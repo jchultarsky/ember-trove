@@ -2,6 +2,7 @@ pub mod admin;
 pub mod backup;
 pub mod export;
 pub mod favorites;
+pub mod inbox;
 pub mod metrics;
 pub mod notes;
 pub mod attachments;
@@ -103,6 +104,7 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/my-day", tasks::my_day_router())
         .nest("/calendar", tasks::calendar_router())
         .nest("/dashboard/projects", tasks::dashboard_router())
+        .nest("/inbox", inbox::router())
         .nest("/nodes/{node_id}/notes", notes::node_note_router())
         .nest("/notes", notes::note_router())
         .nest("/edges", edges::router())
@@ -145,6 +147,22 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     Ok(router)
 }
 
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    let db_status = sqlx::query("SELECT 1")
+        .fetch_optional(&state.pool)
+        .await
+        .map(|r| if r.is_some() { "ok" } else { "error" })
+        .unwrap_or("error");
+
+    Json(json!({
+        "status": if db_status == "ok" { "ok" } else { "degraded" },
+        "service": "ember-trove-api",
+        "version": env!("CARGO_PKG_VERSION"),
+        "timestamp": Utc::now().to_rfc3339(),
+        "database": db_status
+    }))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -162,21 +180,5 @@ mod tests {
         let conf = base.key_extractor(SmartIpKeyExtractor).finish();
         assert!(conf.is_some(), "governor config with SmartIpKeyExtractor must be valid");
     }
-}
-
-async fn health(State(state): State<AppState>) -> Json<Value> {
-    let db_status = sqlx::query("SELECT 1")
-        .fetch_optional(&state.pool)
-        .await
-        .map(|r| if r.is_some() { "ok" } else { "error" })
-        .unwrap_or("error");
-
-    Json(json!({
-        "status": if db_status == "ok" { "ok" } else { "degraded" },
-        "service": "ember-trove-api",
-        "version": env!("CARGO_PKG_VERSION"),
-        "timestamp": Utc::now().to_rfc3339(),
-        "database": db_status
-    }))
 }
 

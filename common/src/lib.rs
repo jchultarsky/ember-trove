@@ -12,6 +12,7 @@ pub mod permission;
 pub mod search;
 pub mod slug;
 pub mod tag;
+pub mod inbox;
 pub mod favorite;
 pub mod note;
 pub mod node_version;

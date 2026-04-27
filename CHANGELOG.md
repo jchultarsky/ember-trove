@@ -4,6 +4,60 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] - 2026-04-27
+
+### Added — iOS Quick Capture (UX phase 1)
+First piece of a six-phase second-brain/GTD usability pass.  Closes the
+single biggest mobile friction point: there was no way to land a thought
+in Ember Trove from an iPhone without unlocking, opening the PWA,
+navigating, and pressing `n` (which doesn't exist on iOS soft
+keyboards).
+
+- **`POST /api/inbox/quick`** — auth-required endpoint that takes
+  `{title, body}`, coalesces them into one Task title (max 500 chars,
+  Unicode-safe truncation, control chars stripped), creates the task
+  with `node_id IS NULL` so it lands in the existing tasks-Inbox view.
+  See [`common::inbox::coalesce_capture`](common/src/inbox.rs:62) for
+  the rules and round-trip tests.
+- **PWA Web Share Target** — `manifest.json` declares
+  `share_target.action = "/share"`.  The service worker (`ui/public/sw.js`,
+  cache bumped to `ember-trove-v5`) intercepts that POST, forwards the
+  multipart fields to `/api/inbox/quick`, and 303s to
+  `/tasks/inbox?captured=1`.  Result: Trove appears in the iOS / Android
+  Share Sheet for any app's text or URL.
+- **PWA shortcuts** — manifest declares three home-screen long-press
+  shortcuts (Quick capture, My Day, Inbox).
+- **`FastCaptureModal`** (`ui/src/components/modals/fast_capture.rs`) —
+  one autofocused textarea, Cmd/Ctrl+Enter saves, Esc closes,
+  "More fields…" hands off to the structured `CreateNodeModal` with
+  the draft pre-filled (no lost typing).  The `n` shortcut now opens
+  this instead of the structured modal — friction floor restored.
+- **InboxView toast on capture** — reads the `?captured=1` marker, fires
+  a success toast, and `replaceState`s the URL clean so a refresh
+  doesn't re-fire it.
+
+### Decision log
+- Capture target is a `Task` (with `node_id IS NULL`), not a `Node`.
+  Tasks already drive the Inbox triage flow the user does daily, and
+  Notes require a parent node so couldn't be the inbox surface.  An
+  `Inbox` `NodeType` was considered and rejected — would have needed a
+  migration plus duplicate sidebar/filter wiring for no behavioural win.
+- The structured `CreateNodeModal`'s "default type from active filter"
+  behaviour was kept.  The friction it caused only existed because `n`
+  used to open it for ad-hoc dumps; now `n` opens fast-capture, and
+  filter-aware defaults are correct when the structured modal is
+  reached deliberately (e.g. from a future "+" on a filtered All Nodes
+  view).
+
+### Follow-ups
+- Apple Shortcut export for Siri "Capture to Trove" — deferred; the
+  Web Share Target reaches ~95% of the win without distribution.
+- A `description: Option<String>` field on `Task` so >500-char captures
+  don't truncate.  Not blocking — share-sheet captures from Safari /
+  Mail / Messages are well under that limit in practice.
+
+---
+
 ## [2.3.9] - 2026-04-27
 
 ### Fixed — Auth callback no longer renders raw JSON 500 to the browser

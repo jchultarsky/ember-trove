@@ -13,5 +13,33 @@
       "type": "image/svg+xml",
       "purpose": "any maskable"
     }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "shortcuts": [
+    {
+      "name": "Quick capture",
+      "short_name": "Capture",
+      "description": "Drop a thought into the Inbox without opening anything else",
+      "url": "/?capture=1"
+    },
+    {
+      "name": "My Day",
+      "short_name": "Today",
+      "url": "/tasks/my-day"
+    },
+    {
+      "name": "Inbox",
+      "short_name": "Inbox",
+      "url": "/tasks/inbox"
+    }
   ]
 }
