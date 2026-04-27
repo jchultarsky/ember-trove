@@ -555,3 +555,59 @@ async fn search_preset_delete_route_registered() {
     let id = Uuid::new_v4();
     assert_route_registered("DELETE", &format!("/api/search-presets/{id}")).await;
 }
+
+// ── OAuth callback failure handling ───────────────────────────────────────────
+// /auth/callback is a browser-navigation endpoint: Cognito redirects the user's
+// browser there after login. On failure (missing PKCE verifier, Cognito reject,
+// OIDC misconfig) the handler must respond with a 303 redirect to the frontend
+// — NOT the shared `ApiError` JSON response, which a browser would render as
+// the page itself. See feedback_browser_navigation_endpoints.md.
+
+#[tokio::test]
+async fn auth_callback_redirects_on_misconfig_instead_of_json_500() {
+    // test_state() has oidc = None, which would make try_callback return
+    // ApiError::Internal. The outer handler must turn that into a 303 redirect.
+    let resp = test_app()
+        .oneshot(
+            Request::get("/auth/callback?code=anything&state=missing")
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::SEE_OTHER,
+        "callback failures must redirect (303), not return a JSON error page"
+    );
+    let location = resp
+        .headers()
+        .get(axum::http::header::LOCATION)
+        .expect("303 must include a Location header");
+    assert_eq!(
+        location, "http://localhost:3000",
+        "redirect target must be the frontend root (test AuthConfig.frontend_url)"
+    );
+    assert_ne!(
+        resp.headers().get(axum::http::header::CONTENT_TYPE)
+            .map(|v| v.to_str().unwrap_or("")),
+        Some("application/json"),
+        "callback failure response must not be JSON"
+    );
+}
+
+#[tokio::test]
+async fn auth_callback_redirects_when_state_param_missing() {
+    // No `state` query param at all → no PKCE lookup possible → must redirect.
+    let resp = test_app()
+        .oneshot(
+            Request::get("/auth/callback?code=anything")
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+}

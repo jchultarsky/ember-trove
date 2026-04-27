@@ -4,6 +4,43 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.3.9] - 2026-04-27
+
+### Fixed — Auth callback no longer renders raw JSON 500 to the browser
+- **`/api/auth/callback` now redirects on every failure mode instead of
+  returning a JSON `ApiError`.**  Cognito redirects the browser directly
+  to the callback URL, so a 500 + `{"error":"internal error"}` body was
+  rendered by the browser as the literal page contents — the user saw a
+  wall of JSON whenever the OAuth handshake failed.  The handler now
+  wraps its work in an inner `try_callback` and converts any `ApiError`
+  into a 303 redirect to `frontend_url`, where the SPA's `AuthGate`
+  starts a fresh login flow.  A missing PKCE verifier (entry evicted
+  by the 10-min TTL or wiped by a container restart) and a missing
+  OAuth `state` query param both short-circuit cleanly to the same
+  redirect path.
+- **`OidcClient::exchange_code` reclassifies Cognito 4xx as
+  `Unauthorized`, not `Internal`.**  An `invalid_code_verifier` /
+  `invalid_grant` from Cognito is an auth-flow failure caused by stale
+  browser state, not a server bug.  This stops the case from
+  generating ERROR-level log noise and aligns it with the existing
+  treatment in `exchange_refresh_token`.
+- **Regression coverage** — added `auth_callback_redirects_on_misconfig_instead_of_json_500`
+  and `auth_callback_redirects_when_state_param_missing` in
+  `api/src/tests.rs`, asserting `303 See Other` + `Location:
+  http://localhost:3000` rather than the previous JSON 500.
+
+### Known follow-up (not in this release)
+- The PKCE verifier is still kept in an in-memory
+  `Mutex<HashMap<String,(String,Instant)>>` on `AppState`, so every
+  container restart wipes in-flight OAuth flows and mid-login users
+  bounce back to the login screen.  Moving the verifier to a
+  short-lived encrypted cookie (the `PrivateCookieJar` is already in
+  scope on `login` / `callback`) would eliminate both the restart
+  volatility and the 10-minute TTL race entirely.  Tracked as a
+  separate task.
+
+---
+
 ## [2.3.8] - 2026-04-26
 
 ### Security / CI hygiene

@@ -157,9 +157,15 @@ impl OidcClient {
             .map_err(|e| ApiError::Internal(format!("token exchange request failed: {e}")))?;
 
         if !resp.status().is_success() {
+            // 4xx from Cognito at the code-exchange step is a stale/missing PKCE
+            // verifier or a replayed authorization code — an auth-flow failure,
+            // not a server bug. Classify as Unauthorized so the callback handler
+            // can redirect the user back into a fresh login flow rather than
+            // emitting a 500 + JSON error page.
             let status = resp.status();
             let body = resp.text().await.unwrap_or_else(|_| "unknown".to_string());
-            return Err(ApiError::Internal(format!(
+            tracing::warn!(%status, %body, "OIDC code exchange rejected");
+            return Err(ApiError::Unauthorized(format!(
                 "token exchange failed ({status}): {body}"
             )));
         }
