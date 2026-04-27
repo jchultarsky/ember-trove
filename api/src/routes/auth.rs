@@ -4,7 +4,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Query, State},
     http::header,
-    response::Html,
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use axum_extra::extract::{
@@ -109,22 +109,50 @@ async fn callback(
     State(app_state): State<AppState>,
     jar: PrivateCookieJar,
     Query(params): Query<CallbackQuery>,
+) -> Response {
+    // The callback is a browser-navigation endpoint (Cognito redirects the
+    // browser here), so on failure we MUST emit a 303 redirect — never the
+    // shared JSON `ApiError` response, which the browser would render
+    // verbatim as the page. Any failure (missing PKCE verifier, Cognito
+    // rejection, OIDC misconfig) bounces the user back to the frontend
+    // root, where AuthGate will start a fresh login flow.
+    match try_callback(&app_state, jar, params).await {
+        Ok((updated_jar, headers, html)) => (updated_jar, headers, html).into_response(),
+        Err(e) => {
+            tracing::warn!(?e, "OAuth callback failed — redirecting to frontend to restart login");
+            Redirect::to(&app_state.auth.frontend_url).into_response()
+        }
+    }
+}
+
+/// Inner callback worker — returns `ApiError` on any failure so the outer
+/// handler can convert it into a redirect.
+async fn try_callback(
+    app_state: &AppState,
+    jar: PrivateCookieJar,
+    params: CallbackQuery,
 ) -> Result<(PrivateCookieJar, [(header::HeaderName, &'static str); 1], Html<String>), ApiError> {
     let oidc = app_state.oidc.as_ref()
         .ok_or_else(|| ApiError::Internal("OIDC not configured — auth is disabled".to_string()))?;
 
     // Retrieve and consume the PKCE verifier from the server-side store.
-    let code_verifier = if let Some(ref oauth_state) = params.state {
+    // A missing verifier means the entry was evicted (10-min TTL elapsed
+    // at the Cognito login screen, or the api container restarted between
+    // /login and /callback). Treat as Unauthorized so the outer handler
+    // redirects to a fresh login flow.
+    let oauth_state = params.state.as_deref()
+        .ok_or_else(|| ApiError::Unauthorized("missing oauth state".to_string()))?;
+    let code_verifier = {
         let mut store = app_state.pkce_store.lock()
             .map_err(|_| ApiError::Internal("pkce store lock poisoned".to_string()))?;
         store.remove(oauth_state).map(|(verifier, _)| verifier)
-    } else {
-        None
-    };
+    }.ok_or_else(|| ApiError::Unauthorized(
+        "PKCE verifier not found (login expired or server restarted)".to_string()
+    ))?;
 
     let redirect_uri = format!("{}/api/auth/callback", app_state.auth.api_external_url);
     let token_resp = oidc
-        .exchange_code(&params.code, &redirect_uri, code_verifier.as_deref())
+        .exchange_code(&params.code, &redirect_uri, Some(&code_verifier))
         .await?;
 
     // Prefer the ID token for the session cookie — it carries email, name, and
