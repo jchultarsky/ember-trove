@@ -14,7 +14,11 @@ use crate::{
         bulk_permissions_view::BulkPermissionsView,
         dark_mode_toggle::DarkModeToggle,
         graph_view::GraphView,
-        modals::{create_node::CreateNodeModal, shortcuts::ShortcutsModal},
+        modals::{
+            create_node::CreateNodeModal,
+            fast_capture::FastCaptureModal,
+            shortcuts::ShortcutsModal,
+        },
         node_editor::NodeEditor,
         node_list::NodeList,
         node_view::NodeView,
@@ -294,11 +298,30 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                 </main>
             </div>
 
-            // Quick-capture modal (invoked via `n` keyboard shortcut)
-            <CreateNodeModal
-                show=show_capture.read_only()
-                on_close=Callback::new(move |_| show_capture.set(false))
-            />
+            // Fast-capture modal — primary `n`-shortcut surface.  One
+            // textarea, lands a Task in the Inbox.  "More fields…" hands off
+            // to the structured CreateNodeModal below, pre-filled with the
+            // user's draft so nothing is lost.
+            {
+                let show_structured = RwSignal::new(false);
+                let structured_prefill = RwSignal::new(String::new());
+                view! {
+                    <FastCaptureModal
+                        show=show_capture.read_only()
+                        on_close=Callback::new(move |_| show_capture.set(false))
+                        on_more_fields=Callback::new(move |draft: String| {
+                            structured_prefill.set(draft);
+                            show_capture.set(false);
+                            show_structured.set(true);
+                        })
+                    />
+                    <CreateNodeModal
+                        show=show_structured.read_only()
+                        on_close=Callback::new(move |_| show_structured.set(false))
+                        initial_body=structured_prefill.read_only()
+                    />
+                }
+            }
 
             // Keyboard shortcuts modal
             <ShortcutsModal

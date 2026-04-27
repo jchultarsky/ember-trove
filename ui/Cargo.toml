@@ -49,6 +49,10 @@ web-sys = { version = "0.3", features = [
     "WheelEvent",
     "Storage",
     "Window",
+    "History",
+    "Location",
+    "Url",
+    "UrlSearchParams",
 ] }
 js-sys = "0.3"
 chrono = { workspace = true, features = ["wasmbind"] }

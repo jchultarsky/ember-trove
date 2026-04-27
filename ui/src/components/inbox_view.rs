@@ -20,6 +20,7 @@ use crate::components::task_common::{
     priority_dot_color, priority_label, priority_value, recurrence_label, recurrence_value,
     status_done, status_value,
 };
+use crate::components::toast::{push_toast, ToastLevel};
 
 // ── InboxView ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,38 @@ use crate::components::task_common::{
 pub fn InboxView() -> impl IntoView {
     let task_refresh = use_context::<TaskRefresh>().expect("TaskRefresh context missing");
     let refresh = task_refresh.0;
+
+    // If we got here via the iOS Web Share Target SW handler (which 303s to
+    // /tasks/inbox?captured=1) or the home-screen "Quick capture" shortcut,
+    // confirm the capture with a toast and strip the marker from the URL so
+    // a refresh doesn't re-fire it.  Runs once per mount.
+    Effect::new(move |run_count: Option<()>| {
+        if run_count.is_some() { return; }
+        let Some(win) = web_sys::window() else { return; };
+        let Ok(href) = win.location().href() else { return; };
+        if let Ok(url) = web_sys::Url::new(&href) {
+            let params = url.search_params();
+            if params.get("captured").as_deref() == Some("1") {
+                push_toast(ToastLevel::Success, "Captured to Inbox");
+                refresh.update(|n| *n += 1);
+                params.delete("captured");
+                url.set_search(&params.to_string().as_string().unwrap_or_default());
+                let new_href = format!(
+                    "{}{}{}",
+                    url.pathname(),
+                    if url.search().is_empty() { "" } else { "?" },
+                    url.search().trim_start_matches('?')
+                );
+                if let Ok(history) = win.history() {
+                    let _ = history.replace_state_with_url(
+                        &leptos::wasm_bindgen::JsValue::NULL,
+                        "",
+                        Some(&new_href),
+                    );
+                }
+            }
+        }
+    });
 
     // New-task form state
     let new_title    = RwSignal::new(String::new());

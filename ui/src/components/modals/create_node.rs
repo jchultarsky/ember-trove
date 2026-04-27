@@ -25,6 +25,10 @@ pub fn CreateNodeModal(
     show: Signal<bool>,
     /// Called when the modal should close (cancel or successful save).
     on_close: Callback<()>,
+    /// Optional draft body to pre-fill on open (used by the fast-capture
+    /// "More fields…" handoff).  Empty string means no pre-fill.
+    #[prop(into, optional)]
+    initial_body: Signal<String>,
 ) -> impl IntoView {
     let title = RwSignal::new(String::new());
     let body = RwSignal::new(String::new());
@@ -50,11 +54,13 @@ pub fn CreateNodeModal(
         }
     });
 
-    // Reset fields every time the modal opens.
+    // Reset fields every time the modal opens.  When `initial_body` is
+    // non-empty (fast-capture handoff), pre-fill the body so the user
+    // doesn't lose what they already typed.
     Effect::new(move |_| {
         if show.get() {
             title.set(String::new());
-            body.set(String::new());
+            body.set(initial_body.get_untracked());
             template_id_for_create.set(None);
             selected_template_value.set(String::new());
             // Pre-select type from the active filter (falls back to "article").
@@ -86,8 +92,12 @@ pub fn CreateNodeModal(
                 }
         }) {
             let tid   = t.id;
-            let tbody = t.body.clone();
-            body.set(tbody);
+            // If the body was pre-filled (e.g. fast-capture handoff or
+            // user-typed content), don't overwrite with the default
+            // template body — pre-fill always wins.
+            if body.get_untracked().trim().is_empty() {
+                body.set(t.body.clone());
+            }
             selected_template_value.set(tid.0.to_string());
             template_id_for_create.set(Some(tid));
         } else {

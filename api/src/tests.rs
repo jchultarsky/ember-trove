@@ -556,6 +556,13 @@ async fn search_preset_delete_route_registered() {
     assert_route_registered("DELETE", &format!("/api/search-presets/{id}")).await;
 }
 
+// ── Quick capture (Phase 1 / iOS Web Share Target) ───────────────────────────
+
+#[tokio::test]
+async fn inbox_quick_route_registered() {
+    assert_route_registered("POST", "/inbox/quick").await;
+}
+
 // ── OAuth callback failure handling ───────────────────────────────────────────
 // /auth/callback is a browser-navigation endpoint: Cognito redirects the user's
 // browser there after login. On failure (missing PKCE verifier, Cognito reject,
