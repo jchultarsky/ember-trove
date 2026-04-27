@@ -23,6 +23,7 @@ use crate::{
         node_list::NodeList,
         node_view::NodeView,
         notes_view::NotesView,
+        plan_view::PlanView,
         project_dashboard::ProjectDashboard,
         search_view::SearchView,
         sidebar::Sidebar,
@@ -276,6 +277,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/tasks/my-day")     view=|| view! { <TasksView active=TasksTab::MyDay    /> } />
                         <Route path=path!("/tasks/inbox")      view=|| view! { <TasksView active=TasksTab::Inbox    /> } />
                         <Route path=path!("/tasks/calendar")   view=|| view! { <TasksView active=TasksTab::Calendar /> } />
+                        <Route path=path!("/plan")             view=PlanView />
                         // Legacy URL redirects — preserve bookmarks, PWA shortcuts, and any
                         // external links dating back before the Tasks consolidation.
                         <Route path=path!("/my-day")    view=|| view! { <Redirect path="/tasks/my-day"    /> } />
