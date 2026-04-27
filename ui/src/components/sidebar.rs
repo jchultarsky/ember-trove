@@ -63,6 +63,8 @@ pub fn Sidebar(auth_state: AuthState, collapsed: SidebarCollapsed, on_nav: Callb
             // ── Section 1: Daily workflow ──────────────────────────────────────
             // Tasks (My Day / Inbox / Calendar) share one sidebar entry; the
             // view itself exposes the three via a tab bar for clearer IA.
+            // Plan is the morning-ritual entry (v2.5.0).
+            <SidebarLink icon="wb_twilight"    label="Plan"      on_click=nav!("/plan")        collapsed=collapsed />
             <SidebarLink icon="task_alt"       label="Tasks"     on_click=nav!("/tasks/my-day") collapsed=collapsed />
             <SidebarLink icon="sticky_note_2"  label="Notes"     on_click=nav!("/notes")     collapsed=collapsed />
             <SidebarLink icon="dashboard"      label="Dashboard" on_click=nav!("/dashboard") collapsed=collapsed />

@@ -4,6 +4,64 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-04-27
+
+### Added — Morning Planning Ritual at `/plan` (UX phase 3)
+A once-per-day surface that turns "look at My Day" into "plan your
+day."  Inspired by Sunsama's daily ritual but stripped down — no
+dragging, no time-blocking, no AI scheduling.  Just the four things
+you actually need to decide before the day starts.
+
+- **`/plan` route** ([`ui/src/components/plan_view.rs`](ui/src/components/plan_view.rs))
+  with four sections:
+  1. **Yesterday** — done / open / cancelled counts for tasks whose
+     `focus_date` was yesterday.  Derived client-side from
+     `fetch_my_day(yesterday)` filtered to `focus_date == yesterday`
+     so day-2 carryovers aren't double-counted with the carry-over
+     section.
+  2. **Carry over** — reuses the v2.4.1 `CarryoverSection` so the
+     Today / Reschedule / Drop actions match the My Day surface.
+  3. **Inbox** — count + jump-to button.
+  4. **Due today** — read-only peek at tasks with `due_date == today`,
+     pulled from the existing month-window calendar fetch.
+- **"Start my day" CTA** stamps `et.plan.last_planned_at` in
+  localStorage with today's date, then navigates to `/tasks/my-day`.
+- **My Day plan-your-day banner** appears at the top of `/tasks/my-day`
+  whenever `et.plan.last_planned_at != today`, so the ritual is
+  discoverable from the user's normal entry point — no need to know
+  the URL.  Dismisses itself once the user confirms today.
+- **My Day cold-start empty state** rewritten to surface both the `n`
+  shortcut and a "Plan your day" CTA, instead of assuming the user
+  already has a project to attach tasks to.
+- **Sidebar entry "Plan"** with a `wb_twilight` icon, just above
+  Tasks, so the ritual is one click from anywhere.
+- **`CarryoverSection` extracted** from `my_day_view.rs` into its own
+  `crate::components::carryover` module so both `/plan` and
+  `/tasks/my-day` import the same component.
+
+### Design notes (decision log)
+- **No new server endpoints.**  Yesterday's stats, carryover, inbox,
+  and today's calendar are all derived from the existing
+  `fetch_my_day` / `list_inbox` / `fetch_calendar_tasks` endpoints.
+  Keeps the phase small and avoids a schema/API surface change for a
+  pure UX layer.
+- **`/plan` over a banner-only surface.**  A dedicated route is
+  bookmarkable, can be set as the PWA home-screen shortcut later, and
+  doesn't compete with the carry-over section for vertical space on
+  My Day.
+- **`et.plan.last_planned_at` is per-device.**  localStorage means
+  different devices need to be planned independently.  This matches
+  how the user actually works (morning planning happens on the laptop
+  they have at hand) — a server-side stamp would be over-engineered.
+
+### Out of scope (left for later)
+- Time-blocking / hour-budget warnings (Sunsama-style).
+- Goal/objective alignment, OKR rollups.
+- Auto-redirect of the PWA `start_url` to `/plan` until planned —
+  considered for Phase 6 if the banner alone isn't enough nudge.
+
+---
+
 ## [2.4.1] - 2026-04-27
 
 ### Added — Carry-over section in My Day (UX phase 2)
