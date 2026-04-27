@@ -4,6 +4,40 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.4.1] - 2026-04-27
+
+### Added — Carry-over section in My Day (UX phase 2)
+The server already carried unfinished tasks forward (`focus_date < today`
+and not done both surface in `list_my_day`), but the UI wove them
+silently into today's groups with only a tiny "carried over" badge.
+Easy to miss, no triage path. Today's "Did I plan this?" question
+required reading every row.
+
+- Tasks with `focus_date < today` now render in a dedicated **Carry
+  Over (N)** section pinned above today's groups
+  ([`my_day_view.rs`](ui/src/components/my_day_view.rs) — partition step
+  in the main render closure plus new `CarryoverSection` and
+  `CarryoverRow` components).
+- Three single-tap actions per row:
+  - **Today** — `focus_date = today`, stays in My Day.
+  - **Reschedule** — toggles a small date input; the picked date becomes
+    the new `focus_date`.
+  - **× (Drop)** — clears `focus_date`; the task drops back to the
+    Inbox (or stands alone if it was already orphaned).
+- Section is hidden when there are no carryovers — first-time users
+  never see an empty "Carry Over (0)" header.
+- All actions go through the existing `PATCH /tasks/:id` endpoint via
+  `UpdateTaskRequest::focus_date: Some(Some|None)`; no schema change.
+- Toast on each action so the result is visible without scanning the
+  newly re-rendered list.
+
+This phase deliberately stays small — it surfaces the existing
+carryover signal without adding triage rituals or batch ops. Phase 3
+(morning-planning ritual) will reuse this `CarryoverSection` so the
+component pulls double-duty.
+
+---
+
 ## [2.4.0] - 2026-04-27
 
 ### Added — iOS Quick Capture (UX phase 1)

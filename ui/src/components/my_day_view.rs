@@ -10,6 +10,7 @@ use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, parse_status, priority_value,
     recurrence_label, recurrence_value, sort_tasks_full, status_done, status_value,
 };
+use crate::components::toast::{push_toast, ToastLevel};
 use leptos_router::hooks::use_navigate;
 
 // ── MyDayView ─────────────────────────────────────────────────────────────────
@@ -115,9 +116,18 @@ pub fn MyDayView() -> impl IntoView {
                             }.into_any();
                         }
 
-                        // Group by node_id (or "inbox" for standalone), preserving sort_order.
+                        // Partition: carryovers (focus_date < today AND not done) vs today.
+                        // The server already excludes "done before today" from list_my_day,
+                        // so anything with focus_date < today is by definition unfinished
+                        // — the user must decide what to do with it.
+                        let (carryovers, today_tasks): (Vec<MyDayTask>, Vec<MyDayTask>) =
+                            raw_tasks.into_iter().partition(|mdt| {
+                                mdt.task.focus_date.is_some_and(|d| d < today)
+                            });
+
+                        // Group today's tasks by node_id, preserving sort_order.
                         let mut grouped: Vec<(String, Option<String>, Vec<Task>)> = vec![];
-                        for MyDayTask { task, node_title } in raw_tasks {
+                        for MyDayTask { task, node_title } in today_tasks {
                             let node_id_str = task.node_id
                                 .map_or_else(|| "inbox".to_string(), |n| n.to_string());
                             if let Some(g) = grouped.iter_mut().find(|(id, _, _)| id == &node_id_str) {
@@ -132,6 +142,7 @@ pub fn MyDayView() -> impl IntoView {
 
                         view! {
                             <div class="space-y-8 w-full">
+                                <CarryoverSection carryovers=carryovers refresh=refresh today=today />
                                 {grouped.into_iter().map(|(_, node_title, tasks)| {
                                     let node_id = tasks[0].node_id;
                                     view! {
@@ -273,6 +284,198 @@ fn MyDayGroup(
                     </div>
                 })}
             </div>
+        </div>
+    }
+}
+
+// ── CarryoverSection ──────────────────────────────────────────────────────────
+//
+// Renders above today's groups. Tasks here have `focus_date < today` and were
+// not finished — they need an explicit decision from the user. Three single-
+// click actions per task:
+//   * **Move to Today** — sets `focus_date = today`. Stays in My Day.
+//   * **Drop**          — clears `focus_date`. Falls back to the Inbox.
+//   * **Reschedule**    — toggles a tiny date input; the picked date becomes
+//                         the new `focus_date`. Hidden until clicked so it
+//                         doesn't add visual noise to every row.
+//
+// Hidden when there are no carryovers — first-time users never see an empty
+// "Carry Over (0)" header.
+
+#[component]
+fn CarryoverSection(
+    carryovers: Vec<MyDayTask>,
+    refresh: RwSignal<u32>,
+    today: NaiveDate,
+) -> impl IntoView {
+    if carryovers.is_empty() {
+        return ().into_any();
+    }
+    let count = carryovers.len();
+    view! {
+        <div class="rounded-lg border border-amber-200 dark:border-amber-900/40 bg-amber-50/40 \
+                    dark:bg-amber-950/20">
+            <div class="flex items-center gap-2 px-3 py-2 border-b border-amber-200 \
+                        dark:border-amber-900/40">
+                <span class="material-symbols-outlined text-amber-600 dark:text-amber-500" style="font-size:16px;">
+                    "history"
+                </span>
+                <span class="text-xs font-semibold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+                    {format!("Carry over ({count})")}
+                </span>
+                <span class="text-xs text-stone-500 dark:text-stone-400 ml-1">
+                    "— from earlier days, still open"
+                </span>
+            </div>
+            <div class="divide-y divide-amber-100 dark:divide-amber-900/30">
+                {carryovers.into_iter().map(|MyDayTask { task, node_title }| {
+                    view! {
+                        <CarryoverRow
+                            task=task
+                            node_title=node_title
+                            today=today
+                            refresh=refresh
+                        />
+                    }
+                }).collect_view()}
+            </div>
+        </div>
+    }.into_any()
+}
+
+#[component]
+fn CarryoverRow(
+    task: Task,
+    node_title: Option<String>,
+    today: NaiveDate,
+    refresh: RwSignal<u32>,
+) -> impl IntoView {
+    let task_id        = task.id;
+    let from_date      = task.focus_date.unwrap_or(today);
+    let from_label     = from_date.format("%b %-d").to_string();
+    let title          = task.title.clone();
+    let parent_label   = node_title.unwrap_or_else(|| "Inbox".to_string());
+
+    let show_picker    = RwSignal::new(false);
+    let picked_date    = RwSignal::new(today.format("%Y-%m-%d").to_string());
+    let busy           = RwSignal::new(false);
+
+    // Fire one PATCH /tasks/:id, refresh My Day, surface a brief toast.
+    let patch_focus = move |new_focus: Option<NaiveDate>, success_msg: &'static str| {
+        if busy.get_untracked() { return; }
+        busy.set(true);
+        let req = UpdateTaskRequest {
+            title:      None,
+            status:     None,
+            priority:   None,
+            focus_date: Some(new_focus),
+            due_date:   None,
+            recurrence: None,
+            node_id:    None,
+        };
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::api::update_task(task_id, &req).await;
+            busy.set(false);
+            match result {
+                Ok(_) => {
+                    push_toast(ToastLevel::Success, success_msg);
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => {
+                    push_toast(ToastLevel::Error, format!("Couldn't update task: {e}"));
+                }
+            }
+        });
+    };
+
+    let on_move_today = move |_| patch_focus(Some(today), "Moved to today");
+    let on_drop       = move |_| patch_focus(None, "Dropped from My Day");
+    let on_reschedule_apply = move |_| {
+        let raw = picked_date.get_untracked();
+        match raw.parse::<NaiveDate>() {
+            Ok(d) if d == today => patch_focus(Some(d), "Moved to today"),
+            Ok(d)                => patch_focus(Some(d), "Rescheduled"),
+            Err(_) => push_toast(ToastLevel::Error, "Pick a valid date".to_string()),
+        }
+        show_picker.set(false);
+    };
+
+    view! {
+        <div class="px-3 py-2">
+            <div class="flex items-start gap-2">
+                <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5"
+                      style="font-size:14px;"
+                      title=format!("Focused on {from_label}")>
+                    "schedule"
+                </span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm text-stone-800 dark:text-stone-200 truncate">
+                        {title}
+                    </div>
+                    <div class="text-xs text-stone-500 dark:text-stone-400 truncate">
+                        {parent_label} " · from " {from_label.clone()}
+                    </div>
+                </div>
+                <div class="flex items-center gap-1 flex-shrink-0">
+                    <button
+                        class="px-2 py-0.5 text-xs rounded bg-amber-600 text-white \
+                               hover:bg-amber-700 disabled:opacity-50 cursor-pointer"
+                        prop:disabled=move || busy.get()
+                        on:click=on_move_today
+                        title="Set focus date to today"
+                    >
+                        "Today"
+                    </button>
+                    <button
+                        class="px-2 py-0.5 text-xs rounded border border-stone-300 \
+                               dark:border-stone-600 text-stone-600 dark:text-stone-300 \
+                               hover:bg-stone-100 dark:hover:bg-stone-800 \
+                               disabled:opacity-50 cursor-pointer"
+                        prop:disabled=move || busy.get()
+                        on:click=move |_| show_picker.update(|v| *v = !*v)
+                        title="Reschedule to a future date"
+                    >
+                        "Reschedule"
+                    </button>
+                    <button
+                        class="p-1 rounded text-stone-400 hover:text-red-500 \
+                               disabled:opacity-50 cursor-pointer"
+                        prop:disabled=move || busy.get()
+                        on:click=on_drop
+                        title="Remove from My Day (back to Inbox / no focus date)"
+                    >
+                        <span class="material-symbols-outlined" style="font-size:16px;">"close"</span>
+                    </button>
+                </div>
+            </div>
+            <Show when=move || show_picker.get()>
+                <div class="mt-2 flex items-center gap-2">
+                    <input
+                        type="date"
+                        class="text-xs bg-stone-100 dark:bg-stone-700 \
+                               text-stone-700 dark:text-stone-300 \
+                               rounded px-2 py-0.5 focus:outline-none \
+                               focus:ring-1 focus:ring-amber-500"
+                        prop:value=move || picked_date.get()
+                        on:input=move |ev| picked_date.set(event_target_value(&ev))
+                    />
+                    <button
+                        class="px-2 py-0.5 text-xs rounded bg-amber-600 text-white \
+                               hover:bg-amber-700 disabled:opacity-50 cursor-pointer"
+                        prop:disabled=move || busy.get()
+                        on:click=on_reschedule_apply
+                    >
+                        "Apply"
+                    </button>
+                    <button
+                        class="px-2 py-0.5 text-xs rounded text-stone-500 \
+                               hover:text-stone-800 dark:hover:text-stone-200 cursor-pointer"
+                        on:click=move |_| show_picker.set(false)
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </Show>
         </div>
     }
 }
