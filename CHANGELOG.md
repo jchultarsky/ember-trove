@@ -4,6 +4,50 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.10.0] - 2026-04-28
+
+### Added — In-app help (Shortcuts / Concepts / Workflow)
+The Apr-2026 UX pass added a real conceptual model on top of the
+schema (focus_date is binary, PARA grouping via `contains` edges,
+Carryover automatic, etc).  None of that was discoverable from the
+UI.  This release surfaces it.
+
+- **`ShortcutsModal` is now `HelpModal`** — same `?` shortcut, same
+  modal pattern, but tabbed: **Shortcuts** (existing keyboard
+  reference, unchanged), **Concepts** (10 short definitions of the
+  data model — Nodes, Tasks, Notes, focus_date vs due_date, PARA,
+  Inbox, Carryover, Pinning, Tags vs Areas, Recent + Search), and
+  **Workflow** (7 numbered steps for the day-to-day loop, capture
+  → triage → focus → end-of-day → weekly review).
+- **`(?)` icon in the sidebar header** — small `help_outline` button
+  next to the dark-mode toggle.  Discoverable for users who don't
+  know the `?` shortcut yet; both paths flip the same signal via the
+  new `ShowHelp` context.
+- **Version stamp** in the modal footer — auto-fills from
+  `CARGO_PKG_VERSION` at compile time so it can never drift behind a
+  release.
+
+### Implementation notes
+- `ui/src/components/modals/shortcuts.rs` deleted; replaced by
+  `ui/src/components/modals/help.rs`.  Content tables are static
+  (no localStorage, no API) — written deliberately as headings +
+  short bullets so updates are surgical.
+- `ShowHelp(RwSignal<bool>)` newtype provided at the layout root;
+  `SidebarHeader` reads it as an `Option<ShowHelp>` (no crash if
+  someone uses the sidebar outside the layout).  Same signal that
+  the `?` keyboard handler already toggles, so mouse and keyboard
+  share one source of truth.
+
+### Discipline note (carried into the release checklist)
+When a future release changes a user-visible model or workflow,
+update the corresponding tab in `help.rs`.  Stale help is worse
+than no help — but the static-content + version-stamp design
+makes the rot visible (the footer says which version the help
+matches; if Concepts mention a feature that no longer exists, it's
+on the next release to fix).
+
+---
+
 ## [2.9.0] - 2026-04-28
 
 ### Added — Dashboard PARA + pinning + activity recap (UX phase 7)

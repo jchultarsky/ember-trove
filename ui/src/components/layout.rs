@@ -18,7 +18,7 @@ use crate::{
             command_palette::CommandPalette,
             create_node::CreateNodeModal,
             fast_capture::FastCaptureModal,
-            shortcuts::ShortcutsModal,
+            help::HelpModal,
         },
         node_editor::NodeEditor,
         node_list::NodeList,
@@ -34,6 +34,13 @@ use crate::{
     },
 };
 use common::id::NodeId;
+
+/// Newtype around the `show_shortcuts` signal so the sidebar header
+/// (and any future surface) can open the help modal via context, not
+/// prop threading.  Keeps the legacy "shortcuts" name for the signal
+/// itself since the keyboard reference is still tab #1.
+#[derive(Clone, Copy)]
+pub struct ShowHelp(pub RwSignal<bool>);
 
 // ── Route param wrappers ─────────────────────────────────────────────────────
 
@@ -106,6 +113,10 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     let navigate = use_navigate();
     let location = use_location();
     let show_shortcuts = RwSignal::new(false);
+    // v2.10.0 — surface the help-modal toggle as a context so the sidebar
+    // header (and any other corner of the UI) can open it without
+    // threading the signal through props.
+    provide_context(ShowHelp(show_shortcuts));
 
     // v2.8.0 — Cmd-K command palette. Opened via Cmd+K / Ctrl+K (any
     // view) or `/` (repurposed from full-page navigation to /search).
@@ -354,8 +365,11 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                 }
             }
 
-            // Keyboard shortcuts modal
-            <ShortcutsModal
+            // v2.10.0 — Help modal: Shortcuts / Concepts / Workflow tabs.
+            // Triggered by `?` (kept the legacy `show_shortcuts` signal name
+            // since it still gates the same modal — just a richer one now)
+            // or by the (?) icon in SidebarHeader.
+            <HelpModal
                 show=show_shortcuts.read_only()
                 on_close=Callback::new(move |_| show_shortcuts.set(false))
             />
@@ -383,10 +397,14 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     }
 }
 
-/// Sidebar header: banner icon + title + dark-mode toggle.
+/// Sidebar header: banner icon + title + (?) help + dark-mode toggle.
 #[component]
 fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
     let app_version = use_context::<AppVersion>().expect("AppVersion must be provided");
+    // v2.10.0 — discoverability for the `?` shortcut.  Optional via
+    // use_context: any layout that doesn't provide ShowHelp just
+    // doesn't render the button (no crash).
+    let help_toggle: Option<ShowHelp> = use_context();
     view! {
         <div class="flex items-center border-b border-stone-200 dark:border-stone-800 px-3 py-4 gap-2">
             <div class="flex-shrink-0 w-8 h-8">
@@ -427,7 +445,24 @@ fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
                         })
                     }}
                 </div>
-                <DarkModeToggle />
+                <div class="flex items-center gap-1">
+                    {help_toggle.map(|h| view! {
+                        <button
+                            type="button"
+                            class="flex-shrink-0 p-1 rounded text-stone-400 \
+                                   hover:text-amber-600 dark:hover:text-amber-500 \
+                                   hover:bg-stone-100 dark:hover:bg-stone-800 \
+                                   transition-colors cursor-pointer"
+                            title="Help (?)"
+                            on:click=move |_| h.0.update(|v| *v = !*v)
+                        >
+                            <span class="material-symbols-outlined" style="font-size:18px;">
+                                "help_outline"
+                            </span>
+                        </button>
+                    })}
+                    <DarkModeToggle />
+                </div>
             </div>
         </div>
     }
