@@ -1,12 +1,38 @@
+//! Project Dashboard — PARA grouping + pinning + activity recap (v2.9.0).
+//!
+//! Three sections, top to bottom:
+//!
+//! 1. **Activity recap** — "Today" and "Yesterday" headings listing
+//!    recent activity entries across every node the user owns.  Pulled
+//!    from `GET /api/dashboard/activity` (defaults to last 48h).
+//!    Empty state hidden — if nothing changed in 48h the section
+//!    just isn't rendered.
+//! 2. **Project groups by Area** — projects collapsed under their
+//!    parent Area name (PARA model).  Projects with no Area parent
+//!    land in an "Ungrouped" bucket at the bottom of the list.
+//!    Within each Area: pinned projects first (`★`), then by
+//!    `last_activity_at` descending.
+//! 3. *(was: per-card details)* — kept inline in `ProjectCard` so
+//!    each card still surfaces its `## Status` markdown, top open
+//!    tasks, and counts.  No layout change there.
+//!
+//! Pin/unpin: each card has a star button.  Click flips the bit via
+//! `PUT /api/nodes/:id/pin`; on success the dashboard refreshes so
+//! the card slides up/down to its new sort position.
+
+use chrono::{DateTime, Duration, Utc};
+use common::activity::RecentActivityEntry;
+use common::id::NodeId;
 use common::task::{ProjectDashboardEntry, TaskSummary};
 use leptos::prelude::*;
+use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::format_helpers::format_relative_short;
 use crate::components::node_meta::{status_color, status_icon, status_label};
 use crate::components::task_common::priority_color_hex;
+use crate::components::toast::{push_toast, ToastLevel};
 use crate::markdown::render_markdown_plain;
-use leptos_router::hooks::use_navigate;
 
 #[component]
 pub fn ProjectDashboard() -> impl IntoView {
@@ -16,9 +42,22 @@ pub fn ProjectDashboard() -> impl IntoView {
         .expect("TaskRefresh context must be provided")
         .0;
 
+    // Refresh signal local to the dashboard so pin toggles refetch
+    // both project list and the activity recap.
+    let dashboard_refresh = RwSignal::new(0u32);
+
     let entries = LocalResource::new(move || {
         let _ = task_refresh.get();
+        let _ = dashboard_refresh.get();
         async move { crate::api::fetch_project_dashboard().await }
+    });
+    let activity = LocalResource::new(move || {
+        let _ = task_refresh.get();
+        let _ = dashboard_refresh.get();
+        // Fetch the last 48h so "Today" + "Yesterday" both have content
+        // regardless of when the user opens the dashboard.
+        let since = (Utc::now() - Duration::hours(48)).to_rfc3339();
+        async move { crate::api::fetch_dashboard_activity(&since, 50).await }
     });
 
     view! {
@@ -33,8 +72,19 @@ pub fn ProjectDashboard() -> impl IntoView {
                 </h1>
             </div>
 
-            // Content
-            <div class="flex-1 overflow-auto p-6 flex flex-col">
+            <div class="flex-1 overflow-auto p-6 flex flex-col space-y-6">
+
+                // ── Activity recap ─────────────────────────────────────
+                <Suspense fallback=move || view! {
+                    <crate::components::skeleton::SkeletonBar />
+                }>
+                    {move || {
+                        let recap = activity.get().and_then(|r| r.ok()).unwrap_or_default();
+                        view! { <ActivityRecap entries=recap /> }
+                    }}
+                </Suspense>
+
+                // ── Project groups ─────────────────────────────────────
                 <Suspense fallback=move || view! {
                     <crate::components::skeleton::SkeletonCards cards=3 />
                 }>
@@ -52,16 +102,68 @@ pub fn ProjectDashboard() -> impl IntoView {
                             }.into_any();
                         }
 
+                        // Group by area_title.  None → "Ungrouped".
+                        // Preserve insertion order: walk the (already-
+                        // sorted-by-pinned-then-recency) list, and bucket
+                        // into a Vec to keep stable group ordering.
+                        let mut groups: Vec<(Option<String>, Vec<ProjectDashboardEntry>)> = Vec::new();
+                        for entry in data {
+                            let key = entry.area_title.clone();
+                            if let Some((_, bucket)) = groups
+                                .iter_mut()
+                                .find(|(k, _)| k == &key)
+                            {
+                                bucket.push(entry);
+                            } else {
+                                groups.push((key, vec![entry]));
+                            }
+                        }
+                        // Sort: named Areas first (alphabetical), Ungrouped last.
+                        groups.sort_by(|(a, _), (b, _)| match (a, b) {
+                            (Some(x), Some(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
+                            (Some(_), None)    => std::cmp::Ordering::Less,
+                            (None, Some(_))    => std::cmp::Ordering::Greater,
+                            (None, None)       => std::cmp::Ordering::Equal,
+                        });
+
                         view! {
-                            <div class="space-y-4">
-                                {data.into_iter().map(|entry| {
-                                    let node_id = entry.node_id;
-                                    let nav = navigate;
+                            <div class="space-y-6">
+                                {groups.into_iter().map(|(area_title, projects)| {
+                                    let header = area_title.clone().unwrap_or_else(|| "Ungrouped".to_string());
+                                    let count = projects.len();
                                     view! {
-                                        <ProjectCard
-                                            entry=entry
-                                            on_navigate=move || nav.get_value()(&format!("/nodes/{node_id}"), Default::default())
-                                        />
+                                        <section>
+                                            <header class="flex items-center gap-2 mb-2">
+                                                <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                                                      style="font-size:14px;">
+                                                    {if area_title.is_some() { "category" } else { "more_horiz" }}
+                                                </span>
+                                                <h2 class="text-xs font-semibold uppercase tracking-wider \
+                                                           text-amber-700 dark:text-amber-400">
+                                                    {header}
+                                                </h2>
+                                                <span class="text-xs text-stone-400 dark:text-stone-500">
+                                                    {format!("({count})")}
+                                                </span>
+                                            </header>
+                                            <div class="space-y-3">
+                                                {projects.into_iter().map(|entry| {
+                                                    let node_id = entry.node_id;
+                                                    view! {
+                                                        <ProjectCard
+                                                            entry=entry
+                                                            on_navigate=move || {
+                                                                navigate.get_value()(
+                                                                    &format!("/nodes/{node_id}"),
+                                                                    Default::default(),
+                                                                )
+                                                            }
+                                                            refresh=dashboard_refresh
+                                                        />
+                                                    }
+                                                }).collect_view()}
+                                            </div>
+                                        </section>
                                     }
                                 }).collect_view()}
                             </div>
@@ -73,14 +175,109 @@ pub fn ProjectDashboard() -> impl IntoView {
     }
 }
 
-// ── Project Card ───────────────────────��─────────────────────────────────────
+// ── Activity recap ──────────────────────────────────────────────────────────
+
+#[component]
+fn ActivityRecap(entries: Vec<RecentActivityEntry>) -> impl IntoView {
+    if entries.is_empty() {
+        // Empty state hidden — nothing to recap = no section.
+        return ().into_any();
+    }
+    let now = Utc::now();
+    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let yesterday_start = today_start - Duration::days(1);
+
+    let (today_entries, older): (Vec<_>, Vec<_>) = entries
+        .into_iter()
+        .partition(|e| e.entry.created_at >= today_start);
+    let yesterday_entries: Vec<_> = older
+        .into_iter()
+        .filter(|e| e.entry.created_at >= yesterday_start)
+        .collect();
+
+    if today_entries.is_empty() && yesterday_entries.is_empty() {
+        return ().into_any();
+    }
+
+    view! {
+        <section class="rounded-lg border border-stone-200 dark:border-stone-800 \
+                        bg-stone-50/40 dark:bg-stone-900/30 p-4">
+            <header class="flex items-center gap-2 mb-3">
+                <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                      style="font-size:16px;">"history"</span>
+                <h2 class="text-xs font-semibold uppercase tracking-wider \
+                           text-amber-700 dark:text-amber-400">
+                    "Recent activity"
+                </h2>
+            </header>
+            <div class="space-y-3">
+                {(!today_entries.is_empty()).then(|| view! {
+                    <ActivityGroup label="Today" entries=today_entries />
+                })}
+                {(!yesterday_entries.is_empty()).then(|| view! {
+                    <ActivityGroup label="Yesterday" entries=yesterday_entries />
+                })}
+            </div>
+        </section>
+    }.into_any()
+}
+
+#[component]
+fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl IntoView {
+    view! {
+        <div>
+            <h3 class="text-[10px] font-semibold uppercase tracking-wider \
+                       text-stone-500 dark:text-stone-400 mb-1">
+                {label}
+            </h3>
+            <ul class="space-y-1 text-sm">
+                {entries.into_iter().map(|e| {
+                    let time = e.entry.created_at.format("%-I:%M %p").to_string();
+                    let icon = e.entry.action.icon();
+                    let action_label = e.entry.action.label();
+                    let title = e.node_title.clone();
+                    let node_id = e.entry.node_id;
+                    view! {
+                        <li class="flex items-center gap-2">
+                            <span class="text-stone-400 dark:text-stone-500 font-mono text-xs \
+                                         flex-shrink-0 w-16">
+                                {time}
+                            </span>
+                            <span class="material-symbols-outlined text-stone-400 dark:text-stone-500 \
+                                         flex-shrink-0" style="font-size:14px;">
+                                {icon}
+                            </span>
+                            <span class="text-stone-500 dark:text-stone-400 text-xs flex-shrink-0">
+                                {action_label}
+                            </span>
+                            <a
+                                href=format!("/nodes/{node_id}")
+                                class="text-stone-700 dark:text-stone-200 truncate \
+                                       hover:text-amber-700 dark:hover:text-amber-400 \
+                                       transition-colors"
+                            >
+                                {title}
+                            </a>
+                        </li>
+                    }
+                }).collect_view()}
+            </ul>
+        </div>
+    }
+}
+
+// ── Project Card ────────────────────────────────────────────────────────────
+//
+// Refactored from v2.6.x.  Adds: pin button (left of title) + uses the new
+// `dashboard_refresh` signal to re-fetch after a pin toggle.
 
 #[component]
 fn ProjectCard(
     entry: ProjectDashboardEntry,
     on_navigate: impl Fn() + 'static,
+    refresh: RwSignal<u32>,
 ) -> impl IntoView {
-    let counts = &entry.task_counts;
+    let counts = entry.task_counts.clone();
     let total = counts.open + counts.in_progress + counts.done + counts.cancelled;
     let done_pct = if total > 0 {
         (counts.done * 100 / total) as f32
@@ -93,10 +290,36 @@ fn ProjectCard(
     let s_color = status_color(&entry.node_status);
 
     let status_html = entry.status_section.as_deref().map(render_markdown_plain);
-    let open_tasks = entry.open_tasks;
+    let open_tasks = entry.open_tasks.clone();
     let has_more = entry.has_more_tasks;
     let open_count = counts.open + counts.in_progress;
     let updated_label = format_relative_short(&entry.last_activity_at);
+
+    let node_id = entry.node_id;
+    let pinned_sig = RwSignal::new(entry.pinned);
+    let pin_busy = RwSignal::new(false);
+
+    let on_pin_click = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        if pin_busy.get_untracked() { return; }
+        let next = !pinned_sig.get_untracked();
+        pinned_sig.set(next);  // optimistic
+        pin_busy.set(true);
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::api::set_node_pinned(node_id, next).await {
+                Ok(_)  => {
+                    push_toast(ToastLevel::Success,
+                        if next { "Pinned" } else { "Unpinned" });
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => {
+                    pinned_sig.set(!next);  // rollback
+                    push_toast(ToastLevel::Error, format!("Pin failed: {e}"));
+                }
+            }
+            pin_busy.set(false);
+        });
+    };
 
     view! {
         <div
@@ -106,31 +329,42 @@ fn ProjectCard(
                 transition-colors cursor-pointer group overflow-hidden"
             on:click=move |_| on_navigate()
         >
-            // ── Top bar: title + status + counts + progress ──────────────
-            // Mobile: title row stacks above a wrapping meta row so the title
-            // is never crushed by the badges/progress on narrow viewports.
-            // Desktop (sm+): single horizontal row as before.
             <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3">
-                // Title
+                // Title row — pin button + icon + title
                 <div class="flex items-center gap-2 min-w-0 sm:flex-1">
+                    <button
+                        type="button"
+                        class="flex-shrink-0 p-1 rounded transition-colors cursor-pointer"
+                        style=move || if pinned_sig.get() {
+                            "color:#f59e0b;"
+                        } else {
+                            "color:#9ca3af;"
+                        }
+                        title=move || if pinned_sig.get() {
+                            "Unpin (currently pinned to top of group)"
+                        } else {
+                            "Pin to top of group"
+                        }
+                        on:click=on_pin_click
+                    >
+                        <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1;">
+                            {move || if pinned_sig.get() { "star" } else { "star_outline" }}
+                        </span>
+                    </button>
                     <span class="material-symbols-outlined text-amber-500 flex-shrink-0"
                         style="font-size: 16px;">{"rocket_launch"}</span>
                     <span class="font-medium text-stone-800 dark:text-stone-200 truncate
                         group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">
-                        {entry.title}
+                        {entry.title.clone()}
                     </span>
                 </div>
 
-                // Meta row: status + activity + counts + progress.
-                // On mobile this wraps under the title; on sm+ it sits inline.
                 <div class="flex items-center flex-wrap gap-x-3 gap-y-2 sm:gap-4 sm:flex-nowrap">
-                    // Node status badge
                     <div class="flex items-center gap-1 text-sm flex-shrink-0" style=s_color>
                         <span class="material-symbols-outlined" style="font-size: 15px;">{s_icon}</span>
                         <span class="text-xs">{s_label}</span>
                     </div>
 
-                    // Last-activity label
                     <div class="hidden sm:flex items-center gap-1 text-xs
                         text-stone-500 dark:text-stone-400 flex-shrink-0"
                         title="Most recent activity across the project and its tasks">
@@ -138,7 +372,6 @@ fn ProjectCard(
                         <span>{updated_label}</span>
                     </div>
 
-                    // Count badges
                     <div class="flex items-center gap-1 flex-shrink-0">
                         <CountBadge count=counts.open
                             color="bg-stone-200 dark:bg-stone-700 text-stone-700 dark:text-stone-300" />
@@ -150,7 +383,6 @@ fn ProjectCard(
                             color="bg-stone-100 dark:bg-stone-800 text-stone-400 dark:text-stone-500" />
                     </div>
 
-                    // Progress
                     <div class="flex items-center gap-2 w-28 flex-shrink-0">
                         {if total == 0 {
                             view! {
@@ -175,13 +407,11 @@ fn ProjectCard(
                 </div>
             </div>
 
-            // ── Expandable detail section ────────────────────────────────
+            // Expandable detail section — unchanged from v2.6.x
             {(status_html.is_some() || !open_tasks.is_empty()).then(|| {
                 view! {
                     <div class="border-t border-stone-200 dark:border-stone-700/60 px-4 py-3
                         grid grid-cols-1 md:grid-cols-2 gap-4">
-
-                        // Status section (left column)
                         {status_html.map(|html| view! {
                             <div>
                                 <div class="text-xs font-semibold uppercase tracking-wider
@@ -198,7 +428,6 @@ fn ProjectCard(
                             </div>
                         })}
 
-                        // Open tasks (right column)
                         {(!open_tasks.is_empty()).then(|| view! {
                             <div>
                                 <div class="text-xs font-semibold uppercase tracking-wider
@@ -224,7 +453,7 @@ fn ProjectCard(
     }
 }
 
-// ── Task chip (compact read-only task row) ──────��────────────────────────────
+// ── Task chip (unchanged from v2.6.x) ───────────────────────────────────────
 
 #[component]
 fn TaskChip(task: TaskSummary) -> impl IntoView {
@@ -238,16 +467,13 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
 
     view! {
         <div class="flex items-center gap-1.5 text-xs py-0.5 group/task">
-            // Priority dot
             <span
                 class="w-2 h-2 rounded-full flex-shrink-0"
                 style=format!("background-color: {color};")
             />
-            // Title
             <span class="truncate text-stone-700 dark:text-stone-300 flex-1 min-w-0">
                 {task.title}
             </span>
-            // In-progress badge
             {in_progress.then(|| view! {
                 <span class="text-[10px] px-1.5 py-0.5 rounded
                     bg-amber-100 dark:bg-amber-900/30
@@ -255,7 +481,6 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
                     "In Progress"
                 </span>
             })}
-            // Due date
             {has_due.then(|| view! {
                 <span class="text-stone-400 dark:text-stone-500 flex-shrink-0 whitespace-nowrap">
                     {due_label}
@@ -265,7 +490,7 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
     }
 }
 
-// ── Count badge ───────��─────────────────────────────���────────────────────────
+// ── Count badge (unchanged from v2.6.x) ─────────────────────────────────────
 
 #[component]
 fn CountBadge(count: u32, color: &'static str) -> impl IntoView {
@@ -275,3 +500,8 @@ fn CountBadge(count: u32, color: &'static str) -> impl IntoView {
         </span>
     }
 }
+
+// Suppress dead-code warning on unused import when the dashboard
+// later becomes tag-aware.
+#[allow(dead_code)]
+fn _phantom(_: NodeId, _: DateTime<Utc>) {}

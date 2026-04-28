@@ -57,6 +57,12 @@ pub fn dashboard_router() -> Router<AppState> {
     Router::new().route("/", get(project_dashboard))
 }
 
+/// Mounted at `/dashboard/activity` — recent activity recap for the
+/// home Dashboard's "What changed today / yesterday" section (v2.9.0).
+pub fn dashboard_activity_router() -> Router<AppState> {
+    Router::new().route("/", get(dashboard_activity))
+}
+
 // ── Recurrence helpers ────────────────────────────────────────────────────────
 
 /// Advance `d` by one recurrence interval. Falls back to `d` on edge cases
@@ -316,11 +322,13 @@ async fn project_dashboard(
 
     let node_ids: Vec<NodeId> = projects.iter().map(|n| n.id).collect();
 
-    // Fetch counts, open tasks, and per-node task activity in parallel.
-    let (counts_result, open_result, activity_result) = tokio::join!(
+    // Fetch counts, open tasks, per-node task activity, and Area
+    // parents (PARA grouping, v2.9.0) in parallel.
+    let (counts_result, open_result, activity_result, area_result) = tokio::join!(
         state.tasks.counts_for_nodes(&node_ids),
         state.tasks.list_open_for_nodes(&node_ids, DASHBOARD_TASK_LIMIT),
         state.tasks.max_task_updated_for_nodes(&node_ids),
+        state.nodes.area_for_nodes(&node_ids),
     );
 
     let counts_map: std::collections::HashMap<NodeId, TaskCounts> =
@@ -331,6 +339,10 @@ async fn project_dashboard(
         .collect();
     let activity_map: std::collections::HashMap<NodeId, chrono::DateTime<chrono::Utc>> =
         activity_result?.into_iter().collect();
+    let area_map: std::collections::HashMap<NodeId, (NodeId, String)> = area_result?
+        .into_iter()
+        .map(|(project, area_id, area_title)| (project, (area_id, area_title)))
+        .collect();
 
     let empty = TaskCounts { open: 0, in_progress: 0, done: 0, cancelled: 0 };
     let mut entries: Vec<ProjectDashboardEntry> = projects
@@ -347,6 +359,10 @@ async fn project_dashboard(
                 .get(&n.id)
                 .copied()
                 .map_or(n.updated_at, |t| t.max(n.updated_at));
+            let (area_id, area_title) = match area_map.get(&n.id) {
+                Some((aid, atitle)) => (Some(*aid), Some(atitle.clone())),
+                None                => (None, None),
+            };
             ProjectDashboardEntry {
                 node_id: n.id,
                 title: n.title,
@@ -356,13 +372,50 @@ async fn project_dashboard(
                 open_tasks,
                 has_more_tasks,
                 last_activity_at,
+                pinned: n.pinned,
+                area_id,
+                area_title,
             }
         })
         .collect();
 
-    // Most recently active projects first — keeps the 2–3 projects the
-    // user is currently working on at the top of the dashboard.
-    entries.sort_by(|a, b| b.last_activity_at.cmp(&a.last_activity_at));
+    // Pinned projects float to the top within their group; among
+    // unpinned (or among pinned), most recently active first — keeps
+    // the 2–3 projects the user is currently working on near the top
+    // of each Area.
+    entries.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.last_activity_at.cmp(&a.last_activity_at))
+    });
 
+    Ok(Json(entries))
+}
+
+#[derive(Deserialize)]
+struct DashboardActivityQuery {
+    /// RFC 3339 lower bound — only return entries `created_at >= since`.
+    /// Defaults to 48h ago if absent.
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    /// Cap on returned rows; defaults to 50, max 200.
+    limit: Option<i64>,
+}
+
+/// `GET /api/dashboard/activity?since=<rfc3339>&limit=<n>` — recent
+/// activity entries for the caller's nodes, joined with each node's
+/// title.  Powers the v2.9.0 dashboard recap.
+async fn dashboard_activity(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(params): Query<DashboardActivityQuery>,
+) -> Result<Json<Vec<common::activity::RecentActivityEntry>>, ApiError> {
+    let since = params.since.unwrap_or_else(|| {
+        chrono::Utc::now() - chrono::Duration::hours(48)
+    });
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let entries = state
+        .activity
+        .list_recent_for_owner(&claims.sub, since, limit)
+        .await?;
     Ok(Json(entries))
 }

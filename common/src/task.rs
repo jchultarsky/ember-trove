@@ -98,6 +98,17 @@ pub struct ProjectDashboardEntry {
     /// Equals `MAX(node.updated_at, MAX(tasks.updated_at))`; used to sort
     /// the dashboard so currently-active projects rise to the top.
     pub last_activity_at: DateTime<Utc>,
+    /// `true` when the user has pinned this project — pinned projects sort
+    /// above non-pinned within their group on the dashboard (v2.9.0).
+    #[serde(default)]
+    pub pinned: bool,
+    /// Optional parent Area (via `edge_type = 'contains'`).  When `Some`,
+    /// the dashboard groups this project under the named Area (PARA);
+    /// when `None`, the project lands in the "Ungrouped" group (v2.9.0).
+    #[serde(default)]
+    pub area_id: Option<crate::id::NodeId>,
+    #[serde(default)]
+    pub area_title: Option<String>,
 }
 
 /// Deserialises `Option<Option<T>>` correctly:

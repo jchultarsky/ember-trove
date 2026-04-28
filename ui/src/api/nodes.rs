@@ -73,6 +73,18 @@ pub async fn update_node(id: NodeId, req: &UpdateNodeRequest) -> Result<Node, Ui
     parse_json(resp).await
 }
 
+/// `PUT /api/nodes/:id/pin` — toggle a node's pinned flag.  Used by
+/// the v2.9.0 dashboard pin button.
+pub async fn set_node_pinned(id: NodeId, pinned: bool) -> Result<Node, UiError> {
+    let resp = Request::put(&api_url(&format!("/nodes/{id}/pin")))
+        .json(&serde_json::json!({ "pinned": pinned }))
+        .map_err(|e| UiError::Parse(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| UiError::Network(e.to_string()))?;
+    parse_json(resp).await
+}
+
 pub async fn delete_node(id: NodeId) -> Result<(), UiError> {
     let resp = Request::delete(&api_url(&format!("/nodes/{id}")))
         .send()

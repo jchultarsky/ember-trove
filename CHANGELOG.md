@@ -4,6 +4,76 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.9.0] - 2026-04-28
+
+### Added — Dashboard PARA + pinning + activity recap (UX phase 7)
+The Project Dashboard is now organised the way a BASB / PARA user
+actually thinks about projects: grouped under their parent **Area**,
+with the most-active and **pinned** projects floated to the top of
+each group, and a *what changed in the last 48 hours* recap at the
+top of the page so you don't have to drill into each project to see
+what moved.  This is the seventh and final phase of the Apr-2026 UX
+pass.
+
+- **PARA grouping.**  `ProjectDashboardEntry` gains `area_id` and
+  `area_title` fields, populated server-side from the `edges` table
+  via a new `NodeRepo::area_for_nodes` query.  An Area "owns" a
+  Project via an `edge_type = 'contains'` edge from the Area to the
+  Project; oldest such edge wins when a project belongs to multiple
+  Areas (`ROW_NUMBER() OVER (PARTITION BY project ORDER BY
+  created_at)`).  Projects with no Area parent land in an
+  **Ungrouped** bucket at the bottom of the list.
+- **Pinning.**  `ProjectDashboardEntry.pinned` is now populated
+  from `nodes.pinned`.  New `NodeRepo::set_pinned` + handler at
+  `PUT /api/nodes/:id/pin` body `{"pinned": bool}` (placeholder
+  route test from earlier finally has a real handler under it).
+  Click the ★ next to a project's title to pin / unpin; pinned
+  projects sort to the top of their Area, then by `last_activity_at`
+  desc.  Optimistic UI with toast + rollback on failure.
+- **Activity recap section.**  New
+  `ActivityRepo::list_recent_for_owner` JOINs `activity_log` to
+  `nodes` so the user's recent activity surfaces in one round-trip
+  with parent-node titles.  New endpoint
+  `GET /api/dashboard/activity?since=<rfc3339>&limit=<n>` (defaults
+  48h / 50 rows).  The dashboard renders this above the project
+  groups, split into "Today" and "Yesterday" sub-headings; hidden
+  entirely when there's nothing to recap so empty cases don't
+  generate visual noise.
+- **`RecentActivityEntry`** DTO added to `common::activity`
+  (`#[serde(flatten)]`'s an `ActivityEntry` plus a `node_title`).
+
+### Implementation notes
+- Dashboard fetch is now two LocalResources (projects + activity)
+  driven by a single shared `dashboard_refresh` signal, so a pin
+  toggle re-fetches both and the optimistic ★ state lines up with
+  the re-sorted project order.
+- Sort within each Area: pinned DESC then `last_activity_at` DESC.
+  Pinned-vs-pinned and unpinned-vs-unpinned both honour recency, so
+  pinning isn't a hard freeze.
+- Stub repos (`StubNodeRepo`, `StubActivityRepo`) updated for the
+  new trait methods — required by CLAUDE.md per-trait-method
+  invariant.
+
+### Tests
+- `dashboard_activity_route_registered` — route registration
+  regression test.
+- `node_pin_route_registered` (pre-existing placeholder) — was
+  vacuously passing on the OIDC=None test path; now backed by a
+  real handler.
+- API total: 61 (was 60); common total: 40 (unchanged).
+
+### Out of scope (deferred / intentionally not in v2.9.0)
+- Multi-Area projects: currently we surface the oldest containing
+  Area only; rendering one project under multiple Areas would
+  duplicate cards on the dashboard, which we judge worse than
+  picking a stable parent.  If a real use case appears, expose a
+  "primary area" field separately.
+- Per-project sort customisation: only pinned-vs-recent for now.
+- Activity recap on mobile is a single column; no pagination yet
+  even though `since`/`limit` are query-tunable.
+
+---
+
 ## [2.8.0] - 2026-04-28
 
 ### Added — Cmd-K command palette (UX phase 6)
