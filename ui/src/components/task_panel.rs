@@ -404,7 +404,10 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let has_recurrence = task.recurrence.is_some();
 
     view! {
-        <div class="group flex items-start gap-2 py-2 border-b border-stone-100 dark:border-stone-800 last:border-0">
+        <div
+            class="group flex items-start gap-2 py-2 border-b border-stone-100 dark:border-stone-800 last:border-0"
+            data-task-id=task_id.0.to_string()
+        >
             // Checkbox
             <button
                 class="mt-0.5 flex-shrink-0 w-4 h-4 rounded border border-stone-400 dark:border-stone-500

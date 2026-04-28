@@ -206,6 +206,20 @@ input[type="checkbox"]:checked::after {
   animation: toast-in 0.2s ease-out both;
 }
 
+/* ── Focus-task highlight (v2.6.2) ─────────────────────────────────────────────
+   Applied for ~1.8s by `focus_task::schedule_focus_task` when the destination
+   view (NodeView, InboxView, TaskPanel) renders the row matching the
+   `?task=<id>` query param the Kanban click navigation set. */
+@keyframes focus-task-flash {
+  0%   { box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0); background-color: rgba(245, 158, 11, 0); }
+  15%  { box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.85); background-color: rgba(245, 158, 11, 0.18); }
+  100% { box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0); background-color: rgba(245, 158, 11, 0); }
+}
+.focus-task-flash {
+  animation: focus-task-flash 1.8s ease-out both;
+  border-radius: 0.5rem;
+}
+
 /* Material Symbols */
 .material-symbols-outlined {
   font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 20;
