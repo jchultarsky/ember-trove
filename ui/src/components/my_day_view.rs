@@ -1,34 +1,53 @@
-//! My Day — two-zone vertical Kanban (v2.6.0).
+//! My Day — two-zone vertical Kanban (v2.6.0+) with keyboard triage (v2.7.0).
 //!
 //! Top zone:  tasks with `focus_date == today`        — "what I'm doing today"
 //! Bottom:    every open task whose `focus_date` is NOT today  — "everything else"
 //!
-//! Two ways to swap a task between zones, both equivalent:
+//! ## Mouse + touch
 //!
-//! * **Tap** — every row carries an explicit ☀ "Add to today" (in backlog)
-//!   or × "Remove from today" (in today) button.  Always visible — no
-//!   hover-to-reveal — so the touch path matches the desktop path.
-//! * **Drag** — HTML5 native drag + drop on desktop.  `dataTransfer`
-//!   carries the task id; the destination zone fires the same PATCH the
-//!   tap button would.  Touch never fires `dragstart`, so iPhone users
-//!   simply use the tap.
+//! Tap the ☀ "Add to today" button (in backlog) or × "Remove from today"
+//! button (in today) on any row.  Drag the row body across the divider
+//! (desktop only — touch never fires HTML5 dragstart).  Both paths run
+//! the same `PATCH /api/tasks/:id`.
 //!
-//! `focus_date` is binary in this model: only `Some(today)` or `None`.
-//! There is no "schedule for next Tuesday" affordance on My Day — the
-//! task editor still lets you change `due_date` (the external deadline);
-//! `focus_date` is purely the Kanban zone.
+//! ## Keyboard (v2.7.0)
+//!
+//! Global keydown handler attached while this view is mounted.  Skipped
+//! when an `<input>`, `<textarea>`, `<select>`, `[contenteditable]`, or
+//! a `<button>` has focus, so typing in the inline edit form, or
+//! tabbing to action buttons, never triggers a shortcut.
+//!
+//!   `j` / `↓`   focus next row (across both zones, in display order)
+//!   `k` / `↑`   focus previous row
+//!   `Enter`     open the focused task in its parent node (or Inbox)
+//!   `Space`     toggle done on the focused task
+//!   `t`         toggle the focused task between Today and Backlog
+//!   `e`         open inline edit on the focused task
+//!   `d`         delete the focused task
+//!
+//! `s` (snooze) is intentionally absent — `focus_date` is binary in this
+//! model (today | None), so "snooze" is the same gesture as "remove from
+//! today" (the `t` toggle from the Today zone).
+//!
+//! ## Carry-over
 //!
 //! Carry-over UI is gone from this view.  Tasks committed to a previous
 //! day that aren't done show up in the backlog with a small
 //! "carried from May 2" badge (rendered by `KanbanTaskRow`); the user
 //! drags or taps them back to today the same as anything else.
 
-use common::task::MyDayTask;
-use leptos::prelude::*;
+use chrono::NaiveDate;
+use common::id::TaskId;
+use common::task::{MyDayTask, TaskStatus, UpdateTaskRequest};
+use leptos::{ev, prelude::*};
+use leptos::wasm_bindgen::JsCast;
+use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::task_common::status_done;
-use crate::components::task_row::{KanbanTaskRow, KanbanZone};
+use crate::components::task_row::{
+    EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone,
+};
 use crate::components::toast::{push_toast, ToastLevel};
 
 #[component]
@@ -51,6 +70,160 @@ pub fn MyDayView() -> impl IntoView {
         async move { crate::api::list_open_tasks().await }
     });
 
+    // ── Keyboard cursor + edit cursor (provided to all KanbanTaskRow's) ─
+    let focused_id: RwSignal<Option<TaskId>> = RwSignal::new(None);
+    let editing_id: RwSignal<Option<TaskId>> = RwSignal::new(None);
+    provide_context(FocusedTaskId(focused_id));
+    provide_context(EditingTaskId(editing_id));
+
+    // ── Flat task list in display order — fed to the keyboard handler.
+    // Today zone first, backlog second.  Updated whenever either
+    // resource changes.  Stored in a separate signal (vs derived from
+    // resources every keypress) so the keydown handler can read it
+    // untracked without touching the reactive graph.
+    let flat_tasks: RwSignal<Vec<MyDayTask>> = RwSignal::new(Vec::new());
+    Effect::new(move |_| {
+        let today_raw = today_tasks.get().and_then(|r| r.ok()).unwrap_or_default();
+        let all_raw   = all_open.get().and_then(|r| r.ok()).unwrap_or_default();
+        let today_zone: Vec<MyDayTask> = today_raw.into_iter()
+            .filter(|t| t.task.focus_date == Some(today))
+            .collect();
+        let backlog_zone: Vec<MyDayTask> = all_raw.into_iter()
+            .filter(|t| t.task.focus_date != Some(today))
+            .collect();
+        let mut flat = today_zone;
+        flat.extend(backlog_zone);
+        // Drop the focus cursor if it now points at a task that
+        // disappeared (deleted, completed, etc.) — k/j start from the
+        // top next time.
+        if let Some(fid) = focused_id.get_untracked()
+            && !flat.iter().any(|t| t.task.id == fid)
+        {
+            focused_id.set(None);
+        }
+        flat_tasks.set(flat);
+    });
+
+    let navigate = StoredValue::new(use_navigate());
+
+    // ── Window keydown handler ─────────────────────────────────────────
+    // Attached on mount (window_event_listener returns a Handle that
+    // Leptos drops automatically when the view unmounts, removing the
+    // listener — no manual cleanup needed).
+    window_event_listener(ev::keydown, move |ev| {
+        // Modifier keys are reserved for app-level shortcuts (Cmd-K
+        // arrives in v2.8.0) — never consume them here.
+        if ev.ctrl_key() || ev.meta_key() || ev.alt_key() { return; }
+
+        // Skip when typing — input, textarea, select, button, or
+        // anything contenteditable.  Buttons are excluded so Enter on
+        // a focused tap-button doesn't trigger the row Enter shortcut.
+        let editable = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.active_element())
+            .map(|el| {
+                let tag = el.tag_name().to_uppercase();
+                if matches!(tag.as_str(), "INPUT" | "TEXTAREA" | "SELECT" | "BUTTON") {
+                    return true;
+                }
+                el.get_attribute("contenteditable")
+                    .map(|v| v != "false")
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if editable { return; }
+
+        let flat = flat_tasks.get_untracked();
+        if flat.is_empty() { return; }
+        let cur_idx = focused_id.get_untracked()
+            .and_then(|id| flat.iter().position(|t| t.task.id == id));
+
+        match ev.key().as_str() {
+            "j" | "ArrowDown" => {
+                ev.prevent_default();
+                let next = cur_idx.map_or(0, |i| (i + 1).min(flat.len() - 1));
+                let id = flat[next].task.id;
+                focused_id.set(Some(id));
+                scroll_focused_into_view(id);
+            }
+            "k" | "ArrowUp" => {
+                ev.prevent_default();
+                let next = cur_idx.map_or(0, |i| i.saturating_sub(1));
+                let id = flat[next].task.id;
+                focused_id.set(Some(id));
+                scroll_focused_into_view(id);
+            }
+            "Enter" => {
+                let Some(idx) = cur_idx else { return; };
+                ev.prevent_default();
+                let mdt = &flat[idx];
+                let target = match mdt.task.node_id {
+                    Some(nid) => format!("/nodes/{nid}?task={}", mdt.task.id),
+                    None      => format!("/tasks/inbox?task={}", mdt.task.id),
+                };
+                navigate.get_value()(&target, Default::default());
+            }
+            " " => {
+                let Some(idx) = cur_idx else { return; };
+                ev.prevent_default();
+                let mdt = &flat[idx];
+                let next_status = if status_done(&mdt.task.status) {
+                    TaskStatus::Open
+                } else {
+                    TaskStatus::Done
+                };
+                patch_task(
+                    mdt.task.id,
+                    UpdateTaskRequest {
+                        title: None, status: Some(next_status),
+                        priority: None, focus_date: None, due_date: None,
+                        recurrence: None, node_id: None,
+                    },
+                    "Toggled",
+                    task_refresh,
+                );
+            }
+            "t" => {
+                let Some(idx) = cur_idx else { return; };
+                ev.prevent_default();
+                let mdt = &flat[idx];
+                let in_today = mdt.task.focus_date == Some(today);
+                let new_focus = if in_today { None } else { Some(today) };
+                let msg = if in_today { "Removed from today" } else { "Added to today" };
+                patch_task(
+                    mdt.task.id,
+                    UpdateTaskRequest {
+                        title: None, status: None, priority: None,
+                        focus_date: Some(new_focus),
+                        due_date: None, recurrence: None, node_id: None,
+                    },
+                    msg,
+                    task_refresh,
+                );
+            }
+            "e" => {
+                let Some(idx) = cur_idx else { return; };
+                ev.prevent_default();
+                editing_id.set(Some(flat[idx].task.id));
+            }
+            "d" => {
+                let Some(idx) = cur_idx else { return; };
+                ev.prevent_default();
+                let id = flat[idx].task.id;
+                wasm_bindgen_futures::spawn_local(async move {
+                    match crate::api::delete_task(id).await {
+                        Ok(_)  => {
+                            push_toast(ToastLevel::Success, "Deleted");
+                            task_refresh.update(|n| *n += 1);
+                        }
+                        Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+                    }
+                });
+            }
+            _ => {}
+        }
+    });
+
     view! {
         <div class="flex flex-col h-full">
 
@@ -66,7 +239,7 @@ pub fn MyDayView() -> impl IntoView {
                         </h1>
                         <p class="text-xs text-stone-400 dark:text-stone-500">
                             {date_label}
-                            " · drag or tap ☀ to add to today, × to send back to backlog"
+                            " · drag, tap ☀/×, or use j/k + Enter/Space/t/e/d (press ? for the full list)"
                         </p>
                     </div>
                     // X / Y done counter for today
@@ -99,11 +272,6 @@ pub fn MyDayView() -> impl IntoView {
                         let raw = today_tasks.get()
                             .and_then(|r| r.ok())
                             .unwrap_or_default();
-                        // The server's list_my_day also includes
-                        // carryovers (focus_date < today AND not done) —
-                        // exclude them here so the today zone is strictly
-                        // focus_date == today.  Carryovers naturally land
-                        // in the backlog zone below.
                         let scoped: Vec<MyDayTask> = raw.into_iter()
                             .filter(|t| t.task.focus_date == Some(today))
                             .collect();
@@ -171,7 +339,7 @@ fn KanbanZoneRow(
     zone: KanbanZone,
     empty_msg: &'static str,
     tasks: Vec<MyDayTask>,
-    today: chrono::NaiveDate,
+    today: NaiveDate,
     refresh: RwSignal<u32>,
     accent_class: &'static str,
 ) -> impl IntoView {
@@ -186,7 +354,7 @@ fn KanbanZoneRow(
         let Some(dt)  = ev.data_transfer() else { return; };
         let Ok(raw)   = dt.get_data("text/plain")    else { return; };
         let Ok(uuid)  = raw.parse::<uuid::Uuid>()    else { return; };
-        let task_id   = common::id::TaskId(uuid);
+        let task_id   = TaskId(uuid);
         let new_focus = match zone {
             KanbanZone::Today   => Some(today),
             KanbanZone::Backlog => None,
@@ -195,7 +363,7 @@ fn KanbanZoneRow(
             KanbanZone::Today   => "Added to today",
             KanbanZone::Backlog => "Removed from today",
         };
-        let req = common::task::UpdateTaskRequest {
+        let req = UpdateTaskRequest {
             title:      None,
             status:     None,
             priority:   None,
@@ -265,4 +433,40 @@ fn KanbanZoneRow(
             }}
         </section>
     }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+/// Fire one PATCH and refresh on success.  Used by the keyboard
+/// shortcut handler — the row's own buttons go through their local
+/// handlers in `task_row.rs`.
+fn patch_task(
+    task_id: TaskId,
+    req: UpdateTaskRequest,
+    success_msg: &'static str,
+    refresh: RwSignal<u32>,
+) {
+    wasm_bindgen_futures::spawn_local(async move {
+        match crate::api::update_task(task_id, &req).await {
+            Ok(_)  => {
+                push_toast(ToastLevel::Success, success_msg);
+                refresh.update(|n| *n += 1);
+            }
+            Err(e) => push_toast(ToastLevel::Error, format!("Update failed: {e}")),
+        }
+    });
+}
+
+/// Scroll the row matching `task_id` into view (no flash — the focus
+/// ring is the visual anchor).  Called after j/k navigation.
+fn scroll_focused_into_view(task_id: TaskId) {
+    let Some(win) = web_sys::window() else { return; };
+    let Some(doc) = win.document() else { return; };
+    let selector = format!("[data-task-id=\"{}\"]", task_id.0);
+    let Ok(Some(el)) = doc.query_selector(&selector) else { return; };
+    let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() else { return; };
+    let opts = web_sys::ScrollIntoViewOptions::new();
+    opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+    opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+    html_el.scroll_into_view_with_scroll_into_view_options(&opts);
 }

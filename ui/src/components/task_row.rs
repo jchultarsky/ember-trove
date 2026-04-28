@@ -33,6 +33,7 @@
 //! restructuring.
 
 use chrono::NaiveDate;
+use common::id::TaskId;
 use common::task::{Task, TaskPriority, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -52,6 +53,21 @@ pub enum KanbanZone {
     /// `focus_date != today` — row in the lower backlog zone.
     Backlog,
 }
+
+/// Newtype for the keyboard cursor: which task row is currently focused
+/// for keyboard shortcuts.  Provided as a context by `MyDayView`; rows
+/// read it to render a focus ring.  Also written by the row's own click
+/// handler so mouse and keyboard share one source of truth.
+#[derive(Clone, Copy)]
+pub struct FocusedTaskId(pub RwSignal<Option<TaskId>>);
+
+/// Newtype for the inline-edit cursor: which task row is currently in
+/// edit mode.  Provided as a context by `MyDayView`; rows watch it to
+/// open / close their inline edit form.  Letting an external signal
+/// drive editing means the keyboard `e` shortcut and the pencil button
+/// share one mechanism.
+#[derive(Clone, Copy)]
+pub struct EditingTaskId(pub RwSignal<Option<TaskId>>);
 
 #[component]
 pub fn KanbanTaskRow(
@@ -78,9 +94,25 @@ pub fn KanbanTaskRow(
     // Status flips locally on toggle; PATCH happens in the background.
     let status_sig = RwSignal::new(task.status.clone());
 
+    // Keyboard-focus + edit cursors come from MyDayView via context.
+    // Optional because KanbanTaskRow could in principle be used outside
+    // a Kanban (no consumer today, but the type is reusable).  When the
+    // contexts aren't provided we fall back to local-only signals so
+    // mouse-driven UX still works.
+    let focused_ctx: Option<FocusedTaskId> = use_context();
+    let editing_ctx: Option<EditingTaskId> = use_context();
+    let editing_local: RwSignal<Option<TaskId>> = RwSignal::new(None);
+    let editing_id_sig: RwSignal<Option<TaskId>> = editing_ctx
+        .map(|e| e.0)
+        .unwrap_or(editing_local);
+    // Derived: is *this* row currently focused / editing?
+    let is_focused = move || focused_ctx
+        .map(|f| f.0.get() == Some(task_id))
+        .unwrap_or(false);
+    let is_editing = move || editing_id_sig.get() == Some(task_id);
+
     // Inline edit form state.  Mirrors the original MyDayTaskRow layout
     // minus the focus_date field (focus is binary, owned by zone-swap).
-    let editing         = RwSignal::new(false);
     let edit_title      = RwSignal::new(task.title.clone());
     let edit_priority   = RwSignal::new(priority_value(&priority).to_string());
     let edit_due        = RwSignal::new(
@@ -163,7 +195,7 @@ pub fn KanbanTaskRow(
         ev.stop_propagation();
         // Reset edit fields to the latest known values, then open.
         edit_title.set(title_sig.get_untracked());
-        editing.set(true);
+        editing_id_sig.set(Some(task_id));
     };
 
     let do_save = move || {
@@ -184,7 +216,7 @@ pub fn KanbanTaskRow(
             node_id:    None,
         };
         title_sig.set(new_title);
-        editing.set(false);
+        editing_id_sig.set(None);
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {
                 Ok(_)  => {
@@ -197,18 +229,21 @@ pub fn KanbanTaskRow(
     };
     let on_cancel_edit = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        editing.set(false);
+        editing_id_sig.set(None);
     };
     let on_save_edit = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
         do_save();
     };
 
-    // ── Row click → navigate to parent (or Inbox) and focus the task ─
+    // ── Row click → focus + navigate to parent (or Inbox) ────────────
     let on_row_click = move |_ev: web_sys::MouseEvent| {
         // Don't navigate while editing — clicks inside the edit form
         // would otherwise jump the user away mid-typing.
-        if editing.get_untracked() { return; }
+        if editing_id_sig.get_untracked() == Some(task_id) { return; }
+        // Mouse and keyboard share one focus cursor — clicking a row
+        // moves the keyboard focus to it as well.
+        if let Some(f) = focused_ctx { f.0.set(Some(task_id)); }
         let target = match node_id {
             Some(nid) => format!("/nodes/{nid}?task={task_id}"),
             None      => format!("/tasks/inbox?task={task_id}"),
@@ -241,7 +276,8 @@ pub fn KanbanTaskRow(
     // re-evaluating the class list on every status change, which was
     // leaving transient hover/border artifacts when the cursor swept the
     // list quickly.  Dynamic state lives in the inline `style=move ||`
-    // (opacity only) where Leptos diffs cleanly.
+    // (opacity for done tasks, focus ring for keyboard cursor) where
+    // Leptos diffs cleanly.
     let row_class = format!(
         "group flex items-start gap-2 py-2 px-3 rounded-r-lg \
          hover:bg-stone-50 dark:hover:bg-stone-800/50 \
@@ -253,7 +289,18 @@ pub fn KanbanTaskRow(
             on:dragstart=on_dragstart
             on:click=on_row_click
             class=row_class
-            style=move || if status_done(&status_sig.get()) { "opacity:0.5;" } else { "" }
+            style=move || {
+                let mut s = String::new();
+                if status_done(&status_sig.get()) { s.push_str("opacity:0.5;"); }
+                if is_focused() {
+                    // Inner amber ring; sits inside the row so it
+                    // doesn't add layout (no offset) and reads as
+                    // "the keyboard is here" without competing with
+                    // the zone's left-border accent.
+                    s.push_str("box-shadow:inset 0 0 0 2px #f59e0b;background-color:rgba(245,158,11,0.04);");
+                }
+                s
+            }
             data-task-id=task_id.0.to_string()
             title="Click to open the task in its parent node"
         >
@@ -299,7 +346,7 @@ pub fn KanbanTaskRow(
                     })}
                 </div>
 
-                {move || if editing.get() {
+                {move || if is_editing() {
                     // ── Inline edit form ─────────────────────────────
                     view! {
                         <div class="mt-1 space-y-2"
@@ -314,7 +361,7 @@ pub fn KanbanTaskRow(
                                 on:keydown=move |ev: leptos::ev::KeyboardEvent| {
                                     match ev.key().as_str() {
                                         "Enter"  => do_save(),
-                                        "Escape" => editing.set(false),
+                                        "Escape" => editing_id_sig.set(None),
                                         _ => {}
                                     }
                                 }

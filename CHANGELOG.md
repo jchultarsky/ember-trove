@@ -4,6 +4,64 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.7.0] - 2026-04-28
+
+### Added — Kanban keyboard triage (UX phase 5)
+The My Day Kanban now drives from the keyboard.  Inbox-zero / triage
+loops that previously needed mouse clicks per row become a single
+`j j j t Space d` rhythm.  Sits cleanly on top of the v2.6.x
+`KanbanTaskRow` foundation — no row layout changes, just new context
+plumbing for focus + edit cursors.
+
+**Shortcuts** (active on `/tasks/my-day`, suppressed when an input,
+textarea, select, button, or contenteditable has focus):
+
+| Key            | Action                                                       |
+|----------------|--------------------------------------------------------------|
+| `j` / `↓`      | Focus next task (across both zones, in display order)        |
+| `k` / `↑`      | Focus previous task                                          |
+| `Enter`        | Open the focused task in its parent (or `/tasks/inbox`)      |
+| `Space`        | Toggle done on the focused task                              |
+| `t`            | Toggle the focused task between Today and Backlog            |
+| `e`            | Open inline edit on the focused task                         |
+| `d`            | Delete the focused task                                      |
+
+`s` (snooze) from the original Phase 5 spec is intentionally absent.
+With `focus_date` binary (today | None) under the v2.6.0 model,
+"snooze" is the same gesture as "remove from today" — already covered
+by `t` from the Today zone.
+
+### Implementation notes
+- New context types in [`task_row.rs`](ui/src/components/task_row.rs):
+  `FocusedTaskId(RwSignal<Option<TaskId>>)` and
+  `EditingTaskId(RwSignal<Option<TaskId>>)`.  `MyDayView` provides
+  both at the top of the view; `KanbanTaskRow` reads them to render a
+  focus ring (inset amber `box-shadow`) and to drive its inline edit
+  form.  Mouse and keyboard share one focus cursor — clicking a row
+  also moves the keyboard cursor there.
+- The window keydown handler lives in `MyDayView` so it auto-detaches
+  when the user navigates elsewhere (Leptos drops the
+  `window_event_listener` handle on view unmount).  Modifier keys
+  (Ctrl / Cmd / Alt) are reserved for app-level shortcuts (e.g. the
+  forthcoming Cmd-K palette) and never consumed.
+- Pencil-button click and `e` shortcut now share one mechanism:
+  both write to the `EditingTaskId` context signal, so opening edit
+  from either path is identical.
+- `j` / `k` after navigation scroll the focused row into view via
+  `scrollIntoView({block: "nearest"})` — quiet, no flash.
+- `ShortcutsModal` (`?`) reorganised into three groups: **Anywhere**,
+  **My Day Kanban**, **Node view** — mirrors where the shortcuts are
+  actually active.
+
+### Out of scope (not regressed by this release)
+- Capture-from-anywhere (`n`) and search (`/`) shortcuts unchanged —
+  still listed under "Anywhere" in the help overlay.
+- The Cmd-K palette (Phase 6 / v2.8.0) will repurpose `/` to open a
+  floating palette over the current view; until then `/` still
+  navigates to the full-page `SearchView`.
+
+---
+
 ## [2.6.2] - 2026-04-28
 
 ### Added — Click-to-navigate + inline edit on Kanban tasks
