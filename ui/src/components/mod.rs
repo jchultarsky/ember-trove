@@ -27,7 +27,6 @@ pub mod calendar_view;
 pub mod change_password_modal;
 pub mod inbox_view;
 pub mod my_day_view;
-pub mod plan_view;
 pub mod project_dashboard;
 pub mod tag_bar;
 pub mod tag_manager;

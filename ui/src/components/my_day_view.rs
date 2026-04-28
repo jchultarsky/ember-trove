@@ -27,7 +27,6 @@ use common::task::MyDayTask;
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
-use crate::components::plan_view::planned_today;
 use crate::components::task_common::status_done;
 use crate::components::task_row::{KanbanTaskRow, KanbanZone};
 use crate::components::toast::{push_toast, ToastLevel};
@@ -88,30 +87,6 @@ pub fn MyDayView() -> impl IntoView {
                     }}
                 </div>
             </div>
-
-            // ── Plan-your-day nudge — until /plan stamps `last_planned_at` ──
-            {move || {
-                let _ = task_refresh.get();
-                if planned_today() { return ().into_any(); }
-                view! {
-                    <a
-                        href="/plan"
-                        class="mx-4 md:mx-6 mt-3 -mb-1 flex items-center justify-between \
-                               gap-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 \
-                               border border-amber-200 dark:border-amber-900/40 \
-                               text-amber-900 dark:text-amber-200 text-sm \
-                               hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors"
-                    >
-                        <span class="flex items-center gap-2">
-                            <span class="material-symbols-outlined" style="font-size:18px;">
-                                "wb_twilight"
-                            </span>
-                            "Plan your day — review yesterday and inbox"
-                        </span>
-                        <span class="material-symbols-outlined" style="font-size:16px;">"arrow_forward"</span>
-                    </a>
-                }.into_any()
-            }}
 
             // ── Two-zone scroll surface ─────────────────────────────────
             <div class="flex-1 overflow-auto p-4 md:p-6 space-y-6">

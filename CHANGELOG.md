@@ -4,6 +4,44 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.6.1] - 2026-04-28
+
+### Removed — `/plan` route and morning-ritual surface
+The Kanban shipped in v2.6.0 made `/plan` redundant.  Side-by-side
+review with the user:
+
+| `/plan` section | Where it lives now | Verdict |
+|---|---|---|
+| Carry-over count | Kanban backlog rows show "carried from X" badge | Redundant |
+| Inbox count | Kanban backlog includes Inbox-chipped rows | Redundant |
+| Due today | Kanban sorts due-first; deadlines float to top | Redundant |
+| Yesterday recap | Nowhere | User opted not to keep it |
+| "Start my day" CTA + `et.plan.last_planned_at` stamp | Drove the banner on `/tasks/my-day` | Banner removed too |
+
+Net deletion:
+
+- `ui/src/components/plan_view.rs` (entire file, plus its `pub mod`
+  in `components/mod.rs`).
+- `<Route path=path!("/plan") view=PlanView />` and the import in
+  `layout.rs`.
+- "Plan" sidebar link in `sidebar.rs`.
+- "Plan your day — review yesterday and inbox" banner block in
+  `my_day_view.rs` (and its `planned_today()` import).
+- `LAST_PLANNED_AT_KEY` localStorage key — no code reads or writes
+  it anymore; existing stored values become inert and harmless.
+
+The Kanban's per-zone empty states (introduced in v2.6.0 — "Nothing
+on today's list — drag or tap ☀ on a backlog task below" /
+"Your backlog is empty.") already replaced what the v2.5.0 cold-start
+copy used to point at, so nothing else needed touching.
+
+### Roadmap impact
+The Apr-2026 UX phase plan now spans phases 1–4 + this trim, with
+Phase 5 (Inbox keyboard triage on the shared `KanbanTaskRow`) on
+deck for v2.7.0.  No other phases changed.
+
+---
+
 ## [2.6.0] - 2026-04-28
 
 ### Changed — My Day is now a two-zone vertical Kanban (UX phase 4)
