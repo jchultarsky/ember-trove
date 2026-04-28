@@ -53,6 +53,10 @@ web-sys = { version = "0.3", features = [
     "Location",
     "Url",
     "UrlSearchParams",
+    "ScrollIntoViewOptions",
+    "ScrollBehavior",
+    "ScrollLogicalPosition",
+    "DomTokenList",
 ] }
 js-sys = "0.3"
 chrono = { workspace = true, features = ["wasmbind"] }

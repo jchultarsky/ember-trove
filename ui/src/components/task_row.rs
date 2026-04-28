@@ -1,27 +1,45 @@
-//! Shared task-row component for the My Day Kanban (v2.6.0).
+//! Shared task-row component for the My Day Kanban (v2.6.0+).
 //!
 //! Renders one task as a row with consistent visual hierarchy:
-//! checkbox, project chip, title, priority dot, due-date label,
-//! actions.  Drives both zones of the My Day Kanban (today + backlog)
-//! via a single `KanbanZone` enum that swaps which "zone-swap" button
-//! is shown.
+//! checkbox · project chip · title · priority dot · due-date label · actions.
+//! Drives both zones of the My Day Kanban (today + backlog) via a single
+//! `KanbanZone` enum that swaps which "zone-swap" button is shown.
 //!
 //! `focus_date` is binary in this model — "today" or "not today".  All
-//! mutations on this row go through `PATCH /api/tasks/:id` setting
-//! `focus_date` to `Some(today)` or `Some(None)` (= clear).
+//! mutations on this row that touch focus go through
+//! `PATCH /api/tasks/:id` setting `focus_date` to `Some(today)` or
+//! `Some(None)` (= clear).
 //!
-//! Drag-and-drop is wired via HTML5 native events.  `dataTransfer` carries
-//! the task id as `text/plain`; the parent zone listens for `drop` events
-//! and runs the same code path as the tap-button handler — so the drag
-//! gesture is purely a desktop convenience, never the only mechanism.
+//! ## Click + drag (v2.6.2)
 //!
-//! Keyboard triage (Phase 5 / v2.7.0) will plug in here without restructuring.
+//! Two ways to interact with the row body:
+//! * **Click** the row body (anywhere outside the action buttons or the
+//!   inline edit form) → navigate to the parent node, scrolled and
+//!   briefly highlighted on the task.  Standalone tasks navigate to the
+//!   Inbox.  Action buttons call `stopPropagation()` so they never
+//!   trigger the row-click.
+//! * **Drag** the row body → HTML5 native drag.  `dataTransfer` carries
+//!   the task id; the destination zone fires the same PATCH the tap
+//!   button would.  Mousedown-then-move triggers drag; mousedown-then-up
+//!   triggers click — they don't conflict in practice.
+//!
+//! ## Inline edit (v2.6.2)
+//!
+//! The pencil button toggles an inline edit form (title, priority,
+//! due_date, recurrence).  No `focus_date` field — that's binary, owned
+//! by the zone-swap button.  Save persists via PATCH; Esc cancels.
+//!
+//! Keyboard triage (Phase 5 / v2.7.0) will plug in here without
+//! restructuring.
 
 use chrono::NaiveDate;
 use common::task::{Task, TaskPriority, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
+use leptos_router::hooks::use_navigate;
 
-use crate::components::task_common::status_done;
+use crate::components::task_common::{
+    parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
+};
 use crate::components::toast::{push_toast, ToastLevel};
 
 /// Which zone of the Kanban this row currently lives in.  Determines which
@@ -47,21 +65,40 @@ pub fn KanbanTaskRow(
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let task_id   = task.id;
-    let title     = task.title.clone();
+    let node_id   = task.node_id;
     let priority  = task.priority.clone();
     let due       = task.due_date;
     let focus     = task.focus_date;
     let parent    = node_title.unwrap_or_else(|| "Inbox".to_string());
     let node_icon = if task.node_id.is_some() { "rocket_launch" } else { "inbox" };
 
+    // Display state — title shows the latest known value (may be edited).
+    let title_sig = RwSignal::new(task.title.clone());
+
     // Status flips locally on toggle; PATCH happens in the background.
     let status_sig = RwSignal::new(task.status.clone());
-    let busy       = RwSignal::new(false);
 
-    // Carry-over context: a task in the backlog zone whose focus_date is
-    // strictly before today was committed to a previous day and never
-    // finished.  Surfaces as a small "from May 2" hint so the user knows
-    // it's been sitting.  Today-zone rows never show this.
+    // Inline edit form state.  Mirrors the original MyDayTaskRow layout
+    // minus the focus_date field (focus is binary, owned by zone-swap).
+    let editing         = RwSignal::new(false);
+    let edit_title      = RwSignal::new(task.title.clone());
+    let edit_priority   = RwSignal::new(priority_value(&priority).to_string());
+    let edit_due        = RwSignal::new(
+        due.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default(),
+    );
+    let edit_recurrence = RwSignal::new(
+        task.recurrence
+            .as_ref()
+            .map(|r| recurrence_value(r).to_string())
+            .unwrap_or_default(),
+    );
+
+    let busy = RwSignal::new(false);
+    let navigate = StoredValue::new(use_navigate());
+
+    // Carry-over context: a backlog row whose focus_date is strictly before
+    // today was committed to a previous day and never finished.  Surfaces
+    // as a small "from May 2" hint.
     let carryover_from: Option<NaiveDate> = match zone {
         KanbanZone::Backlog => focus.filter(|&d| d < today),
         KanbanZone::Today   => None,
@@ -73,13 +110,9 @@ pub fn KanbanTaskRow(
         if busy.get_untracked() { return; }
         busy.set(true);
         let req = UpdateTaskRequest {
-            title:      None,
-            status:     None,
-            priority:   None,
+            title: None, status: None, priority: None,
             focus_date: Some(new_focus),
-            due_date:   None,
-            recurrence: None,
-            node_id:    None,
+            due_date: None, recurrence: None, node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             let result = crate::api::update_task(task_id, &req).await;
@@ -94,10 +127,8 @@ pub fn KanbanTaskRow(
         });
     };
 
-    let on_add_today    = move |_| patch_focus(Some(today), "Added to today");
-    let on_remove_today = move |_| patch_focus(None,         "Removed from today");
-
-    let on_toggle_done = move |_| {
+    let on_toggle_done = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
         if busy.get_untracked() { return; }
         let next = if status_done(&status_sig.get_untracked()) {
             TaskStatus::Open
@@ -117,7 +148,8 @@ pub fn KanbanTaskRow(
         });
     };
 
-    let on_delete = move |_| {
+    let on_delete = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
         if busy.get_untracked() { return; }
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
@@ -127,10 +159,66 @@ pub fn KanbanTaskRow(
         });
     };
 
+    let on_pencil = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        // Reset edit fields to the latest known values, then open.
+        edit_title.set(title_sig.get_untracked());
+        editing.set(true);
+    };
+
+    let do_save = move || {
+        let new_title = edit_title.get_untracked().trim().to_string();
+        if new_title.is_empty() { return; }
+        let new_priority   = parse_priority(&edit_priority.get_untracked());
+        let new_recurrence = parse_recurrence_opt(&edit_recurrence.get_untracked());
+        let new_due: Option<Option<NaiveDate>> = Some(
+            edit_due.get_untracked().trim().parse::<NaiveDate>().ok(),
+        );
+        let req = UpdateTaskRequest {
+            title:      Some(new_title.clone()),
+            status:     None,
+            priority:   Some(new_priority),
+            focus_date: None,
+            due_date:   new_due,
+            recurrence: Some(new_recurrence),
+            node_id:    None,
+        };
+        title_sig.set(new_title);
+        editing.set(false);
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_)  => {
+                    push_toast(ToastLevel::Success, "Saved");
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => push_toast(ToastLevel::Error, format!("Save failed: {e}")),
+            }
+        });
+    };
+    let on_cancel_edit = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        editing.set(false);
+    };
+    let on_save_edit = move |ev: web_sys::MouseEvent| {
+        ev.stop_propagation();
+        do_save();
+    };
+
+    // ── Row click → navigate to parent (or Inbox) and focus the task ─
+    let on_row_click = move |_ev: web_sys::MouseEvent| {
+        // Don't navigate while editing — clicks inside the edit form
+        // would otherwise jump the user away mid-typing.
+        if editing.get_untracked() { return; }
+        let target = match node_id {
+            Some(nid) => format!("/nodes/{nid}?task={task_id}"),
+            None      => format!("/tasks/inbox?task={task_id}"),
+        };
+        navigate.get_value()(&target, Default::default());
+    };
+
     // ── Drag (desktop only — touch never fires HTML5 dragstart) ──────
     let on_dragstart = move |ev: web_sys::DragEvent| {
         if let Some(dt) = ev.data_transfer() {
-            // Move semantics: the row visually leaves its source zone on drop.
             dt.set_effect_allowed("move");
             let _ = dt.set_data("text/plain", &task_id.0.to_string());
         }
@@ -149,18 +237,25 @@ pub fn KanbanTaskRow(
         KanbanZone::Backlog => "border-l-2 border-stone-200 dark:border-stone-700",
     };
 
+    // Static class string (no move closure) — keeps Tailwind from
+    // re-evaluating the class list on every status change, which was
+    // leaving transient hover/border artifacts when the cursor swept the
+    // list quickly.  Dynamic state lives in the inline `style=move ||`
+    // (opacity only) where Leptos diffs cleanly.
+    let row_class = format!(
+        "group flex items-start gap-2 py-2 px-3 rounded-r-lg \
+         hover:bg-stone-50 dark:hover:bg-stone-800/50 \
+         cursor-pointer {zone_accent}"
+    );
     view! {
         <div
             draggable="true"
             on:dragstart=on_dragstart
-            class=move || format!(
-                "group flex items-start gap-2 py-2 px-3 rounded-r-lg \
-                 hover:bg-stone-50 dark:hover:bg-stone-800/50 \
-                 transition-colors cursor-grab active:cursor-grabbing \
-                 {zone_accent} {}",
-                if status_done(&status_sig.get()) { "opacity-50" } else { "" }
-            )
+            on:click=on_row_click
+            class=row_class
+            style=move || if status_done(&status_sig.get()) { "opacity:0.5;" } else { "" }
             data-task-id=task_id.0.to_string()
+            title="Click to open the task in its parent node"
         >
             // Checkbox — toggles Open ↔ Done
             <button
@@ -180,56 +275,168 @@ pub fn KanbanTaskRow(
                 })}
             </button>
 
-            // Body — project chip on its own line, then title + meta inline
+            // Body — project chip + title + meta, OR inline edit form
             <div class="flex-1 min-w-0">
+                // Parent-node chip — amber so it pops against the title
+                // (the app's accent colour; matches the Today-zone left
+                // border, the priority dots, and the focused-task flash).
                 <div class="flex items-center gap-1.5">
-                    <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
+                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
                           style="font-size:13px;">{node_icon}</span>
-                    <span class="text-xs font-medium text-stone-600 dark:text-stone-300 truncate">
+                    <span class="text-xs font-semibold uppercase tracking-wide \
+                                 text-amber-700 dark:text-amber-400 truncate">
                         {parent}
                     </span>
                     {carryover_from.map(|d| {
                         let label = d.format("%b %-d").to_string();
                         let title_attr = format!("Was focused on {label}");
                         view! {
-                            <span class="text-xs text-amber-700 dark:text-amber-400 flex-shrink-0"
+                            <span class="text-xs text-stone-500 dark:text-stone-400 flex-shrink-0"
                                   title=title_attr>
                                 " · carried from " {label}
                             </span>
                         }
                     })}
                 </div>
-                <div class="flex items-center gap-2 mt-0.5">
-                    {priority_dot.map(|s| view! {
-                        <span style=format!("{s}font-size:8px;line-height:1;")>"●"</span>
-                    })}
-                    <span class="text-sm text-stone-800 dark:text-stone-200 truncate"
-                          style=move || if status_done(&status_sig.get()) {
-                              "text-decoration:line-through;"
-                          } else { "" }>
-                        {title}
-                    </span>
-                    {due.map(|d| {
-                        let overdue = d < today && !matches!(status_sig.get_untracked(), TaskStatus::Done | TaskStatus::Cancelled);
-                        let style = if overdue {
-                            "color:#dc2626;font-size:11px;font-weight:600;"
-                        } else {
-                            "color:#9ca3af;font-size:11px;"
-                        };
-                        let label = if overdue {
-                            format!("⚠ due {}", d.format("%b %-d"))
-                        } else {
-                            format!("due {}", d.format("%b %-d"))
-                        };
-                        view! {
-                            <span style=style class="flex-shrink-0" title="External deadline">{label}</span>
-                        }
-                    })}
-                </div>
+
+                {move || if editing.get() {
+                    // ── Inline edit form ─────────────────────────────
+                    view! {
+                        <div class="mt-1 space-y-2"
+                             on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
+                            <input
+                                type="text"
+                                class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
+                                       text-stone-900 dark:text-stone-100 rounded px-2 py-1 \
+                                       focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                prop:value=move || edit_title.get()
+                                on:input=move |ev| edit_title.set(event_target_value(&ev))
+                                on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                                    match ev.key().as_str() {
+                                        "Enter"  => do_save(),
+                                        "Escape" => editing.set(false),
+                                        _ => {}
+                                    }
+                                }
+                            />
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs text-stone-400 dark:text-stone-500">"Priority"</span>
+                                {["low", "medium", "high"].iter().map(|&p| {
+                                    let (label, sel_style) = match p {
+                                        "high"   => ("High",   "color:#ef4444;border-color:#ef4444;"),
+                                        "medium" => ("Medium", "color:#f59e0b;border-color:#f59e0b;"),
+                                        _        => ("Low",    "color:#9ca3af;border-color:#9ca3af;"),
+                                    };
+                                    view! {
+                                        <button
+                                            type="button"
+                                            class="text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer"
+                                            style=move || if edit_priority.get() == p {
+                                                format!("{sel_style}font-weight:600;")
+                                            } else {
+                                                "color:#9ca3af;border-color:#d1d5db;".to_string()
+                                            }
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                ev.stop_propagation();
+                                                edit_priority.set(p.to_string());
+                                            }
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                }).collect_view()}
+                            </div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <input
+                                    type="date"
+                                    class="text-xs bg-stone-100 dark:bg-stone-700 \
+                                           text-stone-700 dark:text-stone-300 \
+                                           rounded px-2 py-0.5 focus:outline-none \
+                                           focus:ring-1 focus:ring-amber-500"
+                                    title="Due date (optional)"
+                                    prop:value=move || edit_due.get()
+                                    on:input=move |ev| edit_due.set(event_target_value(&ev))
+                                />
+                                <select
+                                    class="text-xs bg-stone-100 dark:bg-stone-700 \
+                                           text-stone-700 dark:text-stone-300 \
+                                           rounded px-2 py-0.5 focus:outline-none \
+                                           focus:ring-1 focus:ring-amber-500"
+                                    title="Recurrence"
+                                    on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
+                                >
+                                    <option value="" selected=move || edit_recurrence.get().is_empty()>
+                                        "No repeat"
+                                    </option>
+                                    {[
+                                        ("daily",    "Daily"),
+                                        ("weekly",   "Weekly"),
+                                        ("biweekly", "Every 2 weeks"),
+                                        ("monthly",  "Monthly"),
+                                        ("yearly",   "Yearly"),
+                                    ].iter().map(|&(val, label)| {
+                                        view! {
+                                            <option value=val selected=move || edit_recurrence.get() == val>
+                                                {label}
+                                            </option>
+                                        }
+                                    }).collect_view()}
+                                </select>
+                                <span class="flex-1"/>
+                                <button
+                                    type="button"
+                                    class="px-2 py-0.5 text-xs rounded bg-amber-600 text-white \
+                                           hover:bg-amber-700 cursor-pointer"
+                                    on:click=on_save_edit
+                                >
+                                    "Save"
+                                </button>
+                                <button
+                                    type="button"
+                                    class="px-2 py-0.5 text-xs rounded text-stone-500 \
+                                           hover:text-stone-800 dark:hover:text-stone-200 cursor-pointer"
+                                    on:click=on_cancel_edit
+                                >
+                                    "Cancel"
+                                </button>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    // ── Display row ──────────────────────────────────
+                    view! {
+                        <div class="flex items-center gap-2 mt-0.5">
+                            {priority_dot.map(|s| view! {
+                                <span style=format!("{s}font-size:8px;line-height:1;")>"●"</span>
+                            })}
+                            <span class="text-sm text-stone-800 dark:text-stone-200 truncate"
+                                  style=move || if status_done(&status_sig.get()) {
+                                      "text-decoration:line-through;"
+                                  } else { "" }>
+                                {move || title_sig.get()}
+                            </span>
+                            {due.map(|d| {
+                                let overdue = d < today && !matches!(status_sig.get_untracked(), TaskStatus::Done | TaskStatus::Cancelled);
+                                let style = if overdue {
+                                    "color:#dc2626;font-size:11px;font-weight:600;"
+                                } else {
+                                    "color:#9ca3af;font-size:11px;"
+                                };
+                                let label = if overdue {
+                                    format!("⚠ due {}", d.format("%b %-d"))
+                                } else {
+                                    format!("due {}", d.format("%b %-d"))
+                                };
+                                view! {
+                                    <span style=style class="flex-shrink-0" title="External deadline">{label}</span>
+                                }
+                            })}
+                        </div>
+                    }.into_any()
+                }}
             </div>
 
-            // Actions — always visible (no hover-to-reveal so touch users
-            // don't have to discover them)
+            // Actions — always visible, never trigger row navigation
             <div class="flex items-center gap-0.5 flex-shrink-0">
                 {match zone {
                     KanbanZone::Today => view! {
@@ -239,7 +446,10 @@ pub fn KanbanTaskRow(
                                    hover:bg-amber-50 dark:hover:bg-amber-950/40 \
                                    transition-colors cursor-pointer disabled:opacity-50"
                             prop:disabled=move || busy.get()
-                            on:click=on_remove_today
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.stop_propagation();
+                                patch_focus(None, "Removed from today");
+                            }
                             title="Remove from today (back to backlog)"
                         >
                             <span class="material-symbols-outlined" style="font-size:16px;">"close"</span>
@@ -252,13 +462,26 @@ pub fn KanbanTaskRow(
                                    hover:bg-amber-50 dark:hover:bg-amber-950/40 \
                                    transition-colors cursor-pointer disabled:opacity-50"
                             prop:disabled=move || busy.get()
-                            on:click=on_add_today
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.stop_propagation();
+                                patch_focus(Some(today), "Added to today");
+                            }
                             title="Add to today"
                         >
                             <span class="material-symbols-outlined" style="font-size:16px;">"wb_sunny"</span>
                         </button>
                     }.into_any(),
                 }}
+                <button
+                    type="button"
+                    class="p-1 rounded text-stone-300 dark:text-stone-600 \
+                           hover:text-stone-700 dark:hover:text-stone-200 \
+                           transition-colors cursor-pointer"
+                    on:click=on_pencil
+                    title="Edit this task in place"
+                >
+                    <span class="material-symbols-outlined" style="font-size:16px;">"edit"</span>
+                </button>
                 <button
                     type="button"
                     class="p-1 rounded text-stone-300 dark:text-stone-600 \

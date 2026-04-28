@@ -19,6 +19,7 @@ use crate::components::note_panel::NotePanel;
 use crate::components::task_panel::TaskPanel;
 use crate::components::links_panel::LinksPanel;
 use crate::components::toast::{ToastLevel, push_toast};
+use crate::focus_task::schedule_focus_task;
 use crate::markdown::render_markdown;
 
 fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
@@ -41,6 +42,12 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
     let auth_state = use_auth_state();
     let deleting = RwSignal::new(false);
     let show_delete_confirm = RwSignal::new(false);
+
+    // v2.6.2: when navigation arrived via the Kanban row click
+    // (`/nodes/{id}?task=<task_id>`), find the task in the TaskPanel and
+    // briefly highlight it.  See `crate::focus_task` — handles the
+    // resource-load race by retrying a few times.
+    schedule_focus_task();
 
     // Derive node title for the confirm dialog (empty string until node loads).
     let delete_item_name = Memo::new(move |_| {

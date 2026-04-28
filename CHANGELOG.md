@@ -4,6 +4,64 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.6.2] - 2026-04-28
+
+### Added — Click-to-navigate + inline edit on Kanban tasks
+Real-world feedback after a few hours with v2.6.0/v2.6.1: the Kanban
+rows had no way to open the parent node, no way to edit a task's
+title/due-date/priority/recurrence inline.  Both fixed without
+sacrificing drag-to-swap-zones.
+
+- **Row click navigates** to the task's origin:
+  - Task with parent → `/nodes/{node_id}?task={task_id}`
+  - Standalone (Inbox) task → `/tasks/inbox?task={task_id}`
+  - The destination view (`NodeView` / `InboxView` / `TaskPanel`)
+    scrolls the matching `[data-task-id="<id>"]` row into view and
+    briefly flashes it amber via the new `focus-task-flash` CSS
+    keyframe.  Driven by `crate::focus_task::schedule_focus_task`,
+    which retries a few times to handle the LocalResource-load race.
+    The `?task=` param is `replaceState`'d out so a refresh doesn't
+    re-fire the highlight.
+- **Pencil button** added between the zone-swap button (☀ / ×) and
+  the delete button.  Opens an inline edit form with title, priority
+  (low/medium/high chips), due date, and recurrence (daily / weekly /
+  biweekly / monthly / yearly).  Save persists via PATCH; Esc cancels.
+  No `focus_date` field — focus is binary, owned by the zone-swap
+  button.
+- **Action-button click handlers all `stopPropagation()`** so they
+  never trigger the row-click navigation.  Drag still works because
+  HTML5 dragstart fires only on mousedown + movement; click fires on
+  mousedown + mouseup without movement.
+
+### Fixed — Hover-flicker on rapid mouse-over
+The row's `class=move ||` re-evaluated on every status change,
+swapping class strings and occasionally leaving a transient border
+artifact when the cursor swept the list quickly.  Class string is
+now static; the only mutable bit (opacity for done tasks) lives in a
+clean `style=move ||` attribute that Leptos diffs without surprises.
+
+### Changed — Parent-node chip is now amber
+The project name above each task title was the same colour as the
+title meta and easy to miss.  Now `text-amber-700` (light) /
+`text-amber-400` (dark) with semibold uppercase tracking, matching
+the app's primary accent (Today-zone left border, priority dots,
+focus-task flash, ☀ icons).  The icon (`rocket_launch` for project
+tasks, `inbox` for standalone) gets the same amber tint.
+
+### Behavioural clarification (no code change, captured in CHANGELOG
+### so the model is unambiguous)
+A task in the Today zone that you don't complete by end of day does
+**not** drop into limbo.  Its `focus_date` stays at the date you
+last set it.  Tomorrow, "today" advances by one day, the partition
+flips it into the **Backlog** zone, and `KanbanTaskRow` adds a
+"carried from Apr 28" amber badge so you can see it slipped.
+`TaskRepo::list_open_for_owner` returns every open task regardless
+of `focus_date`, so the task is always visible somewhere until it's
+completed (status=Done) or cancelled — at which point it's done, and
+correctly disappears from the backlog query.
+
+---
+
 ## [2.6.1] - 2026-04-28
 
 ### Removed — `/plan` route and morning-ritual surface

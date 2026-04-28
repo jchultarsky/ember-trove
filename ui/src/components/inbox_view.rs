@@ -21,6 +21,7 @@ use crate::components::task_common::{
     status_done, status_value,
 };
 use crate::components::toast::{push_toast, ToastLevel};
+use crate::focus_task::schedule_focus_task;
 
 // ── InboxView ─────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,11 @@ pub fn InboxView() -> impl IntoView {
             }
         }
     });
+
+    // v2.6.2: when navigation arrived via the Kanban row click on a
+    // standalone (Inbox) task, scroll to and briefly highlight the
+    // matching row.  See `crate::focus_task`.
+    schedule_focus_task();
 
     // New-task form state
     let new_title    = RwSignal::new(String::new());
@@ -388,9 +394,12 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     };
 
     view! {
-        <div class="bg-white dark:bg-stone-900 rounded-xl
-            border border-stone-100 dark:border-stone-800
-            shadow-sm overflow-hidden">
+        <div
+            class="bg-white dark:bg-stone-900 rounded-xl
+                border border-stone-100 dark:border-stone-800
+                shadow-sm overflow-hidden"
+            data-task-id=task_id.0.to_string()
+        >
 
             // ── Main content area ─────────────────────────────────────────────
             <div class="px-3 pt-3 pb-2 space-y-2">
