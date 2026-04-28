@@ -432,14 +432,18 @@ fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
                 class="flex-1 flex items-center justify-between min-w-0 overflow-hidden"
                 class:hidden=move || collapsed.get()
             >
-                <div class="flex items-baseline gap-1.5 min-w-0 truncate">
+                // Title and version stacked vertically — keeps the title on
+                // its own line so it never gets truncated by the (?) +
+                // dark-mode icons on its right.  Version lives under the
+                // title as a small footnote.
+                <div class="flex flex-col min-w-0 leading-tight">
                     <span class="font-semibold text-stone-900 dark:text-stone-100 truncate">
                         "Ember Trove"
                     </span>
                     {move || {
                         let v = app_version.0.get();
                         (!v.is_empty()).then(|| view! {
-                            <span class="text-[10px] font-mono text-stone-400 dark:text-stone-500 select-none shrink-0">
+                            <span class="text-[10px] font-mono text-stone-400 dark:text-stone-500 select-none">
                                 {format!("v{v}")}
                             </span>
                         })

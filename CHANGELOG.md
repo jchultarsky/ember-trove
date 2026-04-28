@@ -4,6 +4,22 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.10.1] - 2026-04-28
+
+### Fixed — Sidebar header truncated "Ember Trove" after the (?) icon landed
+The new help-toggle button added in v2.10.0 plus the existing
+dark-mode toggle plus an inline version pill all competed for the
+same horizontal slot in the sidebar header.  At the default
+`md:w-64` width (16rem) the title got truncated to "Ember Tro…".
+
+Stacked the version under the title (`flex flex-col` on the inner
+container instead of `flex items-baseline`).  Title now owns its own
+line and the version reads as a footnote underneath, matching the
+visual weight it actually deserves.  No width change to the sidebar,
+so main-content viewport stays the same.
+
+---
+
 ## [2.10.0] - 2026-04-28
 
 ### Added — In-app help (Shortcuts / Concepts / Workflow)
