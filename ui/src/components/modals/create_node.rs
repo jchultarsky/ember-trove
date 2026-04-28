@@ -29,6 +29,11 @@ pub fn CreateNodeModal(
     /// "More fields…" handoff).  Empty string means no pre-fill.
     #[prop(into, optional)]
     initial_body: Signal<String>,
+    /// Optional draft title to pre-fill on open (used by the v2.8.0
+    /// command palette's "Create node titled '<query>'" action).
+    /// Empty string means no pre-fill.
+    #[prop(into, optional)]
+    initial_title: Signal<String>,
 ) -> impl IntoView {
     let title = RwSignal::new(String::new());
     let body = RwSignal::new(String::new());
@@ -54,12 +59,12 @@ pub fn CreateNodeModal(
         }
     });
 
-    // Reset fields every time the modal opens.  When `initial_body` is
-    // non-empty (fast-capture handoff), pre-fill the body so the user
-    // doesn't lose what they already typed.
+    // Reset fields every time the modal opens.  Pre-fills:
+    //   * `initial_body`  — fast-capture "More fields…" handoff (v2.4.0)
+    //   * `initial_title` — palette "Create node titled '<query>'" (v2.8.0)
     Effect::new(move |_| {
         if show.get() {
-            title.set(String::new());
+            title.set(initial_title.get_untracked());
             body.set(initial_body.get_untracked());
             template_id_for_create.set(None);
             selected_template_value.set(String::new());

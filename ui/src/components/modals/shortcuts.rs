@@ -15,7 +15,8 @@ struct ShortcutGroup {
 const ANYWHERE: &[Shortcut] = &[
     Shortcut { key: "n",      description: "Quick capture (Inbox)" },
     Shortcut { key: "g",      description: "Graph view" },
-    Shortcut { key: "/",      description: "Search" },
+    Shortcut { key: "/",      description: "Open command palette" },
+    Shortcut { key: "⌘K",     description: "Open command palette (alt)" },
     Shortcut { key: "?",      description: "Show this help" },
     Shortcut { key: "Escape", description: "Close modal / back" },
 ];

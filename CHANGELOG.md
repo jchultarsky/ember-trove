@@ -4,6 +4,69 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.8.0] - 2026-04-28
+
+### Added — Cmd-K command palette (UX phase 6)
+A floating overlay over the current view that lets you jump to any
+node, search nodes, or create a new one without breaking out of where
+you are.  Replaces `/`'s old behaviour of navigating to the full-page
+`SearchView` (still reachable by URL).
+
+- **Hotkeys to open:**
+  - `⌘K` / `Ctrl-K` — works anywhere, even mid-edit (one of the few
+    shortcuts that intentionally bypasses the input-focus guard, since
+    it's a system-wide affordance the user expects to always work).
+  - `/` — repurposed from full-page navigation to opening the palette.
+- **Sections:**
+  - **Recent** (top 5 from `crate::recent::read_recent`) when query is
+    blank — instant fast path, no typing.
+  - **Matches** (live, 300ms-debounced) when query is non-empty.  Calls
+    the existing `node_picker_search` (returns up to 8 results).  Stale
+    responses dropped via the canonical version-counter pattern from
+    `.claude/patterns/reactive-effect-debounce.rs`.
+  - **Create node titled '<query>'** as the bottom action whenever the
+    query is non-empty.  Always present even when there's an exact
+    match — sometimes you want to create another node with the same
+    title.
+- **Keyboard model inside the palette:**
+  - `↑` / `↓` move the highlight; `Enter` picks; `Esc` closes.
+  - Typing resets the highlight to the first item so `Enter` always
+    lands somewhere sensible.
+  - Backdrop click also closes.
+- **"Create node" picks** open the structured `CreateNodeModal`
+  pre-filled with the typed title (new `initial_title` prop on
+  `CreateNodeModal` alongside the existing `initial_body` for
+  fast-capture handoff).
+
+### Implementation notes
+- New file: [`ui/src/components/modals/command_palette.rs`](ui/src/components/modals/command_palette.rs)
+  with a typed `PaletteAction` enum (OpenNode / CreateNode) so the
+  Enter dispatch is exhaustive — no string-keyed payload.
+- The palette's open state lives in `layout.rs` as a single
+  `RwSignal<bool>`; the `⌘K` listener and the `/` shortcut both flip
+  it.  No global state pollution, no app-wide context.
+- The two `window_event_listener` registrations in `layout.rs` are
+  intentionally separate: the `/`-handler short-circuits on any
+  modifier (correct for `n`, `g`, `?`), so `⌘K` needs its own
+  listener that explicitly only fires on the modifier path.
+- `ShortcutsModal` updated — `/` now reads "Open command palette",
+  `⌘K` added as the alternate shortcut.
+
+### Out of scope (deferred)
+- Filter chips (type / tag) inside the palette — the existing
+  `SearchView` still owns advanced filtering.  The palette is
+  optimised for "I know roughly what I'm looking for, just get me
+  there fast."
+- Search-result snippets inside the palette — list shows title +
+  type icon only.  `SearchView` is still the place for snippet
+  preview + sort + pagination.
+- Mobile gesture for opening (no on-screen keyboard equivalent of
+  `⌘K`).  PWA users who installed the home-screen icon get the same
+  three shortcuts the manifest declared in v2.4.0 (Quick capture, My
+  Day, Inbox); the palette is desktop-first.
+
+---
+
 ## [2.7.0] - 2026-04-28
 
 ### Added — Kanban keyboard triage (UX phase 5)

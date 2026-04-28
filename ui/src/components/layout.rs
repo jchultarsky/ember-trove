@@ -15,6 +15,7 @@ use crate::{
         dark_mode_toggle::DarkModeToggle,
         graph_view::GraphView,
         modals::{
+            command_palette::CommandPalette,
             create_node::CreateNodeModal,
             fast_capture::FastCaptureModal,
             shortcuts::ShortcutsModal,
@@ -106,6 +107,32 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     let location = use_location();
     let show_shortcuts = RwSignal::new(false);
 
+    // v2.8.0 — Cmd-K command palette. Opened via Cmd+K / Ctrl+K (any
+    // view) or `/` (repurposed from full-page navigation to /search).
+    // The palette's "Create node titled '<query>'" action stamps the
+    // pending title so the structured CreateNodeModal can pre-fill it.
+    let show_palette: RwSignal<bool> = RwSignal::new(false);
+    let palette_create_title: RwSignal<String> = RwSignal::new(String::new());
+    let show_structured_from_palette: RwSignal<bool> = RwSignal::new(false);
+
+    // Cmd-K / Ctrl-K — separate listener because the main shortcut
+    // handler below short-circuits on any modifier key (which is
+    // correct for /, n, g, etc.).  This one only fires on the modifier
+    // path and doesn't care about input focus: ⌘K is a system-wide
+    // affordance that should work even mid-edit.
+    {
+        let _palette_handle = window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
+            if (ev.meta_key() || ev.ctrl_key())
+                && !ev.shift_key()
+                && !ev.alt_key()
+                && ev.key().eq_ignore_ascii_case("k")
+            {
+                ev.prevent_default();
+                show_palette.update(|v| *v = !*v);
+            }
+        });
+    }
+
     let handle = {
         let navigate = navigate.clone();
         window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
@@ -134,8 +161,12 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                 "n" => show_capture.set(true),
                 "g" => navigate("/graph", Default::default()),
                 "/" => {
+                    // v2.8.0: `/` opens the Cmd-K palette over the
+                    // current view instead of navigating to the
+                    // full-page `/search` (which is still reachable
+                    // by typing the URL or via the legacy redirect).
                     ev.prevent_default();
-                    navigate("/search", Default::default());
+                    show_palette.set(true);
                 }
                 "d" => {
                     // Duplicate the currently open node (only when on /nodes/<uuid>).
@@ -327,6 +358,23 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
             <ShortcutsModal
                 show=show_shortcuts.read_only()
                 on_close=Callback::new(move |_| show_shortcuts.set(false))
+            />
+
+            // v2.8.0 — Cmd-K command palette.  Repurposes `/` and adds
+            // ⌘K / Ctrl-K.  "Create node" picks open the structured
+            // modal pre-filled with the typed title.
+            <CommandPalette
+                show=show_palette.read_only()
+                on_close=Callback::new(move |_| show_palette.set(false))
+                on_create=Callback::new(move |title: String| {
+                    palette_create_title.set(title);
+                    show_structured_from_palette.set(true);
+                })
+            />
+            <CreateNodeModal
+                show=show_structured_from_palette.read_only()
+                on_close=Callback::new(move |_| show_structured_from_palette.set(false))
+                initial_title=palette_create_title.read_only()
             />
 
             // Toast notification overlay
