@@ -23,6 +23,17 @@ pub async fn list_inbox() -> Result<Vec<Task>, UiError> {
     parse_json(resp).await
 }
 
+/// Backlog feed for the My Day Kanban — every open task across every node,
+/// joined with parent node title, sorted due_date NULLS LAST then priority
+/// then created_at.  See `TaskRepo::list_open_for_owner`.
+pub async fn list_open_tasks() -> Result<Vec<MyDayTask>, UiError> {
+    let resp = Request::get(&api_url("/tasks/all"))
+        .send()
+        .await
+        .map_err(|e| UiError::Network(e.to_string()))?;
+    parse_json(resp).await
+}
+
 pub async fn create_standalone_task(req: &CreateTaskRequest) -> Result<Task, UiError> {
     let resp = Request::post(&api_url("/tasks"))
         .json(req)
