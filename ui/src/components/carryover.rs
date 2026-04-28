@@ -113,8 +113,27 @@ fn CarryoverRow(
         show_picker.set(false);
     };
 
+    // Node icon — `rocket_launch` for project-scoped tasks, `inbox` for
+    // standalone (no parent node).  Mirrors the iconography used in
+    // MyDayGroup so the same visual cue means the same thing across views.
+    let node_icon = if task.node_id.is_some() { "rocket_launch" } else { "inbox" };
+
     view! {
         <div class="px-3 py-2">
+            // Top meta row — parent node name as a chip that doesn't get
+            // truncated by the action buttons below.  This is the line the
+            // user scans first to recover context: "this task came from
+            // which project?".
+            <div class="flex items-center gap-1.5 mb-1">
+                <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
+                      style="font-size:13px;">{node_icon}</span>
+                <span class="text-xs font-medium text-stone-600 dark:text-stone-300 truncate">
+                    {parent_label}
+                </span>
+                <span class="text-xs text-stone-400 dark:text-stone-500 flex-shrink-0">
+                    " · from " {from_label.clone()}
+                </span>
+            </div>
             <div class="flex items-start gap-2">
                 <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5"
                       style="font-size:14px;"
@@ -122,11 +141,8 @@ fn CarryoverRow(
                     "schedule"
                 </span>
                 <div class="flex-1 min-w-0">
-                    <div class="text-sm text-stone-800 dark:text-stone-200 truncate">
+                    <div class="text-sm text-stone-800 dark:text-stone-200">
                         {title}
-                    </div>
-                    <div class="text-xs text-stone-500 dark:text-stone-400 truncate">
-                        {parent_label} " · from " {from_label.clone()}
                     </div>
                 </div>
                 <div class="flex items-center gap-1 flex-shrink-0">

@@ -4,6 +4,51 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.5.1] - 2026-04-28
+
+### Fixed — Real-world feedback on the v2.5.0 planning ritual
+Surfaced after a day's use.  Three bugs and a labeling fix; no schema
+or API surface change.
+
+- **`/plan` "items to triage" no longer counts done/cancelled tasks.**
+  `TaskRepo::list_inbox` returns *all* standalone tasks regardless of
+  status, so the Inbox section was showing "3 items to triage" even
+  when all three were already completed.  Filter applied client-side
+  via `task_common::status_done` so the count reflects open work only.
+  Confirmed in browser before/after — a user with 0 open + 3 done
+  inbox tasks now correctly sees "Inbox is empty".  Server-side fix
+  deferred to v2.6.0 since it would require a coordinated change with
+  `InboxView` (which already partitions correctly on the client).
+- **Carry-over rows now show the parent node name as a visible chip.**
+  Previously the parent label rendered in a small grey meta line that
+  got `truncate`d to nothing on narrow viewports and was invisible
+  whenever the action buttons consumed row width.  Lifted to its own
+  full-width meta row above the title with a `rocket_launch` /
+  `inbox` icon mirroring the iconography used in `MyDayGroup`, so
+  context survives at any width.
+- **My Day clarifying subhead.** The page just said "My Day" with a
+  date.  When a user triaged carryovers via the "Today" button (which
+  sets `focus_date = today`) they saw tasks with future `due_date`s
+  show up and were confused.  Subhead now reads "tasks you're focused
+  on today (focus date = today; due date is separate)".  Honest and
+  short.
+- **"due" prefix on date labels in MyDayTaskRow.** A row showing "May 6"
+  in the corner is ambiguous — looks like a focus date, looks like a
+  deadline, looks like nothing in particular.  Now reads "due May 6"
+  (or "⚠ due May 6" when overdue) with a "External deadline" tooltip,
+  so the date's meaning is unambiguous at a glance.
+
+### Out of scope for this point release
+The refactor work surfaced by the user's "can we reuse code?" question
+— extracting a shared `TaskRow` used by `InboxView`, `MyDayTaskRow`,
+`task_panel`, `CarryoverRow`, and `plan_view::CalRow` — and the new
+**Backlog tab** in `TasksView` showing all open tasks across nodes
+both move into v2.6.0 (which displaces the original "Inbox keyboard
+triage" plan to v2.7.0; keyboard triage will sit cleanly on top of
+the unified `TaskRow`).
+
+---
+
 ## [2.5.0] - 2026-04-27
 
 ### Added — Morning Planning Ritual at `/plan` (UX phase 3)

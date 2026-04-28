@@ -62,7 +62,9 @@ pub fn MyDayView() -> impl IntoView {
                                 })
                             }}
                         </div>
-                        <p class="text-xs text-stone-400 dark:text-stone-500">{date_label}</p>
+                        <p class="text-xs text-stone-400 dark:text-stone-500">
+                            {date_label} " · tasks you're focused on today (focus date = today; due date is separate)"
+                        </p>
                     </div>
                 </div>
 
@@ -620,7 +622,10 @@ fn MyDayTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 </span>
                             })}
 
-                            // Due date
+                            // Due date — explicit "due" prefix so the user
+                            // doesn't read a future date and assume the task
+                            // is "for that day" (focus_date and due_date are
+                            // distinct concepts).  Only shown when set.
                             {due.map(|d| {
                                 let style = if overdue {
                                     "color:#dc2626;font-size:11px;font-weight:600;"
@@ -628,12 +633,13 @@ fn MyDayTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                     "color:#9ca3af;font-size:11px;"
                                 };
                                 let label = if overdue {
-                                    format!("⚠ {}", d.format("%b %-d"))
+                                    format!("⚠ due {}", d.format("%b %-d"))
                                 } else {
-                                    d.format("%b %-d").to_string()
+                                    format!("due {}", d.format("%b %-d"))
                                 };
                                 view! {
-                                    <span style=style class="flex-shrink-0">{label}</span>
+                                    <span style=style class="flex-shrink-0"
+                                          title="External deadline">{label}</span>
                                 }
                             })}
 

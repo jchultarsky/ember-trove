@@ -183,19 +183,27 @@ pub fn PlanView() -> impl IntoView {
                         <crate::components::skeleton::SkeletonBar />
                     }>
                         {move || {
+                            // Server-side `list_inbox` returns ALL standalone
+                            // tasks regardless of status — including done /
+                            // cancelled.  "Items to triage" is only the open
+                            // ones, so we filter on the client (server fix
+                            // would need a coordinated change across the
+                            // existing InboxView call site).
                             let inbox = inbox_tasks.get()
                                 .and_then(|r| r.ok())
                                 .unwrap_or_default();
-                            let count = inbox.len();
-                            if count == 0 {
+                            let open_count = inbox.iter()
+                                .filter(|t| !crate::components::task_common::status_done(&t.status))
+                                .count();
+                            if open_count == 0 {
                                 return view! {
                                     <p class="text-sm text-stone-500 dark:text-stone-400">
                                         "Inbox is empty."
                                     </p>
                                 }.into_any();
                             }
-                            let label = if count == 1 { "1 item to triage".to_string() }
-                                        else { format!("{count} items to triage") };
+                            let label = if open_count == 1 { "1 item to triage".to_string() }
+                                        else { format!("{open_count} items to triage") };
                             view! {
                                 <button
                                     class="flex items-center gap-2 text-sm text-stone-700 \
