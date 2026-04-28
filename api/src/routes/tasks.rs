@@ -35,6 +35,7 @@ pub fn task_router() -> Router<AppState> {
     Router::new()
         .route("/", post(create_standalone_task))
         .route("/inbox", get(list_inbox))
+        .route("/all", get(list_all_open))
         .route("/{id}", patch(update_task).delete(delete_task))
         .route("/reorder", put(reorder_tasks))
 }
@@ -141,6 +142,17 @@ async fn list_inbox(
     Extension(claims): Extension<AuthClaims>,
 ) -> Result<Json<Vec<Task>>, ApiError> {
     let tasks = state.tasks.list_inbox(&claims.sub).await?;
+    Ok(Json(tasks))
+}
+
+/// Backlog feed for the My Day Kanban — every open task across every node,
+/// joined with parent node title.  See `TaskRepo::list_open_for_owner` for
+/// the sort contract.
+async fn list_all_open(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<Vec<MyDayTask>>, ApiError> {
+    let tasks = state.tasks.list_open_for_owner(&claims.sub).await?;
     Ok(Json(tasks))
 }
 

@@ -78,6 +78,15 @@ pub trait TaskRepo: Send + Sync {
     /// All tasks owned by `owner_id` — used for backup.
     async fn list_all_for_owner(&self, owner_id: &str) -> Result<Vec<Task>, EmberTroveError>;
 
+    /// All open tasks (status NOT IN done/cancelled) owned by `owner_id`,
+    /// joined with their parent node title.  Used by the My Day Kanban
+    /// backlog zone where the user sees every open task to plan against.
+    /// Sorted: due_date ASC NULLS LAST, then priority desc, then created_at ASC.
+    async fn list_open_for_owner(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError>;
+
     /// All tasks across all owners — used for full backup.
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError>;
 
@@ -478,6 +487,45 @@ impl TaskRepo for PgTaskRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list by due range failed: {e}")))?;
+
+        rows.into_iter().map(my_day_row_to_task).collect()
+    }
+
+    async fn list_open_for_owner(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError> {
+        // NULLS LAST on due_date so dated tasks float to the top of the
+        // backlog; undated open tasks settle at the bottom.  Priority desc
+        // (high → low) breaks ties.  created_at ASC keeps order stable
+        // across re-fetches for items with no due date.
+        let rows = sqlx::query_as::<_, MyDayRow>(
+            r#"
+            SELECT
+                t.id, t.node_id, t.owner_id, t.title,
+                t.status::text    AS status,
+                t.priority::text  AS priority,
+                t.focus_date, t.due_date, t.recurrence, t.sort_order,
+                t.created_at, t.updated_at,
+                n.title           AS node_title
+            FROM node_tasks t
+            LEFT JOIN nodes n ON n.id = t.node_id
+            WHERE t.owner_id = $1
+              AND t.status::text NOT IN ('done', 'cancelled')
+            ORDER BY
+                t.due_date ASC NULLS LAST,
+                CASE t.priority::text
+                    WHEN 'high'   THEN 0
+                    WHEN 'medium' THEN 1
+                    WHEN 'low'    THEN 2
+                END,
+                t.created_at ASC
+            "#,
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("list open for owner failed: {e}")))?;
 
         rows.into_iter().map(my_day_row_to_task).collect()
     }

@@ -4,6 +4,87 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] - 2026-04-28
+
+### Changed — My Day is now a two-zone vertical Kanban (UX phase 4)
+Direct response to user feedback that the planning workflow was unclear:
+"how do I push today's tasks to another day?" and "how do I pull an
+old task into today?" had no good answers in v2.5.x.  Replaces the
+group-by-project layout with a Kanban so both questions become "drag
+between zones, or tap the button."
+
+- **Top zone — Today.** Tasks with `focus_date == today`.  The "what
+  I committed to do today" surface.
+- **Bottom zone — Backlog.** Every other open task across every node,
+  sorted by `due_date ASC NULLS LAST`, then priority desc, then
+  `created_at ASC`.  Powered by a new server query
+  `TaskRepo::list_open_for_owner` exposed at `GET /api/tasks/all`.
+- **Two equivalent ways to swap a task between zones:**
+  - Tap the ☀ "Add to today" button (in backlog) or × "Remove from
+    today" button (in today) on any row.  Always visible — never
+    hover-to-reveal — so the touch path matches the desktop path.
+  - Drag the row from one zone to the other.  HTML5 native drag and
+    drop; the destination zone fires the same `PATCH /api/tasks/:id`
+    the tap button would.  Touch never fires `dragstart` so iPhone
+    users simply tap.
+
+### Simplified mental model
+- **`focus_date` is binary.** Only `Some(today)` or `None`.  No more
+  "schedule for next Tuesday" affordance on My Day rows.  The task
+  editor still lets you change `due_date` (the external deadline);
+  `focus_date` is purely the Kanban zone.  This is a deliberate
+  simplification after the user said "the date the task should be
+  worked can be simply 'today' or 'not today'."
+- **Carry-over is no longer a separate concept on My Day.**
+  Carryovers (open tasks whose `focus_date` is in the past) just
+  appear in the backlog with a small "carried from May 2" badge for
+  context.  The badge tells you the task has been sitting; the
+  ☀ tap (or drag to today) brings it back.
+- **`/plan` Carry Over section becomes a count.** "N tasks carried
+  over from earlier days → /tasks/my-day".  The triage UI lives in
+  one place — the Kanban — and the morning ritual just nudges the
+  user toward it.
+
+### Added — shared `KanbanTaskRow` component
+Lives in `ui/src/components/task_row.rs`.  Drives both Kanban zones
+via a `KanbanZone::Today | Backlog` enum that swaps the zone-swap
+button.  Foundation for v2.7.0 (keyboard triage `j/k/m/c/d/e`) which
+will plug in here without touching layout code.
+
+### Removed
+- Dedicated **Carry Over section** in My Day (logic merged into the
+  backlog zone with a "carried from X" badge).
+- The reschedule date popover that briefly lived on carryover rows in
+  v2.4.1 / v2.5.0 — under the binary `focus_date` model there's
+  nothing to "reschedule to a specific day", and the editor still
+  handles `due_date` mutations.
+- `ui/src/components/carryover.rs` (deleted; its CarryoverSection
+  was used only by the now-deleted carry-over surface in MyDayView
+  and by the simplified count on `/plan`).
+
+### Backend
+- **New trait method** `TaskRepo::list_open_for_owner(owner_id) ->
+  Vec<MyDayTask>` and `StubTaskRepo` impl in `api/src/tests.rs`.
+- **New route** `GET /api/tasks/all` (auth required) returning
+  every open task for the caller, joined with parent node title.
+  Sort: due_date ASC NULLS LAST, then priority desc (high→low),
+  then created_at ASC.  No new schema, no migration.
+- **Route-registration regression test** `tasks_all_open_route_registered`.
+
+### Out of scope (deferred)
+- Filter / sort affordances on the backlog (project filter, "high
+  priority only" toggle).  Default sort is good enough for v2.6.0;
+  filters arrive when the backlog gets large enough to need them.
+- Inline task edit on Kanban rows.  Edit currently means: navigate to
+  the task's parent node and edit there.  Inline edit returns in a
+  later phase — keyboard triage (Phase 5) will need it.
+- Shared TaskRow for `/tasks/inbox` and `task_panel` — InboxView and
+  TaskPanel still use their existing row implementations.  Migrating
+  them is a follow-up cleanup since v2.6.0 already validates the
+  shared row in two zones.
+
+---
+
 ## [2.5.1] - 2026-04-28
 
 ### Fixed — Real-world feedback on the v2.5.0 planning ritual
