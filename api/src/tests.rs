@@ -119,6 +119,7 @@ impl TaskRepo for StubTaskRepo {
     async fn delete(&self, _: TaskId) -> Result<(), EmberTroveError> { unimplemented!() }
     async fn list_my_day(&self, _: &str, _: NaiveDate) -> Result<Vec<MyDayTask>, EmberTroveError> { unimplemented!() }
     async fn list_inbox(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> { unimplemented!() }
+    async fn list_open_for_owner(&self, _: &str) -> Result<Vec<MyDayTask>, EmberTroveError> { unimplemented!() }
     async fn counts_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, TaskCounts)>, EmberTroveError> { unimplemented!() }
     async fn list_open_for_nodes(&self, _: &[NodeId], _: i64) -> Result<Vec<(NodeId, Vec<common::task::TaskSummary>, bool)>, EmberTroveError> { unimplemented!() }
     async fn max_task_updated_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, chrono::DateTime<chrono::Utc>)>, EmberTroveError> { unimplemented!() }
@@ -561,6 +562,13 @@ async fn search_preset_delete_route_registered() {
 #[tokio::test]
 async fn inbox_quick_route_registered() {
     assert_route_registered("POST", "/inbox/quick").await;
+}
+
+// ── My Day Kanban backlog feed (Phase 4 / v2.6.0) ────────────────────────────
+
+#[tokio::test]
+async fn tasks_all_open_route_registered() {
+    assert_route_registered("GET", "/tasks/all").await;
 }
 
 // ── OAuth callback failure handling ───────────────────────────────────────────

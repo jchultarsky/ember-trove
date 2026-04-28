@@ -11,9 +11,10 @@
 //!     endpoints so this phase needs zero server work.  Yesterday's
 //!     stats are derived client-side from `fetch_my_day(yesterday)`
 //!     because the API already filters to "focus_date == d OR carryover".
-//!   * The Carry Over section is the same `CarryoverSection` component
-//!     My Day uses (extracted to `crate::components::carryover` in this
-//!     phase), so triage actions match between the two surfaces.
+//!   * Carry-over triage UI lives on `/tasks/my-day` (the Kanban
+//!     backlog zone shows carryovers with a "carried from X" badge).
+//!     Here we just surface the *count* as a nudge — same pattern as
+//!     the Inbox section.
 //!   * Confirming the plan stamps `et.plan.last_planned_at` in
 //!     localStorage; the My Day banner reads that same key to decide
 //!     whether to nudge.
@@ -27,7 +28,6 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
-use crate::components::carryover::CarryoverSection;
 use crate::components::format_helpers::local_today;
 
 /// localStorage key used by both this view (writer) and `MyDayView`'s
@@ -137,37 +137,50 @@ pub fn PlanView() -> impl IntoView {
                     </Suspense>
                 </section>
 
-                // ── Section 2: Carry Over (reused) ───────────────────────
+                // ── Section 2: Carry-over count ──────────────────────────
+                // The actual triage UI lives on /tasks/my-day's Kanban
+                // backlog (carryovers show up there with a "carried from
+                // X" badge — drag/tap to bring them back to today).  Here
+                // we just surface the count so the morning ritual nudges
+                // the user to look.
                 <section>
+                    <h2 class="text-xs font-semibold text-stone-500 dark:text-stone-400 \
+                               uppercase tracking-wider mb-2">
+                        "Carry over"
+                    </h2>
                     <Suspense fallback=move || view! {
                         <crate::components::skeleton::SkeletonBar />
                     }>
                         {move || {
-                            // Pull carryovers out of today_tasks (server already
-                            // includes them via the carry-forward predicate).
                             let raw = today_tasks.get()
                                 .and_then(|r| r.ok())
                                 .unwrap_or_default();
-                            let carryovers: Vec<MyDayTask> = raw.into_iter()
+                            let count = raw.iter()
                                 .filter(|t| t.task.focus_date.is_some_and(|d| d < today))
-                                .collect();
-                            if carryovers.is_empty() {
+                                .count();
+                            if count == 0 {
                                 return view! {
-                                    <h2 class="text-xs font-semibold text-stone-500 dark:text-stone-400 \
-                                               uppercase tracking-wider mb-2">
-                                        "Carry over"
-                                    </h2>
                                     <p class="text-sm text-stone-500 dark:text-stone-400">
                                         "Nothing carried over — clean slate."
                                     </p>
                                 }.into_any();
                             }
+                            let label = if count == 1 {
+                                "1 task carried over from earlier days".to_string()
+                            } else {
+                                format!("{count} tasks carried over from earlier days")
+                            };
                             view! {
-                                <CarryoverSection
-                                    carryovers=carryovers
-                                    refresh=task_refresh
-                                    today=today
-                                />
+                                <button
+                                    class="flex items-center gap-2 text-sm text-stone-700 \
+                                           dark:text-stone-200 hover:text-amber-600 \
+                                           dark:hover:text-amber-400 transition-colors cursor-pointer"
+                                    on:click=move |_| navigate.get_value()("/tasks/my-day", Default::default())
+                                >
+                                    <span class="material-symbols-outlined" style="font-size:16px;">"history"</span>
+                                    <span>{label}</span>
+                                    <span class="material-symbols-outlined" style="font-size:14px;">"arrow_forward"</span>
+                                </button>
                             }.into_any()
                         }}
                     </Suspense>
