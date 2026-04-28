@@ -51,6 +51,26 @@ pub trait NodeRepo: Send + Sync {
     /// Fetch every node across all owners with tags populated — used for full backup.
     async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError>;
 
+    /// For each `node_id` in the input, find its parent Area (via an
+    /// inbound `edge_type = 'contains'` edge from a node whose
+    /// `node_type = 'area'`).  Used by the v2.9.0 dashboard PARA grouping.
+    ///
+    /// Each project gets at most one Area parent; if multiple Areas
+    /// `contain` the same project, the oldest edge (by `created_at`)
+    /// wins.  Projects with no Area parent are absent from the result —
+    /// the caller treats absence as "Ungrouped".
+    async fn area_for_nodes(
+        &self,
+        node_ids: &[NodeId],
+    ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError>;
+
+    /// Toggle the `pinned` flag on a single node.  Used by the
+    /// dashboard pin/unpin button (v2.9.0).
+    async fn set_pinned(
+        &self,
+        id: NodeId,
+        pinned: bool,
+    ) -> Result<Node, EmberTroveError>;
 }
 
 pub struct PgNodeRepo {
@@ -622,4 +642,80 @@ impl NodeRepo for PgNodeRepo {
         Ok(nodes)
     }
 
+    async fn set_pinned(
+        &self,
+        id: NodeId,
+        pinned: bool,
+    ) -> Result<Node, EmberTroveError> {
+        let row = sqlx::query_as::<_, NodeRow>(
+            r#"
+            UPDATE nodes
+            SET pinned = $2,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
+                      status::text, pinned, created_at, updated_at
+            "#,
+        )
+        .bind(id.0)
+        .bind(pinned)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("set_pinned failed: {e}")))?
+        .ok_or_else(|| EmberTroveError::NotFound(format!("node {id} not found")))?;
+
+        let mut node = NodeRow::into_node(row)?;
+        let mut tag_map = fetch_tags_for_nodes(&self.pool, &[node.id.0]).await?;
+        node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
+        Ok(node)
+    }
+
+    async fn area_for_nodes(
+        &self,
+        node_ids: &[NodeId],
+    ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Uuid> = node_ids.iter().map(|n| n.0).collect();
+
+        // ROW_NUMBER picks the oldest `contains` edge per project so
+        // multiple "areas containing this project" collapse to one
+        // parent.  Stable across runs (created_at + edge id tiebreak).
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            project_id: Uuid,
+            area_id: Uuid,
+            area_title: String,
+        }
+        let rows = sqlx::query_as::<_, Row>(
+            r#"
+            WITH ranked AS (
+                SELECT
+                    e.target_id AS project_id,
+                    a.id        AS area_id,
+                    a.title     AS area_title,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY e.target_id
+                        ORDER BY e.created_at ASC, e.id ASC
+                    ) AS rn
+                FROM edges e
+                JOIN nodes a ON a.id = e.source_id
+                WHERE e.target_id = ANY($1)
+                  AND e.edge_type::text = 'contains'
+                  AND a.node_type::text = 'area'
+            )
+            SELECT project_id, area_id, area_title FROM ranked WHERE rn = 1
+            "#,
+        )
+        .bind(&ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("area_for_nodes failed: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (NodeId(r.project_id), NodeId(r.area_id), r.area_title))
+            .collect())
+    }
 }

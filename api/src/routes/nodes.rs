@@ -56,6 +56,26 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/versions", get(list_versions))
         .route("/{id}/versions/{version_id}/restore", post(restore_version))
         .route("/{id}/duplicate", post(duplicate_node))
+        .route("/{id}/pin", axum::routing::put(set_pin))
+}
+
+#[derive(serde::Deserialize)]
+struct SetPinRequest {
+    pinned: bool,
+}
+
+/// `PUT /api/nodes/:id/pin` — toggle the pinned flag.  Used by the
+/// v2.9.0 dashboard pin button.  Only the node owner / admin / editor
+/// can set pin state.
+async fn set_pin(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SetPinRequest>,
+) -> Result<Json<Node>, ApiError> {
+    require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
+    let node = state.nodes.set_pinned(NodeId(id), req.pinned).await?;
+    Ok(Json(node))
 }
 
 // ── Node list ────────────────────────────────────────────────────────────────

@@ -80,6 +80,8 @@ impl NodeRepo for StubNodeRepo {
     async fn list_titles(&self, _: Option<&str>) -> Result<Vec<NodeTitleEntry>, EmberTroveError> { unimplemented!() }
     async fn find_id_by_title(&self, _: &str) -> Result<Option<NodeId>, EmberTroveError> { unimplemented!() }
     async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
+    async fn area_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> { unimplemented!() }
+    async fn set_pinned(&self, _: NodeId, _: bool) -> Result<Node, EmberTroveError> { unimplemented!() }
     async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
 }
 
@@ -213,6 +215,7 @@ struct StubActivityRepo;
 impl ActivityRepo for StubActivityRepo {
     async fn record(&self, _: NodeId, _: &str, _: ActivityAction, _: serde_json::Value) -> Result<(), EmberTroveError> { Ok(()) }
     async fn list(&self, _: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> { unimplemented!() }
+    async fn list_recent_for_owner(&self, _: &str, _: chrono::DateTime<chrono::Utc>, _: i64) -> Result<Vec<common::activity::RecentActivityEntry>, EmberTroveError> { unimplemented!() }
 }
 
 struct StubNodeVersionRepo;
@@ -569,6 +572,13 @@ async fn inbox_quick_route_registered() {
 #[tokio::test]
 async fn tasks_all_open_route_registered() {
     assert_route_registered("GET", "/tasks/all").await;
+}
+
+// ── Dashboard recent activity recap (Phase 7 / v2.9.0) ───────────────────────
+
+#[tokio::test]
+async fn dashboard_activity_route_registered() {
+    assert_route_registered("GET", "/dashboard/activity").await;
 }
 
 // ── OAuth callback failure handling ───────────────────────────────────────────

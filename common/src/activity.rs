@@ -18,6 +18,16 @@ pub struct ActivityEntry {
     pub created_at: DateTime<Utc>,
 }
 
+/// Activity entry enriched with the parent node's title — used by the
+/// v2.9.0 dashboard recap section so the UI doesn't have to fetch the
+/// node separately for every line.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RecentActivityEntry {
+    #[serde(flatten)]
+    pub entry: ActivityEntry,
+    pub node_title: String,
+}
+
 /// Enumeration of actions recorded in the activity log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
