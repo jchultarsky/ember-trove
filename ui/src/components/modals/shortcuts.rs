@@ -7,14 +7,40 @@ struct Shortcut {
     description: &'static str,
 }
 
-const SHORTCUTS: &[Shortcut] = &[
-    Shortcut { key: "n",      description: "New node" },
+struct ShortcutGroup {
+    title: &'static str,
+    items: &'static [Shortcut],
+}
+
+const ANYWHERE: &[Shortcut] = &[
+    Shortcut { key: "n",      description: "Quick capture (Inbox)" },
     Shortcut { key: "g",      description: "Graph view" },
     Shortcut { key: "/",      description: "Search" },
+    Shortcut { key: "?",      description: "Show this help" },
+    Shortcut { key: "Escape", description: "Close modal / back" },
+];
+
+const NODE_VIEW: &[Shortcut] = &[
     Shortcut { key: "d",      description: "Duplicate current node" },
     Shortcut { key: "p",      description: "Pin / unpin current node" },
-    Shortcut { key: "Escape", description: "Back to node list" },
-    Shortcut { key: "?",      description: "Show this help" },
+];
+
+// v2.7.0 — Kanban keyboard triage.  Mirrors the shortcut set in
+// `my_day_view.rs`'s window keydown handler.
+const MY_DAY: &[Shortcut] = &[
+    Shortcut { key: "j / ↓",  description: "Focus next task" },
+    Shortcut { key: "k / ↑",  description: "Focus previous task" },
+    Shortcut { key: "Enter",  description: "Open focused task in its parent" },
+    Shortcut { key: "Space",  description: "Toggle done on focused task" },
+    Shortcut { key: "t",      description: "Toggle Today / Backlog for focused task" },
+    Shortcut { key: "e",      description: "Edit focused task inline" },
+    Shortcut { key: "d",      description: "Delete focused task" },
+];
+
+const GROUPS: &[ShortcutGroup] = &[
+    ShortcutGroup { title: "Anywhere",        items: ANYWHERE },
+    ShortcutGroup { title: "My Day Kanban",   items: MY_DAY },
+    ShortcutGroup { title: "Node view",       items: NODE_VIEW },
 ];
 
 #[component]
@@ -35,7 +61,8 @@ pub fn ShortcutsModal(
                     <div
                         class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl
                                border border-stone-200 dark:border-stone-700
-                               w-full max-w-sm p-6 flex flex-col gap-5"
+                               w-full max-w-md p-6 flex flex-col gap-5
+                               max-h-[85vh] overflow-auto"
                         on:click=|ev| ev.stop_propagation()
                     >
                         // Header
@@ -59,28 +86,36 @@ pub fn ShortcutsModal(
                             </button>
                         </div>
 
-                        // Shortcut table
-                        <table class="w-full text-sm border-collapse">
-                            <tbody>
-                                {SHORTCUTS.iter().map(|s| view! {
-                                    <tr class="border-b border-stone-100 dark:border-stone-800 last:border-0">
-                                        <td class="py-2 pr-4 w-20">
-                                            <kbd class="inline-flex items-center justify-center
-                                                        min-w-[2rem] px-2 py-0.5
-                                                        rounded border border-stone-300 dark:border-stone-600
-                                                        bg-stone-100 dark:bg-stone-800
-                                                        font-mono text-xs text-stone-700 dark:text-stone-300
-                                                        shadow-sm">
-                                                {s.key}
-                                            </kbd>
-                                        </td>
-                                        <td class="py-2 text-stone-600 dark:text-stone-400">
-                                            {s.description}
-                                        </td>
-                                    </tr>
-                                }).collect::<Vec<_>>()}
-                            </tbody>
-                        </table>
+                        // Grouped shortcut tables
+                        {GROUPS.iter().map(|g| view! {
+                            <section class="space-y-2">
+                                <h3 class="text-xs font-semibold uppercase tracking-wide
+                                           text-amber-700 dark:text-amber-400">
+                                    {g.title}
+                                </h3>
+                                <table class="w-full text-sm border-collapse">
+                                    <tbody>
+                                        {g.items.iter().map(|s| view! {
+                                            <tr class="border-b border-stone-100 dark:border-stone-800 last:border-0">
+                                                <td class="py-1.5 pr-4 w-24">
+                                                    <kbd class="inline-flex items-center justify-center
+                                                                min-w-[2rem] px-2 py-0.5
+                                                                rounded border border-stone-300 dark:border-stone-600
+                                                                bg-stone-100 dark:bg-stone-800
+                                                                font-mono text-xs text-stone-700 dark:text-stone-300
+                                                                shadow-sm">
+                                                        {s.key}
+                                                    </kbd>
+                                                </td>
+                                                <td class="py-1.5 text-stone-600 dark:text-stone-400">
+                                                    {s.description}
+                                                </td>
+                                            </tr>
+                                        }).collect::<Vec<_>>()}
+                                    </tbody>
+                                </table>
+                            </section>
+                        }).collect::<Vec<_>>()}
 
                         // Footer hint
                         <p class="text-xs text-stone-400 dark:text-stone-500">
