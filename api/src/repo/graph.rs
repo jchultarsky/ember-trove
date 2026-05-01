@@ -76,29 +76,36 @@ impl GraphRepo for PgGraphRepo {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await
-            .map_err(|e| EmberTroveError::Internal(format!("save_positions tx begin: {e}")))?;
+        // Single round-trip batched UPSERT using parallel-array UNNEST.
+        // Earlier impl issued one INSERT per row inside a transaction (N
+        // round-trips to Postgres) plus a `DELETE FROM node_positions` that
+        // wiped all users' rows; the FK cascade on `nodes(id)` already
+        // cleans up positions when a node is deleted, so the delete is
+        // redundant.
+        let (ids, xs, ys): (Vec<Uuid>, Vec<f64>, Vec<f64>) = positions.iter().fold(
+            (Vec::with_capacity(positions.len()),
+             Vec::with_capacity(positions.len()),
+             Vec::with_capacity(positions.len())),
+            |(mut ids, mut xs, mut ys), (id, x, y)| {
+                ids.push(*id);
+                xs.push(*x);
+                ys.push(*y);
+                (ids, xs, ys)
+            },
+        );
 
-        sqlx::query("DELETE FROM node_positions")
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| EmberTroveError::Internal(format!("save_positions clear: {e}")))?;
-
-        for (node_id, x, y) in positions {
-            sqlx::query(
-                "INSERT INTO node_positions (node_id, x, y) VALUES ($1, $2, $3)
-                 ON CONFLICT (node_id) DO UPDATE SET x = EXCLUDED.x, y = EXCLUDED.y",
-            )
-            .bind(node_id)
-            .bind(*x)
-            .bind(*y)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| EmberTroveError::Internal(format!("save_positions insert: {e}")))?;
-        }
-
-        tx.commit().await
-            .map_err(|e| EmberTroveError::Internal(format!("save_positions commit: {e}")))?;
+        sqlx::query(
+            "INSERT INTO node_positions (node_id, x, y)
+             SELECT * FROM UNNEST($1::uuid[], $2::double precision[], $3::double precision[])
+             ON CONFLICT (node_id) DO UPDATE
+             SET x = EXCLUDED.x, y = EXCLUDED.y, updated_at = now()",
+        )
+        .bind(&ids[..])
+        .bind(&xs[..])
+        .bind(&ys[..])
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("save_positions failed: {e}")))?;
 
         Ok(())
     }

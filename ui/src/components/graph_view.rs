@@ -15,7 +15,7 @@
 ///
 /// SVG presentation attributes are set via `style` because Leptos 0.8 writes
 /// `attr:` prefixes literally for unknown SVG elements.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use leptos::prelude::*;
 use uuid::Uuid;
@@ -325,6 +325,16 @@ fn force_layout_expanded(
 
     let k = (uw * uh / n as f64).sqrt();
 
+    // Pre-compute id→index so the attractive-force loop is O(m) per iter,
+    // not O(m·n) from `node_ids.iter().position(...)`. Edges to/from IDs
+    // not in `node_ids` (orphans from deleted nodes) are skipped here too.
+    let idx_of: HashMap<Uuid, usize> =
+        node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let edge_idx: Vec<(usize, usize)> = edge_pairs
+        .iter()
+        .filter_map(|(src, tgt)| Some((*idx_of.get(src)?, *idx_of.get(tgt)?)))
+        .collect();
+
     for iter in 0..200_u32 {
         let mut disp_x = vec![0.0_f64; n];
         let mut disp_y = vec![0.0_f64; n];
@@ -344,21 +354,17 @@ fn force_layout_expanded(
             }
         }
 
-        for (src, tgt) in edge_pairs {
-            let si = node_ids.iter().position(|id| id == src);
-            let ti = node_ids.iter().position(|id| id == tgt);
-            if let (Some(si), Some(ti)) = (si, ti) {
-                let ddx = px[si] - px[ti];
-                let ddy = py[si] - py[ti];
-                let dist = (ddx * ddx + ddy * ddy).sqrt().max(1.0);
-                let force = dist * dist / k;
-                let fx = ddx / dist * force;
-                let fy = ddy / dist * force;
-                disp_x[si] -= fx;
-                disp_y[si] -= fy;
-                disp_x[ti] += fx;
-                disp_y[ti] += fy;
-            }
+        for &(si, ti) in &edge_idx {
+            let ddx = px[si] - px[ti];
+            let ddy = py[si] - py[ti];
+            let dist = (ddx * ddx + ddy * ddy).sqrt().max(1.0);
+            let force = dist * dist / k;
+            let fx = ddx / dist * force;
+            let fy = ddy / dist * force;
+            disp_x[si] -= fx;
+            disp_y[si] -= fy;
+            disp_x[ti] += fx;
+            disp_y[ti] += fy;
         }
 
         let temp = 200.0_f64 * (1.0 - iter as f64 / 200.0).max(0.01);
@@ -551,9 +557,16 @@ fn place_component(
         // Center each layer within the component's max width.
         let start_x = origin_x - layer_w / 2.0;
 
-        // Sort: hubs toward center, others outward.
+        // Sort: hubs toward center, others outward.  Defensive lookup —
+        // even with edge filtering at the smart_layout entry, a future caller
+        // path could pass through here with a stray ID; default-to-0 avoids
+        // a HashMap-index panic in production.
         let mut sorted = layer.clone();
-        sorted.sort_by(|a, b| deg[b].cmp(&deg[a]));
+        sorted.sort_by(|a, b| {
+            let da = deg.get(a).copied().unwrap_or(0);
+            let db = deg.get(b).copied().unwrap_or(0);
+            db.cmp(&da)
+        });
 
         for (i, nid) in sorted.iter().enumerate() {
             let x = start_x + i as f64 * NODE_W;
@@ -590,6 +603,19 @@ fn smart_layout(
             fit_zoom: 1.0,
         };
     }
+
+    // Drop orphan edges (endpoints not in the current node set). Without this,
+    // BFS in `find_components` / `assign_layers` walks into UUIDs that have no
+    // entry in `compute_total_degree`'s map, panicking the sort closure in
+    // `place_component`. Orphans appear when an edge row outlives its node
+    // (or when nodes are paginated but edges are not).
+    let id_set: HashSet<Uuid> = node_ids.iter().copied().collect();
+    let edge_pairs: Vec<(Uuid, Uuid)> = edge_pairs
+        .iter()
+        .copied()
+        .filter(|(s, t)| id_set.contains(s) && id_set.contains(t))
+        .collect();
+    let edge_pairs = edge_pairs.as_slice();
 
     let in_degree = compute_in_degree(&node_ids, edge_pairs);
     let components = find_components(&node_ids, edge_pairs);
