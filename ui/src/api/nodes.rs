@@ -7,9 +7,34 @@ use gloo_net::http::Request;
 use super::{api_url, parse_json};
 use crate::error::UiError;
 
-/// Fetch all nodes including archived (used by the graph view).
+/// Fetch ALL nodes (every page) including archived. Used by the graph view,
+/// which must see the full node set so edges to nodes on later pages still
+/// have visible endpoints. Loops until the server reports `has_more=false`,
+/// with a hard cap to avoid pathological infinite loops if pagination ever
+/// reports inconsistent state.
 pub async fn fetch_nodes() -> Result<Vec<Node>, UiError> {
-    fetch_nodes_filtered(None, None, true).await
+    const PAGE_SIZE: u32 = 200;
+    const MAX_PAGES: u32 = 50;
+    let mut all = Vec::new();
+    let mut page: u32 = 1;
+    loop {
+        let url = format!(
+            "{}?include_archived=true&page={page}&per_page={PAGE_SIZE}",
+            api_url("/nodes"),
+        );
+        let resp = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| UiError::Network(e.to_string()))?;
+        let list: common::node::NodeListResponse = parse_json(resp).await?;
+        let returned = list.nodes.len();
+        all.extend(list.nodes);
+        if !list.has_more || returned == 0 || page >= MAX_PAGES {
+            break;
+        }
+        page += 1;
+    }
+    Ok(all)
 }
 
 /// Fetch nodes with optional status and tag_id filters.
