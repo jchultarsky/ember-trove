@@ -4,6 +4,34 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.11.0] - 2026-05-28
+
+### Added — Harmonized add-task forms (shared `NewTaskForm`)
+The in-node add-task UI and the Inbox add-task UI had drifted apart —
+different controls, different layout, different validation feedback.
+Extracted the in-node form into a reusable `NewTaskForm` component
+(icon `+` button, priority / due / recurrence chips, inline
+validation error) and wired both `TaskPanel` and Inbox to it so the
+two entry points are visually and behaviourally identical. Inbox
+additionally gains an **optional node picker** so a captured task can
+be linked to a node at creation time.
+
+### Fixed — My Day tasks now stick until removed or completed
+A task added to My Day (its `focus_date` set via the lightbulb)
+silently dropped out of the **Today** zone at midnight: the read
+filter matched `focus_date == today`, but the lightbulb writes a
+literal date, so the next day the task no longer matched. Carry-forward
+tasks (a past-but-open `focus_date`) must stay in Today until the user
+manually removes them (clears `focus_date`) or completes them.
+
+The Today-zone read boundary is now `focus_date <= today` and the
+Backlog boundary is `focus_date` none-or-future, mirroring the server
+`list_my_day` carry-forward predicate. The "carried from" badge now
+renders in the Today zone as well, so carried items are clearly
+labelled.
+
+---
+
 ## [2.10.1] - 2026-04-28
 
 ### Fixed — Sidebar header truncated "Ember Trove" after the (?) icon landed
