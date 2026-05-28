@@ -1,7 +1,10 @@
 //! My Day — two-zone vertical Kanban (v2.6.0+) with keyboard triage (v2.7.0).
 //!
-//! Top zone:  tasks with `focus_date == today`        — "what I'm doing today"
-//! Bottom:    every open task whose `focus_date` is NOT today  — "everything else"
+//! Top zone:  tasks with `focus_date` set and on-or-before today — "what I'm
+//!            doing today".  Sticky: once committed to My Day a task stays
+//!            here until completed or removed; it never auto-drops at midnight.
+//! Bottom:    every open task with no `focus_date` (or a future one) — the
+//!            "everything else" backlog.
 //!
 //! ## Mouse + touch
 //!
@@ -31,10 +34,10 @@
 //!
 //! ## Carry-over
 //!
-//! Carry-over UI is gone from this view.  Tasks committed to a previous
-//! day that aren't done show up in the backlog with a small
-//! "carried from May 2" badge (rendered by `KanbanTaskRow`); the user
-//! drags or taps them back to today the same as anything else.
+//! Tasks committed to a previous day that aren't done stay in the Today
+//! zone (sticky My Day) with a small "carried from May 2" badge (rendered
+//! by `KanbanTaskRow`) so the user sees how long they've lingered.  They
+//! leave My Day only when completed or tapped/dragged back to the backlog.
 
 use chrono::NaiveDate;
 use common::id::TaskId;
@@ -86,10 +89,10 @@ pub fn MyDayView() -> impl IntoView {
         let today_raw = today_tasks.get().and_then(|r| r.ok()).unwrap_or_default();
         let all_raw   = all_open.get().and_then(|r| r.ok()).unwrap_or_default();
         let today_zone: Vec<MyDayTask> = today_raw.into_iter()
-            .filter(|t| t.task.focus_date == Some(today))
+            .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
             .collect();
         let backlog_zone: Vec<MyDayTask> = all_raw.into_iter()
-            .filter(|t| t.task.focus_date != Some(today))
+            .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
             .collect();
         let mut flat = today_zone;
         flat.extend(backlog_zone);
@@ -273,7 +276,7 @@ pub fn MyDayView() -> impl IntoView {
                             .and_then(|r| r.ok())
                             .unwrap_or_default();
                         let scoped: Vec<MyDayTask> = raw.into_iter()
-                            .filter(|t| t.task.focus_date == Some(today))
+                            .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
                             .collect();
                         view! {
                             <KanbanZoneRow
@@ -301,7 +304,7 @@ pub fn MyDayView() -> impl IntoView {
                             .and_then(|r| r.ok())
                             .unwrap_or_default();
                         let scoped: Vec<MyDayTask> = raw.into_iter()
-                            .filter(|t| t.task.focus_date != Some(today))
+                            .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
                             .collect();
                         let count = scoped.len();
                         let subtitle = if count == 0 {
