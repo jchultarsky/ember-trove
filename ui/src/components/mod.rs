@@ -16,6 +16,7 @@ pub mod note_panel;
 pub mod notes_view;
 pub mod node_meta;
 pub mod node_view;
+pub mod new_task_form;
 pub mod permission_dialog;
 pub mod public_share_view;
 pub mod share_panel;
