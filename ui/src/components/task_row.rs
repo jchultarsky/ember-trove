@@ -5,10 +5,12 @@
 //! Drives both zones of the My Day Kanban (today + backlog) via a single
 //! `KanbanZone` enum that swaps which "zone-swap" button is shown.
 //!
-//! `focus_date` is binary in this model — "today" or "not today".  All
-//! mutations on this row that touch focus go through
-//! `PATCH /api/tasks/:id` setting `focus_date` to `Some(today)` or
-//! `Some(None)` (= clear).
+//! `focus_date` is binary at the *write* boundary — committing a task to My
+//! Day stamps it with today's date; removing clears it.  All focus mutations
+//! on this row go through `PATCH /api/tasks/:id` setting `focus_date` to
+//! `Some(today)` or `Some(None)` (= clear).  At the *read* boundary the Today
+//! zone is sticky: any task whose `focus_date` is on-or-before today stays in
+//! My Day until it is completed or removed — it never auto-drops at midnight.
 //!
 //! ## Click + drag (v2.6.2)
 //!
@@ -48,9 +50,12 @@ use crate::components::toast::{push_toast, ToastLevel};
 /// row's left border accent.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KanbanZone {
-    /// `focus_date == today` — row in the upper "today" zone.
+    /// `focus_date` is set and on-or-before today — row in the upper "today"
+    /// zone.  Sticky: a task committed to My Day stays here across days until
+    /// it is completed or removed (focus_date cleared).
     Today,
-    /// `focus_date != today` — row in the lower backlog zone.
+    /// No `focus_date`, or a `focus_date` in the future — row in the lower
+    /// backlog zone.
     Backlog,
 }
 
@@ -128,13 +133,11 @@ pub fn KanbanTaskRow(
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
 
-    // Carry-over context: a backlog row whose focus_date is strictly before
-    // today was committed to a previous day and never finished.  Surfaces
-    // as a small "from May 2" hint.
-    let carryover_from: Option<NaiveDate> = match zone {
-        KanbanZone::Backlog => focus.filter(|&d| d < today),
-        KanbanZone::Today   => None,
-    };
+    // Carry-over context: a row whose focus_date is strictly before today was
+    // committed to My Day on a previous day and never finished.  Such tasks
+    // now stay in the Today zone (sticky My Day) rather than dropping to the
+    // backlog, so surface the "carried from May 2" hint in either zone.
+    let carryover_from: Option<NaiveDate> = focus.filter(|&d| d < today);
 
     // ── Mutations ─────────────────────────────────────────────────────
 

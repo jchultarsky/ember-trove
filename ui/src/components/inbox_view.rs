@@ -10,11 +10,12 @@ use chrono::NaiveDate;
 use common::{
     id::NodeId,
     search::SearchResult,
-    task::{CreateTaskRequest, Task, UpdateTaskRequest},
+    task::{Task, UpdateTaskRequest},
 };
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
+use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, parse_status,
     priority_dot_color, priority_label, priority_value, recurrence_label, recurrence_value,
@@ -67,43 +68,6 @@ pub fn InboxView() -> impl IntoView {
     // matching row.  See `crate::focus_task`.
     schedule_focus_task();
 
-    // New-task form state
-    let new_title    = RwSignal::new(String::new());
-    let new_priority = RwSignal::new("medium".to_string());
-    let new_due      = RwSignal::new(String::new());
-    let adding       = RwSignal::new(false);
-
-    let do_add = move || {
-        let title = new_title.get_untracked().trim().to_string();
-        if title.is_empty() { return; }
-        let priority = parse_priority(&new_priority.get_untracked());
-        let due_date: Option<NaiveDate> =
-            new_due.get_untracked().trim().parse::<NaiveDate>().ok();
-        adding.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let req = CreateTaskRequest {
-                title,
-                node_id: None,
-                status: None,
-                priority: Some(priority),
-                focus_date: None,
-                due_date,
-                recurrence: None,
-            };
-            if crate::api::create_standalone_task(&req).await.is_ok() {
-                new_title.set(String::new());
-                new_priority.set("medium".to_string());
-                new_due.set(String::new());
-                refresh.update(|n| *n += 1);
-            }
-            adding.set(false);
-        });
-    };
-
-    let on_key = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Enter" { do_add(); }
-    };
-
     let tasks_res = LocalResource::new(move || {
         let _ = refresh.get();
         async move { crate::api::list_inbox().await }
@@ -131,60 +95,9 @@ pub fn InboxView() -> impl IntoView {
             // ── Scrollable content ────────────────────────────────────────────
             <div class="flex-1 overflow-auto px-4 py-4 space-y-4">
 
-                // ── Add-task card ─────────────────────────────────────────────
-                <div class="bg-white dark:bg-stone-900 rounded-xl border border-stone-200
-                    dark:border-stone-700 p-4 shadow-sm space-y-3">
-                    <p class="text-xs font-semibold text-stone-500 dark:text-stone-400
-                        uppercase tracking-wider">
-                        "New task"
-                    </p>
-                    // Title input — full width
-                    <input
-                        type="text"
-                        placeholder="What needs to be done?"
-                        class="w-full rounded-lg border border-stone-200 dark:border-stone-700
-                            bg-stone-50 dark:bg-stone-800 px-3 py-2.5 text-sm
-                            text-stone-900 dark:text-stone-100
-                            focus:outline-none focus:ring-2 focus:ring-amber-400"
-                        prop:value=move || new_title.get()
-                        on:input=move |ev| new_title.set(event_target_value(&ev))
-                        on:keydown=on_key
-                    />
-                    // Controls row — wraps gracefully on narrow screens
-                    <div class="flex items-center gap-2 flex-wrap">
-                        <select
-                            class="rounded-lg border border-stone-200 dark:border-stone-700
-                                bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
-                                text-stone-700 dark:text-stone-300
-                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                            prop:value=move || new_priority.get()
-                            on:change=move |ev| new_priority.set(event_target_value(&ev))
-                        >
-                            <option value="high">"High"</option>
-                            <option value="medium" selected=true>"Medium"</option>
-                            <option value="low">"Low"</option>
-                        </select>
-                        <input
-                            type="date"
-                            class="flex-1 min-w-0 rounded-lg border border-stone-200
-                                dark:border-stone-700 bg-stone-50 dark:bg-stone-800
-                                px-3 py-2 text-sm text-stone-700 dark:text-stone-300
-                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                            prop:value=move || new_due.get()
-                            on:input=move |ev| new_due.set(event_target_value(&ev))
-                        />
-                        <button
-                            class="px-4 py-2 rounded-lg text-sm font-medium
-                                bg-amber-500 hover:bg-amber-600 active:bg-amber-700
-                                text-white transition-colors cursor-pointer
-                                disabled:opacity-50 disabled:cursor-not-allowed"
-                            on:click=move |_| do_add()
-                            disabled=move || adding.get()
-                        >
-                            {move || if adding.get() { "Adding…" } else { "Add" }}
-                        </button>
-                    </div>
-                </div>
+                // ── Add-task form — shared with the node-detail TaskPanel ─────
+                // node_id omitted ⇒ standalone capture with the optional picker.
+                <NewTaskForm refresh=refresh />
 
                 // ── Task list ─────────────────────────────────────────────────
                 <Suspense fallback=|| view! {
