@@ -4,6 +4,23 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.11.1] - 2026-05-29
+
+### Changed — Pinned Rust toolchain bumped 1.92 → 1.96
+The pinned toolchain in `rust-toolchain.toml` lagged the locally-installed
+and CI/Docker stable (all 1.96), which produced recurring `E0514`
+"incompatible version of rustc" conflicts in the shared `target/` dir
+whenever a non-rustup cargo touched the build. Bumped the pin to `1.96`
+to align every build surface on one compiler. Dropped the now-false
+"pinned to rustc 1.92" rationale on the CI `sqlx-cli` install (kept the
+`--version 0.8.6` pin). No application behaviour changes.
+
+### Fixed — Two new clippy 1.96 lints
+- `unnecessary_sort_by` in `node_list.rs` — node "modified" sorts now use
+  `sort_by_key` (`std::cmp::Reverse` for descending).
+- `manual_checked_ops` in `project_dashboard.rs` — the project completion
+  percentage uses `checked_div` + `map_or` instead of a manual `if > 0` guard.
+
 ## [2.11.0] - 2026-05-28
 
 ### Added — Harmonized add-task forms (shared `NewTaskForm`)
