@@ -169,9 +169,8 @@ jobs:
           restore-keys: ubuntu-cargo-sqlx-
 
       - name: Install sqlx-cli
-        # Pin to the 0.8 line to match the project's sqlx 0.8.6 dependency.
-        # sqlx-cli 0.9.0 raised its MSRV to rustc 1.94, but this repo is pinned
-        # to rustc 1.92 via rust-toolchain.toml, so an unpinned install fails.
+        # Pin to the 0.8 line to match the project's sqlx 0.8.6 dependency, so
+        # the CLI's migration handling stays in lockstep with the library.
         run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres --locked
 
       - name: Run migrations

@@ -1,6 +1,10 @@
 [toolchain]
-# AWS SDK crates require rustc >= 1.91.1; pin to 1.92 for reproducible builds.
-channel = "1.92"
+# Pinned to the current stable for reproducible builds. Matches CI's
+# dtolnay/rust-toolchain@stable and the `rust:latest` Docker base (both 1.96),
+# and the locally-installed cargo. Bump deliberately rather than tracking
+# "stable" so a new release can't silently land a clippy lint that breaks CI.
+# (AWS SDK crates require rustc >= 1.91.1; 1.96 clears that comfortably.)
+channel = "1.96"
 targets = ["wasm32-unknown-unknown"]
 # clippy must be listed here — dtolnay/rust-toolchain ignores workflow
 # `components:` when rust-toolchain.toml is present.

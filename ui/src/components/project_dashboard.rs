@@ -279,11 +279,9 @@ fn ProjectCard(
 ) -> impl IntoView {
     let counts = entry.task_counts.clone();
     let total = counts.open + counts.in_progress + counts.done + counts.cancelled;
-    let done_pct = if total > 0 {
-        (counts.done * 100 / total) as f32
-    } else {
-        0.0
-    };
+    let done_pct = (counts.done * 100)
+        .checked_div(total)
+        .map_or(0.0, |v| v as f32);
 
     let s_icon = status_icon(&entry.node_status);
     let s_label = status_label(&entry.node_status);

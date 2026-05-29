@@ -48,8 +48,8 @@ impl SortKey {
             SortKey::NameDesc => nodes.sort_by(|a, b| {
                 b.title.to_lowercase().cmp(&a.title.to_lowercase())
             }),
-            SortKey::ModifiedDesc => nodes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
-            SortKey::ModifiedAsc  => nodes.sort_by(|a, b| a.updated_at.cmp(&b.updated_at)),
+            SortKey::ModifiedDesc => nodes.sort_by_key(|n| std::cmp::Reverse(n.updated_at)),
+            SortKey::ModifiedAsc  => nodes.sort_by_key(|n| n.updated_at),
         }
         nodes
     }
