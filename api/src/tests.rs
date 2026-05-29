@@ -322,6 +322,7 @@ fn test_state() -> AppState {
             ..Config::default()
         },
         started_at: Instant::now(),
+        request_metrics: Arc::new(crate::routes::metrics::RequestMetrics::default()),
         pkce: Arc::new(StubPkceRepo),
     }
 }
@@ -364,6 +365,28 @@ async fn health_returns_200() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn request_metrics_middleware_counts_responses() {
+    // Inject a shared counter so we can read it after driving requests through
+    // the real router — proves the track_requests middleware is wired in.
+    let metrics = Arc::new(crate::routes::metrics::RequestMetrics::default());
+    let mut state = test_state();
+    state.request_metrics = metrics.clone();
+    let app = build_router(state).expect("router builds");
+
+    for _ in 0..3 {
+        let _ = app
+            .clone()
+            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+    }
+
+    let snap = metrics.snapshot();
+    assert_eq!(snap.total, 3, "all three /health responses must be counted");
+    assert_eq!(snap.status_2xx, 3, "/health returns 200 → 2xx bucket");
 }
 
 #[tokio::test]

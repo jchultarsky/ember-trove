@@ -50,6 +50,8 @@ pub struct AppState {
     pub config: Config,
     /// Process start time — used to compute uptime in the metrics endpoint.
     pub started_at: Instant,
+    /// Process-lifetime HTTP request counters, surfaced in the metrics endpoint.
+    pub request_metrics: Arc<crate::routes::metrics::RequestMetrics>,
     /// Short-lived PKCE verifier store — keyed by OAuth state parameter.
     /// Backed by Postgres so in-flight logins survive an API restart/redeploy.
     pub pkce: Arc<dyn PkceRepo>,
