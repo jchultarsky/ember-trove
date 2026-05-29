@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use axum::{
     Extension, Json, Router,
     extract::{Query, State},
@@ -17,7 +15,9 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{auth::middleware::SESSION_COOKIE, error::ApiError, state::AppState};
+use crate::{
+    auth::middleware::SESSION_COOKIE, error::ApiError, repo::pkce::PKCE_TTL, state::AppState,
+};
 
 /// Cookie that holds the encrypted refresh token.
 /// Scoped to `/api/auth/refresh` so the browser never sends it on other requests.
@@ -26,9 +26,6 @@ const REFRESH_COOKIE: &str = "ember_trove_refresh";
 /// Cookie that holds the Cognito access token — required by the ChangePassword API.
 /// Scoped to `/api/auth/change-password` so it is never sent on other requests.
 const ACCESS_COOKIE: &str = "ember_trove_access";
-
-/// Maximum age for a pending PKCE entry — entries older than this are purged.
-const PKCE_TTL: Duration = Duration::from_secs(600); // 10 minutes
 
 /// Public auth routes (no JWT required).
 pub fn public_router() -> Router<AppState> {
@@ -71,14 +68,9 @@ async fn login(
     rand::thread_rng().fill_bytes(&mut state_raw);
     let oauth_state = URL_SAFE_NO_PAD.encode(state_raw);
 
-    // Purge expired entries and store the new one atomically.
-    {
-        let mut store = state.pkce_store.lock()
-            .map_err(|_| ApiError::Internal("pkce store lock poisoned".to_string()))?;
-        let now = Instant::now();
-        store.retain(|_, (_, created_at)| now.duration_since(*created_at) < PKCE_TTL);
-        store.insert(oauth_state.clone(), (code_verifier, now));
-    }
+    // Persist the verifier keyed by the OAuth state. The background sweeper
+    // purges expired entries; the callback consumes this one exactly once.
+    state.pkce.store(&oauth_state, &code_verifier).await?;
 
     let redirect_uri = format!("{}/api/auth/callback", state.auth.api_external_url);
     let url = format!(
@@ -142,13 +134,10 @@ async fn try_callback(
     // redirects to a fresh login flow.
     let oauth_state = params.state.as_deref()
         .ok_or_else(|| ApiError::Unauthorized("missing oauth state".to_string()))?;
-    let code_verifier = {
-        let mut store = app_state.pkce_store.lock()
-            .map_err(|_| ApiError::Internal("pkce store lock poisoned".to_string()))?;
-        store.remove(oauth_state).map(|(verifier, _)| verifier)
-    }.ok_or_else(|| ApiError::Unauthorized(
-        "PKCE verifier not found (login expired or server restarted)".to_string()
-    ))?;
+    let code_verifier = app_state.pkce.take(oauth_state, PKCE_TTL).await?
+        .ok_or_else(|| ApiError::Unauthorized(
+            "PKCE verifier not found (login expired or server restarted)".to_string()
+        ))?;
 
     let redirect_uri = format!("{}/api/auth/callback", app_state.auth.api_external_url);
     let token_resp = oidc

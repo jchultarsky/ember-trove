@@ -54,7 +54,7 @@ use crate::{
     repo::{
         activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo, edge::EdgeRepo,
         favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_version::NodeVersionRepo,
-        note::NoteRepo, permission::PermissionRepo, search::SearchRepo,
+        note::NoteRepo, permission::PermissionRepo, pkce::PkceRepo, search::SearchRepo,
         search_presets::SearchPresetRepo, share_token::ShareTokenRepo, tag::TagRepo,
         node_link::NodeLinkRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
     },
@@ -266,6 +266,14 @@ impl WebhookRepo for StubWebhookRepo {
     async fn delete(&self, _: WebhookId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
 }
 
+struct StubPkceRepo;
+#[async_trait]
+impl PkceRepo for StubPkceRepo {
+    async fn store(&self, _: &str, _: &str) -> Result<(), EmberTroveError> { Ok(()) }
+    async fn take(&self, _: &str, _: Duration) -> Result<Option<String>, EmberTroveError> { Ok(None) }
+    async fn sweep_expired(&self, _: Duration) -> Result<u64, EmberTroveError> { Ok(0) }
+}
+
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
 fn test_state() -> AppState {
@@ -314,7 +322,7 @@ fn test_state() -> AppState {
             ..Config::default()
         },
         started_at: Instant::now(),
-        pkce_store: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        pkce: Arc::new(StubPkceRepo),
     }
 }
 

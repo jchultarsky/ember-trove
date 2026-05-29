@@ -32,7 +32,8 @@ use repo::{
     activity::PgActivityRepo, attachment::PgAttachmentRepo, backup::PgBackupRepo,
     edge::PgEdgeRepo, favorite::PgFavoriteRepo, graph::PgGraphRepo, node::PgNodeRepo,
     node_version::PgNodeVersionRepo, note::PgNoteRepo, permission::PgPermissionRepo,
-    node_link::PgNodeLinkRepo, search::PgSearchRepo, search_presets::PgSearchPresetRepo,
+    pkce::PgPkceRepo, node_link::PgNodeLinkRepo, search::PgSearchRepo,
+    search_presets::PgSearchPresetRepo,
     share_token::PgShareTokenRepo, tag::PgTagRepo, task::PgTaskRepo, template::PgTemplateRepo,
     webhook::PgWebhookRepo,
 };
@@ -169,25 +170,24 @@ async fn main() -> anyhow::Result<()> {
         cookie_key,
         auth,
         config: config.clone(),
+        pkce: Arc::new(PgPkceRepo::new(pool.clone())),
         pool,
-        pkce_store: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     // Spawn a background task that sweeps expired PKCE entries every 5 minutes.
-    // Without this, abandoned OAuth flows accumulate unboundedly in memory.
+    // Without this, abandoned OAuth flows accumulate unboundedly in the table.
     {
-        let pkce = state.pkce_store.clone();
+        let pkce = state.pkce.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
             loop {
                 interval.tick().await;
-                if let Ok(mut store) = pkce.lock() {
-                    let before = store.len();
-                    store.retain(|_, (_, created)| created.elapsed() < std::time::Duration::from_secs(600));
-                    let removed = before - store.len();
-                    if removed > 0 {
+                match pkce.sweep_expired(repo::pkce::PKCE_TTL).await {
+                    Ok(removed) if removed > 0 => {
                         tracing::debug!(removed, "PKCE store: swept expired entries");
                     }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(?e, "PKCE sweep failed"),
                 }
             }
         });
