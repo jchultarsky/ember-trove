@@ -4,6 +4,22 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.11.2] - 2026-05-29
+
+### Changed — Shared `IconButton` component for inline actions
+Inline-edit Save/Cancel controls had drifted across panels: the Kanban
+task row and Inbox used amber text-label buttons, while other panels used
+hand-rolled icon-only buttons with copy-pasted Tailwind hover classes.
+Extracted a single `IconButton` component (`ui/src/components/icon_button.rs`)
+with tooltip, accessible label, hover-color variants
+(Neutral / Save / Danger / Accent), an optional disabled signal, and a
+`stop_propagation` flag for buttons inside clickable rows. Converted the
+text-label Save/Cancel in `task_row` (Kanban) and `inbox_view` to icons,
+and deduplicated the existing icon-only inline buttons in `links_panel`,
+`note_panel`, `tag_manager`, `task_panel`, and `templates_view` onto the
+shared component. Modal-footer and full-form CTAs intentionally keep their
+text labels. No API or behaviour changes.
+
 ## [2.11.1] - 2026-05-29
 
 ### Changed — Pinned Rust toolchain bumped 1.92 → 1.96
