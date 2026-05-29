@@ -28,7 +28,10 @@ use std::time::Duration;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::LatencyUnit;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor};
+use tracing::Level;
 
 use crate::{auth::middleware::require_auth, state::AppState};
 
@@ -138,9 +141,23 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .route("/health", get(health))
         .nest("/share", share::public_share_router())
         .merge(rate_limited)
+        // Count every response by status class (includes /health). Applied here
+        // so it wraps all routes; reads/writes the counters in AppState.
+        .layer(middleware::from_fn_with_state(state.clone(), metrics::track_requests))
         .layer(cors)
         // 30-second request timeout — returns 408 Request Timeout.
         .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)))
+        // Structured per-request tracing: one span per request carrying method,
+        // path, and X-Request-Id; response logged at INFO with latency in ms.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(
+                    DefaultOnResponse::new()
+                        .level(Level::INFO)
+                        .latency_unit(LatencyUnit::Millis),
+                ),
+        )
         // Propagate X-Request-Id from requests; generate one if absent.
         .layer(PropagateRequestIdLayer::x_request_id())
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
