@@ -6,6 +6,7 @@ use common::{
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, parse_priority, parse_status, priority_color, priority_icon, priority_label,
@@ -366,25 +367,20 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                     on:input=move |ev| edit_due.set(event_target_value(&ev))
                                 />
                                 <span class="flex-1"/>
-                                <button
-                                    class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400
-                                        hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors cursor-pointer"
-                                    title="Save"
-                                    on:click=move |_| do_save_edit()
-                                >
-                                    <span class="material-symbols-outlined">"check"</span>
-                                </button>
-                                <button
-                                    class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                        hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                                    title="Cancel"
-                                    on:click=move |_| {
+                                <IconButton
+                                    icon="check"
+                                    label="Save"
+                                    variant=IconButtonVariant::Save
+                                    on_click=Callback::new(move |()| do_save_edit())
+                                />
+                                <IconButton
+                                    icon="close"
+                                    label="Cancel"
+                                    on_click=Callback::new(move |()| {
                                         editing_title.set(false);
                                         edit_title.set(orig_title.get_untracked());
-                                    }
-                                >
-                                    <span class="material-symbols-outlined">"close"</span>
-                                </button>
+                                    })
+                                />
                             </div>
                         </div>
                     }.into_any()

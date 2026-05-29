@@ -8,6 +8,7 @@ pub mod dark_mode_toggle;
 pub mod favorites_section;
 pub mod format_helpers;
 pub mod graph_view;
+pub mod icon_button;
 pub mod layout;
 pub mod modals;
 pub mod node_editor;

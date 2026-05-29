@@ -15,6 +15,7 @@ use common::{
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, parse_status,
@@ -401,32 +402,21 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                         </select>
                                     </div>
                                     // Save / cancel
-                                    <div class="flex items-center gap-2">
-                                        <button
-                                            class="flex items-center gap-1 px-3 py-1.5 rounded-lg
-                                                text-xs font-medium bg-amber-500 hover:bg-amber-600
-                                                active:bg-amber-700 text-white
-                                                transition-colors cursor-pointer"
-                                            on:click=move |_| do_save()
-                                        >
-                                            <span class="material-symbols-outlined"
-                                                style="font-size: 14px;">"check"</span>
-                                            "Save"
-                                        </button>
-                                        <button
-                                            class="flex items-center gap-1 px-3 py-1.5 rounded-lg
-                                                text-xs text-stone-500 hover:text-stone-700
-                                                dark:hover:text-stone-300
-                                                transition-colors cursor-pointer"
-                                            on:click=move |_| {
+                                    <div class="flex items-center gap-1">
+                                        <IconButton
+                                            icon="check"
+                                            label="Save"
+                                            variant=IconButtonVariant::Save
+                                            on_click=Callback::new(move |()| do_save())
+                                        />
+                                        <IconButton
+                                            icon="close"
+                                            label="Cancel"
+                                            on_click=Callback::new(move |()| {
                                                 editing.set(false);
                                                 edit_title.set(orig_title.get_untracked());
-                                            }
-                                        >
-                                            <span class="material-symbols-outlined"
-                                                style="font-size: 14px;">"close"</span>
-                                            "Cancel"
-                                        </button>
+                                            })
+                                        />
                                     </div>
                                 </div>
                             }.into_any()

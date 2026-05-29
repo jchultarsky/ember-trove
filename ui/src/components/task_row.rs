@@ -40,6 +40,7 @@ use common::task::{Task, TaskPriority, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
 };
@@ -230,15 +231,6 @@ pub fn KanbanTaskRow(
             }
         });
     };
-    let on_cancel_edit = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        editing_id_sig.set(None);
-    };
-    let on_save_edit = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        do_save();
-    };
-
     // ── Row click → focus + navigate to parent (or Inbox) ────────────
     let on_row_click = move |_ev: web_sys::MouseEvent| {
         // Don't navigate while editing — clicks inside the edit form
@@ -433,22 +425,19 @@ pub fn KanbanTaskRow(
                                     }).collect_view()}
                                 </select>
                                 <span class="flex-1"/>
-                                <button
-                                    type="button"
-                                    class="px-2 py-0.5 text-xs rounded bg-amber-600 text-white \
-                                           hover:bg-amber-700 cursor-pointer"
-                                    on:click=on_save_edit
-                                >
-                                    "Save"
-                                </button>
-                                <button
-                                    type="button"
-                                    class="px-2 py-0.5 text-xs rounded text-stone-500 \
-                                           hover:text-stone-800 dark:hover:text-stone-200 cursor-pointer"
-                                    on:click=on_cancel_edit
-                                >
-                                    "Cancel"
-                                </button>
+                                <IconButton
+                                    icon="check"
+                                    label="Save"
+                                    variant=IconButtonVariant::Save
+                                    stop_propagation=true
+                                    on_click=Callback::new(move |()| do_save())
+                                />
+                                <IconButton
+                                    icon="close"
+                                    label="Cancel"
+                                    stop_propagation=true
+                                    on_click=Callback::new(move |()| editing_id_sig.set(None))
+                                />
                             </div>
                         </div>
                     }.into_any()

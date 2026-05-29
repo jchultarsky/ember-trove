@@ -4,6 +4,7 @@ use common::{
 };
 use leptos::prelude::*;
 
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::markdown::render_markdown_plain;
 
 /// Number of notes to show before collapsing the rest behind "Show N more".
@@ -359,25 +360,21 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                             <div class="flex items-center justify-between mt-2">
                                                                 <ColorPicker selected=edit_color />
                                                                 <div class="flex items-center gap-1">
-                                                                    <button
-                                                                        class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                                                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                                                                        title="Cancel"
-                                                                        on:click=move |_| {
+                                                                    <IconButton
+                                                                        icon="close"
+                                                                        label="Cancel"
+                                                                        on_click=Callback::new(move |()| {
                                                                             editing.set(false);
                                                                             edit_body.set(orig_body.get_untracked());
                                                                             edit_color.set(orig_color.get_untracked());
-                                                                        }
-                                                                    >
-                                                                        <span class="material-symbols-outlined">"close"</span>
-                                                                    </button>
-                                                                    <button
-                                                                        class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400
-                                                                            hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors cursor-pointer
-                                                                            disabled:opacity-40 disabled:cursor-not-allowed"
-                                                                        title="Save"
-                                                                        disabled=move || edit_body.get().trim().is_empty()
-                                                                        on:click=move |_| {
+                                                                        })
+                                                                    />
+                                                                    <IconButton
+                                                                        icon="check"
+                                                                        label="Save"
+                                                                        variant=IconButtonVariant::Save
+                                                                        disabled=Signal::derive(move || edit_body.get().trim().is_empty())
+                                                                        on_click=Callback::new(move |()| {
                                                                             let new_body =
                                                                                 edit_body.get_untracked().trim().to_string();
                                                                             if new_body.is_empty() { return; }
@@ -399,10 +396,8 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                                     }
                                                                                 }
                                                                             });
-                                                                        }
-                                                                    >
-                                                                        <span class="material-symbols-outlined">"check"</span>
-                                                                    </button>
+                                                                        })
+                                                                    />
                                                                 </div>
                                                             </div>
                                                         })}

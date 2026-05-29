@@ -4,6 +4,8 @@ use common::{
 };
 use leptos::prelude::*;
 
+use crate::components::icon_button::{IconButton, IconButtonVariant};
+
 /// Collapsible panel showing external links (named URLs) attached to a node.
 /// Editors and Owners can add, edit, and delete links.
 /// Viewers see links but have no mutation controls.
@@ -205,25 +207,20 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                             <p class="text-xs text-red-500">{e}</p>
                                                                         })}
                                                                         <div class="flex gap-1">
-                                                                            <button
-                                                                                class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400
-                                                                                       hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors cursor-pointer"
-                                                                                title="Save"
-                                                                                on:click=move |_| do_save_edit()
-                                                                            >
-                                                                                <span class="material-symbols-outlined">"check"</span>
-                                                                            </button>
-                                                                            <button
-                                                                                class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                                                                       hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                                                                                title="Cancel"
-                                                                                on:click=move |_| {
+                                                                            <IconButton
+                                                                                icon="check"
+                                                                                label="Save"
+                                                                                variant=IconButtonVariant::Save
+                                                                                on_click=Callback::new(move |()| do_save_edit())
+                                                                            />
+                                                                            <IconButton
+                                                                                icon="close"
+                                                                                label="Cancel"
+                                                                                on_click=Callback::new(move |()| {
                                                                                     editing_id.set(None);
                                                                                     edit_error.set(None);
-                                                                                }
-                                                                            >
-                                                                                <span class="material-symbols-outlined">"close"</span>
-                                                                            </button>
+                                                                                })
+                                                                            />
                                                                         </div>
                                                                     </div>
                                                                 }.into_any()

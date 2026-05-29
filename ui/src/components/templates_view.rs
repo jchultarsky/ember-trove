@@ -6,6 +6,7 @@ use leptos::prelude::*;
 
 use crate::{
     app::TemplatePrefill,
+    components::icon_button::{IconButton, IconButtonVariant},
     components::toast::{push_toast, ToastLevel},
     markdown::render_markdown_plain,
 };
@@ -134,11 +135,11 @@ pub fn TemplatesView() -> impl IntoView {
         editing_id.set(Some(t.id.0.to_string()));
     };
 
-    let cancel_edit = move |_| {
+    let cancel_edit = move || {
         editing_id.set(None);
     };
 
-    let on_save = move |_| {
+    let on_save = move || {
         let name = form_name.get_untracked();
         if name.is_empty() {
             push_toast(ToastLevel::Error, "Template name is required.");
@@ -335,22 +336,17 @@ pub fn TemplatesView() -> impl IntoView {
                             />
                         </div>
                         <div class="flex items-center gap-1">
-                            <button
-                                class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400
-                                       hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors cursor-pointer"
-                                title="Save"
-                                on:click=on_save
-                            >
-                                <span class="material-symbols-outlined">"check"</span>
-                            </button>
-                            <button
-                                class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                       hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                                title="Cancel"
-                                on:click=cancel_edit
-                            >
-                                <span class="material-symbols-outlined">"close"</span>
-                            </button>
+                            <IconButton
+                                icon="check"
+                                label="Save"
+                                variant=IconButtonVariant::Save
+                                on_click=Callback::new(move |()| on_save())
+                            />
+                            <IconButton
+                                icon="close"
+                                label="Cancel"
+                                on_click=Callback::new(move |()| cancel_edit())
+                            />
                         </div>
                     </div>
                 }

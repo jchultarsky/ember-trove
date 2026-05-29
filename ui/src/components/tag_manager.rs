@@ -1,6 +1,7 @@
 use common::tag::{CreateTagRequest, Tag, UpdateTagRequest};
 use leptos::prelude::*;
 
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::modals::delete_confirm::DeleteConfirmModal;
 use leptos_router::hooks::use_navigate;
 use crate::components::toast::{ToastLevel, push_toast};
@@ -148,7 +149,7 @@ pub fn TagManager() -> impl IntoView {
         });
     };
 
-    let on_save_edit = move |_: web_sys::MouseEvent| {
+    let on_save_edit = move || {
         let Some(id) = editing_id.get_untracked() else {
             return;
         };
@@ -365,22 +366,17 @@ pub fn TagManager() -> impl IntoView {
                                                                                 prop:value=move || edit_name.get()
                                                                                 on:input=move |ev| edit_name.set(event_target_value(&ev))
                                                                             />
-                                                                            <button
-                                                                                class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400
-                                                                                       hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors cursor-pointer"
-                                                                                title="Save"
-                                                                                on:click=on_save_edit
-                                                                            >
-                                                                                <span class="material-symbols-outlined">"check"</span>
-                                                                            </button>
-                                                                            <button
-                                                                                class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                                                                       hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                                                                                title="Cancel"
-                                                                                on:click=move |_| editing_id.set(None)
-                                                                            >
-                                                                                <span class="material-symbols-outlined">"close"</span>
-                                                                            </button>
+                                                                            <IconButton
+                                                                                icon="check"
+                                                                                label="Save"
+                                                                                variant=IconButtonVariant::Save
+                                                                                on_click=Callback::new(move |()| on_save_edit())
+                                                                            />
+                                                                            <IconButton
+                                                                                icon="close"
+                                                                                label="Cancel"
+                                                                                on_click=Callback::new(move |()| editing_id.set(None))
+                                                                            />
                                                                         </div>
                                                                         // Colour picker
                                                                         <ColorPicker value=row_color />
