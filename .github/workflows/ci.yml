@@ -104,35 +104,10 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Run cargo audit
-        # Ignored advisories are transitive-only with no available upgrade path.
-        # Review on every release — drop an ignore the moment upstream publishes
-        # a fix that bumps our Cargo.lock. Don't let this list grow silently.
-        #
-        #   RUSTSEC-2026-0002 — `lru` unsoundness via aws-sdk-s3; we don't
-        #     exercise the affected API surface.
-        #   RUSTSEC-2026-0097 — `rand` unsound only when a custom logger is
-        #     installed via `rand::rng()`; we never register a custom logger.
-        #   RUSTSEC-2026-0098, 0099 — `rustls-webpki` 0.101.7 name-constraint
-        #     bypass on wildcard / URI names. Only the legacy rustls 0.21 tree
-        #     pulled in by aws-smithy-http-client is affected; the jsonwebtoken
-        #     path was bumped to rustls-webpki 0.103.12 (fixed). The AWS SDK
-        #     path only talks to known AWS endpoints with valid AWS-issued
-        #     certs, so the name-constraint edge case is not reachable in
-        #     practice. Drop once aws-smithy-http-client bumps to rustls 0.23+.
-        #   RUSTSEC-2026-0104 (added 2026-04-26) — `rustls-webpki` reachable
-        #     panic in CRL parsing. The modern path (reqwest + jsonwebtoken)
-        #     was bumped to 0.103.13 in this commit; only the legacy
-        #     rustls 0.21 / 0.101.7 chain pulled in by aws-smithy-http-client
-        #     remains. We never feed CRLs to the AWS SDK rustls config, so
-        #     the panic is unreachable in practice. Drop once
-        #     aws-smithy-http-client bumps to rustls 0.23+.
-        run: >
-          cargo audit
-          --ignore RUSTSEC-2026-0002
-          --ignore RUSTSEC-2026-0097
-          --ignore RUSTSEC-2026-0098
-          --ignore RUSTSEC-2026-0099
-          --ignore RUSTSEC-2026-0104
+        # Ignored advisories live in .cargo/audit.toml (the single source of
+        # truth, read automatically) — each with a dated rationale. Do NOT add
+        # inline --ignore flags here; that previously diverged from audit.toml.
+        run: cargo audit
 
   migrations:
     name: validate migrations

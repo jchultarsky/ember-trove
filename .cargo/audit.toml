@@ -1,22 +1,56 @@
-[advisories]
-# RUSTSEC-2023-0071: Marvin Attack timing sidechannel in rsa crate.
-# Pulled via sqlx-mysql which is never used (Postgres-only project).
-# No upstream fix available.
+# cargo-audit configuration — SINGLE SOURCE OF TRUTH for ignored advisories.
 #
-# RUSTSEC-2026-0049: CRL authorativeness matching bug in rustls-webpki.
-# The 0.103.x branch was fixed in 0.103.10 (already updated in Cargo.lock).
-# The 0.101.x branch has no fix and is a transitive dep from an older AWS SDK
-# rustls chain (aws-smithy-http-client → hyper-rustls 0.24 → rustls 0.21).
-# CRL validation edge-case; not exposed in this app's threat model.
+# CI runs a bare `cargo audit`, which reads this file automatically. Do NOT add
+# inline `--ignore` flags to .github/workflows/ci.yml — that previously created
+# two divergent lists (consolidated here on 2026-05-29).
+#
+# Policy: every ignore is transitive-only with no available upgrade path, and
+# carries a dated rationale below. Review on every release; drop an ignore the
+# moment upstream publishes a fix that bumps our Cargo.lock. Do not let this
+# list grow silently.
+[advisories]
 ignore = [
-  # Marvin Attack timing sidechannel in rsa crate.
-  # Pulled via sqlx-mysql which is never used (Postgres-only project). No upstream fix.
-  "RUSTSEC-2023-0071",
-  # CRL authorativeness matching bug in rustls-webpki 0.101.x.
-  # The 0.101.x branch has no fix; transitive via older AWS SDK hyper-rustls chain.
+  # ── Legacy AWS-SDK rustls 0.21 / rustls-webpki 0.101.7 chain ────────────────
+  # Pulled exclusively by aws-smithy-http-client (latest, 1.1.12) →
+  # hyper-rustls 0.24 → rustls 0.21 → rustls-webpki 0.101.7. Our modern TLS path
+  # (reqwest + jsonwebtoken) is on rustls-webpki 0.103.x and is unaffected.
+  # The 0.101.x branch has no fix; the only way to drop this chain is to switch
+  # the AWS SDK off its default rustls 0.21 TLS provider — deferred as a tracked
+  # follow-up (risks prod S3/Cognito/SES TLS; needs real-AWS integration tests).
+  # The AWS SDK only talks to known AWS endpoints with valid AWS-issued certs,
+  # so the name-constraint / CRL edge cases below are not reachable in practice.
+  #
+  #   2026-05-29: RUSTSEC-2026-0049 — CRL authoritativeness matching bug.
   "RUSTSEC-2026-0049",
-  # paste crate marked unmaintained (RUSTSEC-2024-0436).
-  # Transitive dependency of Leptos 0.8 (tachys/reactive_graph). No alternative; Leptos
-  # owns the upgrade path. Warning-level only — not a vulnerability.
+  #   2026-05-29: RUSTSEC-2026-0098 — name constraints incorrectly accepted for
+  #     URI names.
+  "RUSTSEC-2026-0098",
+  #   2026-05-29: RUSTSEC-2026-0099 — name constraints accepted for certs
+  #     asserting a wildcard.
+  "RUSTSEC-2026-0099",
+  #   2026-05-29: RUSTSEC-2026-0104 — reachable panic in CRL parsing. We never
+  #     feed CRLs to the AWS SDK rustls config, so the panic is unreachable.
+  "RUSTSEC-2026-0104",
+
+  # ── Unsound warnings, transitive, affected API surface unused ──────────────
+  #   2026-05-29: RUSTSEC-2026-0002 — `lru` unsoundness via aws-sdk-s3; we do
+  #     not exercise the affected API surface.
+  "RUSTSEC-2026-0002",
+  #   2026-05-29: RUSTSEC-2026-0097 — `rand` unsound only when a custom logger
+  #     is installed via `rand::rng()`; we never register a custom logger.
+  "RUSTSEC-2026-0097",
+
+  # ── Unmaintained, no alternative ────────────────────────────────────────────
+  #   2026-05-29: RUSTSEC-2024-0436 — `paste` marked unmaintained. Transitive
+  #     dependency of Leptos 0.8 (tachys / reactive_graph); Leptos owns the
+  #     upgrade path. Warning-level only — not a vulnerability.
   "RUSTSEC-2024-0436",
+
+  # ── No fix available, affected code path unused ────────────────────────────
+  #   2026-05-29: RUSTSEC-2023-0071 — Marvin timing sidechannel in `rsa`.
+  #     Pulled via sqlx-macros → sqlx-mysql, which the sqlx proc-macro crate
+  #     always compiles regardless of enabled runtime features. We only use the
+  #     Postgres driver at runtime and never touch the MySQL RSA auth path.
+  #     No fixed upgrade is available.
+  "RUSTSEC-2023-0071",
 ]
