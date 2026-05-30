@@ -3,8 +3,10 @@ use common::{
     note::{CreateNoteRequest, UpdateNoteRequest},
 };
 use leptos::prelude::*;
+use leptos::wasm_bindgen::JsCast;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::resizable_editor::ResizableEditor;
 use crate::markdown::render_markdown_plain;
 
 /// Number of notes to show before collapsing the rest behind "Show N more".
@@ -102,6 +104,21 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         async move { crate::api::fetch_notes(node_id).await }
     });
 
+    // Per-note saved editor heights (entity_id → px). Fetched once; the edit
+    // textareas open at the saved height and persist a new height on resize.
+    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
+            editor_heights.set(
+                prefs
+                    .into_iter()
+                    .filter(|p| p.entity_kind == "note")
+                    .map(|p| (p.entity_id, p.height))
+                    .collect(),
+            );
+        }
+    });
+
     let do_add = move || {
         let text = body.get_untracked();
         let trimmed = text.trim().to_string();
@@ -126,12 +143,6 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     };
 
     let on_add     = move |_| do_add();
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
-            do_add();
-        }
-    };
-
     view! {
         <div class="border-t border-stone-200 dark:border-stone-800 pt-6">
             // ── Section header ────────────────────────────────────────────
@@ -180,15 +191,13 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                     {move || (is_owner && show_form.get()).then(|| view! {
                         <div class="mb-4 rounded-lg bg-stone-50 dark:bg-stone-900/50
                             border border-stone-200 dark:border-stone-700 p-3">
-                            <textarea
-                                class="w-full bg-transparent text-sm text-stone-800 dark:text-stone-200
-                                    placeholder:text-stone-400 dark:placeholder:text-stone-600
-                                    resize-none focus:outline-none"
-                                rows="3"
+                            <ResizableEditor
+                                value=body
                                 placeholder="Write a note… (Ctrl+Enter to save)"
-                                prop:value=move || body.get()
-                                on:input=move |ev| body.set(event_target_value(&ev))
-                                on:keydown=on_keydown
+                                on_submit=Callback::new(move |()| do_add())
+                                class="w-full bg-transparent text-sm text-stone-800 dark:text-stone-200 \
+                                    placeholder:text-stone-400 dark:placeholder:text-stone-600 \
+                                    resize-y min-h-[64px] focus:outline-none".to_string()
                             />
                             // ── Template picker ───────────────────
                             <div class="flex flex-wrap items-center gap-1.5 mt-2 mb-2">
@@ -333,10 +342,28 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                             <textarea
                                                                 class="w-full bg-transparent text-sm
                                                                     text-stone-800 dark:text-stone-200
-                                                                    resize-none focus:outline-none"
-                                                                rows="4"
+                                                                    resize-y min-h-[80px] focus:outline-none"
+                                                                style=move || editor_heights.get()
+                                                                    .get(&note_id.0)
+                                                                    .map(|h| format!("height: {h}px;"))
+                                                                    .unwrap_or_default()
                                                                 prop:value=move || edit_body.get()
                                                                 on:input=move |ev| edit_body.set(event_target_value(&ev))
+                                                                on:mouseup=move |ev| {
+                                                                    if let Some(t) = ev.target()
+                                                                        && let Ok(el) = t.dyn_into::<web_sys::HtmlElement>()
+                                                                    {
+                                                                        let h = el.offset_height();
+                                                                        if h > 0
+                                                                            && editor_heights.get_untracked().get(&note_id.0).copied() != Some(h)
+                                                                        {
+                                                                            editor_heights.update(|m| { m.insert(note_id.0, h); });
+                                                                            wasm_bindgen_futures::spawn_local(async move {
+                                                                                let _ = crate::api::set_editor_pref("note", note_id.0, h).await;
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                }
                                                                 on:keydown=move |ev: web_sys::KeyboardEvent| {
                                                                     if ev.key() == "Escape" {
                                                                         editing.set(false);
