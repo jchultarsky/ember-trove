@@ -12,10 +12,10 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait NoteRepo: Send + Sync {
-    /// Create a new note on a node.
+    /// Create a new note. `node_id: None` creates a standalone (inbox) note.
     async fn create(
         &self,
-        node_id: NodeId,
+        node_id: Option<NodeId>,
         owner_id: &str,
         req: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError>;
@@ -57,7 +57,7 @@ impl PgNoteRepo {
 #[derive(sqlx::FromRow)]
 struct NoteRow {
     id: Uuid,
-    node_id: Uuid,
+    node_id: Option<Uuid>,
     owner_id: String,
     body: String,
     color: String,
@@ -69,7 +69,7 @@ impl NoteRow {
     fn into_note(self) -> Note {
         Note {
             id: NoteId(self.id),
-            node_id: NodeId(self.node_id),
+            node_id: self.node_id.map(NodeId),
             owner_id: self.owner_id,
             body: self.body,
             color: self.color,
@@ -79,11 +79,42 @@ impl NoteRow {
     }
 }
 
+/// Feed row = a note plus its parent node's title (`None` for standalone notes,
+/// surfaced via the `LEFT JOIN nodes` in the feed queries).
+#[derive(sqlx::FromRow)]
+struct FeedRow {
+    id: Uuid,
+    node_id: Option<Uuid>,
+    owner_id: String,
+    body: String,
+    color: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    node_title: Option<String>,
+}
+
+impl FeedRow {
+    fn into_feed_note(self) -> FeedNote {
+        FeedNote {
+            note: Note {
+                id: NoteId(self.id),
+                node_id: self.node_id.map(NodeId),
+                owner_id: self.owner_id,
+                body: self.body,
+                color: self.color,
+                created_at: self.created_at,
+                updated_at: self.updated_at,
+            },
+            node_title: self.node_title,
+        }
+    }
+}
+
 #[async_trait]
 impl NoteRepo for PgNoteRepo {
     async fn create(
         &self,
-        node_id: NodeId,
+        node_id: Option<NodeId>,
         owner_id: &str,
         req: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
@@ -94,7 +125,7 @@ impl NoteRepo for PgNoteRepo {
             RETURNING id, node_id, owner_id, body, color, created_at, updated_at
             "#,
         )
-        .bind(node_id.0)
+        .bind(node_id.map(|n| n.0))
         .bind(owner_id)
         .bind(&req.body)
         .bind(&req.color)
@@ -164,25 +195,13 @@ impl NoteRepo for PgNoteRepo {
     }
 
     async fn feed_for_owner(&self, owner_id: &str) -> Result<Vec<FeedNote>, EmberTroveError> {
-        #[derive(sqlx::FromRow)]
-        struct FeedRow {
-            id: Uuid,
-            node_id: Uuid,
-            owner_id: String,
-            body: String,
-            color: String,
-            created_at: DateTime<Utc>,
-            updated_at: DateTime<Utc>,
-            node_title: String,
-        }
-
         let rows = sqlx::query_as::<_, FeedRow>(
             r#"
             SELECT
                 n.id, n.node_id, n.owner_id, n.body, n.color, n.created_at, n.updated_at,
                 nd.title AS node_title
             FROM node_notes n
-            JOIN nodes nd ON nd.id = n.node_id
+            LEFT JOIN nodes nd ON nd.id = n.node_id
             WHERE n.owner_id = $1
             ORDER BY n.created_at DESC
             "#,
@@ -192,43 +211,17 @@ impl NoteRepo for PgNoteRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("feed notes failed: {e}")))?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| FeedNote {
-                note: Note {
-                    id: NoteId(r.id),
-                    node_id: NodeId(r.node_id),
-                    owner_id: r.owner_id,
-                    body: r.body,
-                    color: r.color,
-                    created_at: r.created_at,
-                    updated_at: r.updated_at,
-                },
-                node_title: r.node_title,
-            })
-            .collect())
+        Ok(rows.into_iter().map(FeedRow::into_feed_note).collect())
     }
 
     async fn feed_all(&self) -> Result<Vec<FeedNote>, EmberTroveError> {
-        #[derive(sqlx::FromRow)]
-        struct FeedRow {
-            id: Uuid,
-            node_id: Uuid,
-            owner_id: String,
-            body: String,
-            color: String,
-            created_at: DateTime<Utc>,
-            updated_at: DateTime<Utc>,
-            node_title: String,
-        }
-
         let rows = sqlx::query_as::<_, FeedRow>(
             r#"
             SELECT
                 n.id, n.node_id, n.owner_id, n.body, n.color, n.created_at, n.updated_at,
                 nd.title AS node_title
             FROM node_notes n
-            JOIN nodes nd ON nd.id = n.node_id
+            LEFT JOIN nodes nd ON nd.id = n.node_id
             ORDER BY n.created_at DESC
             "#,
         )
@@ -236,20 +229,6 @@ impl NoteRepo for PgNoteRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("feed_all notes failed: {e}")))?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| FeedNote {
-                note: Note {
-                    id: NoteId(r.id),
-                    node_id: NodeId(r.node_id),
-                    owner_id: r.owner_id,
-                    body: r.body,
-                    color: r.color,
-                    created_at: r.created_at,
-                    updated_at: r.updated_at,
-                },
-                node_title: r.node_title,
-            })
-            .collect())
+        Ok(rows.into_iter().map(FeedRow::into_feed_note).collect())
     }
 }

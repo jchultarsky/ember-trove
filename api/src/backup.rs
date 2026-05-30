@@ -374,7 +374,7 @@ pub async fn execute_restore(
             "#,
         )
         .bind(note.id.0)
-        .bind(note.node_id.0)
+        .bind(note.node_id.map(|n| n.0))
         .bind(&note.owner_id)
         .bind(&note.body)
         .bind(note.created_at)
