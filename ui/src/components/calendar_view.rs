@@ -174,9 +174,8 @@ fn MonthGrid(
                                                 navigate.get_value()(&format!("/nodes/{nid}"), Default::default());
                                             }
                                         }
-                                    >
-                                        {title.clone()}
-                                    </button>
+                                        inner_html=crate::markdown::render_markdown_inline(&title)
+                                    ></button>
                                 }
                             }).collect_view()}
                         </div>
