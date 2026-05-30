@@ -33,7 +33,7 @@ use repo::{
     edge::PgEdgeRepo, favorite::PgFavoriteRepo, graph::PgGraphRepo, node::PgNodeRepo,
     node_version::PgNodeVersionRepo, note::PgNoteRepo, permission::PgPermissionRepo,
     pkce::PgPkceRepo, node_link::PgNodeLinkRepo, search::PgSearchRepo,
-    search_presets::PgSearchPresetRepo,
+    editor_pref::PgEditorPrefRepo, search_presets::PgSearchPresetRepo,
     share_token::PgShareTokenRepo, tag::PgTagRepo, task::PgTaskRepo, template::PgTemplateRepo,
     webhook::PgWebhookRepo,
 };
@@ -164,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         search_presets: Arc::new(PgSearchPresetRepo::new(pool.clone())),
         node_links: Arc::new(PgNodeLinkRepo::new(pool.clone())),
         webhooks: Arc::new(PgWebhookRepo::new(pool.clone())),
+        editor_prefs: Arc::new(PgEditorPrefRepo::new(pool.clone())),
         object_store,
         oidc,
         cognito_admin,

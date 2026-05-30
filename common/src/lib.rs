@@ -14,6 +14,7 @@ pub mod slug;
 pub mod tag;
 pub mod inbox;
 pub mod favorite;
+pub mod editor_pref;
 pub mod note;
 pub mod node_version;
 pub mod template;

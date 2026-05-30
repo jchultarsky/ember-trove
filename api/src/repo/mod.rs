@@ -11,6 +11,7 @@ pub mod graph;
 pub mod node;
 pub mod permission;
 pub mod search;
+pub mod editor_pref;
 pub mod pkce;
 pub mod share_token;
 pub mod tag;

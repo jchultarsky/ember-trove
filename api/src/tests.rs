@@ -268,6 +268,13 @@ impl WebhookRepo for StubWebhookRepo {
     async fn delete(&self, _: WebhookId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
 }
 
+struct StubEditorPrefRepo;
+#[async_trait]
+impl crate::repo::editor_pref::EditorPrefRepo for StubEditorPrefRepo {
+    async fn list_for_owner(&self, _: &str) -> Result<Vec<common::editor_pref::EditorPref>, EmberTroveError> { Ok(vec![]) }
+    async fn set(&self, _: &str, _: &str, _: Uuid, _: i32) -> Result<(), EmberTroveError> { Ok(()) }
+}
+
 struct StubPkceRepo;
 #[async_trait]
 impl PkceRepo for StubPkceRepo {
@@ -306,6 +313,7 @@ fn test_state() -> AppState {
         search_presets:  Arc::new(StubSearchPresetRepo),
         node_links:      Arc::new(StubNodeLinkRepo),
         webhooks:        Arc::new(StubWebhookRepo),
+        editor_prefs:    Arc::new(StubEditorPrefRepo),
         object_store: Arc::new(NullObjectStore),
         oidc:          None,
         cognito_admin: None,
