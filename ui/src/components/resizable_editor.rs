@@ -18,11 +18,13 @@ pub fn ResizableEditor(
     value: RwSignal<String>,
     #[prop(into)] placeholder: String,
     /// Opens the editor at this pixel height when set (a previously-saved size).
-    #[prop(optional)] initial_height: Option<i32>,
+    #[prop(optional_no_strip)] initial_height: Option<i32>,
     /// Invoked with the new pixel height when the user finishes a resize drag.
     #[prop(optional, into)] on_resize: Option<Callback<i32>>,
     /// Invoked on Ctrl/Cmd+Enter (submit shortcut).
     #[prop(optional, into)] on_submit: Option<Callback<()>>,
+    /// Invoked on Escape (cancel shortcut).
+    #[prop(optional, into)] on_escape: Option<Callback<()>>,
     /// Override the default textarea classes.
     #[prop(optional, into)] class: Option<String>,
 ) -> impl IntoView {
@@ -56,6 +58,11 @@ pub fn ResizableEditor(
                 if let Some(cb) = on_submit
                     && ev.key() == "Enter"
                     && (ev.ctrl_key() || ev.meta_key())
+                {
+                    ev.prevent_default();
+                    cb.run(());
+                } else if let Some(cb) = on_escape
+                    && ev.key() == "Escape"
                 {
                     ev.prevent_default();
                     cb.run(());
