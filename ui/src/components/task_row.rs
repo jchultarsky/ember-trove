@@ -75,6 +75,12 @@ pub struct FocusedTaskId(pub RwSignal<Option<TaskId>>);
 #[derive(Clone, Copy)]
 pub struct EditingTaskId(pub RwSignal<Option<TaskId>>);
 
+/// Saved per-task inline-edit heights (px), keyed by task id. Provided as a
+/// context by the surrounding view so each row can open its editor at the
+/// previously-saved size.
+#[derive(Clone, Copy)]
+pub struct TaskEditorHeights(pub RwSignal<std::collections::HashMap<uuid::Uuid, i32>>);
+
 #[component]
 pub fn KanbanTaskRow(
     task: Task,
@@ -343,23 +349,25 @@ pub fn KanbanTaskRow(
 
                 {move || if is_editing() {
                     // ── Inline edit form ─────────────────────────────
+                    let saved_height = use_context::<TaskEditorHeights>()
+                        .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
                     view! {
                         <div class="mt-1 space-y-2"
                              on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
-                            <input
-                                type="text"
+                            <crate::components::resizable_editor::ResizableEditor
+                                value=edit_title
+                                placeholder="Task title…"
+                                initial_height=saved_height
+                                on_submit=Callback::new(move |()| do_save())
+                                on_escape=Callback::new(move |()| editing_id_sig.set(None))
+                                on_resize=Callback::new(move |h: i32| {
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
+                                    });
+                                })
                                 class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
-                                       text-stone-900 dark:text-stone-100 rounded px-2 py-1 \
-                                       focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                prop:value=move || edit_title.get()
-                                on:input=move |ev| edit_title.set(event_target_value(&ev))
-                                on:keydown=move |ev: leptos::ev::KeyboardEvent| {
-                                    match ev.key().as_str() {
-                                        "Enter"  => do_save(),
-                                        "Escape" => editing_id_sig.set(None),
-                                        _ => {}
-                                    }
-                                }
+                                       text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
+                                       min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()
                             />
                             <div class="flex items-center gap-2 flex-wrap">
                                 <span class="text-xs text-stone-400 dark:text-stone-500">"Priority"</span>
