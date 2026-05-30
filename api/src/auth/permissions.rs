@@ -68,10 +68,7 @@ pub async fn require_role(
         return Ok(());
     }
 
-    let perm = permissions
-        .find(node_id, &claims.sub)
-        .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let perm = permissions.find(node_id, &claims.sub).await?;
 
     match perm {
         None => Err(ApiError::Forbidden("access denied".to_string())),
