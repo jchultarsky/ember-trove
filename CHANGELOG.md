@@ -4,6 +4,122 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.17.1] - 2026-05-30
+
+### Fixed — `require_role` preserves the structured error variant
+`require_role` wrapped `PermissionRepo::find` in
+`.map_err(|e| ApiError::Internal(e.to_string()))`, flattening every repo
+error — including the structured `NotFound` / `Forbidden` variants — into
+a generic `500 Internal`. The `?` operator already converts
+`EmberTroveError` to `ApiError` via the `From` impl in `error.rs`, which
+preserves the variant. Dropped the redundant `map_err` so permission
+failures surface the correct status. No behaviour change on the success
+path; internal error fidelity only.
+
+## [2.17.0] - 2026-05-30
+
+### Changed — Resizable, per-task-persisted task editing
+Task title inline-edit moved from a single-line `<input>` to the shared
+`ResizableEditor` (drag-resizable textarea) across My Day / Kanban
+(`KanbanTaskRow`), the node `TaskPanel`, and the Inbox — save on
+Ctrl/Cmd+Enter, cancel on Escape. The dragged height is persisted
+per-task server-side via the `editor_prefs` table and re-applied on next
+open through a `TaskEditorHeights` context map provided by each list view.
+Long task titles can now be edited comfortably without a cramped field.
+
+## [2.16.0] - 2026-05-30
+
+### Added — Shared editor components + server-side editor preferences
+- **`NodePicker`** — a debounced type-ahead node selector (extracted from
+  the task form) replaces the parent-node `<select>` in the Notes compose
+  box and is now shared by both the note and task forms.
+- **`ResizableEditor`** — a shared resize-y textarea used by the feed
+  compose box and node note create/edit, reporting its height on mouseup.
+- **`editor_prefs` table** (migration `029_editor_prefs.sql`) +
+  `EditorPrefRepo` + `GET`/`PUT /editor-prefs` persist per-item editor
+  heights server-side. Note editor heights are applied and saved.
+
+### Fixed — Note focus scroll lands on long node bodies
+Extended the `focus_note` retry schedule (added 3000 ms / 5000 ms steps)
+so the deep-link scroll still reaches a note after a long node body
+finishes rendering.
+
+## [2.15.1] - 2026-05-30
+
+### Changed — Markdown rendering in task titles
+Task titles now render inline Markdown (bold, italic, strikethrough,
+inline code, links) wherever they are displayed — task row, task panel,
+Inbox, and calendar — via a new `render_markdown_inline` helper. Block
+syntax is flattened to a single line so truncated rows keep their layout.
+Notes were already block-rendered everywhere.
+
+## [2.15.0] - 2026-05-30
+
+### Added — Note click-through focus and delete
+Clicking a node-attached note in the feed now deep-links to
+`/nodes/:id?note=<id>`; the NotePanel auto-expands and scrolls to / flashes
+the target note (cards carry a `data-note-id`), mirroring task
+click-through. Notes can be deleted from the feed with an inline
+confirm via owner-checked `NoteRepo::delete` + `DELETE /notes/:id`.
+
+## [2.14.0] - 2026-05-30
+
+### Added — Notes feed filter & sort toolbar
+The Notes feed gains a toolbar: sort (newest / oldest / recently updated),
+node filter (All / Uncategorized / a specific node), a date range, a
+debounced text search, and Reset. Server-side, `feed_for_owner` and
+`feed_all` collapse into a single `feed(owner, NoteFeedFilter)` using
+guarded SQL (`$n IS NULL OR …`) and an enum-driven `ORDER BY`.
+
+## [2.13.0] - 2026-05-30
+
+### Added — Standalone (inbox) notes
+Notes can now be posted without a parent node, like inbox tasks.
+`node_notes.node_id` is nullable (migration `028_note_node_id_nullable`);
+`Note.node_id` / `FeedNote.node_title` became `Option`; the feed query
+switched `JOIN` → `LEFT JOIN`; `POST /notes` accepts a `node_id` in the
+body or none at all. The Notes view gains a compose box, and node-less
+notes render an "Inbox" pill.
+
+## [2.12.1] - 2026-05-30
+
+### Security — Dropped the legacy AWS-SDK rustls 0.21 chain
+Set `default-features = false` on `aws-sdk-{s3,cognitoidentityprovider,sesv2}`
+and dropped their legacy `rustls` feature (which pulled
+`aws-smithy-runtime/tls-rustls` → hyper-rustls 0.24 / rustls 0.21 /
+rustls-webpki 0.101.7), keeping the modern `default-https-client`
+(rustls 0.23 + aws-lc-rs, already in tree via reqwest). Removed the
+RUSTSEC-2026-0049 / 0098 / 0099 / 0104 ignores — the affected package is
+gone and `cargo audit` exits 0 (548 deps, down from 556). Verified with a
+live S3 TLS round-trip (fake credentials → parsed `403 InvalidAccessKeyId`
+= a real handshake on the aws-lc-rs connector).
+
+## [2.12.0] - 2026-05-29
+
+### Added — Per-request tracing & metrics
+`tower-http`'s `TraceLayer` emits a per-request INFO span
+(method / uri / request-id / latency) and a `RequestMetrics` set of atomic
+counters bucketed by status class, surfaced in the admin `/api/metrics`
+endpoint under a new `requests` field. No new dependencies.
+
+### Changed — PKCE verifiers moved to Postgres
+PKCE verifiers moved from an in-memory `Arc<Mutex<HashMap>>` to Postgres
+(migration `027_pkce_verifiers.sql`, new `PkceRepo`, `AppState.pkce`).
+In-flight logins now survive an API restart or redeploy, which previously
+produced `invalid_code_verifier` at the callback. `take` consumes-once
+(`DELETE … RETURNING`) and a sweeper clears expired rows.
+
+### Security — UI container runs as non-root
+The UI image is now `nginxinc/nginx-unprivileged:alpine`, listening on
+8080; the proxy, compose, and k8s port references were updated to match,
+and `Permissions-Policy` was added to the UI image's own nginx config.
+Closes the deferred Docker-hardening gap (S3-4).
+
+### Changed — Consolidated cargo-audit configuration
+The two divergent cargo-audit ignore lists collapse into a single
+`.cargo/audit.toml` (one source of truth, dated rationale); CI runs a bare
+`cargo audit`.
+
 ## [2.11.2] - 2026-05-29
 
 ### Changed — Shared `IconButton` component for inline actions
