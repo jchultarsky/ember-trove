@@ -437,9 +437,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                             if overdue { s.push_str("color:#ef4444;") }
                                             s
                                         }
-                                    >
-                                        {move || orig_title.get()}
-                                    </p>
+                                        inner_html=move || crate::markdown::render_markdown_inline(&orig_title.get())
+                                    ></p>
                                     // Badges row (due + recurrence)
                                     {(due.is_some() || has_recurrence).then(|| {
                                         let tip = recurrence_tip.unwrap_or("");

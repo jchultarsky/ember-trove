@@ -19,7 +19,7 @@
 //! malicious style injection is negligible, and we trust the owner's content.
 
 use std::collections::HashMap;
-use pulldown_cmark::{Options, Parser, html as cmark_html};
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark_html};
 use common::id::NodeId;
 use crate::wikilink::preprocess_wikilinks;
 
@@ -75,4 +75,36 @@ pub fn render_markdown_plain(source: &str) -> String {
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, parser);
     sanitizer().clean(&html_out).to_string()
+}
+
+/// Render Markdown **inline only** — emphasis, strong, strikethrough, inline
+/// code, and links — flattening every block wrapper (paragraphs, headings,
+/// lists, blockquotes, tables) and line breaks into spaces so the result stays
+/// on a single line. Used for task titles, which display as one-line truncated
+/// labels in rows; full block rendering would break that layout.
+pub fn render_markdown_inline(source: &str) -> String {
+    let events = Parser::new_ext(source, MD_OPTIONS).filter_map(|ev| match ev {
+        Event::Start(tag) => Some(match tag {
+            Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. } => {
+                Event::Start(tag)
+            }
+            // Any block wrapper (or image) → a space at the boundary.
+            _ => Event::Text(" ".into()),
+        }),
+        Event::End(end) => Some(match end {
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                Event::End(end)
+            }
+            _ => Event::Text(" ".into()),
+        }),
+        // Keep inline text/code/html as-is.
+        e @ (Event::Text(_) | Event::Code(_) | Event::InlineHtml(_)) => Some(e),
+        // Collapse breaks/rules to a single space (stay one line).
+        Event::SoftBreak | Event::HardBreak | Event::Rule => Some(Event::Text(" ".into())),
+        // Drop block HTML, footnote refs, task-list checkboxes, etc.
+        _ => None,
+    });
+    let mut html_out = String::new();
+    cmark_html::push_html(&mut html_out, events);
+    sanitizer().clean(html_out.trim()).to_string()
 }

@@ -392,9 +392,8 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                             style=move || if status_done(&parse_status(&status_sig.get())) {
                                 "text-decoration: line-through; opacity: 0.5;"
                             } else { "" }
-                        >
-                            {td}
-                        </p>
+                            inner_html=crate::markdown::render_markdown_inline(&td)
+                        ></p>
                     }.into_any()
                 }}
                 <div class="flex items-center gap-2 mt-0.5">
