@@ -731,12 +731,18 @@ async fn sync_wikilinks(
     body: &str,
 ) -> Result<(), ApiError> {
     let titles = parse_wikilink_titles(body);
-    let mut target_ids = Vec::new();
-    for title in &titles {
-        if let Some(id) = state.nodes.find_id_by_title(title).await? {
-            target_ids.push(id);
-        }
-    }
+    // Resolve all wiki-link titles in a single batched query rather than one
+    // round-trip per title on every node save.
+    let target_ids: Vec<NodeId> = if titles.is_empty() {
+        Vec::new()
+    } else {
+        let lowered: Vec<String> = titles.iter().map(|t| t.to_lowercase()).collect();
+        let by_title = state.nodes.find_ids_by_titles(&lowered).await?;
+        lowered
+            .iter()
+            .filter_map(|lt| by_title.get(lt).copied())
+            .collect()
+    };
     state.edges.sync_wikilinks(source_id, &target_ids).await?;
     Ok(())
 }

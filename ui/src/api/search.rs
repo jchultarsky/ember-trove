@@ -4,7 +4,7 @@ use common::{
 };
 use gloo_net::http::Request;
 
-use super::{api_url, parse_json};
+use super::{api_url, delete_empty, get_json, parse_json, post_json};
 use crate::error::UiError;
 
 /// Search nodes.
@@ -80,36 +80,13 @@ pub async fn node_picker_search(q: &str) -> Result<Vec<common::search::SearchRes
 // ── Search presets ─────────────────────────────────────────────────────────────
 
 pub async fn fetch_search_presets() -> Result<Vec<SearchPreset>, UiError> {
-    let resp = Request::get(&api_url("/search-presets"))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    get_json("/search-presets").await
 }
 
 pub async fn create_search_preset(req: &CreateSearchPresetRequest) -> Result<SearchPreset, UiError> {
-    let resp = Request::post(&api_url("/search-presets"))
-        .json(req)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    post_json("/search-presets", req).await
 }
 
 pub async fn delete_search_preset(id: SearchPresetId) -> Result<(), UiError> {
-    let resp = Request::delete(&api_url(&format!("/search-presets/{id}")))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    if resp.ok() {
-        Ok(())
-    } else {
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown error".to_string());
-        Err(UiError::api(status, text))
-    }
+    delete_empty(&format!("/search-presets/{id}")).await
 }

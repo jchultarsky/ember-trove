@@ -79,6 +79,7 @@ impl NodeRepo for StubNodeRepo {
     async fn backlinks(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
     async fn list_titles(&self, _: Option<&str>) -> Result<Vec<NodeTitleEntry>, EmberTroveError> { unimplemented!() }
     async fn find_id_by_title(&self, _: &str) -> Result<Option<NodeId>, EmberTroveError> { unimplemented!() }
+    async fn find_ids_by_titles(&self, _: &[String]) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> { unimplemented!() }
     async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
     async fn area_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> { unimplemented!() }
     async fn set_pinned(&self, _: NodeId, _: bool) -> Result<Node, EmberTroveError> { unimplemented!() }
@@ -147,6 +148,7 @@ struct StubAttachmentRepo;
 impl AttachmentRepo for StubAttachmentRepo {
     async fn create(&self, _: NodeId, _: &str, _: &str, _: i64, _: &str) -> Result<Attachment, EmberTroveError> { unimplemented!() }
     async fn list(&self, _: NodeId) -> Result<Vec<Attachment>, EmberTroveError> { unimplemented!() }
+    async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError> { unimplemented!() }
     async fn get(&self, _: AttachmentId) -> Result<Attachment, EmberTroveError> { unimplemented!() }
     async fn delete(&self, _: AttachmentId) -> Result<String, EmberTroveError> { unimplemented!() }
 }

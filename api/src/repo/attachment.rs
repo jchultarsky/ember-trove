@@ -21,6 +21,10 @@ pub trait AttachmentRepo: Send + Sync {
 
     async fn list(&self, node_id: NodeId) -> Result<Vec<Attachment>, EmberTroveError>;
 
+    /// Fetch every attachment across all nodes in one query — used for full
+    /// backup, replacing a per-node `list` N+1 loop.
+    async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError>;
+
     async fn get(&self, id: AttachmentId) -> Result<Attachment, EmberTroveError>;
 
     /// Delete the DB record and return the s3_key so the caller can remove the object.
@@ -104,6 +108,20 @@ impl AttachmentRepo for PgAttachmentRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("attachment list: {e}")))?;
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError> {
+        let rows = sqlx::query_as::<_, AttachmentRow>(
+            r#"
+            SELECT id, node_id, filename, content_type, size_bytes, s3_key, created_at
+            FROM attachments
+            ORDER BY created_at ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("attachment list_all: {e}")))?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 

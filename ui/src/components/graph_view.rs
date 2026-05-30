@@ -1419,17 +1419,22 @@ pub fn GraphView() -> impl IntoView {
                              fill: none; marker-end: url(#{marker_id});{dash_part}"
                         );
 
+                        // Borrow the positions map (`.with`) and read only the two
+                        // endpoints, instead of cloning the entire HashMap per edge
+                        // on every mousemove during a drag.
                         let d_vis = move || {
-                            let pos = positions.get();
-                            let (x1, y1) = pos.get(&src).copied().unwrap_or((0.0, 0.0));
-                            let (x2, y2) = pos.get(&tgt).copied().unwrap_or((0.0, 0.0));
-                            compute_path(x1, y1, x2, y2)
+                            positions.with(|pos| {
+                                let (x1, y1) = pos.get(&src).copied().unwrap_or((0.0, 0.0));
+                                let (x2, y2) = pos.get(&tgt).copied().unwrap_or((0.0, 0.0));
+                                compute_path(x1, y1, x2, y2)
+                            })
                         };
                         let d_hit = move || {
-                            let pos = positions.get();
-                            let (x1, y1) = pos.get(&src).copied().unwrap_or((0.0, 0.0));
-                            let (x2, y2) = pos.get(&tgt).copied().unwrap_or((0.0, 0.0));
-                            compute_path(x1, y1, x2, y2)
+                            positions.with(|pos| {
+                                let (x1, y1) = pos.get(&src).copied().unwrap_or((0.0, 0.0));
+                                let (x2, y2) = pos.get(&tgt).copied().unwrap_or((0.0, 0.0));
+                                compute_path(x1, y1, x2, y2)
+                            })
                         };
 
                         view! {
@@ -1492,13 +1497,13 @@ pub fn GraphView() -> impl IntoView {
                                     cx=move || {
                                         format!(
                                             "{:.1}",
-                                            positions.get().get(&id).map(|p| p.0).unwrap_or(W / 2.0)
+                                            positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
                                         )
                                     }
                                     cy=move || {
                                         format!(
                                             "{:.1}",
-                                            positions.get().get(&id).map(|p| p.1).unwrap_or(H / 2.0)
+                                            positions.with(|m| m.get(&id).map(|p| p.1).unwrap_or(H / 2.0))
                                         )
                                     }
                                     r="20"
@@ -1511,9 +1516,8 @@ pub fn GraphView() -> impl IntoView {
                             NodeType::Project => view! {
                                 <polygon
                                     points=move || {
-                                        let pos = positions.get();
-                                        let (cx, cy) =
-                                            pos.get(&id).copied().unwrap_or((W / 2.0, H / 2.0));
+                                        let (cx, cy) = positions
+                                            .with(|m| m.get(&id).copied().unwrap_or((W / 2.0, H / 2.0)));
                                         diamond_points(cx, cy)
                                     }
                                     style=format!(
@@ -1556,9 +1560,8 @@ pub fn GraphView() -> impl IntoView {
                             NodeType::Resource => view! {
                                 <polygon
                                     points=move || {
-                                        let pos = positions.get();
-                                        let (cx, cy) =
-                                            pos.get(&id).copied().unwrap_or((W / 2.0, H / 2.0));
+                                        let (cx, cy) = positions
+                                            .with(|m| m.get(&id).copied().unwrap_or((W / 2.0, H / 2.0)));
                                         hexagon_points(cx, cy)
                                     }
                                     style=format!(
@@ -1570,9 +1573,8 @@ pub fn GraphView() -> impl IntoView {
                             NodeType::Reference => view! {
                                 <polygon
                                     points=move || {
-                                        let pos = positions.get();
-                                        let (cx, cy) =
-                                            pos.get(&id).copied().unwrap_or((W / 2.0, H / 2.0));
+                                        let (cx, cy) = positions
+                                            .with(|m| m.get(&id).copied().unwrap_or((W / 2.0, H / 2.0)));
                                         triangle_points(cx, cy)
                                     }
                                     style=format!(
@@ -1659,13 +1661,13 @@ pub fn GraphView() -> impl IntoView {
                                         cx=move || {
                                             format!(
                                                 "{:.1}",
-                                                positions.get().get(&id).map(|p| p.0).unwrap_or(W / 2.0)
+                                                positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
                                             )
                                         }
                                         cy=move || {
                                             format!(
                                                 "{:.1}",
-                                                positions.get().get(&id).map(|p| p.1).unwrap_or(H / 2.0)
+                                                positions.with(|m| m.get(&id).map(|p| p.1).unwrap_or(H / 2.0))
                                             )
                                         }
                                         r="32"
@@ -1679,13 +1681,13 @@ pub fn GraphView() -> impl IntoView {
                                         cx=move || {
                                             format!(
                                                 "{:.1}",
-                                                positions.get().get(&id).map(|p| p.0).unwrap_or(W / 2.0)
+                                                positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
                                             )
                                         }
                                         cy=move || {
                                             format!(
                                                 "{:.1}",
-                                                positions.get().get(&id).map(|p| p.1).unwrap_or(H / 2.0)
+                                                positions.with(|m| m.get(&id).map(|p| p.1).unwrap_or(H / 2.0))
                                             )
                                         }
                                         r="29"
@@ -1698,13 +1700,13 @@ pub fn GraphView() -> impl IntoView {
                                     x=move || {
                                         format!(
                                             "{:.1}",
-                                            positions.get().get(&id).map(|p| p.0).unwrap_or(W / 2.0)
+                                            positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
                                         )
                                     }
                                     y=move || {
                                         format!(
                                             "{:.1}",
-                                            positions.get().get(&id).map(|p| p.1).unwrap_or(H / 2.0)
+                                            positions.with(|m| m.get(&id).map(|p| p.1).unwrap_or(H / 2.0))
                                         )
                                     }
                                     style="text-anchor: middle; dominant-baseline: central; \
@@ -1743,7 +1745,7 @@ pub fn GraphView() -> impl IntoView {
                                     x=move || {
                                         format!(
                                             "{:.1}",
-                                            positions.get().get(&id).map(|p| p.0).unwrap_or(W / 2.0)
+                                            positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
                                         )
                                     }
                                     y=move || {
@@ -1836,11 +1838,11 @@ pub fn GraphView() -> impl IntoView {
                 // Delete button (pointer-events: auto on the button only).
                 let hover_card = move || {
                     edge_hover.get().map(|h| {
-                        let pos = positions.get();
-                        let x1 = pos.get(&h.src_id).map(|p| p.0).unwrap_or(W / 2.0);
-                        let y1 = pos.get(&h.src_id).map(|p| p.1).unwrap_or(H / 2.0);
-                        let x2 = pos.get(&h.tgt_id).map(|p| p.0).unwrap_or(W / 2.0);
-                        let y2 = pos.get(&h.tgt_id).map(|p| p.1).unwrap_or(H / 2.0);
+                        let (x1, y1, x2, y2) = positions.with(|pos| {
+                            let (sx, sy) = pos.get(&h.src_id).copied().unwrap_or((W / 2.0, H / 2.0));
+                            let (tx, ty) = pos.get(&h.tgt_id).copied().unwrap_or((W / 2.0, H / 2.0));
+                            (sx, sy, tx, ty)
+                        });
                         let cx = (x1 + x2) / 2.0;
                         let cy = (y1 + y2) / 2.0 - 24.0;
 
@@ -1977,7 +1979,7 @@ pub fn GraphView() -> impl IntoView {
                                 ev.prevent_default();
                                 did_drag.set(true);
                                 // Compute expanded bounds same as the layout effect.
-                                let n = positions.get().len() as f64;
+                                let n = positions.with(|m| m.len()) as f64;
                                 let grow_factor = (n / 50.0).clamp(1.0, 4.0);
                                 let eff_w = W * grow_factor;
                                 let eff_h = H * grow_factor;
@@ -2120,8 +2122,8 @@ pub fn GraphView() -> impl IntoView {
                             // Node summary card — shown on hover, rendered last so it's on top.
                             {move || {
                                 node_hover.get().map(|h| {
-                                    let pos = positions.get();
-                                    let (nx, ny) = pos.get(&h.node_id).copied().unwrap_or((W / 2.0, H / 2.0));
+                                    let (nx, ny) = positions
+                                        .with(|m| m.get(&h.node_id).copied().unwrap_or((W / 2.0, H / 2.0)));
 
                                     let type_lbl = type_label(&h.node_type);
                                     let status_lbl = status_label(&h.status);
