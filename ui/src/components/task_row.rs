@@ -451,8 +451,8 @@ pub fn KanbanTaskRow(
                             <span class="text-sm text-stone-800 dark:text-stone-200 truncate"
                                   style=move || if status_done(&status_sig.get()) {
                                       "text-decoration:line-through;"
-                                  } else { "" }>
-                                {move || title_sig.get()}
+                                  } else { "" }
+                                  inner_html=move || crate::markdown::render_markdown_inline(&title_sig.get())>
                             </span>
                             {due.map(|d| {
                                 let overdue = d < today && !matches!(status_sig.get_untracked(), TaskStatus::Done | TaskStatus::Cancelled);
