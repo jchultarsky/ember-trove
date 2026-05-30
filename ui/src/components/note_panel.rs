@@ -89,6 +89,14 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     let show_all  = RwSignal::new(false);
     let collapsed = RwSignal::new(false);
 
+    // Arrived via a `/nodes/:id?note=<id>` deep-link from the Notes feed —
+    // expand the panel and reveal all notes so the focused one is in the DOM
+    // for `focus_note` to scroll to (it may be beyond the first 5).
+    if crate::focus_note::pending_focus_note().is_some() {
+        show_all.set(true);
+        collapsed.set(false);
+    }
+
     let notes_resource = LocalResource::new(move || {
         let _ = refresh.get();
         async move { crate::api::fetch_notes(node_id).await }
@@ -283,7 +291,10 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                 let card_class = palette_card_class(&note_color).to_string();
 
                                                 view! {
-                                                    <div class=format!("rounded-lg border px-3 py-2.5 {card_class}")>
+                                                    <div
+                                                        class=format!("rounded-lg border px-3 py-2.5 {card_class}")
+                                                        data-note-id=note_id.0.to_string()
+                                                    >
 
                                                         // ── Display mode ──────────────────────
                                                         {move || (!editing.get()).then({

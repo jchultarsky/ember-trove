@@ -44,6 +44,9 @@ pub trait NoteRepo: Send + Sync {
         req: UpdateNoteRequest,
     ) -> Result<Note, EmberTroveError>;
 
+    /// Delete a note. Only the note's owner may delete it.
+    async fn delete(&self, note_id: NoteId, owner_id: &str) -> Result<(), EmberTroveError>;
+
     /// All notes for a node, newest first.
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError>;
 
@@ -178,6 +181,19 @@ impl NoteRepo for PgNoteRepo {
         .ok_or_else(|| EmberTroveError::NotFound("note not found".to_string()))?;
 
         Ok(row.into_note())
+    }
+
+    async fn delete(&self, note_id: NoteId, owner_id: &str) -> Result<(), EmberTroveError> {
+        let result = sqlx::query("DELETE FROM node_notes WHERE id = $1 AND owner_id = $2")
+            .bind(note_id.0)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("delete note failed: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(EmberTroveError::NotFound("note not found".to_string()));
+        }
+        Ok(())
     }
 
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError> {

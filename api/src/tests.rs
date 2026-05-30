@@ -138,6 +138,7 @@ impl NoteRepo for StubNoteRepo {
     async fn create(&self, _: Option<NodeId>, _: &str, _: CreateNoteRequest) -> Result<Note, EmberTroveError> { unimplemented!() }
     async fn update(&self, _: common::id::NoteId, _: &str, _: common::note::UpdateNoteRequest) -> Result<Note, EmberTroveError> { unimplemented!() }
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Note>, EmberTroveError> { unimplemented!() }
+    async fn delete(&self, _: common::id::NoteId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
     async fn feed(&self, _: Option<&str>, _: &crate::repo::note::NoteFeedFilter) -> Result<Vec<FeedNote>, EmberTroveError> { unimplemented!() }
     async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError> { unimplemented!() }
 }

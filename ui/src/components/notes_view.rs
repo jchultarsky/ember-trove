@@ -1,9 +1,10 @@
 use leptos::prelude::*;
 
-use common::{id::NodeId, note::{CreateNoteRequest, NoteSort}};
+use common::{id::{NodeId, NoteId}, note::{CreateNoteRequest, NoteSort}};
 use gloo_timers::callback::Timeout;
 use leptos_router::hooks::use_navigate;
 
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::markdown::render_markdown_plain;
 
 /// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
@@ -45,6 +46,23 @@ pub fn NotesView() -> impl IntoView {
     let selected_node = RwSignal::<Option<NodeId>>::new(None);
     let posting = RwSignal::new(false);
     let error = RwSignal::<Option<String>>::new(None);
+
+    // ── Delete state ────────────────────────────────────────────────────────
+    // The note currently awaiting delete confirmation (inline, no modal).
+    let confirming_delete = RwSignal::<Option<NoteId>>::new(None);
+    let deleting = RwSignal::new(false);
+    let do_delete = move |note_id: NoteId| {
+        if deleting.get_untracked() {
+            return;
+        }
+        deleting.set(true);
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = crate::api::delete_note(note_id).await;
+            confirming_delete.set(None);
+            deleting.set(false);
+            reload.update(|n| *n += 1);
+        });
+    };
 
     // ── Filter / sort state ─────────────────────────────────────────────────
     let sort = RwSignal::new(NoteSort::Newest);
@@ -295,6 +313,7 @@ pub fn NotesView() -> impl IntoView {
                             <div class="space-y-4 w-full">
                                 {notes.into_iter().map(|feed_note| {
                                     let node_id = feed_note.note.node_id;
+                                    let note_id = feed_note.note.id;
                                     let node_title = feed_note.node_title.clone();
                                     let body_html = render_markdown_plain(&feed_note.note.body);
                                     let card_class = palette_card_class(&feed_note.note.color).to_string();
@@ -302,16 +321,22 @@ pub fn NotesView() -> impl IntoView {
                                         .format("%b %-d, %Y %H:%M")
                                         .to_string();
 
+                                    // Header: clickable node label that deep-links to the
+                                    // note inside its node (`?note=`); or an Inbox pill.
                                     let header = match node_id {
                                         Some(nid) => {
                                             let nav = navigate.clone();
                                             let title = node_title.unwrap_or_default();
                                             view! {
                                                 <button
-                                                    class="flex items-center gap-1.5 mb-2 text-xs font-semibold
+                                                    class="flex items-center gap-1.5 text-xs font-semibold
                                                         text-stone-400 dark:text-stone-500 uppercase tracking-wider
                                                         hover:text-amber-600 dark:hover:text-amber-400 transition-colors"
-                                                    on:click=move |_| nav(&format!("/nodes/{nid}"), Default::default())
+                                                    title="Open this note in its node"
+                                                    on:click=move |_| nav(
+                                                        &format!("/nodes/{nid}?note={note_id}"),
+                                                        Default::default(),
+                                                    )
                                                 >
                                                     <span class="material-symbols-outlined" style="font-size: 13px;">
                                                         {"description"}
@@ -324,7 +349,7 @@ pub fn NotesView() -> impl IntoView {
                                             }.into_any()
                                         }
                                         None => view! {
-                                            <span class="inline-flex items-center gap-1.5 mb-2 text-xs font-semibold
+                                            <span class="inline-flex items-center gap-1.5 text-xs font-semibold
                                                 text-stone-400 dark:text-stone-500 uppercase tracking-wider">
                                                 <span class="material-symbols-outlined" style="font-size: 13px;">
                                                     {"inbox"}
@@ -336,7 +361,40 @@ pub fn NotesView() -> impl IntoView {
 
                                     view! {
                                         <div class=format!("rounded-lg border px-4 py-3 {card_class}")>
-                                            {header}
+                                            <div class="flex items-start justify-between gap-2 mb-2">
+                                                {header}
+                                                // Delete: inline confirm (no modal).
+                                                {move || if confirming_delete.get() == Some(note_id) {
+                                                    view! {
+                                                        <span class="flex items-center gap-1 text-xs">
+                                                            <button
+                                                                class="px-2 py-0.5 rounded bg-red-600 text-white
+                                                                    hover:bg-red-700 disabled:opacity-50"
+                                                                disabled=move || deleting.get()
+                                                                on:click=move |_| do_delete(note_id)
+                                                            >
+                                                                "Delete"
+                                                            </button>
+                                                            <button
+                                                                class="px-2 py-0.5 rounded text-stone-500
+                                                                    hover:bg-stone-100 dark:hover:bg-stone-800"
+                                                                on:click=move |_| confirming_delete.set(None)
+                                                            >
+                                                                "Cancel"
+                                                            </button>
+                                                        </span>
+                                                    }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <IconButton
+                                                            icon="delete"
+                                                            label="Delete note"
+                                                            variant=IconButtonVariant::Danger
+                                                            on_click=Callback::new(move |()| confirming_delete.set(Some(note_id)))
+                                                        />
+                                                    }.into_any()
+                                                }}
+                                            </div>
                                             <div
                                                 class="prose prose-sm max-w-none dark:prose-invert
                                                     prose-p:my-0.5 prose-ul:my-0.5 prose-ol:my-0.5

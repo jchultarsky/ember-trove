@@ -30,7 +30,7 @@ pub fn note_router() -> Router<AppState> {
     Router::new()
         .route("/", post(create_standalone_note))
         .route("/feed", get(note_feed))
-        .route("/{note_id}", patch(update_note))
+        .route("/{note_id}", patch(update_note).delete(delete_note))
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
@@ -96,6 +96,16 @@ async fn update_note(
         .update(NoteId(note_id), &claims.sub, req)
         .await?;
     Ok(Json(note))
+}
+
+/// DELETE /notes/:note_id — delete a note (owner only).
+async fn delete_note(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(note_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    state.notes.delete(NoteId(note_id), &claims.sub).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /notes/feed — notes with node titles, filtered + sorted per query params

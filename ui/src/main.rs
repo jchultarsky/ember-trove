@@ -6,6 +6,7 @@ mod app;
 mod auth;
 mod components;
 mod error;
+mod focus_note;
 mod focus_task;
 mod markdown;
 mod recent;

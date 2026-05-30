@@ -3,7 +3,7 @@ use common::{
     note::{CreateNoteRequest, FeedNote, Note, NoteSort, UpdateNoteRequest},
 };
 
-use super::{get_json, patch_json, post_json};
+use super::{delete_empty, get_json, patch_json, post_json};
 use crate::error::UiError;
 
 pub async fn fetch_notes(node_id: NodeId) -> Result<Vec<Note>, UiError> {
@@ -22,6 +22,10 @@ pub async fn create_note_global(req: &CreateNoteRequest) -> Result<Note, UiError
 
 pub async fn update_note(note_id: NoteId, req: &UpdateNoteRequest) -> Result<Note, UiError> {
     patch_json(&format!("/notes/{note_id}"), req).await
+}
+
+pub async fn delete_note(note_id: NoteId) -> Result<(), UiError> {
+    delete_empty(&format!("/notes/{note_id}")).await
 }
 
 /// Fetch the notes feed with optional filters + sort.

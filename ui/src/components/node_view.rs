@@ -48,6 +48,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
     // briefly highlight it.  See `crate::focus_task` — handles the
     // resource-load race by retrying a few times.
     schedule_focus_task();
+    // Same treatment for `/nodes/{id}?note=<note_id>` — clicking a node-attached
+    // note in the central Notes feed lands on it inside the NotePanel.
+    crate::focus_note::schedule_focus_note();
 
     // Derive node title for the confirm dialog (empty string until node loads).
     let delete_item_name = Memo::new(move |_| {
