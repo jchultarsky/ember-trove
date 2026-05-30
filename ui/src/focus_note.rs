@@ -10,7 +10,11 @@
 
 use leptos::wasm_bindgen::{closure::Closure, JsCast};
 
-const RETRY_DELAYS_MS: [i32; 4] = [0, 200, 600, 1500];
+// A node's Markdown body renders via its own LocalResource and can be long;
+// it may finish (and shift layout) well after the note panel is populated.
+// Re-scroll across later attempts so the focus still lands once the body
+// settles, instead of being invalidated by a late body render.
+const RETRY_DELAYS_MS: [i32; 6] = [0, 200, 600, 1500, 3000, 5000];
 
 /// Schedule the focus-note pass. Call once on view mount. No-ops when the URL
 /// has no `?note=` param.
