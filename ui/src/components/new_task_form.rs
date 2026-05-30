@@ -10,10 +10,11 @@
 //! unlinked if no suitable node exists yet.
 
 use chrono::NaiveDate;
-use common::{id::NodeId, search::SearchResult, task::CreateTaskRequest};
+use common::{id::NodeId, task::CreateTaskRequest};
 use leptos::prelude::*;
 
-use crate::components::task_common::{node_type_icon, parse_priority, parse_recurrence_opt};
+use crate::components::node_picker::NodePicker;
+use crate::components::task_common::{parse_priority, parse_recurrence_opt};
 
 /// Reusable "new task" form.
 ///
@@ -39,32 +40,7 @@ pub fn NewTaskForm(
     let add_error      = RwSignal::new(Option::<String>::None);
 
     // Optional node-picker state (only meaningful when `show_picker`).
-    let selected_node  = RwSignal::<Option<(NodeId, String)>>::new(None);
-    let picker_query   = RwSignal::new(String::new());
-    let picker_results = RwSignal::<Vec<SearchResult>>::new(vec![]);
-    let pick_ver       = RwSignal::new(0u32);
-
-    // Debounced node search — mirrors the inbox "assign to node" picker.
-    if show_picker {
-        Effect::new(move |_| {
-            let q = picker_query.get();
-            if q.trim().is_empty() {
-                picker_results.set(vec![]);
-                return;
-            }
-            pick_ver.update(|v| *v += 1);
-            let ver = pick_ver.get_untracked();
-            wasm_bindgen_futures::spawn_local(async move {
-                gloo_timers::future::TimeoutFuture::new(300).await;
-                if pick_ver.get_untracked() != ver { return; }
-                if let Ok(results) = crate::api::node_picker_search(&q).await
-                    && pick_ver.get_untracked() == ver
-                {
-                    picker_results.set(results);
-                }
-            });
-        });
-    }
+    let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
 
     let do_add = move || {
         let title = new_title.get_untracked().trim().to_string();
@@ -106,8 +82,6 @@ pub fn NewTaskForm(
                     new_due.set(String::new());
                     new_recurrence.set(String::new());
                     selected_node.set(None);
-                    picker_query.set(String::new());
-                    picker_results.set(vec![]);
                     refresh.update(|n| *n += 1);
                     if let Some(cb) = on_added {
                         cb.run(());
@@ -182,84 +156,7 @@ pub fn NewTaskForm(
             </div>
 
             // Optional node picker — only for standalone (inbox) capture.
-            {show_picker.then(|| view! {
-                <div class="relative">
-                    {move || match selected_node.get() {
-                        Some((_, title)) => view! {
-                            <div class="flex items-center gap-1.5 text-xs
-                                text-stone-600 dark:text-stone-300">
-                                <span class="material-symbols-outlined text-stone-400"
-                                    style="font-size: 14px;">"link"</span>
-                                <span class="truncate">{title}</span>
-                                <button
-                                    class="p-0.5 rounded text-stone-400 hover:text-red-500
-                                        dark:hover:text-red-400 transition-colors cursor-pointer"
-                                    title="Unlink node"
-                                    on:click=move |_| selected_node.set(None)
-                                >
-                                    <span class="material-symbols-outlined"
-                                        style="font-size: 14px;">"close"</span>
-                                </button>
-                            </div>
-                        }.into_any(),
-                        None => view! {
-                            <div class="flex items-center gap-1.5">
-                                <span class="material-symbols-outlined text-stone-400 flex-shrink-0"
-                                    style="font-size: 14px;">"link"</span>
-                                <input
-                                    type="text"
-                                    placeholder="Link to a node (optional)…"
-                                    class="flex-1 min-w-0 text-xs bg-stone-100 dark:bg-stone-700
-                                        text-stone-700 dark:text-stone-300 rounded px-2 py-1
-                                        focus:outline-none"
-                                    prop:value=move || picker_query.get()
-                                    on:input=move |ev| picker_query.set(event_target_value(&ev))
-                                    on:keydown=move |ev: leptos::ev::KeyboardEvent| {
-                                        if ev.key() == "Escape" {
-                                            picker_query.set(String::new());
-                                            picker_results.set(vec![]);
-                                        }
-                                    }
-                                />
-                            </div>
-                        }.into_any(),
-                    }}
-                    // Results dropdown
-                    {move || {
-                        let results = picker_results.get();
-                        (selected_node.get().is_none() && !results.is_empty()).then(|| view! {
-                            <div class="absolute z-10 mt-1 w-full bg-white dark:bg-stone-900
-                                border border-stone-200 dark:border-stone-700
-                                rounded-lg shadow-md overflow-hidden max-h-56 overflow-y-auto">
-                                {results.into_iter().map(|r| {
-                                    let nid        = r.node_id;
-                                    let title_sel  = r.title.clone();
-                                    let title_disp = r.title.clone();
-                                    let icon       = node_type_icon(&r.node_type);
-                                    view! {
-                                        <button
-                                            class="w-full flex items-center gap-2 px-3 py-2 text-xs
-                                                text-stone-700 dark:text-stone-300
-                                                hover:bg-amber-50 dark:hover:bg-stone-800
-                                                border-b border-stone-50 dark:border-stone-800
-                                                last:border-b-0 transition-colors cursor-pointer"
-                                            on:click=move |_| {
-                                                selected_node.set(Some((nid, title_sel.clone())));
-                                                picker_query.set(String::new());
-                                                picker_results.set(vec![]);
-                                            }
-                                        >
-                                            <span class="material-symbols-outlined text-stone-400
-                                                flex-shrink-0" style="font-size: 14px;">{icon}</span>
-                                            <span class="truncate text-left">{title_disp}</span>
-                                        </button>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        })
-                    }}
-                </div>
-            })}
+            {show_picker.then(|| view! { <NodePicker selected=selected_node /> })}
 
             {move || add_error.get().map(|msg| view! {
                 <p class="text-xs text-red-500">{msg}</p>
