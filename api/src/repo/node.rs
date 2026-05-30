@@ -45,6 +45,15 @@ pub trait NodeRepo: Send + Sync {
     /// node with that title exists.
     async fn find_id_by_title(&self, title: &str) -> Result<Option<NodeId>, EmberTroveError>;
 
+    /// Resolve many already-lowercased titles in one query. Returns a map from
+    /// the lowercased title to its node ID; unmatched titles are absent.
+    /// Batches what would otherwise be one `find_id_by_title` round-trip per
+    /// wiki-link on every node save.
+    async fn find_ids_by_titles(
+        &self,
+        lowered_titles: &[String],
+    ) -> Result<HashMap<String, NodeId>, EmberTroveError>;
+
     /// Fetch every node owned by `owner_id` with tags populated — used for backup.
     async fn list_all_for_owner(&self, owner_id: &str) -> Result<Vec<Node>, EmberTroveError>;
 
@@ -584,6 +593,32 @@ impl NodeRepo for PgNodeRepo {
         .map_err(|e| EmberTroveError::Internal(format!("find_id_by_title failed: {e}")))?;
 
         Ok(row.map(|r| NodeId(r.id)))
+    }
+
+    async fn find_ids_by_titles(
+        &self,
+        lowered_titles: &[String],
+    ) -> Result<HashMap<String, NodeId>, EmberTroveError> {
+        #[derive(sqlx::FromRow)]
+        struct TitleIdRow {
+            id: Uuid,
+            lt: String,
+        }
+
+        // DISTINCT ON + deterministic ORDER BY picks the lowest id per title,
+        // mirroring the single-match semantics of find_id_by_title.
+        let rows = sqlx::query_as::<_, TitleIdRow>(
+            "SELECT DISTINCT ON (LOWER(title)) id, LOWER(title) AS lt
+             FROM nodes
+             WHERE LOWER(title) = ANY($1)
+             ORDER BY LOWER(title), id",
+        )
+        .bind(lowered_titles)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("find_ids_by_titles failed: {e}")))?;
+
+        Ok(rows.into_iter().map(|r| (r.lt, NodeId(r.id))).collect())
     }
 
     async fn list_all_for_owner(&self, owner_id: &str) -> Result<Vec<Node>, EmberTroveError> {

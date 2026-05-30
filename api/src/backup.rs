@@ -51,16 +51,8 @@ pub async fn create_backup(
     let tasks = state.tasks.list_all().await.map_err(ApiError::from)?;
     let edges = state.edges.list_all().await.map_err(ApiError::from)?;
 
-    // Collect attachments for every node.
-    let mut attachments = Vec::new();
-    for node in &nodes {
-        let mut node_attachments = state
-            .attachments
-            .list(node.id)
-            .await
-            .map_err(ApiError::from)?;
-        attachments.append(&mut node_attachments);
-    }
+    // Collect every attachment in one query (was an N+1 loop over nodes).
+    let attachments = state.attachments.list_all().await.map_err(ApiError::from)?;
 
     // Collect additional entity types (schema v2).
     let node_links = state.node_links.list_all().await.map_err(ApiError::from)?;
