@@ -26,6 +26,20 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
         async move { crate::api::fetch_tasks(node_id).await }
     });
 
+    // Per-task saved inline-edit heights, provided to the nested TaskRows.
+    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    provide_context(crate::components::task_row::TaskEditorHeights(editor_heights));
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
+            editor_heights.set(
+                prefs.into_iter()
+                    .filter(|p| p.entity_kind == "task")
+                    .map(|p| (p.entity_id, p.height))
+                    .collect(),
+            );
+        }
+    });
+
     // Filter: hide done/cancelled tasks by default; toggled by the user.
     let show_completed = RwSignal::new(false);
 
@@ -325,25 +339,27 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             <div class="flex-1 min-w-0">
                 // Title — display or inline edit form (title + priority + due date)
                 {move || if editing_title.get() {
+                    let saved_height = use_context::<crate::components::task_row::TaskEditorHeights>()
+                        .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
                     view! {
                         <div class="space-y-1.5 pb-1">
-                            <input
-                                type="text"
-                                class="w-full bg-stone-100 dark:bg-stone-800 text-sm
-                                    text-stone-900 dark:text-stone-100 rounded px-1.5 py-0.5
-                                    focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                prop:value=move || edit_title.get()
-                                on:input=move |ev| edit_title.set(event_target_value(&ev))
-                                on:keydown=move |ev: leptos::ev::KeyboardEvent| {
-                                    match ev.key().as_str() {
-                                        "Enter" => do_save_edit(),
-                                        "Escape" => {
-                                            editing_title.set(false);
-                                            edit_title.set(orig_title.get_untracked());
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                            <crate::components::resizable_editor::ResizableEditor
+                                value=edit_title
+                                placeholder="Task title…"
+                                initial_height=saved_height
+                                on_submit=Callback::new(move |()| do_save_edit())
+                                on_escape=Callback::new(move |()| {
+                                    editing_title.set(false);
+                                    edit_title.set(orig_title.get_untracked());
+                                })
+                                on_resize=Callback::new(move |h: i32| {
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
+                                    });
+                                })
+                                class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
+                                    text-stone-900 dark:text-stone-100 rounded px-1.5 py-0.5 resize-y \
+                                    min-h-[36px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()
                             />
                             <div class="flex items-center gap-2">
                                 <select

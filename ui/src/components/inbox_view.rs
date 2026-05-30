@@ -74,6 +74,20 @@ pub fn InboxView() -> impl IntoView {
         async move { crate::api::list_inbox().await }
     });
 
+    // Per-task saved inline-edit heights, provided to the InboxTaskRows.
+    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    provide_context(crate::components::task_row::TaskEditorHeights(editor_heights));
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
+            editor_heights.set(
+                prefs.into_iter()
+                    .filter(|p| p.entity_kind == "task")
+                    .map(|p| (p.entity_id, p.height))
+                    .collect(),
+            );
+        }
+    });
+
     view! {
         <div class="flex flex-col h-full">
             // ── Header ────────────────────────────────────────────────────────
@@ -340,23 +354,28 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                     <div class="flex-1 min-w-0">
                         {move || if editing.get() {
                             // ── Edit form ──────────────────────────────────────
+                            let saved_height = use_context::<crate::components::task_row::TaskEditorHeights>()
+                                .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
                             view! {
                                 <div class="space-y-2">
-                                    <input
-                                        type="text"
-                                        class="w-full text-sm rounded-lg border border-amber-400
-                                            bg-white dark:bg-stone-800 px-3 py-2
-                                            text-stone-900 dark:text-stone-100
-                                            focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                        prop:value=move || edit_title.get()
-                                        on:input=move |ev| edit_title.set(event_target_value(&ev))
-                                        on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                            if ev.key() == "Enter"  { do_save(); }
-                                            if ev.key() == "Escape" {
-                                                editing.set(false);
-                                                edit_title.set(orig_title.get_untracked());
-                                            }
-                                        }
+                                    <crate::components::resizable_editor::ResizableEditor
+                                        value=edit_title
+                                        placeholder="Task title…"
+                                        initial_height=saved_height
+                                        on_submit=Callback::new(move |()| do_save())
+                                        on_escape=Callback::new(move |()| {
+                                            editing.set(false);
+                                            edit_title.set(orig_title.get_untracked());
+                                        })
+                                        on_resize=Callback::new(move |h: i32| {
+                                            wasm_bindgen_futures::spawn_local(async move {
+                                                let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
+                                            });
+                                        })
+                                        class="w-full text-sm rounded-lg border border-amber-400 \
+                                            bg-white dark:bg-stone-800 px-3 py-2 resize-y min-h-[44px] \
+                                            text-stone-900 dark:text-stone-100 \
+                                            focus:outline-none focus:ring-1 focus:ring-amber-400".to_string()
                                     />
                                     // Edit controls — wrap on mobile
                                     <div class="flex items-center gap-2 flex-wrap">

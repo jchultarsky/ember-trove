@@ -49,7 +49,7 @@ use leptos_router::hooks::use_navigate;
 use crate::app::TaskRefresh;
 use crate::components::task_common::status_done;
 use crate::components::task_row::{
-    EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone,
+    EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
 };
 use crate::components::toast::{push_toast, ToastLevel};
 
@@ -78,6 +78,21 @@ pub fn MyDayView() -> impl IntoView {
     let editing_id: RwSignal<Option<TaskId>> = RwSignal::new(None);
     provide_context(FocusedTaskId(focused_id));
     provide_context(EditingTaskId(editing_id));
+
+    // Per-task saved inline-edit heights — fetched once, provided to all rows
+    // so each opens its editor at the previously-resized size.
+    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    provide_context(TaskEditorHeights(editor_heights));
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
+            editor_heights.set(
+                prefs.into_iter()
+                    .filter(|p| p.entity_kind == "task")
+                    .map(|p| (p.entity_id, p.height))
+                    .collect(),
+            );
+        }
+    });
 
     // ── Flat task list in display order — fed to the keyboard handler.
     // Today zone first, backlog second.  Updated whenever either
