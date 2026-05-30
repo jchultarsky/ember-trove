@@ -1,7 +1,7 @@
 use common::auth::UserInfo;
 use gloo_net::http::Request;
 
-use super::{RedirectResponse, api_url, parse_json};
+use super::{RedirectResponse, api_url, get_json, parse_json};
 use crate::error::UiError;
 
 pub async fn fetch_me() -> Result<UserInfo, UiError> {
@@ -27,11 +27,7 @@ pub async fn fetch_me() -> Result<UserInfo, UiError> {
 }
 
 pub async fn fetch_login_url() -> Result<String, UiError> {
-    let resp = Request::get(&api_url("/auth/login"))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    let data: RedirectResponse = parse_json(resp).await?;
+    let data: RedirectResponse = get_json("/auth/login").await?;
     Ok(data.redirect_url)
 }
 

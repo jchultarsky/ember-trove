@@ -4,7 +4,7 @@ use common::{
 };
 use gloo_net::http::Request;
 
-use super::{api_url, parse_json};
+use super::{api_url, delete_empty, get_json, parse_json, post_action_json, post_json, put_json};
 use crate::error::UiError;
 
 /// Fetch ALL nodes (every page) including archived. Used by the graph view,
@@ -71,74 +71,31 @@ pub async fn fetch_nodes_filtered(
 }
 
 pub async fn fetch_node(id: NodeId) -> Result<Node, UiError> {
-    let resp = Request::get(&api_url(&format!("/nodes/{id}")))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    get_json(&format!("/nodes/{id}")).await
 }
 
 pub async fn create_node(req: &CreateNodeRequest) -> Result<Node, UiError> {
-    let resp = Request::post(&api_url("/nodes"))
-        .json(req)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    post_json("/nodes", req).await
 }
 
 pub async fn update_node(id: NodeId, req: &UpdateNodeRequest) -> Result<Node, UiError> {
-    let resp = Request::put(&api_url(&format!("/nodes/{id}")))
-        .json(req)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    put_json(&format!("/nodes/{id}"), req).await
 }
 
 /// `PUT /api/nodes/:id/pin` — toggle a node's pinned flag.  Used by
 /// the v2.9.0 dashboard pin button.
 pub async fn set_node_pinned(id: NodeId, pinned: bool) -> Result<Node, UiError> {
-    let resp = Request::put(&api_url(&format!("/nodes/{id}/pin")))
-        .json(&serde_json::json!({ "pinned": pinned }))
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    put_json(&format!("/nodes/{id}/pin"), &serde_json::json!({ "pinned": pinned })).await
 }
 
 pub async fn delete_node(id: NodeId) -> Result<(), UiError> {
-    let resp = Request::delete(&api_url(&format!("/nodes/{id}")))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    if resp.ok() {
-        Ok(())
-    } else {
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown error".to_string());
-        Err(UiError::api(status, text))
-    }
+    delete_empty(&format!("/nodes/{id}")).await
 }
 
 pub async fn duplicate_node(id: NodeId) -> Result<Node, UiError> {
-    let resp = Request::post(&api_url(&format!("/nodes/{id}/duplicate")))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    post_action_json(&format!("/nodes/{id}/duplicate")).await
 }
 
 pub async fn fetch_node_titles() -> Result<Vec<NodeTitleEntry>, UiError> {
-    let resp = Request::get(&api_url("/nodes/titles"))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    get_json("/nodes/titles").await
 }
