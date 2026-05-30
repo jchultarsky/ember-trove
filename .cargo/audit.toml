@@ -10,27 +10,13 @@
 # list grow silently.
 [advisories]
 ignore = [
-  # ── Legacy AWS-SDK rustls 0.21 / rustls-webpki 0.101.7 chain ────────────────
-  # Pulled exclusively by aws-smithy-http-client (latest, 1.1.12) →
-  # hyper-rustls 0.24 → rustls 0.21 → rustls-webpki 0.101.7. Our modern TLS path
-  # (reqwest + jsonwebtoken) is on rustls-webpki 0.103.x and is unaffected.
-  # The 0.101.x branch has no fix; the only way to drop this chain is to switch
-  # the AWS SDK off its default rustls 0.21 TLS provider — deferred as a tracked
-  # follow-up (risks prod S3/Cognito/SES TLS; needs real-AWS integration tests).
-  # The AWS SDK only talks to known AWS endpoints with valid AWS-issued certs,
-  # so the name-constraint / CRL edge cases below are not reachable in practice.
-  #
-  #   2026-05-29: RUSTSEC-2026-0049 — CRL authoritativeness matching bug.
-  "RUSTSEC-2026-0049",
-  #   2026-05-29: RUSTSEC-2026-0098 — name constraints incorrectly accepted for
-  #     URI names.
-  "RUSTSEC-2026-0098",
-  #   2026-05-29: RUSTSEC-2026-0099 — name constraints accepted for certs
-  #     asserting a wildcard.
-  "RUSTSEC-2026-0099",
-  #   2026-05-29: RUSTSEC-2026-0104 — reachable panic in CRL parsing. We never
-  #     feed CRLs to the AWS SDK rustls config, so the panic is unreachable.
-  "RUSTSEC-2026-0104",
+  # NOTE: the legacy AWS-SDK rustls 0.21 / rustls-webpki 0.101.7 chain — and its
+  # four ignores (RUSTSEC-2026-0049/0098/0099/0104) — were ELIMINATED on
+  # 2026-05-29 by setting `default-features = false` on the aws-sdk-{s3,
+  # cognitoidentityprovider,sesv2} crates and dropping their legacy `rustls`
+  # feature. The SDK now uses the modern `default-https-client` (rustls 0.23 +
+  # aws-lc-rs). `cargo tree -i rustls-webpki@0.101.7` returns nothing; verified
+  # with a live TLS round-trip to S3 (InvalidAccessKeyId over TLS).
 
   # ── Unsound warnings, transitive, affected API surface unused ──────────────
   #   2026-05-29: RUSTSEC-2026-0002 — `lru` unsoundness via aws-sdk-s3; we do
