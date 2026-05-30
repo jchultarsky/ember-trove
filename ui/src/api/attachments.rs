@@ -1,15 +1,11 @@
 use common::{attachment::Attachment, id::{AttachmentId, NodeId}};
 use gloo_net::http::Request;
 
-use super::{api_url, parse_json};
+use super::{api_url, delete_empty, get_json, parse_json};
 use crate::error::UiError;
 
 pub async fn fetch_attachments(node_id: NodeId) -> Result<Vec<Attachment>, UiError> {
-    let resp = Request::get(&api_url(&format!("/nodes/{node_id}/attachments")))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    get_json(&format!("/nodes/{node_id}/attachments")).await
 }
 
 /// Upload a file using multipart/form-data.
@@ -29,20 +25,7 @@ pub async fn upload_attachment(
 }
 
 pub async fn delete_attachment(id: AttachmentId) -> Result<(), UiError> {
-    let resp = Request::delete(&api_url(&format!("/attachments/{id}")))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    if resp.ok() {
-        Ok(())
-    } else {
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown error".to_string());
-        Err(UiError::api(status, text))
-    }
+    delete_empty(&format!("/attachments/{id}")).await
 }
 
 #[must_use]
