@@ -103,6 +103,9 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         let req = CreateNoteRequest {
             body: trimmed,
             color: new_color.get_untracked(),
+            // Node comes from the URL path on the node-scoped POST; the body
+            // node_id is ignored by that route.
+            node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             if crate::api::create_note(node_id, &req).await.is_ok() {

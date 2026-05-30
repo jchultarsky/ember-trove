@@ -2,7 +2,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use common::{
     auth::AuthClaims,
@@ -26,6 +26,7 @@ pub fn node_note_router() -> Router<AppState> {
 /// Mounts under `/notes`
 pub fn note_router() -> Router<AppState> {
     Router::new()
+        .route("/", post(create_standalone_note))
         .route("/feed", get(note_feed))
         .route("/{note_id}", patch(update_note))
 }
@@ -54,7 +55,27 @@ async fn create_note(
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
 
-    let note = state.notes.create(NodeId(node_id), &claims.sub, req).await?;
+    let note = state.notes.create(Some(NodeId(node_id)), &claims.sub, req).await?;
+    Ok((StatusCode::CREATED, Json(note)))
+}
+
+/// POST /notes — create a note, optionally attached to a node via `node_id` in
+/// the body. With no `node_id` it's a standalone (inbox / micro-blog) note.
+/// Attaching to a node requires editor rights on that node.
+async fn create_standalone_note(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Json(req): Json<CreateNoteRequest>,
+) -> Result<(StatusCode, Json<Note>), ApiError> {
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
+
+    let node_id = req.node_id;
+    if let Some(node_id) = node_id {
+        require_editor(state.permissions.as_ref(), &claims, node_id).await?;
+    }
+
+    let note = state.notes.create(node_id, &claims.sub, req).await?;
     Ok((StatusCode::CREATED, Json(note)))
 }
 

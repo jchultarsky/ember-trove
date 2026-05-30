@@ -14,6 +14,12 @@ pub async fn create_note(node_id: NodeId, req: &CreateNoteRequest) -> Result<Not
     post_json(&format!("/nodes/{node_id}/notes"), req).await
 }
 
+/// Create a note from the global Notes view. With `req.node_id == None` this is
+/// a standalone (inbox / micro-blog) note; with `Some(id)` it attaches to that node.
+pub async fn create_note_global(req: &CreateNoteRequest) -> Result<Note, UiError> {
+    post_json("/notes", req).await
+}
+
 pub async fn update_note(note_id: NoteId, req: &UpdateNoteRequest) -> Result<Note, UiError> {
     patch_json(&format!("/notes/{note_id}"), req).await
 }
