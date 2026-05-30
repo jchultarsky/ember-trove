@@ -5,6 +5,8 @@ use gloo_timers::callback::Timeout;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::node_picker::NodePicker;
+use crate::components::resizable_editor::ResizableEditor;
 use crate::markdown::render_markdown_plain;
 
 /// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
@@ -43,7 +45,7 @@ pub fn NotesView() -> impl IntoView {
 
     // ── Compose box state ──────────────────────────────────────────────────
     let body = RwSignal::new(String::new());
-    let selected_node = RwSignal::<Option<NodeId>>::new(None);
+    let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
     let posting = RwSignal::new(false);
     let error = RwSignal::<Option<String>>::new(None);
 
@@ -136,7 +138,7 @@ pub fn NotesView() -> impl IntoView {
         }
         posting.set(true);
         error.set(None);
-        let node_id = selected_node.get_untracked();
+        let node_id = selected_node.get_untracked().map(|(id, _)| id);
         wasm_bindgen_futures::spawn_local(async move {
             let req = CreateNoteRequest {
                 body: text,
@@ -169,36 +171,15 @@ pub fn NotesView() -> impl IntoView {
 
             // ── Compose box ──────────────────────────────────────────────
             <div class="px-6 py-4 border-b border-stone-200 dark:border-stone-800 space-y-2">
-                <textarea
-                    class="w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700
-                        bg-stone-50 dark:bg-stone-800 text-sm text-stone-800 dark:text-stone-200
-                        placeholder-stone-400 dark:placeholder-stone-600 resize-y min-h-[64px]
-                        focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                <ResizableEditor
+                    value=body
                     placeholder="Write a note…  (Ctrl+Enter to post)"
-                    prop:value=move || body.get()
-                    on:input=move |ev| body.set(event_target_value(&ev))
-                    on:keydown=move |ev| {
-                        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
-                            ev.prevent_default();
-                            do_post();
-                        }
-                    }
+                    on_submit=Callback::new(move |()| do_post())
                 />
                 <div class="flex items-center gap-2">
-                    <select
-                        class=format!("{INPUT_CLASS} max-w-[16rem]")
-                        prop:value=move || selected_node.get().map(|n| n.0.to_string()).unwrap_or_default()
-                        on:change=move |ev| {
-                            selected_node.set(uuid::Uuid::parse_str(&event_target_value(&ev)).ok().map(NodeId));
-                        }
-                    >
-                        <option value="">"No node (inbox)"</option>
-                        {move || node_titles.get().map(|list| {
-                            list.into_iter().map(|e| view! {
-                                <option value=e.id.0.to_string()>{e.title}</option>
-                            }).collect_view()
-                        })}
-                    </select>
+                    <div class="flex-1 min-w-0 max-w-[20rem]">
+                        <NodePicker selected=selected_node placeholder="Attach to a node (optional)…" />
+                    </div>
                     <button
                         class="ml-auto px-3 py-1.5 rounded-lg bg-amber-600 text-white text-sm font-medium
                             hover:bg-amber-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"

@@ -14,7 +14,7 @@ pub struct EditorPref {
 }
 
 /// Request to persist a resized editor height for one entity.
-#[derive(Debug, Clone, Deserialize, ToSchema, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct SetEditorPrefRequest {
     #[garde(length(min = 1, max = 8))]
     pub entity_kind: String,
