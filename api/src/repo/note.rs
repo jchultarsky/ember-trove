@@ -3,10 +3,26 @@ use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
     id::{NodeId, NoteId},
-    note::{CreateNoteRequest, FeedNote, Note, UpdateNoteRequest},
+    note::{CreateNoteRequest, FeedNote, Note, NoteSort, UpdateNoteRequest},
 };
 use sqlx::PgPool;
 use uuid::Uuid;
+
+/// Parsed filter for the notes feed (route maps `NoteFeedParams` → this).
+#[derive(Debug, Clone, Default)]
+pub struct NoteFeedFilter {
+    /// Only notes attached to this node.
+    pub node_id: Option<NodeId>,
+    /// Only standalone (inbox) notes.
+    pub uncategorized: bool,
+    /// Inclusive lower bound on `created_at`.
+    pub from: Option<DateTime<Utc>>,
+    /// Exclusive upper bound on `created_at` (caller passes start-of-next-day).
+    pub to: Option<DateTime<Utc>>,
+    /// Case-insensitive substring filter on the body.
+    pub q: Option<String>,
+    pub sort: NoteSort,
+}
 
 // ── Trait ──────────────────────────────────────────────────────────────────────
 
@@ -31,11 +47,13 @@ pub trait NoteRepo: Send + Sync {
     /// All notes for a node, newest first.
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError>;
 
-    /// All notes by a given owner, newest first, with node titles (central feed).
-    async fn feed_for_owner(&self, owner_id: &str) -> Result<Vec<FeedNote>, EmberTroveError>;
-
-    /// All notes across all owners, newest first, with node titles.
-    async fn feed_all(&self) -> Result<Vec<FeedNote>, EmberTroveError>;
+    /// Central feed: notes with node titles, filtered + sorted per `filter`.
+    /// `owner_id: Some(sub)` scopes to one user; `None` returns all (admin).
+    async fn feed(
+        &self,
+        owner_id: Option<&str>,
+        filter: &NoteFeedFilter,
+    ) -> Result<Vec<FeedNote>, EmberTroveError>;
 
     /// All notes across all owners — used for full backup.
     async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError>;
@@ -194,40 +212,46 @@ impl NoteRepo for PgNoteRepo {
         Ok(rows.into_iter().map(NoteRow::into_note).collect())
     }
 
-    async fn feed_for_owner(&self, owner_id: &str) -> Result<Vec<FeedNote>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, FeedRow>(
+    async fn feed(
+        &self,
+        owner_id: Option<&str>,
+        filter: &NoteFeedFilter,
+    ) -> Result<Vec<FeedNote>, EmberTroveError> {
+        // ORDER BY can't be a bind param; the column/direction come from a
+        // closed enum (no injection). Filters use the guarded `$n IS NULL OR`
+        // pattern so absent filters are no-ops.
+        let order_by = match filter.sort {
+            NoteSort::Newest => "n.created_at DESC",
+            NoteSort::Oldest => "n.created_at ASC",
+            NoteSort::Updated => "n.updated_at DESC",
+        };
+        let sql = format!(
             r#"
             SELECT
                 n.id, n.node_id, n.owner_id, n.body, n.color, n.created_at, n.updated_at,
                 nd.title AS node_title
             FROM node_notes n
             LEFT JOIN nodes nd ON nd.id = n.node_id
-            WHERE n.owner_id = $1
-            ORDER BY n.created_at DESC
-            "#,
-        )
-        .bind(owner_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("feed notes failed: {e}")))?;
+            WHERE ($1::text IS NULL OR n.owner_id = $1)
+              AND ($2::uuid IS NULL OR n.node_id = $2)
+              AND (NOT $3 OR n.node_id IS NULL)
+              AND ($4::timestamptz IS NULL OR n.created_at >= $4)
+              AND ($5::timestamptz IS NULL OR n.created_at < $5)
+              AND ($6::text IS NULL OR n.body ILIKE '%' || $6 || '%')
+            ORDER BY {order_by}
+            "#
+        );
 
-        Ok(rows.into_iter().map(FeedRow::into_feed_note).collect())
-    }
-
-    async fn feed_all(&self) -> Result<Vec<FeedNote>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, FeedRow>(
-            r#"
-            SELECT
-                n.id, n.node_id, n.owner_id, n.body, n.color, n.created_at, n.updated_at,
-                nd.title AS node_title
-            FROM node_notes n
-            LEFT JOIN nodes nd ON nd.id = n.node_id
-            ORDER BY n.created_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("feed_all notes failed: {e}")))?;
+        let rows = sqlx::query_as::<_, FeedRow>(&sql)
+            .bind(owner_id)
+            .bind(filter.node_id.map(|n| n.0))
+            .bind(filter.uncategorized)
+            .bind(filter.from)
+            .bind(filter.to)
+            .bind(filter.q.as_deref())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("feed notes failed: {e}")))?;
 
         Ok(rows.into_iter().map(FeedRow::into_feed_note).collect())
     }

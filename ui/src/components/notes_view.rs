@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 
-use common::{id::NodeId, note::CreateNoteRequest};
+use common::{id::NodeId, note::{CreateNoteRequest, NoteSort}};
+use gloo_timers::callback::Timeout;
 use leptos_router::hooks::use_navigate;
 
 use crate::markdown::render_markdown_plain;
@@ -22,19 +23,19 @@ fn palette_card_class(color: &str) -> &'static str {
         .unwrap_or(PALETTE[0].1)
 }
 
+const INPUT_CLASS: &str = "px-2 py-1.5 rounded-lg border border-stone-200 dark:border-stone-700 \
+    bg-stone-50 dark:bg-stone-800 text-sm text-stone-700 dark:text-stone-300 \
+    focus:outline-none focus:ring-2 focus:ring-amber-500/40";
+
 #[component]
 pub fn NotesView() -> impl IntoView {
     let navigate = use_navigate();
 
-    // Feed reload counter — bumped after posting a new note (the project rule:
-    // re-fetch a LocalResource via a counter signal, never inside a closure).
+    // Feed reload counter — bumped after posting (re-fetch a LocalResource via a
+    // counter, never inside the closure).
     let reload = RwSignal::new(0u32);
-    let feed_resource = LocalResource::new(move || {
-        let _ = reload.get();
-        async move { crate::api::fetch_notes_feed().await }
-    });
 
-    // Node list for the optional compose-box node picker.
+    // Node list for the compose picker AND the filter dropdown.
     let node_titles = LocalResource::new(move || async move {
         crate::api::fetch_node_titles().await.unwrap_or_default()
     });
@@ -44,6 +45,71 @@ pub fn NotesView() -> impl IntoView {
     let selected_node = RwSignal::<Option<NodeId>>::new(None);
     let posting = RwSignal::new(false);
     let error = RwSignal::<Option<String>>::new(None);
+
+    // ── Filter / sort state ─────────────────────────────────────────────────
+    let sort = RwSignal::new(NoteSort::Newest);
+    // Node filter select value: "" = all, "inbox" = standalone, else a node UUID.
+    let node_filter = RwSignal::new(String::new());
+    let from_date = RwSignal::new(String::new());
+    let to_date = RwSignal::new(String::new());
+    // Text filter: `text_input` is bound to the box; `text_q` is the debounced
+    // value the feed actually queries on (300 ms after typing stops).
+    let text_input = RwSignal::new(String::new());
+    let text_q = RwSignal::new(String::new());
+    let debounce_v = RwSignal::new(0u32);
+    Effect::new(move |_| {
+        let val = text_input.get();
+        let v = debounce_v.get_untracked() + 1;
+        debounce_v.set(v);
+        Timeout::new(300, move || {
+            if debounce_v.get_untracked() == v {
+                text_q.set(val.clone());
+            }
+        })
+        .forget();
+    });
+
+    let any_filter_active = move || {
+        sort.get() != NoteSort::Newest
+            || !node_filter.get().is_empty()
+            || !from_date.get().is_empty()
+            || !to_date.get().is_empty()
+            || !text_input.get().is_empty()
+    };
+    let reset_filters = move || {
+        sort.set(NoteSort::Newest);
+        node_filter.set(String::new());
+        from_date.set(String::new());
+        to_date.set(String::new());
+        text_input.set(String::new());
+        text_q.set(String::new());
+    };
+
+    // Feed depends on all filter signals → re-fetches when any changes.
+    let feed_resource = LocalResource::new(move || {
+        let _ = reload.get();
+        let sort_v = sort.get();
+        let nf = node_filter.get();
+        let from = from_date.get();
+        let to = to_date.get();
+        let q = text_q.get();
+        async move {
+            let (node_id, uncategorized) = match nf.as_str() {
+                "" => (None, false),
+                "inbox" => (None, true),
+                s => (uuid::Uuid::parse_str(s).ok().map(NodeId), false),
+            };
+            crate::api::fetch_notes_feed(
+                node_id,
+                uncategorized,
+                Some(from.as_str()),
+                Some(to.as_str()),
+                Some(q.as_str()),
+                sort_v,
+            )
+            .await
+        }
+    });
 
     let do_post = move || {
         let text = body.get_untracked().trim().to_string();
@@ -102,15 +168,10 @@ pub fn NotesView() -> impl IntoView {
                 />
                 <div class="flex items-center gap-2">
                     <select
-                        class="px-2 py-1.5 rounded-lg border border-stone-200 dark:border-stone-700
-                            bg-stone-50 dark:bg-stone-800 text-sm text-stone-700 dark:text-stone-300
-                            focus:outline-none focus:ring-2 focus:ring-amber-500/40 max-w-[16rem]"
+                        class=format!("{INPUT_CLASS} max-w-[16rem]")
                         prop:value=move || selected_node.get().map(|n| n.0.to_string()).unwrap_or_default()
                         on:change=move |ev| {
-                            let v = event_target_value(&ev);
-                            selected_node.set(
-                                uuid::Uuid::parse_str(&v).ok().map(NodeId)
-                            );
+                            selected_node.set(uuid::Uuid::parse_str(&event_target_value(&ev)).ok().map(NodeId));
                         }
                     >
                         <option value="">"No node (inbox)"</option>
@@ -134,6 +195,75 @@ pub fn NotesView() -> impl IntoView {
                 })}
             </div>
 
+            // ── Filter / sort toolbar ────────────────────────────────────
+            <div class="px-6 py-2.5 border-b border-stone-200 dark:border-stone-800
+                flex flex-wrap items-center gap-2">
+                // Sort
+                <select
+                    class=INPUT_CLASS
+                    title="Sort order"
+                    prop:value=move || match sort.get() {
+                        NoteSort::Newest => "newest",
+                        NoteSort::Oldest => "oldest",
+                        NoteSort::Updated => "updated",
+                    }
+                    on:change=move |ev| sort.set(match event_target_value(&ev).as_str() {
+                        "oldest" => NoteSort::Oldest,
+                        "updated" => NoteSort::Updated,
+                        _ => NoteSort::Newest,
+                    })
+                >
+                    <option value="newest">"Newest first"</option>
+                    <option value="oldest">"Oldest first"</option>
+                    <option value="updated">"Recently updated"</option>
+                </select>
+                // Node filter
+                <select
+                    class=format!("{INPUT_CLASS} max-w-[16rem]")
+                    title="Filter by node"
+                    prop:value=move || node_filter.get()
+                    on:change=move |ev| node_filter.set(event_target_value(&ev))
+                >
+                    <option value="">"All notes"</option>
+                    <option value="inbox">"Uncategorized (inbox)"</option>
+                    {move || node_titles.get().map(|list| {
+                        list.into_iter().map(|e| view! {
+                            <option value=e.id.0.to_string()>{e.title}</option>
+                        }).collect_view()
+                    })}
+                </select>
+                // Date range
+                <input
+                    type="date" class=INPUT_CLASS title="From date (inclusive)"
+                    prop:value=move || from_date.get()
+                    on:input=move |ev| from_date.set(event_target_value(&ev))
+                />
+                <span class="text-stone-400 text-sm">"–"</span>
+                <input
+                    type="date" class=INPUT_CLASS title="To date (inclusive)"
+                    prop:value=move || to_date.get()
+                    on:input=move |ev| to_date.set(event_target_value(&ev))
+                />
+                // Text filter
+                <input
+                    type="text" class=format!("{INPUT_CLASS} flex-1 min-w-[8rem]")
+                    placeholder="Filter text…"
+                    prop:value=move || text_input.get()
+                    on:input=move |ev| text_input.set(event_target_value(&ev))
+                />
+                // Reset
+                <Show when=any_filter_active>
+                    <button
+                        class="px-2.5 py-1.5 rounded-lg text-sm text-stone-500 dark:text-stone-400
+                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                        title="Clear all filters"
+                        on:click=move |_| reset_filters()
+                    >
+                        "Reset"
+                    </button>
+                </Show>
+            </div>
+
             // Feed
             <div class="flex-1 overflow-auto p-6 flex flex-col">
                 <Suspense fallback=move || view! {
@@ -145,15 +275,17 @@ pub fn NotesView() -> impl IntoView {
                             .unwrap_or_default();
 
                         if notes.is_empty() {
+                            let msg = if any_filter_active() {
+                                "No notes match these filters."
+                            } else {
+                                "No notes yet. Write one above, or add one from a node."
+                            };
                             return view! {
                                 <div class="flex-1 flex flex-col items-center justify-center gap-3">
                                     <span class="material-symbols-outlined text-stone-300 dark:text-stone-700"
                                         style="font-size: 48px;">{"sticky_note_2"}</span>
                                     <p class="text-stone-400 dark:text-stone-500 text-sm text-center">
-                                        "No notes yet."
-                                    </p>
-                                    <p class="text-stone-400 dark:text-stone-500 text-sm text-center">
-                                        "Write a note above, or add one from a node."
+                                        {msg}
                                     </p>
                                 </div>
                             }.into_any();
@@ -170,8 +302,6 @@ pub fn NotesView() -> impl IntoView {
                                         .format("%b %-d, %Y %H:%M")
                                         .to_string();
 
-                                    // Header: a node link for node-attached notes, an
-                                    // "Inbox" pill for standalone notes.
                                     let header = match node_id {
                                         Some(nid) => {
                                             let nav = navigate.clone();

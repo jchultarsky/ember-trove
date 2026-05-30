@@ -52,6 +52,48 @@ pub struct CreateNoteRequest {
     pub node_id: Option<NodeId>,
 }
 
+/// Sort order for the notes feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NoteSort {
+    /// Newest created first (default).
+    #[default]
+    Newest,
+    /// Oldest created first.
+    Oldest,
+    /// Most recently updated first.
+    Updated,
+}
+
+impl NoteSort {
+    /// Parse the `sort` query value; anything unrecognized falls back to `Newest`.
+    #[must_use]
+    pub fn from_param(s: Option<&str>) -> Self {
+        match s {
+            Some("oldest") => Self::Oldest,
+            Some("updated") => Self::Updated,
+            _ => Self::Newest,
+        }
+    }
+}
+
+/// Query parameters for the notes feed (filter + sort); all optional.
+#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
+pub struct NoteFeedParams {
+    /// Filter to a specific node (UUID string).
+    pub node_id: Option<String>,
+    /// When `true`, return only standalone (inbox) notes.
+    pub uncategorized: Option<bool>,
+    /// Inclusive lower bound on `created_at` (`YYYY-MM-DD`).
+    pub from: Option<String>,
+    /// Inclusive upper bound on `created_at` (`YYYY-MM-DD`).
+    pub to: Option<String>,
+    /// Case-insensitive substring filter on the note body.
+    pub q: Option<String>,
+    /// Sort order: `newest` (default) | `oldest` | `updated`.
+    pub sort: Option<String>,
+}
+
 /// Request body for editing an existing note.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct UpdateNoteRequest {

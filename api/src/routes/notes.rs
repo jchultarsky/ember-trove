@@ -4,10 +4,11 @@ use axum::{
     http::StatusCode,
     routing::{get, patch, post},
 };
+use chrono::{DateTime, NaiveDate, Utc};
 use common::{
     auth::AuthClaims,
     id::{NodeId, NoteId},
-    note::{CreateNoteRequest, FeedNote, Note, UpdateNoteRequest},
+    note::{CreateNoteRequest, FeedNote, Note, NoteFeedParams, NoteSort, UpdateNoteRequest},
 };
 use garde::Validate;
 use uuid::Uuid;
@@ -15,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     auth::permissions::{is_admin, require_editor, require_viewer},
     error::ApiError,
+    repo::note::NoteFeedFilter,
     state::AppState,
 };
 
@@ -96,16 +98,81 @@ async fn update_note(
     Ok(Json(note))
 }
 
-/// GET /notes/feed — notes owned by the caller, newest first, with node titles.
-/// Admins see all notes.
+/// GET /notes/feed — notes with node titles, filtered + sorted per query params
+/// (node_id, uncategorized, from, to, q, sort). Admins see all owners' notes.
 async fn note_feed(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
+    axum::extract::Query(params): axum::extract::Query<NoteFeedParams>,
 ) -> Result<Json<Vec<FeedNote>>, ApiError> {
-    let feed = if is_admin(&claims) {
-        state.notes.feed_all().await?
+    let owner_id = if is_admin(&claims) {
+        None
     } else {
-        state.notes.feed_for_owner(&claims.sub).await?
+        Some(claims.sub.as_str())
     };
+
+    let filter = NoteFeedFilter {
+        node_id: params
+            .node_id
+            .as_deref()
+            .and_then(|s| Uuid::parse_str(s).ok())
+            .map(NodeId),
+        uncategorized: params.uncategorized.unwrap_or(false),
+        from: params.from.as_deref().and_then(parse_date_start),
+        to: params.to.as_deref().and_then(parse_date_end),
+        q: params.q.filter(|s| !s.trim().is_empty()),
+        sort: NoteSort::from_param(params.sort.as_deref()),
+    };
+
+    let feed = state.notes.feed(owner_id, &filter).await?;
     Ok(Json(feed))
+}
+
+/// Parse a `YYYY-MM-DD` date as the inclusive start-of-day (UTC).
+fn parse_date_start(s: &str) -> Option<DateTime<Utc>> {
+    let d = NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?;
+    d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc())
+}
+
+/// Parse a `YYYY-MM-DD` date as the exclusive end bound = start of the next day
+/// (UTC), so the upper bound is inclusive of the whole given day.
+fn parse_date_end(s: &str) -> Option<DateTime<Utc>> {
+    let d = NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?.succ_opt()?;
+    d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_start_is_midnight_utc() {
+        assert_eq!(
+            parse_date_start("2026-05-30").map(|d| d.to_rfc3339()),
+            Some("2026-05-30T00:00:00+00:00".to_string())
+        );
+    }
+
+    #[test]
+    fn date_end_is_next_day_midnight() {
+        assert_eq!(
+            parse_date_end("2026-05-30").map(|d| d.to_rfc3339()),
+            Some("2026-05-31T00:00:00+00:00".to_string())
+        );
+    }
+
+    #[test]
+    fn invalid_dates_return_none() {
+        assert!(parse_date_start("nonsense").is_none());
+        assert!(parse_date_end("2026-13-99").is_none());
+    }
+
+    #[test]
+    fn sort_param_parsing() {
+        assert_eq!(NoteSort::from_param(Some("oldest")), NoteSort::Oldest);
+        assert_eq!(NoteSort::from_param(Some("updated")), NoteSort::Updated);
+        assert_eq!(NoteSort::from_param(Some("newest")), NoteSort::Newest);
+        assert_eq!(NoteSort::from_param(None), NoteSort::Newest);
+        assert_eq!(NoteSort::from_param(Some("garbage")), NoteSort::Newest);
+    }
 }
