@@ -4,6 +4,62 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.19.0] - 2026-05-31
+
+Security sprint 8 — follow-ups from a deep, adversarially-verified security
+audit, plus the auth-flow items deferred from v2.18.0. (Still deferred: the
+CSP `'unsafe-inline'`/`'unsafe-eval'` removal, which needs a nonce/hash on the
+Trunk bootstrap and browser verification.)
+
+### Security — Graph & edge endpoints are now tenant-scoped
+The graph surface was the last endpoint family trusting client-side filtering:
+- `PUT /graph/positions` (batch) had **no ownership check** — any authenticated
+  user could overwrite the layout coordinates of *any* node, and the array was
+  unbounded. The write is now owner-scoped (rows for nodes the caller doesn't
+  own are dropped) and capped at 2000 entries.
+- `GET /graph/positions` and `GET /edges` returned **every** node position /
+  edge in the system (leaking other owners' node UUIDs). Both are now scoped to
+  the caller's own nodes (admins still see all).
+
+### Security — Node ownership can no longer be hijacked
+A user granted `Owner` on a shared node could revoke or downgrade the canonical
+creator's permission row, locking them out (`require_role` consults only the
+permissions table). The creator's row (`nodes.owner_id`) is now immutable except
+by an admin.
+
+### Security — Authentication hardening
+- The JWT **issuer** (`iss`) is now validated (`set_issuer`) in addition to the
+  existing RS256 / audience / expiry checks, and an **access token presented in
+  place of an ID token** on the session path is rejected (`token_use`).
+- The OAuth **`state`** is now bound to the initiating browser via a short-lived,
+  encrypted `SameSite=Lax` cookie that the callback must match — closing a
+  login-CSRF / session-fixation gap.
+
+### Security — Webhook SSRF & cross-tenant fan-out
+- Webhook URLs are now DNS-resolved at registration and rejected if any resolved
+  IP is private/link-local/IMDS; the dispatcher no longer follows redirects.
+- Webhook delivery is filtered to the resource owner's own webhooks.
+
+### Security — Hardening & cleanup
+- Share-invite email HTML body now escapes user-controlled values (node title,
+  inviter) to prevent HTML/phishing injection.
+- `/api/auth/refresh` and change-password return generic error messages
+  (upstream Cognito detail is logged, not reflected).
+- Attachment upload now uses a content-type **allowlist** (was a bypassable
+  blocklist); downloads already send `nosniff`.
+- `CreateEdgeRequest.label` and search-preset fields are length-validated.
+- `create_webhook` masks the secret in its response (consistent with list/update).
+- `COOKIE_SECURE` now defaults to `true` (the dev compose opts out for http).
+- Markdown `style` attributes are filtered to a safe CSS property allowlist
+  (colour/emphasis kept; `position`/`z-index`/`url()` stripped) — removing the
+  clickjacking-overlay vector while preserving inline colours.
+- Removed the dead Keycloak realm seed file (contained hardcoded example
+  passwords) and theme; the project is Cognito-only.
+
+### Fixed
+- Replaced three `.expect()` calls on the SES invite path with graceful skips
+  (no-panic guarantee).
+
 ## [2.18.0] - 2026-05-31
 
 Security sprint 7 — authorization hardening, from a comprehensive review
