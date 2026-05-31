@@ -4,6 +4,49 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.18.0] - 2026-05-31
+
+Security sprint 7 — authorization hardening, from a comprehensive review
+prompted by the growing personal-data surface. Fixes the low-deploy-risk
+broken-access-control issues; login-flow, CSP, and rendering items
+(JWT issuer validation, OAuth `state` CSRF binding, webhook SSRF, CSP
+`unsafe-inline`, ammonia `style` CSS) are tracked as follow-ups.
+
+### Security — Search results are now scoped to the caller
+The global search endpoint extracted no auth claims and the query layer
+had no owner predicate, so any authenticated user could read **every
+other user's** node titles, note-body snippets, and task titles via
+`GET /api/search`. `SearchRepo::search` now takes the caller's subject
+and scopes the `valid_nodes` CTE / node query by `owner_id`; admins pass
+`None` to search across all owners. (Was a system-wide read breach of the
+most sensitive content; required no special access.)
+
+### Security — Node-link authorization
+- `GET /nodes/:id/links` now requires `require_viewer` (was an
+  unauthenticated read — any user could enumerate any node's links).
+- Node-link `update`/`delete` are now scoped by `node_id` as well as
+  `link_id`, so a user with editor rights on one node can no longer
+  mutate a link belonging to another node (IDOR).
+
+### Security — Template reads scoped to the owner
+`GET /templates` and `GET /templates/:id` returned any user's templates
+(bodies are user-authored). Both are now owner-scoped (admins see all),
+matching the existing write-path checks.
+
+### Security — Notes feed is bounded + LIKE-safe
+`GET /notes/feed` had no `LIMIT` (a full-table scan; the admin path
+serialized every owner's notes, and `q=%` made it trivial). It is now
+bounded by a server-clamped page size, and `%`/`_`/`\` in the text
+filter are escaped so they match literally instead of as wildcards.
+
+### Fixed — Webhook secret masking no longer panics on multibyte secrets
+`mask_secret` byte-sliced `&s[..4]`, panicking when the 4th byte fell
+mid-UTF-8. Truncation is now char-safe.
+
+### Security — Attachment downloads send `X-Content-Type-Options: nosniff`
+Defense-in-depth alongside the existing `Content-Disposition: attachment`
+so a stored file can't be MIME-sniffed into an executable type.
+
 ## [2.17.1] - 2026-05-30
 
 ### Fixed — `require_role` preserves the structured error variant
