@@ -4,6 +4,22 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.19.2] - 2026-05-31
+
+### Security — Removed `script-src 'unsafe-inline'` from the CSP (last review finding)
+The edge CSP's `script-src` no longer carries `'unsafe-inline'` — it uses a
+per-request nonce plus `'strict-dynamic'`. The reverse proxy injects the
+request's `$request_id` into every `<script>` tag (`sub_filter`) and emits the
+matching `nonce-…` in the header, so the inline service-worker registration,
+the `WebAssembly.instantiateStreaming` shim, and Trunk's module bootstrap run
+without `'unsafe-inline'`; `'strict-dynamic'` lets the nonced bootstrap load
+the per-build, content-hashed WASM-glue JS it imports (no fragile per-build
+hash pinning). `'wasm-unsafe-eval'` and `'unsafe-eval'` remain (required by
+wasm-bindgen's glue), and `style-src` keeps `'unsafe-inline'` for the
+loading-screen `<style>` and Tailwind. Injected inline scripts (e.g. via an
+ammonia-sanitizer bypass) can no longer execute. This closes the final
+outstanding item from the security reviews/audit (sprints 7–9).
+
 ## [2.19.1] - 2026-05-31
 
 Security sprint 9 — hardening for the blind spots flagged by the deep audit's
