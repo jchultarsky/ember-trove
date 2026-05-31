@@ -112,9 +112,12 @@ impl Config {
             aws_secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
             ses_from_email: env::var("SES_FROM_EMAIL").ok(),
             cookie_key,
+            // Secure-by-default: a prod deploy that forgets to set COOKIE_SECURE
+            // still gets Secure cookies. Local http dev must opt out explicitly
+            // (COOKIE_SECURE=false), which the dev docker-compose.yml sets.
             cookie_secure: env::var("COOKIE_SECURE")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(false),
+                .map(|v| !(v == "false" || v == "0"))
+                .unwrap_or(true),
             frontend_url: require("FRONTEND_URL")?,
             api_external_url: require("API_EXTERNAL_URL")?,
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),

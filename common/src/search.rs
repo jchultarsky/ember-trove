@@ -73,12 +73,18 @@ pub struct SearchPreset {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, garde::Validate)]
 pub struct CreateSearchPresetRequest {
+    #[garde(length(min = 1, max = 100))]
     pub name: String,
+    #[garde(length(max = 1000))]
     pub query: String,
+    #[garde(skip)]
     pub fuzzy: bool,
+    #[garde(skip)]
     pub published_only: bool,
+    #[garde(length(max = 2000))]
     pub tag_ids: String,
+    #[garde(length(max = 8))]
     pub tag_op: String,
 }

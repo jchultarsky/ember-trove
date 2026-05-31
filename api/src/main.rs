@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("database migration failed: {e}"))?;
     tracing::info!("database migrations complete");
 
-    // OIDC discovery — fetch endpoints and JWKS from Keycloak (optional for Phase 1 dev).
+    // OIDC discovery — fetch endpoints and JWKS from Cognito (optional for local dev).
     let oidc = if let (Some(issuer), Some(client_id), Some(client_secret)) =
         (&config.oidc_issuer, &config.oidc_client_id, &config.oidc_client_secret)
     {

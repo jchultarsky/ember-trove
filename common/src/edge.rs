@@ -39,10 +39,14 @@ pub struct EdgeWithTitles {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, garde::Validate)]
 pub struct CreateEdgeRequest {
+    #[garde(skip)]
     pub source_id: NodeId,
+    #[garde(skip)]
     pub target_id: NodeId,
+    #[garde(skip)]
     pub edge_type: EdgeType,
+    #[garde(inner(length(max = 200)))]
     pub label: Option<String>,
 }

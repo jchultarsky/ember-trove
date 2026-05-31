@@ -12,10 +12,13 @@ use common::{
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::require_viewer,
+    auth::permissions::{is_admin, require_viewer},
     error::ApiError,
     state::AppState,
 };
+
+/// Hard cap on a single batch position write (DoS guard).
+const MAX_BATCH_POSITIONS: usize = 2000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -26,29 +29,43 @@ pub fn router() -> Router<AppState> {
 
 async fn list_positions(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
 ) -> Result<Json<Vec<NodePosition>>, ApiError> {
-    // Positions are keyed by node_id; the graph view client-side already
-    // filters to only render nodes the caller owns. Returning all positions
-    // is safe (just x/y coordinates, no sensitive data).
-    let positions = state.graph.list_positions().await?;
+    // SECURITY: scope to the caller's own nodes so positions can't be used to
+    // enumerate other owners' node IDs. Admins (None) see all.
+    let subject = if is_admin(&claims) {
+        None
+    } else {
+        Some(claims.sub.as_str())
+    };
+    let positions = state.graph.list_positions(subject).await?;
     Ok(Json(positions))
 }
 
 async fn upsert_positions_batch(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
     Json(req): Json<SavePositionsRequest>,
 ) -> Result<StatusCode, ApiError> {
-    // The graph view only sends positions for nodes the caller owns
-    // (node list is already ownership-scoped). Positions are just x/y
-    // coordinates with no sensitive data.
+    if req.positions.len() > MAX_BATCH_POSITIONS {
+        return Err(ApiError::Validation(format!(
+            "too many positions (max {MAX_BATCH_POSITIONS})"
+        )));
+    }
+    // SECURITY: the repo write is owner-scoped (rows for nodes the caller
+    // doesn't own are dropped), so a client can't tamper with other owners'
+    // graph layouts. Admins (None) may write any node's position.
+    let subject = if is_admin(&claims) {
+        None
+    } else {
+        Some(claims.sub.as_str())
+    };
     let tuples: Vec<(Uuid, f64, f64)> = req
         .positions
         .into_iter()
         .map(|(node_id, x, y)| (node_id.0, x, y))
         .collect();
-    state.graph.save_positions(&tuples).await?;
+    state.graph.save_positions(&tuples, subject).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
