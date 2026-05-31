@@ -641,6 +641,11 @@ fn extract_full(
     use flate2::read::GzDecoder;
     use std::io::Read;
 
+    // Decompression-bomb guards: bound per-entry and cumulative extracted size
+    // so a malicious/corrupted archive can't OOM the API during restore.
+    const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB per file
+    const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB total
+
     let gz = GzDecoder::new(archive_bytes);
     let mut archive = tar::Archive::new(gz);
     let entries = archive
@@ -650,6 +655,7 @@ fn extract_full(
     let mut manifest_bytes: Option<Vec<u8>> = None;
     let mut data_bytes: Option<Vec<u8>> = None;
     let mut attachment_files: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut total_bytes: u64 = 0;
 
     for entry in entries {
         let mut entry =
@@ -660,16 +666,36 @@ fn extract_full(
             .to_string_lossy()
             .to_string();
 
+        // Read at most MAX_ENTRY_BYTES + 1 so an oversized entry is detected
+        // without materialising the whole thing.
         let mut buf = Vec::new();
-        entry
+        (&mut entry)
+            .take(MAX_ENTRY_BYTES + 1)
             .read_to_end(&mut buf)
             .map_err(|e| ApiError::Internal(format!("read entry '{path}' failed: {e}")))?;
+        if buf.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(ApiError::Validation(
+                "backup archive entry exceeds the size limit".to_string(),
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(buf.len() as u64);
+        if total_bytes > MAX_TOTAL_BYTES {
+            return Err(ApiError::Validation(
+                "backup archive exceeds the total size limit".to_string(),
+            ));
+        }
 
         if path == "manifest.json" {
             manifest_bytes = Some(buf);
         } else if path == "data.json" {
             data_bytes = Some(buf);
         } else if path.starts_with("attachments/") {
+            // Reject path traversal before the key is ever used as an S3 key.
+            if path.contains("..") {
+                return Err(ApiError::Validation(
+                    "backup archive contains an invalid path".to_string(),
+                ));
+            }
             attachment_files.push((path, buf));
         }
     }
