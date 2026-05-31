@@ -168,7 +168,7 @@ impl PermissionRepo for StubPermissionRepo {
 struct StubSearchRepo;
 #[async_trait]
 impl SearchRepo for StubSearchRepo {
-    async fn search(&self, _: &SearchQuery) -> Result<SearchResponse, EmberTroveError> { unimplemented!() }
+    async fn search(&self, _: &SearchQuery, _: Option<&str>) -> Result<SearchResponse, EmberTroveError> { unimplemented!() }
 }
 
 struct StubGraphRepo;
@@ -232,7 +232,7 @@ impl NodeVersionRepo for StubNodeVersionRepo {
 struct StubTemplateRepo;
 #[async_trait]
 impl TemplateRepo for StubTemplateRepo {
-    async fn list(&self) -> Result<Vec<NodeTemplate>, EmberTroveError> { unimplemented!() }
+    async fn list(&self, _: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError> { unimplemented!() }
     async fn get(&self, _: TemplateId) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
     async fn create(&self, _: &str, _: CreateTemplateRequest) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
     async fn update(&self, _: TemplateId, _: UpdateTemplateRequest) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
@@ -246,8 +246,8 @@ impl NodeLinkRepo for StubNodeLinkRepo {
     async fn list_all(&self) -> Result<Vec<NodeLink>, EmberTroveError> { unimplemented!() }
     async fn list(&self, _: NodeId) -> Result<Vec<NodeLink>, EmberTroveError> { unimplemented!() }
     async fn create(&self, _: NodeId, _: CreateNodeLinkRequest) -> Result<NodeLink, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: NodeLinkId, _: UpdateNodeLinkRequest) -> Result<NodeLink, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: NodeLinkId) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn update(&self, _: NodeId, _: NodeLinkId, _: UpdateNodeLinkRequest) -> Result<NodeLink, EmberTroveError> { unimplemented!() }
+    async fn delete(&self, _: NodeId, _: NodeLinkId) -> Result<(), EmberTroveError> { unimplemented!() }
 }
 
 struct StubSearchPresetRepo;

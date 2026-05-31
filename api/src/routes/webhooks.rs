@@ -85,13 +85,22 @@ pub fn router() -> Router<AppState> {
 /// Mask the webhook secret so it's never returned in full after creation.
 fn mask_secret(mut hook: Webhook) -> Webhook {
     if let Some(ref s) = hook.secret {
-        if s.len() > 4 {
-            hook.secret = Some(format!("{}…", &s[..4]));
-        } else {
-            hook.secret = Some("••••".to_string());
-        }
+        hook.secret = Some(mask_value(s));
     }
     hook
+}
+
+/// Mask a secret string, revealing at most its first 4 characters.
+///
+/// Char-safe: byte-slicing `&s[..4]` panics if the 4th byte falls mid-UTF-8
+/// (e.g. a secret beginning with a multi-byte character).
+fn mask_value(s: &str) -> String {
+    if s.chars().count() > 4 {
+        let prefix: String = s.chars().take(4).collect();
+        format!("{prefix}…")
+    } else {
+        "••••".to_string()
+    }
 }
 
 async fn list_webhooks(
@@ -142,4 +151,39 @@ async fn delete_webhook(
         .delete(WebhookId(id), &claims.sub)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mask_value, validate_webhook_url};
+
+    #[test]
+    fn mask_value_is_char_safe_on_multibyte_secret() {
+        // Regression: byte-slicing `&s[..4]` would panic here (the 4th byte is
+        // mid-codepoint). Must reveal the first 4 chars without panicking.
+        assert_eq!(mask_value("🔑🔑🔑🔑🔑secret"), "🔑🔑🔑🔑…");
+        assert_eq!(mask_value("ünîçødë-key"), "ünîç…");
+    }
+
+    #[test]
+    fn mask_value_hides_short_secrets_entirely() {
+        assert_eq!(mask_value("abcd"), "••••");
+        assert_eq!(mask_value("🔑"), "••••");
+        assert_eq!(mask_value(""), "••••");
+    }
+
+    #[test]
+    fn mask_value_reveals_prefix_of_long_ascii() {
+        assert_eq!(mask_value("supersecret"), "supe…");
+    }
+
+    #[test]
+    fn validate_webhook_url_rejects_plaintext_http_and_private() {
+        assert!(validate_webhook_url("https://example.com/hook").is_ok());
+        assert!(validate_webhook_url("http://example.com/hook").is_err());
+        assert!(validate_webhook_url("http://localhost:9000/h").is_ok());
+        assert!(validate_webhook_url("https://169.254.169.254/").is_err());
+        assert!(validate_webhook_url("https://10.0.0.5/").is_err());
+        assert!(validate_webhook_url("ftp://example.com/").is_err());
+    }
 }

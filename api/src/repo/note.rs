@@ -22,6 +22,18 @@ pub struct NoteFeedFilter {
     /// Case-insensitive substring filter on the body.
     pub q: Option<String>,
     pub sort: NoteSort,
+    /// Max rows to return (server-clamped).
+    pub limit: i64,
+    /// Row offset for pagination.
+    pub offset: i64,
+}
+
+/// Escape SQL `LIKE`/`ILIKE` metacharacters (`\`, `%`, `_`) so a user-supplied
+/// substring is matched literally. Pair with `ESCAPE '\'` in the query.
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 // ── Trait ──────────────────────────────────────────────────────────────────────
@@ -253,10 +265,15 @@ impl NoteRepo for PgNoteRepo {
               AND (NOT $3 OR n.node_id IS NULL)
               AND ($4::timestamptz IS NULL OR n.created_at >= $4)
               AND ($5::timestamptz IS NULL OR n.created_at < $5)
-              AND ($6::text IS NULL OR n.body ILIKE '%' || $6 || '%')
+              AND ($6::text IS NULL OR n.body ILIKE ('%' || $6 || '%') ESCAPE '\')
             ORDER BY {order_by}
+            LIMIT $7 OFFSET $8
             "#
         );
+
+        // Escape LIKE metacharacters so a `q` of "%" / "_" matches literally
+        // rather than acting as a wildcard (it bypasses the filter otherwise).
+        let q_escaped = filter.q.as_deref().map(escape_like);
 
         let rows = sqlx::query_as::<_, FeedRow>(&sql)
             .bind(owner_id)
@@ -264,11 +281,40 @@ impl NoteRepo for PgNoteRepo {
             .bind(filter.uncategorized)
             .bind(filter.from)
             .bind(filter.to)
-            .bind(filter.q.as_deref())
+            .bind(q_escaped)
+            .bind(filter.limit)
+            .bind(filter.offset)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| EmberTroveError::Internal(format!("feed notes failed: {e}")))?;
 
         Ok(rows.into_iter().map(FeedRow::into_feed_note).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_like;
+
+    #[test]
+    fn escape_like_neutralizes_wildcards() {
+        // `%` and `_` must be escaped so they match literally, not as wildcards.
+        assert_eq!(escape_like("50%"), "50\\%");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+        assert_eq!(escape_like("%"), "\\%");
+    }
+
+    #[test]
+    fn escape_like_escapes_backslash_first() {
+        // The backslash itself must be doubled before it can escape the others,
+        // otherwise the inserted escapes could be mis-parsed.
+        assert_eq!(escape_like("a\\b"), "a\\\\b");
+        assert_eq!(escape_like("\\%"), "\\\\\\%");
+    }
+
+    #[test]
+    fn escape_like_leaves_plain_text_untouched() {
+        assert_eq!(escape_like("hello world"), "hello world");
+        assert_eq!(escape_like(""), "");
     }
 }

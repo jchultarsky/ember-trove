@@ -92,6 +92,10 @@ pub struct NoteFeedParams {
     pub q: Option<String>,
     /// Sort order: `newest` (default) | `oldest` | `updated`.
     pub sort: Option<String>,
+    /// 1-based page number (default 1).
+    pub page: Option<u32>,
+    /// Rows per page (default 200, server-clamped to 1000).
+    pub per_page: Option<u32>,
 }
 
 /// Request body for editing an existing note.
