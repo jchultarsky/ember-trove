@@ -13,6 +13,15 @@ use common::admin::{AdminUser, CreateAdminUserRequest};
 
 use crate::error::ApiError;
 
+/// Map a Cognito SDK error to a generic client-facing error, logging the real
+/// detail server-side. SECURITY: prevents leaking the User Pool ID, AWS request
+/// IDs, and internal exception types — notably `UsernameExistsException`, which
+/// would otherwise re-open a user-enumeration oracle via the invite endpoint.
+fn cognito_err(op: &str, e: impl std::fmt::Display) -> ApiError {
+    tracing::error!(op, error = %e, "Cognito admin operation failed");
+    ApiError::Internal("identity provider operation failed".to_string())
+}
+
 // ── Client ───────────────────────────────────────────────────────────────────
 
 /// Thin async wrapper around the AWS Cognito Identity Provider SDK.
@@ -62,7 +71,7 @@ impl CognitoAdminClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| ApiError::Internal(format!("Cognito list_users failed: {e}")))?;
+                .map_err(|e| cognito_err("list_users", e))?;
 
             for u in resp.users() {
                 // Fetch group memberships for each user.
@@ -101,28 +110,28 @@ impl CognitoAdminClient {
                     .name("email")
                     .value(&req.email)
                     .build()
-                    .map_err(|e| ApiError::Internal(format!("Cognito attr build failed: {e}")))?,
+                    .map_err(|e| cognito_err("attr_build", e))?,
             )
             .user_attributes(
                 AttributeType::builder()
                     .name("email_verified")
                     .value("true")
                     .build()
-                    .map_err(|e| ApiError::Internal(format!("Cognito attr build failed: {e}")))?,
+                    .map_err(|e| cognito_err("attr_build", e))?,
             )
             .user_attributes(
                 AttributeType::builder()
                     .name("given_name")
                     .value(&req.first_name)
                     .build()
-                    .map_err(|e| ApiError::Internal(format!("Cognito attr build failed: {e}")))?,
+                    .map_err(|e| cognito_err("attr_build", e))?,
             )
             .user_attributes(
                 AttributeType::builder()
                     .name("family_name")
                     .value(&req.last_name)
                     .build()
-                    .map_err(|e| ApiError::Internal(format!("Cognito attr build failed: {e}")))?,
+                    .map_err(|e| cognito_err("attr_build", e))?,
             );
 
         if let Some(action) = message_action {
@@ -132,7 +141,7 @@ impl CognitoAdminClient {
         let resp = builder
             .send()
             .await
-            .map_err(|e| ApiError::Internal(format!("Cognito admin_create_user failed: {e}")))?;
+            .map_err(|e| cognito_err("admin_create_user", e))?;
 
         let user = resp
             .user()
@@ -149,9 +158,7 @@ impl CognitoAdminClient {
                 .group_name(group)
                 .send()
                 .await
-                .map_err(|e| {
-                    ApiError::Internal(format!("Cognito add_to_group '{group}' failed: {e}"))
-                })?;
+                .map_err(|e| cognito_err("admin_add_user_to_group", e))?;
         }
 
         Ok(cognito_user_to_dto(user, req.initial_roles.clone()))
@@ -162,7 +169,10 @@ impl CognitoAdminClient {
     /// Returns `None` when no user with that email exists in the pool.
     /// Uses the Cognito `ListUsers` filter `email = "<addr>"`.
     pub async fn find_user_by_email(&self, email: &str) -> Result<Option<AdminUser>, ApiError> {
-        let filter = format!("email = \"{email}\"");
+        // Escape `"` and `\` so the address can't break out of the quoted
+        // ListUsers filter, independent of any upstream `garde(email)` check.
+        let escaped = email.replace('\\', "\\\\").replace('"', "\\\"");
+        let filter = format!("email = \"{escaped}\"");
         let resp = self
             .client
             .list_users()
@@ -170,7 +180,7 @@ impl CognitoAdminClient {
             .filter(&filter)
             .send()
             .await
-            .map_err(|e| ApiError::Internal(format!("Cognito list_users (by email) failed: {e}")))?;
+            .map_err(|e| cognito_err("list_users_by_email", e))?;
 
         let user = match resp.users().first() {
             None => return Ok(None),
@@ -195,7 +205,7 @@ impl CognitoAdminClient {
                 if msg.contains("UserNotFoundException") {
                     ApiError::NotFound(format!("user {username} not found"))
                 } else {
-                    ApiError::Internal(format!("Cognito delete_user failed: {e}"))
+                    cognito_err("admin_delete_user", e)
                 }
             })?;
         Ok(())
@@ -219,7 +229,7 @@ impl CognitoAdminClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| ApiError::Internal(format!("Cognito list_groups failed: {e}")))?;
+                .map_err(|e| cognito_err("list_groups", e))?;
 
             for g in resp.groups() {
                 if let Some(name) = g.group_name() {
@@ -245,9 +255,7 @@ impl CognitoAdminClient {
             .username(username)
             .send()
             .await
-            .map_err(|e| {
-                ApiError::Internal(format!("Cognito list_user_groups failed: {e}"))
-            })?;
+            .map_err(|e| cognito_err("list_user_groups", e))?;
 
         Ok(resp
             .groups()
@@ -275,11 +283,7 @@ impl CognitoAdminClient {
                     .group_name(group)
                     .send()
                     .await
-                    .map_err(|e| {
-                        ApiError::Internal(format!(
-                            "Cognito add_to_group '{group}' failed: {e}"
-                        ))
-                    })?;
+                    .map_err(|e| cognito_err("admin_add_user_to_group", e))?;
             }
         }
 
@@ -293,11 +297,7 @@ impl CognitoAdminClient {
                     .group_name(group)
                     .send()
                     .await
-                    .map_err(|e| {
-                        ApiError::Internal(format!(
-                            "Cognito remove_from_group '{group}' failed: {e}"
-                        ))
-                    })?;
+                    .map_err(|e| cognito_err("admin_remove_user_from_group", e))?;
             }
         }
 
