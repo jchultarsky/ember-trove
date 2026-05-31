@@ -19,12 +19,16 @@ pub trait NodeLinkRepo: Send + Sync {
         node_id: NodeId,
         req: CreateNodeLinkRequest,
     ) -> Result<NodeLink, EmberTroveError>;
+    /// Update a link. SECURITY: scoped to `node_id` so a caller with editor
+    /// rights on one node cannot mutate a link belonging to another node.
     async fn update(
         &self,
+        node_id: NodeId,
         id: NodeLinkId,
         req: UpdateNodeLinkRequest,
     ) -> Result<NodeLink, EmberTroveError>;
-    async fn delete(&self, id: NodeLinkId) -> Result<(), EmberTroveError>;
+    /// Delete a link, scoped to `node_id` (see `update`).
+    async fn delete(&self, node_id: NodeId, id: NodeLinkId) -> Result<(), EmberTroveError>;
 }
 
 // ── PgNodeLinkRepo ─────────────────────────────────────────────────────────────
@@ -111,6 +115,7 @@ impl NodeLinkRepo for PgNodeLinkRepo {
 
     async fn update(
         &self,
+        node_id: NodeId,
         id: NodeLinkId,
         req: UpdateNodeLinkRequest,
     ) -> Result<NodeLink, EmberTroveError> {
@@ -118,12 +123,13 @@ impl NodeLinkRepo for PgNodeLinkRepo {
             "UPDATE node_links
              SET name = COALESCE($1, name),
                  url  = COALESCE($2, url)
-             WHERE id = $3
+             WHERE id = $3 AND node_id = $4
              RETURNING id, node_id, name, url, created_at",
         )
         .bind(req.name.as_deref())
         .bind(req.url.as_deref())
         .bind(id.0)
+        .bind(node_id.0)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("update node_link failed: {e}")))?
@@ -132,12 +138,16 @@ impl NodeLinkRepo for PgNodeLinkRepo {
         Ok(row.into_link())
     }
 
-    async fn delete(&self, id: NodeLinkId) -> Result<(), EmberTroveError> {
-        sqlx::query("DELETE FROM node_links WHERE id = $1")
+    async fn delete(&self, node_id: NodeId, id: NodeLinkId) -> Result<(), EmberTroveError> {
+        let result = sqlx::query("DELETE FROM node_links WHERE id = $1 AND node_id = $2")
             .bind(id.0)
+            .bind(node_id.0)
             .execute(&self.pool)
             .await
             .map_err(|e| EmberTroveError::Internal(format!("delete node_link failed: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(EmberTroveError::NotFound("node link not found".to_string()));
+        }
         Ok(())
     }
 }

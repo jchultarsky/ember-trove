@@ -61,6 +61,9 @@ pub async fn fetch_notes_feed(
         NoteSort::Updated => "updated",
     };
     parts.push(format!("sort={sort_str}"));
+    // Request the server's max page size so the single-page feed isn't
+    // truncated. (Server bounds this to 1000; "load more" paging is a TODO.)
+    parts.push("per_page=1000".to_string());
     get_json(&format!("/notes/feed?{}", parts.join("&"))).await
 }
 

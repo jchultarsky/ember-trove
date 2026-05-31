@@ -10,7 +10,17 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait SearchRepo: Send + Sync {
-    async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, EmberTroveError>;
+    /// Search nodes/notes/tasks.
+    ///
+    /// `subject` scopes results to a single owner (`Some(sub)`); pass `None`
+    /// for admins to search across all owners. SECURITY: callers MUST pass the
+    /// authenticated subject for non-admins — otherwise search leaks every
+    /// owner's private content.
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        subject: Option<&str>,
+    ) -> Result<SearchResponse, EmberTroveError>;
 }
 
 pub struct PgSearchRepo {
@@ -95,7 +105,11 @@ fn sort_clause(sort: &Option<String>, has_rank: bool) -> &'static str {
 
 #[async_trait]
 impl SearchRepo for PgSearchRepo {
-    async fn search(&self, query: &SearchQuery) -> Result<SearchResponse, EmberTroveError> {
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        subject: Option<&str>,
+    ) -> Result<SearchResponse, EmberTroveError> {
         let q = query.q.trim();
         let page = query.page.unwrap_or(1).max(1);
         let per_page = query.per_page.unwrap_or(20).min(100);
@@ -126,6 +140,7 @@ impl SearchRepo for PgSearchRepo {
                     page,
                     per_page,
                     offset,
+                    subject,
                 )
                 .await;
         }
@@ -145,6 +160,7 @@ impl SearchRepo for PgSearchRepo {
                 page,
                 per_page,
                 offset,
+                subject,
             )
             .await
         } else {
@@ -160,6 +176,7 @@ impl SearchRepo for PgSearchRepo {
                 page,
                 per_page,
                 offset,
+                subject,
             )
             .await
         }
@@ -185,6 +202,7 @@ impl PgSearchRepo {
         page: u32,
         per_page: u32,
         offset: u32,
+        subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
         let type_filter = node_type.as_ref().map(node_type_to_str);
         let status_filter = status.as_ref().map(node_status_to_str);
@@ -206,6 +224,7 @@ impl PgSearchRepo {
               )
               AND ($5::timestamptz IS NULL OR updated_at >= $5)
               AND ($6::timestamptz IS NULL OR updated_at < $6)
+              AND ($7::text IS NULL OR owner_id = $7::text)
             "#,
         )
         .bind(type_filter)
@@ -214,6 +233,7 @@ impl PgSearchRepo {
         .bind(and_mode)
         .bind(updated_after)
         .bind(updated_before)
+        .bind(subject)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list nodes count failed: {e}")))?;
@@ -246,6 +266,7 @@ impl PgSearchRepo {
                   )
                   AND ($5::timestamptz IS NULL OR updated_at >= $5)
                   AND ($6::timestamptz IS NULL OR updated_at < $6)
+                  AND ($9::text IS NULL OR owner_id = $9::text)
                 {order}
                 LIMIT $7 OFFSET $8
                 "#,
@@ -260,6 +281,7 @@ impl PgSearchRepo {
         .bind(updated_before)
         .bind(per_page as i64)
         .bind(offset as i64)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list nodes failed: {e}")))?;
@@ -296,6 +318,7 @@ impl PgSearchRepo {
         page: u32,
         per_page: u32,
         offset: u32,
+        subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
         let type_filter = node_type.as_ref().map(node_type_to_str);
         let status_filter = status.as_ref().map(node_status_to_str);
@@ -317,6 +340,7 @@ impl PgSearchRepo {
                   )
                   AND ($6::timestamptz IS NULL OR updated_at >= $6)
                   AND ($7::timestamptz IS NULL OR updated_at < $7)
+                  AND ($8::text IS NULL OR owner_id = $8::text)
             )
             SELECT COUNT(DISTINCT n.id)::bigint AS total
             FROM nodes n
@@ -343,6 +367,7 @@ impl PgSearchRepo {
         .bind(and_mode)
         .bind(updated_after)
         .bind(updated_before)
+        .bind(subject)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("search count failed: {e}")))?;
@@ -365,6 +390,7 @@ impl PgSearchRepo {
                       )
                       AND ($6::timestamptz IS NULL OR updated_at >= $6)
                       AND ($7::timestamptz IS NULL OR updated_at < $7)
+                      AND ($10::text IS NULL OR owner_id = $10::text)
                 ),
                 candidates AS (
                     -- Match from node title / body
@@ -467,6 +493,7 @@ impl PgSearchRepo {
         .bind(updated_before)
         .bind(per_page as i64)
         .bind(offset as i64)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("fulltext search failed: {e}")))?;
@@ -497,6 +524,7 @@ impl PgSearchRepo {
         page: u32,
         per_page: u32,
         offset: u32,
+        subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
         let type_filter = node_type.as_ref().map(node_type_to_str);
         let status_filter = status.as_ref().map(node_status_to_str);
@@ -519,6 +547,7 @@ impl PgSearchRepo {
                   )
                   AND ($7::timestamptz IS NULL OR updated_at >= $7)
                   AND ($8::timestamptz IS NULL OR updated_at < $8)
+                  AND ($9::text IS NULL OR owner_id = $9::text)
             )
             SELECT COUNT(DISTINCT n.id)::bigint AS total
             FROM nodes n
@@ -546,6 +575,7 @@ impl PgSearchRepo {
         .bind(and_mode)
         .bind(updated_after)
         .bind(updated_before)
+        .bind(subject)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("fuzzy count failed: {e}")))?;
@@ -568,6 +598,7 @@ impl PgSearchRepo {
                       )
                       AND ($7::timestamptz IS NULL OR updated_at >= $7)
                       AND ($8::timestamptz IS NULL OR updated_at < $8)
+                      AND ($11::text IS NULL OR owner_id = $11::text)
                 ),
                 candidates AS (
                     -- Match from node title / body
@@ -656,6 +687,7 @@ impl PgSearchRepo {
         .bind(updated_before)
         .bind(per_page as i64)
         .bind(offset as i64)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("fuzzy search failed: {e}")))?;
