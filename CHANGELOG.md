@@ -4,6 +4,27 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [2.19.1] - 2026-05-31
+
+Security sprint 9 — hardening for the blind spots flagged by the deep audit's
+completeness critic (all Low). The same pass confirmed activity-log read
+scoping, backup/restore authorization, rate-limiting coverage, and a full
+sqlx-parameterization sweep are **clean** (no findings).
+
+### Security — Cognito admin client no longer leaks provider internals
+Every `CognitoAdminClient` operation wrapped the raw AWS/Cognito error string
+into the client-facing response, leaking the User Pool ID and internal
+exception types (notably `UsernameExistsException`, which re-opened a
+user-enumeration oracle via the invite endpoint). Errors now map to a generic
+message with the detail logged server-side. The `find_user_by_email`
+`ListUsers` filter also escapes `\` and `"` (defense-in-depth, independent of
+the upstream `garde(email)` validation).
+
+### Security — Backup restore is bounded against decompression bombs
+The admin-only restore now caps per-entry (512 MiB) and cumulative (2 GiB)
+extracted size, and rejects attachment archive paths containing `..` before
+they are used as S3 keys.
+
 ## [2.19.0] - 2026-05-31
 
 Security sprint 8 — follow-ups from a deep, adversarially-verified security
