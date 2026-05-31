@@ -72,6 +72,8 @@ services:
       COOKIE_KEY: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
       FRONTEND_URL: "http://localhost:8003"
       API_EXTERNAL_URL: "http://localhost:8003"
+      # Local dev is plain http — opt out of Secure cookies (prod defaults on).
+      COOKIE_SECURE: "false"
       HOST: "0.0.0.0"
       PORT: "3003"
       RUST_LOG: info

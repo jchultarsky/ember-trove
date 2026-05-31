@@ -60,7 +60,8 @@ pub async fn create_backup(
     let permissions = state.permissions.list_all(None).await.map_err(ApiError::from)?;
     let share_tokens = state.share_tokens.list_all().await.map_err(ApiError::from)?;
     let node_versions = state.node_versions.list_all().await.map_err(ApiError::from)?;
-    let node_positions = state.graph.list_positions().await.map_err(ApiError::from)?;
+    // Full backup is admin-only — None = all owners' positions.
+    let node_positions = state.graph.list_positions(None).await.map_err(ApiError::from)?;
 
     let entity_counts = EntityCounts {
         nodes: nodes.len() as u32,

@@ -322,19 +322,38 @@ async fn upload_attachment(
         .unwrap_or("application/octet-stream")
         .to_string();
 
-    // SECURITY: Reject content types that could enable stored XSS or malware.
-    const BLOCKED_TYPES: &[&str] = &[
-        "text/html",
-        "application/xhtml+xml",
-        "image/svg+xml",
-        "application/javascript",
-        "text/javascript",
-        "application/x-executable",
-        "application/x-sharedlib",
-        "application/x-msdos-program",
+    // SECURITY: allowlist the accepted content types (a blocklist is
+    // bypassable — any type not explicitly blocked would slip through). Active
+    // types (text/html, image/svg+xml, *javascript) are simply not on the list.
+    // SVG is an image type that can carry script, so it is excluded from the
+    // `image/` prefix. Defense-in-depth alongside the download path's
+    // `Content-Disposition: attachment` + `X-Content-Type-Options: nosniff`.
+    const ALLOWED_PREFIXES: &[&str] = &["image/", "audio/", "video/"];
+    const ALLOWED_EXACT: &[&str] = &[
+        "application/pdf",
+        "application/json",
+        "application/zip",
+        "application/octet-stream",
+        "application/msword",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.oasis.opendocument.presentation",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+        "text/calendar",
     ];
     let ct_lower = content_type.to_lowercase();
-    if BLOCKED_TYPES.iter().any(|b| ct_lower.starts_with(b)) {
+    let base = ct_lower.split(';').next().unwrap_or("").trim();
+    let allowed = (ALLOWED_PREFIXES.iter().any(|p| base.starts_with(p))
+        && !base.starts_with("image/svg"))
+        || ALLOWED_EXACT.contains(&base);
+    if !allowed {
         return Err(ApiError::Validation(format!(
             "file type '{content_type}' is not allowed"
         )));
@@ -394,6 +413,19 @@ async fn grant_permission(
 
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
 
+    // SECURITY: a granted Owner must not be able to downgrade the canonical
+    // creator (nodes.owner_id) to a weaker role via grant-upsert. Only an
+    // admin may change the canonical owner's row, and only to Owner otherwise.
+    let node = state.nodes.get(NodeId(id)).await?;
+    if req.subject_id == node.owner_id
+        && !matches!(req.role, PermissionRole::Owner)
+        && !is_admin(&claims)
+    {
+        return Err(ApiError::Forbidden(
+            "cannot downgrade the node owner".to_string(),
+        ));
+    }
+
     let perm = state
         .permissions
         .grant(NodeId(id), &claims.sub, req)
@@ -415,6 +447,22 @@ async fn revoke_permission(
     Path((id, perm_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
+
+    // SECURITY: the canonical creator's (nodes.owner_id) Owner row is the
+    // backstop that keeps them from being locked out (require_role consults
+    // only the permissions table, not nodes.owner_id). A second granted Owner
+    // must not be able to revoke it. Only an admin may.
+    let node = state.nodes.get(NodeId(id)).await?;
+    let perms = state.permissions.list(NodeId(id)).await?;
+    if let Some(target) = perms.iter().find(|p| p.id == PermissionId(perm_id))
+        && target.subject_id == node.owner_id
+        && !is_admin(&claims)
+    {
+        return Err(ApiError::Forbidden(
+            "cannot revoke the node owner's permission".to_string(),
+        ));
+    }
+
     state.permissions.revoke(PermissionId(perm_id)).await?;
     log_activity(
         &state,

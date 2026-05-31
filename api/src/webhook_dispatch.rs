@@ -21,28 +21,38 @@ use crate::repo::webhook::WebhookRepo;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Spawn fire-and-forget tasks that POST webhook payloads to subscribers.
+///
+/// SECURITY: only delivers to webhooks owned by `owner_id` (the owner of the
+/// resource that triggered the event), so one tenant's events never fan out to
+/// another tenant's endpoint (cross-tenant metadata leak).
 pub fn dispatch(
     webhooks: Arc<dyn WebhookRepo>,
     event: &str,
     node_id: Option<NodeId>,
     triggered_by: &str,
+    owner_id: &str,
 ) {
     let event = event.to_string();
     let triggered_by = triggered_by.to_string();
+    let owner_id = owner_id.to_string();
     tokio::spawn(async move {
-        let hooks = match webhooks.list_active_for_event(&event).await {
+        let mut hooks = match webhooks.list_active_for_event(&event).await {
             Ok(h) => h,
             Err(e) => {
                 warn!("webhook list_active_for_event failed: {e}");
                 return;
             }
         };
+        // Only fan out to the resource owner's own webhooks.
+        hooks.retain(|h| h.owner_id == owner_id);
         // If client construction fails (e.g. TLS backend init error) abort
         // the whole dispatch rather than silently falling back to a client
         // with no timeout — a slow webhook endpoint on the default client
-        // would pin the tokio task indefinitely.
+        // would pin the tokio task indefinitely. Redirects are disabled so a
+        // 30x to a private/IMDS address can't be followed (SSRF).
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
         {
             Ok(c) => c,

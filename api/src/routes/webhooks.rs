@@ -13,7 +13,30 @@ use uuid::Uuid;
 
 use crate::{error::ApiError, state::AppState};
 
+/// True if `ip` is loopback / private / link-local / IMDS / unspecified — i.e.
+/// a target a webhook must never reach (SSRF).
+fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.octets()[0] == 0
+                || (v4.octets()[0] == 169 && v4.octets()[1] == 254)
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 (ULA)
+                || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
+        }
+    }
+}
+
 /// Reject webhook URLs targeting private/internal networks (SSRF prevention).
+/// Synchronous structural checks (scheme, literal IPs, internal hostnames).
+/// DNS resolution is handled separately by [`validate_webhook_dns`].
 fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|_| ApiError::Validation("invalid webhook URL".to_string()))?;
@@ -37,28 +60,16 @@ fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
         }
     }
 
-    // Block private/link-local IP ranges.
+    // Block private/link-local IP ranges given as a literal host.
     if let Some(host) = parsed.host_str() {
-        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            let is_private = match ip {
-                std::net::IpAddr::V4(v4) => {
-                    v4.is_loopback()
-                        || v4.is_private()
-                        || v4.is_link_local()
-                        || v4.octets()[0] == 169 && v4.octets()[1] == 254
-                }
-                std::net::IpAddr::V6(v6) => {
-                    v6.is_loopback()
-                        || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7
-                }
-            };
-            if is_private {
-                return Err(ApiError::Validation(
-                    "webhook URL must not target private networks".to_string(),
-                ));
-            }
+        if let Ok(ip) = host.parse::<std::net::IpAddr>()
+            && is_blocked_ip(ip)
+        {
+            return Err(ApiError::Validation(
+                "webhook URL must not target private networks".to_string(),
+            ));
         }
-        // Block AWS metadata endpoint by hostname.
+        // Block AWS/GCP metadata endpoint by hostname.
         let lower = host.to_lowercase();
         if lower == "metadata.google.internal"
             || lower.ends_with(".internal")
@@ -70,6 +81,34 @@ fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
         }
     }
 
+    Ok(())
+}
+
+/// Resolve the webhook host and reject if ANY resolved IP is private/internal.
+/// Closes the SSRF bypass where a public hostname resolves to a private/IMDS
+/// address. (Does not defeat DNS-rebinding TOCTOU; dispatch also disables
+/// redirects as a second layer.)
+async fn validate_webhook_dns(url: &str) -> Result<(), ApiError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| ApiError::Validation("invalid webhook URL".to_string()))?;
+    let Some(host) = parsed.host_str() else {
+        return Ok(());
+    };
+    // Literal IPs were already checked synchronously.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(());
+    }
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| ApiError::Validation("webhook host does not resolve".to_string()))?;
+    for addr in addrs {
+        if is_blocked_ip(addr.ip()) {
+            return Err(ApiError::Validation(
+                "webhook URL resolves to a private/internal address".to_string(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -123,8 +162,11 @@ async fn create_webhook(
     Json(req): Json<CreateWebhookRequest>,
 ) -> Result<(StatusCode, Json<Webhook>), ApiError> {
     validate_webhook_url(&req.url)?;
+    validate_webhook_dns(&req.url).await?;
     let hook = state.webhooks.create(&claims.sub, req).await?;
-    Ok((StatusCode::CREATED, Json(hook)))
+    // Mask the secret in the response too (consistent with list/update); the
+    // client supplied it, so nothing is lost.
+    Ok((StatusCode::CREATED, Json(mask_secret(hook))))
 }
 
 async fn update_webhook(
@@ -134,6 +176,7 @@ async fn update_webhook(
     Json(req): Json<UpdateWebhookRequest>,
 ) -> Result<Json<Webhook>, ApiError> {
     validate_webhook_url(&req.url)?;
+    validate_webhook_dns(&req.url).await?;
     let hook = state
         .webhooks
         .update(WebhookId(id), &claims.sub, req)
@@ -155,7 +198,25 @@ async fn delete_webhook(
 
 #[cfg(test)]
 mod tests {
-    use super::{mask_value, validate_webhook_url};
+    use super::{is_blocked_ip, mask_value, validate_webhook_url};
+
+    #[test]
+    fn is_blocked_ip_flags_private_and_imds() {
+        use std::net::IpAddr;
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.5",
+            "192.168.1.1",
+            "172.16.0.1",
+            "169.254.169.254", // AWS IMDS
+            "0.0.0.0",
+        ] {
+            assert!(is_blocked_ip(ip.parse::<IpAddr>().unwrap()), "{ip} should be blocked");
+        }
+        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
+            assert!(!is_blocked_ip(ip.parse::<IpAddr>().unwrap()), "{ip} should be allowed");
+        }
+    }
 
     #[test]
     fn mask_value_is_char_safe_on_multibyte_secret() {

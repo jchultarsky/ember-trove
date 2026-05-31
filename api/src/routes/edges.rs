@@ -9,10 +9,11 @@ use common::{
     edge::{CreateEdgeRequest, Edge},
     id::EdgeId,
 };
+use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::require_editor,
+    auth::permissions::{is_admin, require_editor},
     error::ApiError,
     state::AppState,
 };
@@ -25,12 +26,17 @@ pub fn router() -> Router<AppState> {
 
 async fn list_edges(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
 ) -> Result<Json<Vec<Edge>>, ApiError> {
-    // Edge list is consumed by the graph view which already filters visible
-    // nodes by ownership. Returning all edges is safe because the UI only
-    // renders edges whose endpoints appear in the filtered node set.
-    let edges = state.edges.list_all().await?;
+    // SECURITY: scope to edges whose endpoints the caller owns; do NOT rely on
+    // client-side filtering for an authz boundary (it leaks node UUIDs). Admins
+    // (None) see all edges.
+    let subject = if is_admin(&claims) {
+        None
+    } else {
+        Some(claims.sub.as_str())
+    };
+    let edges = state.edges.list_visible(subject).await?;
     Ok(Json(edges))
 }
 
@@ -39,6 +45,8 @@ async fn create_edge(
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateEdgeRequest>,
 ) -> Result<(StatusCode, Json<Edge>), ApiError> {
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     // Caller must have editor access on the source node.
     require_editor(state.permissions.as_ref(), &claims, req.source_id).await?;
     let edge = state.edges.create(req).await?;

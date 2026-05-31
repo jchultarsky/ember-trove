@@ -9,6 +9,7 @@ use common::{
     id::SearchPresetId,
     search::{CreateSearchPresetRequest, SearchPreset},
 };
+use garde::Validate;
 use uuid::Uuid;
 
 use crate::{error::ApiError, state::AppState};
@@ -32,6 +33,8 @@ async fn create_preset(
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateSearchPresetRequest>,
 ) -> Result<(StatusCode, Json<SearchPreset>), ApiError> {
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     let preset = state.search_presets.create(&claims.sub, req).await?;
     Ok((StatusCode::CREATED, Json(preset)))
 }
