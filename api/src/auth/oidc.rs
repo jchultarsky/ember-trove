@@ -19,6 +19,9 @@ struct CachedJwks {
 /// OIDC discovery document (subset of fields we need).
 #[derive(Debug, Deserialize)]
 struct OidcDiscovery {
+    /// The issuer identifier — must equal the `iss` claim of issued tokens.
+    #[serde(default)]
+    issuer: Option<String>,
     authorization_endpoint: String,
     token_endpoint: String,
     jwks_uri: String,
@@ -52,6 +55,11 @@ pub struct OidcClaims {
     /// Cognito group memberships — used as roles in `AuthClaims`.
     #[serde(rename = "cognito:groups", default)]
     pub groups: Option<Vec<String>>,
+    /// Cognito token kind: `"id"` for ID tokens, `"access"` for access tokens.
+    /// The session path expects an ID token; an access token must not be
+    /// accepted in its place.
+    #[serde(default)]
+    pub token_use: Option<String>,
     pub exp: i64,
 }
 
@@ -66,6 +74,9 @@ pub struct OidcClient {
     token_endpoint: String,
     client_id: String,
     client_secret: String,
+    /// Expected `iss` claim — validated on every token (SECURITY: rejects
+    /// tokens minted by a different issuer even if signed by a JWKS key).
+    issuer: String,
     jwks: Arc<RwLock<Option<CachedJwks>>>,
     jwks_uri: String,
     http: reqwest::Client,
@@ -115,6 +126,12 @@ impl OidcClient {
             "OIDC discovery complete"
         );
 
+        // Prefer the discovery doc's own issuer (authoritative — it is exactly
+        // what the IdP puts in the `iss` claim); fall back to the configured one.
+        let issuer = discovery
+            .issuer
+            .unwrap_or_else(|| issuer.trim_end_matches('/').to_string());
+
         Ok(Self {
             authorization_endpoint: discovery.authorization_endpoint,
             end_session_endpoint: discovery.end_session_endpoint,
@@ -122,6 +139,7 @@ impl OidcClient {
             token_endpoint: discovery.token_endpoint,
             client_id,
             client_secret,
+            issuer,
             jwks: Arc::new(RwLock::new(None)),
             jwks_uri: discovery.jwks_uri,
             http,
@@ -230,9 +248,12 @@ impl OidcClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_else(|_| "unknown".to_string());
-            return Err(ApiError::Unauthorized(format!(
-                "refresh token exchange failed ({status}): {body}"
-            )));
+            // Log the upstream detail server-side; return a generic message so
+            // the IdP's error body isn't reflected to (unauthenticated) callers.
+            tracing::warn!(%status, %body, "refresh token exchange failed");
+            return Err(ApiError::Unauthorized(
+                "could not refresh session".to_string(),
+            ));
         }
 
         resp.json::<TokenResponse>()
@@ -282,6 +303,9 @@ impl OidcClient {
         // an attacker to craft an HS256 token signed with the public key.
         let mut validation = Validation::new(jsonwebtoken::Algorithm::RS256);
         validation.set_audience(&[self.client_id.as_str()]);
+        // SECURITY: pin the issuer so a token minted by a different issuer (even
+        // one whose key happens to appear in the fetched JWKS) is rejected.
+        validation.set_issuer(&[self.issuer.as_str()]);
         validation.validate_exp = true;
 
         let token_data = jsonwebtoken::decode::<OidcClaims>(token, &decoding_key, &validation)
@@ -289,6 +313,14 @@ impl OidcClient {
                 tracing::warn!(%e, %kid, "JWT validation failed");
                 ApiError::Unauthorized("invalid token".to_string())
             })?;
+
+        // SECURITY: this is the session path — reject an access token presented
+        // in place of an ID token. Lenient: only an explicit "access" is
+        // rejected (ID tokens carry "id"; tokens without the claim are allowed).
+        if token_data.claims.token_use.as_deref() == Some("access") {
+            tracing::warn!(%kid, "access token presented on the session path; rejected");
+            return Err(ApiError::Unauthorized("invalid token".to_string()));
+        }
 
         Ok(token_data.claims)
     }
@@ -332,17 +364,28 @@ impl OidcClient {
 
         let status = resp.status();
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
-        let msg = body.get("message")
+        let upstream_msg = body
+            .get("message")
             .or_else(|| body.get("Message"))
             .and_then(|v| v.as_str())
-            .unwrap_or("password change failed")
-            .to_string();
-
+            .unwrap_or("");
         let code = body.get("__type").and_then(|v| v.as_str()).unwrap_or("");
-        if code == "NotAuthorizedException" {
-            Err(ApiError::Unauthorized(msg))
-        } else {
-            Err(ApiError::Internal(format!("ChangePassword ({status}): {msg}")))
+
+        // Log the provider's wording server-side; return a fixed client-facing
+        // message per error class so Cognito's internal phrasing / policy detail
+        // isn't reflected to the client.
+        tracing::warn!(%status, %code, %upstream_msg, "ChangePassword failed");
+        match code {
+            "NotAuthorizedException" => Err(ApiError::Unauthorized(
+                "current password is incorrect".to_string(),
+            )),
+            "InvalidPasswordException" => Err(ApiError::Validation(
+                "new password does not meet the password policy".to_string(),
+            )),
+            "LimitExceededException" => Err(ApiError::Unauthorized(
+                "too many attempts; please try again later".to_string(),
+            )),
+            _ => Err(ApiError::Internal("password change failed".to_string())),
         }
     }
 

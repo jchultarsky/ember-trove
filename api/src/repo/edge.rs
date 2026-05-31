@@ -20,6 +20,10 @@ pub trait EdgeRepo: Send + Sync {
         node_id: NodeId,
     ) -> Result<Vec<EdgeWithTitles>, EmberTroveError>;
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError>;
+    /// Edges visible to `subject`: both endpoints owned by them (`Some(sub)`),
+    /// or all edges for an admin (`None`). SECURITY: prevents leaking the node
+    /// UUIDs / topology of other owners' private graphs.
+    async fn list_visible(&self, subject: Option<&str>) -> Result<Vec<Edge>, EmberTroveError>;
     /// Atomically replace all `wiki_link` edges outgoing from `source_id` with
     /// edges to the given `target_ids`. Self-loop targets are silently skipped.
     async fn sync_wikilinks(
@@ -246,6 +250,26 @@ impl EdgeRepo for PgEdgeRepo {
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list all edges failed: {e}")))?;
+
+        rows.into_iter().map(EdgeRow::into_edge).collect()
+    }
+
+    async fn list_visible(&self, subject: Option<&str>) -> Result<Vec<Edge>, EmberTroveError> {
+        let rows = sqlx::query_as::<_, EdgeRow>(
+            r#"
+            SELECT e.id, e.source_id, e.target_id, e.edge_type::text, e.label, e.created_at
+            FROM edges e
+            JOIN nodes sn ON sn.id = e.source_id
+            JOIN nodes tn ON tn.id = e.target_id
+            WHERE ($1::text IS NULL
+                   OR (sn.owner_id = $1::text AND tn.owner_id = $1::text))
+            ORDER BY e.created_at DESC
+            "#,
+        )
+        .bind(subject)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("list visible edges failed: {e}")))?;
 
         rows.into_iter().map(EdgeRow::into_edge).collect()
     }

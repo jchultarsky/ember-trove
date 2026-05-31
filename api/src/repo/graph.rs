@@ -5,11 +5,21 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait GraphRepo: Send + Sync {
-    async fn list_positions(&self) -> Result<Vec<NodePosition>, EmberTroveError>;
+    /// List node positions. SECURITY: scoped to `subject`'s owned nodes
+    /// (`Some(sub)`); `None` (admin) returns all. Prevents enumerating other
+    /// owners' node IDs/coordinates.
+    async fn list_positions(
+        &self,
+        subject: Option<&str>,
+    ) -> Result<Vec<NodePosition>, EmberTroveError>;
     async fn upsert_position(&self, node_id: Uuid, x: f64, y: f64) -> Result<(), EmberTroveError>;
+    /// Batch upsert positions. SECURITY: only positions for nodes owned by
+    /// `subject` are written (`None` = admin, no filter); rows for nodes the
+    /// caller doesn't own are silently dropped, preventing cross-user tampering.
     async fn save_positions(
         &self,
         positions: &[(Uuid, f64, f64)],
+        subject: Option<&str>,
     ) -> Result<(), EmberTroveError>;
 }
 
@@ -33,10 +43,17 @@ struct NodePositionRow {
 
 #[async_trait]
 impl GraphRepo for PgGraphRepo {
-    async fn list_positions(&self) -> Result<Vec<NodePosition>, EmberTroveError> {
+    async fn list_positions(
+        &self,
+        subject: Option<&str>,
+    ) -> Result<Vec<NodePosition>, EmberTroveError> {
         let rows = sqlx::query_as::<_, NodePositionRow>(
-            "SELECT node_id, x, y FROM node_positions",
+            "SELECT p.node_id, p.x, p.y
+             FROM node_positions p
+             JOIN nodes n ON n.id = p.node_id
+             WHERE ($1::text IS NULL OR n.owner_id = $1::text)",
         )
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list_positions failed: {e}")))?;
@@ -71,6 +88,7 @@ impl GraphRepo for PgGraphRepo {
     async fn save_positions(
         &self,
         positions: &[(Uuid, f64, f64)],
+        subject: Option<&str>,
     ) -> Result<(), EmberTroveError> {
         if positions.is_empty() {
             return Ok(());
@@ -94,15 +112,23 @@ impl GraphRepo for PgGraphRepo {
             },
         );
 
+        // SECURITY: join to `nodes` and filter by owner so a caller can only
+        // write positions for nodes they own (admins pass NULL = no filter).
+        // Rows referencing other owners' (or nonexistent) nodes are dropped.
         sqlx::query(
             "INSERT INTO node_positions (node_id, x, y)
-             SELECT * FROM UNNEST($1::uuid[], $2::double precision[], $3::double precision[])
+             SELECT u.node_id, u.x, u.y
+             FROM UNNEST($1::uuid[], $2::double precision[], $3::double precision[])
+                  AS u(node_id, x, y)
+             JOIN nodes n ON n.id = u.node_id
+             WHERE ($4::text IS NULL OR n.owner_id = $4::text)
              ON CONFLICT (node_id) DO UPDATE
              SET x = EXCLUDED.x, y = EXCLUDED.y, updated_at = now()",
         )
         .bind(&ids[..])
         .bind(&xs[..])
         .bind(&ys[..])
+        .bind(subject)
         .execute(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("save_positions failed: {e}")))?;

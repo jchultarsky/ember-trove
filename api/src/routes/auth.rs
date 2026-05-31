@@ -27,6 +27,12 @@ const REFRESH_COOKIE: &str = "ember_trove_refresh";
 /// Scoped to `/api/auth/change-password` so it is never sent on other requests.
 const ACCESS_COOKIE: &str = "ember_trove_access";
 
+/// Short-lived, encrypted cookie binding the OAuth `state` to the browser that
+/// began the login. The callback requires the echoed `state` to match it
+/// (CSRF / session-fixation defense). `SameSite=Lax` so it is still sent on the
+/// top-level redirect back from the IdP. Scoped to `/api/auth`.
+const OAUTH_STATE_COOKIE: &str = "ember_trove_oauth_state";
+
 /// Public auth routes (no JWT required).
 pub fn public_router() -> Router<AppState> {
     Router::new()
@@ -71,6 +77,18 @@ async fn login(
     // Persist the verifier keyed by the OAuth state. The background sweeper
     // purges expired entries; the callback consumes this one exactly once.
     state.pkce.store(&oauth_state, &code_verifier).await?;
+
+    // Bind the state to THIS browser (CSRF defense): the callback requires the
+    // echoed `state` to equal this encrypted cookie. SameSite=Lax so it rides
+    // the top-level redirect back from the IdP; session-lived (cleared at the
+    // callback; the server-side PKCE entry also has a 10-min TTL).
+    let state_cookie = Cookie::build((OAUTH_STATE_COOKIE, oauth_state.clone()))
+        .path("/api/auth")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .secure(state.auth.cookie_secure)
+        .build();
+    let jar = jar.add(state_cookie);
 
     let redirect_uri = format!("{}/api/auth/callback", state.auth.api_external_url);
     let url = format!(
@@ -134,6 +152,18 @@ async fn try_callback(
     // redirects to a fresh login flow.
     let oauth_state = params.state.as_deref()
         .ok_or_else(|| ApiError::Unauthorized("missing oauth state".to_string()))?;
+
+    // SECURITY (CSRF / session fixation): the `state` echoed back by the IdP
+    // must match the value bound to THIS browser at /login via an encrypted
+    // cookie. Without this, an attacker could feed a victim a valid
+    // (state, code) pair and log them into the attacker's account.
+    let state_ok = jar
+        .get(OAUTH_STATE_COOKIE)
+        .is_some_and(|c| c.value() == oauth_state);
+    if !state_ok {
+        return Err(ApiError::Unauthorized("oauth state mismatch".to_string()));
+    }
+
     let code_verifier = app_state.pkce.take(oauth_state, PKCE_TTL).await?
         .ok_or_else(|| ApiError::Unauthorized(
             "PKCE verifier not found (login expired or server restarted)".to_string()
@@ -168,7 +198,11 @@ async fn try_callback(
         .secure(secure)
         .build();
 
-    let mut updated_jar = jar.add(session_cookie).add(cognito_access_cookie);
+    // Clear the one-time OAuth state cookie now that it has served its purpose.
+    let mut updated_jar = jar
+        .remove(Cookie::build((OAUTH_STATE_COOKIE, "")).path("/api/auth").build())
+        .add(session_cookie)
+        .add(cognito_access_cookie);
 
     if let Some(refresh_token) = token_resp.refresh_token {
         let refresh_cookie = Cookie::build((REFRESH_COOKIE, refresh_token))

@@ -14,10 +14,15 @@
 //! Normal text with <span style="background-color: #fef9c3;">highlight</span>.
 //! ```
 //!
-//! The `style` attribute is permitted on a wide range of block and inline
-//! elements. Because this is a private, self-hosted PKM system the risk of
-//! malicious style injection is negligible, and we trust the owner's content.
+//! The `style` attribute is permitted on a range of block and inline elements,
+//! but its VALUE is filtered (see [`sanitize_style`]) down to a safe CSS
+//! property allowlist (colour / weight / decoration). Layout properties
+//! (`position`, `z-index`, offsets, sizes) and `url()` are stripped so that a
+//! crafted note can't build a full-viewport clickjacking/phishing overlay or a
+//! tracking-pixel — relevant now that one owner's content may be rendered in
+//! another user's (or an admin's) session.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark_html};
 use common::id::NodeId;
@@ -37,10 +42,56 @@ const STYLED_ELEMENTS: &[&str] = &[
     "table", "thead", "tbody", "tr", "th", "td",
 ];
 
+/// CSS properties allowed to survive in a sanitised `style` attribute. Chosen
+/// to support inline colour / highlight / emphasis while excluding anything
+/// that affects layout/positioning (the overlay-clickjacking vector).
+const SAFE_STYLE_PROPS: &[&str] = &[
+    "color",
+    "background-color",
+    "font-weight",
+    "font-style",
+    "font-size",
+    "text-decoration",
+    "text-align",
+];
+
+/// Filter a `style` attribute value to the [`SAFE_STYLE_PROPS`] allowlist,
+/// dropping unknown properties and any value containing `url(`, `expression`,
+/// `javascript`, or a comment. Returns `None` when nothing safe remains (the
+/// attribute is then removed entirely).
+fn sanitize_style(value: &str) -> Option<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for decl in value.split(';') {
+        let Some((prop, val)) = decl.split_once(':') else {
+            continue;
+        };
+        let prop = prop.trim().to_ascii_lowercase();
+        let val = val.trim();
+        if !SAFE_STYLE_PROPS.contains(&prop.as_str()) || val.is_empty() {
+            continue;
+        }
+        let lv = val.to_ascii_lowercase();
+        if lv.contains("url(")
+            || lv.contains("expression")
+            || lv.contains("javascript")
+            || lv.contains("/*")
+        {
+            continue;
+        }
+        kept.push(format!("{prop}: {val}"));
+    }
+    if kept.is_empty() {
+        None
+    } else {
+        Some(kept.join("; "))
+    }
+}
+
 /// Build a pre-configured ammonia sanitiser that:
 /// - Preserves the default-allowed tag set (headings, lists, links, etc.)
 /// - Adds `<span>`, `<div>`, `<input>` (for task-list checkboxes)
-/// - Permits `style` on all block/inline elements (inline colour + highlight)
+/// - Permits `style` on block/inline elements, with its VALUE filtered to a
+///   safe CSS-property allowlist (see [`sanitize_style`])
 /// - Permits `class` and `data-node-id` on `<a>` (WikiLink integration)
 /// - Permits `class` on `<span>` (WikiLink unresolved spans)
 fn sanitizer() -> ammonia::Builder<'static> {
@@ -53,6 +104,15 @@ fn sanitizer() -> ammonia::Builder<'static> {
     for &tag in STYLED_ELEMENTS {
         b.add_tag_attributes(tag, &["style"]);
     }
+    // SECURITY: sanitise the value of every surviving `style` attribute so it
+    // can carry colour/emphasis but not layout/positioning (overlay) CSS.
+    b.attribute_filter(|_element, attribute, value| {
+        if attribute == "style" {
+            sanitize_style(value).map(Cow::Owned)
+        } else {
+            Some(Cow::Borrowed(value))
+        }
+    });
     b
 }
 

@@ -95,6 +95,7 @@ impl EdgeRepo for StubEdgeRepo {
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> { unimplemented!() }
     async fn list_for_node_with_titles(&self, _: NodeId) -> Result<Vec<EdgeWithTitles>, EmberTroveError> { unimplemented!() }
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> { unimplemented!() }
+    async fn list_visible(&self, _: Option<&str>) -> Result<Vec<Edge>, EmberTroveError> { unimplemented!() }
     async fn sync_wikilinks(&self, _: NodeId, _: &[NodeId]) -> Result<(), EmberTroveError> { unimplemented!() }
 }
 
@@ -174,9 +175,9 @@ impl SearchRepo for StubSearchRepo {
 struct StubGraphRepo;
 #[async_trait]
 impl GraphRepo for StubGraphRepo {
-    async fn list_positions(&self) -> Result<Vec<NodePosition>, EmberTroveError> { unimplemented!() }
+    async fn list_positions(&self, _: Option<&str>) -> Result<Vec<NodePosition>, EmberTroveError> { unimplemented!() }
     async fn upsert_position(&self, _: Uuid, _: f64, _: f64) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn save_positions(&self, _: &[(Uuid, f64, f64)]) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn save_positions(&self, _: &[(Uuid, f64, f64)], _: Option<&str>) -> Result<(), EmberTroveError> { unimplemented!() }
 }
 
 struct StubBackupRepo;
