@@ -11,8 +11,9 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait TemplateRepo: Send + Sync + 'static {
-    /// Return all templates, ordered by name.
-    async fn list(&self) -> Result<Vec<NodeTemplate>, EmberTroveError>;
+    /// Return templates ordered by name. SECURITY: scoped to `subject`
+    /// (`Some(sub)`); pass `None` for admins to list across all owners.
+    async fn list(&self, subject: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError>;
 
     /// Fetch a single template by ID.
     async fn get(&self, id: TemplateId) -> Result<NodeTemplate, EmberTroveError>;
@@ -123,10 +124,13 @@ const COLS: &str =
 
 #[async_trait]
 impl TemplateRepo for PgTemplateRepo {
-    async fn list(&self) -> Result<Vec<NodeTemplate>, EmberTroveError> {
+    async fn list(&self, subject: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError> {
         let rows = sqlx::query_as::<_, TemplateRow>(&format!(
-            "SELECT {COLS} FROM node_templates ORDER BY name",
+            "SELECT {COLS} FROM node_templates \
+             WHERE ($1::text IS NULL OR created_by = $1::text) \
+             ORDER BY name",
         ))
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list templates failed: {e}")))?;

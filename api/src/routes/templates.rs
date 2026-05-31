@@ -12,7 +12,11 @@ use common::{
 use garde::Validate;
 use uuid::Uuid;
 
-use crate::{auth::permissions::require_resource_owner, error::ApiError, state::AppState};
+use crate::{
+    auth::permissions::{is_admin, require_resource_owner},
+    error::ApiError,
+    state::AppState,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -23,18 +27,25 @@ pub fn router() -> Router<AppState> {
 
 async fn list_templates(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
 ) -> Result<Json<Vec<NodeTemplate>>, ApiError> {
-    let templates = state.templates.list().await?;
+    // SECURITY: scope to the caller's own templates; admins (None) see all.
+    let subject = if is_admin(&claims) {
+        None
+    } else {
+        Some(claims.sub.as_str())
+    };
+    let templates = state.templates.list(subject).await?;
     Ok(Json(templates))
 }
 
 async fn get_template(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NodeTemplate>, ApiError> {
     let template = state.templates.get(TemplateId(id)).await?;
+    require_resource_owner(&claims, &template.created_by)?;
     Ok(Json(template))
 }
 

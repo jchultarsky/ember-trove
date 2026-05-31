@@ -121,6 +121,11 @@ async fn note_feed(
         Some(claims.sub.as_str())
     };
 
+    // Bound the feed query (was unbounded — a full-table scan, and the admin
+    // path returns every owner's notes). Generous cap avoids truncating a
+    // realistic personal feed; true "load more" pagination is a UI follow-up.
+    let per_page = i64::from(params.per_page.unwrap_or(200).clamp(1, 1000));
+
     let filter = NoteFeedFilter {
         node_id: params
             .node_id
@@ -132,6 +137,8 @@ async fn note_feed(
         to: params.to.as_deref().and_then(parse_date_end),
         q: params.q.filter(|s| !s.trim().is_empty()),
         sort: NoteSort::from_param(params.sort.as_deref()),
+        limit: per_page,
+        offset: i64::from(params.page.unwrap_or(1).max(1) - 1) * per_page,
     };
 
     let feed = state.notes.feed(owner_id, &filter).await?;

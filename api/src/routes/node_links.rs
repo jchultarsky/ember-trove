@@ -12,7 +12,11 @@ use common::{
 use garde::Validate;
 use uuid::Uuid;
 
-use crate::{auth::permissions::require_editor, error::ApiError, state::AppState};
+use crate::{
+    auth::permissions::{require_editor, require_viewer},
+    error::ApiError,
+    state::AppState,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -22,9 +26,10 @@ pub fn router() -> Router<AppState> {
 
 async fn list_links(
     State(state): State<AppState>,
-    Extension(_claims): Extension<AuthClaims>,
+    Extension(claims): Extension<AuthClaims>,
     Path(node_id): Path<Uuid>,
 ) -> Result<Json<Vec<NodeLink>>, ApiError> {
+    require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     let links = state.node_links.list(NodeId(node_id)).await?;
     Ok(Json(links))
 }
@@ -49,7 +54,10 @@ async fn update_link(
 ) -> Result<Json<NodeLink>, ApiError> {
     req.validate().map_err(|e| ApiError::Validation(e.to_string()))?;
     require_editor(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
-    let link = state.node_links.update(NodeLinkId(link_id), req).await?;
+    let link = state
+        .node_links
+        .update(NodeId(node_id), NodeLinkId(link_id), req)
+        .await?;
     Ok(Json(link))
 }
 
@@ -59,6 +67,9 @@ async fn delete_link(
     Path((node_id, link_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
-    state.node_links.delete(NodeLinkId(link_id)).await?;
+    state
+        .node_links
+        .delete(NodeId(node_id), NodeLinkId(link_id))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

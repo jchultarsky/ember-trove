@@ -50,6 +50,9 @@ async fn download(
             ),
         )
         .header(header::CONTENT_LENGTH, data.len().to_string())
+        // Stop the browser from MIME-sniffing a stored attachment into an
+        // executable type (defense-in-depth alongside the attachment disposition).
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from(data))
         .map_err(|e| ApiError::Internal(format!("response build: {e}")))
 }
