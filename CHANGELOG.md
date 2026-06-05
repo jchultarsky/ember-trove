@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling
+- Bumped `actions/cache` from v4 to v5.0.5 (SHA-pinned, `# v5.0.5`) across all CI jobs
+  to move off the deprecated Node.js 20 runtime (GitHub forces Node 20 actions onto
+  Node 24; v5 targets Node 24 natively). Clears the CI deprecation annotation.
+- Dependency bumps (consolidating Dependabot #5, #6, #8, #9 into one resolved lockfile):
+  `jsonwebtoken` 9 → 10 (OIDC JWT verification; our `Validation` config is explicit —
+  RS256-pinned, audience + issuer pinned, `exp` enforced — so the major bump is
+  behaviour-preserving), `zip` 3 → 8 (backup/export), `gloo-net` 0.6 → 0.7 (UI HTTP),
+  `leptos` 0.8.16 → 0.8.19, plus the weekly minor/patch group (`tokio`, `uuid`,
+  `wasm-bindgen`, `web-sys`, `tower-http`, `utoipa`, … ). `sha2` 0.11 (Dependabot #7)
+  is **deferred**: it pulls `digest` 0.11 while `hmac` is still on `digest` 0.10, so
+  `HmacCore<Sha256>` stops satisfying `hmac::Mac` and the build breaks — revisit once the
+  RustCrypto `digest` 0.11 ecosystem (incl. `hmac`) is released.
+
 ### Documentation
 - Corrected `CLAUDE.md`'s stale environment note: `gh` is now installed (Homebrew) and
   authenticated, and is the supported way to push from tool shells (the sandbox keychain
