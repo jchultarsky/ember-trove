@@ -1,6 +1,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::{EmberTroveError, id::SearchPresetId, search::{CreateSearchPresetRequest, SearchPreset}};
+use common::{
+    EmberTroveError,
+    id::SearchPresetId,
+    search::{CreateSearchPresetRequest, SearchPreset},
+};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
@@ -17,11 +21,7 @@ pub trait SearchPresetRepo: Send + Sync + 'static {
     ) -> Result<SearchPreset, EmberTroveError>;
 
     /// Delete a preset — only owner may delete.
-    async fn delete(
-        &self,
-        id: SearchPresetId,
-        owner_id: &str,
-    ) -> Result<(), EmberTroveError>;
+    async fn delete(&self, id: SearchPresetId, owner_id: &str) -> Result<(), EmberTroveError>;
 }
 
 // ── Internal row type ─────────────────────────────────────────────────────────
@@ -109,21 +109,18 @@ impl SearchPresetRepo for PgSearchPresetRepo {
         Ok(row.into_preset())
     }
 
-    async fn delete(
-        &self,
-        id: SearchPresetId,
-        owner_id: &str,
-    ) -> Result<(), EmberTroveError> {
-        let result =
-            sqlx::query("DELETE FROM search_presets WHERE id = $1 AND owner_id = $2")
-                .bind(id.0)
-                .bind(owner_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| EmberTroveError::Internal(format!("delete search preset failed: {e}")))?;
+    async fn delete(&self, id: SearchPresetId, owner_id: &str) -> Result<(), EmberTroveError> {
+        let result = sqlx::query("DELETE FROM search_presets WHERE id = $1 AND owner_id = $2")
+            .bind(id.0)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("delete search preset failed: {e}")))?;
 
         if result.rows_affected() == 0 {
-            return Err(EmberTroveError::NotFound("search preset not found".to_string()));
+            return Err(EmberTroveError::NotFound(
+                "search preset not found".to_string(),
+            ));
         }
         Ok(())
     }

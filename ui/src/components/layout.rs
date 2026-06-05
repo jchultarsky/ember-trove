@@ -15,10 +15,8 @@ use crate::{
         dark_mode_toggle::DarkModeToggle,
         graph_view::GraphView,
         modals::{
-            command_palette::CommandPalette,
-            create_node::CreateNodeModal,
-            fast_capture::FastCaptureModal,
-            help::HelpModal,
+            command_palette::CommandPalette, create_node::CreateNodeModal,
+            fast_capture::FastCaptureModal, help::HelpModal,
         },
         node_editor::NodeEditor,
         node_list::NodeList,
@@ -100,11 +98,9 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
         Signal::derive(move || !is_mobile.get() && collapsed_state.get());
 
     let mobile_open: RwSignal<bool> = RwSignal::new(false);
-    let show_capture = use_context::<ShowCapture>()
-        .expect("ShowCapture context missing")
-        .0;
+    let show_capture = expect_context::<ShowCapture>().0;
 
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
 
     let close_mobile = move || mobile_open.set(false);
 
@@ -132,16 +128,17 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     // path and doesn't care about input focus: ⌘K is a system-wide
     // affordance that should work even mid-edit.
     {
-        let _palette_handle = window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
-            if (ev.meta_key() || ev.ctrl_key())
-                && !ev.shift_key()
-                && !ev.alt_key()
-                && ev.key().eq_ignore_ascii_case("k")
-            {
-                ev.prevent_default();
-                show_palette.update(|v| *v = !*v);
-            }
-        });
+        let _palette_handle =
+            window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
+                if (ev.meta_key() || ev.ctrl_key())
+                    && !ev.shift_key()
+                    && !ev.alt_key()
+                    && ev.key().eq_ignore_ascii_case("k")
+                {
+                    ev.prevent_default();
+                    show_palette.update(|v| *v = !*v);
+                }
+            });
     }
 
     let handle = {
@@ -183,8 +180,10 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                     // Duplicate the currently open node (only when on /nodes/<uuid>).
                     let path = location.pathname.get_untracked();
                     let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-                    if segs.len() == 2 && segs[0] == "nodes"
-                        && let Ok(node_id) = segs[1].parse::<NodeId>() {
+                    if segs.len() == 2
+                        && segs[0] == "nodes"
+                        && let Ok(node_id) = segs[1].parse::<NodeId>()
+                    {
                         let nav = navigate.clone();
                         wasm_bindgen_futures::spawn_local(async move {
                             match crate::api::duplicate_node(node_id).await {
@@ -400,7 +399,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
 /// Sidebar header: banner icon + title + (?) help + dark-mode toggle.
 #[component]
 fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
-    let app_version = use_context::<AppVersion>().expect("AppVersion must be provided");
+    let app_version = expect_context::<AppVersion>();
     // v2.10.0 — discoverability for the `?` shortcut.  Optional via
     // use_context: any layout that doesn't provide ShowHelp just
     // doesn't render the button (no crash).
@@ -480,7 +479,8 @@ fn AuthGate(auth_state: AuthState, children: ChildrenFn) -> impl IntoView {
             <div class="flex items-center justify-center h-screen bg-stone-50 dark:bg-stone-950">
                 <div class="text-stone-400 dark:text-stone-500 text-sm">"Loading..."</div>
             </div>
-        }.into_any(),
+        }
+        .into_any(),
         AuthStatus::Unauthenticated => {
             wasm_bindgen_futures::spawn_local(async {
                 if let Ok(url) = crate::api::fetch_login_url().await

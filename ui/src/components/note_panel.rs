@@ -16,22 +16,41 @@ const INITIAL_VISIBLE: usize = 5;
 /// Each entry: (key, swatch inline-style, full Tailwind card classes).
 /// All card class strings are written out in full so Tailwind's scanner picks them up.
 const PALETTE: &[(&str, &str, &str)] = &[
-    ("default", "background:#e7e5e4",
-     "bg-stone-50 dark:bg-stone-900/50 border-stone-200 dark:border-stone-700"),
-    ("amber",   "background:#fef3c7",
-     "bg-amber-100 dark:bg-amber-950/60 border-amber-300 dark:border-amber-800"),
-    ("rose",    "background:#ffe4e6",
-     "bg-rose-100 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800"),
-    ("lime",    "background:#dcfce7",
-     "bg-lime-100 dark:bg-lime-950/60 border-lime-300 dark:border-lime-800"),
-    ("sky",     "background:#e0f2fe",
-     "bg-sky-100 dark:bg-sky-950/60 border-sky-300 dark:border-sky-800"),
-    ("violet",  "background:#ede9fe",
-     "bg-violet-100 dark:bg-violet-950/60 border-violet-300 dark:border-violet-800"),
+    (
+        "default",
+        "background:#e7e5e4",
+        "bg-stone-50 dark:bg-stone-900/50 border-stone-200 dark:border-stone-700",
+    ),
+    (
+        "amber",
+        "background:#fef3c7",
+        "bg-amber-100 dark:bg-amber-950/60 border-amber-300 dark:border-amber-800",
+    ),
+    (
+        "rose",
+        "background:#ffe4e6",
+        "bg-rose-100 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800",
+    ),
+    (
+        "lime",
+        "background:#dcfce7",
+        "bg-lime-100 dark:bg-lime-950/60 border-lime-300 dark:border-lime-800",
+    ),
+    (
+        "sky",
+        "background:#e0f2fe",
+        "bg-sky-100 dark:bg-sky-950/60 border-sky-300 dark:border-sky-800",
+    ),
+    (
+        "violet",
+        "background:#ede9fe",
+        "bg-violet-100 dark:bg-violet-950/60 border-violet-300 dark:border-violet-800",
+    ),
 ];
 
 fn palette_card_class(color: &str) -> &'static str {
-    PALETTE.iter()
+    PALETTE
+        .iter()
         .find(|(k, _, _)| *k == color)
         .map(|(_, _, cls)| *cls)
         .unwrap_or(PALETTE[0].2)
@@ -73,22 +92,42 @@ fn ColorPicker(selected: RwSignal<String>) -> impl IntoView {
 
 /// Pre-defined note structures — (label, Material Symbol icon name, markdown body).
 const NOTE_TEMPLATES: &[(&str, &str, &str)] = &[
-    ("meeting", "groups", "## Meeting Notes\n\n**Date:** \n**Attendees:** \n\n## Agenda\n\n1. \n\n## Decisions\n\n- \n\n## Action Items\n\n- [ ] "),
-    ("decision", "gavel", "## Decision Record\n\n**Status:** Proposed\n**Date:** \n\n## Context\n\n\n\n## Decision\n\n\n\n## Consequences\n\n- "),
-    ("status", "trending_up", "## Status Update\n\n**Period:** \n\n## Progress\n\n- \n\n## Blockers\n\n- \n\n## Next Steps\n\n- "),
-    ("checklist", "checklist", "## Checklist\n\n- [ ] \n- [ ] \n- [ ] "),
-    ("idea", "lightbulb", "## Idea\n\n**Problem:** \n\n**Proposed Solution:** \n\n**Open Questions:** \n\n- "),
+    (
+        "meeting",
+        "groups",
+        "## Meeting Notes\n\n**Date:** \n**Attendees:** \n\n## Agenda\n\n1. \n\n## Decisions\n\n- \n\n## Action Items\n\n- [ ] ",
+    ),
+    (
+        "decision",
+        "gavel",
+        "## Decision Record\n\n**Status:** Proposed\n**Date:** \n\n## Context\n\n\n\n## Decision\n\n\n\n## Consequences\n\n- ",
+    ),
+    (
+        "status",
+        "trending_up",
+        "## Status Update\n\n**Period:** \n\n## Progress\n\n- \n\n## Blockers\n\n- \n\n## Next Steps\n\n- ",
+    ),
+    (
+        "checklist",
+        "checklist",
+        "## Checklist\n\n- [ ] \n- [ ] \n- [ ] ",
+    ),
+    (
+        "idea",
+        "lightbulb",
+        "## Idea\n\n**Problem:** \n\n**Proposed Solution:** \n\n**Open Questions:** \n\n- ",
+    ),
 ];
 
 // ── NotePanel ─────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
-    let refresh   = RwSignal::new(0u32);
+    let refresh = RwSignal::new(0u32);
     let show_form = RwSignal::new(false);
-    let body      = RwSignal::new(String::new());
+    let body = RwSignal::new(String::new());
     let new_color = RwSignal::new("default".to_string());
-    let show_all  = RwSignal::new(false);
+    let show_all = RwSignal::new(false);
     let collapsed = RwSignal::new(false);
 
     // Arrived via a `/nodes/:id?note=<id>` deep-link from the Notes feed —
@@ -106,7 +145,8 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
 
     // Per-note saved editor heights (entity_id → px). Fetched once; the edit
     // textareas open at the saved height and persist a new height on resize.
-    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    let editor_heights =
+        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
     wasm_bindgen_futures::spawn_local(async move {
         if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
             editor_heights.set(
@@ -142,7 +182,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         });
     };
 
-    let on_add     = move |_| do_add();
+    let on_add = move |_| do_add();
     view! {
         <div class="border-t border-stone-200 dark:border-stone-800 pt-6">
             // ── Section header ────────────────────────────────────────────

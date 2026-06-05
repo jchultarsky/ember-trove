@@ -27,8 +27,7 @@ use crate::{
 
 /// Mounts under `/nodes/:node_id/tasks` and `/tasks`.
 pub fn node_task_router() -> Router<AppState> {
-    Router::new()
-        .route("/", get(list_tasks).post(create_task))
+    Router::new().route("/", get(list_tasks).post(create_task))
 }
 
 pub fn task_router() -> Router<AppState> {
@@ -69,10 +68,10 @@ pub fn dashboard_activity_router() -> Router<AppState> {
 /// (e.g. Feb 29 in non-leap year advances to Feb 28).
 fn advance_date(d: NaiveDate, rule: &RecurrenceRule) -> NaiveDate {
     match rule {
-        RecurrenceRule::Daily    => d + chrono::Duration::days(1),
-        RecurrenceRule::Weekly   => d + chrono::Duration::weeks(1),
+        RecurrenceRule::Daily => d + chrono::Duration::days(1),
+        RecurrenceRule::Weekly => d + chrono::Duration::weeks(1),
         RecurrenceRule::Biweekly => d + chrono::Duration::weeks(2),
-        RecurrenceRule::Monthly  => {
+        RecurrenceRule::Monthly => {
             let (y, m) = if d.month() == 12 {
                 (d.year() + 1, 1u32)
             } else {
@@ -82,11 +81,9 @@ fn advance_date(d: NaiveDate, rule: &RecurrenceRule) -> NaiveDate {
                 .or_else(|| NaiveDate::from_ymd_opt(y, m, 28))
                 .unwrap_or(d)
         }
-        RecurrenceRule::Yearly => {
-            NaiveDate::from_ymd_opt(d.year() + 1, d.month(), d.day())
-                .or_else(|| NaiveDate::from_ymd_opt(d.year() + 1, d.month(), 28))
-                .unwrap_or(d)
-        }
+        RecurrenceRule::Yearly => NaiveDate::from_ymd_opt(d.year() + 1, d.month(), d.day())
+            .or_else(|| NaiveDate::from_ymd_opt(d.year() + 1, d.month(), 28))
+            .unwrap_or(d),
     }
 }
 
@@ -246,11 +243,7 @@ async fn reorder_tasks(
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<ReorderTasksRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let updates: Vec<(TaskId, i32)> = req
-        .tasks
-        .iter()
-        .map(|e| (e.id, e.sort_order))
-        .collect();
+    let updates: Vec<(TaskId, i32)> = req.tasks.iter().map(|e| (e.id, e.sort_order)).collect();
     state.tasks.reorder(&updates, &claims.sub).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -326,7 +319,9 @@ async fn project_dashboard(
     // parents (PARA grouping, v2.9.0) in parallel.
     let (counts_result, open_result, activity_result, area_result) = tokio::join!(
         state.tasks.counts_for_nodes(&node_ids),
-        state.tasks.list_open_for_nodes(&node_ids, DASHBOARD_TASK_LIMIT),
+        state
+            .tasks
+            .list_open_for_nodes(&node_ids, DASHBOARD_TASK_LIMIT),
         state.tasks.max_task_updated_for_nodes(&node_ids),
         state.nodes.area_for_nodes(&node_ids),
     );
@@ -344,24 +339,29 @@ async fn project_dashboard(
         .map(|(project, area_id, area_title)| (project, (area_id, area_title)))
         .collect();
 
-    let empty = TaskCounts { open: 0, in_progress: 0, done: 0, cancelled: 0 };
+    let empty = TaskCounts {
+        open: 0,
+        in_progress: 0,
+        done: 0,
+        cancelled: 0,
+    };
     let mut entries: Vec<ProjectDashboardEntry> = projects
         .into_iter()
         .map(|n| {
             let node_status = format!("{:?}", n.status).to_lowercase();
-            let task_counts = counts_map.get(&n.id).cloned().unwrap_or_else(|| empty.clone());
-            let status_section = n.body.as_deref().and_then(|b| extract_section(b, "status"));
-            let (open_tasks, has_more_tasks) = open_map
+            let task_counts = counts_map
                 .get(&n.id)
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_else(|| empty.clone());
+            let status_section = n.body.as_deref().and_then(|b| extract_section(b, "status"));
+            let (open_tasks, has_more_tasks) = open_map.get(&n.id).cloned().unwrap_or_default();
             let last_activity_at = activity_map
                 .get(&n.id)
                 .copied()
                 .map_or(n.updated_at, |t| t.max(n.updated_at));
             let (area_id, area_title) = match area_map.get(&n.id) {
                 Some((aid, atitle)) => (Some(*aid), Some(atitle.clone())),
-                None                => (None, None),
+                None => (None, None),
             };
             ProjectDashboardEntry {
                 node_id: n.id,
@@ -409,9 +409,9 @@ async fn dashboard_activity(
     Extension(claims): Extension<AuthClaims>,
     Query(params): Query<DashboardActivityQuery>,
 ) -> Result<Json<Vec<common::activity::RecentActivityEntry>>, ApiError> {
-    let since = params.since.unwrap_or_else(|| {
-        chrono::Utc::now() - chrono::Duration::hours(48)
-    });
+    let since = params
+        .since
+        .unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::hours(48));
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let entries = state
         .activity

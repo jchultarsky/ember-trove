@@ -10,12 +10,12 @@
 //! system when something goes wrong.
 
 use axum::{
+    Extension, Json, Router,
     body::Body,
     extract::{Path, State},
     http::{StatusCode, header},
     response::Response,
     routing::{delete, get, post},
-    Extension, Json, Router,
 };
 use common::auth::AuthClaims;
 use serde::Deserialize;
@@ -29,12 +29,7 @@ struct CreateBackupRequest {
     comment: Option<String>,
 }
 
-use crate::{
-    auth::permissions::require_admin,
-    backup as svc,
-    error::ApiError,
-    state::AppState,
-};
+use crate::{auth::permissions::require_admin, backup as svc, error::ApiError, state::AppState};
 
 pub fn router() -> Router<AppState> {
     Router::new()

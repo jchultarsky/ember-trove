@@ -8,7 +8,10 @@ use crate::error::UiError;
 /// Mirrors the contract used by the service-worker share-target handler in
 /// `ui/public/sw.js` so an in-app capture and a Share Sheet capture both
 /// land in the same place.
-pub async fn quick_capture(title: &str, body: Option<&str>) -> Result<QuickCaptureResponse, UiError> {
+pub async fn quick_capture(
+    title: &str,
+    body: Option<&str>,
+) -> Result<QuickCaptureResponse, UiError> {
     let req = QuickCaptureRequest {
         title: Some(title.to_string()),
         body: body.map(str::to_owned),

@@ -31,16 +31,14 @@ use crate::app::TaskRefresh;
 use crate::components::format_helpers::format_relative_short;
 use crate::components::node_meta::{status_color, status_icon, status_label};
 use crate::components::task_common::priority_color_hex;
-use crate::components::toast::{push_toast, ToastLevel};
+use crate::components::toast::{ToastLevel, push_toast};
 use crate::markdown::render_markdown_plain;
 
 #[component]
 pub fn ProjectDashboard() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
 
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     // Refresh signal local to the dashboard so pin toggles refetch
     // both project list and the activity recap.
@@ -184,7 +182,8 @@ fn ActivityRecap(entries: Vec<RecentActivityEntry>) -> impl IntoView {
         return ().into_any();
     }
     let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    // Midnight is infallible via `NaiveTime::MIN`; avoids an `.unwrap()` on `and_hms_opt`.
+    let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
     let yesterday_start = today_start - Duration::days(1);
 
     let (today_entries, older): (Vec<_>, Vec<_>) = entries
@@ -219,7 +218,8 @@ fn ActivityRecap(entries: Vec<RecentActivityEntry>) -> impl IntoView {
                 })}
             </div>
         </section>
-    }.into_any()
+    }
+    .into_any()
 }
 
 #[component]
@@ -299,19 +299,23 @@ fn ProjectCard(
 
     let on_pin_click = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if pin_busy.get_untracked() { return; }
+        if pin_busy.get_untracked() {
+            return;
+        }
         let next = !pinned_sig.get_untracked();
-        pinned_sig.set(next);  // optimistic
+        pinned_sig.set(next); // optimistic
         pin_busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::set_node_pinned(node_id, next).await {
-                Ok(_)  => {
-                    push_toast(ToastLevel::Success,
-                        if next { "Pinned" } else { "Unpinned" });
+                Ok(_) => {
+                    push_toast(
+                        ToastLevel::Success,
+                        if next { "Pinned" } else { "Unpinned" },
+                    );
                     refresh.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    pinned_sig.set(!next);  // rollback
+                    pinned_sig.set(!next); // rollback
                     push_toast(ToastLevel::Error, format!("Pin failed: {e}"));
                 }
             }

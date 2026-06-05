@@ -57,8 +57,17 @@ struct RedirectResponse {
 async fn login(
     State(state): State<AppState>,
     jar: PrivateCookieJar,
-) -> Result<(PrivateCookieJar, [(header::HeaderName, &'static str); 1], Json<RedirectResponse>), ApiError> {
-    let oidc = state.oidc.as_ref()
+) -> Result<
+    (
+        PrivateCookieJar,
+        [(header::HeaderName, &'static str); 1],
+        Json<RedirectResponse>,
+    ),
+    ApiError,
+> {
+    let oidc = state
+        .oidc
+        .as_ref()
         .ok_or_else(|| ApiError::Internal("OIDC not configured — auth is disabled".to_string()))?;
 
     // PKCE: generate a 32-byte random code_verifier and derive the S256 challenge.
@@ -129,7 +138,10 @@ async fn callback(
     match try_callback(&app_state, jar, params).await {
         Ok((updated_jar, headers, html)) => (updated_jar, headers, html).into_response(),
         Err(e) => {
-            tracing::warn!(?e, "OAuth callback failed — redirecting to frontend to restart login");
+            tracing::warn!(
+                ?e,
+                "OAuth callback failed — redirecting to frontend to restart login"
+            );
             Redirect::to(&app_state.auth.frontend_url).into_response()
         }
     }
@@ -141,8 +153,17 @@ async fn try_callback(
     app_state: &AppState,
     jar: PrivateCookieJar,
     params: CallbackQuery,
-) -> Result<(PrivateCookieJar, [(header::HeaderName, &'static str); 1], Html<String>), ApiError> {
-    let oidc = app_state.oidc.as_ref()
+) -> Result<
+    (
+        PrivateCookieJar,
+        [(header::HeaderName, &'static str); 1],
+        Html<String>,
+    ),
+    ApiError,
+> {
+    let oidc = app_state
+        .oidc
+        .as_ref()
         .ok_or_else(|| ApiError::Internal("OIDC not configured — auth is disabled".to_string()))?;
 
     // Retrieve and consume the PKCE verifier from the server-side store.
@@ -150,7 +171,9 @@ async fn try_callback(
     // at the Cognito login screen, or the api container restarted between
     // /login and /callback). Treat as Unauthorized so the outer handler
     // redirects to a fresh login flow.
-    let oauth_state = params.state.as_deref()
+    let oauth_state = params
+        .state
+        .as_deref()
         .ok_or_else(|| ApiError::Unauthorized("missing oauth state".to_string()))?;
 
     // SECURITY (CSRF / session fixation): the `state` echoed back by the IdP
@@ -164,10 +187,15 @@ async fn try_callback(
         return Err(ApiError::Unauthorized("oauth state mismatch".to_string()));
     }
 
-    let code_verifier = app_state.pkce.take(oauth_state, PKCE_TTL).await?
-        .ok_or_else(|| ApiError::Unauthorized(
-            "PKCE verifier not found (login expired or server restarted)".to_string()
-        ))?;
+    let code_verifier = app_state
+        .pkce
+        .take(oauth_state, PKCE_TTL)
+        .await?
+        .ok_or_else(|| {
+            ApiError::Unauthorized(
+                "PKCE verifier not found (login expired or server restarted)".to_string(),
+            )
+        })?;
 
     let redirect_uri = format!("{}/api/auth/callback", app_state.auth.api_external_url);
     let token_resp = oidc
@@ -178,7 +206,9 @@ async fn try_callback(
     // cognito:groups which the auth middleware needs.  Fall back to access_token
     // for providers that don't issue a separate ID token.
     let cognito_access_token = token_resp.access_token;
-    let session_token = token_resp.id_token.unwrap_or_else(|| cognito_access_token.clone());
+    let session_token = token_resp
+        .id_token
+        .unwrap_or_else(|| cognito_access_token.clone());
 
     let secure = app_state.auth.cookie_secure;
 
@@ -200,7 +230,11 @@ async fn try_callback(
 
     // Clear the one-time OAuth state cookie now that it has served its purpose.
     let mut updated_jar = jar
-        .remove(Cookie::build((OAUTH_STATE_COOKIE, "")).path("/api/auth").build())
+        .remove(
+            Cookie::build((OAUTH_STATE_COOKIE, ""))
+                .path("/api/auth")
+                .build(),
+        )
         .add(session_cookie)
         .add(cognito_access_cookie);
 
@@ -234,7 +268,9 @@ async fn refresh(
     State(state): State<AppState>,
     jar: PrivateCookieJar,
 ) -> Result<(PrivateCookieJar, Json<serde_json::Value>), ApiError> {
-    let oidc = state.oidc.as_ref()
+    let oidc = state
+        .oidc
+        .as_ref()
         .ok_or_else(|| ApiError::Internal("OIDC not configured".to_string()))?;
 
     let refresh_token = jar
@@ -287,8 +323,16 @@ async fn logout(
 
     let updated_jar = jar
         .remove(Cookie::build((SESSION_COOKIE, "")).path("/").build())
-        .remove(Cookie::build((REFRESH_COOKIE, "")).path("/api/auth/refresh").build())
-        .remove(Cookie::build((ACCESS_COOKIE, "")).path("/api/auth/change-password").build());
+        .remove(
+            Cookie::build((REFRESH_COOKIE, ""))
+                .path("/api/auth/refresh")
+                .build(),
+        )
+        .remove(
+            Cookie::build((ACCESS_COOKIE, ""))
+                .path("/api/auth/change-password")
+                .build(),
+        );
 
     // Redirect through Cognito's end-session endpoint so the SSO session cookie
     // at the Cognito domain is cleared.  Without this the browser is silently
@@ -316,15 +360,20 @@ async fn change_password(
     let access_token = jar
         .get(ACCESS_COOKIE)
         .map(|c| c.value().to_string())
-        .ok_or_else(|| ApiError::Unauthorized(
-            "access token cookie missing — please log out and back in".to_string()
-        ))?;
+        .ok_or_else(|| {
+            ApiError::Unauthorized(
+                "access token cookie missing — please log out and back in".to_string(),
+            )
+        })?;
 
     // Call Cognito ChangePassword — requires the access token (not ID token).
-    let oidc = state.oidc.as_ref()
+    let oidc = state
+        .oidc
+        .as_ref()
         .ok_or_else(|| ApiError::Internal("OIDC not configured".to_string()))?;
 
-    oidc.change_password(&access_token, &body.current_password, &body.new_password).await?;
+    oidc.change_password(&access_token, &body.current_password, &body.new_password)
+        .await?;
 
     Ok(Json(serde_json::json!({"ok": true})))
 }

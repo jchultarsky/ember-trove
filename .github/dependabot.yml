@@ -1,0 +1,32 @@
+# Dependabot — automated dependency PRs.
+# Targets `develop` (Git Flow: all changes land on develop first, never main).
+# Conventional-commit prefixes keep history consistent with the rest of the repo.
+version: 2
+updates:
+  # Rust crates (workspace + member manifests).
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: develop
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Batch low-risk minor/patch bumps into one PR to cut noise; majors stay separate.
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions — keeps the SHA pins in .github/workflows/* current (Dependabot
+  # updates both the pinned SHA and the trailing `# vX` comment).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    target-branch: develop
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci(deps)"
+    groups:
+      actions-all:
+        update-types: ["minor", "patch"]

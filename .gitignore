@@ -2,7 +2,17 @@
 /dist
 ui/dist/
 /.sqlx
-.claude/
+
+# Claude Code: ignore local state (settings.local.json, session/plan caches),
+# but TRACK the shared knowledge files CLAUDE.md references. Use `.claude/*`
+# (not `.claude/`) so the per-entry negations below take effect — git cannot
+# re-include a path whose parent directory is excluded.
+.claude/*
+!.claude/POLICY.md
+!.claude/ERRORS.md
+!.claude/ROADMAP.md
+!.claude/rules/
+!.claude/patterns/
 
 # ── Secrets & environment ─────────────────────────────────────────────────────
 *.env

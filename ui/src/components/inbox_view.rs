@@ -22,14 +22,14 @@ use crate::components::task_common::{
     priority_dot_color, priority_label, priority_value, recurrence_label, recurrence_value,
     status_done, status_value,
 };
-use crate::components::toast::{push_toast, ToastLevel};
+use crate::components::toast::{ToastLevel, push_toast};
 use crate::focus_task::schedule_focus_task;
 
 // ── InboxView ─────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn InboxView() -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>().expect("TaskRefresh context missing");
+    let task_refresh = expect_context::<TaskRefresh>();
     let refresh = task_refresh.0;
 
     // If we got here via the iOS Web Share Target SW handler (which 303s to
@@ -37,9 +37,15 @@ pub fn InboxView() -> impl IntoView {
     // confirm the capture with a toast and strip the marker from the URL so
     // a refresh doesn't re-fire it.  Runs once per mount.
     Effect::new(move |run_count: Option<()>| {
-        if run_count.is_some() { return; }
-        let Some(win) = web_sys::window() else { return; };
-        let Ok(href) = win.location().href() else { return; };
+        if run_count.is_some() {
+            return;
+        }
+        let Some(win) = web_sys::window() else {
+            return;
+        };
+        let Ok(href) = win.location().href() else {
+            return;
+        };
         if let Ok(url) = web_sys::Url::new(&href) {
             let params = url.search_params();
             if params.get("captured").as_deref() == Some("1") {
@@ -75,12 +81,16 @@ pub fn InboxView() -> impl IntoView {
     });
 
     // Per-task saved inline-edit heights, provided to the InboxTaskRows.
-    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
-    provide_context(crate::components::task_row::TaskEditorHeights(editor_heights));
+    let editor_heights =
+        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    provide_context(crate::components::task_row::TaskEditorHeights(
+        editor_heights,
+    ));
     wasm_bindgen_futures::spawn_local(async move {
         if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
             editor_heights.set(
-                prefs.into_iter()
+                prefs
+                    .into_iter()
                     .filter(|p| p.entity_kind == "task")
                     .map(|p| (p.entity_id, p.height))
                     .collect(),
@@ -185,17 +195,17 @@ pub fn InboxView() -> impl IntoView {
 #[component]
 fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let task_id = task.id;
-    let today   = crate::components::format_helpers::local_today();
+    let today = crate::components::format_helpers::local_today();
 
-    let status_val   = RwSignal::new(status_value(&task.status).to_string());
+    let status_val = RwSignal::new(status_value(&task.status).to_string());
     let priority_val = RwSignal::new(priority_value(&task.priority).to_string());
 
     // Inline-edit state
-    let editing         = RwSignal::new(false);
-    let orig_title      = RwSignal::new(task.title.clone());
-    let edit_title      = RwSignal::new(task.title.clone());
-    let edit_priority   = RwSignal::new(priority_value(&task.priority).to_string());
-    let edit_due        = RwSignal::new(
+    let editing = RwSignal::new(false);
+    let orig_title = RwSignal::new(task.title.clone());
+    let edit_title = RwSignal::new(task.title.clone());
+    let edit_priority = RwSignal::new(priority_value(&task.priority).to_string());
+    let edit_due = RwSignal::new(
         task.due_date
             .map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default(),
@@ -212,10 +222,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let in_my_day = RwSignal::new(is_in_my_day(&task, today));
 
     // Node-picker state
-    let assigning      = RwSignal::new(false);
-    let picker_query   = RwSignal::new(String::new());
+    let assigning = RwSignal::new(false);
+    let picker_query = RwSignal::new(String::new());
     let picker_results = RwSignal::<Vec<SearchResult>>::new(vec![]);
-    let pick_ver       = RwSignal::new(0u32);
+    let pick_ver = RwSignal::new(0u32);
 
     // Debounced search
     Effect::new(move |_| {
@@ -228,7 +238,9 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         let ver = pick_ver.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(300).await;
-            if pick_ver.get_untracked() != ver { return; }
+            if pick_ver.get_untracked() != ver {
+                return;
+            }
             if let Ok(results) = crate::api::node_picker_search(&q).await
                 && pick_ver.get_untracked() == ver
             {
@@ -242,8 +254,12 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         picker_query.set(String::new());
         picker_results.set(vec![]);
         let req = UpdateTaskRequest {
-            title: None, status: None, priority: None,
-            focus_date: None, due_date: None, recurrence: None,
+            title: None,
+            status: None,
+            priority: None,
+            focus_date: None,
+            due_date: None,
+            recurrence: None,
             node_id: Some(Some(node_id)),
         };
         wasm_bindgen_futures::spawn_local(async move {
@@ -254,15 +270,18 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
 
     let has_recurrence = task.recurrence.is_some();
     let recurrence_tip = task.recurrence.as_ref().map(|r| recurrence_label(r));
-    let overdue        = task.due_date
+    let overdue = task
+        .due_date
         .map(|d| !status_done(&task.status) && d < today)
         .unwrap_or(false);
     let due = task.due_date;
 
     let do_save = move || {
         let new_title = edit_title.get_untracked().trim().to_string();
-        if new_title.is_empty() { return; }
-        let new_priority   = parse_priority(&edit_priority.get_untracked());
+        if new_title.is_empty() {
+            return;
+        }
+        let new_priority = parse_priority(&edit_priority.get_untracked());
         let new_recurrence = parse_recurrence_opt(&edit_recurrence.get_untracked());
         let new_due: Option<Option<NaiveDate>> =
             Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
@@ -270,13 +289,13 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         orig_title.set(new_title.clone());
         priority_val.set(priority_value(&new_priority).to_string());
         let req = UpdateTaskRequest {
-            title:      Some(new_title),
-            status:     None,
-            priority:   Some(new_priority),
+            title: Some(new_title),
+            status: None,
+            priority: Some(new_priority),
             focus_date: None,
-            due_date:   new_due,
+            due_date: new_due,
             recurrence: Some(new_recurrence),
-            node_id:    None,
+            node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             let _ = crate::api::update_task(task_id, &req).await;
@@ -286,11 +305,15 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
 
     let on_toggle = move |_| {
         let current = status_val.get_untracked();
-        let next    = if current == "done" { "open" } else { "done" };
+        let next = if current == "done" { "open" } else { "done" };
         let req = UpdateTaskRequest {
-            title: None, status: Some(parse_status(next)),
-            priority: None, focus_date: None, due_date: None,
-            recurrence: None, node_id: None,
+            title: None,
+            status: Some(parse_status(next)),
+            priority: None,
+            focus_date: None,
+            due_date: None,
+            recurrence: None,
+            node_id: None,
         };
         status_val.set(next.to_string());
         wasm_bindgen_futures::spawn_local(async move {
@@ -301,12 +324,20 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
 
     let on_toggle_my_day = move |_| {
         let currently_in = in_my_day.get_untracked();
-        let new_focus = if currently_in { Some(None) } else { Some(Some(today)) };
+        let new_focus = if currently_in {
+            Some(None)
+        } else {
+            Some(Some(today))
+        };
         in_my_day.set(!currently_in);
         let req = UpdateTaskRequest {
-            title: None, status: None, priority: None,
-            focus_date: new_focus, due_date: None,
-            recurrence: None, node_id: None,
+            title: None,
+            status: None,
+            priority: None,
+            focus_date: new_focus,
+            due_date: None,
+            recurrence: None,
+            node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             let _ = crate::api::update_task(task_id, &req).await;

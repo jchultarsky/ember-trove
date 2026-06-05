@@ -15,7 +15,7 @@ use leptos_router::hooks::use_navigate;
 
 // localStorage keys for each sub-group's expand state.  Default false
 // (collapsed) so the sidebar stays compact as the lists grow.
-const LS_WEB_EXPANDED:   &str = "et.fav.web.expanded";
+const LS_WEB_EXPANDED: &str = "et.fav.web.expanded";
 const LS_NODES_EXPANDED: &str = "et.fav.nodes.expanded";
 
 fn read_expanded(key: &str) -> bool {
@@ -36,16 +36,18 @@ pub fn FavoritesSection(collapsed: SidebarCollapsed, on_nav: Callback<()>) -> im
 
     // Expand state for the two sub-groups — persisted per-user in
     // localStorage so each section remembers its own state across reloads.
-    let web_expanded   = RwSignal::new(read_expanded(LS_WEB_EXPANDED));
+    let web_expanded = RwSignal::new(read_expanded(LS_WEB_EXPANDED));
     let nodes_expanded = RwSignal::new(read_expanded(LS_NODES_EXPANDED));
-    Effect::new(move |_| write_expanded(LS_WEB_EXPANDED,   web_expanded.get()));
+    Effect::new(move |_| write_expanded(LS_WEB_EXPANDED, web_expanded.get()));
     Effect::new(move |_| write_expanded(LS_NODES_EXPANDED, nodes_expanded.get()));
 
     // Re-fetch whenever NodeView pins/unpins a node (FavoritesRefresh bumped).
     let fav_refresh = use_context::<FavoritesRefresh>().map(|fr| fr.0);
     Effect::new(move |_| {
         // Track the refresh counter so this effect re-runs on every bump.
-        if let Some(r) = fav_refresh { let _ = r.get(); }
+        if let Some(r) = fav_refresh {
+            let _ = r.get();
+        }
         spawn_local(async move {
             if let Ok(favs) = fetch_favorites().await {
                 favorites.set(favs);
@@ -56,7 +58,9 @@ pub fn FavoritesSection(collapsed: SidebarCollapsed, on_nav: Callback<()>) -> im
     let on_added = Callback::new(move |fav: Favorite| {
         favorites.update(|list| list.push(fav));
         // Bump FavoritesRefresh so any open NodeView re-fetches and syncs its pin button.
-        if let Some(r) = fav_refresh { r.update(|n| *n += 1); }
+        if let Some(r) = fav_refresh {
+            r.update(|n| *n += 1);
+        }
     });
 
     let on_delete = Callback::new(move |id: FavoriteId| {
@@ -319,7 +323,7 @@ fn FavoriteRow(
 ) -> impl IntoView {
     let navigate = use_navigate();
     let label2 = label.clone();
-    let url2   = url.clone();
+    let url2 = url.clone();
     let is_url = url.is_some();
 
     let handle_click = move || {

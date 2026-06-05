@@ -21,7 +21,10 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_links).post(create_link))
-        .route("/{link_id}", axum::routing::put(update_link).delete(delete_link))
+        .route(
+            "/{link_id}",
+            axum::routing::put(update_link).delete(delete_link),
+        )
 }
 
 async fn list_links(
@@ -40,7 +43,8 @@ async fn create_link(
     Path(node_id): Path<Uuid>,
     Json(req): Json<CreateNodeLinkRequest>,
 ) -> Result<(StatusCode, Json<NodeLink>), ApiError> {
-    req.validate().map_err(|e| ApiError::Validation(e.to_string()))?;
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     require_editor(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     let link = state.node_links.create(NodeId(node_id), req).await?;
     Ok((StatusCode::CREATED, Json(link)))
@@ -52,7 +56,8 @@ async fn update_link(
     Path((node_id, link_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<UpdateNodeLinkRequest>,
 ) -> Result<Json<NodeLink>, ApiError> {
-    req.validate().map_err(|e| ApiError::Validation(e.to_string()))?;
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     require_editor(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     let link = state
         .node_links

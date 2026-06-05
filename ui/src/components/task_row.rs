@@ -44,7 +44,7 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
 };
-use crate::components::toast::{push_toast, ToastLevel};
+use crate::components::toast::{ToastLevel, push_toast};
 
 /// Which zone of the Kanban this row currently lives in.  Determines which
 /// zone-swap button (× Remove vs ☀ Add) is shown and the colour of the
@@ -92,13 +92,17 @@ pub fn KanbanTaskRow(
     zone: KanbanZone,
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
-    let task_id   = task.id;
-    let node_id   = task.node_id;
-    let priority  = task.priority.clone();
-    let due       = task.due_date;
-    let focus     = task.focus_date;
-    let parent    = node_title.unwrap_or_else(|| "Inbox".to_string());
-    let node_icon = if task.node_id.is_some() { "rocket_launch" } else { "inbox" };
+    let task_id = task.id;
+    let node_id = task.node_id;
+    let priority = task.priority.clone();
+    let due = task.due_date;
+    let focus = task.focus_date;
+    let parent = node_title.unwrap_or_else(|| "Inbox".to_string());
+    let node_icon = if task.node_id.is_some() {
+        "rocket_launch"
+    } else {
+        "inbox"
+    };
 
     // Display state — title shows the latest known value (may be edited).
     let title_sig = RwSignal::new(task.title.clone());
@@ -114,21 +118,23 @@ pub fn KanbanTaskRow(
     let focused_ctx: Option<FocusedTaskId> = use_context();
     let editing_ctx: Option<EditingTaskId> = use_context();
     let editing_local: RwSignal<Option<TaskId>> = RwSignal::new(None);
-    let editing_id_sig: RwSignal<Option<TaskId>> = editing_ctx
-        .map(|e| e.0)
-        .unwrap_or(editing_local);
+    let editing_id_sig: RwSignal<Option<TaskId>> =
+        editing_ctx.map(|e| e.0).unwrap_or(editing_local);
     // Derived: is *this* row currently focused / editing?
-    let is_focused = move || focused_ctx
-        .map(|f| f.0.get() == Some(task_id))
-        .unwrap_or(false);
+    let is_focused = move || {
+        focused_ctx
+            .map(|f| f.0.get() == Some(task_id))
+            .unwrap_or(false)
+    };
     let is_editing = move || editing_id_sig.get() == Some(task_id);
 
     // Inline edit form state.  Mirrors the original MyDayTaskRow layout
     // minus the focus_date field (focus is binary, owned by zone-swap).
-    let edit_title      = RwSignal::new(task.title.clone());
-    let edit_priority   = RwSignal::new(priority_value(&priority).to_string());
-    let edit_due        = RwSignal::new(
-        due.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default(),
+    let edit_title = RwSignal::new(task.title.clone());
+    let edit_priority = RwSignal::new(priority_value(&priority).to_string());
+    let edit_due = RwSignal::new(
+        due.map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default(),
     );
     let edit_recurrence = RwSignal::new(
         task.recurrence
@@ -149,12 +155,18 @@ pub fn KanbanTaskRow(
     // ── Mutations ─────────────────────────────────────────────────────
 
     let patch_focus = move |new_focus: Option<NaiveDate>, success_msg: &'static str| {
-        if busy.get_untracked() { return; }
+        if busy.get_untracked() {
+            return;
+        }
         busy.set(true);
         let req = UpdateTaskRequest {
-            title: None, status: None, priority: None,
+            title: None,
+            status: None,
+            priority: None,
             focus_date: Some(new_focus),
-            due_date: None, recurrence: None, node_id: None,
+            due_date: None,
+            recurrence: None,
+            node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             let result = crate::api::update_task(task_id, &req).await;
@@ -171,7 +183,9 @@ pub fn KanbanTaskRow(
 
     let on_toggle_done = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if busy.get_untracked() { return; }
+        if busy.get_untracked() {
+            return;
+        }
         let next = if status_done(&status_sig.get_untracked()) {
             TaskStatus::Open
         } else {
@@ -180,8 +194,13 @@ pub fn KanbanTaskRow(
         status_sig.set(next.clone());
         busy.set(true);
         let req = UpdateTaskRequest {
-            title: None, status: Some(next), priority: None,
-            focus_date: None, due_date: None, recurrence: None, node_id: None,
+            title: None,
+            status: Some(next),
+            priority: None,
+            focus_date: None,
+            due_date: None,
+            recurrence: None,
+            node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             let _ = crate::api::update_task(task_id, &req).await;
@@ -192,7 +211,9 @@ pub fn KanbanTaskRow(
 
     let on_delete = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if busy.get_untracked() { return; }
+        if busy.get_untracked() {
+            return;
+        }
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
             let _ = crate::api::delete_task(task_id).await;
@@ -210,26 +231,27 @@ pub fn KanbanTaskRow(
 
     let do_save = move || {
         let new_title = edit_title.get_untracked().trim().to_string();
-        if new_title.is_empty() { return; }
-        let new_priority   = parse_priority(&edit_priority.get_untracked());
+        if new_title.is_empty() {
+            return;
+        }
+        let new_priority = parse_priority(&edit_priority.get_untracked());
         let new_recurrence = parse_recurrence_opt(&edit_recurrence.get_untracked());
-        let new_due: Option<Option<NaiveDate>> = Some(
-            edit_due.get_untracked().trim().parse::<NaiveDate>().ok(),
-        );
+        let new_due: Option<Option<NaiveDate>> =
+            Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         let req = UpdateTaskRequest {
-            title:      Some(new_title.clone()),
-            status:     None,
-            priority:   Some(new_priority),
+            title: Some(new_title.clone()),
+            status: None,
+            priority: Some(new_priority),
             focus_date: None,
-            due_date:   new_due,
+            due_date: new_due,
             recurrence: Some(new_recurrence),
-            node_id:    None,
+            node_id: None,
         };
         title_sig.set(new_title);
         editing_id_sig.set(None);
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {
-                Ok(_)  => {
+                Ok(_) => {
                     push_toast(ToastLevel::Success, "Saved");
                     refresh.update(|n| *n += 1);
                 }
@@ -241,13 +263,17 @@ pub fn KanbanTaskRow(
     let on_row_click = move |_ev: web_sys::MouseEvent| {
         // Don't navigate while editing — clicks inside the edit form
         // would otherwise jump the user away mid-typing.
-        if editing_id_sig.get_untracked() == Some(task_id) { return; }
+        if editing_id_sig.get_untracked() == Some(task_id) {
+            return;
+        }
         // Mouse and keyboard share one focus cursor — clicking a row
         // moves the keyboard focus to it as well.
-        if let Some(f) = focused_ctx { f.0.set(Some(task_id)); }
+        if let Some(f) = focused_ctx {
+            f.0.set(Some(task_id));
+        }
         let target = match node_id {
             Some(nid) => format!("/nodes/{nid}?task={task_id}"),
-            None      => format!("/tasks/inbox?task={task_id}"),
+            None => format!("/tasks/inbox?task={task_id}"),
         };
         navigate.get_value()(&target, Default::default());
     };
@@ -263,13 +289,13 @@ pub fn KanbanTaskRow(
     // ── Render ────────────────────────────────────────────────────────
 
     let priority_dot = match priority {
-        TaskPriority::High   => Some("color:#ef4444;"),
+        TaskPriority::High => Some("color:#ef4444;"),
         TaskPriority::Medium => Some("color:#f59e0b;"),
-        TaskPriority::Low    => None,
+        TaskPriority::Low => None,
     };
 
     let zone_accent = match zone {
-        KanbanZone::Today   => "border-l-2 border-amber-400",
+        KanbanZone::Today => "border-l-2 border-amber-400",
         KanbanZone::Backlog => "border-l-2 border-stone-200 dark:border-stone-700",
     };
 

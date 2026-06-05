@@ -28,16 +28,10 @@ pub trait PermissionRepo: Send + Sync {
     ) -> Result<Option<Permission>, EmberTroveError>;
 
     /// List all permissions, optionally filtered to a specific node.
-    async fn list_all(
-        &self,
-        node_id: Option<NodeId>,
-    ) -> Result<Vec<Permission>, EmberTroveError>;
+    async fn list_all(&self, node_id: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError>;
 
     /// Look up a single permission grant by its ID.
-    async fn find_by_id(
-        &self,
-        id: PermissionId,
-    ) -> Result<Option<Permission>, EmberTroveError>;
+    async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError>;
 
     /// Update the role on an existing permission by its ID.
     async fn update(
@@ -183,10 +177,7 @@ impl PermissionRepo for PgPermissionRepo {
         row.map(|r| r.into_permission()).transpose()
     }
 
-    async fn list_all(
-        &self,
-        node_id: Option<NodeId>,
-    ) -> Result<Vec<Permission>, EmberTroveError> {
+    async fn list_all(&self, node_id: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> {
         let rows = sqlx::query_as::<_, PermissionRow>(
             r#"
             SELECT id, node_id, subject_id, role::text, granted_by, created_at
@@ -203,10 +194,7 @@ impl PermissionRepo for PgPermissionRepo {
         rows.into_iter().map(|r| r.into_permission()).collect()
     }
 
-    async fn find_by_id(
-        &self,
-        id: PermissionId,
-    ) -> Result<Option<Permission>, EmberTroveError> {
+    async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError> {
         let row = sqlx::query_as::<_, PermissionRow>(
             r#"
             SELECT id, node_id, subject_id, role::text, granted_by, created_at
@@ -271,7 +259,11 @@ mod tests {
 
     #[test]
     fn role_to_str_and_back_round_trip() {
-        for role in [PermissionRole::Owner, PermissionRole::Editor, PermissionRole::Viewer] {
+        for role in [
+            PermissionRole::Owner,
+            PermissionRole::Editor,
+            PermissionRole::Viewer,
+        ] {
             let s = role_to_str(&role);
             let back = parse_role(s).expect("round-trip should succeed");
             assert_eq!(back, role);

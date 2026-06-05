@@ -1,8 +1,8 @@
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
-    Extension, Json, Router,
 };
 use common::{
     auth::AuthClaims,

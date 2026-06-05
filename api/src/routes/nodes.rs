@@ -1,9 +1,9 @@
 use axum::{
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
-    Extension, Json, Router,
 };
 use bytes::Bytes;
 use common::{
@@ -12,7 +12,10 @@ use common::{
     auth::AuthClaims,
     edge::EdgeWithTitles,
     id::{NodeId, NodeVersionId, PermissionId, TagId},
-    node::{CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeTitleEntry, UpdateNodeRequest},
+    node::{
+        CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeTitleEntry,
+        UpdateNodeRequest,
+    },
     node_version::NodeVersion,
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
     tag::Tag,
@@ -42,7 +45,8 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/tags/{tag_id}", post(attach_tag).delete(detach_tag))
         .route(
             "/{id}/attachments",
-            get(list_attachments).post(upload_attachment)
+            get(list_attachments)
+                .post(upload_attachment)
                 .layer(DefaultBodyLimit::max(50 * 1024 * 1024)), // 50 MiB upload cap
         )
         .route(
@@ -158,7 +162,10 @@ async fn create_node(
 
     sync_wikilinks(&state, node.id, node.body.as_deref().unwrap_or("")).await?;
     let (action, meta) = if let Some(tid) = template_id {
-        (ActivityAction::CreatedFromTemplate, json!({ "title": node.title, "template_id": tid }))
+        (
+            ActivityAction::CreatedFromTemplate,
+            json!({ "title": node.title, "template_id": tid }),
+        )
     } else {
         (ActivityAction::Created, json!({ "title": node.title }))
     };
@@ -208,7 +215,14 @@ async fn update_node(
             tracing::warn!("node version snapshot failed (non-fatal): {e}");
         }
     });
-    log_activity(&state, node.id, &claims, ActivityAction::Edited, json!({ "title": node.title })).await;
+    log_activity(
+        &state,
+        node.id,
+        &claims,
+        ActivityAction::Edited,
+        json!({ "title": node.title }),
+    )
+    .await;
     Ok(Json(node))
 }
 
@@ -219,9 +233,21 @@ async fn delete_node(
 ) -> Result<StatusCode, ApiError> {
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     // Capture the title before deletion for the activity entry (cascade will remove it after).
-    let title = state.nodes.get(NodeId(id)).await.map(|n| n.title).unwrap_or_default();
+    let title = state
+        .nodes
+        .get(NodeId(id))
+        .await
+        .map(|n| n.title)
+        .unwrap_or_default();
     state.nodes.delete(NodeId(id)).await?;
-    log_activity(&state, NodeId(id), &claims, ActivityAction::Deleted, json!({ "title": title })).await;
+    log_activity(
+        &state,
+        NodeId(id),
+        &claims,
+        ActivityAction::Deleted,
+        json!({ "title": title }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -274,7 +300,14 @@ async fn attach_tag(
 ) -> Result<StatusCode, ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     state.tags.attach(NodeId(id), TagId(tag_id)).await?;
-    log_activity(&state, NodeId(id), &claims, ActivityAction::TagAdded, json!({ "tag_id": tag_id })).await;
+    log_activity(
+        &state,
+        NodeId(id),
+        &claims,
+        ActivityAction::TagAdded,
+        json!({ "tag_id": tag_id }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -285,7 +318,14 @@ async fn detach_tag(
 ) -> Result<StatusCode, ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     state.tags.detach(NodeId(id), TagId(tag_id)).await?;
-    log_activity(&state, NodeId(id), &claims, ActivityAction::TagRemoved, json!({ "tag_id": tag_id })).await;
+    log_activity(
+        &state,
+        NodeId(id),
+        &claims,
+        ActivityAction::TagRemoved,
+        json!({ "tag_id": tag_id }),
+    )
+    .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -596,7 +636,11 @@ pub(crate) async fn log_activity(
             obj.insert(k.clone(), v.clone());
         }
     }
-    if let Err(e) = state.activity.record(node_id, &claims.sub, action, meta).await {
+    if let Err(e) = state
+        .activity
+        .record(node_id, &claims.sub, action, meta)
+        .await
+    {
         tracing::warn!("activity log write failed (non-fatal): {e}");
     }
 }
@@ -677,11 +721,7 @@ async fn export_node(
                 node.created_at.format("%Y-%m-%dT%H:%M:%SZ"),
                 node.updated_at.format("%Y-%m-%dT%H:%M:%SZ"),
             );
-            let md = format!(
-                "{}{}",
-                front_matter,
-                node.body.as_deref().unwrap_or("")
-            );
+            let md = format!("{}{}", front_matter, node.body.as_deref().unwrap_or(""));
             let name = sanitize_filename(&format!("{}.md", node.title));
             (md, "text/markdown; charset=utf-8", name)
         }
@@ -745,7 +785,9 @@ async fn restore_version(
     let version = state.node_versions.get(NodeVersionId(version_id)).await?;
     // Verify the version belongs to this node.
     if version.node_id != NodeId(id) {
-        return Err(ApiError::NotFound("version does not belong to this node".to_string()));
+        return Err(ApiError::NotFound(
+            "version does not belong to this node".to_string(),
+        ));
     }
     let req = UpdateNodeRequest {
         title: None,
@@ -765,19 +807,21 @@ async fn restore_version(
             tracing::warn!("restore version snapshot failed (non-fatal): {e}");
         }
     });
-    log_activity(&state, node.id, &claims, ActivityAction::Edited, json!({ "title": node.title, "restored_from": version_id })).await;
+    log_activity(
+        &state,
+        node.id,
+        &claims,
+        ActivityAction::Edited,
+        json!({ "title": node.title, "restored_from": version_id }),
+    )
+    .await;
     Ok(Json(node))
 }
-
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve wiki-link titles in `body` to node IDs and sync `wiki_link` edges.
-async fn sync_wikilinks(
-    state: &AppState,
-    source_id: NodeId,
-    body: &str,
-) -> Result<(), ApiError> {
+async fn sync_wikilinks(state: &AppState, source_id: NodeId, body: &str) -> Result<(), ApiError> {
     let titles = parse_wikilink_titles(body);
     // Resolve all wiki-link titles in a single batched query rather than one
     // round-trip per title on every node save.
@@ -831,7 +875,11 @@ async fn duplicate_node(
         .map_err(|e| ApiError::Internal(format!("auto-grant owner permission failed: {e}")))?;
 
     // Copy tags from the source node.
-    let tags = state.tags.list_for_node(NodeId(id)).await.unwrap_or_default();
+    let tags = state
+        .tags
+        .list_for_node(NodeId(id))
+        .await
+        .unwrap_or_default();
     for tag in tags {
         let _ = state.tags.attach(dup.id, tag.id).await;
     }

@@ -1,8 +1,8 @@
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, put},
-    Extension, Json, Router,
 };
 use common::{
     auth::AuthClaims,
@@ -21,7 +21,12 @@ use crate::{
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_templates).post(create_template))
-        .route("/{id}", get(get_template).put(update_template).delete(delete_template))
+        .route(
+            "/{id}",
+            get(get_template)
+                .put(update_template)
+                .delete(delete_template),
+        )
         .route("/{id}/set-default", put(set_default_template))
 }
 
@@ -54,7 +59,8 @@ async fn create_template(
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateTemplateRequest>,
 ) -> Result<(StatusCode, Json<NodeTemplate>), ApiError> {
-    req.validate().map_err(|e| ApiError::Validation(e.to_string()))?;
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     let template = state.templates.create(&claims.sub, req).await?;
     Ok((StatusCode::CREATED, Json(template)))
 }
@@ -67,7 +73,8 @@ async fn update_template(
 ) -> Result<Json<NodeTemplate>, ApiError> {
     let existing = state.templates.get(TemplateId(id)).await?;
     require_resource_owner(&claims, &existing.created_by)?;
-    req.validate().map_err(|e| ApiError::Validation(e.to_string()))?;
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     let template = state.templates.update(TemplateId(id), req).await?;
     Ok(Json(template))
 }

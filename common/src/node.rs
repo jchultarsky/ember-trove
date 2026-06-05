@@ -41,7 +41,6 @@ pub struct Node {
     pub edge_count: u32,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CreateNodeRequest {
     #[garde(length(min = 1, max = 500))]

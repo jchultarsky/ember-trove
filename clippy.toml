@@ -1,0 +1,10 @@
+# Clippy configuration for Ember Trove.
+#
+# The zero-panic policy (CLAUDE.md / .claude/POLICY.md §3) is enforced as lints in
+# `[workspace.lints.clippy]` (root Cargo.toml): `unwrap_used`, `expect_used`, and
+# `panic` are denied. Test code is exempt — assertions there *should* panic on
+# failure — so we opt into the standard in-test allowances below rather than
+# sprinkling `#[allow(...)]` across every `mod tests`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

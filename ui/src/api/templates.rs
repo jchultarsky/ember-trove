@@ -26,6 +26,8 @@ pub async fn delete_template(id: uuid::Uuid) -> Result<(), UiError> {
 ///
 /// Returns the updated `NodeTemplate` (with `is_default` reflecting the new
 /// state).  Only the template's creator may call this successfully.
-pub async fn set_template_default(id: uuid::Uuid) -> Result<common::template::NodeTemplate, UiError> {
+pub async fn set_template_default(
+    id: uuid::Uuid,
+) -> Result<common::template::NodeTemplate, UiError> {
     put_action_json(&format!("/templates/{id}/set-default")).await
 }

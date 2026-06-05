@@ -33,16 +33,26 @@ See [README.md](README.md) for the full step-by-step local development guide, in
 
 ---
 
-## Guardrails (see CLAUDE.md)
+## Guardrails (see [`.claude/POLICY.md`](.claude/POLICY.md) for the full policy)
 
-- **Zero panics** — no `.unwrap()`, no `panic!`. Use `?` everywhere.
-- **`thiserror`** for all custom error types.
-- **TDD** — write a failing test first.
-- Run before every commit:
+- **Plan first** for anything beyond a one-line fix; **reuse** existing code (grep before writing).
+- **Zero panics** — no `.unwrap()`/`.expect()`/`panic!` in non-test code. Use `?` everywhere.
+- **`thiserror`** for library error types; **`anyhow`** for application glue.
+- **TDD** — write a failing test first; new code and bug fixes land with tests.
+- **Research crates** (docs.rs, MSRV, license, advisories) before adding one; prefer `std`
+  and existing `[workspace.dependencies]`. Track the latest **stable** Rust.
+
+**Install the git hooks once**, then they run the gates for you:
 
 ```bash
-cargo check && cargo clippy -- -D warnings && cargo fmt --check
-cargo test
+make hooks-install   # pre-commit: cargo fmt --all --check + clippy; pre-push: cargo test
+```
+
+Formatting is enforced (default `rustfmt`, edition 2024). Run the full suite anytime with
+`make verify` (or `./scripts/verify.sh`):
+
+```bash
+cargo fmt --all --check && cargo clippy -- -D warnings && cargo check && cargo test
 ```
 
 ---

@@ -3,8 +3,8 @@ use leptos::prelude::*;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::modals::delete_confirm::DeleteConfirmModal;
-use leptos_router::hooks::use_navigate;
 use crate::components::toast::{ToastLevel, push_toast};
+use leptos_router::hooks::use_navigate;
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -100,8 +100,7 @@ fn ColorPicker(
 #[component]
 pub fn TagManager() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let tag_filter_ctx =
-        use_context::<RwSignal<Option<Tag>>>().expect("tag_filter signal must be provided");
+    let tag_filter_ctx = expect_context::<RwSignal<Option<Tag>>>();
 
     let refresh = RwSignal::new(0u32);
     let search_q = RwSignal::new(String::new());
@@ -135,7 +134,10 @@ pub fn TagManager() -> impl IntoView {
         error_msg.set(None);
 
         wasm_bindgen_futures::spawn_local(async move {
-            let req = CreateTagRequest { name: name.clone(), color };
+            let req = CreateTagRequest {
+                name: name.clone(),
+                color,
+            };
             match crate::api::create_tag(&req).await {
                 Ok(_) => {
                     new_name.set(String::new());

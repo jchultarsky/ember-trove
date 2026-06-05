@@ -107,16 +107,13 @@ impl OidcClient {
         // Prefer the discovery doc's revocation_endpoint (RFC 7009).
         // Fall back to deriving it from the token endpoint for providers that
         // don't advertise it.
-        let revocation_endpoint = discovery
-            .revocation_endpoint
-            .clone()
-            .unwrap_or_else(|| {
-                discovery
-                    .token_endpoint
-                    .strip_suffix("/token")
-                    .map(|base| format!("{base}/revoke"))
-                    .unwrap_or_else(|| discovery.end_session_endpoint.clone())
-            });
+        let revocation_endpoint = discovery.revocation_endpoint.clone().unwrap_or_else(|| {
+            discovery
+                .token_endpoint
+                .strip_suffix("/token")
+                .map(|base| format!("{base}/revoke"))
+                .unwrap_or_else(|| discovery.end_session_endpoint.clone())
+        });
 
         tracing::info!(
             authorization_endpoint = %discovery.authorization_endpoint,
@@ -269,11 +266,10 @@ impl OidcClient {
     pub async fn validate_token(&self, token: &str) -> Result<OidcClaims, ApiError> {
         let jwks = self.get_jwks().await?;
 
-        let header = jsonwebtoken::decode_header(token)
-            .map_err(|e| {
-                tracing::warn!(%e, "JWT decode header failed");
-                ApiError::Unauthorized("invalid token".to_string())
-            })?;
+        let header = jsonwebtoken::decode_header(token).map_err(|e| {
+            tracing::warn!(%e, "JWT decode header failed");
+            ApiError::Unauthorized("invalid token".to_string())
+        })?;
 
         let kid = header
             .kid
@@ -289,11 +285,10 @@ impl OidcClient {
                 ApiError::Unauthorized("invalid token".to_string())
             })?;
 
-        let decoding_key = DecodingKey::from_jwk(jwk)
-            .map_err(|e| {
-                tracing::warn!(%e, %kid, "failed to derive decoding key from JWK");
-                ApiError::Unauthorized("invalid token".to_string())
-            })?;
+        let decoding_key = DecodingKey::from_jwk(jwk).map_err(|e| {
+            tracing::warn!(%e, %kid, "failed to derive decoding key from JWK");
+            ApiError::Unauthorized("invalid token".to_string())
+        })?;
 
         // Cognito ID tokens set `aud` to the App Client ID.
         // Validate it explicitly so tokens issued for other apps in the same
@@ -339,16 +334,21 @@ impl OidcClient {
         // Derive the Cognito service root from the token_endpoint URL.
         // token_endpoint: https://cognito-idp.<region>.amazonaws.com/<pool>/oauth2/token
         // service root:   https://cognito-idp.<region>.amazonaws.com/
-        let service_root = self.token_endpoint
+        let service_root = self
+            .token_endpoint
             .splitn(4, '/')
             .take(3)
             .collect::<Vec<_>>()
             .join("/");
 
-        let resp = self.http
+        let resp = self
+            .http
             .post(&service_root)
             .header("Content-Type", "application/x-amz-json-1.1")
-            .header("X-Amz-Target", "AWSCognitoIdentityProviderService.ChangePassword")
+            .header(
+                "X-Amz-Target",
+                "AWSCognitoIdentityProviderService.ChangePassword",
+            )
             .json(&serde_json::json!({
                 "AccessToken": access_token,
                 "PreviousPassword": previous_password,

@@ -7,7 +7,9 @@ pub async fn list_backups() -> Result<Vec<common::backup::BackupJob>, UiError> {
     get_json("/admin/backups").await
 }
 
-pub async fn create_backup_api(comment: Option<String>) -> Result<common::backup::BackupJob, UiError> {
+pub async fn create_backup_api(
+    comment: Option<String>,
+) -> Result<common::backup::BackupJob, UiError> {
     let builder = Request::post(&api_url("/admin/backups"));
     let resp = if let Some(ref c) = comment {
         builder
@@ -30,7 +32,9 @@ pub async fn delete_backup(id: uuid::Uuid) -> Result<(), UiError> {
     delete_empty(&format!("/admin/backups/{id}")).await
 }
 
-pub async fn preview_backup_restore(id: uuid::Uuid) -> Result<common::backup::BackupPreview, UiError> {
+pub async fn preview_backup_restore(
+    id: uuid::Uuid,
+) -> Result<common::backup::BackupPreview, UiError> {
     get_json(&format!("/admin/backups/{id}/preview")).await
 }
 

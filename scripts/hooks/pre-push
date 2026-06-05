@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Ember Trove pre-push hook — thorough gate run before sharing commits.
+#
+# Runs the test suite plus the WASM-target UI lint (the slower checks we keep out
+# of pre-commit). Mirrors the CI scope (`--workspace --exclude ui` for host tests;
+# ui is linted/built for wasm32). CI remains the final authority.
+#
+# Installed via `make hooks-install`. Emergency bypass: `git push --no-verify`.
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "pre-push: cargo not found — skipping Rust gates." >&2
+  exit 0
+fi
+
+echo "pre-push: cargo test --workspace --exclude ui"
+cargo test --workspace --exclude ui
+
+# Only lint the UI for wasm32 if the target is installed; otherwise warn, don't block.
+if rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then
+  echo "pre-push: cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings"
+  cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
+else
+  echo "pre-push: wasm32-unknown-unknown target not installed — skipping UI lint." >&2
+fi
+
+echo "pre-push: OK"

@@ -5,6 +5,19 @@ members  = ["api", "ui", "common"]
 default-members = ["api", "common"]
 resolver = "2"
 
+# Zero-panic policy (.claude/POLICY.md §3), enforced as lints rather than left to
+# code review. These are clippy *restriction* lints (allow-by-default), so they only
+# bite under `cargo clippy` — `cargo build`/`check` are unaffected. Test code is
+# exempted via `clippy.toml` (allow-*-in-tests). The sanctioned escape hatch for a
+# genuinely-infallible/invariant case is a localised `#[allow(clippy::..)]` with a
+# comment, NOT a blanket relaxation here. Each member opts in with `[lints] workspace
+# = true`. UI context lookups use Leptos `expect_context` (not `.expect()`) — see
+# `.claude/rules/leptos.md`.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic       = "deny"
+
 [workspace.dependencies]
 # Logging
 tracing            = "0.1"

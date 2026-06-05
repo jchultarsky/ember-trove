@@ -90,9 +90,9 @@ fn parse_tag_ids(tag_ids: &Option<String>) -> Vec<Uuid> {
 fn sort_clause(sort: &Option<String>, has_rank: bool) -> &'static str {
     match sort.as_deref() {
         Some("updated_desc") => "ORDER BY updated_at DESC, title",
-        Some("updated_asc")  => "ORDER BY updated_at ASC, title",
-        Some("title_asc")    => "ORDER BY title ASC",
-        Some("title_desc")   => "ORDER BY title DESC",
+        Some("updated_asc") => "ORDER BY updated_at ASC, title",
+        Some("title_asc") => "ORDER BY title ASC",
+        Some("title_desc") => "ORDER BY title DESC",
         _ => {
             if has_rank {
                 "ORDER BY rank DESC, title"
@@ -120,9 +120,11 @@ impl SearchRepo for PgSearchRepo {
         // Convert NaiveDate bounds to UTC datetime bounds.
         // updated_after → start of that day (00:00:00 UTC)
         // updated_before → start of the *next* day (exclusive upper bound)
-        let after_dt: Option<DateTime<Utc>> = query.updated_after
+        let after_dt: Option<DateTime<Utc>> = query
+            .updated_after
             .map(|d| d.and_time(NaiveTime::MIN).and_utc());
-        let before_dt: Option<DateTime<Utc>> = query.updated_before
+        let before_dt: Option<DateTime<Utc>> = query
+            .updated_before
             .and_then(|d| d.succ_opt())
             .map(|d| d.and_time(NaiveTime::MIN).and_utc());
 
@@ -238,9 +240,8 @@ impl PgSearchRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list nodes count failed: {e}")))?;
 
-        let rows = sqlx::query_as::<_, SearchRow>(
-            &format!(
-                r#"
+        let rows = sqlx::query_as::<_, SearchRow>(&format!(
+            r#"
                 SELECT
                     id,
                     title,
@@ -270,9 +271,8 @@ impl PgSearchRepo {
                 {order}
                 LIMIT $7 OFFSET $8
                 "#,
-                order = sort_clause(sort, false),
-            ),
-        )
+            order = sort_clause(sort, false),
+        ))
         .bind(type_filter)
         .bind(status_filter)
         .bind(tag_ids)
@@ -580,9 +580,8 @@ impl PgSearchRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("fuzzy count failed: {e}")))?;
 
-        let rows = sqlx::query_as::<_, SearchRow>(
-            &format!(
-                r#"
+        let rows = sqlx::query_as::<_, SearchRow>(&format!(
+            r#"
                 WITH valid_nodes AS (
                     SELECT id FROM nodes
                     WHERE ($3::text IS NULL OR node_type = $3::node_type)
@@ -674,9 +673,8 @@ impl PgSearchRepo {
                 {order}
                 LIMIT $9 OFFSET $10
                 "#,
-                order = sort_clause(sort, true),
-            ),
-        )
+            order = sort_clause(sort, true),
+        ))
         .bind(q)
         .bind(&like_pattern)
         .bind(type_filter)
@@ -703,18 +701,18 @@ impl PgSearchRepo {
 
 fn node_type_to_str(t: &common::node::NodeType) -> &'static str {
     match t {
-        common::node::NodeType::Article   => "article",
-        common::node::NodeType::Project   => "project",
-        common::node::NodeType::Area      => "area",
-        common::node::NodeType::Resource  => "resource",
+        common::node::NodeType::Article => "article",
+        common::node::NodeType::Project => "project",
+        common::node::NodeType::Area => "area",
+        common::node::NodeType::Resource => "resource",
         common::node::NodeType::Reference => "reference",
     }
 }
 
 fn node_status_to_str(s: &common::node::NodeStatus) -> &'static str {
     match s {
-        common::node::NodeStatus::Draft     => "draft",
+        common::node::NodeStatus::Draft => "draft",
         common::node::NodeStatus::Published => "published",
-        common::node::NodeStatus::Archived  => "archived",
+        common::node::NodeStatus::Archived => "archived",
     }
 }

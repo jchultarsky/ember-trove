@@ -4,12 +4,12 @@ use crate::api::change_password;
 
 #[component]
 pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
-    let current   = RwSignal::new(String::new());
-    let proposed  = RwSignal::new(String::new());
+    let current = RwSignal::new(String::new());
+    let proposed = RwSignal::new(String::new());
     let confirmed = RwSignal::new(String::new());
-    let saving    = RwSignal::new(false);
-    let error     = RwSignal::new(Option::<String>::None);
-    let success   = RwSignal::new(false);
+    let saving = RwSignal::new(false);
+    let error = RwSignal::new(Option::<String>::None);
+    let success = RwSignal::new(false);
 
     let do_submit = move || {
         let cur = current.get_untracked();
@@ -25,7 +25,9 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
             return;
         }
         if new.len() < 8 {
-            error.set(Some("New password must be at least 8 characters.".to_string()));
+            error.set(Some(
+                "New password must be at least 8 characters.".to_string(),
+            ));
             return;
         }
 

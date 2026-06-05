@@ -5,7 +5,9 @@ use common::{
 use leptos::prelude::*;
 
 use crate::app::{storage_get, storage_set};
-use crate::components::node_meta::{status_color, status_icon, status_label, type_icon, type_label};
+use crate::components::node_meta::{
+    status_color, status_icon, status_label, type_icon, type_label,
+};
 use leptos_router::hooks::use_navigate;
 
 /// Sanitize `ts_headline` output to allow only `<b>` tags (search highlights).
@@ -13,10 +15,7 @@ use leptos_router::hooks::use_navigate;
 fn sanitize_highlight(html: &str) -> String {
     let mut tags = std::collections::HashSet::new();
     tags.insert("b");
-    ammonia::Builder::new()
-        .tags(tags)
-        .clean(html)
-        .to_string()
+    ammonia::Builder::new().tags(tags).clean(html).to_string()
 }
 
 // ── Search history (localStorage) ────────────────────────────────────────────
@@ -26,10 +25,12 @@ const HISTORY_MAX: usize = 20;
 
 fn load_history() -> Vec<String> {
     storage_get(HISTORY_KEY)
-        .map(|raw| raw.split('\n')
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect())
+        .map(|raw| {
+            raw.split('\n')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -39,7 +40,9 @@ fn save_history(items: &[String]) {
 
 fn push_history(query: &str) {
     let q = query.trim().to_string();
-    if q.is_empty() { return; }
+    if q.is_empty() {
+        return;
+    }
     let mut items = load_history();
     items.retain(|s| s != &q);
     items.insert(0, q);
@@ -68,12 +71,10 @@ fn clear_history() {
 #[component]
 pub fn SearchView() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let search_query =
-        use_context::<RwSignal<String>>().expect("search_query signal must be provided");
+    let search_query = expect_context::<RwSignal<String>>();
     // Initialise from global single-tag context (set by NodeList chip clicks),
     // then manage locally — no reactive subscription to the global signal.
-    let global_tag_filter =
-        use_context::<RwSignal<Option<Tag>>>().expect("tag_filter signal must be provided");
+    let global_tag_filter = expect_context::<RwSignal<Option<Tag>>>();
     let init_tags: Vec<Tag> = global_tag_filter.get_untracked().into_iter().collect();
 
     let tag_filters: RwSignal<Vec<Tag>> = RwSignal::new(init_tags);
@@ -94,9 +95,8 @@ pub fn SearchView() -> impl IntoView {
     let history: RwSignal<Vec<String>> = RwSignal::new(load_history());
 
     // Fetch all tags once for the picker.
-    let all_tags: LocalResource<Vec<Tag>> = LocalResource::new(|| async {
-        crate::api::fetch_tags().await.unwrap_or_default()
-    });
+    let all_tags: LocalResource<Vec<Tag>> =
+        LocalResource::new(|| async { crate::api::fetch_tags().await.unwrap_or_default() });
 
     // ── Search presets ────────────────────────────────────────────────────────
     let preset_refresh = RwSignal::new(0u32);
@@ -113,17 +113,21 @@ pub fn SearchView() -> impl IntoView {
         loading.set(true);
         error_msg.set(None);
         let is_fuzzy = fuzzy.get_untracked();
-        let status = if published_only.get_untracked() { Some("published") } else { None };
+        let status = if published_only.get_untracked() {
+            Some("published")
+        } else {
+            None
+        };
         let nt = node_type_filter.get_untracked();
         let sort_val = sort.get_untracked();
         let after_val = updated_after.get_untracked();
         let before_val = updated_before.get_untracked();
-        let tag_ids: Vec<uuid::Uuid> = tag_filters
-            .get_untracked()
-            .iter()
-            .map(|t| t.id.0)
-            .collect();
-        let tag_op = if tag_op_and.get_untracked() { "and" } else { "or" };
+        let tag_ids: Vec<uuid::Uuid> = tag_filters.get_untracked().iter().map(|t| t.id.0).collect();
+        let tag_op = if tag_op_and.get_untracked() {
+            "and"
+        } else {
+            "or"
+        };
         let current_page = page.get_untracked();
         search_version.update(|v| *v += 1);
         let version = search_version.get_untracked();
@@ -133,9 +137,21 @@ pub fn SearchView() -> impl IntoView {
             if search_version.get_untracked() != version {
                 return;
             }
-            let sort_str = if sort_val == "relevance" { None } else { Some(sort_val.as_str()) };
-            let after_str = if after_val.is_empty() { None } else { Some(after_val.as_str()) };
-            let before_str = if before_val.is_empty() { None } else { Some(before_val.as_str()) };
+            let sort_str = if sort_val == "relevance" {
+                None
+            } else {
+                Some(sort_val.as_str())
+            };
+            let after_str = if after_val.is_empty() {
+                None
+            } else {
+                Some(after_val.as_str())
+            };
+            let before_str = if before_val.is_empty() {
+                None
+            } else {
+                Some(before_val.as_str())
+            };
             match crate::api::search_nodes(
                 &q,
                 is_fuzzy,
@@ -174,15 +190,15 @@ pub fn SearchView() -> impl IntoView {
 
     // Auto-search when query, options, or tag filters change.
     Effect::new(move |_| {
-        let _q  = search_query.get();
-        let _f  = fuzzy.get();
-        let _p  = published_only.get();
+        let _q = search_query.get();
+        let _f = fuzzy.get();
+        let _p = published_only.get();
         let _nt = node_type_filter.get();
-        let _s  = sort.get();
+        let _s = sort.get();
         let _af = updated_after.get();
         let _bf = updated_before.get();
-        let _t  = tag_filters.get();
-        let _o  = tag_op_and.get();
+        let _t = tag_filters.get();
+        let _o = tag_op_and.get();
         page.set(1);
         do_search();
     });
@@ -815,10 +831,7 @@ pub fn SearchView() -> impl IntoView {
 /// Renders a button that opens a custom dropdown listing unselected tags.
 /// A click-away backdrop closes the menu without selecting anything.
 #[component]
-fn TagPicker(
-    all_tags: LocalResource<Vec<Tag>>,
-    tag_filters: RwSignal<Vec<Tag>>,
-) -> impl IntoView {
+fn TagPicker(all_tags: LocalResource<Vec<Tag>>, tag_filters: RwSignal<Vec<Tag>>) -> impl IntoView {
     let open = RwSignal::new(false);
 
     view! {

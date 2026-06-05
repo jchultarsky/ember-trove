@@ -63,15 +63,29 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
 /// Tailwind colour class for the action icon bubble.
 fn action_colour(action: &ActivityAction) -> &'static str {
     match action {
-        ActivityAction::Created => "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
-        ActivityAction::Edited => "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
+        ActivityAction::Created => {
+            "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+        }
+        ActivityAction::Edited => {
+            "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
+        }
         ActivityAction::Deleted => "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
-        ActivityAction::TagAdded | ActivityAction::TagRemoved => "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300",
-        ActivityAction::AttachmentUploaded => "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300",
-        ActivityAction::PermissionGranted | ActivityAction::PermissionRevoked => "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300",
+        ActivityAction::TagAdded | ActivityAction::TagRemoved => {
+            "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300"
+        }
+        ActivityAction::AttachmentUploaded => {
+            "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300"
+        }
+        ActivityAction::PermissionGranted | ActivityAction::PermissionRevoked => {
+            "bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300"
+        }
         ActivityAction::Shared => "bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300",
-        ActivityAction::Exported => "bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300",
-        ActivityAction::CreatedFromTemplate => "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
+        ActivityAction::Exported => {
+            "bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300"
+        }
+        ActivityAction::CreatedFromTemplate => {
+            "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+        }
     }
 }
 

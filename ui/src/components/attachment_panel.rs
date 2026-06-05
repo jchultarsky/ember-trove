@@ -23,9 +23,9 @@ fn is_previewable(content_type: &str) -> bool {
 
 #[component]
 pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
-    let refresh    = RwSignal::new(0u32);
-    let error_msg  = RwSignal::new(Option::<String>::None);
-    let drag_over  = RwSignal::new(false);
+    let refresh = RwSignal::new(0u32);
+    let error_msg = RwSignal::new(Option::<String>::None);
+    let drag_over = RwSignal::new(false);
     let file_input_ref = NodeRef::<Input>::new();
 
     // Pending files selected by picker or drop.  web_sys::File is Send on wasm32.
@@ -44,7 +44,9 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
         let _ = refresh.get();
         let is_open = open.get();
         async move {
-            if !is_open { return Ok(vec![]); }
+            if !is_open {
+                return Ok(vec![]);
+            }
             api::fetch_attachments(node_id).await
         }
     });
@@ -53,9 +55,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
 
     // Collect files from a FileList into the pending queue.
     let queue_file_list = move |fl: web_sys::FileList| {
-        let files: Vec<web_sys::File> = (0..fl.length())
-            .filter_map(|i| fl.get(i))
-            .collect();
+        let files: Vec<web_sys::File> = (0..fl.length()).filter_map(|i| fl.get(i)).collect();
         if !files.is_empty() {
             pending_files.set(files);
             error_msg.set(None);
@@ -71,10 +71,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
     };
 
     let on_file_change = move |_| {
-        if let Some(fl) = file_input_ref
-            .get_untracked()
-            .and_then(|el| el.files())
-        {
+        if let Some(fl) = file_input_ref.get_untracked().and_then(|el| el.files()) {
             queue_file_list(fl);
         }
     };

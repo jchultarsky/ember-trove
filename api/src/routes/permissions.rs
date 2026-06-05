@@ -3,11 +3,10 @@
 /// These mirror the nested `nodes/{id}/permissions` routes but operate directly
 /// on permission IDs, making it easy to list or update grants across nodes.
 use axum::{
-    Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, put},
-    Extension, Json,
 };
 use common::{
     auth::AuthClaims,
@@ -17,7 +16,11 @@ use common::{
 use garde::Validate;
 use uuid::Uuid;
 
-use crate::{auth::permissions::{is_admin, require_owner}, error::ApiError, state::AppState};
+use crate::{
+    auth::permissions::{is_admin, require_owner},
+    error::ApiError,
+    state::AppState,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -34,9 +37,7 @@ async fn list_permissions(
     Extension(claims): Extension<AuthClaims>,
     Query(params): Query<PermissionListParams>,
 ) -> Result<Json<Vec<Permission>>, ApiError> {
-    let node_id = params
-        .node_id
-        .map(common::id::NodeId);
+    let node_id = params.node_id.map(common::id::NodeId);
     let all_perms = state.permissions.list_all(node_id).await?;
 
     // Admins see everything.
@@ -48,10 +49,7 @@ async fn list_permissions(
     // or holds Owner role on the same node.
     let owned_nodes: std::collections::HashSet<common::id::NodeId> = all_perms
         .iter()
-        .filter(|p| {
-            p.subject_id == claims.sub
-                && matches!(p.role, PermissionRole::Owner)
-        })
+        .filter(|p| p.subject_id == claims.sub && matches!(p.role, PermissionRole::Owner))
         .map(|p| p.node_id)
         .collect();
 

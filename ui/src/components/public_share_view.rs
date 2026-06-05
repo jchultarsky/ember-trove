@@ -8,9 +8,7 @@ use crate::markdown::render_markdown_plain;
 
 #[component]
 pub fn PublicShareView(token: Uuid) -> impl IntoView {
-    let node = LocalResource::new(move || async move {
-        api::fetch_shared_node(token).await
-    });
+    let node = LocalResource::new(move || async move { api::fetch_shared_node(token).await });
 
     view! {
         <div class="min-h-screen bg-stone-50 dark:bg-stone-950">

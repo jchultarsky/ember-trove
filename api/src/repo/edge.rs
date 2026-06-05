@@ -6,8 +6,8 @@ use common::{
     id::{EdgeId, NodeId},
 };
 use sqlx::PgPool;
-use uuid::Uuid;
 use std::collections::HashSet;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait EdgeRepo: Send + Sync {
@@ -286,9 +286,11 @@ impl EdgeRepo for PgEdgeRepo {
             .filter(|&id| id != source_id.0)
             .collect();
 
-        let mut tx = self.pool.begin().await.map_err(|e| {
-            EmberTroveError::Internal(format!("begin transaction failed: {e}"))
-        })?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("begin transaction failed: {e}")))?;
 
         // Remove all existing wiki_link edges from this source node.
         sqlx::query(
@@ -311,14 +313,12 @@ impl EdgeRepo for PgEdgeRepo {
             .bind(target)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                EmberTroveError::Internal(format!("insert wiki_link edge failed: {e}"))
-            })?;
+            .map_err(|e| EmberTroveError::Internal(format!("insert wiki_link edge failed: {e}")))?;
         }
 
-        tx.commit().await.map_err(|e| {
-            EmberTroveError::Internal(format!("commit wiki_link sync failed: {e}"))
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("commit wiki_link sync failed: {e}")))?;
 
         Ok(())
     }
