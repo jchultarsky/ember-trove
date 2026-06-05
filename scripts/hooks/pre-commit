@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Ember Trove pre-commit hook — fast gate run on every `git commit`.
+#
+# Enforces formatting + lints before a commit is recorded (CI is the final hard
+# gate; this catches problems at the source). Heavier `cargo test` runs in
+# pre-push, not here, to keep commits responsive.
+#
+# Installed via `make hooks-install` (sets core.hooksPath=scripts/hooks), so it
+# is version-controlled rather than living in the un-tracked .git/hooks dir.
+# Emergency bypass: `git commit --no-verify` (state the reason in the commit body).
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# If cargo isn't available (e.g. a docs-only environment), don't block the commit.
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "pre-commit: cargo not found — skipping Rust gates." >&2
+  exit 0
+fi
+
+echo "pre-commit: cargo fmt --all --check"
+cargo fmt --all --check
+
+echo "pre-commit: cargo clippy --workspace --exclude ui -- -D warnings"
+cargo clippy --workspace --exclude ui -- -D warnings
+
+echo "pre-commit: OK"

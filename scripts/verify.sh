@@ -30,6 +30,7 @@ echo ""
 echo "=== Ember Trove Verification Suite ==="
 echo ""
 
+run_step "cargo fmt --check"      "cargo fmt --all --check"
 run_step "cargo check"            "cargo check --quiet"
 run_step "cargo clippy"           "cargo clippy -- -D warnings --quiet"
 run_step "cargo check (wasm32)"   "cargo check -p ui --target wasm32-unknown-unknown --quiet"
