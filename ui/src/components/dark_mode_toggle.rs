@@ -8,7 +8,7 @@ pub enum Theme {
 
 #[component]
 pub fn DarkModeToggle() -> impl IntoView {
-    let theme = use_context::<RwSignal<Theme>>().expect("Theme context must be provided");
+    let theme = expect_context::<RwSignal<Theme>>();
 
     let icon = move || match theme.get() {
         Theme::Light => "dark_mode",

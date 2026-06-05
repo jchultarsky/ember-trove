@@ -17,9 +17,7 @@ use crate::components::task_common::{
 
 #[component]
 pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     let tasks_resource = LocalResource::new(move || {
         let _ = task_refresh.get();

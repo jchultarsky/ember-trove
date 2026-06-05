@@ -55,9 +55,7 @@ use crate::components::toast::{ToastLevel, push_toast};
 
 #[component]
 pub fn MyDayView() -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     let today = crate::components::format_helpers::local_today();
     let date_label = today.format("%A, %B %-d").to_string();

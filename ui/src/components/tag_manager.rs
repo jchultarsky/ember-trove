@@ -100,8 +100,7 @@ fn ColorPicker(
 #[component]
 pub fn TagManager() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let tag_filter_ctx =
-        use_context::<RwSignal<Option<Tag>>>().expect("tag_filter signal must be provided");
+    let tag_filter_ctx = expect_context::<RwSignal<Option<Tag>>>();
 
     let refresh = RwSignal::new(0u32);
     let search_q = RwSignal::new(String::new());

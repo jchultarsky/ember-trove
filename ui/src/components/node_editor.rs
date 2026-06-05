@@ -150,7 +150,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     let navigate = use_navigate();
     let nav_save = navigate.clone(); // clone for on_save spawn_local
     let nav_back1 = navigate.clone(); // clone for back button in header
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
 
     let title = RwSignal::new(String::new());
     // In create mode, pre-select the type from the active node_type_filter so

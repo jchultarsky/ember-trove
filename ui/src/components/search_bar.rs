@@ -13,8 +13,7 @@ pub fn SearchBar() -> impl IntoView {
     let navigate = use_navigate();
     let location = use_location();
     // Shared query — also read by SearchView.
-    let search_query =
-        use_context::<RwSignal<String>>().expect("search_query signal must be provided");
+    let search_query = expect_context::<RwSignal<String>>();
 
     let results: RwSignal<Vec<SearchResult>> = RwSignal::new(vec![]);
     let show_dropdown = RwSignal::new(false);

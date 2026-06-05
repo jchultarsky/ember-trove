@@ -38,9 +38,7 @@ use crate::markdown::render_markdown_plain;
 pub fn ProjectDashboard() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
 
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     // Refresh signal local to the dashboard so pin toggles refetch
     // both project list and the activity recap.
@@ -184,7 +182,8 @@ fn ActivityRecap(entries: Vec<RecentActivityEntry>) -> impl IntoView {
         return ().into_any();
     }
     let now = Utc::now();
-    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap().and_utc();
+    // Midnight is infallible via `NaiveTime::MIN`; avoids an `.unwrap()` on `and_hms_opt`.
+    let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
     let yesterday_start = today_start - Duration::days(1);
 
     let (today_entries, older): (Vec<_>, Vec<_>) = entries

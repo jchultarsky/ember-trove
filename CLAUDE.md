@@ -17,8 +17,9 @@ This file is the lean, always-loaded summary; depth lives in `.claude/`.
 ## Core workflow (the short version of POLICY.md)
 
 1. **Plan first** for anything beyond a one-line fix; reuse existing code (grep before writing).
-2. **No panics:** never `.unwrap()`/`.expect()`/`panic!` in non-test code. `thiserror` (lib),
-   `anyhow` (app). Use `?`.
+2. **No panics:** never `.unwrap()`/`.expect()`/`panic!` in non-test code — lint-enforced
+   (`[workspace.lints.clippy]`; tests exempt via `clippy.toml`). `thiserror` (lib),
+   `anyhow` (app). Use `?`. UI context: `expect_context::<T>()`, not `use_context().expect()`.
 3. **TDD:** failing test → minimal impl → refactor. New code and bug fixes land with tests.
 4. **Research crates** (docs.rs, MSRV, license, advisories) before adding; prefer `std` and
    existing `[workspace.dependencies]`. Track the latest **stable** Rust.

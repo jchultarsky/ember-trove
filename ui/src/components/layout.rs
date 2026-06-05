@@ -98,11 +98,9 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
         Signal::derive(move || !is_mobile.get() && collapsed_state.get());
 
     let mobile_open: RwSignal<bool> = RwSignal::new(false);
-    let show_capture = use_context::<ShowCapture>()
-        .expect("ShowCapture context missing")
-        .0;
+    let show_capture = expect_context::<ShowCapture>().0;
 
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
 
     let close_mobile = move || mobile_open.set(false);
 
@@ -401,7 +399,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
 /// Sidebar header: banner icon + title + (?) help + dark-mode toggle.
 #[component]
 fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
-    let app_version = use_context::<AppVersion>().expect("AppVersion must be provided");
+    let app_version = expect_context::<AppVersion>();
     // v2.10.0 — discoverability for the `?` shortcut.  Optional via
     // use_context: any layout that doesn't provide ShowHelp just
     // doesn't render the button (no crash).

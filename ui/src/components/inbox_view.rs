@@ -29,7 +29,7 @@ use crate::focus_task::schedule_focus_task;
 
 #[component]
 pub fn InboxView() -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>().expect("TaskRefresh context missing");
+    let task_refresh = expect_context::<TaskRefresh>();
     let refresh = task_refresh.0;
 
     // If we got here via the iOS Web Share Target SW handler (which 303s to

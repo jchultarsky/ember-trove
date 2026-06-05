@@ -97,7 +97,7 @@ fn body_preview(body: &str) -> Option<String> {
 #[component]
 pub fn NodeList() -> impl IntoView {
     let navigate = use_navigate();
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
     let tag_filter = use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
 
     let node_type_filter =
@@ -623,7 +623,7 @@ fn NodeCards(
 ) -> impl IntoView {
     let navigate = use_navigate();
     let tag_filter = use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
 
     // Wrap in StoredValue so it is Copy and can be captured across per-card closures.
     let available_tags = StoredValue::new(available_tags);

@@ -71,12 +71,10 @@ fn clear_history() {
 #[component]
 pub fn SearchView() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let search_query =
-        use_context::<RwSignal<String>>().expect("search_query signal must be provided");
+    let search_query = expect_context::<RwSignal<String>>();
     // Initialise from global single-tag context (set by NodeList chip clicks),
     // then manage locally — no reactive subscription to the global signal.
-    let global_tag_filter =
-        use_context::<RwSignal<Option<Tag>>>().expect("tag_filter signal must be provided");
+    let global_tag_filter = expect_context::<RwSignal<Option<Tag>>>();
     let init_tags: Vec<Tag> = global_tag_filter.get_untracked().into_iter().collect();
 
     let tag_filters: RwSignal<Vec<Tag>> = RwSignal::new(init_tags);

@@ -28,8 +28,7 @@ pub fn Sidebar(
         });
     };
 
-    let node_type_filter = use_context::<RwSignal<Option<String>>>()
-        .expect("node_type_filter signal must be provided");
+    let node_type_filter = expect_context::<RwSignal<Option<String>>>();
 
     // Macro to reduce cloning boilerplate for each nav closure.
     // Each SidebarLink on_click needs its own clone of navigate + on_nav.

@@ -185,9 +185,7 @@ fn MonthGrid(year: i32, month: u32, tasks: Vec<MyDayTask>, today: NaiveDate) -> 
 
 #[component]
 pub fn CalendarView() -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     let today = crate::components::format_helpers::local_today();
     let year_sig = RwSignal::new(today.year());

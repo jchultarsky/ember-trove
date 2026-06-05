@@ -31,7 +31,7 @@ fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
 #[component]
 pub fn NodeView(id: NodeId) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
 
     let node = LocalResource::new(move || {
         let id = id;

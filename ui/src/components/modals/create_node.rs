@@ -43,7 +43,7 @@ pub fn CreateNodeModal(
     let loading = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
 
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
     let navigate = use_navigate();
     // Pre-select the active node-type filter so "Add" respects the current view.
     let node_type_filter: Option<RwSignal<Option<String>>> =

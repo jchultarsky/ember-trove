@@ -70,7 +70,7 @@ pub fn push_toast(level: ToastLevel, message: impl Into<String>) {
 
 #[component]
 pub fn ToastOverlay() -> impl IntoView {
-    let state = use_context::<ToastState>().expect("ToastState must be provided");
+    let state = expect_context::<ToastState>();
 
     view! {
         <div class="fixed bottom-24 right-6 z-50 flex flex-col gap-2 pointer-events-none">

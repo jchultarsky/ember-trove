@@ -27,6 +27,14 @@ starting non-trivial work. Rules here are normative ("MUST"/"NEVER").
 
 - **NEVER** `.unwrap()`, `.expect()` (outside tests/build-time constants), or
   `panic!` in library/app code. Use `Result`/`Option` and `?`.
+- **Enforced, not just reviewed.** `clippy::unwrap_used`, `expect_used`, and `panic`
+  are denied in `[workspace.lints.clippy]` (root `Cargo.toml`); each crate opts in
+  with `[lints] workspace = true`. Test code is exempt via `clippy.toml`
+  (`allow-*-in-tests`). A genuinely-infallible call gets a *localised*
+  `#[allow(clippy::unwrap_used)]` with a one-line justification — never a blanket
+  relaxation. The gate (`cargo clippy … -D warnings`) now fails on a stray panic path.
+- **UI context lookups** are a wiring invariant, not a runtime failure: use Leptos
+  `expect_context::<T>()` (not `use_context().expect(...)`) — see `.claude/rules/leptos.md`.
 - `thiserror` for library error enums; `anyhow` for application/binary glue.
 - Prefer owned types at API boundaries; respect the borrow checker rather than
   reaching for `clone()` reflexively, but a clear `clone` beats a lifetime maze.

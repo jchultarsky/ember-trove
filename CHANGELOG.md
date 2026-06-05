@@ -7,6 +7,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Tooling
+- Enforced the zero-panic policy as lints instead of leaving it to review:
+  `clippy::unwrap_used`, `expect_used`, and `panic` are denied in
+  `[workspace.lints.clippy]` (each crate opts in with `[lints] workspace = true`),
+  with test code exempted via `clippy.toml` (`allow-*-in-tests`). The clippy gate
+  now fails on a stray panic path; previously the rule was documented but unchecked
+  (`-D warnings` does not enable the restriction lints by default).
+- Made `scripts/verify.sh` pass `--workspace --exclude ui` explicitly (matching CI
+  and the git hooks) rather than relying on `default-members`.
 - Adopted default `rustfmt` (edition 2024) as an enforced standard: one-time
   workspace reformat, plus `cargo fmt --all --check` in the pre-commit hook, CI
   (`fmt` job), and `scripts/verify.sh`. CI previously never checked formatting.
@@ -20,7 +28,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   (`cargo` + `github-actions`, weekly, targeting `develop`).
 - Declared `rustfmt` in `rust-toolchain.toml` components (required by the CI fmt job).
 
+### Changed
+- Migrated all `ui/` required-context lookups from `use_context::<T>().expect(..)`
+  to the idiomatic `expect_context::<T>()` (behaviour-identical; satisfies the new
+  `expect_used` lint, which treats a missing provider as a wiring invariant rather
+  than a policed panic). Replaced one infallible `and_hms_opt(0,0,0).unwrap()` in
+  `project_dashboard.rs` with `and_time(NaiveTime::MIN)`.
+
 ### Documentation
+- Documented the `expect_context` carve-out and the lint enforcement in
+  `.claude/POLICY.md` §3, `.claude/rules/leptos.md`, and `CLAUDE.md`.
 - Added a `.claude/` knowledge tree (`POLICY.md`, `ERRORS.md`, `ROADMAP.md`,
   `rules/`, `patterns/`) that the previously-dangling `CLAUDE.md` references now
   resolve to, and slimmed `CLAUDE.md` to a lean always-loaded core.

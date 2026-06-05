@@ -44,6 +44,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   `.claude/patterns/reactive-effect-debounce.rs`.
 - **Context newtypes** to prevent collisions:
   `#[derive(Clone, Copy)] struct ShowCapture(pub RwSignal<bool>);` (see `ui/src/app.rs`).
+- **Required context = `expect_context::<T>()`, never `use_context::<T>().expect(..)`.**
+  A missing provider is a build-time wiring bug, not a runtime/data failure, so the
+  blessed Leptos helper is the sanctioned exception to the zero-panic lint
+  (`clippy::expect_used`) — it reads as intent and keeps the lint strict for genuine
+  `.unwrap()`/`.expect()` on fallible values. For a context that may legitimately be
+  absent, use `use_context::<T>().unwrap_or_else(|| …)` instead (real example:
+  `ui/src/components/node_list.rs`, `tag_filter`).
 
 ## SVG & Tailwind
 

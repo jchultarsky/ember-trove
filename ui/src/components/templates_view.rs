@@ -98,8 +98,7 @@ const ALL_TYPES: [NodeType; 5] = [
 #[component]
 pub fn TemplatesView() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let prefill = use_context::<RwSignal<Option<TemplatePrefill>>>()
-        .expect("TemplatePrefill signal must be provided");
+    let prefill = expect_context::<RwSignal<Option<TemplatePrefill>>>();
 
     let refresh = RwSignal::new(0u32);
 
