@@ -19,6 +19,7 @@ use common::{
     node_version::NodeVersion,
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
     tag::Tag,
+    webhook::{EVENT_NODE_CREATED, EVENT_NODE_DELETED, EVENT_NODE_UPDATED},
 };
 use garde::Validate;
 use serde_json::json;
@@ -29,6 +30,7 @@ use crate::{
     error::ApiError,
     notify::maybe_notify_invite,
     state::AppState,
+    webhook_dispatch::dispatch,
     wikilink::parse_wikilink_titles,
 };
 
@@ -170,6 +172,13 @@ async fn create_node(
         (ActivityAction::Created, json!({ "title": node.title }))
     };
     log_activity(&state, node.id, &claims, action, meta).await;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_NODE_CREATED,
+        Some(node.id),
+        &claims.sub,
+        &node.owner_id,
+    );
     Ok((StatusCode::CREATED, Json(node)))
 }
 
@@ -223,6 +232,13 @@ async fn update_node(
         json!({ "title": node.title }),
     )
     .await;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_NODE_UPDATED,
+        Some(node.id),
+        &claims.sub,
+        &node.owner_id,
+    );
     Ok(Json(node))
 }
 
@@ -232,12 +248,12 @@ async fn delete_node(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    // Capture the title before deletion for the activity entry (cascade will remove it after).
-    let title = state
-        .nodes
-        .get(NodeId(id))
-        .await
-        .map(|n| n.title)
+    // Capture title + owner before deletion (cascade removes the row after, and
+    // the webhook fan-out needs the owner to scope delivery to their endpoints).
+    let existing = state.nodes.get(NodeId(id)).await.ok();
+    let title = existing
+        .as_ref()
+        .map(|n| n.title.clone())
         .unwrap_or_default();
     state.nodes.delete(NodeId(id)).await?;
     log_activity(
@@ -248,6 +264,15 @@ async fn delete_node(
         json!({ "title": title }),
     )
     .await;
+    if let Some(owner_id) = existing.map(|n| n.owner_id) {
+        dispatch(
+            state.webhooks.clone(),
+            EVENT_NODE_DELETED,
+            Some(NodeId(id)),
+            &claims.sub,
+            &owner_id,
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
