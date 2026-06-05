@@ -6,7 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [2.19.4] - 2026-06-05
+### Tooling
+- Dependency major bumps (resolving the remaining open Dependabot PRs):
+  `reqwest` 0.12 → 0.13 (added the now-feature-gated `form` feature for the OIDC
+  token/revocation calls; 0.13 also defaults `default-tls` to the modern rustls
+  stack, consistent with our AWS-SDK TLS posture), `axum-extra` 0.10 → 0.12,
+  `rand` 0.8 → 0.9 (`thread_rng()` → `rng()`), and `ammonia` 3 → 4 (markdown
+  sanitizer; API-compatible).
+- **Unblocked the deferred `sha2`/`hmac` bump.** `sha2` 0.10 → 0.11 and `hmac`
+  0.12 → 0.13 are now bumped *together*, so both ride the same `digest` 0.11 and
+  `Hmac<Sha256>` again satisfies `hmac::Mac` (the earlier single-crate bump broke
+  because `hmac` 0.12 was still on `digest` 0.10 — see prior `[Unreleased]` note).
+  `new_from_slice` moved to the `KeyInit` trait, now imported in
+  `webhook_dispatch.rs`. The webhook HMAC-signing and PKCE S256 paths are
+  unchanged in behaviour.
 
 ### Removed
 - Deleted the orphaned `ui/src/components/modals/link_picker.rs` "Phase 4" stub

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use common::{id::NodeId, webhook::WebhookPayload};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tracing::warn;
 
