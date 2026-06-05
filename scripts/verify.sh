@@ -32,9 +32,11 @@ echo ""
 
 run_step "cargo fmt --check"      "cargo fmt --all --check"
 run_step "cargo check"            "cargo check --quiet"
-run_step "cargo clippy"           "cargo clippy -- -D warnings --quiet"
+# NOTE: --quiet must precede `--`; anything after `--` is forwarded to rustc,
+# which has no --quiet flag (this previously failed every clippy step).
+run_step "cargo clippy"           "cargo clippy --quiet -- -D warnings"
 run_step "cargo check (wasm32)"   "cargo check -p ui --target wasm32-unknown-unknown --quiet"
-run_step "cargo clippy (wasm32)"  "cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings --quiet"
+run_step "cargo clippy (wasm32)"  "cargo clippy --quiet -p ui --target wasm32-unknown-unknown -- -D warnings"
 run_step "cargo test"             "cargo test --quiet"
 run_step "git status clean"       "[ -z \"\$(git status --porcelain)\" ]"
 
