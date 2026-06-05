@@ -16,6 +16,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
+- **Wire webhook delivery.** `api/src/webhook_dispatch::dispatch` is built and
+  tenant-scoped (SSRF-hardened registration already shipped) but has **no callers** —
+  registered webhooks never fire. Wire `dispatch(...)` into the node/task mutation
+  handlers (create/update/delete) so subscribers actually receive events, with tests.
+  Surfaced 2026-06-05 when the crate-wide `#![allow(dead_code)]` was removed; the
+  module now carries a scoped allow until this lands.
 - Convert coverage from report-only to a `--fail-under` gate once the baseline settles.
 - UI test strategy: more logic pushed into `common/` for host-target unit coverage;
   decide on a WASM/browser e2e harness.

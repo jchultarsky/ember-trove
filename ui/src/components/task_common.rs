@@ -102,15 +102,6 @@ pub fn priority_color(p: &TaskPriority) -> &'static str {
     }
 }
 
-/// Numeric weight for sorting — lower = higher priority.
-pub fn priority_weight(p: &TaskPriority) -> u8 {
-    match p {
-        TaskPriority::High => 0,
-        TaskPriority::Medium => 1,
-        TaskPriority::Low => 2,
-    }
-}
-
 // ── Recurrence ──────────────────────────────────────────────────────────────
 
 pub fn parse_recurrence_opt(s: &str) -> Option<RecurrenceRule> {
@@ -184,35 +175,5 @@ pub fn sort_tasks_by_order(tasks: &mut [Task]) {
         a.sort_order
             .cmp(&b.sort_order)
             .then_with(|| a.created_at.cmp(&b.created_at))
-    });
-}
-
-/// Richer sort: `sort_order` first, then incomplete before done, then
-/// priority (high→low), then due date (soonest first).
-/// Used by MyDayView.
-pub fn sort_tasks_full(tasks: &mut [Task]) {
-    tasks.sort_by(|a, b| {
-        let so = a.sort_order.cmp(&b.sort_order);
-        if so != std::cmp::Ordering::Equal {
-            return so;
-        }
-        let a_done = status_done(&a.status);
-        let b_done = status_done(&b.status);
-        match (a_done, b_done) {
-            (true, false) => std::cmp::Ordering::Greater,
-            (false, true) => std::cmp::Ordering::Less,
-            _ => {
-                let pw = priority_weight(&a.priority).cmp(&priority_weight(&b.priority));
-                if pw != std::cmp::Ordering::Equal {
-                    return pw;
-                }
-                match (a.due_date, b.due_date) {
-                    (Some(ad), Some(bd)) => ad.cmp(&bd),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                }
-            }
-        }
     });
 }

@@ -2361,65 +2361,6 @@ fn legend_shape_icon(color: &'static str, shape: &'static str) -> AnyView {
 }
 
 #[component]
-fn LegendShape(label: &'static str, color: &'static str, shape: &'static str) -> impl IntoView {
-    let icon: AnyView = match shape {
-        "diamond" => view! {
-            <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
-                <polygon
-                    points="7,1 13,7 7,13 1,7"
-                    style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
-                />
-            </svg>
-        }
-        .into_any(),
-        "rect" => view! {
-            <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
-                <rect
-                    x="1" y="3" width="12" height="8" rx="2"
-                    style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
-                />
-            </svg>
-        }
-        .into_any(),
-        "hexagon" => view! {
-            <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
-                <polygon
-                    points="7,1 12.2,4 12.2,10 7,13 1.8,10 1.8,4"
-                    style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
-                />
-            </svg>
-        }
-        .into_any(),
-        "triangle" => view! {
-            <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
-                <polygon
-                    points="7,1 13,13 1,13"
-                    style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
-                />
-            </svg>
-        }
-        .into_any(),
-        _ => view! {
-            // circle (Article default)
-            <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
-                <circle
-                    cx="7" cy="7" r="6"
-                    style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
-                />
-            </svg>
-        }
-        .into_any(),
-    };
-
-    view! {
-        <div class="flex items-center gap-1.5">
-            {icon}
-            <span class="text-stone-700 dark:text-stone-300">{label}</span>
-        </div>
-    }
-}
-
-#[component]
 fn LegendEdge(
     label: &'static str,
     color: &'static str,

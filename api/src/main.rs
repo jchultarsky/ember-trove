@@ -1,6 +1,3 @@
-// Phase 1 skeleton — stub items will be used as later phases are implemented.
-#![allow(dead_code)]
-
 mod admin;
 mod auth;
 mod backup;

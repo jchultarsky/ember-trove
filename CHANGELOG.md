@@ -6,6 +6,46 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.19.4] - 2026-06-05
+
+### Removed
+- Deleted the orphaned `ui/src/components/modals/link_picker.rs` "Phase 4" stub
+  (`#![allow(dead_code)]`, zero call sites, UI text still read "Link picker coming
+  in Phase 4"). Node-to-node linking has shipped via the graph view's inline edge
+  creation (`POST /edges`) since Phase 4, making the modal dead. Also removed two
+  orphaned task-sort helpers in `ui/src/components/task_common.rs`
+  (`sort_tasks_full` + its sole consumer `priority_weight`, superseded by
+  `sort_tasks_by_order`) and the never-mounted `LegendShape` graph-legend
+  component (the edge legend `LegendEdge` remains in use).
+
+### Changed
+- Dropped the crate-wide `#![allow(dead_code)]` (with its stale "Phase 1 skeleton"
+  rationale) from `api/src/main.rs` and `ui/src/main.rs`, restoring real dead-code
+  lint coverage across both binaries. Genuinely-retained dead code is now scoped
+  with localized `#[allow(dead_code)]` + justification instead of a blanket
+  relaxation: the sqlx-deser-only `SummaryRow.rn` / `SearchRow.updated_at` fields,
+  the deliberate `IconButtonVariant::Accent` palette variant, and the
+  not-yet-wired webhook delivery module (`api/src/webhook_dispatch.rs`).
+
+### Tooling
+- Bumped `actions/cache` from v4 to v5.0.5 (SHA-pinned, `# v5.0.5`) across all CI jobs
+  to move off the deprecated Node.js 20 runtime (GitHub forces Node 20 actions onto
+  Node 24; v5 targets Node 24 natively). Clears the CI deprecation annotation.
+- Dependency bumps (consolidating Dependabot #5, #6, #8, #9 into one resolved lockfile):
+  `jsonwebtoken` 9 → 10 (OIDC JWT verification; our `Validation` config is explicit —
+  RS256-pinned, audience + issuer pinned, `exp` enforced — so the major bump is
+  behaviour-preserving), `zip` 3 → 8 (backup/export), `gloo-net` 0.6 → 0.7 (UI HTTP),
+  `leptos` 0.8.16 → 0.8.19, plus the weekly minor/patch group (`tokio`, `uuid`,
+  `wasm-bindgen`, `web-sys`, `tower-http`, `utoipa`, … ). `sha2` 0.11 (Dependabot #7)
+  is **deferred**: it pulls `digest` 0.11 while `hmac` is still on `digest` 0.10, so
+  `HmacCore<Sha256>` stops satisfying `hmac::Mac` and the build breaks — revisit once the
+  RustCrypto `digest` 0.11 ecosystem (incl. `hmac`) is released.
+
+### Documentation
+- Corrected `CLAUDE.md`'s stale environment note: `gh` is now installed (Homebrew) and
+  authenticated, and is the supported way to push from tool shells (the sandbox keychain
+  does not unlock non-interactively).
+
 ## [2.19.3] - 2026-06-05
 
 ### Tooling
