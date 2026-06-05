@@ -59,7 +59,10 @@ cargo check -p ui --target wasm32-unknown-unknown
 - **Docker PATH:** `export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"`.
 - **`cat` aliased to `bat`:** use plain `-m "..."` for commit messages (not heredoc via cat).
 - **`grep`/`tail`/`head`/`rg` unavailable:** use the Grep tool, Read with offset/limit,
-  `python3 -c` for JSON. **`gh` not installed locally** (it runs on GitHub runners only).
+  `python3 -c` for JSON. **`gh` is installed (Homebrew) and authenticated** (`jchultarsky101`,
+  scopes incl. `repo`+`workflow`) — usable for runs/PRs/releases. Its https credential helper
+  also lets `git push` succeed from tool shells (the sandbox osxkeychain does **not** unlock
+  non-interactively, so without gh, pushes fail with "could not read Username").
 - **`aws` CLI unavailable:** use `boto3` (`pip3 install boto3`).
 - **`zoxide` doctor banner** in tool shells is a harness double-source artifact, not a config
   bug — ignore it (or `export _ZO_DOCTOR=0`).

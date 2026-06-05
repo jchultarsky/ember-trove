@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+- Corrected `CLAUDE.md`'s stale environment note: `gh` is now installed (Homebrew) and
+  authenticated, and is the supported way to push from tool shells (the sandbox keychain
+  does not unlock non-interactively).
+
 ## [2.19.3] - 2026-06-05
 
 ### Tooling
