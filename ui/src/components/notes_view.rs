@@ -127,31 +127,95 @@ pub fn NotesView() -> impl IntoView {
         text_q.set(String::new());
     };
 
-    // Feed depends on all filter signals → re-fetches when any changes.
-    let feed_resource = LocalResource::new(move || {
-        let _ = reload.get();
+    // ── Paged feed state ────────────────────────────────────────────────────
+    // The feed accumulates pages: a fresh load (filters/reload change) replaces
+    // the list; "Load more" appends the next page. `req_v` is a version guard so
+    // a stale in-flight fetch (filters changed mid-request) can't clobber a newer
+    // one — same pattern as the debounce above.
+    let displayed = RwSignal::<Vec<common::note::FeedNote>>::new(Vec::new());
+    let page = RwSignal::new(1u32);
+    let has_more = RwSignal::new(false);
+    let loading = RwSignal::new(true);
+    let loading_more = RwSignal::new(false);
+    let req_v = RwSignal::new(0u32);
+
+    let parse_node_filter = |nf: &str| match nf {
+        "" => (None, false),
+        "inbox" => (None, true),
+        s => (uuid::Uuid::parse_str(s).ok().map(NodeId), false),
+    };
+
+    // Fresh load whenever any filter (or the reload counter) changes.
+    Effect::new(move |_| {
         let sort_v = sort.get();
         let nf = node_filter.get();
         let from = from_date.get();
         let to = to_date.get();
         let q = text_q.get();
-        async move {
-            let (node_id, uncategorized) = match nf.as_str() {
-                "" => (None, false),
-                "inbox" => (None, true),
-                s => (uuid::Uuid::parse_str(s).ok().map(NodeId), false),
-            };
-            crate::api::fetch_notes_feed(
+        let _ = reload.get();
+
+        let v = req_v.get_untracked() + 1;
+        req_v.set(v);
+        page.set(1);
+        loading.set(true);
+        wasm_bindgen_futures::spawn_local(async move {
+            let (node_id, uncategorized) = parse_node_filter(&nf);
+            let res = crate::api::fetch_notes_feed(
                 node_id,
                 uncategorized,
                 Some(from.as_str()),
                 Some(to.as_str()),
                 Some(q.as_str()),
                 sort_v,
+                1,
             )
             .await
-        }
+            .unwrap_or_default();
+            // Commit only if this is still the latest request.
+            if req_v.get_untracked() == v {
+                has_more.set(res.len() as u32 == crate::api::FEED_PAGE_SIZE);
+                displayed.set(res);
+                loading.set(false);
+            }
+        });
     });
+
+    // Append the next page. Snapshots the current request generation so a
+    // filter change mid-fetch drops the now-irrelevant appended results.
+    let load_more = move || {
+        if loading.get_untracked() || loading_more.get_untracked() || !has_more.get_untracked() {
+            return;
+        }
+        loading_more.set(true);
+        let v = req_v.get_untracked();
+        let next = page.get_untracked() + 1;
+        let sort_v = sort.get_untracked();
+        let nf = node_filter.get_untracked();
+        let from = from_date.get_untracked();
+        let to = to_date.get_untracked();
+        let q = text_q.get_untracked();
+        wasm_bindgen_futures::spawn_local(async move {
+            let (node_id, uncategorized) = parse_node_filter(&nf);
+            let res = crate::api::fetch_notes_feed(
+                node_id,
+                uncategorized,
+                Some(from.as_str()),
+                Some(to.as_str()),
+                Some(q.as_str()),
+                sort_v,
+                next,
+            )
+            .await
+            .unwrap_or_default();
+            if req_v.get_untracked() == v {
+                let got = res.len() as u32;
+                has_more.set(got == crate::api::FEED_PAGE_SIZE);
+                displayed.update(|d| d.extend(res));
+                page.set(next);
+            }
+            loading_more.set(false);
+        });
+    };
 
     let do_post = move || {
         let text = body.get_untracked().trim().to_string();
@@ -287,15 +351,15 @@ pub fn NotesView() -> impl IntoView {
 
             // Feed
             <div class="flex-1 overflow-auto p-6 flex flex-col">
-                <Suspense fallback=move || view! {
-                    <crate::components::skeleton::SkeletonList rows=6 />
-                }>
                     {move || {
-                        let notes = feed_resource.get()
-                            .and_then(|r| r.ok())
-                            .unwrap_or_default();
+                        let notes = displayed.get();
 
                         if notes.is_empty() {
+                            if loading.get() {
+                                return view! {
+                                    <crate::components::skeleton::SkeletonList rows=6 />
+                                }.into_any();
+                            }
                             let msg = if any_filter_active() {
                                 "No notes match these filters."
                             } else {
@@ -413,7 +477,20 @@ pub fn NotesView() -> impl IntoView {
                             </div>
                         }.into_any()
                     }}
-                </Suspense>
+                    {move || has_more.get().then(|| view! {
+                        <div class="flex justify-center pt-4">
+                            <button
+                                class="px-4 py-1.5 rounded-lg text-sm font-medium text-amber-700 \
+                                    dark:text-amber-400 border border-amber-300 dark:border-amber-800 \
+                                    hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors \
+                                    disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled=move || loading_more.get()
+                                on:click=move |_| load_more()
+                            >
+                                {move || if loading_more.get() { "Loading…" } else { "Load more" }}
+                            </button>
+                        </div>
+                    })}
             </div>
         </div>
     }

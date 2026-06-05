@@ -28,8 +28,14 @@ pub async fn delete_note(note_id: NoteId) -> Result<(), UiError> {
     delete_empty(&format!("/notes/{note_id}")).await
 }
 
-/// Fetch the notes feed with optional filters + sort.
+/// Rows fetched per "Load more" page of the notes feed. A page that comes back
+/// full (== this many rows) means there may be more — the feed view uses that
+/// to decide whether to keep the "Load more" control visible.
+pub const FEED_PAGE_SIZE: u32 = 50;
+
+/// Fetch one page of the notes feed with optional filters + sort.
 /// `node_id` and `uncategorized` are mutually exclusive (the UI sends at most one).
+/// `page` is 1-based; each page returns up to [`FEED_PAGE_SIZE`] rows.
 pub async fn fetch_notes_feed(
     node_id: Option<NodeId>,
     uncategorized: bool,
@@ -37,6 +43,7 @@ pub async fn fetch_notes_feed(
     to: Option<&str>,
     q: Option<&str>,
     sort: NoteSort,
+    page: u32,
 ) -> Result<Vec<FeedNote>, UiError> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(n) = node_id {
@@ -61,9 +68,8 @@ pub async fn fetch_notes_feed(
         NoteSort::Updated => "updated",
     };
     parts.push(format!("sort={sort_str}"));
-    // Request the server's max page size so the single-page feed isn't
-    // truncated. (Server bounds this to 1000; "load more" paging is a TODO.)
-    parts.push("per_page=1000".to_string());
+    parts.push(format!("per_page={FEED_PAGE_SIZE}"));
+    parts.push(format!("page={}", page.max(1)));
     get_json(&format!("/notes/feed?{}", parts.join("&"))).await
 }
 
