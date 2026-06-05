@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Notes feed "Load more" paging
+The Notes feed previously requested a single `per_page=1000` page (a hard
+truncation past 1000 notes). It now pages: each fetch pulls `FEED_PAGE_SIZE`
+(50) rows and a **Load more** button appends the next page until the feed is
+exhausted. The server already supported `page`/`per_page` with `LIMIT/OFFSET`;
+this is a UI change. A version-guarded fresh-load effect (the project's debounce
+pattern) resets to page 1 and replaces the list when any filter/sort changes, so
+a stale in-flight fetch can't clobber a newer one; "more available" is inferred
+from a full page coming back. Removes the standing `notes.rs` TODO.
+
 ### Added — Webhook delivery is now wired (registered webhooks actually fire)
 The `webhook_dispatch::dispatch` delivery path existed (tenant-scoped,
 SSRF-hardened, HMAC-signed) but had **no callers**, so registered webhooks
