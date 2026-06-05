@@ -1,6 +1,9 @@
 use leptos::prelude::*;
 
-use common::{id::{NodeId, NoteId}, note::{CreateNoteRequest, NoteSort}};
+use common::{
+    id::{NodeId, NoteId},
+    note::{CreateNoteRequest, NoteSort},
+};
 use gloo_timers::callback::Timeout;
 use leptos_router::hooks::use_navigate;
 
@@ -11,16 +14,35 @@ use crate::markdown::render_markdown_plain;
 
 /// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
 const PALETTE: &[(&str, &str)] = &[
-    ("default", "bg-stone-50 dark:bg-stone-900/50 border-stone-200 dark:border-stone-700"),
-    ("amber",   "bg-amber-100 dark:bg-amber-950/60 border-amber-300 dark:border-amber-800"),
-    ("rose",    "bg-rose-100 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800"),
-    ("lime",    "bg-lime-100 dark:bg-lime-950/60 border-lime-300 dark:border-lime-800"),
-    ("sky",     "bg-sky-100 dark:bg-sky-950/60 border-sky-300 dark:border-sky-800"),
-    ("violet",  "bg-violet-100 dark:bg-violet-950/60 border-violet-300 dark:border-violet-800"),
+    (
+        "default",
+        "bg-stone-50 dark:bg-stone-900/50 border-stone-200 dark:border-stone-700",
+    ),
+    (
+        "amber",
+        "bg-amber-100 dark:bg-amber-950/60 border-amber-300 dark:border-amber-800",
+    ),
+    (
+        "rose",
+        "bg-rose-100 dark:bg-rose-950/60 border-rose-300 dark:border-rose-800",
+    ),
+    (
+        "lime",
+        "bg-lime-100 dark:bg-lime-950/60 border-lime-300 dark:border-lime-800",
+    ),
+    (
+        "sky",
+        "bg-sky-100 dark:bg-sky-950/60 border-sky-300 dark:border-sky-800",
+    ),
+    (
+        "violet",
+        "bg-violet-100 dark:bg-violet-950/60 border-violet-300 dark:border-violet-800",
+    ),
 ];
 
 fn palette_card_class(color: &str) -> &'static str {
-    PALETTE.iter()
+    PALETTE
+        .iter()
         .find(|(k, _)| *k == color)
         .map(|(_, cls)| *cls)
         .unwrap_or(PALETTE[0].1)

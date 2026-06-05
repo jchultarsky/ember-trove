@@ -72,9 +72,21 @@ pub async fn node_picker_search(q: &str) -> Result<Vec<common::search::SearchRes
     if q.trim().is_empty() {
         return Ok(vec![]);
     }
-    search_nodes(q, false, None, None, &[], "or", Some("title_asc"), None, None, 1, 8)
-        .await
-        .map(|r| r.results)
+    search_nodes(
+        q,
+        false,
+        None,
+        None,
+        &[],
+        "or",
+        Some("title_asc"),
+        None,
+        None,
+        1,
+        8,
+    )
+    .await
+    .map(|r| r.results)
 }
 
 // ── Search presets ─────────────────────────────────────────────────────────────
@@ -83,7 +95,9 @@ pub async fn fetch_search_presets() -> Result<Vec<SearchPreset>, UiError> {
     get_json("/search-presets").await
 }
 
-pub async fn create_search_preset(req: &CreateSearchPresetRequest) -> Result<SearchPreset, UiError> {
+pub async fn create_search_preset(
+    req: &CreateSearchPresetRequest,
+) -> Result<SearchPreset, UiError> {
     post_json("/search-presets", req).await
 }
 

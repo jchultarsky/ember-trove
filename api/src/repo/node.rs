@@ -3,7 +3,10 @@ use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
     id::{NodeId, TagId},
-    node::{CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeType, NodeTitleEntry, UpdateNodeRequest},
+    node::{
+        CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeTitleEntry, NodeType,
+        UpdateNodeRequest,
+    },
     slug::slugify,
     tag::Tag,
 };
@@ -75,11 +78,7 @@ pub trait NodeRepo: Send + Sync {
 
     /// Toggle the `pinned` flag on a single node.  Used by the
     /// dashboard pin/unpin button (v2.9.0).
-    async fn set_pinned(
-        &self,
-        id: NodeId,
-        pinned: bool,
-    ) -> Result<Node, EmberTroveError>;
+    async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError>;
 }
 
 pub struct PgNodeRepo {
@@ -425,7 +424,10 @@ impl NodeRepo for PgNodeRepo {
             .await
             .map_err(|e| EmberTroveError::Internal(format!("list nodes failed: {e}")))?;
 
-        let mut nodes = rows.into_iter().map(NodeRow::into_node).collect::<Result<Vec<_>, _>>()?;
+        let mut nodes = rows
+            .into_iter()
+            .map(NodeRow::into_node)
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Batch-fetch tags for all returned nodes in a single query.
         let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
@@ -544,11 +546,9 @@ impl NodeRepo for PgNodeRepo {
         // for the same node.
         let rows = match subject {
             None => {
-                sqlx::query_as::<_, TitleRow>(
-                    "SELECT id, title, slug FROM nodes ORDER BY title",
-                )
-                .fetch_all(&self.pool)
-                .await
+                sqlx::query_as::<_, TitleRow>("SELECT id, title, slug FROM nodes ORDER BY title")
+                    .fetch_all(&self.pool)
+                    .await
             }
             Some(sub) => {
                 sqlx::query_as::<_, TitleRow>(
@@ -677,11 +677,7 @@ impl NodeRepo for PgNodeRepo {
         Ok(nodes)
     }
 
-    async fn set_pinned(
-        &self,
-        id: NodeId,
-        pinned: bool,
-    ) -> Result<Node, EmberTroveError> {
+    async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError> {
         let row = sqlx::query_as::<_, NodeRow>(
             r#"
             UPDATE nodes

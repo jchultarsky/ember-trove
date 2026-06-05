@@ -13,18 +13,28 @@
 //! found, the param is `replaceState`'d out of the URL so a refresh
 //! doesn't re-fire it.
 
-use leptos::wasm_bindgen::{closure::Closure, JsCast};
+use leptos::wasm_bindgen::{JsCast, closure::Closure};
 
 const RETRY_DELAYS_MS: [i32; 4] = [0, 200, 600, 1500];
 
 /// Schedule the focus-task pass.  Call once on view mount.  No-ops when
 /// the URL has no `?task=` param.
 pub fn schedule_focus_task() {
-    let Some(win) = web_sys::window() else { return; };
-    let Ok(href)  = win.location().href() else { return; };
-    let Ok(url)   = web_sys::Url::new(&href) else { return; };
-    let Some(task_id) = url.search_params().get("task") else { return; };
-    if task_id.is_empty() { return; }
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let Ok(href) = win.location().href() else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::new(&href) else {
+        return;
+    };
+    let Some(task_id) = url.search_params().get("task") else {
+        return;
+    };
+    if task_id.is_empty() {
+        return;
+    }
 
     for delay in RETRY_DELAYS_MS {
         let id = task_id.clone();
@@ -40,9 +50,13 @@ pub fn schedule_focus_task() {
 }
 
 fn try_focus_task(task_id: &str, win: &web_sys::Window) {
-    let Some(doc) = win.document() else { return; };
-    let selector  = format!("[data-task-id=\"{task_id}\"]");
-    let Ok(Some(el)) = doc.query_selector(&selector) else { return; };
+    let Some(doc) = win.document() else {
+        return;
+    };
+    let selector = format!("[data-task-id=\"{task_id}\"]");
+    let Ok(Some(el)) = doc.query_selector(&selector) else {
+        return;
+    };
 
     // Scroll into view, centred so the user can see surrounding context.
     let opts = web_sys::ScrollIntoViewOptions::new();

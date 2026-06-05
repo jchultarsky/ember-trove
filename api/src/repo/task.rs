@@ -82,10 +82,7 @@ pub trait TaskRepo: Send + Sync {
     /// joined with their parent node title.  Used by the My Day Kanban
     /// backlog zone where the user sees every open task to plan against.
     /// Sorted: due_date ASC NULLS LAST, then priority desc, then created_at ASC.
-    async fn list_open_for_owner(
-        &self,
-        owner_id: &str,
-    ) -> Result<Vec<MyDayTask>, EmberTroveError>;
+    async fn list_open_for_owner(&self, owner_id: &str) -> Result<Vec<MyDayTask>, EmberTroveError>;
 
     /// All tasks across all owners — used for full backup.
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError>;
@@ -152,11 +149,11 @@ fn parse_priority(s: &str) -> Result<TaskPriority, EmberTroveError> {
 
 pub fn parse_recurrence(s: &str) -> Result<RecurrenceRule, EmberTroveError> {
     match s {
-        "daily"    => Ok(RecurrenceRule::Daily),
-        "weekly"   => Ok(RecurrenceRule::Weekly),
+        "daily" => Ok(RecurrenceRule::Daily),
+        "weekly" => Ok(RecurrenceRule::Weekly),
         "biweekly" => Ok(RecurrenceRule::Biweekly),
-        "monthly"  => Ok(RecurrenceRule::Monthly),
-        "yearly"   => Ok(RecurrenceRule::Yearly),
+        "monthly" => Ok(RecurrenceRule::Monthly),
+        "yearly" => Ok(RecurrenceRule::Yearly),
         other => Err(EmberTroveError::Internal(format!(
             "unknown recurrence: {other}"
         ))),
@@ -182,11 +179,11 @@ fn priority_str(p: &TaskPriority) -> &'static str {
 
 pub fn recurrence_str(r: &RecurrenceRule) -> &'static str {
     match r {
-        RecurrenceRule::Daily    => "daily",
-        RecurrenceRule::Weekly   => "weekly",
+        RecurrenceRule::Daily => "daily",
+        RecurrenceRule::Weekly => "weekly",
         RecurrenceRule::Biweekly => "biweekly",
-        RecurrenceRule::Monthly  => "monthly",
-        RecurrenceRule::Yearly   => "yearly",
+        RecurrenceRule::Monthly => "monthly",
+        RecurrenceRule::Yearly => "yearly",
     }
 }
 
@@ -254,7 +251,10 @@ fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
         updated_at: r.updated_at,
     }
     .into_task()?;
-    Ok(MyDayTask { task, node_title: r.node_title })
+    Ok(MyDayTask {
+        task,
+        node_title: r.node_title,
+    })
 }
 
 #[async_trait]
@@ -269,7 +269,10 @@ impl TaskRepo for PgTaskRepo {
         let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
         let status = req.status.as_ref().map_or("open", |s| status_str(s));
         let priority = req.priority.as_ref().map_or("medium", |p| priority_str(p));
-        let recurrence = req.recurrence.as_ref().map(|r| recurrence_str(r).to_string());
+        let recurrence = req
+            .recurrence
+            .as_ref()
+            .map(|r| recurrence_str(r).to_string());
 
         let row = sqlx::query_as::<_, TaskRow>(&format!(
             r#"
@@ -329,13 +332,15 @@ impl TaskRepo for PgTaskRepo {
     }
 
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
-        let status_s      = req.status.as_ref().map(|s| status_str(s).to_string());
-        let priority_s    = req.priority.as_ref().map(|p| priority_str(p).to_string());
+        let status_s = req.status.as_ref().map(|s| status_str(s).to_string());
+        let priority_s = req.priority.as_ref().map(|p| priority_str(p).to_string());
         let recurrence_update = req.recurrence.is_some();
-        let recurrence_val    = req.recurrence.and_then(|r| r)
+        let recurrence_val = req
+            .recurrence
+            .and_then(|r| r)
             .map(|r| recurrence_str(&r).to_string());
         let node_id_update = req.node_id.is_some();
-        let node_id_val    = req.node_id.and_then(|n| n).map(|n| n.0);
+        let node_id_val = req.node_id.and_then(|n| n).map(|n| n.0);
 
         let row = sqlx::query_as::<_, TaskRow>(&format!(
             r#"
@@ -491,10 +496,7 @@ impl TaskRepo for PgTaskRepo {
         rows.into_iter().map(my_day_row_to_task).collect()
     }
 
-    async fn list_open_for_owner(
-        &self,
-        owner_id: &str,
-    ) -> Result<Vec<MyDayTask>, EmberTroveError> {
+    async fn list_open_for_owner(&self, owner_id: &str) -> Result<Vec<MyDayTask>, EmberTroveError> {
         // NULLS LAST on due_date so dated tasks float to the top of the
         // backlog; undated open tasks settle at the bottom.  Priority desc
         // (high → low) breaks ties.  created_at ASC keeps order stable
@@ -698,7 +700,9 @@ impl TaskRepo for PgTaskRepo {
         .bind(&ids)
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| EmberTroveError::Internal(format!("max_task_updated_for_nodes failed: {e}")))?;
+        .map_err(|e| {
+            EmberTroveError::Internal(format!("max_task_updated_for_nodes failed: {e}"))
+        })?;
 
         Ok(rows
             .into_iter()

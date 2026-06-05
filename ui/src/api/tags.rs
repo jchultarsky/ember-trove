@@ -1,9 +1,9 @@
+use super::{delete_empty, get_json, post_action, post_json, put_json};
+use crate::error::UiError;
 use common::{
     id::{NodeId, TagId},
     tag::{CreateTagRequest, Tag, UpdateTagRequest},
 };
-use super::{delete_empty, get_json, post_action, post_json, put_json};
-use crate::error::UiError;
 
 pub async fn fetch_tags() -> Result<Vec<Tag>, UiError> {
     get_json("/tags").await

@@ -22,11 +22,7 @@ pub trait NodeVersionRepo: Send + Sync + 'static {
     ) -> Result<(), EmberTroveError>;
 
     /// List up to `limit` most-recent versions for a node, newest first.
-    async fn list(
-        &self,
-        node_id: NodeId,
-        limit: i64,
-    ) -> Result<Vec<NodeVersion>, EmberTroveError>;
+    async fn list(&self, node_id: NodeId, limit: i64) -> Result<Vec<NodeVersion>, EmberTroveError>;
 
     /// Fetch a single version by ID.
     async fn get(&self, id: NodeVersionId) -> Result<NodeVersion, EmberTroveError>;
@@ -87,23 +83,17 @@ impl NodeVersionRepo for PgNodeVersionRepo {
         body: &str,
         created_by: &str,
     ) -> Result<(), EmberTroveError> {
-        sqlx::query(
-            "INSERT INTO node_versions (node_id, body, created_by) VALUES ($1, $2, $3)",
-        )
-        .bind(node_id.0)
-        .bind(body)
-        .bind(created_by)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("record node version failed: {e}")))?;
+        sqlx::query("INSERT INTO node_versions (node_id, body, created_by) VALUES ($1, $2, $3)")
+            .bind(node_id.0)
+            .bind(body)
+            .bind(created_by)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("record node version failed: {e}")))?;
         Ok(())
     }
 
-    async fn list(
-        &self,
-        node_id: NodeId,
-        limit: i64,
-    ) -> Result<Vec<NodeVersion>, EmberTroveError> {
+    async fn list(&self, node_id: NodeId, limit: i64) -> Result<Vec<NodeVersion>, EmberTroveError> {
         let rows = sqlx::query_as::<_, NodeVersionRow>(
             r#"SELECT id, node_id, body, created_by, created_at
                FROM node_versions

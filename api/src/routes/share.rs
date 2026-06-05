@@ -9,10 +9,10 @@
 //!   GET    /share/{token}              — read node via share token
 
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{delete, get},
-    Extension, Json, Router,
 };
 use common::{
     activity::ActivityAction,
@@ -25,10 +25,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::require_owner,
-    error::ApiError,
-    routes::nodes::log_activity,
-    state::AppState,
+    auth::permissions::require_owner, error::ApiError, routes::nodes::log_activity, state::AppState,
 };
 
 // ── Protected sub-router (nested under /nodes/{id}) ──────────────────────────

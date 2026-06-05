@@ -37,8 +37,7 @@ impl CognitoAdminClient {
     /// this function.  `region` defaults to `us-east-2` if blank.
     pub async fn new(region: &str, user_pool_id: String) -> Self {
         let region_provider =
-            RegionProviderChain::first_try(Region::new(region.to_string()))
-                .or_default_provider();
+            RegionProviderChain::first_try(Region::new(region.to_string())).or_default_provider();
 
         let config = aws_config::defaults(BehaviorVersion::latest())
             .region(region_provider)
@@ -59,23 +58,19 @@ impl CognitoAdminClient {
         let mut pagination_token: Option<String> = None;
 
         loop {
-            let mut req = self
-                .client
-                .list_users()
-                .user_pool_id(&self.user_pool_id);
+            let mut req = self.client.list_users().user_pool_id(&self.user_pool_id);
 
             if let Some(ref token) = pagination_token {
                 req = req.pagination_token(token);
             }
 
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| cognito_err("list_users", e))?;
+            let resp = req.send().await.map_err(|e| cognito_err("list_users", e))?;
 
             for u in resp.users() {
                 // Fetch group memberships for each user.
-                let groups = self.list_user_groups(u.username().unwrap_or_default()).await?;
+                let groups = self
+                    .list_user_groups(u.username().unwrap_or_default())
+                    .await?;
                 users.push(cognito_user_to_dto(u, groups));
             }
 
@@ -143,9 +138,9 @@ impl CognitoAdminClient {
             .await
             .map_err(|e| cognito_err("admin_create_user", e))?;
 
-        let user = resp
-            .user()
-            .ok_or_else(|| ApiError::Internal("Cognito create_user returned no user".to_string()))?;
+        let user = resp.user().ok_or_else(|| {
+            ApiError::Internal("Cognito create_user returned no user".to_string())
+        })?;
 
         let username = user.username().unwrap_or_default().to_string();
 
@@ -217,10 +212,7 @@ impl CognitoAdminClient {
         let mut next_token: Option<String> = None;
 
         loop {
-            let mut req = self
-                .client
-                .list_groups()
-                .user_pool_id(&self.user_pool_id);
+            let mut req = self.client.list_groups().user_pool_id(&self.user_pool_id);
 
             if let Some(ref token) = next_token {
                 req = req.next_token(token);

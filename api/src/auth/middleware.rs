@@ -20,9 +20,11 @@ pub async fn require_auth(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let oidc = state.oidc.as_ref()
+    let oidc = state
+        .oidc
+        .as_ref()
         .ok_or_else(|| ApiError::Internal("OIDC not configured — auth is disabled".to_string()))?;
-    
+
     let token = extract_token(&jar, &request)?;
     let claims = validate_and_map(oidc, &token).await?;
 

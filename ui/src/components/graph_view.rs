@@ -29,7 +29,10 @@ use common::{
 };
 
 use crate::{
-    api::{create_edge, delete_edge, fetch_all_edges, fetch_nodes, fetch_positions, save_position, save_positions},
+    api::{
+        create_edge, delete_edge, fetch_all_edges, fetch_nodes, fetch_positions, save_position,
+        save_positions,
+    },
     components::node_meta::{status_color_hex, status_label, type_icon, type_label},
 };
 use leptos_router::hooks::use_navigate;
@@ -80,20 +83,20 @@ struct EdgeHover {
 
 fn node_fill(nt: &NodeType) -> &'static str {
     match nt {
-        NodeType::Article   => "#d97706",
-        NodeType::Project   => "#2563eb",
-        NodeType::Area      => "#16a34a",
-        NodeType::Resource  => "#9333ea",
+        NodeType::Article => "#d97706",
+        NodeType::Project => "#2563eb",
+        NodeType::Area => "#16a34a",
+        NodeType::Resource => "#9333ea",
         NodeType::Reference => "#dc2626",
     }
 }
 
 fn node_stroke_color(nt: &NodeType) -> &'static str {
     match nt {
-        NodeType::Article   => "#92400e",
-        NodeType::Project   => "#1e40af",
-        NodeType::Area      => "#166534",
-        NodeType::Resource  => "#6b21a8",
+        NodeType::Article => "#92400e",
+        NodeType::Project => "#1e40af",
+        NodeType::Area => "#166534",
+        NodeType::Resource => "#6b21a8",
         NodeType::Reference => "#991b1b",
     }
 }
@@ -145,24 +148,24 @@ fn triangle_points(cx: f64, cy: f64) -> String {
 
 fn edge_color(et: &EdgeType) -> &'static str {
     match et {
-        EdgeType::References  => "#d97706",
-        EdgeType::Contains    => "#22c55e",
-        EdgeType::RelatedTo   => "#a855f7",
-        EdgeType::DependsOn   => "#f97316",
+        EdgeType::References => "#d97706",
+        EdgeType::Contains => "#22c55e",
+        EdgeType::RelatedTo => "#a855f7",
+        EdgeType::DependsOn => "#f97316",
         EdgeType::DerivedFrom => "#ec4899",
-        EdgeType::WikiLink    => "#60a5fa",
+        EdgeType::WikiLink => "#60a5fa",
     }
 }
 
 /// CSS stroke-dasharray; "none" → solid line.
 fn edge_dash(et: &EdgeType) -> &'static str {
     match et {
-        EdgeType::References  => "none",
-        EdgeType::Contains    => "none",
-        EdgeType::RelatedTo   => "8,4",
-        EdgeType::DependsOn   => "3,4",
+        EdgeType::References => "none",
+        EdgeType::Contains => "none",
+        EdgeType::RelatedTo => "8,4",
+        EdgeType::DependsOn => "3,4",
         EdgeType::DerivedFrom => "8,3,2,3",
-        EdgeType::WikiLink    => "4,2",
+        EdgeType::WikiLink => "4,2",
     }
 }
 
@@ -170,29 +173,29 @@ fn edge_stroke_width(et: &EdgeType) -> f64 {
     match et {
         EdgeType::Contains => 2.5,
         EdgeType::WikiLink => 1.0,
-        _                  => 1.5,
+        _ => 1.5,
     }
 }
 
 fn edge_label(et: &EdgeType) -> &'static str {
     match et {
-        EdgeType::References  => "References",
-        EdgeType::Contains    => "Contains",
-        EdgeType::RelatedTo   => "Related to",
-        EdgeType::DependsOn   => "Depends on",
+        EdgeType::References => "References",
+        EdgeType::Contains => "Contains",
+        EdgeType::RelatedTo => "Related to",
+        EdgeType::DependsOn => "Depends on",
         EdgeType::DerivedFrom => "Derived from",
-        EdgeType::WikiLink    => "Wiki link",
+        EdgeType::WikiLink => "Wiki link",
     }
 }
 
 fn edge_marker_id(et: &EdgeType) -> &'static str {
     match et {
-        EdgeType::References  => "arrow-references",
-        EdgeType::Contains    => "arrow-contains",
-        EdgeType::RelatedTo   => "arrow-related-to",
-        EdgeType::DependsOn   => "arrow-depends-on",
+        EdgeType::References => "arrow-references",
+        EdgeType::Contains => "arrow-contains",
+        EdgeType::RelatedTo => "arrow-related-to",
+        EdgeType::DependsOn => "arrow-depends-on",
         EdgeType::DerivedFrom => "arrow-derived-from",
-        EdgeType::WikiLink    => "arrow-wiki-link",
+        EdgeType::WikiLink => "arrow-wiki-link",
     }
 }
 
@@ -201,25 +204,31 @@ fn edge_marker_id(et: &EdgeType) -> &'static str {
 fn inject_svg_markers() {
     let Some(win) = web_sys::window() else { return };
     let Some(doc) = win.document() else { return };
-    let Some(svg) = doc.get_element_by_id("graph-svg") else { return };
+    let Some(svg) = doc.get_element_by_id("graph-svg") else {
+        return;
+    };
     if svg.query_selector("marker").ok().flatten().is_some() {
         return;
     }
 
     let ns = "http://www.w3.org/2000/svg";
-    let Ok(defs) = doc.create_element_ns(Some(ns), "defs") else { return };
+    let Ok(defs) = doc.create_element_ns(Some(ns), "defs") else {
+        return;
+    };
 
     const ARROWS: &[(&str, &str)] = &[
-        ("arrow-references",   "#d97706"),
-        ("arrow-contains",     "#22c55e"),
-        ("arrow-related-to",   "#a855f7"),
-        ("arrow-depends-on",   "#f97316"),
+        ("arrow-references", "#d97706"),
+        ("arrow-contains", "#22c55e"),
+        ("arrow-related-to", "#a855f7"),
+        ("arrow-depends-on", "#f97316"),
         ("arrow-derived-from", "#ec4899"),
-        ("arrow-wiki-link",    "#60a5fa"),
+        ("arrow-wiki-link", "#60a5fa"),
     ];
 
     for (id, color) in ARROWS {
-        let Ok(marker) = doc.create_element_ns(Some(ns), "marker") else { continue };
+        let Ok(marker) = doc.create_element_ns(Some(ns), "marker") else {
+            continue;
+        };
         let _ = marker.set_attribute("id", id);
         let _ = marker.set_attribute("markerWidth", "8");
         let _ = marker.set_attribute("markerHeight", "6");
@@ -227,7 +236,9 @@ fn inject_svg_markers() {
         let _ = marker.set_attribute("refY", "3");
         let _ = marker.set_attribute("orient", "auto");
 
-        let Ok(path) = doc.create_element_ns(Some(ns), "path") else { continue };
+        let Ok(path) = doc.create_element_ns(Some(ns), "path") else {
+            continue;
+        };
         let _ = path.set_attribute("d", "M 0 0 L 6 3 L 0 6 Z");
         let _ = path.set_attribute("fill", color);
         let _ = marker.append_child(&path);
@@ -260,10 +271,7 @@ fn node_body_preview(body: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .filter(|l| {
-            !l.is_empty()
-                && !l.starts_with('#')
-                && !l.starts_with("```")
-                && !l.starts_with("---")
+            !l.is_empty() && !l.starts_with('#') && !l.starts_with("```") && !l.starts_with("---")
         })
         .collect::<Vec<_>>()
         .join(" ");
@@ -328,8 +336,11 @@ fn force_layout_expanded(
     // Pre-compute id→index so the attractive-force loop is O(m) per iter,
     // not O(m·n) from `node_ids.iter().position(...)`. Edges to/from IDs
     // not in `node_ids` (orphans from deleted nodes) are skipped here too.
-    let idx_of: HashMap<Uuid, usize> =
-        node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    let idx_of: HashMap<Uuid, usize> = node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (*id, i))
+        .collect();
     let edge_idx: Vec<(usize, usize)> = edge_pairs
         .iter()
         .filter_map(|(src, tgt)| Some((*idx_of.get(src)?, *idx_of.get(tgt)?)))
@@ -408,10 +419,7 @@ struct LayoutResult {
 }
 
 /// Compute the in-degree for each node from edge pairs.
-fn compute_in_degree(
-    node_ids: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-) -> HashMap<Uuid, usize> {
+fn compute_in_degree(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> HashMap<Uuid, usize> {
     let mut deg: HashMap<Uuid, usize> = node_ids.iter().map(|id| (*id, 0)).collect();
     for (_src, tgt) in edge_pairs {
         if let Some(d) = deg.get_mut(tgt) {
@@ -422,29 +430,29 @@ fn compute_in_degree(
 }
 
 /// Build adjacency list (undirected) for BFS traversal.
-fn build_adjacency(
-    node_ids: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-) -> HashMap<Uuid, Vec<Uuid>> {
+fn build_adjacency(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> HashMap<Uuid, Vec<Uuid>> {
     let mut adj: HashMap<Uuid, Vec<Uuid>> = node_ids.iter().map(|id| (*id, Vec::new())).collect();
     for (src, tgt) in edge_pairs {
-        if let Some(v) = adj.get_mut(src) { v.push(*tgt); }
-        if let Some(v) = adj.get_mut(tgt) { v.push(*src); }
+        if let Some(v) = adj.get_mut(src) {
+            v.push(*tgt);
+        }
+        if let Some(v) = adj.get_mut(tgt) {
+            v.push(*src);
+        }
     }
     adj
 }
 
 /// Find connected components via BFS.
-fn find_components(
-    node_ids: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-) -> Vec<Vec<Uuid>> {
+fn find_components(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> Vec<Vec<Uuid>> {
     let adj = build_adjacency(node_ids, edge_pairs);
     let mut visited = std::collections::HashSet::new();
     let mut components = Vec::new();
 
     for &nid in node_ids {
-        if visited.contains(&nid) { continue; }
+        if visited.contains(&nid) {
+            continue;
+        }
         let mut component = Vec::new();
         let mut queue = vec![nid];
         visited.insert(nid);
@@ -482,8 +490,12 @@ fn assign_layers(
     if roots.is_empty() {
         let mut deg: HashMap<Uuid, usize> = component.iter().map(|id| (*id, 0)).collect();
         for (src, tgt) in edge_pairs {
-            if comp_set.contains(src) { *deg.entry(*src).or_default() += 1; }
-            if comp_set.contains(tgt) { *deg.entry(*tgt).or_default() += 1; }
+            if comp_set.contains(src) {
+                *deg.entry(*src).or_default() += 1;
+            }
+            if comp_set.contains(tgt) {
+                *deg.entry(*tgt).or_default() += 1;
+            }
         }
         roots.push(
             component
@@ -500,7 +512,9 @@ fn assign_layers(
     let mut visited = std::collections::HashSet::new();
 
     let current_layer = roots;
-    for r in &current_layer { visited.insert(*r); }
+    for r in &current_layer {
+        visited.insert(*r);
+    }
     layers.push(current_layer);
 
     while let Some(layer) = layers.last() {
@@ -514,7 +528,9 @@ fn assign_layers(
                 }
             }
         }
-        if next_layer.is_empty() { break; }
+        if next_layer.is_empty() {
+            break;
+        }
         layers.push(next_layer);
     }
 
@@ -522,14 +538,15 @@ fn assign_layers(
 }
 
 /// Compute total degree for sorting within layers (hubs toward center).
-fn compute_total_degree(
-    node_ids: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-) -> HashMap<Uuid, usize> {
+fn compute_total_degree(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> HashMap<Uuid, usize> {
     let mut deg: HashMap<Uuid, usize> = node_ids.iter().map(|id| (*id, 0)).collect();
     for (src, tgt) in edge_pairs {
-        if let Some(d) = deg.get_mut(src) { *d += 1; }
-        if let Some(d) = deg.get_mut(tgt) { *d += 1; }
+        if let Some(d) = deg.get_mut(src) {
+            *d += 1;
+        }
+        if let Some(d) = deg.get_mut(tgt) {
+            *d += 1;
+        }
     }
     deg
 }
@@ -592,7 +609,9 @@ fn smart_layout(
     if n == 0 {
         return LayoutResult {
             positions: HashMap::new(),
-            fit_pan_x: 0.0, fit_pan_y: 0.0, fit_zoom: 1.0,
+            fit_pan_x: 0.0,
+            fit_pan_y: 0.0,
+            fit_zoom: 1.0,
         };
     }
     if n == 1 {
@@ -634,7 +653,11 @@ fn smart_layout(
         // offsets so wider/taller components in one cell cannot overlap neighbours.
         let cols = (components.len() as f64).sqrt().ceil() as usize;
         let rows = components.len().div_ceil(cols);
-        struct CompPlacement { pos: HashMap<Uuid, (f64, f64)>, min_x: f64, min_y: f64 }
+        struct CompPlacement {
+            pos: HashMap<Uuid, (f64, f64)>,
+            min_x: f64,
+            min_y: f64,
+        }
         let mut placements: Vec<CompPlacement> = Vec::new();
         let mut col_widths = vec![0.0_f64; cols];
         let mut row_heights = vec![0.0_f64; rows];
@@ -651,16 +674,16 @@ fn smart_layout(
             let c_h = c_max_y - c_min_y + COMPONENT_SPACING;
             col_widths[col] = col_widths[col].max(c_w);
             row_heights[row] = row_heights[row].max(c_h);
-            placements.push(CompPlacement { pos, min_x: c_min_x, min_y: c_min_y });
+            placements.push(CompPlacement {
+                pos,
+                min_x: c_min_x,
+                min_y: c_min_y,
+            });
         }
 
         // Cumulative column/row offsets derived from the widest/tallest cell.
-        let col_offsets: Vec<f64> = (0..cols)
-            .map(|i| col_widths[..i].iter().sum())
-            .collect();
-        let row_offsets: Vec<f64> = (0..rows)
-            .map(|i| row_heights[..i].iter().sum())
-            .collect();
+        let col_offsets: Vec<f64> = (0..cols).map(|i| col_widths[..i].iter().sum()).collect();
+        let row_offsets: Vec<f64> = (0..rows).map(|i| row_heights[..i].iter().sum()).collect();
 
         for (ci, p) in placements.into_iter().enumerate() {
             let col = ci % cols;
@@ -680,8 +703,14 @@ fn smart_layout(
     {
         let grow_factor = (n as f64 / 50.0).clamp(1.0, 4.0);
         let eff_margin = MARGIN * grow_factor;
-        let raw_min_x = all_positions.values().map(|p| p.0).fold(f64::INFINITY, f64::min);
-        let raw_min_y = all_positions.values().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let raw_min_x = all_positions
+            .values()
+            .map(|p| p.0)
+            .fold(f64::INFINITY, f64::min);
+        let raw_min_y = all_positions
+            .values()
+            .map(|p| p.1)
+            .fold(f64::INFINITY, f64::min);
         let shift_x = eff_margin - raw_min_x;
         let shift_y = eff_margin - raw_min_y;
         for pos in all_positions.values_mut() {
@@ -719,7 +748,9 @@ fn smart_layout(
 
     LayoutResult {
         positions: all_positions,
-        fit_pan_x, fit_pan_y, fit_zoom,
+        fit_pan_x,
+        fit_pan_y,
+        fit_zoom,
     }
 }
 
@@ -775,10 +806,10 @@ pub fn GraphView() -> impl IntoView {
 
     // ── Type-visibility filter signals ───────────────────────────────────────
     // Each signal controls whether nodes of that type are rendered.
-    let show_articles:   RwSignal<bool> = RwSignal::new(true);
-    let show_projects:   RwSignal<bool> = RwSignal::new(true);
-    let show_areas:      RwSignal<bool> = RwSignal::new(true);
-    let show_resources:  RwSignal<bool> = RwSignal::new(true);
+    let show_articles: RwSignal<bool> = RwSignal::new(true);
+    let show_projects: RwSignal<bool> = RwSignal::new(true);
+    let show_areas: RwSignal<bool> = RwSignal::new(true);
+    let show_resources: RwSignal<bool> = RwSignal::new(true);
     let show_references: RwSignal<bool> = RwSignal::new(true);
 
     // ── Tag filter signal ────────────────────────────────────────────────────
@@ -799,8 +830,10 @@ pub fn GraphView() -> impl IntoView {
                 Ok(nodes) => {
                     let edges = fetch_all_edges().await.unwrap_or_default();
                     let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
-                    let edge_pairs: Vec<(Uuid, Uuid)> =
-                        edges.iter().map(|e| (e.source_id.0, e.target_id.0)).collect();
+                    let edge_pairs: Vec<(Uuid, Uuid)> = edges
+                        .iter()
+                        .map(|e| (e.source_id.0, e.target_id.0))
+                        .collect();
 
                     // Auto-grow: increase effective canvas area based on node count.
                     let n = node_ids.len() as f64;
@@ -809,7 +842,8 @@ pub fn GraphView() -> impl IntoView {
                     let eff_h = H * grow_factor;
                     let eff_margin = MARGIN * grow_factor;
 
-                    let mut layout = force_layout_expanded(&node_ids, &edge_pairs, eff_w, eff_h, eff_margin);
+                    let mut layout =
+                        force_layout_expanded(&node_ids, &edge_pairs, eff_w, eff_h, eff_margin);
 
                     if let Ok(saved) = fetch_positions().await {
                         for pos in saved {
@@ -833,7 +867,9 @@ pub fn GraphView() -> impl IntoView {
 
     // ── Re-layout effect: runs smart layout, overriding ALL saved positions ──
     Effect::new(move |_| {
-        if !re_layout.get() { return; }
+        if !re_layout.get() {
+            return;
+        }
         re_layouting.set(true);
         let nodes = nodes_sig.get_untracked();
         let edges = edges_sig.get_untracked();
@@ -842,8 +878,10 @@ pub fn GraphView() -> impl IntoView {
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(80).await;
 
-            let edge_pairs: Vec<(Uuid, Uuid)> =
-                edges.iter().map(|e| (e.source_id.0, e.target_id.0)).collect();
+            let edge_pairs: Vec<(Uuid, Uuid)> = edges
+                .iter()
+                .map(|e| (e.source_id.0, e.target_id.0))
+                .collect();
 
             let viewport_w = web_sys::window()
                 .and_then(|w| w.inner_width().ok())

@@ -16,27 +16,27 @@ pub fn status_done(s: &TaskStatus) -> bool {
 pub fn parse_status(s: &str) -> TaskStatus {
     match s {
         "in_progress" => TaskStatus::InProgress,
-        "done"        => TaskStatus::Done,
-        "cancelled"   => TaskStatus::Cancelled,
-        _             => TaskStatus::Open,
+        "done" => TaskStatus::Done,
+        "cancelled" => TaskStatus::Cancelled,
+        _ => TaskStatus::Open,
     }
 }
 
 pub fn status_value(s: &TaskStatus) -> &'static str {
     match s {
-        TaskStatus::Open       => "open",
+        TaskStatus::Open => "open",
         TaskStatus::InProgress => "in_progress",
-        TaskStatus::Done       => "done",
-        TaskStatus::Cancelled  => "cancelled",
+        TaskStatus::Done => "done",
+        TaskStatus::Cancelled => "cancelled",
     }
 }
 
 pub fn status_label(s: &TaskStatus) -> &'static str {
     match s {
-        TaskStatus::Open       => "Open",
+        TaskStatus::Open => "Open",
         TaskStatus::InProgress => "In Progress",
-        TaskStatus::Done       => "Done",
-        TaskStatus::Cancelled  => "Cancelled",
+        TaskStatus::Done => "Done",
+        TaskStatus::Cancelled => "Cancelled",
     }
 }
 
@@ -45,69 +45,69 @@ pub fn status_label(s: &TaskStatus) -> &'static str {
 pub fn parse_priority(s: &str) -> TaskPriority {
     match s {
         "high" => TaskPriority::High,
-        "low"  => TaskPriority::Low,
-        _      => TaskPriority::Medium,
+        "low" => TaskPriority::Low,
+        _ => TaskPriority::Medium,
     }
 }
 
 pub fn priority_value(p: &TaskPriority) -> &'static str {
     match p {
-        TaskPriority::High   => "high",
+        TaskPriority::High => "high",
         TaskPriority::Medium => "medium",
-        TaskPriority::Low    => "low",
+        TaskPriority::Low => "low",
     }
 }
 
 pub fn priority_label(p: &TaskPriority) -> &'static str {
     match p {
-        TaskPriority::High   => "High",
+        TaskPriority::High => "High",
         TaskPriority::Medium => "Medium",
-        TaskPriority::Low    => "Low",
+        TaskPriority::Low => "Low",
     }
 }
 
 /// Raw hex colour string for a priority level (e.g. `"#dc2626"`).
 pub fn priority_color_hex(p: &TaskPriority) -> &'static str {
     match p {
-        TaskPriority::High   => "#dc2626",
+        TaskPriority::High => "#dc2626",
         TaskPriority::Medium => "#d97706",
-        TaskPriority::Low    => "#6b7280",
+        TaskPriority::Low => "#6b7280",
     }
 }
 
 /// Inline CSS for a small filled circle used as a priority indicator.
 pub fn priority_dot_color(p: &TaskPriority) -> &'static str {
     match p {
-        TaskPriority::High   => "background:#dc2626;",
+        TaskPriority::High => "background:#dc2626;",
         TaskPriority::Medium => "background:#d97706;",
-        TaskPriority::Low    => "background:#6b7280;",
+        TaskPriority::Low => "background:#6b7280;",
     }
 }
 
 /// Material Symbols icon name for the priority level.
 pub fn priority_icon(p: &TaskPriority) -> &'static str {
     match p {
-        TaskPriority::High   => "keyboard_double_arrow_up",
+        TaskPriority::High => "keyboard_double_arrow_up",
         TaskPriority::Medium => "drag_handle",
-        TaskPriority::Low    => "keyboard_double_arrow_down",
+        TaskPriority::Low => "keyboard_double_arrow_down",
     }
 }
 
 /// Inline CSS colour for the priority icon / label text.
 pub fn priority_color(p: &TaskPriority) -> &'static str {
     match p {
-        TaskPriority::High   => "color: #dc2626;",
+        TaskPriority::High => "color: #dc2626;",
         TaskPriority::Medium => "color: #d97706;",
-        TaskPriority::Low    => "color: #6b7280;",
+        TaskPriority::Low => "color: #6b7280;",
     }
 }
 
 /// Numeric weight for sorting — lower = higher priority.
 pub fn priority_weight(p: &TaskPriority) -> u8 {
     match p {
-        TaskPriority::High   => 0,
+        TaskPriority::High => 0,
         TaskPriority::Medium => 1,
-        TaskPriority::Low    => 2,
+        TaskPriority::Low => 2,
     }
 }
 
@@ -115,32 +115,32 @@ pub fn priority_weight(p: &TaskPriority) -> u8 {
 
 pub fn parse_recurrence_opt(s: &str) -> Option<RecurrenceRule> {
     match s {
-        "daily"    => Some(RecurrenceRule::Daily),
-        "weekly"   => Some(RecurrenceRule::Weekly),
+        "daily" => Some(RecurrenceRule::Daily),
+        "weekly" => Some(RecurrenceRule::Weekly),
         "biweekly" => Some(RecurrenceRule::Biweekly),
-        "monthly"  => Some(RecurrenceRule::Monthly),
-        "yearly"   => Some(RecurrenceRule::Yearly),
-        _          => None,
+        "monthly" => Some(RecurrenceRule::Monthly),
+        "yearly" => Some(RecurrenceRule::Yearly),
+        _ => None,
     }
 }
 
 pub fn recurrence_value(r: &RecurrenceRule) -> &'static str {
     match r {
-        RecurrenceRule::Daily    => "daily",
-        RecurrenceRule::Weekly   => "weekly",
+        RecurrenceRule::Daily => "daily",
+        RecurrenceRule::Weekly => "weekly",
         RecurrenceRule::Biweekly => "biweekly",
-        RecurrenceRule::Monthly  => "monthly",
-        RecurrenceRule::Yearly   => "yearly",
+        RecurrenceRule::Monthly => "monthly",
+        RecurrenceRule::Yearly => "yearly",
     }
 }
 
 pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
     match r {
-        RecurrenceRule::Daily    => "Daily",
-        RecurrenceRule::Weekly   => "Weekly",
+        RecurrenceRule::Daily => "Daily",
+        RecurrenceRule::Weekly => "Weekly",
         RecurrenceRule::Biweekly => "Every 2 weeks",
-        RecurrenceRule::Monthly  => "Monthly",
-        RecurrenceRule::Yearly   => "Yearly",
+        RecurrenceRule::Monthly => "Monthly",
+        RecurrenceRule::Yearly => "Yearly",
     }
 }
 
@@ -150,12 +150,12 @@ pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
 /// node-picker and elsewhere).
 pub fn node_type_icon(node_type: &str) -> &'static str {
     match node_type {
-        "article"   => "description",
-        "project"   => "rocket_launch",
-        "area"      => "category",
-        "resource"  => "bookmarks",
+        "article" => "description",
+        "project" => "rocket_launch",
+        "area" => "category",
+        "resource" => "bookmarks",
         "reference" => "menu_book",
-        _           => "article",
+        _ => "article",
     }
 }
 
@@ -170,7 +170,7 @@ pub fn node_type_icon(node_type: &str) -> &'static str {
 pub fn is_in_my_day(task: &Task, today: chrono::NaiveDate) -> bool {
     match task.focus_date {
         Some(d) if d == today => true,
-        Some(d) if d < today  => !status_done(&task.status),
+        Some(d) if d < today => !status_done(&task.status),
         _ => false,
     }
 }
@@ -193,7 +193,9 @@ pub fn sort_tasks_by_order(tasks: &mut [Task]) {
 pub fn sort_tasks_full(tasks: &mut [Task]) {
     tasks.sort_by(|a, b| {
         let so = a.sort_order.cmp(&b.sort_order);
-        if so != std::cmp::Ordering::Equal { return so; }
+        if so != std::cmp::Ordering::Equal {
+            return so;
+        }
         let a_done = status_done(&a.status);
         let b_done = status_done(&b.status);
         match (a_done, b_done) {
@@ -201,12 +203,14 @@ pub fn sort_tasks_full(tasks: &mut [Task]) {
             (false, true) => std::cmp::Ordering::Less,
             _ => {
                 let pw = priority_weight(&a.priority).cmp(&priority_weight(&b.priority));
-                if pw != std::cmp::Ordering::Equal { return pw; }
+                if pw != std::cmp::Ordering::Equal {
+                    return pw;
+                }
                 match (a.due_date, b.due_date) {
                     (Some(ad), Some(bd)) => ad.cmp(&bd),
-                    (Some(_), None)      => std::cmp::Ordering::Less,
-                    (None, Some(_))      => std::cmp::Ordering::Greater,
-                    (None, None)         => std::cmp::Ordering::Equal,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
                 }
             }
         }

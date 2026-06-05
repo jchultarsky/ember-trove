@@ -14,7 +14,7 @@ use common::{
 };
 use leptos::prelude::*;
 
-use crate::components::toast::{push_toast, ToastLevel};
+use crate::components::toast::{ToastLevel, push_toast};
 use leptos_router::hooks::use_navigate;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -29,15 +29,18 @@ fn role_label(role: &PermissionRole) -> &'static str {
 
 fn role_badge_class(role: &PermissionRole) -> &'static str {
     match role {
-        PermissionRole::Owner =>
+        PermissionRole::Owner => {
             "px-2 py-0.5 rounded-full text-xs font-medium \
-             bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300",
-        PermissionRole::Editor =>
+             bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+        }
+        PermissionRole::Editor => {
             "px-2 py-0.5 rounded-full text-xs font-medium \
-             bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300",
-        PermissionRole::Viewer =>
+             bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
+        }
+        PermissionRole::Viewer => {
             "px-2 py-0.5 rounded-full text-xs font-medium \
-             bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300",
+             bg-stone-100 text-stone-700 dark:bg-stone-800 dark:text-stone-300"
+        }
     }
 }
 
@@ -62,7 +65,6 @@ fn display_name(sub: &str, user_map: &HashMap<String, (String, String)>) -> Stri
 
 #[component]
 pub fn BulkPermissionsView() -> impl IntoView {
-
     // Refresh counter — bump after any mutation to reload the permissions list.
     let refresh = RwSignal::new(0u32);
 
@@ -73,9 +75,10 @@ pub fn BulkPermissionsView() -> impl IntoView {
         async move { crate::api::list_all_permissions().await.unwrap_or_default() }
     });
 
-    let titles_resource = LocalResource::new(|| async move {
-        crate::api::fetch_node_titles().await.unwrap_or_default()
-    });
+    let titles_resource =
+        LocalResource::new(
+            || async move { crate::api::fetch_node_titles().await.unwrap_or_default() },
+        );
 
     // user_map: sub → (email, display_name)
     let users_resource = LocalResource::new(|| async move {
@@ -86,8 +89,9 @@ pub fn BulkPermissionsView() -> impl IntoView {
             .map(|u| {
                 let email = u.email.clone().unwrap_or_default();
                 let name = match (u.first_name.as_deref(), u.last_name.as_deref()) {
-                    (Some(f), Some(l)) if !f.is_empty() || !l.is_empty() =>
-                        format!("{f} {l}").trim().to_string(),
+                    (Some(f), Some(l)) if !f.is_empty() || !l.is_empty() => {
+                        format!("{f} {l}").trim().to_string()
+                    }
                     _ => String::new(),
                 };
                 (u.id, (email, name))
@@ -311,9 +315,10 @@ fn PermRow(
         let id: PermissionId = perm_id;
         leptos::task::spawn_local(async move {
             // Use the standalone DELETE /permissions/{id} route.
-            let resp = gloo_net::http::Request::delete(
-                &crate::api::api_url(&format!("/permissions/{}", id.0))
-            )
+            let resp = gloo_net::http::Request::delete(&crate::api::api_url(&format!(
+                "/permissions/{}",
+                id.0
+            )))
             .send()
             .await;
             match resp {

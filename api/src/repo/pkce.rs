@@ -162,6 +162,9 @@ mod tests {
     fn cutoff_is_ttl_before_now() {
         let now = Utc::now();
         let cutoff = expiry_cutoff(now, Duration::from_secs(600));
-        assert_eq!(now.signed_duration_since(cutoff), chrono::Duration::seconds(600));
+        assert_eq!(
+            now.signed_duration_since(cutoff),
+            chrono::Duration::seconds(600)
+        );
     }
 }

@@ -31,15 +31,15 @@ impl HelpTab {
     fn label(self) -> &'static str {
         match self {
             HelpTab::Shortcuts => "Shortcuts",
-            HelpTab::Concepts  => "Concepts",
-            HelpTab::Workflow  => "Workflow",
+            HelpTab::Concepts => "Concepts",
+            HelpTab::Workflow => "Workflow",
         }
     }
     fn icon(self) -> &'static str {
         match self {
             HelpTab::Shortcuts => "keyboard",
-            HelpTab::Concepts  => "category",
-            HelpTab::Workflow  => "route",
+            HelpTab::Concepts => "category",
+            HelpTab::Workflow => "route",
         }
     }
 }
@@ -57,33 +57,87 @@ struct ShortcutGroup {
 }
 
 const ANYWHERE: &[Shortcut] = &[
-    Shortcut { key: "n",      description: "Quick capture (Inbox)" },
-    Shortcut { key: "g",      description: "Graph view" },
-    Shortcut { key: "/",      description: "Open command palette" },
-    Shortcut { key: "⌘K",     description: "Open command palette (alt)" },
-    Shortcut { key: "?",      description: "Show this help" },
-    Shortcut { key: "Escape", description: "Close modal / back" },
+    Shortcut {
+        key: "n",
+        description: "Quick capture (Inbox)",
+    },
+    Shortcut {
+        key: "g",
+        description: "Graph view",
+    },
+    Shortcut {
+        key: "/",
+        description: "Open command palette",
+    },
+    Shortcut {
+        key: "⌘K",
+        description: "Open command palette (alt)",
+    },
+    Shortcut {
+        key: "?",
+        description: "Show this help",
+    },
+    Shortcut {
+        key: "Escape",
+        description: "Close modal / back",
+    },
 ];
 
 const NODE_VIEW: &[Shortcut] = &[
-    Shortcut { key: "d",      description: "Duplicate current node" },
-    Shortcut { key: "p",      description: "Pin / unpin current node" },
+    Shortcut {
+        key: "d",
+        description: "Duplicate current node",
+    },
+    Shortcut {
+        key: "p",
+        description: "Pin / unpin current node",
+    },
 ];
 
 const MY_DAY: &[Shortcut] = &[
-    Shortcut { key: "j / ↓",  description: "Focus next task" },
-    Shortcut { key: "k / ↑",  description: "Focus previous task" },
-    Shortcut { key: "Enter",  description: "Open focused task in its parent" },
-    Shortcut { key: "Space",  description: "Toggle done on focused task" },
-    Shortcut { key: "t",      description: "Toggle Today / Backlog for focused task" },
-    Shortcut { key: "e",      description: "Edit focused task inline" },
-    Shortcut { key: "d",      description: "Delete focused task" },
+    Shortcut {
+        key: "j / ↓",
+        description: "Focus next task",
+    },
+    Shortcut {
+        key: "k / ↑",
+        description: "Focus previous task",
+    },
+    Shortcut {
+        key: "Enter",
+        description: "Open focused task in its parent",
+    },
+    Shortcut {
+        key: "Space",
+        description: "Toggle done on focused task",
+    },
+    Shortcut {
+        key: "t",
+        description: "Toggle Today / Backlog for focused task",
+    },
+    Shortcut {
+        key: "e",
+        description: "Edit focused task inline",
+    },
+    Shortcut {
+        key: "d",
+        description: "Delete focused task",
+    },
 ];
 
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
-    ShortcutGroup { title: "Anywhere",        items: ANYWHERE },
-    ShortcutGroup { title: "My Day Kanban",   items: MY_DAY },
-    ShortcutGroup { title: "Node view",       items: NODE_VIEW },
+    ShortcutGroup {
+        title: "Anywhere",
+        items: ANYWHERE,
+    },
+    ShortcutGroup {
+        title: "My Day Kanban",
+        items: MY_DAY,
+    },
+    ShortcutGroup {
+        title: "Node view",
+        items: NODE_VIEW,
+    },
 ];
 
 // ── Concepts content ─────────────────────────────────────────────────────────
@@ -239,10 +293,7 @@ const WORKFLOW_STEPS: &[WorkflowStep] = &[
 // ── HelpModal ────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn HelpModal(
-    #[prop(into)] show: Signal<bool>,
-    on_close: Callback<()>,
-) -> impl IntoView {
+pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> impl IntoView {
     let active = RwSignal::new(HelpTab::Shortcuts);
 
     // Reset to the Shortcuts tab every time the modal opens — the

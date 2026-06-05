@@ -11,9 +11,7 @@ pub async fn save_position(node_id: uuid::Uuid, x: f64, y: f64) -> Result<(), Ui
 }
 
 /// Batch-save all node positions at once (used by auto-arrange).
-pub async fn save_positions(
-    positions: &[(common::id::NodeId, f64, f64)],
-) -> Result<(), UiError> {
+pub async fn save_positions(positions: &[(common::id::NodeId, f64, f64)]) -> Result<(), UiError> {
     let req = common::graph::SavePositionsRequest {
         positions: positions.to_vec(),
     };

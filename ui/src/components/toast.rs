@@ -39,7 +39,11 @@ impl ToastState {
     pub fn push(&self, level: ToastLevel, message: impl Into<String>) {
         let id = self.next_id.get_untracked();
         self.next_id.update(|n| *n += 1);
-        let toast = Toast { id, level, message: message.into() };
+        let toast = Toast {
+            id,
+            level,
+            message: message.into(),
+        };
         self.toasts.update(|ts| ts.push(toast));
         let toasts = self.toasts;
         spawn_local(async move {

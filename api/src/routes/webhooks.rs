@@ -1,8 +1,8 @@
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::get,
-    Extension, Json, Router,
 };
 use common::{
     auth::AuthClaims,
@@ -189,10 +189,7 @@ async fn delete_webhook(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    state
-        .webhooks
-        .delete(WebhookId(id), &claims.sub)
-        .await?;
+    state.webhooks.delete(WebhookId(id), &claims.sub).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -211,10 +208,16 @@ mod tests {
             "169.254.169.254", // AWS IMDS
             "0.0.0.0",
         ] {
-            assert!(is_blocked_ip(ip.parse::<IpAddr>().unwrap()), "{ip} should be blocked");
+            assert!(
+                is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
+                "{ip} should be blocked"
+            );
         }
         for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
-            assert!(!is_blocked_ip(ip.parse::<IpAddr>().unwrap()), "{ip} should be allowed");
+            assert!(
+                !is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
+                "{ip} should be allowed"
+            );
         }
     }
 

@@ -132,7 +132,9 @@ impl FavoriteRepo for PgFavoriteRepo {
         }
 
         if req.label.trim().is_empty() {
-            return Err(EmberTroveError::Validation("label must not be empty".to_string()));
+            return Err(EmberTroveError::Validation(
+                "label must not be empty".to_string(),
+            ));
         }
 
         let row = sqlx::query_as::<_, FavoriteRow>(
@@ -168,17 +170,17 @@ impl FavoriteRepo for PgFavoriteRepo {
     }
 
     async fn delete(&self, id: FavoriteId, owner_id: &str) -> Result<(), EmberTroveError> {
-        let result = sqlx::query(
-            "DELETE FROM user_favorites WHERE id = $1 AND owner_id = $2",
-        )
-        .bind(id.0)
-        .bind(owner_id)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("delete favorite failed: {e}")))?;
+        let result = sqlx::query("DELETE FROM user_favorites WHERE id = $1 AND owner_id = $2")
+            .bind(id.0)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("delete favorite failed: {e}")))?;
 
         if result.rows_affected() == 0 {
-            return Err(EmberTroveError::NotFound(format!("favorite {id} not found")));
+            return Err(EmberTroveError::NotFound(format!(
+                "favorite {id} not found"
+            )));
         }
         Ok(())
     }
@@ -195,15 +197,13 @@ impl FavoriteRepo for PgFavoriteRepo {
             .map_err(|e| EmberTroveError::Internal(format!("begin tx failed: {e}")))?;
 
         for (pos, fav_id) in ids.iter().enumerate() {
-            sqlx::query(
-                "UPDATE user_favorites SET position = $1 WHERE id = $2 AND owner_id = $3",
-            )
-            .bind(pos as i32)
-            .bind(fav_id.0)
-            .bind(owner_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| EmberTroveError::Internal(format!("reorder favorite failed: {e}")))?;
+            sqlx::query("UPDATE user_favorites SET position = $1 WHERE id = $2 AND owner_id = $3")
+                .bind(pos as i32)
+                .bind(fav_id.0)
+                .bind(owner_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| EmberTroveError::Internal(format!("reorder favorite failed: {e}")))?;
         }
 
         tx.commit()

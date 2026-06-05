@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use common::{
     id::{NodeId, TemplateId},
-    node::{CreateNodeRequest, NodeStatus, NodeType, NodeTitleEntry, UpdateNodeRequest},
+    node::{CreateNodeRequest, NodeStatus, NodeTitleEntry, NodeType, UpdateNodeRequest},
     template::NodeTemplate,
 };
 use leptos::prelude::*;
@@ -10,9 +10,9 @@ use wasm_bindgen::JsCast as _;
 
 use crate::app::TemplatePrefill;
 use crate::components::toast::{ToastLevel, push_toast};
-use leptos_router::hooks::use_navigate;
 use crate::markdown::render_markdown;
 use crate::templates::template_for_type;
+use leptos_router::hooks::use_navigate;
 
 fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
     entries.iter().map(|e| (e.title.clone(), e.id)).collect()
@@ -148,7 +148,7 @@ fn is_wide_viewport() -> bool {
 #[component]
 pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     let navigate = use_navigate();
-    let nav_save  = navigate.clone(); // clone for on_save spawn_local
+    let nav_save = navigate.clone(); // clone for on_save spawn_local
     let nav_back1 = navigate.clone(); // clone for back button in header
     let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
 
@@ -221,7 +221,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // `node` is captured by value (Copy); all signals are Copy too.
     let upload_image_file = move |file: web_sys::File| {
         let Some(node_id) = node else {
-            push_toast(ToastLevel::Error, "Save the node first before uploading images.");
+            push_toast(
+                ToastLevel::Error,
+                "Save the node first before uploading images.",
+            );
             return;
         };
         // Claim a unique placeholder ID before entering the async block.
@@ -246,7 +249,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             .unwrap_or(0) as usize;
         let current = body.get_untracked();
         let cursor = utf16_to_utf8_offset(&current, cursor_u16);
-        let new_val = format!("{}{}{}", &current[..cursor], placeholder, &current[cursor..]);
+        let new_val = format!(
+            "{}{}{}",
+            &current[..cursor],
+            placeholder,
+            &current[cursor..]
+        );
         body.set(new_val.clone());
         if let Some(el) = textarea_ref.get() {
             el.set_value(&new_val);
@@ -281,7 +289,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 Ok(att) => {
                     let url = crate::api::attachment_download_url(att.id);
                     let final_md = format!("![{filename}]({url})");
-                    let updated = body.get_untracked().replacen(&placeholder_clone, &final_md, 1);
+                    let updated = body
+                        .get_untracked()
+                        .replacen(&placeholder_clone, &final_md, 1);
                     body.set(updated.clone());
                     if let Some(el) = textarea_ref.get() {
                         el.set_value(&updated);
@@ -342,7 +352,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     };
     // Paste from clipboard (e.g. screenshot paste via Ctrl+V).
     let on_img_paste = move |ev: web_sys::ClipboardEvent| {
-        let Some(cd) = ev.clipboard_data() else { return };
+        let Some(cd) = ev.clipboard_data() else {
+            return;
+        };
         let items = cd.items();
         let mut found_image = false;
         for i in 0..items.length() {
@@ -350,7 +362,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             if item.kind() != "file" || !item.type_().starts_with("image/") {
                 continue;
             }
-            let Ok(Some(file)) = item.get_as_file() else { continue };
+            let Ok(Some(file)) = item.get_as_file() else {
+                continue;
+            };
             if !found_image {
                 // Only prevent default once we know we have an image.
                 ev.prevent_default();
@@ -436,11 +450,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         let before = &current[..cursor];
         if let Some(open_pos) = before.rfind("[[") {
             // open_pos comes from rfind → already a valid UTF-8 boundary.
-            let new_val = format!(
-                "[[{}]]{}",
-                selected,
-                &current[cursor..],
-            );
+            let new_val = format!("[[{}]]{}", selected, &current[cursor..],);
             let prefix = &current[..open_pos];
             let new_val = format!("{prefix}{new_val}");
             let new_cursor_bytes = open_pos + 2 + selected.len() + 2;

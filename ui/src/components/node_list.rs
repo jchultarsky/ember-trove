@@ -9,9 +9,11 @@ use leptos::prelude::*;
 use uuid::Uuid;
 
 use crate::components::modals::delete_confirm::DeleteConfirmModal;
-use crate::components::node_meta::{status_color, status_icon, status_label, type_icon, type_label};
-use leptos_router::hooks::use_navigate;
+use crate::components::node_meta::{
+    status_color, status_icon, status_label, type_icon, type_label,
+};
 use crate::components::toast::{ToastLevel, push_toast};
+use leptos_router::hooks::use_navigate;
 
 // ── Sorting ────────────────────────────────────────────────────────────────────
 
@@ -26,10 +28,10 @@ pub enum SortKey {
 impl SortKey {
     fn label(self) -> &'static str {
         match self {
-            SortKey::NameAsc      => "Title A→Z",
-            SortKey::NameDesc     => "Title Z→A",
+            SortKey::NameAsc => "Title A→Z",
+            SortKey::NameDesc => "Title Z→A",
             SortKey::ModifiedDesc => "Newest first",
-            SortKey::ModifiedAsc  => "Oldest first",
+            SortKey::ModifiedAsc => "Oldest first",
         }
     }
 
@@ -42,14 +44,10 @@ impl SortKey {
 
     fn sort_nodes(self, mut nodes: Vec<Node>) -> Vec<Node> {
         match self {
-            SortKey::NameAsc => nodes.sort_by(|a, b| {
-                a.title.to_lowercase().cmp(&b.title.to_lowercase())
-            }),
-            SortKey::NameDesc => nodes.sort_by(|a, b| {
-                b.title.to_lowercase().cmp(&a.title.to_lowercase())
-            }),
+            SortKey::NameAsc => nodes.sort_by_key(|n| n.title.to_lowercase()),
+            SortKey::NameDesc => nodes.sort_by_key(|n| std::cmp::Reverse(n.title.to_lowercase())),
             SortKey::ModifiedDesc => nodes.sort_by_key(|n| std::cmp::Reverse(n.updated_at)),
-            SortKey::ModifiedAsc  => nodes.sort_by_key(|n| n.updated_at),
+            SortKey::ModifiedAsc => nodes.sort_by_key(|n| n.updated_at),
         }
         nodes
     }
@@ -100,8 +98,7 @@ fn body_preview(body: &str) -> Option<String> {
 pub fn NodeList() -> impl IntoView {
     let navigate = use_navigate();
     let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
-    let tag_filter =
-        use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
+    let tag_filter = use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
 
     let node_type_filter =
         use_context::<RwSignal<Option<String>>>().unwrap_or_else(|| RwSignal::new(None));
@@ -113,7 +110,7 @@ pub fn NodeList() -> impl IntoView {
 
     // Bulk selection state — shared between NodeList (action bar) and NodeCards (checkboxes).
     let selected_ids: RwSignal<HashSet<Uuid>> = RwSignal::new(HashSet::new());
-    let show_apply_menu  = RwSignal::new(false);
+    let show_apply_menu = RwSignal::new(false);
     let show_remove_menu = RwSignal::new(false);
     let confirm_bulk_delete = RwSignal::new(false);
 
@@ -625,10 +622,8 @@ fn NodeCards(
     selected_ids: RwSignal<HashSet<Uuid>>,
 ) -> impl IntoView {
     let navigate = use_navigate();
-    let tag_filter =
-        use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
-    let refresh =
-        use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let tag_filter = use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
+    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
 
     // Wrap in StoredValue so it is Copy and can be captured across per-card closures.
     let available_tags = StoredValue::new(available_tags);

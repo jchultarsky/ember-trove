@@ -18,15 +18,20 @@ pub fn ResizableEditor(
     value: RwSignal<String>,
     #[prop(into)] placeholder: String,
     /// Opens the editor at this pixel height when set (a previously-saved size).
-    #[prop(optional_no_strip)] initial_height: Option<i32>,
+    #[prop(optional_no_strip)]
+    initial_height: Option<i32>,
     /// Invoked with the new pixel height when the user finishes a resize drag.
-    #[prop(optional, into)] on_resize: Option<Callback<i32>>,
+    #[prop(optional, into)]
+    on_resize: Option<Callback<i32>>,
     /// Invoked on Ctrl/Cmd+Enter (submit shortcut).
-    #[prop(optional, into)] on_submit: Option<Callback<()>>,
+    #[prop(optional, into)]
+    on_submit: Option<Callback<()>>,
     /// Invoked on Escape (cancel shortcut).
-    #[prop(optional, into)] on_escape: Option<Callback<()>>,
+    #[prop(optional, into)]
+    on_escape: Option<Callback<()>>,
     /// Override the default textarea classes.
-    #[prop(optional, into)] class: Option<String>,
+    #[prop(optional, into)]
+    class: Option<String>,
 ) -> impl IntoView {
     // Track the last reported height so a plain click (mouseup without a resize)
     // doesn't fire a redundant save.

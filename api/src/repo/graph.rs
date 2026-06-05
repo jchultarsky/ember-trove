@@ -101,9 +101,11 @@ impl GraphRepo for PgGraphRepo {
         // cleans up positions when a node is deleted, so the delete is
         // redundant.
         let (ids, xs, ys): (Vec<Uuid>, Vec<f64>, Vec<f64>) = positions.iter().fold(
-            (Vec::with_capacity(positions.len()),
-             Vec::with_capacity(positions.len()),
-             Vec::with_capacity(positions.len())),
+            (
+                Vec::with_capacity(positions.len()),
+                Vec::with_capacity(positions.len()),
+                Vec::with_capacity(positions.len()),
+            ),
             |(mut ids, mut xs, mut ys), (id, x, y)| {
                 ids.push(*id);
                 xs.push(*x);

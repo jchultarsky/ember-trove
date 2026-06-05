@@ -6,12 +6,11 @@
 //! Filename: `ember-trove-export-<YYYY-MM-DD>.zip`
 
 use axum::{
-    Extension,
+    Extension, Router,
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use chrono::Utc;
 use common::auth::AuthClaims;
@@ -32,7 +31,11 @@ async fn export_all(
     let nodes = if is_admin(&claims) {
         state.nodes.list_all().await.map_err(ApiError::from)?
     } else {
-        state.nodes.list_all_for_owner(&claims.sub).await.map_err(ApiError::from)?
+        state
+            .nodes
+            .list_all_for_owner(&claims.sub)
+            .await
+            .map_err(ApiError::from)?
     };
 
     // Build ZIP in memory.

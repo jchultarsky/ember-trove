@@ -1,6 +1,9 @@
 use common::{
     id::{NodeId, TaskId},
-    task::{CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTaskEntry, ReorderTasksRequest, Task, UpdateTaskRequest},
+    task::{
+        CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTaskEntry, ReorderTasksRequest,
+        Task, UpdateTaskRequest,
+    },
 };
 
 use super::{delete_empty, get_json, patch_json, post_json, put_empty};
@@ -41,7 +44,10 @@ pub async fn reorder_tasks(entries: &[(TaskId, i32)]) -> Result<(), UiError> {
     let req = ReorderTasksRequest {
         tasks: entries
             .iter()
-            .map(|(id, order)| ReorderTaskEntry { id: *id, sort_order: *order })
+            .map(|(id, order)| ReorderTaskEntry {
+                id: *id,
+                sort_order: *order,
+            })
             .collect(),
     };
     put_empty("/tasks/reorder", &req).await

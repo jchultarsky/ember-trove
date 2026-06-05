@@ -7,7 +7,7 @@ use leptos::prelude::*;
 use crate::{
     app::TemplatePrefill,
     components::icon_button::{IconButton, IconButtonVariant},
-    components::toast::{push_toast, ToastLevel},
+    components::toast::{ToastLevel, push_toast},
     markdown::render_markdown_plain,
 };
 use leptos_router::hooks::use_navigate;
@@ -155,13 +155,25 @@ pub fn TemplatesView() -> impl IntoView {
 
         leptos::task::spawn_local(async move {
             let result = if id_str == "new" {
-                let req = CreateTemplateRequest { name, description: desc, node_type: nt, body };
+                let req = CreateTemplateRequest {
+                    name,
+                    description: desc,
+                    node_type: nt,
+                    body,
+                };
                 crate::api::create_template(&req).await.map(|_| ())
             } else if let Ok(id) = id_str.parse::<uuid::Uuid>() {
-                let req = UpdateTemplateRequest { name, description: desc, node_type: nt, body };
+                let req = UpdateTemplateRequest {
+                    name,
+                    description: desc,
+                    node_type: nt,
+                    body,
+                };
                 crate::api::update_template(id, &req).await.map(|_| ())
             } else {
-                Err(crate::error::UiError::Parse("invalid template ID".to_string()))
+                Err(crate::error::UiError::Parse(
+                    "invalid template ID".to_string(),
+                ))
             };
 
             match result {
@@ -192,7 +204,11 @@ pub fn TemplatesView() -> impl IntoView {
         let type_str = node_type_str(&t.node_type).to_string();
         let body = t.body.clone();
         let tid = t.id;
-        prefill.set(Some(TemplatePrefill { node_type: type_str, body, template_id: tid }));
+        prefill.set(Some(TemplatePrefill {
+            node_type: type_str,
+            body,
+            template_id: tid,
+        }));
         navigate.get_value()("/nodes/new", Default::default());
     };
 

@@ -35,9 +35,8 @@ pub fn AdminView() -> impl IntoView {
     let creating = RwSignal::new(false);
 
     // Available realm roles (fetched once).
-    let available_roles = LocalResource::new(|| async move {
-        api::list_realm_roles().await.unwrap_or_default()
-    });
+    let available_roles =
+        LocalResource::new(|| async move { api::list_realm_roles().await.unwrap_or_default() });
 
     // Selected roles for the create form — use a Vec<String> signal.
     let form_roles: RwSignal<Vec<String>> = RwSignal::new(vec!["user".to_string()]);

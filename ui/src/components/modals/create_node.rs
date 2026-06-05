@@ -84,19 +84,19 @@ pub fn CreateNodeModal(
     // default exists, the picker is reset to "no template" (body is unchanged
     // so user-typed content is preserved).
     Effect::new(move |_| {
-        let nt     = node_type_str.get();
+        let nt = node_type_str.get();
         let templates = available_templates.get();
         if let Some(t) = templates.iter().find(|t| {
             t.is_default
                 && match &t.node_type {
-                    common::node::NodeType::Article   => nt == "article",
-                    common::node::NodeType::Project   => nt == "project",
-                    common::node::NodeType::Area      => nt == "area",
-                    common::node::NodeType::Resource  => nt == "resource",
+                    common::node::NodeType::Article => nt == "article",
+                    common::node::NodeType::Project => nt == "project",
+                    common::node::NodeType::Area => nt == "area",
+                    common::node::NodeType::Resource => nt == "resource",
                     common::node::NodeType::Reference => nt == "reference",
                 }
         }) {
-            let tid   = t.id;
+            let tid = t.id;
             // If the body was pre-filled (e.g. fast-capture handoff or
             // user-typed content), don't overwrite with the default
             // template body — pre-fill always wins.
@@ -118,7 +118,9 @@ pub fn CreateNodeModal(
     let submit_pending = RwSignal::new(false);
 
     Effect::new(move |_| {
-        if !submit_pending.get() { return; }
+        if !submit_pending.get() {
+            return;
+        }
         submit_pending.set(false);
         let t = title.get_untracked();
         if t.trim().is_empty() {
@@ -126,11 +128,11 @@ pub fn CreateNodeModal(
             return;
         }
         let node_type = match node_type_str.get_untracked().as_str() {
-            "project"   => NodeType::Project,
-            "area"      => NodeType::Area,
-            "resource"  => NodeType::Resource,
+            "project" => NodeType::Project,
+            "area" => NodeType::Area,
+            "resource" => NodeType::Resource,
             "reference" => NodeType::Reference,
-            _           => NodeType::Article,
+            _ => NodeType::Article,
         };
         let b = body.get_untracked();
         let body_opt = if b.trim().is_empty() { None } else { Some(b) };

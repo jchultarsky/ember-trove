@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::{
+    EmberTroveError,
     attachment::Attachment,
     id::{AttachmentId, NodeId},
-    EmberTroveError,
 };
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
@@ -142,14 +142,13 @@ impl AttachmentRepo for PgAttachmentRepo {
     }
 
     async fn delete(&self, id: AttachmentId) -> Result<String, EmberTroveError> {
-        let s3_key: String = sqlx::query_scalar(
-            "DELETE FROM attachments WHERE id = $1 RETURNING s3_key",
-        )
-        .bind(id.0)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("attachment delete: {e}")))?
-        .ok_or_else(|| EmberTroveError::NotFound(format!("attachment {}", id.0)))?;
+        let s3_key: String =
+            sqlx::query_scalar("DELETE FROM attachments WHERE id = $1 RETURNING s3_key")
+                .bind(id.0)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| EmberTroveError::Internal(format!("attachment delete: {e}")))?
+                .ok_or_else(|| EmberTroveError::NotFound(format!("attachment {}", id.0)))?;
         Ok(s3_key)
     }
 }

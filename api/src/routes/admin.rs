@@ -5,10 +5,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{delete, get, put},
-    Extension, Json, Router,
 };
 use common::{
     admin::{AdminUser, CreateAdminUserRequest, UpdateUserRolesRequest},
@@ -17,10 +17,7 @@ use common::{
 use garde::Validate;
 
 use crate::{
-    admin::CognitoAdminClient,
-    auth::permissions::require_admin,
-    error::ApiError,
-    state::AppState,
+    admin::CognitoAdminClient, auth::permissions::require_admin, error::ApiError, state::AppState,
 };
 
 pub fn router() -> Router<AppState> {
@@ -36,9 +33,7 @@ pub fn router() -> Router<AppState> {
 /// Unwrap the Cognito admin client or return 503.
 fn cognito_client(state: &AppState) -> Result<Arc<CognitoAdminClient>, ApiError> {
     state.cognito_admin.clone().ok_or_else(|| {
-        ApiError::Internal(
-            "Cognito admin is not configured (set COGNITO_USER_POOL_ID)".to_string(),
-        )
+        ApiError::Internal("Cognito admin is not configured (set COGNITO_USER_POOL_ID)".to_string())
     })
 }
 

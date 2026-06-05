@@ -8,9 +8,7 @@ use crate::{
     api::fetch_api_version,
     auth::provide_auth_state,
     components::{
-        dark_mode_toggle::Theme,
-        layout::Layout,
-        public_share_view::PublicShareView,
+        dark_mode_toggle::Theme, layout::Layout, public_share_view::PublicShareView,
         toast::ToastState,
     },
 };
@@ -83,7 +81,13 @@ pub fn App() -> impl IntoView {
 
     // Persist theme in localStorage
     let initial_theme = storage_get("theme")
-        .map(|s| if s == "dark" { Theme::Dark } else { Theme::Light })
+        .map(|s| {
+            if s == "dark" {
+                Theme::Dark
+            } else {
+                Theme::Light
+            }
+        })
         .unwrap_or(Theme::Light);
 
     let theme = RwSignal::new(initial_theme);

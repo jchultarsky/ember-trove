@@ -1,10 +1,8 @@
-use axum::{
-    Extension, Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::get,
+use axum::{Extension, Json, Router, extract::State, http::StatusCode, routing::get};
+use common::{
+    auth::AuthClaims,
+    editor_pref::{EditorPref, SetEditorPrefRequest},
 };
-use common::{auth::AuthClaims, editor_pref::{EditorPref, SetEditorPrefRequest}};
 use garde::Validate;
 
 use crate::{error::ApiError, state::AppState};

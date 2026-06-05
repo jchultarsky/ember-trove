@@ -1,10 +1,10 @@
 use axum::{
+    Extension, Router,
     body::Body,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::Response,
     routing::{delete, get},
-    Extension, Router,
 };
 use common::{auth::AuthClaims, id::AttachmentId};
 use uuid::Uuid;
@@ -42,7 +42,8 @@ async fn download(
             header::CONTENT_DISPOSITION,
             format!(
                 "attachment; filename=\"{}\"",
-                attachment.filename
+                attachment
+                    .filename
                     .chars()
                     .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' '))
                     .take(200)

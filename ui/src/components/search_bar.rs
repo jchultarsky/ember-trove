@@ -47,7 +47,9 @@ pub fn SearchBar() -> impl IntoView {
                 show_dropdown.set(false);
                 return;
             }
-            match crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6).await {
+            match crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6)
+                .await
+            {
                 Ok(resp) => {
                     if debounce_version.get_untracked() == version {
                         results.set(resp.results);

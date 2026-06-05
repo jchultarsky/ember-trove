@@ -31,7 +31,7 @@ use crate::app::TaskRefresh;
 use crate::components::format_helpers::format_relative_short;
 use crate::components::node_meta::{status_color, status_icon, status_label};
 use crate::components::task_common::priority_color_hex;
-use crate::components::toast::{push_toast, ToastLevel};
+use crate::components::toast::{ToastLevel, push_toast};
 use crate::markdown::render_markdown_plain;
 
 #[component]
@@ -219,7 +219,8 @@ fn ActivityRecap(entries: Vec<RecentActivityEntry>) -> impl IntoView {
                 })}
             </div>
         </section>
-    }.into_any()
+    }
+    .into_any()
 }
 
 #[component]
@@ -299,19 +300,23 @@ fn ProjectCard(
 
     let on_pin_click = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if pin_busy.get_untracked() { return; }
+        if pin_busy.get_untracked() {
+            return;
+        }
         let next = !pinned_sig.get_untracked();
-        pinned_sig.set(next);  // optimistic
+        pinned_sig.set(next); // optimistic
         pin_busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::set_node_pinned(node_id, next).await {
-                Ok(_)  => {
-                    push_toast(ToastLevel::Success,
-                        if next { "Pinned" } else { "Unpinned" });
+                Ok(_) => {
+                    push_toast(
+                        ToastLevel::Success,
+                        if next { "Pinned" } else { "Unpinned" },
+                    );
                     refresh.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    pinned_sig.set(!next);  // rollback
+                    pinned_sig.set(!next); // rollback
                     push_toast(ToastLevel::Error, format!("Pin failed: {e}"));
                 }
             }

@@ -22,11 +22,11 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
+use crate::wikilink::preprocess_wikilinks;
+use common::id::NodeId;
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark_html};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html as cmark_html};
-use common::id::NodeId;
-use crate::wikilink::preprocess_wikilinks;
 
 /// Markdown extensions enabled for all renderers.
 const MD_OPTIONS: Options = Options::ENABLE_STRIKETHROUGH
@@ -35,11 +35,31 @@ const MD_OPTIONS: Options = Options::ENABLE_STRIKETHROUGH
 
 /// Elements on which the `style` attribute is permitted.
 const STYLED_ELEMENTS: &[&str] = &[
-    "span", "div", "p",
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "strong", "em", "s", "u", "code", "pre", "blockquote",
-    "ul", "ol", "li",
-    "table", "thead", "tbody", "tr", "th", "td",
+    "span",
+    "div",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "strong",
+    "em",
+    "s",
+    "u",
+    "code",
+    "pre",
+    "blockquote",
+    "ul",
+    "ol",
+    "li",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "th",
+    "td",
 ];
 
 /// CSS properties allowed to survive in a sanitised `style` attribute. Chosen
