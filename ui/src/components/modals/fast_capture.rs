@@ -19,12 +19,12 @@
 
 use leptos::html;
 use leptos::prelude::*;
-use leptos::wasm_bindgen::{closure::Closure, JsCast};
+use leptos::wasm_bindgen::{JsCast, closure::Closure};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
     api::quick_capture,
-    components::toast::{push_toast, ToastLevel},
+    components::toast::{ToastLevel, push_toast},
 };
 
 /// Fast-capture modal.  Show/hide is driven by the `ShowCapture` context
@@ -197,4 +197,3 @@ pub fn FastCaptureModal(
         </Show>
     }
 }
-

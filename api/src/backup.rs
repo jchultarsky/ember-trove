@@ -57,11 +57,27 @@ pub async fn create_backup(
     // Collect additional entity types (schema v2).
     let node_links = state.node_links.list_all().await.map_err(ApiError::from)?;
     let favorites = state.favorites.list_all().await.map_err(ApiError::from)?;
-    let permissions = state.permissions.list_all(None).await.map_err(ApiError::from)?;
-    let share_tokens = state.share_tokens.list_all().await.map_err(ApiError::from)?;
-    let node_versions = state.node_versions.list_all().await.map_err(ApiError::from)?;
+    let permissions = state
+        .permissions
+        .list_all(None)
+        .await
+        .map_err(ApiError::from)?;
+    let share_tokens = state
+        .share_tokens
+        .list_all()
+        .await
+        .map_err(ApiError::from)?;
+    let node_versions = state
+        .node_versions
+        .list_all()
+        .await
+        .map_err(ApiError::from)?;
     // Full backup is admin-only — None = all owners' positions.
-    let node_positions = state.graph.list_positions(None).await.map_err(ApiError::from)?;
+    let node_positions = state
+        .graph
+        .list_positions(None)
+        .await
+        .map_err(ApiError::from)?;
 
     let entity_counts = EntityCounts {
         nodes: nodes.len() as u32,
@@ -114,10 +130,7 @@ pub async fn create_backup(
     for att in &attachments {
         match state.object_store.get(&att.s3_key).await {
             Ok(file_bytes) => {
-                let archive_path = format!(
-                    "attachments/{}/{}",
-                    att.node_id.0, att.filename
-                );
+                let archive_path = format!("attachments/{}/{}", att.node_id.0, att.filename);
                 add_bytes_to_archive(&mut builder, &archive_path, &file_bytes)?;
             }
             Err(e) => {
@@ -567,9 +580,7 @@ pub async fn execute_restore(
         let s3_key = data
             .attachments
             .iter()
-            .find(|a| {
-                archive_path == &format!("attachments/{}/{}", a.node_id.0, a.filename)
-            })
+            .find(|a| archive_path == &format!("attachments/{}/{}", a.node_id.0, a.filename))
             .map(|a| a.s3_key.clone());
 
         if let Some(key) = s3_key {
@@ -701,9 +712,8 @@ fn extract_full(
     }
 
     let manifest: BackupManifest = serde_json::from_slice(
-        &manifest_bytes.ok_or_else(|| {
-            ApiError::Internal("manifest.json missing from archive".to_string())
-        })?,
+        &manifest_bytes
+            .ok_or_else(|| ApiError::Internal("manifest.json missing from archive".to_string()))?,
     )
     .map_err(|e| ApiError::Internal(format!("parse manifest.json failed: {e}")))?;
 

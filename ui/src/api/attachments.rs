@@ -1,4 +1,7 @@
-use common::{attachment::Attachment, id::{AttachmentId, NodeId}};
+use common::{
+    attachment::Attachment,
+    id::{AttachmentId, NodeId},
+};
 use gloo_net::http::Request;
 
 use super::{api_url, delete_empty, get_json, parse_json};

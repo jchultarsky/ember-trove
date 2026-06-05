@@ -25,7 +25,7 @@ pub fn provide_auth_state() -> AuthState {
 /// Read the auth state from context.
 #[must_use]
 pub fn use_auth_state() -> AuthState {
-    use_context::<AuthState>().expect("AuthState context must be provided")
+    expect_context::<AuthState>()
 }
 
 /// On mount, call GET /api/auth/me to check if we have a valid session cookie.

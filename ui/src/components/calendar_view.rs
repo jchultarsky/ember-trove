@@ -82,12 +82,7 @@ fn two_month_label(y1: i32, m1: u32, y2: i32, m2: u32) -> String {
 // ── MonthGrid (inner component) ──────────────────────────────────────────────
 
 #[component]
-fn MonthGrid(
-    year: i32,
-    month: u32,
-    tasks: Vec<MyDayTask>,
-    today: NaiveDate,
-) -> impl IntoView {
+fn MonthGrid(year: i32, month: u32, tasks: Vec<MyDayTask>, today: NaiveDate) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let days = days_in_month(year, month);
     let offset = first_weekday(year, month);
@@ -190,9 +185,7 @@ fn MonthGrid(
 
 #[component]
 pub fn CalendarView() -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     let today = crate::components::format_helpers::local_today();
     let year_sig = RwSignal::new(today.year());

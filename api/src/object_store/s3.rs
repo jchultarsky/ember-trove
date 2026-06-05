@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use aws_sdk_s3::{
+    Client, Config,
     config::{BehaviorVersion, Credentials, Region},
     presigning::PresigningConfig,
     primitives::ByteStream,
-    Client, Config,
 };
 use bytes::Bytes;
 use common::EmberTroveError;

@@ -7,8 +7,7 @@
 
 use leptos::prelude::*;
 
-const BAR: &str =
-    "animate-pulse bg-stone-200 dark:bg-stone-800 rounded";
+const BAR: &str = "animate-pulse bg-stone-200 dark:bg-stone-800 rounded";
 
 /// A generic muted bar.  `width` and `height` accept any Tailwind size class.
 #[component]
@@ -35,9 +34,7 @@ pub fn SkeletonListRow() -> impl IntoView {
 /// A stack of row placeholders — usable as a Suspense fallback for any
 /// list-shaped view (My Day tasks, Inbox tasks, Notes feed, etc.).
 #[component]
-pub fn SkeletonList(
-    #[prop(default = 5)] rows: usize,
-) -> impl IntoView {
+pub fn SkeletonList(#[prop(default = 5)] rows: usize) -> impl IntoView {
     view! {
         <div class="divide-y divide-stone-100 dark:divide-stone-800/60">
             {(0..rows).map(|_| view! { <SkeletonListRow /> }).collect_view()}
@@ -63,9 +60,7 @@ pub fn SkeletonCard() -> impl IntoView {
 
 /// A column of card placeholders for the dashboard.
 #[component]
-pub fn SkeletonCards(
-    #[prop(default = 3)] cards: usize,
-) -> impl IntoView {
+pub fn SkeletonCards(#[prop(default = 3)] cards: usize) -> impl IntoView {
     view! {
         <div class="space-y-4">
             {(0..cards).map(|_| view! { <SkeletonCard /> }).collect_view()}

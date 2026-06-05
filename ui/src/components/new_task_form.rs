@@ -32,12 +32,12 @@ pub fn NewTaskForm(
     let show_picker = node_id.is_none();
 
     // Core form state
-    let new_title      = RwSignal::new(String::new());
-    let new_priority   = RwSignal::new("medium".to_string());
-    let new_due        = RwSignal::new(String::new());
+    let new_title = RwSignal::new(String::new());
+    let new_priority = RwSignal::new("medium".to_string());
+    let new_due = RwSignal::new(String::new());
     let new_recurrence = RwSignal::new(String::new());
-    let adding         = RwSignal::new(false);
-    let add_error      = RwSignal::new(Option::<String>::None);
+    let adding = RwSignal::new(false);
+    let add_error = RwSignal::new(Option::<String>::None);
 
     // Optional node-picker state (only meaningful when `show_picker`).
     let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
@@ -49,11 +49,7 @@ pub fn NewTaskForm(
             return;
         }
         let priority = parse_priority(&new_priority.get_untracked());
-        let due_date = new_due
-            .get_untracked()
-            .trim()
-            .parse::<NaiveDate>()
-            .ok();
+        let due_date = new_due.get_untracked().trim().parse::<NaiveDate>().ok();
         let recurrence = parse_recurrence_opt(&new_recurrence.get_untracked());
         // Fixed prop node wins; otherwise use the optionally-picked node.
         let chosen_node = node_id.or_else(|| selected_node.get_untracked().map(|(id, _)| id));

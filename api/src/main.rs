@@ -25,17 +25,16 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use admin::CognitoAdminClient;
 use auth::{AuthConfig, oidc::OidcClient};
-use notify::SesNotifier;
 use config::Config;
+use notify::SesNotifier;
 use object_store::s3::S3ObjectStore;
 use repo::{
-    activity::PgActivityRepo, attachment::PgAttachmentRepo, backup::PgBackupRepo,
-    edge::PgEdgeRepo, favorite::PgFavoriteRepo, graph::PgGraphRepo, node::PgNodeRepo,
-    node_version::PgNodeVersionRepo, note::PgNoteRepo, permission::PgPermissionRepo,
-    pkce::PgPkceRepo, node_link::PgNodeLinkRepo, search::PgSearchRepo,
-    editor_pref::PgEditorPrefRepo, search_presets::PgSearchPresetRepo,
-    share_token::PgShareTokenRepo, tag::PgTagRepo, task::PgTaskRepo, template::PgTemplateRepo,
-    webhook::PgWebhookRepo,
+    activity::PgActivityRepo, attachment::PgAttachmentRepo, backup::PgBackupRepo, edge::PgEdgeRepo,
+    editor_pref::PgEditorPrefRepo, favorite::PgFavoriteRepo, graph::PgGraphRepo, node::PgNodeRepo,
+    node_link::PgNodeLinkRepo, node_version::PgNodeVersionRepo, note::PgNoteRepo,
+    permission::PgPermissionRepo, pkce::PgPkceRepo, search::PgSearchRepo,
+    search_presets::PgSearchPresetRepo, share_token::PgShareTokenRepo, tag::PgTagRepo,
+    task::PgTaskRepo, template::PgTemplateRepo, webhook::PgWebhookRepo,
 };
 use state::AppState;
 
@@ -65,11 +64,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("database migrations complete");
 
     // OIDC discovery — fetch endpoints and JWKS from Cognito (optional for local dev).
-    let oidc = if let (Some(issuer), Some(client_id), Some(client_secret)) =
-        (&config.oidc_issuer, &config.oidc_client_id, &config.oidc_client_secret)
-    {
-        let client =
-            OidcClient::discover(issuer, client_id.clone(), client_secret.clone()).await?;
+    let oidc = if let (Some(issuer), Some(client_id), Some(client_secret)) = (
+        &config.oidc_issuer,
+        &config.oidc_client_id,
+        &config.oidc_client_secret,
+    ) {
+        let client = OidcClient::discover(issuer, client_id.clone(), client_secret.clone()).await?;
 
         Some(Arc::new(client))
     } else {
@@ -201,6 +201,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("ember-trove-api listening on {addr}");
 
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

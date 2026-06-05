@@ -1,7 +1,4 @@
-use common::{
-    favorite::CreateFavoriteRequest,
-    node::NodeTitleEntry,
-};
+use common::{favorite::CreateFavoriteRequest, node::NodeTitleEntry};
 use leptos::portal::Portal;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -104,7 +101,10 @@ pub fn AddFavoriteModal(
             match create_favorite(&req).await {
                 Ok(fav) => {
                     loading.set(false);
-                    push_toast(ToastLevel::Success, format!("\"{}\" added to Favorites.", fav.label));
+                    push_toast(
+                        ToastLevel::Success,
+                        format!("\"{}\" added to Favorites.", fav.label),
+                    );
                     on_added.run(fav);
                     on_close.run(());
                 }

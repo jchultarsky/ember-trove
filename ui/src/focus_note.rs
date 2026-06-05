@@ -8,7 +8,7 @@
 //! `focus-task-flash` CSS animation. Strips the `?note=` param after focusing
 //! so a refresh doesn't re-fire.
 
-use leptos::wasm_bindgen::{closure::Closure, JsCast};
+use leptos::wasm_bindgen::{JsCast, closure::Closure};
 
 // A node's Markdown body renders via its own LocalResource and can be long;
 // it may finish (and shift layout) well after the note panel is populated.
@@ -19,11 +19,21 @@ const RETRY_DELAYS_MS: [i32; 6] = [0, 200, 600, 1500, 3000, 5000];
 /// Schedule the focus-note pass. Call once on view mount. No-ops when the URL
 /// has no `?note=` param.
 pub fn schedule_focus_note() {
-    let Some(win) = web_sys::window() else { return; };
-    let Ok(href) = win.location().href() else { return; };
-    let Ok(url) = web_sys::Url::new(&href) else { return; };
-    let Some(note_id) = url.search_params().get("note") else { return; };
-    if note_id.is_empty() { return; }
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let Ok(href) = win.location().href() else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::new(&href) else {
+        return;
+    };
+    let Some(note_id) = url.search_params().get("note") else {
+        return;
+    };
+    if note_id.is_empty() {
+        return;
+    }
 
     for delay in RETRY_DELAYS_MS {
         let id = note_id.clone();
@@ -49,9 +59,13 @@ pub fn pending_focus_note() -> Option<String> {
 }
 
 fn try_focus_note(note_id: &str, win: &web_sys::Window) {
-    let Some(doc) = win.document() else { return; };
+    let Some(doc) = win.document() else {
+        return;
+    };
     let selector = format!("[data-note-id=\"{note_id}\"]");
-    let Ok(Some(el)) = doc.query_selector(&selector) else { return; };
+    let Ok(Some(el)) = doc.query_selector(&selector) else {
+        return;
+    };
 
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_behavior(web_sys::ScrollBehavior::Smooth);

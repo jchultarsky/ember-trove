@@ -11,8 +11,7 @@ use leptos_router::hooks::use_navigate;
 #[component]
 pub fn TagBar(node_id: NodeId) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let tag_filter =
-        use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
+    let tag_filter = use_context::<RwSignal<Option<Tag>>>().unwrap_or_else(|| RwSignal::new(None));
     let refresh_tags = RwSignal::new(0u32);
     let input_value = RwSignal::new(String::new());
     let show_input = RwSignal::new(false);

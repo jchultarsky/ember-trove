@@ -371,6 +371,38 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
 ---
 
+## Development Workflow & Standards
+
+Ember Trove follows a **zero-panic, TDD-first, plan-before-you-change** workflow. The
+full policy lives in [`.claude/POLICY.md`](.claude/POLICY.md); contributor mechanics in
+[`CONTRIBUTING.md`](CONTRIBUTING.md); agent guardrails in [`CLAUDE.md`](CLAUDE.md).
+
+**One-time setup — install the git hooks:**
+
+```bash
+make hooks-install      # pre-commit: cargo fmt --all --check + clippy; pre-push: tests
+```
+
+**Definition of done** (enforced by hooks locally and by CI on every push/PR):
+
+```bash
+make verify             # or ./scripts/verify.sh — runs the full suite below
+#   cargo fmt --all --check          (formatting is enforced; edition 2024)
+#   cargo clippy ... -- -D warnings  (api+common, and ui for wasm32)
+#   cargo test --workspace --exclude ui
+#   cargo check -p ui --target wasm32-unknown-unknown
+```
+
+- **Formatting:** default `rustfmt`, edition 2024. Configure your editor to format with
+  `--edition 2024` so it matches the CI gate.
+- **Coverage:** `make coverage` (CI reports it via `cargo llvm-cov`; currently report-only).
+- **Dependencies:** [Dependabot](.github/dependabot.yml) proposes weekly `cargo` and
+  `github-actions` updates against `develop`; Actions are pinned to commit SHAs.
+- **Git Flow:** branch from `develop`; never commit directly to `main`/`develop`. See
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) for the feature/release/hotfix flow.
+
+---
+
 ## API Reference
 
 All routes are nested under `/api`. Interactive docs at `/swagger-ui/` when the API is running.

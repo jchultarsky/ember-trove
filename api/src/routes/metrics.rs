@@ -12,7 +12,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use axum::{extract::{Request, State}, middleware::Next, response::Response, Extension, Json};
+use axum::{
+    Extension, Json,
+    extract::{Request, State},
+    middleware::Next,
+    response::Response,
+};
 use common::auth::AuthClaims;
 use serde::Serialize;
 

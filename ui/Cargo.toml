@@ -7,6 +7,9 @@ repository = "https://github.com/jchultarsky101/ember-trove"
 [package.metadata.dist]
 dist = false
 
+[lints]
+workspace = true
+
 [dependencies]
 common      = { path = "../common" }
 leptos        = { version = "0.8.16", features = ["csr"] }

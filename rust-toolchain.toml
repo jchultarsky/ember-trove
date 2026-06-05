@@ -6,6 +6,7 @@
 # (AWS SDK crates require rustc >= 1.91.1; 1.96 clears that comfortably.)
 channel = "1.96"
 targets = ["wasm32-unknown-unknown"]
-# clippy must be listed here — dtolnay/rust-toolchain ignores workflow
-# `components:` when rust-toolchain.toml is present.
-components = ["clippy"]
+# clippy AND rustfmt must be listed here — dtolnay/rust-toolchain ignores workflow
+# `components:` when rust-toolchain.toml is present, so the CI `fmt` job (cargo fmt
+# --all --check) and `clippy` jobs both depend on these being declared here.
+components = ["clippy", "rustfmt"]

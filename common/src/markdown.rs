@@ -96,7 +96,10 @@ Some intro text.
         let section = extract_section(body, "Status").expect("should find section");
         assert!(section.contains("MVP shipped"));
         assert!(section.contains("Collecting feedback"));
-        assert!(!section.contains("Do something"), "should not leak into next section");
+        assert!(
+            !section.contains("Do something"),
+            "should not leak into next section"
+        );
     }
 
     #[test]

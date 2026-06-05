@@ -4,15 +4,17 @@ use leptos_router::hooks::{use_location, use_navigate};
 use crate::{
     auth::{AuthState, AuthStatus},
     components::{
-        change_password_modal::ChangePasswordModal,
-        favorites_section::FavoritesSection,
-        layout::SidebarCollapsed,
-        search_bar::SearchBar,
+        change_password_modal::ChangePasswordModal, favorites_section::FavoritesSection,
+        layout::SidebarCollapsed, search_bar::SearchBar,
     },
 };
 
 #[component]
-pub fn Sidebar(auth_state: AuthState, collapsed: SidebarCollapsed, on_nav: Callback<()>) -> impl IntoView {
+pub fn Sidebar(
+    auth_state: AuthState,
+    collapsed: SidebarCollapsed,
+    on_nav: Callback<()>,
+) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let show_change_pw = RwSignal::new(false);
 
@@ -26,15 +28,17 @@ pub fn Sidebar(auth_state: AuthState, collapsed: SidebarCollapsed, on_nav: Callb
         });
     };
 
-    let node_type_filter =
-        use_context::<RwSignal<Option<String>>>().expect("node_type_filter signal must be provided");
+    let node_type_filter = expect_context::<RwSignal<Option<String>>>();
 
     // Macro to reduce cloning boilerplate for each nav closure.
     // Each SidebarLink on_click needs its own clone of navigate + on_nav.
     macro_rules! nav {
         ($path:expr) => {{
             let n = navigate.get_value();
-            move || { n($path, Default::default()); on_nav.run(()); }
+            move || {
+                n($path, Default::default());
+                on_nav.run(());
+            }
         }};
     }
 
@@ -219,54 +223,57 @@ fn RecentSection(collapsed: SidebarCollapsed, on_nav: Callback<()>) -> impl Into
 
         let is_collapsed = collapsed.get();
 
-        Some(view! {
-            <div>
-                {(!is_collapsed).then(|| view! {
-                    <p class="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest
-                               text-stone-400 dark:text-stone-500 select-none">
-                        "Recent"
-                    </p>
-                })}
-                {entries.into_iter().map(|entry| {
-                    let id = entry.id;
-                    let title = entry.title.clone();
-                    let icon = entry.icon.clone();
-                    let label = entry.title.clone();
-                    let n = navigate.get_value();
-                    view! {
-                        <button
-                            class=move || {
-                                let base = "flex items-center w-full rounded-lg text-sm \
-                                    text-stone-600 dark:text-stone-400 \
-                                    hover:bg-stone-100 dark:hover:bg-stone-800 \
-                                    hover:text-stone-800 dark:hover:text-stone-200 \
-                                    transition-colors cursor-pointer py-1.5";
-                                if collapsed.get() {
-                                    format!("{base} justify-center px-0")
-                                } else {
-                                    format!("{base} px-3 gap-2")
+        Some(
+            view! {
+                <div>
+                    {(!is_collapsed).then(|| view! {
+                        <p class="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest
+                                   text-stone-400 dark:text-stone-500 select-none">
+                            "Recent"
+                        </p>
+                    })}
+                    {entries.into_iter().map(|entry| {
+                        let id = entry.id;
+                        let title = entry.title.clone();
+                        let icon = entry.icon.clone();
+                        let label = entry.title.clone();
+                        let n = navigate.get_value();
+                        view! {
+                            <button
+                                class=move || {
+                                    let base = "flex items-center w-full rounded-lg text-sm \
+                                        text-stone-600 dark:text-stone-400 \
+                                        hover:bg-stone-100 dark:hover:bg-stone-800 \
+                                        hover:text-stone-800 dark:hover:text-stone-200 \
+                                        transition-colors cursor-pointer py-1.5";
+                                    if collapsed.get() {
+                                        format!("{base} justify-center px-0")
+                                    } else {
+                                        format!("{base} px-3 gap-2")
+                                    }
                                 }
-                            }
-                            title=title.clone()
-                            on:click=move |_| {
-                                n(&format!("/nodes/{id}"), Default::default());
-                                on_nav.run(());
-                            }
-                        >
-                            <span class="material-symbols-outlined shrink-0
-                                         text-stone-400 dark:text-stone-500"
-                                  style="font-size: 16px;">
-                                {icon.clone()}
-                            </span>
-                            <span class="truncate text-xs"
-                                  class:hidden=move || collapsed.get()>
-                                {label.clone()}
-                            </span>
-                        </button>
-                    }
-                }).collect_view()}
-            </div>
-        }.into_any())
+                                title=title.clone()
+                                on:click=move |_| {
+                                    n(&format!("/nodes/{id}"), Default::default());
+                                    on_nav.run(());
+                                }
+                            >
+                                <span class="material-symbols-outlined shrink-0
+                                             text-stone-400 dark:text-stone-500"
+                                      style="font-size: 16px;">
+                                    {icon.clone()}
+                                </span>
+                                <span class="truncate text-xs"
+                                      class:hidden=move || collapsed.get()>
+                                    {label.clone()}
+                                </span>
+                            </button>
+                        }
+                    }).collect_view()}
+                </div>
+            }
+            .into_any(),
+        )
     }
 }
 

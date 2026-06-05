@@ -5,15 +5,10 @@
 //! in-app fast-capture textarea.  See `common::inbox` for the DTOs and the
 //! coalesce/truncate rules.
 
-use axum::{
-    Extension, Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::post,
-};
+use axum::{Extension, Json, Router, extract::State, http::StatusCode, routing::post};
 use common::{
     auth::AuthClaims,
-    inbox::{coalesce_capture, QuickCaptureRequest, QuickCaptureResponse},
+    inbox::{QuickCaptureRequest, QuickCaptureResponse, coalesce_capture},
     task::{CreateTaskRequest, TaskPriority, TaskStatus},
 };
 use garde::Validate;

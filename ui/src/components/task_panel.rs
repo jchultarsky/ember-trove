@@ -17,9 +17,7 @@ use crate::components::task_common::{
 
 #[component]
 pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
     let tasks_resource = LocalResource::new(move || {
         let _ = task_refresh.get();
@@ -27,12 +25,16 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     });
 
     // Per-task saved inline-edit heights, provided to the nested TaskRows.
-    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
-    provide_context(crate::components::task_row::TaskEditorHeights(editor_heights));
+    let editor_heights =
+        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    provide_context(crate::components::task_row::TaskEditorHeights(
+        editor_heights,
+    ));
     wasm_bindgen_futures::spawn_local(async move {
         if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
             editor_heights.set(
-                prefs.into_iter()
+                prefs
+                    .into_iter()
                     .filter(|p| p.entity_kind == "task")
                     .map(|p| (p.entity_id, p.height))
                     .collect(),
@@ -52,7 +54,8 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
 
     // Sync open/done buckets whenever the resource (re-)loads.
     Effect::new(move |_| {
-        let all = tasks_resource.get()
+        let all = tasks_resource
+            .get()
             .and_then(|r| r.ok())
             .unwrap_or_default();
         let (mut open, done): (Vec<_>, Vec<_>) =
@@ -228,11 +231,11 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let status_sig = RwSignal::new(status_val.clone());
 
     // Inline editing — title, priority, due date.
-    let editing_title  = RwSignal::new(false);
-    let edit_title     = RwSignal::new(task.title.clone());
-    let orig_title     = RwSignal::new(task.title.clone());
-    let edit_priority  = RwSignal::new(priority_value(&priority).to_string());
-    let edit_due       = RwSignal::new(
+    let editing_title = RwSignal::new(false);
+    let edit_title = RwSignal::new(task.title.clone());
+    let orig_title = RwSignal::new(task.title.clone());
+    let edit_priority = RwSignal::new(priority_value(&priority).to_string());
+    let edit_due = RwSignal::new(
         due.map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default(),
     );
@@ -240,12 +243,13 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     // Save all editable fields at once.
     let do_save_edit = move || {
         let new_title = edit_title.get_untracked().trim().to_string();
-        if new_title.is_empty() { return; }
+        if new_title.is_empty() {
+            return;
+        }
         editing_title.set(false);
         let new_priority = Some(parse_priority(&edit_priority.get_untracked()));
-        let new_due: Option<Option<NaiveDate>> = Some(
-            edit_due.get_untracked().trim().parse::<NaiveDate>().ok()
-        );
+        let new_due: Option<Option<NaiveDate>> =
+            Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         let req = UpdateTaskRequest {
             title: Some(new_title),
             status: None,
@@ -310,7 +314,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
         });
     };
 
-    let title_display  = task.title.clone();
+    let title_display = task.title.clone();
     let has_recurrence = task.recurrence.is_some();
 
     view! {

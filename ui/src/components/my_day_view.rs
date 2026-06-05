@@ -42,8 +42,8 @@
 use chrono::NaiveDate;
 use common::id::TaskId;
 use common::task::{MyDayTask, TaskStatus, UpdateTaskRequest};
-use leptos::{ev, prelude::*};
 use leptos::wasm_bindgen::JsCast;
+use leptos::{ev, prelude::*};
 use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
@@ -51,15 +51,13 @@ use crate::components::task_common::status_done;
 use crate::components::task_row::{
     EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
 };
-use crate::components::toast::{push_toast, ToastLevel};
+use crate::components::toast::{ToastLevel, push_toast};
 
 #[component]
 pub fn MyDayView() -> impl IntoView {
-    let task_refresh = use_context::<TaskRefresh>()
-        .expect("TaskRefresh context must be provided")
-        .0;
+    let task_refresh = expect_context::<TaskRefresh>().0;
 
-    let today      = crate::components::format_helpers::local_today();
+    let today = crate::components::format_helpers::local_today();
     let date_label = today.format("%A, %B %-d").to_string();
 
     // Two parallel resources — server already filters status, so the
@@ -81,12 +79,14 @@ pub fn MyDayView() -> impl IntoView {
 
     // Per-task saved inline-edit heights — fetched once, provided to all rows
     // so each opens its editor at the previously-resized size.
-    let editor_heights = RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    let editor_heights =
+        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
     provide_context(TaskEditorHeights(editor_heights));
     wasm_bindgen_futures::spawn_local(async move {
         if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
             editor_heights.set(
-                prefs.into_iter()
+                prefs
+                    .into_iter()
                     .filter(|p| p.entity_kind == "task")
                     .map(|p| (p.entity_id, p.height))
                     .collect(),
@@ -102,11 +102,13 @@ pub fn MyDayView() -> impl IntoView {
     let flat_tasks: RwSignal<Vec<MyDayTask>> = RwSignal::new(Vec::new());
     Effect::new(move |_| {
         let today_raw = today_tasks.get().and_then(|r| r.ok()).unwrap_or_default();
-        let all_raw   = all_open.get().and_then(|r| r.ok()).unwrap_or_default();
-        let today_zone: Vec<MyDayTask> = today_raw.into_iter()
+        let all_raw = all_open.get().and_then(|r| r.ok()).unwrap_or_default();
+        let today_zone: Vec<MyDayTask> = today_raw
+            .into_iter()
             .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
             .collect();
-        let backlog_zone: Vec<MyDayTask> = all_raw.into_iter()
+        let backlog_zone: Vec<MyDayTask> = all_raw
+            .into_iter()
             .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
             .collect();
         let mut flat = today_zone;
@@ -131,7 +133,9 @@ pub fn MyDayView() -> impl IntoView {
     window_event_listener(ev::keydown, move |ev| {
         // Modifier keys are reserved for app-level shortcuts (Cmd-K
         // arrives in v2.8.0) — never consume them here.
-        if ev.ctrl_key() || ev.meta_key() || ev.alt_key() { return; }
+        if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+            return;
+        }
 
         // Skip when typing — input, textarea, select, button, or
         // anything contenteditable.  Buttons are excluded so Enter on
@@ -149,11 +153,16 @@ pub fn MyDayView() -> impl IntoView {
                     .unwrap_or(false)
             })
             .unwrap_or(false);
-        if editable { return; }
+        if editable {
+            return;
+        }
 
         let flat = flat_tasks.get_untracked();
-        if flat.is_empty() { return; }
-        let cur_idx = focused_id.get_untracked()
+        if flat.is_empty() {
+            return;
+        }
+        let cur_idx = focused_id
+            .get_untracked()
             .and_then(|id| flat.iter().position(|t| t.task.id == id));
 
         match ev.key().as_str() {
@@ -172,17 +181,21 @@ pub fn MyDayView() -> impl IntoView {
                 scroll_focused_into_view(id);
             }
             "Enter" => {
-                let Some(idx) = cur_idx else { return; };
+                let Some(idx) = cur_idx else {
+                    return;
+                };
                 ev.prevent_default();
                 let mdt = &flat[idx];
                 let target = match mdt.task.node_id {
                     Some(nid) => format!("/nodes/{nid}?task={}", mdt.task.id),
-                    None      => format!("/tasks/inbox?task={}", mdt.task.id),
+                    None => format!("/tasks/inbox?task={}", mdt.task.id),
                 };
                 navigate.get_value()(&target, Default::default());
             }
             " " => {
-                let Some(idx) = cur_idx else { return; };
+                let Some(idx) = cur_idx else {
+                    return;
+                };
                 ev.prevent_default();
                 let mdt = &flat[idx];
                 let next_status = if status_done(&mdt.task.status) {
@@ -193,44 +206,62 @@ pub fn MyDayView() -> impl IntoView {
                 patch_task(
                     mdt.task.id,
                     UpdateTaskRequest {
-                        title: None, status: Some(next_status),
-                        priority: None, focus_date: None, due_date: None,
-                        recurrence: None, node_id: None,
+                        title: None,
+                        status: Some(next_status),
+                        priority: None,
+                        focus_date: None,
+                        due_date: None,
+                        recurrence: None,
+                        node_id: None,
                     },
                     "Toggled",
                     task_refresh,
                 );
             }
             "t" => {
-                let Some(idx) = cur_idx else { return; };
+                let Some(idx) = cur_idx else {
+                    return;
+                };
                 ev.prevent_default();
                 let mdt = &flat[idx];
                 let in_today = mdt.task.focus_date == Some(today);
                 let new_focus = if in_today { None } else { Some(today) };
-                let msg = if in_today { "Removed from today" } else { "Added to today" };
+                let msg = if in_today {
+                    "Removed from today"
+                } else {
+                    "Added to today"
+                };
                 patch_task(
                     mdt.task.id,
                     UpdateTaskRequest {
-                        title: None, status: None, priority: None,
+                        title: None,
+                        status: None,
+                        priority: None,
                         focus_date: Some(new_focus),
-                        due_date: None, recurrence: None, node_id: None,
+                        due_date: None,
+                        recurrence: None,
+                        node_id: None,
                     },
                     msg,
                     task_refresh,
                 );
             }
             "e" => {
-                let Some(idx) = cur_idx else { return; };
+                let Some(idx) = cur_idx else {
+                    return;
+                };
                 ev.prevent_default();
                 editing_id.set(Some(flat[idx].task.id));
             }
             "d" => {
-                let Some(idx) = cur_idx else { return; };
+                let Some(idx) = cur_idx else {
+                    return;
+                };
                 ev.prevent_default();
                 let id = flat[idx].task.id;
                 wasm_bindgen_futures::spawn_local(async move {
                     match crate::api::delete_task(id).await {
-                        Ok(_)  => {
+                        Ok(_) => {
                             push_toast(ToastLevel::Success, "Deleted");
                             task_refresh.update(|n| *n += 1);
                         }
@@ -369,30 +400,36 @@ fn KanbanZoneRow(
     let on_drop = move |ev: web_sys::DragEvent| {
         ev.prevent_default();
         drag_over.set(false);
-        let Some(dt)  = ev.data_transfer() else { return; };
-        let Ok(raw)   = dt.get_data("text/plain")    else { return; };
-        let Ok(uuid)  = raw.parse::<uuid::Uuid>()    else { return; };
-        let task_id   = TaskId(uuid);
+        let Some(dt) = ev.data_transfer() else {
+            return;
+        };
+        let Ok(raw) = dt.get_data("text/plain") else {
+            return;
+        };
+        let Ok(uuid) = raw.parse::<uuid::Uuid>() else {
+            return;
+        };
+        let task_id = TaskId(uuid);
         let new_focus = match zone {
-            KanbanZone::Today   => Some(today),
+            KanbanZone::Today => Some(today),
             KanbanZone::Backlog => None,
         };
         let success_msg = match zone {
-            KanbanZone::Today   => "Added to today",
+            KanbanZone::Today => "Added to today",
             KanbanZone::Backlog => "Removed from today",
         };
         let req = UpdateTaskRequest {
-            title:      None,
-            status:     None,
-            priority:   None,
+            title: None,
+            status: None,
+            priority: None,
             focus_date: Some(new_focus),
-            due_date:   None,
+            due_date: None,
             recurrence: None,
-            node_id:    None,
+            node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {
-                Ok(_)  => {
+                Ok(_) => {
                     push_toast(ToastLevel::Success, success_msg);
                     refresh.update(|n| *n += 1);
                 }
@@ -466,7 +503,7 @@ fn patch_task(
 ) {
     wasm_bindgen_futures::spawn_local(async move {
         match crate::api::update_task(task_id, &req).await {
-            Ok(_)  => {
+            Ok(_) => {
                 push_toast(ToastLevel::Success, success_msg);
                 refresh.update(|n| *n += 1);
             }
@@ -478,11 +515,19 @@ fn patch_task(
 /// Scroll the row matching `task_id` into view (no flash — the focus
 /// ring is the visual anchor).  Called after j/k navigation.
 fn scroll_focused_into_view(task_id: TaskId) {
-    let Some(win) = web_sys::window() else { return; };
-    let Some(doc) = win.document() else { return; };
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let Some(doc) = win.document() else {
+        return;
+    };
     let selector = format!("[data-task-id=\"{}\"]", task_id.0);
-    let Ok(Some(el)) = doc.query_selector(&selector) else { return; };
-    let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() else { return; };
+    let Ok(Some(el)) = doc.query_selector(&selector) else {
+        return;
+    };
+    let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() else {
+        return;
+    };
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_behavior(web_sys::ScrollBehavior::Smooth);
     opts.set_block(web_sys::ScrollLogicalPosition::Nearest);

@@ -5,22 +5,24 @@ use common::id::NodeId;
 use common::node::NodeTitleEntry;
 use leptos::{html::Input, prelude::*};
 
-use crate::components::attachment_panel::AttachmentPanel;
-use leptos_router::hooks::use_navigate;
-use crate::components::modals::delete_confirm::DeleteConfirmModal;
-use crate::components::node_meta::{status_color, status_icon, status_label, type_icon, type_label};
+use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::activity_panel::ActivityPanel;
+use crate::components::attachment_panel::AttachmentPanel;
+use crate::components::links_panel::LinksPanel;
+use crate::components::modals::delete_confirm::DeleteConfirmModal;
+use crate::components::node_meta::{
+    status_color, status_icon, status_label, type_icon, type_label,
+};
+use crate::components::note_panel::NotePanel;
 use crate::components::permission_dialog::PermissionPanel;
 use crate::components::share_panel::SharePanel;
-use crate::components::version_panel::VersionPanel;
 use crate::components::tag_bar::TagBar;
-use crate::auth::{AuthStatus, use_auth_state};
-use crate::components::note_panel::NotePanel;
 use crate::components::task_panel::TaskPanel;
-use crate::components::links_panel::LinksPanel;
 use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::version_panel::VersionPanel;
 use crate::focus_task::schedule_focus_task;
 use crate::markdown::render_markdown;
+use leptos_router::hooks::use_navigate;
 
 fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
     entries.iter().map(|e| (e.title.clone(), e.id)).collect()
@@ -29,7 +31,7 @@ fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
 #[component]
 pub fn NodeView(id: NodeId) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let refresh = use_context::<RwSignal<u32>>().expect("refresh signal must be provided");
+    let refresh = expect_context::<RwSignal<u32>>();
 
     let node = LocalResource::new(move || {
         let id = id;
@@ -421,7 +423,9 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
             let is_open = open.get();
             let node_id = node_id;
             async move {
-                if !is_open { return Ok(vec![]); }
+                if !is_open {
+                    return Ok(vec![]);
+                }
                 crate::api::fetch_edges_for_node(node_id).await
             }
         });
@@ -715,7 +719,9 @@ fn BacklinksPanel(node_id: NodeId) -> impl IntoView {
         let is_open = open.get();
         let node_id = node_id;
         async move {
-            if !is_open { return Ok(vec![]); }
+            if !is_open {
+                return Ok(vec![]);
+            }
             crate::api::fetch_backlinks(node_id).await
         }
     });

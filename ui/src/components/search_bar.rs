@@ -13,8 +13,7 @@ pub fn SearchBar() -> impl IntoView {
     let navigate = use_navigate();
     let location = use_location();
     // Shared query — also read by SearchView.
-    let search_query =
-        use_context::<RwSignal<String>>().expect("search_query signal must be provided");
+    let search_query = expect_context::<RwSignal<String>>();
 
     let results: RwSignal<Vec<SearchResult>> = RwSignal::new(vec![]);
     let show_dropdown = RwSignal::new(false);
@@ -47,7 +46,9 @@ pub fn SearchBar() -> impl IntoView {
                 show_dropdown.set(false);
                 return;
             }
-            match crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6).await {
+            match crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6)
+                .await
+            {
                 Ok(resp) => {
                     if debounce_version.get_untracked() == version {
                         results.set(resp.results);

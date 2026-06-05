@@ -57,7 +57,10 @@ async fn create_note(
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
 
-    let note = state.notes.create(Some(NodeId(node_id)), &claims.sub, req).await?;
+    let note = state
+        .notes
+        .create(Some(NodeId(node_id)), &claims.sub, req)
+        .await?;
     Ok((StatusCode::CREATED, Json(note)))
 }
 

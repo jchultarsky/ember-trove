@@ -10,7 +10,11 @@ pub async fn fetch_editor_prefs() -> Result<Vec<EditorPref>, UiError> {
 }
 
 /// Persist a resized editor height for one entity (`"task"` or `"note"`).
-pub async fn set_editor_pref(entity_kind: &str, entity_id: Uuid, height: i32) -> Result<(), UiError> {
+pub async fn set_editor_pref(
+    entity_kind: &str,
+    entity_id: Uuid,
+    height: i32,
+) -> Result<(), UiError> {
     let req = SetEditorPrefRequest {
         entity_kind: entity_kind.to_string(),
         entity_id,

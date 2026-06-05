@@ -6,12 +6,12 @@ mod attachments;
 mod auth;
 mod backup;
 mod edges;
+mod editor_prefs;
 mod favorites;
 mod graph;
 mod inbox;
 mod node_links;
 mod nodes;
-mod editor_prefs;
 mod notes;
 mod permissions;
 mod search;
@@ -67,7 +67,10 @@ pub async fn change_password(current: &str, proposed: &str) -> Result<(), UiErro
         Ok(())
     } else {
         let status = resp.status();
-        let msg = resp.text().await.unwrap_or_else(|_| "password change failed".to_string());
+        let msg = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "password change failed".to_string());
         Err(UiError::api(status, msg))
     }
 }
@@ -279,12 +282,12 @@ pub use attachments::*;
 pub use auth::*;
 pub use backup::*;
 pub use edges::*;
+pub use editor_prefs::*;
 pub use favorites::*;
 pub use graph::*;
 pub use inbox::*;
 pub use node_links::*;
 pub use nodes::*;
-pub use editor_prefs::*;
 pub use notes::*;
 pub use permissions::*;
 pub use search::*;

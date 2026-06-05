@@ -33,7 +33,9 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         let is_open = open.get();
         let node_id = node_id;
         async move {
-            if !is_open { return Ok(vec![]); }
+            if !is_open {
+                return Ok(vec![]);
+            }
             api::list_permissions(node_id).await
         }
     });

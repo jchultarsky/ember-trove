@@ -1,16 +1,17 @@
 pub mod admin;
+pub mod attachments;
+pub mod auth;
 pub mod backup;
+pub mod edges;
 pub mod editor_prefs;
 pub mod export;
 pub mod favorites;
+pub mod graph;
 pub mod inbox;
 pub mod metrics;
-pub mod notes;
-pub mod attachments;
-pub mod auth;
-pub mod edges;
-pub mod graph;
+pub mod node_links;
 pub mod nodes;
+pub mod notes;
 pub mod permissions;
 pub mod search;
 pub mod search_presets;
@@ -18,20 +19,21 @@ pub mod share;
 pub mod tags;
 pub mod tasks;
 pub mod templates;
-pub mod node_links;
 pub mod webhooks;
 
-use axum::{extract::State, middleware, routing::get, Json, Router};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{Method, StatusCode, header};
+use axum::{Json, Router, extract::State, middleware, routing::get};
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
+use tower_governor::{
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
+};
+use tower_http::LatencyUnit;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-use tower_http::LatencyUnit;
-use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor};
 use tracing::Level;
 
 use crate::{auth::middleware::require_auth, state::AppState};
@@ -67,16 +69,12 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     // SECURITY: Fail hard if FRONTEND_URL is not a valid header value.
     // Silently falling back to AllowOrigin::any() with credentials would be an
     // open CORS policy — any origin could make authenticated cross-site requests.
-    let origin = AllowOrigin::exact(
-        state
-            .auth
-            .frontend_url
-            .parse()
-            .map_err(|e| anyhow::anyhow!(
-                "FRONTEND_URL '{}' is not a valid CORS origin: {e}",
-                state.auth.frontend_url
-            ))?,
-    );
+    let origin = AllowOrigin::exact(state.auth.frontend_url.parse().map_err(|e| {
+        anyhow::anyhow!(
+            "FRONTEND_URL '{}' is not a valid CORS origin: {e}",
+            state.auth.frontend_url
+        )
+    })?);
 
     // With allow_credentials(true), headers and methods must be explicit (not Any).
     let cors = CorsLayer::new()
@@ -145,10 +143,16 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .merge(rate_limited)
         // Count every response by status class (includes /health). Applied here
         // so it wraps all routes; reads/writes the counters in AppState.
-        .layer(middleware::from_fn_with_state(state.clone(), metrics::track_requests))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            metrics::track_requests,
+        ))
         .layer(cors)
         // 30-second request timeout — returns 408 Request Timeout.
-        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30)))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(30),
+        ))
         // Structured per-request tracing: one span per request carrying method,
         // path, and X-Request-Id; response logged at INFO with latency in ms.
         .layer(
@@ -198,7 +202,9 @@ mod tests {
             .const_per_millisecond(100)
             .const_burst_size(100);
         let conf = base.key_extractor(SmartIpKeyExtractor).finish();
-        assert!(conf.is_some(), "governor config with SmartIpKeyExtractor must be valid");
+        assert!(
+            conf.is_some(),
+            "governor config with SmartIpKeyExtractor must be valid"
+        );
     }
 }
-

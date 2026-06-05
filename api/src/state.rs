@@ -11,11 +11,11 @@ use crate::{
     object_store::ObjectStore,
     repo::{
         activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo, edge::EdgeRepo,
-        favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_version::NodeVersionRepo,
-        note::NoteRepo, permission::PermissionRepo, pkce::PkceRepo, search::SearchRepo,
-        editor_pref::EditorPrefRepo,
-        node_link::NodeLinkRepo, search_presets::SearchPresetRepo, share_token::ShareTokenRepo,
-        tag::TagRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
+        editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
+        node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
+        permission::PermissionRepo, pkce::PkceRepo, search::SearchRepo,
+        search_presets::SearchPresetRepo, share_token::ShareTokenRepo, tag::TagRepo,
+        task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
     },
 };
 

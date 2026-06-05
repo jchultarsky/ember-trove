@@ -93,22 +93,13 @@ knowledge node with you on Ember Trove.</p>"
             .client
             .send_email()
             .from_email_address(&self.from_email)
-            .destination(
-                Destination::builder()
-                    .to_addresses(to_email)
-                    .build(),
-            )
+            .destination(Destination::builder().to_addresses(to_email).build())
             .content(
                 EmailContent::builder()
                     .simple(
                         Message::builder()
                             .subject(subject_c)
-                            .body(
-                                Body::builder()
-                                    .html(html_c)
-                                    .text(text_c)
-                                    .build(),
-                            )
+                            .body(Body::builder().html(html_c).text(text_c).build())
                             .build(),
                     )
                     .build(),

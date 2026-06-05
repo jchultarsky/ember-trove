@@ -85,10 +85,10 @@ impl TemplateRow {
 
 fn parse_node_type(s: &str) -> Result<NodeType, EmberTroveError> {
     match s {
-        "article"   => Ok(NodeType::Article),
-        "project"   => Ok(NodeType::Project),
-        "area"      => Ok(NodeType::Area),
-        "resource"  => Ok(NodeType::Resource),
+        "article" => Ok(NodeType::Article),
+        "project" => Ok(NodeType::Project),
+        "area" => Ok(NodeType::Area),
+        "resource" => Ok(NodeType::Resource),
         "reference" => Ok(NodeType::Reference),
         other => Err(EmberTroveError::Internal(format!(
             "unknown node_type in template: {other}"
@@ -98,10 +98,10 @@ fn parse_node_type(s: &str) -> Result<NodeType, EmberTroveError> {
 
 fn node_type_str(nt: &NodeType) -> &'static str {
     match nt {
-        NodeType::Article   => "article",
-        NodeType::Project   => "project",
-        NodeType::Area      => "area",
-        NodeType::Resource  => "resource",
+        NodeType::Article => "article",
+        NodeType::Project => "project",
+        NodeType::Area => "area",
+        NodeType::Resource => "resource",
         NodeType::Reference => "reference",
     }
 }
@@ -249,9 +249,7 @@ impl TemplateRepo for PgTemplateRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("set_default toggle failed: {e}")))?
         .ok_or_else(|| {
-            EmberTroveError::NotFound(
-                "template not found or not owned by current user".to_string(),
-            )
+            EmberTroveError::NotFound("template not found or not owned by current user".to_string())
         })?;
 
         tx.commit()

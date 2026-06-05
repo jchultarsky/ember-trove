@@ -4,18 +4,9 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
-    attachment::Attachment,
-    edge::Edge,
-    favorite::Favorite,
-    graph::NodePosition,
-    node::Node,
-    node_link::NodeLink,
-    node_version::NodeVersion,
-    note::Note,
-    permission::Permission,
-    share_token::ShareToken,
-    tag::Tag,
-    task::Task,
+    attachment::Attachment, edge::Edge, favorite::Favorite, graph::NodePosition, node::Node,
+    node_link::NodeLink, node_version::NodeVersion, note::Note, permission::Permission,
+    share_token::ShareToken, tag::Tag, task::Task,
 };
 
 /// Entity count summary embedded in the manifest and returned for previews.

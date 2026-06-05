@@ -16,10 +16,17 @@
 //!   `X-Real-IP`, `X-Forwarded-For`, or `ConnectInfo<SocketAddr>`.
 //!   All requests to rate-limited routes include `X-Forwarded-For: 127.0.0.1`.
 
-use std::{sync::Arc, time::{Duration, Instant}};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
-use axum::{Router, body::Body, http::{Request, StatusCode}};
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
 use axum_extra::extract::cookie::Key;
 use chrono::NaiveDate;
 use common::{
@@ -30,18 +37,20 @@ use common::{
     edge::{CreateEdgeRequest, Edge, EdgeWithTitles},
     favorite::{CreateFavoriteRequest, Favorite},
     graph::NodePosition,
-    id::{AttachmentId, EdgeId, FavoriteId, NodeId, PermissionId, ShareTokenId, TagId, TaskId,
-         TemplateId},
+    id::{
+        AttachmentId, EdgeId, FavoriteId, NodeId, PermissionId, ShareTokenId, TagId, TaskId,
+        TemplateId,
+    },
+    id::{NodeLinkId, SearchPresetId, WebhookId},
     node::{CreateNodeRequest, Node, NodeListParams, NodeTitleEntry, UpdateNodeRequest},
+    node_link::{CreateNodeLinkRequest, NodeLink, UpdateNodeLinkRequest},
     note::{CreateNoteRequest, FeedNote, Note},
     permission::{GrantPermissionRequest, Permission, PermissionRole},
-    id::{NodeLinkId, SearchPresetId, WebhookId},
-    node_link::{CreateNodeLinkRequest, NodeLink, UpdateNodeLinkRequest},
-    webhook::{CreateWebhookRequest, UpdateWebhookRequest, Webhook},
     search::{CreateSearchPresetRequest, SearchPreset, SearchQuery, SearchResponse},
     tag::{CreateTagRequest, Tag, UpdateTagRequest},
     task::{CreateTaskRequest, MyDayTask, Task, TaskCounts, UpdateTaskRequest},
     template::{CreateTemplateRequest, NodeTemplate, UpdateTemplateRequest},
+    webhook::{CreateWebhookRequest, UpdateWebhookRequest, Webhook},
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -53,10 +62,10 @@ use crate::{
     object_store::NullObjectStore,
     repo::{
         activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo, edge::EdgeRepo,
-        favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_version::NodeVersionRepo,
-        note::NoteRepo, permission::PermissionRepo, pkce::PkceRepo, search::SearchRepo,
-        search_presets::SearchPresetRepo, share_token::ShareTokenRepo, tag::TagRepo,
-        node_link::NodeLinkRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
+        favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_link::NodeLinkRepo,
+        node_version::NodeVersionRepo, note::NoteRepo, permission::PermissionRepo, pkce::PkceRepo,
+        search::SearchRepo, search_presets::SearchPresetRepo, share_token::ShareTokenRepo,
+        tag::TagRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
     },
     routes::build_router,
     state::AppState,
@@ -69,219 +78,584 @@ use crate::{
 struct StubNodeRepo;
 #[async_trait]
 impl NodeRepo for StubNodeRepo {
-    async fn create(&self, _: &str, _: CreateNodeRequest) -> Result<Node, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: NodeId) -> Result<Node, EmberTroveError> { unimplemented!() }
-    async fn get_by_slug(&self, _: &str) -> Result<Node, EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: NodeId, _: UpdateNodeRequest) -> Result<Node, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: NodeId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn neighbors(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
-    async fn backlinks(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
-    async fn list_titles(&self, _: Option<&str>) -> Result<Vec<NodeTitleEntry>, EmberTroveError> { unimplemented!() }
-    async fn find_id_by_title(&self, _: &str) -> Result<Option<NodeId>, EmberTroveError> { unimplemented!() }
-    async fn find_ids_by_titles(&self, _: &[String]) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> { unimplemented!() }
-    async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
-    async fn area_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> { unimplemented!() }
-    async fn set_pinned(&self, _: NodeId, _: bool) -> Result<Node, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError> { unimplemented!() }
+    async fn create(&self, _: &str, _: CreateNodeRequest) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: NodeId) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get_by_slug(&self, _: &str) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(&self, _: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(&self, _: NodeId, _: UpdateNodeRequest) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: NodeId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn neighbors(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn backlinks(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_titles(&self, _: Option<&str>) -> Result<Vec<NodeTitleEntry>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find_id_by_title(&self, _: &str) -> Result<Option<NodeId>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find_ids_by_titles(
+        &self,
+        _: &[String],
+    ) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Node>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn area_for_nodes(
+        &self,
+        _: &[NodeId],
+    ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn set_pinned(&self, _: NodeId, _: bool) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubEdgeRepo;
 #[async_trait]
 impl EdgeRepo for StubEdgeRepo {
-    async fn create(&self, _: CreateEdgeRequest) -> Result<Edge, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: EdgeId) -> Result<Edge, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> { unimplemented!() }
-    async fn list_for_node_with_titles(&self, _: NodeId) -> Result<Vec<EdgeWithTitles>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> { unimplemented!() }
-    async fn list_visible(&self, _: Option<&str>) -> Result<Vec<Edge>, EmberTroveError> { unimplemented!() }
-    async fn sync_wikilinks(&self, _: NodeId, _: &[NodeId]) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn create(&self, _: CreateEdgeRequest) -> Result<Edge, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: EdgeId) -> Result<Edge, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_for_node_with_titles(
+        &self,
+        _: NodeId,
+    ) -> Result<Vec<EdgeWithTitles>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_visible(&self, _: Option<&str>) -> Result<Vec<Edge>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn sync_wikilinks(&self, _: NodeId, _: &[NodeId]) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubTagRepo;
 #[async_trait]
 impl TagRepo for StubTagRepo {
-    async fn create(&self, _: &str, _: CreateTagRequest) -> Result<Tag, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: TagId) -> Result<Tag, EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: &str) -> Result<Vec<Tag>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<Tag>, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: TagId, _: UpdateTagRequest) -> Result<Tag, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: TagId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn attach(&self, _: NodeId, _: TagId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn detach(&self, _: NodeId, _: TagId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Tag>, EmberTroveError> { unimplemented!() }
+    async fn create(&self, _: &str, _: CreateTagRequest) -> Result<Tag, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: TagId) -> Result<Tag, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(&self, _: &str) -> Result<Vec<Tag>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<Tag>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(&self, _: TagId, _: UpdateTagRequest) -> Result<Tag, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: TagId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn attach(&self, _: NodeId, _: TagId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn detach(&self, _: NodeId, _: TagId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Tag>, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubTaskRepo;
 #[async_trait]
 impl TaskRepo for StubTaskRepo {
-    async fn create(&self, _: Option<NodeId>, _: &str, _: CreateTaskRequest) -> Result<Task, EmberTroveError> { unimplemented!() }
-    async fn list_for_node(&self, _: NodeId, _: &str) -> Result<Vec<Task>, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: TaskId) -> Result<Task, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: TaskId, _: UpdateTaskRequest) -> Result<Task, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: TaskId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn list_my_day(&self, _: &str, _: NaiveDate) -> Result<Vec<MyDayTask>, EmberTroveError> { unimplemented!() }
-    async fn list_inbox(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> { unimplemented!() }
-    async fn list_open_for_owner(&self, _: &str) -> Result<Vec<MyDayTask>, EmberTroveError> { unimplemented!() }
-    async fn counts_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, TaskCounts)>, EmberTroveError> { unimplemented!() }
-    async fn list_open_for_nodes(&self, _: &[NodeId], _: i64) -> Result<Vec<(NodeId, Vec<common::task::TaskSummary>, bool)>, EmberTroveError> { unimplemented!() }
-    async fn max_task_updated_for_nodes(&self, _: &[NodeId]) -> Result<Vec<(NodeId, chrono::DateTime<chrono::Utc>)>, EmberTroveError> { unimplemented!() }
-    async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError> { unimplemented!() }
-    async fn list_by_due_range(&self, _: &str, _: NaiveDate, _: NaiveDate) -> Result<Vec<MyDayTask>, EmberTroveError> { unimplemented!() }
-    async fn reorder(&self, _: &[(TaskId, i32)], _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn create(
+        &self,
+        _: Option<NodeId>,
+        _: &str,
+        _: CreateTaskRequest,
+    ) -> Result<Task, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_for_node(&self, _: NodeId, _: &str) -> Result<Vec<Task>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: TaskId) -> Result<Task, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(&self, _: TaskId, _: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: TaskId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_my_day(&self, _: &str, _: NaiveDate) -> Result<Vec<MyDayTask>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_inbox(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_open_for_owner(&self, _: &str) -> Result<Vec<MyDayTask>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn counts_for_nodes(
+        &self,
+        _: &[NodeId],
+    ) -> Result<Vec<(NodeId, TaskCounts)>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_open_for_nodes(
+        &self,
+        _: &[NodeId],
+        _: i64,
+    ) -> Result<Vec<(NodeId, Vec<common::task::TaskSummary>, bool)>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn max_task_updated_for_nodes(
+        &self,
+        _: &[NodeId],
+    ) -> Result<Vec<(NodeId, chrono::DateTime<chrono::Utc>)>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_by_due_range(
+        &self,
+        _: &str,
+        _: NaiveDate,
+        _: NaiveDate,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn reorder(&self, _: &[(TaskId, i32)], _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubNoteRepo;
 #[async_trait]
 impl NoteRepo for StubNoteRepo {
-    async fn create(&self, _: Option<NodeId>, _: &str, _: CreateNoteRequest) -> Result<Note, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: common::id::NoteId, _: &str, _: common::note::UpdateNoteRequest) -> Result<Note, EmberTroveError> { unimplemented!() }
-    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Note>, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: common::id::NoteId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn feed(&self, _: Option<&str>, _: &crate::repo::note::NoteFeedFilter) -> Result<Vec<FeedNote>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError> { unimplemented!() }
+    async fn create(
+        &self,
+        _: Option<NodeId>,
+        _: &str,
+        _: CreateNoteRequest,
+    ) -> Result<Note, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(
+        &self,
+        _: common::id::NoteId,
+        _: &str,
+        _: common::note::UpdateNoteRequest,
+    ) -> Result<Note, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Note>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: common::id::NoteId, _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn feed(
+        &self,
+        _: Option<&str>,
+        _: &crate::repo::note::NoteFeedFilter,
+    ) -> Result<Vec<FeedNote>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubAttachmentRepo;
 #[async_trait]
 impl AttachmentRepo for StubAttachmentRepo {
-    async fn create(&self, _: NodeId, _: &str, _: &str, _: i64, _: &str) -> Result<Attachment, EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: NodeId) -> Result<Vec<Attachment>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: AttachmentId) -> Result<Attachment, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: AttachmentId) -> Result<String, EmberTroveError> { unimplemented!() }
+    async fn create(
+        &self,
+        _: NodeId,
+        _: &str,
+        _: &str,
+        _: i64,
+        _: &str,
+    ) -> Result<Attachment, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(&self, _: NodeId) -> Result<Vec<Attachment>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: AttachmentId) -> Result<Attachment, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: AttachmentId) -> Result<String, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubPermissionRepo;
 #[async_trait]
 impl PermissionRepo for StubPermissionRepo {
-    async fn grant(&self, _: NodeId, _: &str, _: GrantPermissionRequest) -> Result<Permission, EmberTroveError> { unimplemented!() }
-    async fn revoke(&self, _: PermissionId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: NodeId) -> Result<Vec<Permission>, EmberTroveError> { unimplemented!() }
-    async fn find(&self, _: NodeId, _: &str) -> Result<Option<Permission>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self, _: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> { unimplemented!() }
-    async fn find_by_id(&self, _: PermissionId) -> Result<Option<Permission>, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: PermissionId, _: PermissionRole, _: &str) -> Result<Permission, EmberTroveError> { unimplemented!() }
+    async fn grant(
+        &self,
+        _: NodeId,
+        _: &str,
+        _: GrantPermissionRequest,
+    ) -> Result<Permission, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn revoke(&self, _: PermissionId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(&self, _: NodeId) -> Result<Vec<Permission>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find(&self, _: NodeId, _: &str) -> Result<Option<Permission>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self, _: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find_by_id(&self, _: PermissionId) -> Result<Option<Permission>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(
+        &self,
+        _: PermissionId,
+        _: PermissionRole,
+        _: &str,
+    ) -> Result<Permission, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubSearchRepo;
 #[async_trait]
 impl SearchRepo for StubSearchRepo {
-    async fn search(&self, _: &SearchQuery, _: Option<&str>) -> Result<SearchResponse, EmberTroveError> { unimplemented!() }
+    async fn search(
+        &self,
+        _: &SearchQuery,
+        _: Option<&str>,
+    ) -> Result<SearchResponse, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubGraphRepo;
 #[async_trait]
 impl GraphRepo for StubGraphRepo {
-    async fn list_positions(&self, _: Option<&str>) -> Result<Vec<NodePosition>, EmberTroveError> { unimplemented!() }
-    async fn upsert_position(&self, _: Uuid, _: f64, _: f64) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn save_positions(&self, _: &[(Uuid, f64, f64)], _: Option<&str>) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn list_positions(&self, _: Option<&str>) -> Result<Vec<NodePosition>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn upsert_position(&self, _: Uuid, _: f64, _: f64) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn save_positions(
+        &self,
+        _: &[(Uuid, f64, f64)],
+        _: Option<&str>,
+    ) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubBackupRepo;
 #[async_trait]
 impl BackupRepo for StubBackupRepo {
     async fn create(
-        &self, _: &str, _: &str, _: i64,
-        _: i32, _: i32, _: i32, _: i32, _: i32, _: i32, _: Option<&str>,
-    ) -> Result<BackupJob, EmberTroveError> { unimplemented!() }
-    async fn list_for_owner(&self, _: &str) -> Result<Vec<BackupJob>, EmberTroveError> { unimplemented!() }
-    async fn list_all(&self) -> Result<Vec<BackupJob>, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: Uuid) -> Result<BackupJob, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: Uuid) -> Result<(), EmberTroveError> { unimplemented!() }
+        &self,
+        _: &str,
+        _: &str,
+        _: i64,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: Option<&str>,
+    ) -> Result<BackupJob, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_for_owner(&self, _: &str) -> Result<Vec<BackupJob>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<BackupJob>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: Uuid) -> Result<BackupJob, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: Uuid) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubFavoriteRepo;
 #[async_trait]
 impl FavoriteRepo for StubFavoriteRepo {
-    async fn list_all(&self) -> Result<Vec<Favorite>, EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: &str) -> Result<Vec<Favorite>, EmberTroveError> { unimplemented!() }
-    async fn create(&self, _: &str, _: CreateFavoriteRequest) -> Result<Favorite, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: FavoriteId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn reorder(&self, _: &str, _: &[FavoriteId]) -> Result<Vec<Favorite>, EmberTroveError> { unimplemented!() }
+    async fn list_all(&self) -> Result<Vec<Favorite>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(&self, _: &str) -> Result<Vec<Favorite>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn create(&self, _: &str, _: CreateFavoriteRequest) -> Result<Favorite, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: FavoriteId, _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn reorder(&self, _: &str, _: &[FavoriteId]) -> Result<Vec<Favorite>, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubShareTokenRepo;
 #[async_trait]
 impl ShareTokenRepo for StubShareTokenRepo {
-    async fn list_all(&self) -> Result<Vec<common::share_token::ShareToken>, EmberTroveError> { unimplemented!() }
-    async fn create(&self, _: NodeId, _: &str, _: &common::share_token::CreateShareTokenRequest) -> Result<common::share_token::ShareToken, EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: NodeId) -> Result<Vec<common::share_token::ShareToken>, EmberTroveError> { unimplemented!() }
-    async fn find_by_token(&self, _: Uuid) -> Result<Option<common::share_token::ShareToken>, EmberTroveError> { unimplemented!() }
-    async fn revoke(&self, _: ShareTokenId) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn list_all(&self) -> Result<Vec<common::share_token::ShareToken>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn create(
+        &self,
+        _: NodeId,
+        _: &str,
+        _: &common::share_token::CreateShareTokenRequest,
+    ) -> Result<common::share_token::ShareToken, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(
+        &self,
+        _: NodeId,
+    ) -> Result<Vec<common::share_token::ShareToken>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find_by_token(
+        &self,
+        _: Uuid,
+    ) -> Result<Option<common::share_token::ShareToken>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn revoke(&self, _: ShareTokenId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubActivityRepo;
 #[async_trait]
 impl ActivityRepo for StubActivityRepo {
-    async fn record(&self, _: NodeId, _: &str, _: ActivityAction, _: serde_json::Value) -> Result<(), EmberTroveError> { Ok(()) }
-    async fn list(&self, _: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> { unimplemented!() }
-    async fn list_recent_for_owner(&self, _: &str, _: chrono::DateTime<chrono::Utc>, _: i64) -> Result<Vec<common::activity::RecentActivityEntry>, EmberTroveError> { unimplemented!() }
+    async fn record(
+        &self,
+        _: NodeId,
+        _: &str,
+        _: ActivityAction,
+        _: serde_json::Value,
+    ) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn list(&self, _: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_recent_for_owner(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+        _: i64,
+    ) -> Result<Vec<common::activity::RecentActivityEntry>, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubNodeVersionRepo;
 #[async_trait]
 impl NodeVersionRepo for StubNodeVersionRepo {
-    async fn list_all(&self) -> Result<Vec<common::node_version::NodeVersion>, EmberTroveError> { unimplemented!() }
-    async fn record(&self, _: NodeId, _: &str, _: &str) -> Result<(), EmberTroveError> { Ok(()) }
-    async fn list(&self, _: NodeId, _: i64) -> Result<Vec<common::node_version::NodeVersion>, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: common::id::NodeVersionId) -> Result<common::node_version::NodeVersion, EmberTroveError> { unimplemented!() }
+    async fn list_all(&self) -> Result<Vec<common::node_version::NodeVersion>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn record(&self, _: NodeId, _: &str, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn list(
+        &self,
+        _: NodeId,
+        _: i64,
+    ) -> Result<Vec<common::node_version::NodeVersion>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(
+        &self,
+        _: common::id::NodeVersionId,
+    ) -> Result<common::node_version::NodeVersion, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubTemplateRepo;
 #[async_trait]
 impl TemplateRepo for StubTemplateRepo {
-    async fn list(&self, _: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError> { unimplemented!() }
-    async fn get(&self, _: TemplateId) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
-    async fn create(&self, _: &str, _: CreateTemplateRequest) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: TemplateId, _: UpdateTemplateRequest) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: TemplateId) -> Result<(), EmberTroveError> { unimplemented!() }
-    async fn set_default(&self, _: TemplateId, _: &str) -> Result<NodeTemplate, EmberTroveError> { unimplemented!() }
+    async fn list(&self, _: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: TemplateId) -> Result<NodeTemplate, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn create(
+        &self,
+        _: &str,
+        _: CreateTemplateRequest,
+    ) -> Result<NodeTemplate, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(
+        &self,
+        _: TemplateId,
+        _: UpdateTemplateRequest,
+    ) -> Result<NodeTemplate, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: TemplateId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn set_default(&self, _: TemplateId, _: &str) -> Result<NodeTemplate, EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubNodeLinkRepo;
 #[async_trait]
 impl NodeLinkRepo for StubNodeLinkRepo {
-    async fn list_all(&self) -> Result<Vec<NodeLink>, EmberTroveError> { unimplemented!() }
-    async fn list(&self, _: NodeId) -> Result<Vec<NodeLink>, EmberTroveError> { unimplemented!() }
-    async fn create(&self, _: NodeId, _: CreateNodeLinkRequest) -> Result<NodeLink, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: NodeId, _: NodeLinkId, _: UpdateNodeLinkRequest) -> Result<NodeLink, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: NodeId, _: NodeLinkId) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn list_all(&self) -> Result<Vec<NodeLink>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list(&self, _: NodeId) -> Result<Vec<NodeLink>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn create(
+        &self,
+        _: NodeId,
+        _: CreateNodeLinkRequest,
+    ) -> Result<NodeLink, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(
+        &self,
+        _: NodeId,
+        _: NodeLinkId,
+        _: UpdateNodeLinkRequest,
+    ) -> Result<NodeLink, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: NodeId, _: NodeLinkId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubSearchPresetRepo;
 #[async_trait]
 impl SearchPresetRepo for StubSearchPresetRepo {
-    async fn list(&self, _: &str) -> Result<Vec<SearchPreset>, EmberTroveError> { unimplemented!() }
-    async fn create(&self, _: &str, _: CreateSearchPresetRequest) -> Result<SearchPreset, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: SearchPresetId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn list(&self, _: &str) -> Result<Vec<SearchPreset>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn create(
+        &self,
+        _: &str,
+        _: CreateSearchPresetRequest,
+    ) -> Result<SearchPreset, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: SearchPresetId, _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubWebhookRepo;
 #[async_trait]
 impl WebhookRepo for StubWebhookRepo {
-    async fn list(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> { unimplemented!() }
-    async fn list_active_for_event(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> { unimplemented!() }
-    async fn create(&self, _: &str, _: CreateWebhookRequest) -> Result<Webhook, EmberTroveError> { unimplemented!() }
-    async fn update(&self, _: WebhookId, _: &str, _: UpdateWebhookRequest) -> Result<Webhook, EmberTroveError> { unimplemented!() }
-    async fn delete(&self, _: WebhookId, _: &str) -> Result<(), EmberTroveError> { unimplemented!() }
+    async fn list(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_active_for_event(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn create(&self, _: &str, _: CreateWebhookRequest) -> Result<Webhook, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(
+        &self,
+        _: WebhookId,
+        _: &str,
+        _: UpdateWebhookRequest,
+    ) -> Result<Webhook, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: WebhookId, _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
 }
 
 struct StubEditorPrefRepo;
 #[async_trait]
 impl crate::repo::editor_pref::EditorPrefRepo for StubEditorPrefRepo {
-    async fn list_for_owner(&self, _: &str) -> Result<Vec<common::editor_pref::EditorPref>, EmberTroveError> { Ok(vec![]) }
-    async fn set(&self, _: &str, _: &str, _: Uuid, _: i32) -> Result<(), EmberTroveError> { Ok(()) }
+    async fn list_for_owner(
+        &self,
+        _: &str,
+    ) -> Result<Vec<common::editor_pref::EditorPref>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn set(&self, _: &str, _: &str, _: Uuid, _: i32) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
 }
 
 struct StubPkceRepo;
 #[async_trait]
 impl PkceRepo for StubPkceRepo {
-    async fn store(&self, _: &str, _: &str) -> Result<(), EmberTroveError> { Ok(()) }
-    async fn take(&self, _: &str, _: Duration) -> Result<Option<String>, EmberTroveError> { Ok(None) }
-    async fn sweep_expired(&self, _: Duration) -> Result<u64, EmberTroveError> { Ok(0) }
+    async fn store(&self, _: &str, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn take(&self, _: &str, _: Duration) -> Result<Option<String>, EmberTroveError> {
+        Ok(None)
+    }
+    async fn sweep_expired(&self, _: Duration) -> Result<u64, EmberTroveError> {
+        Ok(0)
+    }
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -296,37 +670,37 @@ fn test_state() -> AppState {
 
     AppState {
         pool,
-        nodes:        Arc::new(StubNodeRepo),
-        edges:        Arc::new(StubEdgeRepo),
-        tags:         Arc::new(StubTagRepo),
-        tasks:        Arc::new(StubTaskRepo),
-        notes:        Arc::new(StubNoteRepo),
-        attachments:  Arc::new(StubAttachmentRepo),
-        permissions:  Arc::new(StubPermissionRepo),
-        search:       Arc::new(StubSearchRepo),
-        graph:        Arc::new(StubGraphRepo),
-        backup:       Arc::new(StubBackupRepo),
-        favorites:    Arc::new(StubFavoriteRepo),
-        share_tokens:  Arc::new(StubShareTokenRepo),
-        activity:      Arc::new(StubActivityRepo),
+        nodes: Arc::new(StubNodeRepo),
+        edges: Arc::new(StubEdgeRepo),
+        tags: Arc::new(StubTagRepo),
+        tasks: Arc::new(StubTaskRepo),
+        notes: Arc::new(StubNoteRepo),
+        attachments: Arc::new(StubAttachmentRepo),
+        permissions: Arc::new(StubPermissionRepo),
+        search: Arc::new(StubSearchRepo),
+        graph: Arc::new(StubGraphRepo),
+        backup: Arc::new(StubBackupRepo),
+        favorites: Arc::new(StubFavoriteRepo),
+        share_tokens: Arc::new(StubShareTokenRepo),
+        activity: Arc::new(StubActivityRepo),
         node_versions: Arc::new(StubNodeVersionRepo),
-        templates:       Arc::new(StubTemplateRepo),
-        search_presets:  Arc::new(StubSearchPresetRepo),
-        node_links:      Arc::new(StubNodeLinkRepo),
-        webhooks:        Arc::new(StubWebhookRepo),
-        editor_prefs:    Arc::new(StubEditorPrefRepo),
+        templates: Arc::new(StubTemplateRepo),
+        search_presets: Arc::new(StubSearchPresetRepo),
+        node_links: Arc::new(StubNodeLinkRepo),
+        webhooks: Arc::new(StubWebhookRepo),
+        editor_prefs: Arc::new(StubEditorPrefRepo),
         object_store: Arc::new(NullObjectStore),
-        oidc:          None,
+        oidc: None,
         cognito_admin: None,
-        notifier:      None,
-        cookie_key:    Key::generate(),
+        notifier: None,
+        cookie_key: Key::generate(),
         auth: AuthConfig {
-            issuer:           "https://example.com".to_string(),
-            client_id:        "test-client".to_string(),
-            client_secret:    "test-secret".to_string(),
-            frontend_url:     "http://localhost:3000".to_string(),
+            issuer: "https://example.com".to_string(),
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            frontend_url: "http://localhost:3000".to_string(),
             api_external_url: "http://localhost:3003".to_string(),
-            cookie_secure:    false,
+            cookie_secure: false,
         },
         config: Config {
             database_url: "postgres://test:test@127.0.0.1:5432/test".to_string(),
@@ -484,27 +858,37 @@ async fn protected_route_without_oidc_returns_500_with_error_field() {
 // ── Node routes ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn nodes_list_route_registered()   { assert_route_registered("GET",    "/nodes").await; }
+async fn nodes_list_route_registered() {
+    assert_route_registered("GET", "/nodes").await;
+}
 #[tokio::test]
-async fn node_create_route_registered()  { assert_route_registered("POST",   "/nodes").await; }
+async fn node_create_route_registered() {
+    assert_route_registered("POST", "/nodes").await;
+}
 #[tokio::test]
-async fn node_get_route_registered()     { assert_route_registered("GET",    &format!("/nodes/{}", Uuid::new_v4())).await; }
+async fn node_get_route_registered() {
+    assert_route_registered("GET", &format!("/nodes/{}", Uuid::new_v4())).await;
+}
 #[tokio::test]
-async fn node_update_route_registered()  { assert_route_registered("PUT",    &format!("/nodes/{}", Uuid::new_v4())).await; }
+async fn node_update_route_registered() {
+    assert_route_registered("PUT", &format!("/nodes/{}", Uuid::new_v4())).await;
+}
 #[tokio::test]
-async fn node_delete_route_registered()  { assert_route_registered("DELETE", &format!("/nodes/{}", Uuid::new_v4())).await; }
+async fn node_delete_route_registered() {
+    assert_route_registered("DELETE", &format!("/nodes/{}", Uuid::new_v4())).await;
+}
 
 // ── Per-node permission routes ────────────────────────────────────────────────
 
 #[tokio::test]
 async fn node_permissions_list_route_registered() {
     let nid = Uuid::new_v4();
-    assert_route_registered("GET",    &format!("/nodes/{nid}/permissions")).await;
+    assert_route_registered("GET", &format!("/nodes/{nid}/permissions")).await;
 }
 #[tokio::test]
 async fn node_permissions_grant_route_registered() {
     let nid = Uuid::new_v4();
-    assert_route_registered("POST",   &format!("/nodes/{nid}/permissions")).await;
+    assert_route_registered("POST", &format!("/nodes/{nid}/permissions")).await;
 }
 #[tokio::test]
 async fn node_permissions_revoke_route_registered() {
@@ -517,11 +901,11 @@ async fn node_permissions_revoke_route_registered() {
 
 #[tokio::test]
 async fn standalone_permissions_list_route_registered() {
-    assert_route_registered("GET",    "/permissions").await;
+    assert_route_registered("GET", "/permissions").await;
 }
 #[tokio::test]
 async fn standalone_permission_update_route_registered() {
-    assert_route_registered("PUT",    &format!("/permissions/{}", Uuid::new_v4())).await;
+    assert_route_registered("PUT", &format!("/permissions/{}", Uuid::new_v4())).await;
 }
 #[tokio::test]
 async fn standalone_permission_delete_route_registered() {
@@ -531,41 +915,67 @@ async fn standalone_permission_delete_route_registered() {
 // ── Other domain routes ───────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn tags_list_route_registered()      { assert_route_registered("GET", "/tags").await; }
+async fn tags_list_route_registered() {
+    assert_route_registered("GET", "/tags").await;
+}
 #[tokio::test]
-async fn search_route_registered()         { assert_route_registered("GET", "/search").await; }
+async fn search_route_registered() {
+    assert_route_registered("GET", "/search").await;
+}
 #[tokio::test]
-async fn graph_route_registered()          { assert_route_registered("GET", "/graph").await; }
+async fn graph_route_registered() {
+    assert_route_registered("GET", "/graph").await;
+}
 #[tokio::test]
-async fn favorites_list_route_registered() { assert_route_registered("GET", "/favorites").await; }
+async fn favorites_list_route_registered() {
+    assert_route_registered("GET", "/favorites").await;
+}
 #[tokio::test]
-async fn notes_feed_route_registered()     { assert_route_registered("GET", "/notes").await; }
+async fn notes_feed_route_registered() {
+    assert_route_registered("GET", "/notes").await;
+}
 #[tokio::test]
-async fn edges_list_route_registered()     { assert_route_registered("GET", "/edges").await; }
+async fn edges_list_route_registered() {
+    assert_route_registered("GET", "/edges").await;
+}
 
 // ── Template routes ───────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn templates_list_route_registered()   { assert_route_registered("GET",    "/templates").await; }
+async fn templates_list_route_registered() {
+    assert_route_registered("GET", "/templates").await;
+}
 #[tokio::test]
-async fn template_create_route_registered()  { assert_route_registered("POST",   "/templates").await; }
+async fn template_create_route_registered() {
+    assert_route_registered("POST", "/templates").await;
+}
 #[tokio::test]
-async fn template_get_route_registered()     { assert_route_registered("GET",    &format!("/templates/{}", Uuid::new_v4())).await; }
+async fn template_get_route_registered() {
+    assert_route_registered("GET", &format!("/templates/{}", Uuid::new_v4())).await;
+}
 #[tokio::test]
-async fn template_update_route_registered()  { assert_route_registered("PUT",    &format!("/templates/{}", Uuid::new_v4())).await; }
+async fn template_update_route_registered() {
+    assert_route_registered("PUT", &format!("/templates/{}", Uuid::new_v4())).await;
+}
 #[tokio::test]
-async fn template_delete_route_registered()  { assert_route_registered("DELETE", &format!("/templates/{}", Uuid::new_v4())).await; }
+async fn template_delete_route_registered() {
+    assert_route_registered("DELETE", &format!("/templates/{}", Uuid::new_v4())).await;
+}
 
 // ── Node pin route ─────────────────────────────────────────────────────────────
 #[tokio::test]
-async fn node_pin_route_registered() { assert_route_registered("PUT", &format!("/nodes/{}/pin", Uuid::new_v4())).await; }
+async fn node_pin_route_registered() {
+    assert_route_registered("PUT", &format!("/nodes/{}/pin", Uuid::new_v4())).await;
+}
 
 // ── Permission DTO unit tests ─────────────────────────────────────────────────
 
 #[test]
 fn update_permission_request_serializes_role() {
     use common::permission::UpdatePermissionRequest;
-    let req = UpdatePermissionRequest { role: PermissionRole::Editor };
+    let req = UpdatePermissionRequest {
+        role: PermissionRole::Editor,
+    };
     let json = serde_json::to_value(&req).unwrap();
     assert_eq!(json["role"], "editor");
 }
@@ -573,7 +983,7 @@ fn update_permission_request_serializes_role() {
 #[test]
 fn permission_role_roundtrip_all_variants() {
     for (variant, expected) in [
-        (PermissionRole::Owner,  "owner"),
+        (PermissionRole::Owner, "owner"),
         (PermissionRole::Editor, "editor"),
         (PermissionRole::Viewer, "viewer"),
     ] {
@@ -657,7 +1067,8 @@ async fn auth_callback_redirects_on_misconfig_instead_of_json_500() {
         "redirect target must be the frontend root (test AuthConfig.frontend_url)"
     );
     assert_ne!(
-        resp.headers().get(axum::http::header::CONTENT_TYPE)
+        resp.headers()
+            .get(axum::http::header::CONTENT_TYPE)
             .map(|v| v.to_str().unwrap_or("")),
         Some("application/json"),
         "callback failure response must not be JSON"

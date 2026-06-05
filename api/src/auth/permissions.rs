@@ -109,23 +109,45 @@ mod tests {
 
     #[test]
     fn viewer_requirement_is_satisfied_by_any_role() {
-        for role in [PermissionRole::Viewer, PermissionRole::Editor, PermissionRole::Owner] {
+        for role in [
+            PermissionRole::Viewer,
+            PermissionRole::Editor,
+            PermissionRole::Owner,
+        ] {
             assert!(role_satisfies(&role, &PermissionRole::Viewer));
         }
     }
 
     #[test]
     fn editor_requirement_is_satisfied_by_editor_and_owner() {
-        assert!(role_satisfies(&PermissionRole::Editor, &PermissionRole::Editor));
-        assert!(role_satisfies(&PermissionRole::Owner, &PermissionRole::Editor));
-        assert!(!role_satisfies(&PermissionRole::Viewer, &PermissionRole::Editor));
+        assert!(role_satisfies(
+            &PermissionRole::Editor,
+            &PermissionRole::Editor
+        ));
+        assert!(role_satisfies(
+            &PermissionRole::Owner,
+            &PermissionRole::Editor
+        ));
+        assert!(!role_satisfies(
+            &PermissionRole::Viewer,
+            &PermissionRole::Editor
+        ));
     }
 
     #[test]
     fn owner_requirement_is_satisfied_only_by_owner() {
-        assert!(role_satisfies(&PermissionRole::Owner, &PermissionRole::Owner));
-        assert!(!role_satisfies(&PermissionRole::Editor, &PermissionRole::Owner));
-        assert!(!role_satisfies(&PermissionRole::Viewer, &PermissionRole::Owner));
+        assert!(role_satisfies(
+            &PermissionRole::Owner,
+            &PermissionRole::Owner
+        ));
+        assert!(!role_satisfies(
+            &PermissionRole::Editor,
+            &PermissionRole::Owner
+        ));
+        assert!(!role_satisfies(
+            &PermissionRole::Viewer,
+            &PermissionRole::Owner
+        ));
     }
 
     #[test]

@@ -33,11 +33,11 @@ use common::search::SearchResult;
 use leptos::html;
 use leptos::portal::Portal;
 use leptos::prelude::*;
-use leptos::wasm_bindgen::{closure::Closure, JsCast};
+use leptos::wasm_bindgen::{JsCast, closure::Closure};
 use leptos_router::hooks::use_navigate;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::recent::{read_recent, RecentEntry};
+use crate::recent::{RecentEntry, read_recent};
 
 // ── PaletteAction ─────────────────────────────────────────────────────────────
 //
@@ -48,7 +48,11 @@ use crate::recent::{read_recent, RecentEntry};
 #[derive(Clone, PartialEq, Eq)]
 enum PaletteAction {
     /// Navigate to an existing node (from Recent or Search results).
-    OpenNode { id: uuid::Uuid, title: String, icon: String },
+    OpenNode {
+        id: uuid::Uuid,
+        title: String,
+        icon: String,
+    },
     /// Open the structured `CreateNodeModal` with `title` pre-filled.
     CreateNode { title: String },
 }
@@ -56,19 +60,19 @@ enum PaletteAction {
 impl PaletteAction {
     fn icon(&self) -> &str {
         match self {
-            PaletteAction::OpenNode  { icon, .. } => icon,
-            PaletteAction::CreateNode { .. }      => "add",
+            PaletteAction::OpenNode { icon, .. } => icon,
+            PaletteAction::CreateNode { .. } => "add",
         }
     }
     fn primary(&self) -> &str {
         match self {
-            PaletteAction::OpenNode   { title, .. } => title,
-            PaletteAction::CreateNode { title }     => title,
+            PaletteAction::OpenNode { title, .. } => title,
+            PaletteAction::CreateNode { title } => title,
         }
     }
     fn secondary(&self) -> &'static str {
         match self {
-            PaletteAction::OpenNode   { .. } => "Open",
+            PaletteAction::OpenNode { .. } => "Open",
             PaletteAction::CreateNode { .. } => "Create new node",
         }
     }
@@ -132,7 +136,9 @@ pub fn CommandPalette(
         let my_v = version.get_untracked();
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(300).await;
-            if version.get_untracked() != my_v { return; }
+            if version.get_untracked() != my_v {
+                return;
+            }
             if q.trim().is_empty() {
                 results.set(Vec::new());
                 return;
@@ -156,7 +162,9 @@ pub fn CommandPalette(
             // Recent only — the "no-typing-needed" path.
             for r in recent.get().into_iter().take(5) {
                 out.push(PaletteAction::OpenNode {
-                    id: r.id, title: r.title, icon: r.icon,
+                    id: r.id,
+                    title: r.title,
+                    icon: r.icon,
                 });
             }
         } else {
@@ -168,7 +176,9 @@ pub fn CommandPalette(
                 });
             }
             // Always offer Create as the bottom action when typing.
-            out.push(PaletteAction::CreateNode { title: trimmed.to_string() });
+            out.push(PaletteAction::CreateNode {
+                title: trimmed.to_string(),
+            });
         }
         out
     });
@@ -186,7 +196,9 @@ pub fn CommandPalette(
     // Pick by index — runs the action and closes the palette.
     let pick = move |idx: usize| {
         let acts = actions.get_untracked();
-        let Some(action) = acts.get(idx).cloned() else { return; };
+        let Some(action) = acts.get(idx).cloned() else {
+            return;
+        };
         match action {
             PaletteAction::OpenNode { id, .. } => {
                 navigate.get_value()(&format!("/nodes/{id}"), Default::default());
@@ -202,28 +214,28 @@ pub fn CommandPalette(
     // Keyboard handler on the palette container.  ↑/↓ move the
     // highlight, Enter picks, Esc closes.  Plain typing falls through
     // to the input element so the query updates normally.
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        match ev.key().as_str() {
-            "Escape" => {
-                ev.prevent_default();
-                on_close.run(());
-            }
-            "ArrowDown" => {
-                ev.prevent_default();
-                let len = actions.get_untracked().len();
-                if len == 0 { return; }
-                highlight.update(|h| *h = (*h + 1).min(len - 1));
-            }
-            "ArrowUp" => {
-                ev.prevent_default();
-                highlight.update(|h| *h = h.saturating_sub(1));
-            }
-            "Enter" => {
-                ev.prevent_default();
-                pick(highlight.get_untracked());
-            }
-            _ => {}
+    let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
+        "Escape" => {
+            ev.prevent_default();
+            on_close.run(());
         }
+        "ArrowDown" => {
+            ev.prevent_default();
+            let len = actions.get_untracked().len();
+            if len == 0 {
+                return;
+            }
+            highlight.update(|h| *h = (*h + 1).min(len - 1));
+        }
+        "ArrowUp" => {
+            ev.prevent_default();
+            highlight.update(|h| *h = h.saturating_sub(1));
+        }
+        "Enter" => {
+            ev.prevent_default();
+            pick(highlight.get_untracked());
+        }
+        _ => {}
     };
 
     view! {
@@ -351,11 +363,12 @@ pub fn CommandPalette(
 /// twice for that section).
 fn type_to_icon(node_type: &str) -> String {
     match node_type {
-        "article"   => "description",
-        "project"   => "rocket_launch",
-        "area"      => "category",
-        "resource"  => "bookmarks",
+        "article" => "description",
+        "project" => "rocket_launch",
+        "area" => "category",
+        "resource" => "bookmarks",
         "reference" => "menu_book",
-        _           => "note",
-    }.to_string()
+        _ => "note",
+    }
+    .to_string()
 }

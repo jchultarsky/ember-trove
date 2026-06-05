@@ -62,7 +62,12 @@ mod tests {
 
     #[test]
     fn user_info_from_full_claims() {
-        let c = claims("user-1", Some("a@b.com"), Some("Alice"), vec!["admin", "user"]);
+        let c = claims(
+            "user-1",
+            Some("a@b.com"),
+            Some("Alice"),
+            vec!["admin", "user"],
+        );
         let info = UserInfo::from(c);
         assert_eq!(info.sub, "user-1");
         assert_eq!(info.email.as_deref(), Some("a@b.com"));

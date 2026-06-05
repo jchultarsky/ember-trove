@@ -32,7 +32,9 @@ pub fn SharePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         let _ = refresh.get();
         let is_open = open.get();
         async move {
-            if !is_open { return Ok(vec![]); }
+            if !is_open {
+                return Ok(vec![]);
+            }
             api::list_share_tokens(node_id).await
         }
     });

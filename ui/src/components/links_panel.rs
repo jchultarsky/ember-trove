@@ -11,26 +11,28 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 /// Viewers see links but have no mutation controls.
 #[component]
 pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
-    let open    = RwSignal::new(false);
+    let open = RwSignal::new(false);
     let refresh = RwSignal::new(0u32);
 
     // ── Add-form state ────────────────────────────────────────────────────────
-    let show_add  = RwSignal::new(false);
-    let new_name  = RwSignal::new(String::new());
-    let new_url   = RwSignal::new(String::new());
+    let show_add = RwSignal::new(false);
+    let new_name = RwSignal::new(String::new());
+    let new_url = RwSignal::new(String::new());
     let add_error = RwSignal::new(Option::<String>::None);
 
     // ── Edit-form state (per link) ────────────────────────────────────────────
-    let editing_id  = RwSignal::new(Option::<NodeLinkId>::None);
-    let edit_name   = RwSignal::new(String::new());
-    let edit_url    = RwSignal::new(String::new());
-    let edit_error  = RwSignal::new(Option::<String>::None);
+    let editing_id = RwSignal::new(Option::<NodeLinkId>::None);
+    let edit_name = RwSignal::new(String::new());
+    let edit_url = RwSignal::new(String::new());
+    let edit_error = RwSignal::new(Option::<String>::None);
 
     let links_res = LocalResource::new(move || {
         let _ = refresh.get();
         let is_open = open.get();
         async move {
-            if !is_open { return Ok(vec![]); }
+            if !is_open {
+                return Ok(vec![]);
+            }
             crate::api::fetch_node_links(node_id).await
         }
     });
@@ -38,7 +40,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
     // ── Add handler ───────────────────────────────────────────────────────────
     let do_add = move || {
         let name = new_name.get_untracked().trim().to_string();
-        let url  = new_url.get_untracked().trim().to_string();
+        let url = new_url.get_untracked().trim().to_string();
         if name.is_empty() || url.is_empty() {
             add_error.set(Some("Name and URL are required.".to_string()));
             return;
@@ -67,9 +69,11 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
 
     // ── Edit save handler ─────────────────────────────────────────────────────
     let do_save_edit = move || {
-        let Some(link_id) = editing_id.get_untracked() else { return };
+        let Some(link_id) = editing_id.get_untracked() else {
+            return;
+        };
         let name = edit_name.get_untracked().trim().to_string();
-        let url  = edit_url.get_untracked().trim().to_string();
+        let url = edit_url.get_untracked().trim().to_string();
         if name.is_empty() || url.is_empty() {
             edit_error.set(Some("Name and URL are required.".to_string()));
             return;
@@ -81,7 +85,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
         };
         let req = UpdateNodeLinkRequest {
             name: Some(name),
-            url:  Some(url),
+            url: Some(url),
         };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_node_link(node_id, link_id, &req).await {

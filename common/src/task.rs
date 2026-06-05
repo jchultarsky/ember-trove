@@ -148,16 +148,32 @@ pub struct UpdateTaskRequest {
     pub status: Option<TaskStatus>,
     pub priority: Option<TaskPriority>,
     /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(d))` = set to date
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deser_double_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deser_double_opt"
+    )]
     pub focus_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(d))` = set to date
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deser_double_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deser_double_opt"
+    )]
     pub due_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(None)` = clear recurrence · `Some(Some(r))` = set
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deser_double_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deser_double_opt"
+    )]
     pub recurrence: Option<Option<RecurrenceRule>>,
     /// `None` = leave unchanged · `Some(None)` = detach from node · `Some(Some(id))` = associate
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deser_double_opt")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deser_double_opt"
+    )]
     pub node_id: Option<Option<NodeId>>,
 }
 
