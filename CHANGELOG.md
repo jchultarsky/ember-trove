@@ -4,6 +4,33 @@ All notable changes to Ember Trove are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Tooling
+- Adopted default `rustfmt` (edition 2024) as an enforced standard: one-time
+  workspace reformat, plus `cargo fmt --all --check` in the pre-commit hook, CI
+  (`fmt` job), and `scripts/verify.sh`. CI previously never checked formatting.
+- Added version-controlled git hooks (`scripts/hooks/`, installed via
+  `make hooks-install`): pre-commit runs fmt + clippy; pre-push runs the test
+  suite + the wasm32 UI lint.
+- Added a `Makefile` with `hooks-install`, `fmt`, `lint`, `test`, `coverage`,
+  and `verify` targets wrapping the canonical commands.
+- Added a CI `coverage` job (`cargo llvm-cov` over api + common, report-only).
+- Pinned all third-party GitHub Actions to commit SHAs and added Dependabot
+  (`cargo` + `github-actions`, weekly, targeting `develop`).
+- Declared `rustfmt` in `rust-toolchain.toml` components (required by the CI fmt job).
+
+### Documentation
+- Added a `.claude/` knowledge tree (`POLICY.md`, `ERRORS.md`, `ROADMAP.md`,
+  `rules/`, `patterns/`) that the previously-dangling `CLAUDE.md` references now
+  resolve to, and slimmed `CLAUDE.md` to a lean always-loaded core.
+- Documented the development workflow/standards in `README.md` and aligned
+  `CONTRIBUTING.md` with the enforced hooks and formatting.
+
+### Fixed
+- `ui/src/components/node_list.rs`: replaced two sort closures with `sort_by_key`
+  (clippy `unnecessary_sort_by`, surfaced when rustfmt collapsed the block bodies).
+
 ## [2.19.2] - 2026-05-31
 
 ### Security — Removed `script-src 'unsafe-inline'` from the CSP (last review finding)
