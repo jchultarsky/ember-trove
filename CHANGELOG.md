@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling
+- Bumped `actions/cache` from v4 to v5.0.5 (SHA-pinned, `# v5.0.5`) across all CI jobs
+  to move off the deprecated Node.js 20 runtime (GitHub forces Node 20 actions onto
+  Node 24; v5 targets Node 24 natively). Clears the CI deprecation annotation.
+
 ### Documentation
 - Corrected `CLAUDE.md`'s stale environment note: `gh` is now installed (Homebrew) and
   authenticated, and is the supported way to push from tool shells (the sandbox keychain
