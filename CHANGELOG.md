@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.19.3] - 2026-06-05
+
 ### Tooling
 - Enforced the zero-panic policy as lints instead of leaving it to review:
   `clippy::unwrap_used`, `expect_used`, and `panic` are denied in
