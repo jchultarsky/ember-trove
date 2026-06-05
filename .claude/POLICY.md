@@ -6,24 +6,49 @@ starting non-trivial work. Rules here are normative ("MUST"/"NEVER").
 
 ---
 
-## 1. Plan before you change
+## 1. Security is the primary concern
+
+Ember Trove stores users' **personal data**. Security is the foremost priority and is
+evaluated *first* on every change — above velocity and convenience. This is normative.
+
+- **Confidentiality by default.** Treat all user content as confidential. Every endpoint
+  MUST enforce authentication and authorization; queries MUST be scoped to the owning
+  subject (the admin role is the only documented exception — see `.claude/rules/api.md`,
+  "Admin permission model"). Never widen access "to make it work."
+- **Injection-safe.** All SQL MUST be parameterized via sqlx bind params — NEVER
+  string-format user input into a query. All user-supplied markdown/HTML MUST be sanitized
+  (`ammonia`) before render.
+- **No secrets or PII in logs, errors, or telemetry.** Never log tokens, credentials,
+  Cognito claims, or personal data. Error responses MUST NOT leak internal detail.
+- **Secrets stay out of the repo.** Configuration secrets come from the environment, never
+  committed. Rotate anything exposed.
+- **Dependencies stay advisory-clean.** `cargo audit` MUST be clean; ignored RUSTSEC
+  advisories are transitive-only, dated, and reviewed every release (`.cargo/audit.toml`,
+  §12). Removing a dependency to drop an advisory beats suppressing it.
+- **Flag every tradeoff.** When a choice pits convenience, performance, or speed against
+  the confidentiality or integrity of personal data, security wins — and you MUST call the
+  tradeoff out explicitly rather than silently taking the weaker path.
+- A change that weakens the security posture is **not done**, even with every gate green.
+  Security-relevant changes go under `CHANGELOG.md` → `Security` (§9).
+
+## 2. Plan before you change
 
 - For anything beyond a one-line fix, **plan first**. Explore the code, state the
   approach, and get sign-off before editing. Use plan mode for multi-file or
   architectural changes. A wrong plan caught early is cheaper than a wrong diff.
 - Name the files you intend to touch and the patterns you intend to reuse *before*
-  writing new code. If an existing helper does the job, use it — see §2.
+  writing new code. If an existing helper does the job, use it — see §3.
 
-## 2. Accuracy and reuse over speed
+## 3. Accuracy and reuse over speed
 
 - Correctness, code reuse, and clarity beat velocity. There is no deadline that
   justifies a panic path or a copy-pasted helper.
 - **Search before you write.** Grep for an existing function, newtype, or pattern
   first. The canonical patterns live in `.claude/patterns/`; the layer rules in
   `.claude/rules/`. Duplicating logic that already exists is a defect.
-- Prefer `std` and crates already in `Cargo.toml` over new dependencies (§6).
+- Prefer `std` and crates already in `Cargo.toml` over new dependencies (§7).
 
-## 3. Zero-panic, idiomatic Rust
+## 4. Zero-panic, idiomatic Rust
 
 - **NEVER** `.unwrap()`, `.expect()` (outside tests/build-time constants), or
   `panic!` in library/app code. Use `Result`/`Option` and `?`.
@@ -39,7 +64,7 @@ starting non-trivial work. Rules here are normative ("MUST"/"NEVER").
 - Prefer owned types at API boundaries; respect the borrow checker rather than
   reaching for `clone()` reflexively, but a clear `clone` beats a lifetime maze.
 
-## 4. Test-driven development
+## 5. Test-driven development
 
 - **Red → Green → Refactor.** Write a failing test first (`mod tests` or
   `api/src/tests.rs`-style integration), implement the minimum to pass, then refactor.
@@ -49,12 +74,12 @@ starting non-trivial work. Rules here are normative ("MUST"/"NEVER").
   CI excludes it from `cargo test` (`--workspace --exclude ui`). Put testable logic in
   `common/` so it *can* be unit-tested.
 
-## 5. Definition of done — all gates green
+## 6. Definition of done — all gates green
 
 A change is **not done** until, locally and in CI, all of these are green:
 
 ```
-cargo fmt --all --check                                   # formatting (enforced; see §11)
+cargo fmt --all --check                                   # formatting (enforced; see §12)
 cargo clippy --workspace --exclude ui -- -D warnings      # api + common, warnings = errors
 cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace --exclude ui
@@ -69,7 +94,7 @@ except for a genuine emergency, and say so in the commit body.
 > rustfmt and clippy interact: applying `cargo fmt` can surface new clippy lints by
 > rewriting closures/expressions. Always run clippy *after* fmt. See `.claude/ERRORS.md`.
 
-## 6. Dependencies — research before adding
+## 7. Dependencies — research before adding
 
 Before proposing a new crate:
 
@@ -81,7 +106,7 @@ Before proposing a new crate:
    `[workspace.dependencies]` and let the leaf crates inherit with `.workspace = true`.
 5. State *why* it's needed and what it replaces. New deps are reviewed, not assumed.
 
-## 7. Git Flow & release hygiene
+## 8. Git Flow & release hygiene
 
 Branching model (also in `CONTRIBUTING.md`):
 
@@ -99,7 +124,7 @@ Branching model (also in `CONTRIBUTING.md`):
   `gh run list` until all runs `completed`; fix any `failure` at the root cause and ship a
   follow-up patch. A green Release beside a red CI still leaves `main` broken.
 
-## 8. Documentation is part of the change
+## 9. Documentation is part of the change
 
 Every change updates, as applicable:
 
@@ -108,25 +133,25 @@ Every change updates, as applicable:
 - **`README.md`** — new env vars, endpoints, commands, or setup steps.
 - **Code comments** — explain *why*, not *what*; date non-obvious rationale (the
   `.cargo/audit.toml` style). Public items get `///` doc comments.
-- **`.claude/`** — if you discover a pattern or a gotcha, record it (§10).
+- **`.claude/`** — if you discover a pattern or a gotcha, record it (§11).
 
-## 9. Be a partner, not a fan
+## 10. Be a partner, not a fan
 
 - Push back on weak ideas, including the maintainer's. Disagree with reasons and a
   better alternative. Do **not** agree to be agreeable.
 - Be technical and precise; assume an experienced reader. No filler, no false certainty.
   If you don't know, say so and find out. Report failures plainly with the output.
 
-## 10. Learn every iteration
+## 11. Learn every iteration
 
 - When a non-obvious bug or fix recurs or costs real time, append it to
   `.claude/ERRORS.md` (symptom → cause → fix → date).
 - When you establish a reusable code shape, add/refresh a file in `.claude/patterns/`
   and link it from the relevant `.claude/rules/*.md`.
 - Keep `.claude/ROADMAP.md` current: state, backlog, and architecture decisions.
-- Capture durable cross-session facts as Claude memory; keep `CLAUDE.md` lean (§11).
+- Capture durable cross-session facts as Claude memory; keep `CLAUDE.md` lean (§12).
 
-## 11. Tooling currency & formatting
+## 12. Tooling currency & formatting
 
 - **Toolchain:** track the latest **stable** Rust. `rust-toolchain.toml` pins an exact
   version deliberately (not `stable`) so a new release can't silently introduce a
@@ -142,7 +167,7 @@ Every change updates, as applicable:
   RUSTSEC advisories; each ignore is transitive-only, dated, and reviewed every release.
   Never add inline `--ignore` flags in CI.
 
-## 12. Coverage
+## 13. Coverage
 
 - CI reports line coverage via `cargo llvm-cov` over `--workspace --exclude ui`.
   It is **report-only** today (no hard threshold) so it never blocks on the existing

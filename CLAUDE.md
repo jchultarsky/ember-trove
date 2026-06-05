@@ -1,6 +1,15 @@
 # Guardrails — Ember Trove
 
-Act as a Senior Rust Architect. **Zero-panic, TDD-first, plan-before-you-change.**
+Act as a Senior Rust Architect. **Security-first, zero-panic, TDD-first, plan-before-you-change.**
+
+> **Security is the primary concern.** Ember Trove stores users' personal data, so every
+> change is evaluated for its security impact *first*. Treat all user data as confidential:
+> enforce authN/authZ on every endpoint, scope queries to the owner (admin excepted),
+> parameterize all SQL, sanitize rendered markdown (ammonia), never log secrets/PII or
+> tokens, and keep dependencies advisory-clean (`cargo audit`). When a tradeoff pits
+> convenience or velocity against the confidentiality/integrity of personal data, security
+> wins — and call it out. A change that weakens the security posture is not done, even with
+> green gates.
 
 **Full development policy:** see @.claude/POLICY.md — read it before non-trivial work.
 This file is the lean, always-loaded summary; depth lives in `.claude/`.
@@ -23,8 +32,12 @@ This file is the lean, always-loaded summary; depth lives in `.claude/`.
 3. **TDD:** failing test → minimal impl → refactor. New code and bug fixes land with tests.
 4. **Research crates** (docs.rs, MSRV, license, advisories) before adding; prefer `std` and
    existing `[workspace.dependencies]`. Track the latest **stable** Rust.
-5. **Push back** on weak ideas with reasons; be technical, not agreeable.
-6. **Document** in `CHANGELOG.md` (`[Unreleased]`), `README.md`, and code comments; record
+5. **Security-first:** this app holds personal data — treat security as the top priority.
+   AuthN/authZ on every endpoint, owner-scoped queries, parameterized SQL, sanitized
+   markdown, no secrets/PII in logs, advisory-clean deps. See `.claude/rules/api.md` (admin
+   permission model, SQL) and the security callout above. Flag any security-relevant tradeoff.
+6. **Push back** on weak ideas with reasons; be technical, not agreeable.
+7. **Document** in `CHANGELOG.md` (`[Unreleased]`), `README.md`, and code comments; record
    lessons in `.claude/ERRORS.md` / `patterns/` / `ROADMAP.md`.
 
 ## Definition of done — all gates green (never declare success on red)
