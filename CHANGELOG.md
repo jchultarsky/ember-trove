@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Webhook delivery is now wired (registered webhooks actually fire)
+The `webhook_dispatch::dispatch` delivery path existed (tenant-scoped,
+SSRF-hardened, HMAC-signed) but had **no callers**, so registered webhooks
+never fired. It is now invoked from the node and task CRUD handlers:
+`node.created` / `node.updated` / `node.deleted` (`routes/nodes.rs`) and
+`task.created` / `task.updated` / `task.deleted` (`routes/tasks.rs`). Delivery
+is scoped to the *resource owner's* own active webhooks (a node/task event only
+fans out to the owner's endpoints — never cross-tenant). Event names are now
+canonical `pub const`s + an `available_events()` allowlist in `common::webhook`
+(used by `default_events`), so handlers and clients can't drift on spelling.
+`task.*` joins `node.*` as a subscribable event; `default_events()` now
+subscribes to all six. The crate-wide dead-code lint is satisfied without the
+prior module-scoped `allow` (dispatch has real callers now).
+
+> Behaviour note: deployments with webhooks that were registered while delivery
+> was dormant will start receiving POSTs after this upgrade — that is the
+> intended fix, but call it out in release notes.
+
 ### Tooling
 - Dependency major bumps (resolving the remaining open Dependabot PRs):
   `reqwest` 0.12 → 0.13 (added the now-feature-gated `form` feature for the OIDC
