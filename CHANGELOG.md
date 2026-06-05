@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- Deleted the orphaned `ui/src/components/modals/link_picker.rs` "Phase 4" stub
+  (`#![allow(dead_code)]`, zero call sites, UI text still read "Link picker coming
+  in Phase 4"). Node-to-node linking has shipped via the graph view's inline edge
+  creation (`POST /edges`) since Phase 4, making the modal dead. Also removed two
+  orphaned task-sort helpers in `ui/src/components/task_common.rs`
+  (`sort_tasks_full` + its sole consumer `priority_weight`, superseded by
+  `sort_tasks_by_order`) and the never-mounted `LegendShape` graph-legend
+  component (the edge legend `LegendEdge` remains in use).
+
+### Changed
+- Dropped the crate-wide `#![allow(dead_code)]` (with its stale "Phase 1 skeleton"
+  rationale) from `api/src/main.rs` and `ui/src/main.rs`, restoring real dead-code
+  lint coverage across both binaries. Genuinely-retained dead code is now scoped
+  with localized `#[allow(dead_code)]` + justification instead of a blanket
+  relaxation: the sqlx-deser-only `SummaryRow.rn` / `SearchRow.updated_at` fields,
+  the deliberate `IconButtonVariant::Accent` palette variant, and the
+  not-yet-wired webhook delivery module (`api/src/webhook_dispatch.rs`).
+
 ### Tooling
 - Bumped `actions/cache` from v4 to v5.0.5 (SHA-pinned, `# v5.0.5`) across all CI jobs
   to move off the deprecated Node.js 20 runtime (GitHub forces Node 20 actions onto

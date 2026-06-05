@@ -11,6 +11,9 @@ pub enum IconButtonVariant {
     /// Red hover — destructive actions (delete, remove).
     Danger,
     /// Amber hover — accent actions (add, navigate, download).
+    /// Part of the deliberate IconButton palette (v2.11.2); no current call
+    /// site, kept so accent actions can adopt it without re-deriving the class.
+    #[allow(dead_code)]
     Accent,
 }
 

@@ -604,6 +604,9 @@ impl TaskRepo for PgTaskRepo {
             status: String,
             priority: String,
             due_date: Option<NaiveDate>,
+            // Window-function rank: filtered in the SQL `WHERE rn <= $n`, so sqlx
+            // must map the column, but Rust never reads it after deserialization.
+            #[allow(dead_code)]
             rn: i64,
         }
 

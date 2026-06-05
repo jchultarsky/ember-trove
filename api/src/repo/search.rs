@@ -46,6 +46,9 @@ struct SearchRow {
     status: String,
     match_source: Option<String>,
     highlighted_title: Option<String>,
+    // Used by SQL `WHERE`/`ORDER BY` (recency); sqlx must map the column, but
+    // Rust never reads it after deserialization.
+    #[allow(dead_code)]
     updated_at: DateTime<Utc>,
 }
 
