@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.19.4] - 2026-06-05
+
 ### Removed
 - Deleted the orphaned `ui/src/components/modals/link_picker.rs` "Phase 4" stub
   (`#![allow(dead_code)]`, zero call sites, UI text still read "Link picker coming
