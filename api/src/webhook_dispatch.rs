@@ -4,6 +4,14 @@
 //! node ID.  Active webhooks subscribed to that event are fetched from the repo
 //! and an HTTP POST is spawned for each one.  Delivery failures are logged but
 //! never propagate back to the caller.
+//!
+//! NOTE (2026-06-05): the delivery path is built and tenant-scoped but not yet
+//! wired to any mutation handler — [`dispatch`] currently has no callers, so
+//! registered webhooks do not fire. Tracked in `.claude/ROADMAP.md` (wire
+//! webhook delivery into the node/task mutation routes). The module-scoped
+//! `allow(dead_code)` keeps this retained-but-unwired code from tripping the
+//! crate-wide dead-code lint, without a blanket relaxation across the crate.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 
