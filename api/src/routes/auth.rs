@@ -72,7 +72,7 @@ async fn login(
 
     // PKCE: generate a 32-byte random code_verifier and derive the S256 challenge.
     let mut raw = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut raw);
+    rand::rng().fill_bytes(&mut raw);
     let code_verifier = URL_SAFE_NO_PAD.encode(raw);
     let code_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
 
@@ -80,7 +80,7 @@ async fn login(
     // The verifier is stored server-side keyed by this token, which travels
     // through the redirect URL — avoiding iOS Safari ITP cookie restrictions.
     let mut state_raw = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut state_raw);
+    rand::rng().fill_bytes(&mut state_raw);
     let oauth_state = URL_SAFE_NO_PAD.encode(state_raw);
 
     // Persist the verifier keyed by the OAuth state. The background sweeper
