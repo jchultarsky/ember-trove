@@ -6,6 +6,43 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.4] - 2026-06-06
+
+### Documentation — Rewrite local-dev docs for the Cognito reality (remove stale Keycloak)
+Auth moved from Keycloak to Cognito long ago (`feat(auth): replace Keycloak with Amazon
+Cognito`), but the README's "Local Development" walkthrough still described a Keycloak
+setup that no longer exists in the compose — so following it failed. Fully rewrote it
+(`README.md` → "Running Locally"): an **Option A — Full Docker stack** flow (verified:
+`cp .env.local.example`, fill secrets, `--env-file deploy/.env.local up --build`,
+`localhost:8003`) and an **Option B — native** flow (cargo + `trunk serve`, which proxies
+`/api`), plus a **"bring your own Cognito"** section so a fresh cloner can stand up their
+own user pool + app client + callback. Also: corrected the `COOKIE_KEY` guidance (the
+all-zeros value is rejected, not "safe for local dev"), dropped dead env vars from the
+config reference (`OIDC_EXTERNAL_URL`, `KEYCLOAK_ADMIN_*`), fixed the Key Features / Tech
+Stack auth rows, added the `/api/auth/change-password` endpoint, and updated
+`CONTRIBUTING.md`'s local-stack snippet. Known follow-up: local login still requires a
+Cognito pool (no bundled local IdP) — documented as such.
+
+### Tooling — Dependency bump
+`taiki-e/install-action` 2.81.5 → 2.81.6 (Dependabot, github-actions group).
+
+### Tooling — Local Docker stack: require a real COOKIE_KEY (was broken out of the box)
+The local `deploy/docker-compose.yml` hardcoded an all-zeros `COOKIE_KEY`, which
+the API correctly rejects at startup ("trivially weak") — so the api container
+crash-looped and the local stack never came up. `COOKIE_KEY` is now required from
+`deploy/.env.local` (`${COOKIE_KEY:?…}`), documented in `.env.local.example` with
+`openssl rand -hex 64`. Verified the full stack (postgres + MinIO + api + ui/nginx)
+boots and serves at `http://localhost:8003`.
+
+### Tooling — Stop the recurring red `chore(deps)` CI from the rand 0.10 bump
+Dependabot opened a weekly `rand` 0.9 → 0.10 PR whose CI failed every time:
+rand 0.10 has a breaking `RngCore`/`fill_bytes` API change, and — more
+fundamentally — `governor 0.10` (via `tower_governor 0.8`) still pins `rand ^0.9`,
+so adopting 0.10 would force two `rand` versions into the tree in the CSPRNG path
+that mints PKCE verifiers and OAuth state. Added a dependabot `ignore` for
+`rand` `0.10.x` (with a dated rationale) so the bump is deferred until the
+ecosystem supports a single-version migration. Closed the stale PR.
+
 ## [2.20.3] - 2026-06-05
 
 ### Changed — Loosen auth rate limits for active development

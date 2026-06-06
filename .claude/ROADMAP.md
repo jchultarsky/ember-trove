@@ -3,12 +3,22 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-06-05)
+## Current state (2026-06-06)
 
-- **Released:** v2.19.2. The v2.19.x line closed the deep security review/audit
-  (sprints 7–9): CSP nonce + `strict-dynamic` (removed `script-src 'unsafe-inline'`),
-  Cognito admin hardening, activity-log scoping, backup/restore authz, rate-limiting
-  coverage, full sqlx-parameterization sweep.
+- **Released:** v2.20.4. The v2.20.1–2.20.4 patches restored login, which the v2.20.0
+  deploy had broken in two stacked ways: (1) the `/api/auth/callback` redirect used an
+  inline `<script>` that the new strict CSP (nonce + `strict-dynamic`) blocked → blank
+  page; fixed with a real HTTP 303 redirect. (2) `jsonwebtoken` 9→10 ships **no** built-in
+  crypto backend, so RS256 session-token verification panicked → 502 on every authed
+  request; fixed by enabling the `aws_lc_rs` backend (matches our rustls/AWS-SDK provider;
+  avoids the `rsa` crate / RUSTSEC-2023-0071). Also: auth rate limits loosened for active
+  dev (`/api/auth/me` carved into its own zone so the AuthGate can't loop), a pre-commit
+  secret scan + "no private keys in tests" policy, and a fixed local Docker stack
+  (`COOKIE_KEY` required from `.env.local`).
+- **Prior (v2.19.x):** closed the deep security review/audit (sprints 7–9): CSP nonce +
+  `strict-dynamic` (removed `script-src 'unsafe-inline'`), Cognito admin hardening,
+  activity-log scoping, backup/restore authz, rate-limiting coverage, full
+  sqlx-parameterization sweep.
 - **Toolchain:** Rust pinned to `1.96` (current stable) in `rust-toolchain.toml`;
   workspace edition 2024, resolver 2.
 - **Pipeline:** `CI` (check/clippy/fmt/audit/migrations/coverage/docker-build) +
@@ -22,6 +32,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   mechanical task; left for the maintainer to steer.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
   not a repo deliverable).
+- **Self-contained local auth (deferred):** local login needs a Cognito pool — there's no
+  bundled IdP since the Keycloak→Cognito migration. README now documents "bring your own
+  Cognito". A local OIDC container (Keycloak/dex with a `cognito:groups` claim mapper) would
+  restore zero-AWS clone-and-run, but partially reverses that migration for local — revisit
+  only if the cloner experience needs it.
 
 ## Architecture decisions (ADR-lite)
 

@@ -16,6 +16,16 @@ updates:
       # Batch low-risk minor/patch bumps into one PR to cut noise; majors stay separate.
       cargo-minor-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # rand 0.10 is blocked by the ecosystem: governor 0.10 (via tower_governor 0.8)
+      # still requires rand ^0.9, so adopting rand 0.10 now would force TWO rand
+      # versions into the tree — in the CSPRNG path that mints PKCE verifiers and
+      # OAuth state (api/src/routes/auth.rs). It also has a breaking RngCore/fill_bytes
+      # API change. Defer until tower_governor/governor support rand 0.10, then do a
+      # single clean-version migration in its own commit. Re-evaluate this ignore then.
+      # (2026-06-06)
+      - dependency-name: "rand"
+        versions: ["0.10.x"]
 
   # GitHub Actions — keeps the SHA pins in .github/workflows/* current (Dependabot
   # updates both the pinned SHA and the trailing `# vX` comment).
