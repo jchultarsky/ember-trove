@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.3] - 2026-06-05
+
+### Changed — Loosen auth rate limits for active development
+The strict `auth` nginx zone (login/callback/refresh/logout) was 10 r/m, burst 5.
+During iterative login testing that throttled quickly, and — worse — `/api/auth/me`
+(the session check hit on *every* app load) shared that budget: once it 429'd, the
+SPA's AuthGate treated it as logged-out and looped login↔callback, re-saturating
+the limiter. Two changes in `deploy/nginx.prod.conf`: (1) `/api/auth/me` now has
+its own generous zone (120 r/m) via an exact-match `location =` so a session check
+never trips the brute-force limiter; (2) the `auth` zone is loosened to 30 r/m,
+burst 10. Deliberately relaxed for the active-development phase — revisit and
+tighten later. Validated with `nginx -t`.
+
 ### Security/Tooling — Remove committed test private key; add a pre-commit secret scan
 The 2.20.2 JWT regression test embedded a generated RSA **private** key (used only
 to sign a test token). It was a throwaway with no production value — it never
