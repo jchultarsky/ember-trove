@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.1] - 2026-06-05
+
+### Fixed — Login left users on a blank "Redirecting…" page (CSP vs. inline script)
+After login, Cognito redirects the browser to `/api/auth/callback`, which set the
+session cookie and then bounced into the SPA via an **inline** `<script>
+window.location.replace(…)</script>`. The 2.20.0 deploy added a strict
+Content-Security-Policy (`deploy/nginx.prod.conf`) whose `script-src` uses a
+per-request nonce + `'strict-dynamic'` with no `'unsafe-inline'`. The nonce is
+stamped onto `<script>` tags by an nginx `sub_filter` that runs **only** in the
+frontend `location /` block — not `location ~ ^/api/auth/` — so the callback's
+inline redirect script carried no nonce and CSP blocked it. The redirect never
+fired and the user was stranded on a blank page. The callback now issues a real
+**HTTP 303 redirect** (`axum::response::Redirect`) instead of an inline script,
+so it needs no nonce and the strict CSP stays fully intact (no `'unsafe-inline'`
+re-introduced). Session/refresh/access cookies are unchanged.
+
 ## [2.20.0] - 2026-06-05
 
 ### Tooling — CI hardening (coverage floor + cargo-deny)
