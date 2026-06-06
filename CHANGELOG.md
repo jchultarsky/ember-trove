@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — Stop the recurring red `chore(deps)` CI from the rand 0.10 bump
+Dependabot opened a weekly `rand` 0.9 → 0.10 PR whose CI failed every time:
+rand 0.10 has a breaking `RngCore`/`fill_bytes` API change, and — more
+fundamentally — `governor 0.10` (via `tower_governor 0.8`) still pins `rand ^0.9`,
+so adopting 0.10 would force two `rand` versions into the tree in the CSPRNG path
+that mints PKCE verifiers and OAuth state. Added a dependabot `ignore` for
+`rand` `0.10.x` (with a dated rationale) so the bump is deferred until the
+ecosystem supports a single-version migration. Closed the stale PR.
+
 ## [2.20.1] - 2026-06-05
 
 ### Fixed — Login left users on a blank "Redirecting…" page (CSP vs. inline script)
