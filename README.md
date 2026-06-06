@@ -30,7 +30,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Quick capture** — `n` keyboard shortcut opens a lightweight modal for rapid node creation. Type, title, and optional body; Ctrl+Enter to save.
 - **Keyboard shortcuts** — `n` new node · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields.
 - **Multi-user permissions** — nodes are **private by default**. Owners can invite others by email with Viewer / Editor / Owner roles. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
-- **User management** — admin UI backed by Amazon Cognito (production) or Keycloak (local). User invite emails via AWS SES.
+- **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
 - **Public share links** — generate opaque share tokens for read-only access to a node without login.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
 - **Light / dark mode** — class-based Tailwind v4 warm ember theme, persisted in `localStorage`.
@@ -48,8 +48,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 | Frontend    | Leptos 0.8 CSR/WASM · Tailwind CSS v4   |
 | Database    | PostgreSQL 16 · sqlx 0.8               |
 | File Store  | S3-compatible (MinIO / Lightsail Object Storage / AWS S3) |
-| Auth (local)| OIDC via Keycloak (dev) / Cognito       |
-| Auth (prod) | Amazon Cognito (hosted UI + custom CSS) |
+| Auth        | Amazon Cognito (OIDC; hosted UI + custom CSS) |
 | Markdown    | pulldown-cmark · ammonia               |
 | OpenAPI     | utoipa + Swagger UI                     |
 | Build       | Trunk (UI) · cargo workspace            |
@@ -98,166 +97,105 @@ See **[docs/deploy-aws.md](docs/deploy-aws.md)** for a complete step-by-step gui
 
 ---
 
-## Local Development — Step-by-Step
+## Running Locally
 
-This section walks you through building and running every service manually on your local machine.
+There are two ways to run the stack on your machine:
+
+- **[Option A — Full Docker stack](#option-a--full-docker-stack-recommended)** (recommended): everything in containers.
+- **[Option B — Native API + UI](#option-b--native-api--ui-faster-iteration)**: the app from source, backing services in Docker (faster rebuilds).
+
+Both need an OIDC identity provider for login — see **[Auth: bring your own Cognito](#auth-bring-your-own-cognito)** first.
 
 ### Prerequisites
 
-Install the following tools before proceeding:
-
 | Tool | Version | Install |
 |------|---------|---------|
-| Rust | stable ≥ 1.91.1 | [rustup.rs](https://rustup.rs) |
-| wasm32 target | — | `rustup target add wasm32-unknown-unknown` |
-| Trunk | latest | `cargo install trunk` |
-| sqlx-cli | latest | `cargo install sqlx-cli --features postgres` |
 | Docker Desktop | latest | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
+| Rust | stable ≥ 1.91.1 | [rustup.rs](https://rustup.rs) — *native mode only* |
+| wasm32 target | — | `rustup target add wasm32-unknown-unknown` — *native mode only* |
+| Trunk | latest | `cargo install trunk` — *native mode only* |
+| sqlx-cli | latest | `cargo install sqlx-cli --features postgres` — *only to author new migrations* |
 
 > **Note:** `aws-sdk-s3` requires Rust ≥ 1.91.1. Run `rustup update stable` if your toolchain is older.
+> Migrations are applied automatically at API startup (`sqlx::migrate!`), so you never run them by hand.
 
 ---
 
-### Step 1 — Start the backing services (PostgreSQL, MinIO, Keycloak)
+### Auth: bring your own Cognito
 
-```bash
-docker compose -f deploy/docker-compose.yml up -d postgres minio keycloak
-```
+Ember Trove authenticates via **OIDC against Amazon Cognito**. It reads roles from the
+Cognito `cognito:groups` claim and expects a Cognito **ID token**, so there is no
+bundled local identity provider — to log in locally you point it at a Cognito user pool.
 
-Wait ~15 seconds for Keycloak to finish starting, then verify:
+- **Maintainer:** use the existing pool. Put its app-client secret and (optionally) the
+  admin IAM keys into `deploy/.env.local` (below). The pool/client IDs are already the
+  defaults in `deploy/docker-compose.yml`.
+- **Cloned the repo?** Create your own pool (one-time; Cognito is free ≤ 50 K MAU):
+  1. **Cognito → Create user pool.** Note the **Pool ID** (`<region>_xxxxx`); the issuer
+     is `https://cognito-idp.<region>.amazonaws.com/<pool-id>`.
+  2. Add an **app client** of type *confidential* (with a client secret). Note the
+     **client ID** and **secret**.
+  3. Enable the **Authorization code grant** with scopes `openid email profile`, set up a
+     **Hosted UI domain**, and add the allowed **callback URL**
+     `http://localhost:8003/api/auth/callback` and sign-out URL `http://localhost:8003`.
+  4. Create a group named **`admin`** and add your user to it — app roles come from
+     `cognito:groups`.
+  5. *(Optional)* For the `/api/admin/*` user-management endpoints, create an IAM user with
+     Cognito admin permissions and use its keys as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
 
-```bash
-docker compose -f deploy/docker-compose.yml ps
-```
-
-Expected output:
-
-```
-NAME                    STATUS
-deploy-postgres-1       running (healthy)
-deploy-minio-1          running (healthy)
-deploy-keycloak-1       running
-```
-
-Service URLs:
-
-| Service    | URL                          | Credentials                         |
-|------------|------------------------------|--------------------------------------|
-| PostgreSQL | `localhost:5432`             | `ember_trove` / `ember_trove_dev`    |
-| MinIO UI   | http://localhost:9001        | `ember_trove` / `ember_trove_dev`    |
-| Keycloak   | http://localhost:8180        | `admin` / `admin` (master realm)     |
+  Then set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `COGNITO_USER_POOL_ID`, and
+  `COGNITO_REGION` to your pool's values — in `deploy/docker-compose.yml` (the non-secret IDs)
+  and `deploy/.env.local` (the secrets).
 
 ---
 
-### Step 2 — Configure Keycloak
+### Option A — Full Docker stack (recommended)
 
-Keycloak uses an in-memory dev store (`KC_DB: dev-file`). Recreate the realm and client after every Keycloak container restart.
-
-**2a. Authenticate kcadm:**
-
-```bash
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh config credentials \
-    --server http://localhost:8080 \
-    --realm master \
-    --user admin \
-    --password admin
-```
-
-**2b. Create the realm:**
+Runs every service as a container: PostgreSQL, MinIO (local S3, bucket auto-created), the
+API, and the UI (nginx serving the WASM SPA and proxying `/api/`).
 
 ```bash
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh create realms \
-    -s realm=ember-trove \
-    -s enabled=true
+# 1. Create your local secrets file (gitignored).
+cp deploy/.env.local.example deploy/.env.local
+
+# 2. Fill it in: OIDC_CLIENT_SECRET, the two AWS_* keys (optional, for /admin),
+#    and a COOKIE_KEY. Generate the cookie key — the API rejects a weak/all-identical one:
+#      openssl rand -hex 64
+
+# 3. Build and start the whole stack.
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env.local up --build
 ```
 
-**2c. Create the OIDC client:**
+Open **http://localhost:8003**. (First build is slow — Rust + WASM compile.)
 
-```bash
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh create clients \
-    -r ember-trove \
-    -s clientId=ember-trove-api \
-    -s enabled=true \
-    -s publicClient=false \
-    -s secret=change-me \
-    -s 'redirectUris=["http://localhost:3003/api/auth/callback","http://localhost:8003/api/auth/callback"]' \
-    -s directAccessGrantsEnabled=true
-```
+| Service    | URL                    | Credentials                       |
+|------------|------------------------|-----------------------------------|
+| UI (nginx) | http://localhost:8003  | — (log in via Cognito)            |
+| API        | http://localhost:3003  | —                                 |
+| MinIO API  | http://localhost:9000  | `ember_trove` / `ember_trove_dev` |
+| MinIO UI   | http://localhost:9001  | `ember_trove` / `ember_trove_dev` |
+| PostgreSQL | `localhost:5432`       | `ember_trove` / `ember_trove_dev` |
 
-**2d. Disable PKCE on the client:**
-
-```bash
-CLIENT_UUID=$(docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh get clients \
-    -r ember-trove \
-    --fields id,clientId \
-    -q clientId=ember-trove-api \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
-
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh update clients/$CLIENT_UUID \
-    -r ember-trove \
-    -s 'attributes={"pkce.code.challenge.method":""}'
-```
-
-**2e. Create the admin realm role:**
-
-```bash
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh create roles \
-    -r ember-trove \
-    -s name=admin
-```
-
-**2f. Create a test user:**
-
-```bash
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh create users \
-    -r ember-trove \
-    -s username=testuser \
-    -s email=test@example.com \
-    -s firstName=Test \
-    -s lastName=User \
-    -s enabled=true
-
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh set-password \
-    -r ember-trove \
-    --username testuser \
-    --new-password Ember2026
-
-docker exec deploy-keycloak-1 \
-  /opt/keycloak/bin/kcadm.sh add-roles \
-    -r ember-trove \
-    --uusername testuser \
-    --rolename admin
-```
+Stop with `docker compose -f deploy/docker-compose.yml down` (add `-v` to also wipe the
+Postgres/MinIO volumes).
 
 ---
 
-### Step 3 — Apply database migrations
+### Option B — Native API + UI (faster iteration)
+
+Run only the backing services in Docker and the app from source — rebuilds are much faster
+than re-baking images.
+
+**1. Start Postgres + MinIO:**
 
 ```bash
-export DATABASE_URL=postgres://ember_trove:ember_trove_dev@localhost/ember_trove
-sqlx migrate run --source migrations/
-```
-
----
-
-### Step 4 — Create the MinIO bucket
-
-```bash
+docker compose -f deploy/docker-compose.yml up -d postgres minio
+# Create the S3 bucket (the API does not auto-create it in native mode):
 docker exec deploy-minio-1 mc alias set local http://localhost:9000 ember_trove ember_trove_dev
-docker exec deploy-minio-1 mc mb local/ember-trove
+docker exec deploy-minio-1 mc mb --ignore-existing local/ember-trove
 ```
 
----
-
-### Step 5 — Build and run the API
+**2. Build and run the API** (migrations apply automatically on startup):
 
 ```bash
 export DATABASE_URL=postgres://ember_trove:ember_trove_dev@localhost/ember_trove
@@ -266,62 +204,29 @@ export S3_BUCKET=ember-trove
 export S3_ACCESS_KEY=ember_trove
 export S3_SECRET_KEY=ember_trove_dev
 export S3_REGION=us-east-1
-export OIDC_ISSUER=http://localhost:8180/realms/ember-trove
-export OIDC_CLIENT_ID=ember-trove-api
-export OIDC_CLIENT_SECRET=change-me
+# Point these at YOUR Cognito pool (see "Auth: bring your own Cognito"):
+export OIDC_ISSUER=https://cognito-idp.<region>.amazonaws.com/<pool-id>
+export OIDC_CLIENT_ID=<your-app-client-id>
+export OIDC_CLIENT_SECRET=<your-app-client-secret>
+export COOKIE_KEY=$(openssl rand -hex 64)   # must be a real 128-hex-char key
 export FRONTEND_URL=http://localhost:8003
-export API_EXTERNAL_URL=http://localhost:3003
-export KEYCLOAK_ADMIN_USER=admin
-export KEYCLOAK_ADMIN_PASSWORD=admin
-export COOKIE_KEY=00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+export API_EXTERNAL_URL=http://localhost:8003
+export COOKIE_SECURE=false                   # local dev is plain http
 export RUST_LOG=info
 
 cargo run -p api
 ```
 
-> **COOKIE_KEY** must be exactly 128 hex characters (64 bytes). The all-zeros value is safe for local dev only.
+Verify: `curl http://localhost:3003/api/health` → `{"status":"ok",...}`.
+Swagger UI (loopback only): **http://localhost:3003/swagger-ui/**.
 
-Verify:
-
-```bash
-curl http://localhost:3003/api/health
-# {"status":"ok","service":"ember-trove-api","database":"ok"}
-```
-
-Swagger UI: **http://localhost:3003/swagger-ui/**
-
----
-
-### Step 6 — Build and run the UI dev server
+**3. Build and run the UI dev server** (`ui/Trunk.toml` proxies `/api` → `localhost:3003`):
 
 ```bash
 trunk serve --config ui/Trunk.toml
 ```
 
-First build takes ~60 s. Navigate to **http://localhost:8003**.
-
-Log in with: `testuser` / `Ember2026`
-
----
-
-## Running the Full Docker Stack (Local)
-
-```bash
-docker compose -f deploy/docker-compose.yml up --build
-```
-
-> After a fresh `docker compose up`, re-run the Keycloak setup in Step 2 — the dev-file store is ephemeral.
-
-| Service    | URL                    |
-|------------|------------------------|
-| UI (nginx) | http://localhost:8003  |
-| API        | http://localhost:3003  |
-| Keycloak   | http://localhost:8180  |
-| MinIO API  | http://localhost:9000  |
-| MinIO UI   | http://localhost:9001  |
-| PostgreSQL | `localhost:5432`       |
-
----
+Navigate to **http://localhost:8003** and log in through your Cognito Hosted UI.
 
 ## Configuration Reference
 
@@ -330,29 +235,26 @@ All API configuration is provided via environment variables.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Always | PostgreSQL connection string |
-| `COOKIE_KEY` | Always | 128 hex chars (64 bytes) for cookie encryption |
+| `COOKIE_KEY` | Always | 128 hex chars (64 bytes) for cookie encryption; must be a real random key (rejected if weak/all-identical) — `openssl rand -hex 64` |
 | `COOKIE_SECURE` | Prod | Set `true` in production (HTTPS only) |
 | `FRONTEND_URL` | Always | Browser-facing URL of the UI |
 | `API_EXTERNAL_URL` | Always | Browser-facing URL of the API |
 | `HOST` | No | Bind address (default: `0.0.0.0`) |
 | `PORT` | No | Bind port (default: `3003`) |
 | `RUST_LOG` | No | Log level (default: `info`) |
-| `OIDC_ISSUER` | Auth | Keycloak realm or Cognito issuer URL |
-| `OIDC_CLIENT_ID` | Auth | OIDC client ID |
-| `OIDC_CLIENT_SECRET` | Auth | OIDC client secret |
-| `OIDC_EXTERNAL_URL` | Docker/local | Rewrites internal Keycloak discovery URL for browser redirect |
-| `COGNITO_USER_POOL_ID` | Cognito | User Pool ID for admin operations |
-| `COGNITO_REGION` | Cognito | AWS region of the User Pool |
-| `AWS_ACCESS_KEY_ID` | Cognito | IAM key for Cognito admin operations |
-| `AWS_SECRET_ACCESS_KEY` | Cognito | IAM secret for Cognito admin operations |
+| `OIDC_ISSUER` | Auth | Cognito issuer URL (`https://cognito-idp.<region>.amazonaws.com/<pool-id>`) |
+| `OIDC_CLIENT_ID` | Auth | Cognito app-client ID |
+| `OIDC_CLIENT_SECRET` | Auth | Cognito app-client secret |
+| `COGNITO_USER_POOL_ID` | Admin | User Pool ID — enables `/api/admin/*` when set (optional) |
+| `COGNITO_REGION` | Admin | AWS region of the User Pool (default: `us-east-2`) |
+| `AWS_ACCESS_KEY_ID` | Admin | IAM key for Cognito admin operations |
+| `AWS_SECRET_ACCESS_KEY` | Admin | IAM secret for Cognito admin operations |
 | `SES_FROM_EMAIL` | Optional | From-address for node invite emails via AWS SES v2; if unset, invites work but no email is sent |
 | `S3_ENDPOINT` | S3 | S3-compatible endpoint URL (omit for native AWS S3) |
 | `S3_BUCKET` | S3 | Bucket name |
 | `S3_ACCESS_KEY` | S3 | S3 access key |
 | `S3_SECRET_KEY` | S3 | S3 secret key |
 | `S3_REGION` | No | S3 region (default: `us-east-1`) |
-| `KEYCLOAK_ADMIN_USER` | Keycloak | Master realm admin username |
-| `KEYCLOAK_ADMIN_PASSWORD` | Keycloak | Master realm admin password |
 
 ---
 
@@ -421,6 +323,7 @@ All routes are nested under `/api`. Interactive docs at `/swagger-ui/` when the 
 |--------|------|-------------|
 | GET | `/api/auth/me` | Current user info and roles |
 | POST | `/api/auth/logout` | Clear session cookies + redirect through IdP end-session endpoint |
+| POST | `/api/auth/change-password` | Change the signed-in user's Cognito password |
 
 ### Health
 

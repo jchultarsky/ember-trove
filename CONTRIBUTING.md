@@ -24,12 +24,12 @@ cargo install sqlx-cli --features postgres
 ### Local Stack
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d postgres minio keycloak
-export DATABASE_URL=postgres://ember_trove:ember_trove_dev@localhost/ember_trove
-sqlx migrate run --source migrations/
+# Backing services only (the API auto-applies migrations on startup):
+docker compose -f deploy/docker-compose.yml up -d postgres minio
 ```
 
-See [README.md](README.md) for the full step-by-step local development guide, including Keycloak setup.
+See [README.md](README.md#running-locally) for the full guide — both the Docker and native
+flows, plus the Cognito ("bring your own pool") auth setup needed for local login.
 
 ---
 
