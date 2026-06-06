@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.3] - 2026-06-05
+
 ### Changed — Loosen auth rate limits for active development
 The strict `auth` nginx zone (login/callback/refresh/logout) was 10 r/m, burst 5.
 During iterative login testing that throttled quickly, and — worse — `/api/auth/me`
