@@ -21,7 +21,11 @@ evaluated *first* on every change — above velocity and convenience. This is no
 - **No secrets or PII in logs, errors, or telemetry.** Never log tokens, credentials,
   Cognito claims, or personal data. Error responses MUST NOT leak internal detail.
 - **Secrets stay out of the repo.** Configuration secrets come from the environment, never
-  committed. Rotate anything exposed.
+  committed. Rotate anything exposed. **Never commit private keys or credentials** — not
+  even in tests: use a *public* key plus a runtime- or fixture-generated token, never a
+  committed `BEGIN … PRIVATE KEY` block. The pre-commit hook (`scripts/hooks/pre-commit`)
+  scans staged additions for private-key/AWS-key patterns and blocks the commit; treat a
+  hit as a real finding, not a nuisance.
 - **Dependencies stay advisory-clean.** `cargo audit` MUST be clean; ignored RUSTSEC
   advisories are transitive-only, dated, and reviewed every release (`.cargo/audit.toml`,
   §12). Removing a dependency to drop an advisory beats suppressing it.
