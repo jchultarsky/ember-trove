@@ -2,7 +2,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Query, State},
     http::header,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use axum_extra::extract::{
@@ -136,7 +136,7 @@ async fn callback(
     // rejection, OIDC misconfig) bounces the user back to the frontend
     // root, where AuthGate will start a fresh login flow.
     match try_callback(&app_state, jar, params).await {
-        Ok((updated_jar, headers, html)) => (updated_jar, headers, html).into_response(),
+        Ok((updated_jar, headers, redirect)) => (updated_jar, headers, redirect).into_response(),
         Err(e) => {
             tracing::warn!(
                 ?e,
@@ -157,7 +157,7 @@ async fn try_callback(
     (
         PrivateCookieJar,
         [(header::HeaderName, &'static str); 1],
-        Html<String>,
+        Redirect,
     ),
     ApiError,
 > {
@@ -248,19 +248,18 @@ async fn try_callback(
         updated_jar = updated_jar.add(refresh_cookie);
     }
 
-    let frontend_url = &app_state.auth.frontend_url;
-
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html><head><title>Redirecting...</title></head>
-<body><script>window.location.replace("{frontend_url}");</script></body>
-</html>"#
-    );
-
+    // Issue a real HTTP 303 redirect into the SPA rather than an inline-script
+    // `window.location.replace`. The strict production CSP (script-src with a
+    // per-request nonce + 'strict-dynamic', no 'unsafe-inline') blocks any
+    // inline script that isn't nonce-stamped, and the nginx nonce sub_filter
+    // only runs on the frontend `location /` block — not `/api/auth/`. An
+    // inline-script redirect here therefore never fires, leaving the user on a
+    // blank "Redirecting..." page. A 303 needs no script, so it keeps the CSP
+    // strict and works regardless. See deploy/nginx.prod.conf. (v2.20.1)
     Ok((
         updated_jar,
         [(header::CACHE_CONTROL, "no-store")],
-        Html(html),
+        Redirect::to(&app_state.auth.frontend_url),
     ))
 }
 
