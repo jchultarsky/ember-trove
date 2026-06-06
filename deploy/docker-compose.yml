@@ -68,8 +68,10 @@ services:
       COGNITO_REGION: us-east-2
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-change-me}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-change-me}
-      # 128-char hex key (64 bytes) for cookie encryption — CHANGE IN PRODUCTION
-      COOKIE_KEY: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      # 128-char hex key (64 bytes) for cookie encryption. The API rejects a
+      # weak/all-identical key at startup, so this MUST come from deploy/.env.local.
+      # Generate one with: openssl rand -hex 64
+      COOKIE_KEY: "${COOKIE_KEY:?set COOKIE_KEY in deploy/.env.local (openssl rand -hex 64)}"
       FRONTEND_URL: "http://localhost:8003"
       API_EXTERNAL_URL: "http://localhost:8003"
       # Local dev is plain http — opt out of Secure cookies (prod defaults on).
