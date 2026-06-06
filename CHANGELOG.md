@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.4] - 2026-06-06
+
+### Documentation — Rewrite local-dev docs for the Cognito reality (remove stale Keycloak)
+Auth moved from Keycloak to Cognito long ago (`feat(auth): replace Keycloak with Amazon
+Cognito`), but the README's "Local Development" walkthrough still described a Keycloak
+setup that no longer exists in the compose — so following it failed. Fully rewrote it
+(`README.md` → "Running Locally"): an **Option A — Full Docker stack** flow (verified:
+`cp .env.local.example`, fill secrets, `--env-file deploy/.env.local up --build`,
+`localhost:8003`) and an **Option B — native** flow (cargo + `trunk serve`, which proxies
+`/api`), plus a **"bring your own Cognito"** section so a fresh cloner can stand up their
+own user pool + app client + callback. Also: corrected the `COOKIE_KEY` guidance (the
+all-zeros value is rejected, not "safe for local dev"), dropped dead env vars from the
+config reference (`OIDC_EXTERNAL_URL`, `KEYCLOAK_ADMIN_*`), fixed the Key Features / Tech
+Stack auth rows, added the `/api/auth/change-password` endpoint, and updated
+`CONTRIBUTING.md`'s local-stack snippet. Known follow-up: local login still requires a
+Cognito pool (no bundled local IdP) — documented as such.
+
+### Tooling — Dependency bump
+`taiki-e/install-action` 2.81.5 → 2.81.6 (Dependabot, github-actions group).
+
 ### Tooling — Local Docker stack: require a real COOKIE_KEY (was broken out of the box)
 The local `deploy/docker-compose.yml` hardcoded an all-zeros `COOKIE_KEY`, which
 the API correctly rejects at startup ("trivially weak") — so the api container
