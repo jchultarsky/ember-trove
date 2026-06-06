@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — Local Docker stack: require a real COOKIE_KEY (was broken out of the box)
+The local `deploy/docker-compose.yml` hardcoded an all-zeros `COOKIE_KEY`, which
+the API correctly rejects at startup ("trivially weak") — so the api container
+crash-looped and the local stack never came up. `COOKIE_KEY` is now required from
+`deploy/.env.local` (`${COOKIE_KEY:?…}`), documented in `.env.local.example` with
+`openssl rand -hex 64`. Verified the full stack (postgres + MinIO + api + ui/nginx)
+boots and serves at `http://localhost:8003`.
+
 ### Tooling — Stop the recurring red `chore(deps)` CI from the rand 0.10 bump
 Dependabot opened a weekly `rand` 0.9 → 0.10 PR whose CI failed every time:
 rand 0.10 has a breaking `RngCore`/`fill_bytes` API change, and — more
