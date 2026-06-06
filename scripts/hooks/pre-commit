@@ -11,6 +11,26 @@
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:$PATH"
 
+# ── Secret scan — never commit private keys or credentials ───────────────────
+# Zero-dependency guard motivated by a leaked test RSA private key (2026-06-06).
+# Scans staged ADDITIONS for high-confidence secret patterns (PEM private-key
+# blocks, AWS access keys). Public keys (`BEGIN PUBLIC KEY`) are NOT matched.
+# The hooks dir is excluded so this rule's own pattern text can't self-trigger.
+# Runs before the cargo gates so it fires even where cargo is absent.
+# Bypass (only for a verified false positive): git commit --no-verify
+staged_adds="$(git diff --cached --no-color -U0 -- . ':(exclude)scripts/hooks' \
+  | grep -E '^\+' | grep -Ev '^\+\+\+' || true)"
+secret_hits="$(printf '%s\n' "$staged_adds" \
+  | grep -nE -- '-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}' || true)"
+if [ -n "$secret_hits" ]; then
+  echo "pre-commit: BLOCKED — staged changes look like they contain a secret:" >&2
+  printf '%s\n' "$secret_hits" | sed 's/^/  /' >&2
+  echo "Secrets (private keys, access keys) must never be committed. Remove it;" >&2
+  echo "for a genuine false positive bypass with: git commit --no-verify" >&2
+  exit 1
+fi
+echo "pre-commit: secret scan OK"
+
 # If cargo isn't available (e.g. a docs-only environment), don't block the commit.
 if ! command -v cargo >/dev/null 2>&1; then
   echo "pre-commit: cargo not found — skipping Rust gates." >&2
