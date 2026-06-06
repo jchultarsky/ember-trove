@@ -2,6 +2,8 @@
 name    = "common"
 version = "0.1.0"
 edition = "2024"
+# Internal workspace crate — never published (see api/Cargo.toml rationale).
+publish = false
 
 [lints]
 workspace = true
