@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.0] - 2026-06-05
+
 ### Tooling — CI hardening (coverage floor + cargo-deny)
 - The coverage job is now a **hard gate**: `cargo llvm-cov … --fail-under-lines 17`
   (line-coverage baseline ~18.7% on 2026-06-05). The floor is set below the baseline
