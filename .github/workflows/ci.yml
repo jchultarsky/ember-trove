@@ -101,8 +101,11 @@ jobs:
   coverage:
     name: coverage (api + common)
     runs-on: ubuntu-latest
-    # Report-only: prints a line-coverage summary, does NOT gate. Flip to a hard
-    # gate later by appending `--fail-under-lines <N>` to the cargo llvm-cov call.
+    # Now a hard gate: fails if api+common line coverage drops below the floor
+    # below. The floor (17%) sits under the measured baseline (~18.7% lines on
+    # 2026-06-05) so it never blocks the existing suite, but it does block a
+    # real regression. Raise it deliberately as the suite grows (ui is WASM and
+    # excluded, so its logic should live in `common/` to be counted).
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -128,8 +131,8 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
-      - name: Coverage summary (api + common; ui is WASM, excluded)
-        run: cargo llvm-cov --workspace --exclude ui --summary-only
+      - name: Coverage summary + floor (api + common; ui is WASM, excluded)
+        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 17
 
   audit:
     name: cargo audit (security)
@@ -160,6 +163,36 @@ jobs:
         # truth, read automatically) — each with a dated rationale. Do NOT add
         # inline --ignore flags here; that previously diverged from audit.toml.
         run: cargo audit
+
+  deny:
+    name: cargo deny (licenses + bans + sources)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Rust (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ubuntu-cargo-deny-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-cargo-deny-
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@4bc351f7f2614e48088386e2a0ad917ca3a7e4ba # v2
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo deny
+        # Advisories are owned by `cargo audit` (.cargo/audit.toml is the single
+        # source of truth) — see deny.toml. cargo-deny runs only the checks audit
+        # does NOT do, so the two never diverge. Config: deny.toml.
+        run: cargo deny check licenses bans sources
 
   migrations:
     name: validate migrations

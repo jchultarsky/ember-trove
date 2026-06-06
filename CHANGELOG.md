@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — CI hardening (coverage floor + cargo-deny)
+- The coverage job is now a **hard gate**: `cargo llvm-cov … --fail-under-lines 17`
+  (line-coverage baseline ~18.7% on 2026-06-05). The floor is set below the baseline
+  so it never blocks the current suite but does catch a regression; raise it as the
+  suite grows.
+- Added **`cargo-deny`** (`deny.toml` + a new CI job) for the supply-chain checks
+  `cargo audit` does *not* perform: **licenses + bans + sources**. RUSTSEC advisories
+  remain solely with `cargo audit` (`.cargo/audit.toml` stays the single source of
+  truth), so the two gates don't overlap — the reason cargo-deny had been deferred.
+  Workspace crates are marked `publish = false` (they're a self-hosted app, never
+  published) and skipped via `[licenses].private`; three permissive transitive
+  licenses (`BSL-1.0`, `CDLA-Permissive-2.0`, `bzip2-1.0.6`) are allow-listed with
+  provenance comments.
+
 ### Added — Notes feed "Load more" paging
 The Notes feed previously requested a single `per_page=1000` page (a hard
 truncation past 1000 notes). It now pages: each fetch pulls `FEED_PAGE_SIZE`
