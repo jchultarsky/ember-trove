@@ -419,3 +419,82 @@ impl OidcClient {
         Ok(jwks)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+    use serde::{Deserialize, Serialize};
+
+    // Test-only RSA-2048 keypair (NOT a secret — generated for this test alone).
+    const TEST_RSA_PRIV_PEM: &str = r#"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCi/qunH6u7Kmaj
+xuQq3G4wIycfeYxcpr27T+7YvANvhMHXP9Hrm1FmJBVgxZtnF7s5XAwVFx8ke4SF
+9tZBkFXZ7W4G0uY6y0MXoeIimwZ0FLxIG5n+p9f6eOpRE+az1XJFdkW1Na1/Uhkn
+HXmhYb/V1TG/RJ0tCOiyDYGiehNHCTxm7JIfSpWy8T7KlabOpcVJP9uiOAVva6BC
+hQ2gG+JSoInZv1uSnbf8zDPHb3yfPoRSgoVwqCGyeHazHZxt2T6vNDO22didgxXb
+qQgGt5p5tm7VcI92/CLDv6ESv31DgGd1Bu1gg5c97JquAIV7Zh4pg4LzRfps2PQR
+nAkG1xHZAgMBAAECggEAGBfDWTh/+rJFijNpwiEjo3dqvscJdZ+K/49M65n8+wS5
+X18WYThr44h1ZYDIHAjAurWNrqdkidC9Mc0e9gGHAyfKofUWJX4qnGloIvvdzBZN
+j24PCPqX3PT3E8V4jkAAfF6DZsn4q49/2s2LT0zC3bF+ATr77a55sOn4rcLUKyVo
+s8wrHK0WL1pfNHpI/bCzxEf5XHB+PhIu77/NXm3EiNdeG8ppi2ozakv1FpUom9j3
+4hkWIYMZG27LHqB79gKA09cRJgit5QhOLoqgM4fdFKiyPz5LDpZesh7URcQDmPks
+aO0YuZL/m6N6sqhK0+aWT/6laIccBDpWMuCmb255NQKBgQDPshS1ukjgK5WwDc2w
+ZVAN/43DgAYiAGkwPqmDQVEjOm5pOx2Ojzg3Quo1U3f/MhxryrpDqZzahV4CjNRM
+xJs3BSLRE3mZmt1LxLKhCFNeomW3Q7qu2IzYim5D3RN2S4xnTeFGNEf6PihRvvkC
+bLVxyH1jOrlT7g3Tb+mCSpylhQKBgQDI5ymj2/Qi21HYJBbQO4GVx48Fxqurijex
+fr21X4+0PKkMRhAn1RxRtPN1Uyvr8RQfkkEqUJZ/CMvEd+bexG3zusx1bm2t5Zsx
+fnXYIMOaoCz7/Sw2wlmqY+CE62fuBbUik9AIp9SLj4LlmXr+/8ZN7baJV80z13b+
+e6JOLjAxRQKBgQDA5iCd9/ofWduYu/lBz5beqW89F/aaNc98Y3aE1XFKSsapLaJx
++Uq46IkmJfPZLO2An7UHisyHmD6MF8hF1IRkQXzoujHCHDdUW8ecEGN+DU5zO5Bz
+O+T0aP2oQfgFcn1gpNCJp50CKiDAa6JSQizzFMaAFtZxwTNOIS67OBjtEQKBgQCb
+lsMd3uOE9zu8W767R8qE+Abg30rmT+Xv9YrwY3DEklINallqr9X9xVjjHSWf1ZXT
+GY6UOdND0MkWgBFxpsjMgHeF3p7clTyKqTiUyFMUdkZAZYMPaZbNqgoghrt3kD4G
+6Fity2SFLQCf1ix2PhoTEi1S0ofeRVknnxJE3+p8zQKBgBZlwZS9ewAcBueVWWSF
+K/9lYzH/RigDpLzMT2lRkpqarw56dzFoVQ6k7WOXozVNcBGKNTqC3iUQ3dpU4SzS
+APpA95rdkf54lY5qea5ug9fHBRHm8J2efkwYCWkBnVje47a77HLR2kzMPACV+cri
+V5o6nNkpx+i99wYZxvFU0IKl
+-----END PRIVATE KEY-----"#;
+
+    const TEST_RSA_PUB_PEM: &str = r#"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAov6rpx+ruypmo8bkKtxu
+MCMnH3mMXKa9u0/u2LwDb4TB1z/R65tRZiQVYMWbZxe7OVwMFRcfJHuEhfbWQZBV
+2e1uBtLmOstDF6HiIpsGdBS8SBuZ/qfX+njqURPms9VyRXZFtTWtf1IZJx15oWG/
+1dUxv0SdLQjosg2BonoTRwk8ZuySH0qVsvE+ypWmzqXFST/bojgFb2ugQoUNoBvi
+UqCJ2b9bkp23/Mwzx298nz6EUoKFcKghsnh2sx2cbdk+rzQzttnYnYMV26kIBrea
+ebZu1XCPdvwiw7+hEr99Q4BndQbtYIOXPeyargCFe2YeKYOC80X6bNj0EZwJBtcR
+2QIDAQAB
+-----END PUBLIC KEY-----"#;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct Claims {
+        sub: String,
+        exp: usize,
+    }
+
+    /// Regression test for the production login outage: jsonwebtoken 10 requires
+    /// an explicit crypto-backend feature (`aws_lc_rs` or `rust_crypto`). With
+    /// neither enabled, the FIRST RS256 verification panics at runtime
+    /// ("Could not automatically determine the process-level CryptoProvider …"),
+    /// crashing the worker → nginx 502 on every authenticated request. Exercising
+    /// a real RS256 sign+verify here fails (panics) unless a backend is enabled,
+    /// so this guards the `aws_lc_rs` feature against being dropped again. The
+    /// `oidc = None` middleware tests never reach this path.
+    #[test]
+    fn rs256_sign_and_verify_roundtrip_does_not_panic() {
+        let claims = Claims {
+            sub: "user-123".to_string(),
+            // far-future expiry so `validate_exp` passes deterministically
+            exp: 4_102_444_800, // 2100-01-01
+        };
+
+        let enc = EncodingKey::from_rsa_pem(TEST_RSA_PRIV_PEM.as_bytes()).unwrap();
+        let token = encode(&Header::new(Algorithm::RS256), &claims, &enc).unwrap();
+
+        let dec = DecodingKey::from_rsa_pem(TEST_RSA_PUB_PEM.as_bytes()).unwrap();
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_aud = false; // no `aud` claim in this minimal token
+
+        let decoded = decode::<Claims>(&token, &dec, &validation).unwrap();
+        assert_eq!(decoded.claims, claims);
+    }
+}
