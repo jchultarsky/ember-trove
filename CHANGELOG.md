@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.2] - 2026-06-05
+
+### Fixed — Login still broken: JWT validation panicked → 502 on every authenticated request
+A second 2.20.0 regression, exposed once the 2.20.1 callback fix let the flow
+reach the API: every authenticated request (`/api/auth/me`, etc.) returned
+**502** because the worker **panicked** validating the session JWT. Root cause:
+the `jsonwebtoken` 9 → 10 bump. v10 ships **no built-in crypto backend** (v9
+bundled `ring`); a backend feature must be enabled explicitly or the first RS256
+verification panics — *"Could not automatically determine the process-level
+CryptoProvider from jsonwebtoken crate features."* Our manifest enabled neither,
+so login could never complete. Enabled the **`aws_lc_rs`** backend (the provider
+rustls/the AWS SDK already use, so the tree stays single-crypto). Added an RS256
+sign+verify regression test in `auth::oidc` — the existing middleware tests run
+with `oidc = None` and never exercised the verify path, which is why CI stayed
+green while prod crashed.
+- **Security:** chose `aws_lc_rs` over `rust_crypto` deliberately — `rust_crypto`
+  would pull the pure-Rust `rsa` crate (RUSTSEC-2023-0071, Marvin timing). `cargo
+  audit` remains clean and no `rsa` crate enters the tree.
+
 ## [2.20.1] - 2026-06-05
 
 ### Fixed — Login left users on a blank "Redirecting…" page (CSP vs. inline script)
