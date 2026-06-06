@@ -15,6 +15,17 @@ that mints PKCE verifiers and OAuth state. Added a dependabot `ignore` for
 `rand` `0.10.x` (with a dated rationale) so the bump is deferred until the
 ecosystem supports a single-version migration. Closed the stale PR.
 
+### Security/Tooling — Remove committed test private key; add a pre-commit secret scan
+The 2.20.2 JWT regression test embedded a generated RSA **private** key (used only
+to sign a test token). It was a throwaway with no production value — it never
+protected real data and nothing needs rotation — but committing a `BEGIN … PRIVATE
+KEY` block is wrong and tripped secret scanning. The test now uses only the
+**public** key and drives the verification path with a bogus-signature token (still
+reproduces the original panic without a crypto backend). Added a zero-dependency
+secret scan to `scripts/hooks/pre-commit` that blocks staged private-key/AWS-key
+material, and a normative "never commit private keys, even in tests" rule to
+`.claude/POLICY.md` §1.
+
 ## [2.20.2] - 2026-06-05
 
 ### Fixed — Login still broken: JWT validation panicked → 502 on every authenticated request
