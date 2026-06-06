@@ -52,7 +52,13 @@ utoipa            = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Auth / JWT
-jsonwebtoken = "10"
+# jsonwebtoken 10 has NO built-in crypto backend (unlike 9's bundled ring): a
+# backend feature MUST be enabled or RS256 verification panics at runtime
+# ("Could not automatically determine the process-level CryptoProvider …").
+# We pin `aws_lc_rs` — the provider rustls/the AWS SDK already use (.claude/rules/api.md),
+# so the tree stays single-crypto — and deliberately NOT `rust_crypto`, which would
+# pull the pure-Rust `rsa` crate (RUSTSEC-2023-0071, Marvin timing). (v2.20.2)
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 reqwest      = { version = "0.13", features = ["json", "form"] }
 axum-extra   = { version = "0.12", features = ["cookie-private"] }
 urlencoding  = "2"
