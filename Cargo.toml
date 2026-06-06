@@ -53,13 +53,13 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Auth / JWT
 jsonwebtoken = "10"
-reqwest      = { version = "0.12", features = ["json"] }
-axum-extra   = { version = "0.10", features = ["cookie-private"] }
+reqwest      = { version = "0.13", features = ["json", "form"] }
+axum-extra   = { version = "0.12", features = ["cookie-private"] }
 urlencoding  = "2"
 hex          = "0.4"
-hmac         = "0.12"
-rand         = "0.8"
-sha2         = "0.10"
+hmac         = "0.13"
+rand         = "0.9"
+sha2         = "0.11"
 base64       = { version = "0.22", features = ["alloc"] }
 
 # Common domain types

@@ -6,7 +6,64 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [2.19.4] - 2026-06-05
+## [2.20.0] - 2026-06-05
+
+### Tooling — CI hardening (coverage floor + cargo-deny)
+- The coverage job is now a **hard gate**: `cargo llvm-cov … --fail-under-lines 17`
+  (line-coverage baseline ~18.7% on 2026-06-05). The floor is set below the baseline
+  so it never blocks the current suite but does catch a regression; raise it as the
+  suite grows.
+- Added **`cargo-deny`** (`deny.toml` + a new CI job) for the supply-chain checks
+  `cargo audit` does *not* perform: **licenses + bans + sources**. RUSTSEC advisories
+  remain solely with `cargo audit` (`.cargo/audit.toml` stays the single source of
+  truth), so the two gates don't overlap — the reason cargo-deny had been deferred.
+  Workspace crates are marked `publish = false` (they're a self-hosted app, never
+  published) and skipped via `[licenses].private`; three permissive transitive
+  licenses (`BSL-1.0`, `CDLA-Permissive-2.0`, `bzip2-1.0.6`) are allow-listed with
+  provenance comments.
+
+### Added — Notes feed "Load more" paging
+The Notes feed previously requested a single `per_page=1000` page (a hard
+truncation past 1000 notes). It now pages: each fetch pulls `FEED_PAGE_SIZE`
+(50) rows and a **Load more** button appends the next page until the feed is
+exhausted. The server already supported `page`/`per_page` with `LIMIT/OFFSET`;
+this is a UI change. A version-guarded fresh-load effect (the project's debounce
+pattern) resets to page 1 and replaces the list when any filter/sort changes, so
+a stale in-flight fetch can't clobber a newer one; "more available" is inferred
+from a full page coming back. Removes the standing `notes.rs` TODO.
+
+### Added — Webhook delivery is now wired (registered webhooks actually fire)
+The `webhook_dispatch::dispatch` delivery path existed (tenant-scoped,
+SSRF-hardened, HMAC-signed) but had **no callers**, so registered webhooks
+never fired. It is now invoked from the node and task CRUD handlers:
+`node.created` / `node.updated` / `node.deleted` (`routes/nodes.rs`) and
+`task.created` / `task.updated` / `task.deleted` (`routes/tasks.rs`). Delivery
+is scoped to the *resource owner's* own active webhooks (a node/task event only
+fans out to the owner's endpoints — never cross-tenant). Event names are now
+canonical `pub const`s + an `available_events()` allowlist in `common::webhook`
+(used by `default_events`), so handlers and clients can't drift on spelling.
+`task.*` joins `node.*` as a subscribable event; `default_events()` now
+subscribes to all six. The crate-wide dead-code lint is satisfied without the
+prior module-scoped `allow` (dispatch has real callers now).
+
+> Behaviour note: deployments with webhooks that were registered while delivery
+> was dormant will start receiving POSTs after this upgrade — that is the
+> intended fix, but call it out in release notes.
+
+### Tooling
+- Dependency major bumps (resolving the remaining open Dependabot PRs):
+  `reqwest` 0.12 → 0.13 (added the now-feature-gated `form` feature for the OIDC
+  token/revocation calls; 0.13 also defaults `default-tls` to the modern rustls
+  stack, consistent with our AWS-SDK TLS posture), `axum-extra` 0.10 → 0.12,
+  `rand` 0.8 → 0.9 (`thread_rng()` → `rng()`), and `ammonia` 3 → 4 (markdown
+  sanitizer; API-compatible).
+- **Unblocked the deferred `sha2`/`hmac` bump.** `sha2` 0.10 → 0.11 and `hmac`
+  0.12 → 0.13 are now bumped *together*, so both ride the same `digest` 0.11 and
+  `Hmac<Sha256>` again satisfies `hmac::Mac` (the earlier single-crate bump broke
+  because `hmac` 0.12 was still on `digest` 0.10 — see prior `[Unreleased]` note).
+  `new_from_slice` moved to the `KeyInit` trait, now imported in
+  `webhook_dispatch.rs`. The webhook HMAC-signing and PKCE S256 paths are
+  unchanged in behaviour.
 
 ### Removed
 - Deleted the orphaned `ui/src/components/modals/link_picker.rs` "Phase 4" stub

@@ -1,8 +1,12 @@
 [package]
 name       = "api"
-version = "2.19.4"
+version = "2.20.0"
 edition    = "2024"
 repository = "https://github.com/jchultarsky101/ember-trove"
+# Self-hosted application crate — never published to a registry. Marks the crate
+# "private" so cargo-deny's license check skips it (no LICENSE in the repo; this
+# is not an OSS-distribution artifact). See deny.toml `[licenses].private`.
+publish = false
 
 [lints]
 workspace = true

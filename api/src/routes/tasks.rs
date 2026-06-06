@@ -14,6 +14,7 @@ use common::{
         CreateTaskRequest, MyDayTask, ProjectDashboardEntry, RecurrenceRule, ReorderTasksRequest,
         Task, TaskCounts, TaskStatus, UpdateTaskRequest,
     },
+    webhook::{EVENT_TASK_CREATED, EVENT_TASK_DELETED, EVENT_TASK_UPDATED},
 };
 use garde::Validate;
 use serde::Deserialize;
@@ -23,6 +24,7 @@ use crate::{
     auth::permissions::{is_admin, require_editor, require_viewer},
     error::ApiError,
     state::AppState,
+    webhook_dispatch::dispatch,
 };
 
 /// Mounts under `/nodes/:node_id/tasks` and `/tasks`.
@@ -119,6 +121,13 @@ async fn create_task(
         .tasks
         .create(Some(NodeId(node_id)), &claims.sub, req)
         .await?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_CREATED,
+        task.node_id,
+        &claims.sub,
+        &task.owner_id,
+    );
     Ok((StatusCode::CREATED, Json(task)))
 }
 
@@ -136,6 +145,13 @@ async fn create_standalone_task(
     }
     let node_id = req.node_id;
     let task = state.tasks.create(node_id, &claims.sub, req).await?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_CREATED,
+        task.node_id,
+        &claims.sub,
+        &task.owner_id,
+    );
     Ok((StatusCode::CREATED, Json(task)))
 }
 
@@ -217,6 +233,13 @@ async fn update_task(
             .await;
     }
 
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_UPDATED,
+        updated.node_id,
+        &claims.sub,
+        &updated.owner_id,
+    );
     Ok(Json(updated))
 }
 
@@ -233,7 +256,15 @@ async fn delete_task(
             return Err(ApiError::Forbidden("access denied".to_string()));
         }
     }
+    let (owner_id, node_id) = (existing.owner_id.clone(), existing.node_id);
     state.tasks.delete(TaskId(id)).await?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_DELETED,
+        node_id,
+        &claims.sub,
+        &owner_id,
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

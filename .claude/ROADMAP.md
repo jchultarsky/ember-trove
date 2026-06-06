@@ -16,18 +16,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
-- **Wire webhook delivery.** `api/src/webhook_dispatch::dispatch` is built and
-  tenant-scoped (SSRF-hardened registration already shipped) but has **no callers** —
-  registered webhooks never fire. Wire `dispatch(...)` into the node/task mutation
-  handlers (create/update/delete) so subscribers actually receive events, with tests.
-  Surfaced 2026-06-05 when the crate-wide `#![allow(dead_code)]` was removed; the
-  module now carries a scoped allow until this lands.
-- Convert coverage from report-only to a `--fail-under` gate once the baseline settles.
 - UI test strategy: more logic pushed into `common/` for host-target unit coverage;
-  decide on a WASM/browser e2e harness.
-- Revisit `cargo-deny` (licenses + bans + sources) as a superset of `cargo-audit` —
-  deferred for now to avoid overlap.
-- Optional: `lldb-dap` for editor step-debugging (not installed).
+  decide on a WASM/browser e2e harness. **Needs a direction** — this is an
+  architecture choice (Playwright vs. `wasm-bindgen-test` headless vs. none), not a
+  mechanical task; left for the maintainer to steer.
+- Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
+  not a repo deliverable).
 
 ## Architecture decisions (ADR-lite)
 
@@ -45,3 +39,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
   reformat; enforced by hook + CI. Editors format with `--edition 2024`.
 - **SHA-pinned GitHub Actions + Dependabot.** Supply-chain hardening consistent with the
   project's security posture; Dependabot keeps pins current.
+- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 17`
+  (baseline ~18.7% on 2026-06-05). The floor sits under the baseline so it never blocks the
+  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05)
+- **`cargo-deny` added for licenses + bans + sources only** (2026-06-05). Advisories stay with
+  `cargo audit` (`.cargo/audit.toml` is the single source of truth) so the two never diverge —
+  cargo-deny runs only the non-overlapping checks, resolving the earlier "avoid overlap"
+  deferral. Workspace crates are `publish = false` and skipped via `[licenses].private`; three
+  permissive transitive licenses (BSL-1.0, CDLA-Permissive-2.0, bzip2-1.0.6) are allow-listed
+  with provenance comments in `deny.toml`.

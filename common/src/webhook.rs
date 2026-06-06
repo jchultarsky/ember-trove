@@ -30,12 +30,65 @@ pub struct CreateWebhookRequest {
     pub events: Vec<String>,
 }
 
-fn default_events() -> Vec<String> {
-    vec![
-        "node.created".to_string(),
-        "node.updated".to_string(),
-        "node.deleted".to_string(),
+// Canonical webhook event names. Delivery matches a fired event against each
+// webhook's `events` array by exact string equality (`$1 = ANY(events)`), so
+// handlers and clients MUST use these exact strings — hence the shared consts.
+pub const EVENT_NODE_CREATED: &str = "node.created";
+pub const EVENT_NODE_UPDATED: &str = "node.updated";
+pub const EVENT_NODE_DELETED: &str = "node.deleted";
+pub const EVENT_TASK_CREATED: &str = "task.created";
+pub const EVENT_TASK_UPDATED: &str = "task.updated";
+pub const EVENT_TASK_DELETED: &str = "task.deleted";
+
+/// Every event a webhook may subscribe to (the canonical allowlist). Used for
+/// the default subscription and as the documented set the UI/clients pick from.
+pub fn available_events() -> &'static [&'static str] {
+    &[
+        EVENT_NODE_CREATED,
+        EVENT_NODE_UPDATED,
+        EVENT_NODE_DELETED,
+        EVENT_TASK_CREATED,
+        EVENT_TASK_UPDATED,
+        EVENT_TASK_DELETED,
     ]
+}
+
+/// Default subscription when a create request omits `events`: all of them.
+fn default_events() -> Vec<String> {
+    available_events()
+        .iter()
+        .map(|e| (*e).to_string())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn available_events_are_unique_and_shaped() {
+        let evs = available_events();
+        assert_eq!(evs.len(), 6, "expected six canonical events");
+        let mut sorted = evs.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), evs.len(), "event names must be unique");
+        for e in evs {
+            let (cat, action) = e.split_once('.').expect("event is `category.action`");
+            assert!(matches!(cat, "node" | "task"), "unexpected category: {cat}");
+            assert!(!action.is_empty(), "empty action in {e}");
+        }
+    }
+
+    #[test]
+    fn default_events_match_available() {
+        let defaults = default_events();
+        let avail: Vec<String> = available_events()
+            .iter()
+            .map(|e| (*e).to_string())
+            .collect();
+        assert_eq!(defaults, avail, "defaults should cover the full allowlist");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
