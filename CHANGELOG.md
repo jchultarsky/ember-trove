@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.2] - 2026-06-05
+
 ### Fixed — Login still broken: JWT validation panicked → 502 on every authenticated request
 A second 2.20.0 regression, exposed once the 2.20.1 callback fix let the flow
 reach the API: every authenticated request (`/api/auth/me`, etc.) returned
