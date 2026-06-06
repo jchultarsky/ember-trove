@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.20.1] - 2026-06-05
+
 ### Fixed — Login left users on a blank "Redirecting…" page (CSP vs. inline script)
 After login, Cognito redirects the browser to `/api/auth/callback`, which set the
 session cookie and then bounced into the SPA via an **inline** `<script>
