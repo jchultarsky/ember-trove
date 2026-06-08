@@ -63,3 +63,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
   deferral. Workspace crates are `publish = false` and skipped via `[licenses].private`; three
   permissive transitive licenses (BSL-1.0, CDLA-Permissive-2.0, bzip2-1.0.6) are allow-listed
   with provenance comments in `deny.toml`.
+- **`focus_date` is a binary UI model (`today | None`).** The wire type stays
+  `Option<NaiveDate>` and the API accepts any date, but the My Day Kanban only ever writes
+  `Some(today)` or clears it — there is **no future-date picker on the daily surface**, by
+  deliberate user choice ("today or not today", v2.6.0). `due_date` is the editable deadline
+  and lives in the task-editor modal. `is_in_my_day`/`list_my_day` still handle carryovers
+  (past `focus_date`, not done). A genuine "schedule for a future day" need should land next
+  to `due_date`, never as a Kanban quick action — keep the daily surface lean. (2026-04-28)
+- **Quick-capture target is a `Task` with `node_id IS NULL`, not a Node.** `/api/inbox/quick`
+  (+ the iOS Web Share Target) creates a triage Task surfaced by `/tasks/inbox`
+  (`tasks WHERE node_id IS NULL`); wire format `{title?, body?}`, coalesced + truncated to 500
+  chars server-side. A 6th `NodeType::Inbox` variant was considered and **rejected** — it
+  would have meant a migration plus duplicate sidebar/filter/dashboard wiring for no
+  behavioural win, and Notes need a parent node so couldn't be the inbox surface. Future
+  capture paths (command palette, Apple Shortcut, third-party clippers) MUST hit
+  `/api/inbox/quick` — do not invent a parallel create-node path. (2026-04-27)

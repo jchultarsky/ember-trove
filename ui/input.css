@@ -66,6 +66,11 @@
 .prose ul { list-style-type: disc; }
 .prose ol { list-style-type: decimal; }
 .prose li { margin-top: 0.25em; margin-bottom: 0.25em; }
+/* GOTCHA: any background/border/padding added here ALSO hits `<code>` inside
+   `<pre>` (fenced blocks render as `<pre><code>`), boxing each line. Always
+   reset the new property on BOTH `.prose pre code` and `.dark .prose pre code`
+   below — the dark reset must be on `.dark .prose pre code` to win specificity.
+   See .claude/ERRORS.md "Multi-line code blocks render as a stack of boxes". */
 .prose code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.85em;
