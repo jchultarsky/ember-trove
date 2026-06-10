@@ -14,8 +14,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
   Unauthenticated — including the seconds of API downtime during the
   container restart. The probe now retries transient failures (network/5xx)
   with ~23 s of backoff; only an authoritative 401/403 ends the session.
-  Live-verify on the next deploy: an open tab should ride through with just
-  a brief spinner (tabs running pre-2.22.1 bundles got one final bounce). My Day carryovers now
+  **Live-verified on the v2.22.2 deploy** (2026-06-10): the tab was reloaded
+  inside the restart window (health watcher caught API down) and came back
+  authenticated on the new bundle — no login bounce. The pre-fix behavior at
+  that exact moment was a forced Cognito re-login. My Day carryovers now
   prompt "still today?" (Yes re-stamps, No drops to backlog) and overdue
   tasks group into a foldable red-accented section (binary `focus_date` ADR
   unchanged); the Calendar adds click-a-day quick capture (`data-date` cells,
