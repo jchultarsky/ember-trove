@@ -47,15 +47,17 @@ use leptos::{ev, prelude::*};
 use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
-use crate::components::task_common::status_done;
+use crate::components::task_common::{status_done, undo_restore_task};
 use crate::components::task_row::{
     EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
 };
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 #[component]
 pub fn MyDayView() -> impl IntoView {
     let task_refresh = expect_context::<TaskRefresh>().0;
+    // Captured at setup for the undo closure, which outlives the deleted row.
+    let toast_state = use_context::<ToastState>();
 
     let today = crate::components::format_helpers::local_today();
     let date_label = today.format("%A, %B %-d").to_string();
@@ -262,8 +264,11 @@ pub fn MyDayView() -> impl IntoView {
                 wasm_bindgen_futures::spawn_local(async move {
                     match crate::api::delete_task(id).await {
                         Ok(_) => {
-                            push_toast(ToastLevel::Success, "Deleted");
                             task_refresh.update(|n| *n += 1);
+                            push_undo_toast(
+                                "Task deleted",
+                                undo_restore_task(id, task_refresh, toast_state),
+                            );
                         }
                         Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
                     }

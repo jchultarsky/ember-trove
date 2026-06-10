@@ -40,6 +40,11 @@ pub async fn delete_task(task_id: TaskId) -> Result<(), UiError> {
     delete_empty(&format!("/tasks/{task_id}")).await
 }
 
+/// `POST /api/tasks/:id/restore` — un-delete a soft-deleted task (undo toast).
+pub async fn restore_task(task_id: TaskId) -> Result<Task, UiError> {
+    post_json(&format!("/tasks/{task_id}/restore"), &serde_json::json!({})).await
+}
+
 pub async fn reorder_tasks(entries: &[(TaskId, i32)]) -> Result<(), UiError> {
     let req = ReorderTasksRequest {
         tasks: entries

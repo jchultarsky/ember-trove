@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Undo for task & note deletion (soft delete)
+Tasks and notes previously hard-deleted instantly — including via the My Day
+`d` shortcut — with no confirmation and no way back, while nodes/tags got
+confirm modals. Deletion now follows the undo-toast pattern (instant action,
+recoverable) instead of interrupting with dialogs:
+
+- **API**: `DELETE` on tasks/notes tombstones the row (`deleted_at`,
+  migration 030) instead of erasing it; new `POST /tasks/:id/restore` and
+  `POST /notes/:id/restore` endpoints un-delete (authorization mirrors
+  delete). Every live query — lists, feeds, dashboards, counts, calendar,
+  backups — filters tombstones out. Tombstones older than 30 days are purged
+  at API startup and daily thereafter.
+- **UI**: every task/note delete (My Day rows + `d` key, Inbox cards, the
+  node task panel, the notes feed) shows a "Task/Note deleted — Undo" toast
+  for 8 s; Undo restores the item in place. "Clear all completed" gets a
+  bulk undo ("Deleted N completed tasks — Undo"). The notes feed's inline
+  are-you-sure confirmation is gone — delete is instant and recoverable.
+  Node deletion keeps its specific confirm modal (nodes cascade to their
+  tasks/notes/attachments, so a dialog is still warranted there).
+
 ### Added — Editor autosave & unsaved-work protection
 The node editor could silently lose work: no autosave, no dirty tracking, and the
 global `Escape` handler (or any sidebar click / tab close) discarded everything

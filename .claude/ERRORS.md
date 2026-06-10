@@ -50,6 +50,19 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   missing PKCE verifier / expired session is a normal redirect-to-frontend case, not a 500.
   — 2026-04-27 / 2026-06-06
 
+### `assert_route_registered` passes for routes that don't exist
+- **Symptom:** a route-registration test in `api/src/tests.rs` passes even though the
+  route was never added to the router (TDD "red" phase silently green).
+- **Cause:** `require_auth` is applied with `.layer()`, and Axum `layer()` middleware
+  runs **before route matching** — every path under the protected tree gets the
+  500 "OIDC not configured" short-circuit, never a 404. So the `!= NOT_FOUND`
+  assertion is vacuous for any nested path.
+- **Fix:** drive the real handler instead: build a bare router slice with claims
+  injected — `Router::new().nest("/tasks", task_router()).layer(Extension(fake_claims())).with_state(test_state())`
+  — and make the relevant stub repo return canned data so you can assert on the
+  handler's response. Real example: `task_restore_returns_restored_task_for_owner`
+  in `api/src/tests.rs`. (2026-06-10)
+
 ## CI / tooling
 
 ### `cargo fmt --check` fails across the whole repo

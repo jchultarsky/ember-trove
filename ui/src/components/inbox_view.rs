@@ -20,9 +20,9 @@ use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, parse_status,
     priority_dot_color, priority_label, priority_value, recurrence_label, recurrence_value,
-    status_done, status_value,
+    status_done, status_value, undo_restore_task,
 };
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 use crate::focus_task::schedule_focus_task;
 
 // ── InboxView ─────────────────────────────────────────────────────────────────
@@ -194,6 +194,8 @@ pub fn InboxView() -> impl IntoView {
 
 #[component]
 fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
+    // Captured at setup for the undo closure, which outlives this row.
+    let toast_state = use_context::<ToastState>();
     let task_id = task.id;
     let today = crate::components::format_helpers::local_today();
 
@@ -371,7 +373,13 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let on_delete = move |_| {
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::delete_task(task_id).await {
-                Ok(_) => refresh.update(|n| *n += 1),
+                Ok(_) => {
+                    refresh.update(|n| *n += 1);
+                    push_undo_toast(
+                        "Task deleted",
+                        undo_restore_task(task_id, refresh, toast_state),
+                    );
+                }
                 Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
             }
         });

@@ -28,6 +28,11 @@ pub async fn delete_note(note_id: NoteId) -> Result<(), UiError> {
     delete_empty(&format!("/notes/{note_id}")).await
 }
 
+/// `POST /api/notes/:id/restore` — un-delete a soft-deleted note (undo toast).
+pub async fn restore_note(note_id: NoteId) -> Result<Note, UiError> {
+    post_json(&format!("/notes/{note_id}/restore"), &serde_json::json!({})).await
+}
+
 /// Rows fetched per "Load more" page of the notes feed. A page that comes back
 /// full (== this many rows) means there may be more — the feed view uses that
 /// to decide whether to keep the "Load more" control visible.

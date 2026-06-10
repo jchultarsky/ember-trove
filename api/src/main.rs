@@ -192,6 +192,37 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Purge task/note tombstones older than the retention window, at startup
+    // (first interval tick fires immediately) and then daily. Soft-deleted
+    // rows back the UI's undo toast; after 30 days "deleted means deleted".
+    {
+        /// How long soft-deleted tasks/notes are kept before hard deletion.
+        const TOMBSTONE_RETENTION_DAYS: i64 = 30;
+        let tasks = state.tasks.clone();
+        let notes = state.notes.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
+            loop {
+                interval.tick().await;
+                let cutoff = chrono::Utc::now() - chrono::TimeDelta::days(TOMBSTONE_RETENTION_DAYS);
+                match tasks.purge_deleted_before(cutoff).await {
+                    Ok(purged) if purged > 0 => {
+                        tracing::info!(purged, "purged expired task tombstones");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(?e, "task tombstone purge failed"),
+                }
+                match notes.purge_deleted_before(cutoff).await {
+                    Ok(purged) if purged > 0 => {
+                        tracing::info!(purged, "purged expired note tombstones");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(?e, "note tombstone purge failed"),
+                }
+            }
+        });
+    }
+
     let app = axum::Router::new().nest("/api", routes::build_router(state)?);
 
     let addr = format!("{}:{}", config.host, config.port);

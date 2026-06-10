@@ -11,14 +11,17 @@ use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, parse_priority, parse_status, priority_color, priority_icon, priority_label,
     priority_value, sort_tasks_by_order, status_done, status_label, status_value,
+    undo_restore_task,
 };
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 // ── TaskPanel ─────────────────────────────────────────────────────────────────
 
 #[component]
 pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     let task_refresh = expect_context::<TaskRefresh>().0;
+    // Captured at setup for the undo closures, which outlive the deleted rows.
+    let toast_state = use_context::<ToastState>();
 
     let tasks_resource = LocalResource::new(move || {
         let _ = task_refresh.get();
@@ -203,9 +206,12 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                             on:click=move |_| {
                                 let ids = ids_for_clear.clone();
                                 wasm_bindgen_futures::spawn_local(async move {
+                                    let mut deleted: Vec<TaskId> = Vec::new();
                                     let mut failed = 0usize;
                                     for id in ids {
-                                        if crate::api::delete_task(id).await.is_err() {
+                                        if crate::api::delete_task(id).await.is_ok() {
+                                            deleted.push(id);
+                                        } else {
                                             failed += 1;
                                         }
                                     }
@@ -219,6 +225,31 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                                     // Refetch regardless — some deletes may
                                     // have succeeded before a failure.
                                     task_refresh.update(|n| *n += 1);
+                                    if !deleted.is_empty() {
+                                        let n = deleted.len();
+                                        let noun = if n == 1 { "task" } else { "tasks" };
+                                        let undo = std::sync::Arc::new(move || {
+                                            let deleted = deleted.clone();
+                                            wasm_bindgen_futures::spawn_local(async move {
+                                                let mut restore_failed = 0usize;
+                                                for id in deleted {
+                                                    if crate::api::restore_task(id).await.is_err() {
+                                                        restore_failed += 1;
+                                                    }
+                                                }
+                                                task_refresh.update(|n| *n += 1);
+                                                if restore_failed > 0
+                                                    && let Some(ts) = toast_state
+                                                {
+                                                    ts.push(
+                                                        ToastLevel::Error,
+                                                        format!("Couldn't restore {restore_failed} of them"),
+                                                    );
+                                                }
+                                            });
+                                        });
+                                        push_undo_toast(format!("Deleted {n} completed {noun}"), undo);
+                                    }
                                 });
                             }
                         >
@@ -236,6 +267,8 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
 #[component]
 fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let task_id = task.id;
+    // Captured at setup for the undo closure, which outlives this row.
+    let toast_state = use_context::<ToastState>();
     let is_done = status_done(&task.status);
     let status_val = status_value(&task.status).to_string();
     let priority = task.priority.clone();
@@ -344,7 +377,13 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let on_delete = move |_| {
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::delete_task(task_id).await {
-                Ok(_) => task_refresh.update(|n| *n += 1),
+                Ok(_) => {
+                    task_refresh.update(|n| *n += 1);
+                    push_undo_toast(
+                        "Task deleted",
+                        undo_restore_task(task_id, task_refresh, toast_state),
+                    );
+                }
                 Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
             }
         });
