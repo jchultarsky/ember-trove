@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Command palette actions
+The Cmd-K palette now runs commands, not just node search: navigation
+("Go to My Day / Inbox / Calendar / Dashboard / Graph / Notes / All Nodes /
+Tags / Templates"), "New task (quick capture)", "New node…", "Toggle dark
+mode", and "Help & shortcuts" — each matched against synonyms ("theme" finds
+dark mode) and showing its global shortcut in the row so the palette teaches
+the keyboard layer. On a node page, "Edit current node" and "Duplicate
+current node" join the list. The empty-query view shows Recent plus the two
+capture commands.
+
 ### Added — Keyboard inbox triage ("Process" mode)
 A **Process** button on the Inbox opens a one-task-at-a-time triage card:
 `t` adds to today, `s` schedules a due date, `a` attaches to a node (with the
