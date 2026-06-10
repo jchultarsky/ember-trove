@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.2] - 2026-06-10
+
 ### Tooling — Playwright e2e smoke suite
 Browser-level smoke tests (`e2e/`, `scripts/e2e.sh`, CI job `e2e`) — the
 direct response to v2.21.1, where both hotfix bugs were structurally
