@@ -22,6 +22,11 @@ CI job is too slow a feedback loop for selector work.
   list with CSS (`hidden`) — the task title then exists twice in the DOM.
   Scope assertions to a container (`getByTestId('triage-card')`); give new
   overlay-style surfaces a `data-testid`.
+- **Gate keyboard shortcuts on app render.** A keystroke sent before the
+  WASM bundle initializes (cold CI runners!) is silently lost — wait for
+  `page.locator('main')` to be visible after `goto` before pressing keys
+  (`gotoApp` helper in palette.spec.ts). Clicking a real element first
+  (auto-waiting) achieves the same.
 - **Element refs go stale across re-renders** — a list refetch between a
   `find` and a click invalidates refs. Re-locate just before acting, or drive
   the assertion through `expect(locator)` auto-waiting.

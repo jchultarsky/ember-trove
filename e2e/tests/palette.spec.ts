@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 
 /**
  * Cmd-K command palette: node search, app commands with synonym matching,
@@ -7,8 +7,19 @@ import { test, expect } from '@playwright/test';
 
 const PALETTE_INPUT = 'Search nodes, or type a new title…'; // Unicode ellipsis!
 
+/**
+ * Navigate and wait for the WASM app to render before sending keyboard
+ * shortcuts. On cold CI runners the bundle takes seconds to initialize —
+ * a Cmd+K fired before the window listener registers is silently lost
+ * (caught in the first CI run; local warm stacks always won the race).
+ */
+async function gotoApp(page: Page, path: string) {
+  await page.goto(path);
+  await expect(page.locator('main')).toBeVisible({ timeout: 15_000 });
+}
+
 test('opens with Cmd+K, lists capture commands on empty query, closes on Esc', async ({ page }) => {
-  await page.goto('/tasks/my-day');
+  await gotoApp(page, '/tasks/my-day');
   await page.keyboard.press('ControlOrMeta+k');
 
   const input = page.getByPlaceholder(PALETTE_INPUT);
@@ -20,7 +31,7 @@ test('opens with Cmd+K, lists capture commands on empty query, closes on Esc', a
 });
 
 test('matches commands by synonym and dispatches navigation', async ({ page }) => {
-  await page.goto('/tasks/my-day');
+  await gotoApp(page, '/tasks/my-day');
   await page.keyboard.press('ControlOrMeta+k');
 
   // "theme" is a keyword alias of "Toggle dark mode" — synonym matching.
@@ -37,7 +48,7 @@ test('matches commands by synonym and dispatches navigation', async ({ page }) =
 });
 
 test('toggle dark mode flips the html class (and back)', async ({ page }) => {
-  await page.goto('/tasks/my-day');
+  await gotoApp(page, '/tasks/my-day');
   const html = page.locator('html');
   await expect(html).not.toHaveClass(/dark/);
 
@@ -62,7 +73,7 @@ test('finds and opens a node by title search', async ({ page, request }) => {
   const node = await created.json();
 
   try {
-    await page.goto('/tasks/my-day');
+    await gotoApp(page, '/tasks/my-day');
     await page.keyboard.press('ControlOrMeta+k');
     await page.getByPlaceholder(PALETTE_INPUT).fill(title);
 
@@ -83,7 +94,7 @@ test('offers node-context commands on a node page', async ({ page, request }) =>
   const node = await created.json();
 
   try {
-    await page.goto(`/nodes/${node.id}`);
+    await gotoApp(page, `/nodes/${node.id}`);
     await page.keyboard.press('ControlOrMeta+k');
     // Empty query on a node page surfaces the context commands.
     await expect(page.getByRole('button', { name: /Edit current node/ })).toBeVisible();
