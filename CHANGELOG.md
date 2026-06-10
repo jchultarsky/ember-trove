@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.22.0] - 2026-06-10
+
 ### Added — My Day: carryover prompt and foldable overdue section
 Carried-over tasks (focused on a previous day, still open) now ask
 "still today?" inline: **Yes** re-stamps the focus date to today (clearing

@@ -5,7 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-06-10)
 
-- **Released:** v2.21.3 — e2e suite grown to 13 specs: triage flows (`t`/`s`/`a`
+- **Released:** v2.22.0 — the ROADMAP backlog cleared. My Day carryovers now
+  prompt "still today?" (Yes re-stamps, No drops to backlog) and overdue
+  tasks group into a foldable red-accented section (binary `focus_date` ADR
+  unchanged); the Calendar adds click-a-day quick capture (`data-date` cells,
+  inline composer → standalone task due that day); focus traps completed on
+  the last two modals (create-node, add-favorite); the saved-search presets
+  UI turned out to already exist (stale backlog claim) and is now pinned by
+  e2e. Suite: 19 Playwright specs + host unit tests for every new pure
+  function. Prior same-day releases: v2.21.4 (palette ranking: commands beat
+  body-text node matches), v2.21.3 (triage/palette e2e), v2.21.2 (e2e
+  foundation), v2.21.1 (WASM hotfixes), v2.21.0 (usability review).
+- **Prior (v2.21.3):** — e2e suite grown to 13 specs: triage flows (`t`/`s`/`a`
   decisions with API-verified server state, skip-wrap, no-changes exit) and the
   command palette (synonym matching, navigation dispatch, dark-mode round-trip,
   node search, context commands). Only app change: a `data-testid` on the
@@ -69,20 +80,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
-- **Palette ranking: command-keyword hits should beat body-text node matches**
-  (found live-testing v2.21.3, 2026-06-10): typing "theme" surfaces "Toggle
-  dark mode" but two nodes whose *bodies* mention "theme" rank above it, so
-  Enter opens a node instead of running the command. Options: rank exact
-  command-keyword matches above body-only (non-title) node matches, or add a
-  `>` prefix for command-only mode (the established palette convention).
-  `match_source` on `SearchResult` already distinguishes title vs body hits,
-  so the ranking fix is likely cheap.
-- 2026-06-09 usability review: **fully shipped in v2.21.0** (see Current state).
-  Unscheduled nice-to-haves that came out of it: My Day carryovers as one-click
-  "still today?" suggestions + collapsible overdue section; calendar
-  click-day-to-add-task; saved-search presets UI; focus trap on the remaining
-  modals (create-node, add-favorite); deferred block references (heading links
-  cover most of the value).
+- 2026-06-09 usability review: **fully shipped** across v2.21.0–v2.22.0
+  (see Current state), including every follow-on nice-to-have and the palette
+  ranking fix it surfaced. Only deliberate deferral kept: block references —
+  heading links (`[[Note#Heading]]`) cover most of the value; revisit only if
+  transclusion demand materializes.
 - ~~UI test strategy~~ **Decided 2026-06-10: Playwright** (`e2e/`, CI job
   `e2e`) after v2.21.1 proved host-side gates can't see WASM runtime bugs.
   Smoke-level today (5 specs); grow specs alongside new UI surfaces, and keep
