@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.4] - 2026-06-10
+
 ### Fixed — Palette: commands no longer hijacked by body-text node matches
 Typing a command-intent query like "theme" or "dark" could rank nodes whose
 *bodies* mention the word above the command itself, so Enter opened a node
