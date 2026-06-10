@@ -73,6 +73,75 @@ fn atx_heading_level(line: &str) -> Option<usize> {
     }
 }
 
+/// Convert the first plain-text occurrence of `title` in `body` into a
+/// wiki-link ("unlinked mention" → link).
+///
+/// - ASCII-case-insensitive, but the match must sit on word boundaries so
+///   `alpha` never rewrites `alphabet`.
+/// - Occurrences inside an existing `[[...]]` span (target or alias text)
+///   are skipped.
+/// - When the prose casing differs from `title`, it is preserved through the
+///   alias form: `[[Title|matched text]]`.
+///
+/// Returns `None` when nothing linkable is found — e.g. the caller's search
+/// hit was a stemmed or fuzzy match rather than a literal one.
+pub fn link_first_mention(body: &str, title: &str) -> Option<String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+
+    // Byte spans of existing [[...]] links — off-limits for rewriting.
+    let mut link_spans: Vec<(usize, usize)> = Vec::new();
+    let mut scan = 0;
+    while let Some(open_rel) = body[scan..].find("[[") {
+        let open = scan + open_rel;
+        match body[open + 2..].find("]]") {
+            Some(close_rel) => {
+                let end = open + 2 + close_rel + 2;
+                link_spans.push((open, end));
+                scan = end;
+            }
+            None => break,
+        }
+    }
+
+    // ASCII case folding is byte-for-byte, so offsets into the folded copies
+    // are valid for the originals (and char boundaries are preserved).
+    let body_fold = body.to_ascii_lowercase();
+    let title_fold = title.to_ascii_lowercase();
+
+    let mut from = 0;
+    while let Some(rel) = body_fold[from..].find(&title_fold) {
+        let start = from + rel;
+        let end = start + title.len();
+        let inside_link = link_spans.iter().any(|&(s, e)| start >= s && start < e);
+        let boundary_before = !body[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric());
+        let boundary_after = !body[end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric());
+        if !inside_link && boundary_before && boundary_after {
+            let matched = &body[start..end];
+            let replacement = if matched == title {
+                format!("[[{title}]]")
+            } else {
+                format!("[[{title}|{matched}]]")
+            };
+            let mut out = String::with_capacity(body.len() + replacement.len());
+            out.push_str(&body[..start]);
+            out.push_str(&replacement);
+            out.push_str(&body[end..]);
+            return Some(out);
+        }
+        from = end;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +245,59 @@ WIP.
         let body = "##Status\n\nBroken heading.\n## Status\n\nReal content.\n";
         let section = extract_section(body, "Status").expect("should find");
         assert_eq!(section, "Real content.");
+    }
+
+    #[test]
+    fn link_mention_exact_case() {
+        assert_eq!(
+            link_first_mention("Alpha is key", "Alpha"),
+            Some("[[Alpha]] is key".to_string())
+        );
+    }
+
+    #[test]
+    fn link_mention_preserves_prose_casing_via_alias() {
+        assert_eq!(
+            link_first_mention("see alpha note", "Alpha"),
+            Some("see [[Alpha|alpha]] note".to_string())
+        );
+    }
+
+    #[test]
+    fn link_mention_skips_existing_wikilinks() {
+        assert_eq!(
+            link_first_mention("[[Alpha]] and alpha again", "Alpha"),
+            Some("[[Alpha]] and [[Alpha|alpha]] again".to_string())
+        );
+    }
+
+    #[test]
+    fn link_mention_requires_word_boundaries() {
+        assert_eq!(link_first_mention("the alphabet song", "alpha"), None);
+        assert_eq!(link_first_mention("realpha", "alpha"), None);
+    }
+
+    #[test]
+    fn link_mention_none_when_absent_or_empty() {
+        assert_eq!(link_first_mention("nothing here", "Alpha"), None);
+        assert_eq!(link_first_mention("anything", ""), None);
+        assert_eq!(link_first_mention("anything", "   "), None);
+    }
+
+    #[test]
+    fn link_mention_survives_multibyte_text() {
+        assert_eq!(
+            link_first_mention("café — alpha — π", "Alpha"),
+            Some("café — [[Alpha|alpha]] — π".to_string())
+        );
+    }
+
+    #[test]
+    fn link_mention_skips_alias_display_text() {
+        // "alpha" inside the display part of an existing link is off-limits.
+        assert_eq!(
+            link_first_mention("[[Other|alpha thing]] end", "Alpha"),
+            None
+        );
     }
 }
