@@ -1,0 +1,40 @@
+# E2E overlay for the Playwright smoke suite — layered over docker-compose.yml:
+#
+#   docker compose -p ember-e2e \
+#     -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml \
+#     up -d --build
+#
+# (scripts/e2e.sh does this for you.) Differences from the dev stack:
+#
+# * The api image is built WITH the `e2e-bypass` cargo feature and armed via
+#   E2E_AUTH_BYPASS=1, so every request is authenticated as a synthetic test
+#   user — no Cognito session needed. Production images are never built with
+#   this feature (deploy/Dockerfile.api defaults CARGO_FEATURES to empty).
+# * OIDC is blanked (empty value == unset, see api/src/config.rs `optional`),
+#   so the stack runs fully offline.
+# * Postgres data is ephemeral (tmpfs) — every `up` starts from a clean
+#   database, keeping test runs reproducible. Run under a separate compose
+#   project name (-p ember-e2e) so the dev stack's volumes are untouched.
+# * COOKIE_KEY comes from scripts/e2e.sh (fixed throwaway value — the bypass
+#   never issues cookies; config just validates the shape). NOT a secret.
+
+services:
+  postgres:
+    # `!reset` clears the inherited named volume (plain `volumes: []` would
+    # merge-append); tmpfs makes the database ephemeral per `up`.
+    volumes: !reset []
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  api:
+    build:
+      args:
+        CARGO_FEATURES: "e2e-bypass"
+    environment:
+      E2E_AUTH_BYPASS: "1"
+      OIDC_ISSUER: ""
+      OIDC_CLIENT_ID: ""
+      OIDC_CLIENT_SECRET: ""
+      COGNITO_USER_POOL_ID: ""
+      AWS_ACCESS_KEY_ID: ""
+      AWS_SECRET_ACCESS_KEY: ""

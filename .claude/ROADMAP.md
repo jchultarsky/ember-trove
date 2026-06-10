@@ -55,10 +55,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
   click-day-to-add-task; saved-search presets UI; focus trap on the remaining
   modals (create-node, add-favorite); deferred block references (heading links
   cover most of the value).
-- UI test strategy: more logic pushed into `common/` for host-target unit coverage;
-  decide on a WASM/browser e2e harness. **Needs a direction** — this is an
-  architecture choice (Playwright vs. `wasm-bindgen-test` headless vs. none), not a
-  mechanical task; left for the maintainer to steer.
+- ~~UI test strategy~~ **Decided 2026-06-10: Playwright** (`e2e/`, CI job
+  `e2e`) after v2.21.1 proved host-side gates can't see WASM runtime bugs.
+  Smoke-level today (5 specs); grow specs alongside new UI surfaces, and keep
+  pushing pure logic into `common/` for unit coverage.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
   not a repo deliverable).
 - **Self-contained local auth (deferred):** local login needs a Cognito pool — there's no
