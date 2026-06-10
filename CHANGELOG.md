@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.22.1] - 2026-06-10
+
+### Fixed — Deploys no longer force open tabs to re-login
+`AuthGate` treated any failed `/api/auth/me` probe as "not logged in" and
+immediately bounced the tab to Cognito — so the few seconds of API downtime
+during a deploy restart logged every open tab out despite a still-valid
+session cookie. The probe now retries transient failures (network errors,
+5xx) with backoff for ~23 s before giving up; only an authoritative 401/403
+ends the session. Diagnosed after three forced re-logins during the
+2026-06-10 release train.
+
 ## [2.22.0] - 2026-06-10
 
 ### Added — My Day: carryover prompt and foldable overdue section
