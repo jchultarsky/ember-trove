@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.22.2] - 2026-06-10
+
+### Documentation — ROADMAP updates (v2.22.0 prod verification, AuthGate fix record)
+Docs-only release; also serves as the live verification vehicle for the
+v2.22.1 AuthGate deploy-resilience fix (an open tab should survive this
+deploy's restart window).
+
 ## [2.22.1] - 2026-06-10
 
 ### Fixed — Deploys no longer force open tabs to re-login

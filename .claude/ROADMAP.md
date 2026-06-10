@@ -5,7 +5,17 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-06-10)
 
-- **Released:** v2.22.0 — the ROADMAP backlog cleared. My Day carryovers now
+- **Released & prod-verified:** v2.22.0 — the ROADMAP backlog cleared. All
+  new surfaces hand-tested live after deploy: calendar day-click captured a
+  due-today task; the carryover prompt's Yes re-stamped and cleared the
+  badge; the Overdue section rendered, counted, and folded. One operational
+  observation, diagnosed and **fixed in v2.22.1**: deploys forced open tabs
+  to re-login because `AuthGate` treated any `/api/auth/me` failure as
+  Unauthenticated — including the seconds of API downtime during the
+  container restart. The probe now retries transient failures (network/5xx)
+  with ~23 s of backoff; only an authoritative 401/403 ends the session.
+  Live-verify on the next deploy: an open tab should ride through with just
+  a brief spinner (tabs running pre-2.22.1 bundles got one final bounce). My Day carryovers now
   prompt "still today?" (Yes re-stamps, No drops to backlog) and overdue
   tasks group into a foldable red-accented section (binary `focus_date` ADR
   unchanged); the Calendar adds click-a-day quick capture (`data-date` cells,
