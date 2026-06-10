@@ -5,7 +5,13 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-06-10)
 
-- **Released:** v2.22.0 — the ROADMAP backlog cleared. My Day carryovers now
+- **Released & prod-verified:** v2.22.0 — the ROADMAP backlog cleared. All
+  new surfaces hand-tested live after deploy: calendar day-click captured a
+  due-today task; the carryover prompt's Yes re-stamped and cleared the
+  badge; the Overdue section rendered, counted, and folded. One operational
+  observation: each deploy logs active sessions out (re-login needed) —
+  likely COOKIE_KEY or session handling across API restarts; worth a look
+  before release cadence increases. My Day carryovers now
   prompt "still today?" (Yes re-stamps, No drops to backlog) and overdue
   tasks group into a foldable red-accented section (binary `focus_date` ADR
   unchanged); the Calendar adds click-a-day quick capture (`data-date` cells,
