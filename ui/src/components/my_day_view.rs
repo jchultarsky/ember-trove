@@ -101,6 +101,9 @@ pub fn MyDayView() -> impl IntoView {
     // resource changes.  Stored in a separate signal (vs derived from
     // resources every keypress) so the keydown handler can read it
     // untracked without touching the reactive graph.
+    // Overdue section fold state — expanded by default, session-local.
+    let show_overdue = RwSignal::new(true);
+
     let flat_tasks: RwSignal<Vec<MyDayTask>> = RwSignal::new(Vec::new());
     Effect::new(move |_| {
         let today_raw = today_tasks.get().and_then(|r| r.ok()).unwrap_or_default();
@@ -113,8 +116,15 @@ pub fn MyDayView() -> impl IntoView {
             .into_iter()
             .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
             .collect();
+        // Mirror the display order: today → overdue (only while the section
+        // is expanded — j/k must not focus hidden rows) → upcoming.
+        let (overdue, upcoming) =
+            crate::components::task_common::partition_overdue(backlog_zone, today);
         let mut flat = today_zone;
-        flat.extend(backlog_zone);
+        if show_overdue.get() {
+            flat.extend(overdue);
+        }
+        flat.extend(upcoming);
         // Drop the focus cursor if it now points at a task that
         // disappeared (deleted, completed, etc.) — k/j start from the
         // top next time.
@@ -359,19 +369,53 @@ pub fn MyDayView() -> impl IntoView {
                         let scoped: Vec<MyDayTask> = raw.into_iter()
                             .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
                             .collect();
-                        let count = scoped.len();
+                        // Overdue tasks get their own foldable section instead
+                        // of mixing into (and topping) the backlog — visible by
+                        // default, but collapsible so they never become a
+                        // pinned guilt pile (2026-06-09 review).
+                        let (overdue, upcoming) =
+                            crate::components::task_common::partition_overdue(scoped, today);
+                        let overdue_count = overdue.len();
+                        let count = upcoming.len();
                         let subtitle = if count == 0 {
                             "Your backlog is empty.".to_string()
                         } else {
                             format!("{count} open · sorted by deadline first, then priority")
                         };
                         view! {
+                            {(overdue_count > 0).then(|| view! {
+                                <div data-testid="overdue-section">
+                                    <button
+                                        class="flex items-center gap-1.5 mb-2 text-xs font-semibold
+                                               uppercase tracking-wide text-red-600 dark:text-red-400
+                                               hover:opacity-80 transition-opacity cursor-pointer"
+                                        on:click=move |_| show_overdue.update(|v| *v = !*v)
+                                    >
+                                        <span class="material-symbols-outlined" style="font-size:14px;">
+                                            {move || if show_overdue.get() { "expand_more" } else { "chevron_right" }}
+                                        </span>
+                                        {format!("Overdue · {overdue_count}")}
+                                    </button>
+                                    {move || show_overdue.get().then(|| view! {
+                                        <KanbanZoneRow
+                                            title="Overdue"
+                                            subtitle="Past their deadline — reschedule, do, or drop"
+                                            zone=KanbanZone::Backlog
+                                            empty_msg=""
+                                            tasks=overdue.clone()
+                                            today=today
+                                            refresh=task_refresh
+                                            accent_class="bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-900/40"
+                                        />
+                                    })}
+                                </div>
+                            })}
                             <KanbanZoneRow
                                 title="Backlog"
                                 subtitle=subtitle
                                 zone=KanbanZone::Backlog
                                 empty_msg="No open tasks elsewhere — inbox zero across all projects."
-                                tasks=scoped
+                                tasks=upcoming
                                 today=today
                                 refresh=task_refresh
                                 accent_class="bg-stone-50/40 dark:bg-stone-900/30 border-stone-200 dark:border-stone-700"

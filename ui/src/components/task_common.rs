@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use common::id::TaskId;
-use common::task::{RecurrenceRule, Task, TaskPriority, TaskStatus};
+use common::task::{MyDayTask, RecurrenceRule, Task, TaskPriority, TaskStatus};
 use leptos::prelude::*;
 
 use crate::components::toast::{ToastLevel, ToastState};
@@ -199,6 +199,21 @@ pub fn is_in_my_day(task: &Task, today: chrono::NaiveDate) -> bool {
     }
 }
 
+// ── Backlog partitioning ────────────────────────────────────────────────────
+
+/// Split backlog tasks into `(overdue, upcoming)`. Overdue = an open task
+/// whose `due_date` is strictly before `today`; everything else (no due
+/// date, due today, due later, or already done) stays in the main backlog.
+/// Relative order is preserved within each group.
+pub fn partition_overdue(
+    tasks: Vec<MyDayTask>,
+    today: chrono::NaiveDate,
+) -> (Vec<MyDayTask>, Vec<MyDayTask>) {
+    tasks
+        .into_iter()
+        .partition(|t| !status_done(&t.task.status) && t.task.due_date.is_some_and(|d| d < today))
+}
+
 // ── Sorting ─────────────────────────────────────────────────────────────────
 
 /// Sort tasks by `sort_order` first, then `created_at` as a tiebreak.
@@ -209,4 +224,50 @@ pub fn sort_tasks_by_order(tasks: &mut [Task]) {
             .cmp(&b.sort_order)
             .then_with(|| a.created_at.cmp(&b.created_at))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+    use common::id::TaskId;
+    use common::task::{Task, TaskPriority, TaskStatus};
+
+    fn mk(due: Option<NaiveDate>, status: TaskStatus) -> MyDayTask {
+        MyDayTask {
+            task: Task {
+                id: TaskId(uuid::Uuid::new_v4()),
+                node_id: None,
+                owner_id: "t".to_string(),
+                title: "t".to_string(),
+                status,
+                priority: TaskPriority::Medium,
+                focus_date: None,
+                due_date: due,
+                recurrence: None,
+                sort_order: 0,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            node_title: None,
+        }
+    }
+
+    #[test]
+    fn overdue_is_open_and_strictly_past_due() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).expect("date");
+        let yesterday = NaiveDate::from_ymd_opt(2026, 6, 9);
+        let tomorrow = NaiveDate::from_ymd_opt(2026, 6, 11);
+        let tasks = vec![
+            mk(yesterday, TaskStatus::Open),   // overdue
+            mk(Some(today), TaskStatus::Open), // due today → upcoming
+            mk(tomorrow, TaskStatus::Open),    // future → upcoming
+            mk(None, TaskStatus::Open),        // undated → upcoming
+            mk(yesterday, TaskStatus::Done),   // done → upcoming (no guilt pile)
+        ];
+        let (overdue, upcoming) = partition_overdue(tasks, today);
+        assert_eq!(overdue.len(), 1);
+        assert_eq!(overdue[0].task.due_date, yesterday);
+        assert_eq!(upcoming.len(), 4);
+    }
 }
