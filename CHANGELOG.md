@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Calendar quick-add
+Clicking a day cell on the Calendar opens an inline composer; Enter creates a
+standalone task due that day (it lands in the Inbox for triage like any other
+capture), Escape cancels. Task chips still navigate to their node — clicks no
+longer fall through to the cell. Day cells carry `data-date` attributes.
+
 ### Changed — Focus traps on the remaining modals
 Create-node and add-favorite now trap Tab focus, return focus on close, and
 carry `role="dialog"`/`aria-modal` — completing the modal a11y pass started
