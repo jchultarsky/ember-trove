@@ -203,6 +203,34 @@ async fn get_node_by_slug(
     Ok(Json(node))
 }
 
+/// How long after an `Edited` activity entry further edits by the same user
+/// are coalesced into it instead of logged again. Editor autosave PATCHes
+/// every few seconds of idle time; one "Edited" line per editing session is
+/// what the dashboard recap should show. (2026-06-10)
+const EDIT_ACTIVITY_COALESCE_MINUTES: i64 = 15;
+
+/// Whether a body snapshot should be recorded in `node_versions`.
+///
+/// Skips the insert when the new body is identical to the latest stored
+/// version — title/status-only saves and autosave repeats would otherwise
+/// pile up duplicate rows.
+fn version_snapshot_needed(latest_body: Option<&str>, new_body: &str) -> bool {
+    latest_body != Some(new_body)
+}
+
+/// Whether an `Edited` activity entry should be logged, or coalesced into
+/// the previous one (same subject, still inside the coalescing window).
+fn edit_activity_needed(
+    latest: Option<&ActivityEntry>,
+    subject: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(e) = latest else { return true };
+    e.action != ActivityAction::Edited
+        || e.subject_id != subject
+        || now - e.created_at >= chrono::TimeDelta::minutes(EDIT_ACTIVITY_COALESCE_MINUTES)
+}
+
 async fn update_node(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -214,24 +242,45 @@ async fn update_node(
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let node = state.nodes.update(NodeId(id), req).await?;
     sync_wikilinks(&state, node.id, node.body.as_deref().unwrap_or("")).await?;
-    // Record body snapshot (fire-and-forget — failure is non-fatal).
+    // Record a body snapshot unless identical to the latest stored version
+    // (autosave repeats and title/status-only saves). Awaited inline — the
+    // previous fire-and-forget spawn could write snapshots out of order when
+    // saves arrive seconds apart. Failure stays non-fatal. (2026-06-10)
     let body_snap = node.body.clone().unwrap_or_default();
-    let sub = claims.sub.clone();
-    let ver_repo = state.node_versions.clone();
-    let nid = node.id;
-    tokio::spawn(async move {
-        if let Err(e) = ver_repo.record(nid, &body_snap, &sub).await {
-            tracing::warn!("node version snapshot failed (non-fatal): {e}");
+    let latest_body = match state.node_versions.list(node.id, 1).await {
+        Ok(versions) => versions.into_iter().next().map(|v| v.body),
+        Err(e) => {
+            tracing::warn!("latest version lookup failed (non-fatal): {e}");
+            None
         }
-    });
-    log_activity(
-        &state,
-        node.id,
-        &claims,
-        ActivityAction::Edited,
-        json!({ "title": node.title }),
-    )
-    .await;
+    };
+    if version_snapshot_needed(latest_body.as_deref(), &body_snap)
+        && let Err(e) = state
+            .node_versions
+            .record(node.id, &body_snap, &claims.sub)
+            .await
+    {
+        tracing::warn!("node version snapshot failed (non-fatal): {e}");
+    }
+    // Coalesce rapid consecutive edits by the same user into one activity
+    // entry so autosave doesn't flood the dashboard recap.
+    let log_edit = match state.activity.list(node.id, 1).await {
+        Ok(entries) => edit_activity_needed(entries.first(), &claims.sub, chrono::Utc::now()),
+        Err(e) => {
+            tracing::warn!("latest activity lookup failed (non-fatal): {e}");
+            true
+        }
+    };
+    if log_edit {
+        log_activity(
+            &state,
+            node.id,
+            &claims,
+            ActivityAction::Edited,
+            json!({ "title": node.title }),
+        )
+        .await;
+    }
     dispatch(
         state.webhooks.clone(),
         EVENT_NODE_UPDATED,
@@ -935,5 +984,69 @@ fn sanitize_filename(raw: &str) -> String {
         "upload".to_string()
     } else {
         clean
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeDelta, Utc};
+    use common::id::ActivityId;
+
+    fn entry(action: ActivityAction, subject: &str, age_minutes: i64) -> ActivityEntry {
+        ActivityEntry {
+            id: ActivityId(Uuid::new_v4()),
+            node_id: NodeId(Uuid::new_v4()),
+            subject_id: subject.to_string(),
+            action,
+            metadata: json!({}),
+            created_at: Utc::now() - TimeDelta::minutes(age_minutes),
+        }
+    }
+
+    #[test]
+    fn snapshot_needed_when_no_prior_version() {
+        assert!(version_snapshot_needed(None, "body"));
+    }
+
+    #[test]
+    fn snapshot_skipped_when_body_unchanged() {
+        // Title/status-only saves and autosave repeats must not pile up
+        // duplicate version rows.
+        assert!(!version_snapshot_needed(Some("body"), "body"));
+    }
+
+    #[test]
+    fn snapshot_needed_when_body_changed() {
+        assert!(version_snapshot_needed(Some("old"), "new"));
+    }
+
+    #[test]
+    fn edit_log_needed_when_no_prior_activity() {
+        assert!(edit_activity_needed(None, "sub-a", Utc::now()));
+    }
+
+    #[test]
+    fn edit_log_coalesced_within_window_same_subject() {
+        let e = entry(ActivityAction::Edited, "sub-a", 5);
+        assert!(!edit_activity_needed(Some(&e), "sub-a", Utc::now()));
+    }
+
+    #[test]
+    fn edit_log_needed_after_window_elapsed() {
+        let e = entry(ActivityAction::Edited, "sub-a", 20);
+        assert!(edit_activity_needed(Some(&e), "sub-a", Utc::now()));
+    }
+
+    #[test]
+    fn edit_log_needed_for_different_subject() {
+        let e = entry(ActivityAction::Edited, "sub-b", 5);
+        assert!(edit_activity_needed(Some(&e), "sub-a", Utc::now()));
+    }
+
+    #[test]
+    fn edit_log_needed_when_latest_is_not_an_edit() {
+        let e = entry(ActivityAction::TagAdded, "sub-a", 5);
+        assert!(edit_activity_needed(Some(&e), "sub-a", Utc::now()));
     }
 }
