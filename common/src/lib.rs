@@ -16,6 +16,7 @@ pub mod node_link;
 pub mod node_version;
 pub mod note;
 pub mod permission;
+pub mod quickadd;
 pub mod search;
 pub mod share_token;
 pub mod slug;

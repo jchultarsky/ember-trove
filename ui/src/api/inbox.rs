@@ -11,10 +11,14 @@ use crate::error::UiError;
 pub async fn quick_capture(
     title: &str,
     body: Option<&str>,
+    due_date: Option<chrono::NaiveDate>,
+    priority: Option<common::task::TaskPriority>,
 ) -> Result<QuickCaptureResponse, UiError> {
     let req = QuickCaptureRequest {
         title: Some(title.to_string()),
         body: body.map(str::to_owned),
+        due_date,
+        priority,
     };
     post_json("/inbox/quick", &req).await
 }
