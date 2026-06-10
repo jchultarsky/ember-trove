@@ -6,6 +6,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Editor autosave & unsaved-work protection
+The node editor could silently lose work: no autosave, no dirty tracking, and the
+global `Escape` handler (or any sidebar click / tab close) discarded everything
+since the last manual Save. Now:
+
+- **Edit mode autosaves**: changes PATCH automatically 2 s after typing pauses
+  (debounced; in-flight saves coalesce, with a recheck after each round-trip).
+  Navigating away flushes any still-unsaved edits as the editor unmounts, and
+  closing/refreshing the tab while dirty triggers the browser's native
+  unsaved-changes prompt. Failed autosaves keep the edits locally and retry on
+  the next change instead of hammering the API.
+- **Create mode keeps a local draft**: `/nodes/new` content (title, body, type,
+  status) persists to `localStorage` as you type, is restored on the next visit,
+  and is cleared on successful create. A pristine scaffold is never persisted.
+- **Save-state indicator** in the editor header ("Unsaved changes… / Saving… /
+  Saved / Draft kept locally / Couldn't save — edits kept here"), `aria-live`
+  so screen readers hear save outcomes. The manual Save button still works and
+  navigates to the node view as before.
+
+### Fixed — Failed node load can no longer be saved back as an empty node
+In edit mode, if the initial `fetch_node` failed, the editor showed empty fields
+with Save enabled — clicking it would overwrite the real node with an empty body.
+A load failure now shows an error banner and keeps Save (and autosave) disabled.
+
+### Changed — Version snapshots dedupe; "Edited" activity coalesces
+With autosave PATCHing every few seconds, two server-side behaviors needed tuning
+(both also improve manual saves):
+
+- `PUT /nodes/:id` skips the `node_versions` snapshot when the body is unchanged
+  from the latest stored version (title/status-only saves previously inserted
+  pure duplicates). Snapshots are now awaited inline rather than spawned, so
+  rapid saves can't record versions out of order.
+- Consecutive `Edited` activity entries by the same user on the same node within
+  15 minutes coalesce into one, so the dashboard recap shows one line per editing
+  session instead of one per autosave.
+
 ## [2.20.4] - 2026-06-06
 
 ### Documentation — Rewrite local-dev docs for the Cognito reality (remove stale Keycloak)

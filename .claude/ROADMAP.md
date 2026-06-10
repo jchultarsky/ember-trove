@@ -26,6 +26,22 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
+- **UI trust fixes, Tier 1 remainder (from the 2026-06-09 usability review;
+  editor autosave shipped first):**
+  (a) *Optimistic-rollback sweep* — `task_row.rs:206/219` and
+  `my_day_view.rs:263` fire mutations with `let _ =` after an optimistic signal
+  update: on API failure the UI shows success with no toast and no rollback.
+  Make every optimistic path revert + toast on `Err` (the toggle-done path at
+  `task_row.rs:179` is the correct template).
+  (b) *Undo-toast economy* — tasks (`d` key!) and notes delete instantly with no
+  confirm and no undo, while nodes/tags get modals. Adopt instant-action +
+  undo toast for tasks/notes (likely needs a soft-delete/restore API), keep one
+  specific confirm ("Delete node 'X'?", verb-labeled buttons) for node delete.
+- Tier 2/3 usability candidates from the same review: local graph on node pages
+  + global-graph filters/orphans; unlinked mentions under backlinks; keyboard
+  inbox-triage mode; NL quick-add parsing; palette actions beyond nodes;
+  a11y pass (focus trap/return, route-change focus, color-only priority dots);
+  skeletons in Notes/Search/Templates; `prefers-color-scheme` default.
 - UI test strategy: more logic pushed into `common/` for host-target unit coverage;
   decide on a WASM/browser e2e harness. **Needs a direction** — this is an
   architecture choice (Playwright vs. `wasm-bindgen-test` headless vs. none), not a

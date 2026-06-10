@@ -9,8 +9,8 @@
 //!
 //! Distilled from ui/src/components/notes_view.rs (`debounce_v` / `text_q`).
 
+use gloo_timers::callback::Timeout; // NOT leptos::leptos_dom::helpers — that path has no Timeout
 use leptos::prelude::*;
-use leptos::leptos_dom::helpers::Timeout;
 
 #[component]
 fn DebouncedSearch() -> impl IntoView {

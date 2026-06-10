@@ -5,11 +5,13 @@ use common::{
     node::{CreateNodeRequest, NodeStatus, NodeTitleEntry, NodeType, UpdateNodeRequest},
     template::NodeTemplate,
 };
+use gloo_timers::callback::Timeout;
+use leptos::ev;
 use leptos::prelude::*;
 use wasm_bindgen::JsCast as _;
 
 use crate::app::TemplatePrefill;
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use crate::markdown::render_markdown;
 use crate::templates::template_for_type;
 use leptos_router::hooks::use_navigate;
@@ -23,6 +25,46 @@ fn parse_status(s: &str) -> NodeStatus {
         "published" => NodeStatus::Published,
         "archived" => NodeStatus::Archived,
         _ => NodeStatus::Draft,
+    }
+}
+
+/// Idle time after the last edit before an autosave PATCH (edit mode) or a
+/// localStorage draft write (create mode) fires. Long enough not to interrupt
+/// a wiki-link autocomplete interaction mid-typing; short enough to keep the
+/// potential loss window tiny.
+const AUTOSAVE_DEBOUNCE_MS: u32 = 2_000;
+
+/// The editor's persisted snapshot: (title, body, status). `node_type` is
+/// excluded in edit mode because `UpdateNodeRequest` cannot change it.
+type Snapshot = (String, String, String);
+
+/// Save lifecycle, surfaced in the header indicator.
+#[derive(Clone, Copy, PartialEq)]
+enum SaveState {
+    /// Pristine — nothing to persist.
+    Idle,
+    /// Local changes not yet persisted (autosave pending).
+    Dirty,
+    /// A save is in flight.
+    Saving,
+    /// Persisted — server-side in edit mode, localStorage draft in create mode.
+    Saved,
+    /// Last save attempt failed; the edits are still held locally.
+    Failed,
+}
+
+impl SaveState {
+    /// Indicator label. Create-mode wording must not imply the node exists
+    /// on the server — only a local draft does.
+    fn label(self, edit_mode: bool) -> &'static str {
+        match self {
+            SaveState::Idle => "",
+            SaveState::Dirty => "Unsaved changes\u{2026}",
+            SaveState::Saving => "Saving\u{2026}",
+            SaveState::Saved if edit_mode => "Saved",
+            SaveState::Saved => "Draft kept locally",
+            SaveState::Failed => "Couldn\u{2019}t save \u{2014} edits kept here",
+        }
     }
 }
 
@@ -133,6 +175,15 @@ mod tests {
         let cursor_u16 = text.encode_utf16().count();
         assert_eq!(wikilink_query_at(text, cursor_u16), Some("foo".to_string()));
     }
+
+    #[test]
+    fn save_state_saved_label_distinguishes_modes() {
+        // Create mode persists only a local draft — the label must not claim
+        // the node was saved to the server.
+        assert_eq!(SaveState::Saved.label(true), "Saved");
+        assert_eq!(SaveState::Saved.label(false), "Draft kept locally");
+        assert_eq!(SaveState::Idle.label(true), "");
+    }
 }
 
 /// Returns `true` if the browser viewport is ≥ 768 px wide (≈ tablet or larger).
@@ -152,33 +203,52 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     let nav_back1 = navigate.clone(); // clone for back button in header
     let refresh = expect_context::<RwSignal<u32>>();
 
-    let title = RwSignal::new(String::new());
     // In create mode, pre-select the type from the active node_type_filter so
     // that opening the editor from e.g. the Projects list defaults to Project.
     // In edit mode the spawn_local block below will override this immediately.
     let node_type_filter = use_context::<RwSignal<Option<String>>>();
     let prefill_signal = use_context::<RwSignal<Option<TemplatePrefill>>>();
 
-    // If a TemplatePrefill context is set, consume it (clear immediately) and
-    // use its values as the create-mode defaults instead of the static templates.
-    let (default_type, initial_body, initial_template_id) = if node.is_none() {
-        if let Some(sig) = prefill_signal
-            && let Some(p) = sig.get_untracked()
-        {
-            sig.set(None);
-            (p.node_type, p.body, Some(p.template_id))
+    // Create-mode initial state, in priority order: a TemplatePrefill context
+    // (consumed/cleared immediately), a locally persisted draft (work rescued
+    // from an abandoned /nodes/new — see crate::draft), or the static scaffold
+    // for the active type filter.
+    let (default_type, initial_body, initial_template_id, initial_title, initial_status) =
+        if node.is_none() {
+            if let Some(sig) = prefill_signal
+                && let Some(p) = sig.get_untracked()
+            {
+                sig.set(None);
+                (
+                    p.node_type,
+                    p.body,
+                    Some(p.template_id),
+                    String::new(),
+                    "draft".to_string(),
+                )
+            } else if let Some(d) = crate::draft::read_draft()
+                .filter(|d| d.is_meaningful(template_for_type(&d.node_type)))
+            {
+                (d.node_type, d.body, None, d.title, d.status)
+            } else {
+                let nt = node_type_filter
+                    .and_then(|f| f.get_untracked())
+                    .unwrap_or_else(|| "article".to_string());
+                let body = template_for_type(&nt).to_string();
+                (nt, body, None, String::new(), "draft".to_string())
+            }
         } else {
-            let nt = node_type_filter
-                .and_then(|f| f.get_untracked())
-                .unwrap_or_else(|| "article".to_string());
-            let body = template_for_type(&nt).to_string();
-            (nt, body, None)
-        }
-    } else {
-        ("article".to_string(), String::new(), None)
-    };
+            (
+                "article".to_string(),
+                String::new(),
+                None,
+                String::new(),
+                "draft".to_string(),
+            )
+        };
 
-    let node_type = RwSignal::new(default_type.clone());
+    let title = RwSignal::new(initial_title);
+    let node_type = RwSignal::new(default_type);
     // In create mode, pre-populate the body from template or static scaffold.
     // In edit mode spawn_local below will overwrite this with the real body.
     let body = RwSignal::new(initial_body);
@@ -196,13 +266,37 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             available_templates.set(ts);
         }
     });
-    let status = RwSignal::new("draft".to_string());
+    let status = RwSignal::new(initial_status);
     let saving = RwSignal::new(false);
     // True while the initial node fetch is in-flight (edit mode only).
     // The Save button is disabled until this clears to prevent saving stale
     // signal values if the user clicks Save before fetch_node completes.
     let fetching = RwSignal::new(false);
     let error_msg = RwSignal::new(Option::<String>::None);
+
+    // ── Autosave state ──────────────────────────────────────────────────────
+    // Last server-persisted snapshot; None until the edit-mode fetch lands
+    // (autosave stays disabled while None) and always None in create mode,
+    // where changes go to a localStorage draft instead.
+    let baseline = RwSignal::new(Option::<Snapshot>::None);
+    let save_state = RwSignal::new(SaveState::Idle);
+    // Debounce version counter (see .claude/patterns/reactive-effect-debounce.rs).
+    let autosave_v = RwSignal::new(0u32);
+    // Submit trigger (see .claude/patterns/submit-trigger.rs): the debounce
+    // timeout and the post-save recheck both set it; one effect does the PATCH.
+    let autosave_now = RwSignal::new(false);
+    // Captured directly (not via push_toast) so the unmount flush can report
+    // its outcome after this component's reactive owner is gone.
+    let toast_state = use_context::<ToastState>();
+    // Current editor snapshot, untracked — shared by autosave, the unmount
+    // flush, and the beforeunload guard.
+    let snapshot_now = move || {
+        (
+            title.get_untracked(),
+            body.get_untracked(),
+            status.get_untracked(),
+        )
+    };
 
     // Preview visibility — starts visible on wide viewports, hidden on narrow.
     let show_preview = RwSignal::new(is_wide_viewport());
@@ -319,15 +413,184 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     if let Some(id) = node {
         fetching.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(n) = crate::api::fetch_node(id).await {
-                title.set(n.title);
-                body.set(n.body.unwrap_or_default());
-                node_type.set(format!("{:?}", n.node_type).to_lowercase());
-                status.set(format!("{:?}", n.status).to_lowercase());
+            match crate::api::fetch_node(id).await {
+                Ok(n) => {
+                    let snap: Snapshot = (
+                        n.title.clone(),
+                        n.body.clone().unwrap_or_default(),
+                        format!("{:?}", n.status).to_lowercase(),
+                    );
+                    title.set(snap.0.clone());
+                    body.set(snap.1.clone());
+                    node_type.set(format!("{:?}", n.node_type).to_lowercase());
+                    status.set(snap.2.clone());
+                    baseline.set(Some(snap));
+                    fetching.set(false);
+                }
+                Err(e) => {
+                    // Deliberately leave `fetching` true: it keeps Save (and
+                    // autosave, via the None baseline) disabled, so a failed
+                    // load can never be saved back as an empty body over the
+                    // real node.
+                    error_msg.set(Some(format!("Couldn't load node: {e}")));
+                }
             }
-            fetching.set(false);
         });
     }
+
+    // ── Autosave wiring ─────────────────────────────────────────────────────
+    // Debounced change watcher: edit mode schedules an autosave PATCH; create
+    // mode persists the draft locally. Re-runs on every keystroke; only the
+    // latest scheduled timeout commits (version-counter pattern).
+    Effect::new(move |prev: Option<()>| {
+        let snap: Snapshot = (title.get(), body.get(), status.get());
+        if node.is_some() {
+            let Some(base) = baseline.get() else {
+                return; // initial fetch not landed (or failed) — autosave off
+            };
+            if snap == base {
+                return;
+            }
+            save_state.set(SaveState::Dirty);
+            let v = autosave_v.get_untracked() + 1;
+            autosave_v.set(v);
+            Timeout::new(AUTOSAVE_DEBOUNCE_MS, move || {
+                if autosave_v.get_untracked() == v {
+                    autosave_now.set(true);
+                }
+            })
+            .forget();
+        } else {
+            let d = crate::draft::CreateDraft {
+                title: snap.0,
+                body: snap.1,
+                node_type: node_type.get(),
+                status: snap.2,
+            };
+            // Skip the mount-time run: writing here would clobber a stored
+            // draft just by opening /nodes/new with a template prefill.
+            if prev.is_none() {
+                return;
+            }
+            let v = autosave_v.get_untracked() + 1;
+            autosave_v.set(v);
+            Timeout::new(AUTOSAVE_DEBOUNCE_MS, move || {
+                if autosave_v.get_untracked() != v {
+                    return;
+                }
+                if d.is_meaningful(template_for_type(&d.node_type)) {
+                    crate::draft::write_draft(&d);
+                    save_state.set(SaveState::Saved);
+                } else {
+                    // Reverted to pristine — leave nothing behind.
+                    crate::draft::clear_draft();
+                    save_state.set(SaveState::Idle);
+                }
+            })
+            .forget();
+        }
+    });
+
+    // Autosave executor (edit mode only). Skips when a save is already in
+    // flight; the completion recheck below re-triggers if more edits arrived
+    // during the round-trip.
+    Effect::new(move |_| {
+        if !autosave_now.get() {
+            return;
+        }
+        autosave_now.set(false);
+        let Some(id) = node else { return };
+        if saving.get_untracked() || fetching.get_untracked() {
+            return;
+        }
+        let snap = snapshot_now();
+        if baseline.get_untracked().as_ref() == Some(&snap) {
+            return;
+        }
+        saving.set(true);
+        save_state.set(SaveState::Saving);
+        wasm_bindgen_futures::spawn_local(async move {
+            let req = UpdateNodeRequest {
+                title: Some(snap.0.clone()),
+                body: Some(snap.1.clone()),
+                metadata: None,
+                status: Some(parse_status(&snap.2)),
+            };
+            match crate::api::update_node(id, &req).await {
+                Ok(_) => {
+                    baseline.set(Some(snap));
+                    save_state.set(SaveState::Saved);
+                }
+                Err(_) => {
+                    // Keep the edits and don't auto-retry (an offline session
+                    // would hammer the API); the next keystroke schedules a
+                    // fresh attempt, and the unmount flush is a last resort.
+                    save_state.set(SaveState::Failed);
+                }
+            }
+            saving.set(false);
+            if save_state.get_untracked() != SaveState::Failed
+                && baseline.get_untracked().as_ref() != Some(&snapshot_now())
+            {
+                autosave_now.set(true);
+            }
+        });
+    });
+
+    // Warn before the tab closes/refreshes with unpersisted edits. Edit mode
+    // only: create mode is already covered by the localStorage draft.
+    if node.is_some() {
+        let unload_handle =
+            window_event_listener(ev::beforeunload, move |ev: web_sys::BeforeUnloadEvent| {
+                let dirty = baseline
+                    .get_untracked()
+                    .is_some_and(|base| base != snapshot_now());
+                if dirty || saving.get_untracked() {
+                    ev.prevent_default();
+                    // Some browsers require a return value for the prompt.
+                    ev.set_return_value("Unsaved changes");
+                }
+            });
+        on_cleanup(move || unload_handle.remove());
+    }
+
+    // Last-chance flush: navigating away (Escape, sidebar link, browser back)
+    // unmounts the editor; persist any edits younger than the debounce window.
+    // The values are read synchronously here, before the signals are disposed.
+    on_cleanup(move || {
+        let Some(id) = node else { return };
+        let Some(base) = baseline.get_untracked() else {
+            return;
+        };
+        let snap = snapshot_now();
+        if snap == base {
+            return;
+        }
+        wasm_bindgen_futures::spawn_local(async move {
+            let req = UpdateNodeRequest {
+                title: Some(snap.0),
+                body: Some(snap.1),
+                metadata: None,
+                status: Some(parse_status(&snap.2)),
+            };
+            match crate::api::update_node(id, &req).await {
+                Ok(_) => {
+                    refresh.update(|n| *n += 1);
+                    if let Some(ts) = toast_state {
+                        ts.push(ToastLevel::Success, "Unsaved edits saved.");
+                    }
+                }
+                Err(e) => {
+                    if let Some(ts) = toast_state {
+                        ts.push(
+                            ToastLevel::Error,
+                            format!("Couldn't save your last edits: {e}"),
+                        );
+                    }
+                }
+            }
+        });
+    });
 
     // Image drag events on the textarea.
     let on_img_dragover = move |ev: web_sys::DragEvent| {
@@ -376,20 +639,19 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
     let on_save = move |_: web_sys::MouseEvent| {
         saving.set(true);
+        save_state.set(SaveState::Saving);
         error_msg.set(None);
-        let t = title.get_untracked();
-        let b = body.get_untracked();
+        let snap = snapshot_now();
         let nt_str = node_type.get_untracked();
-        let st_str = status.get_untracked();
 
         let nav = nav_save.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let result = if let Some(id) = node {
                 let req = UpdateNodeRequest {
-                    title: Some(t),
-                    body: Some(b),
+                    title: Some(snap.0.clone()),
+                    body: Some(snap.1.clone()),
                     metadata: None,
-                    status: Some(parse_status(&st_str)),
+                    status: Some(parse_status(&snap.2)),
                 };
                 crate::api::update_node(id, &req).await
             } else {
@@ -401,11 +663,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     _ => NodeType::Article,
                 };
                 let req = CreateNodeRequest {
-                    title: t,
+                    title: snap.0.clone(),
                     node_type: nt,
-                    body: Some(b),
+                    body: Some(snap.1.clone()),
                     metadata: serde_json::Value::Object(serde_json::Map::new()),
-                    status: Some(parse_status(&st_str)),
+                    status: Some(parse_status(&snap.2)),
                     template_id: template_id_for_create.get_untracked(),
                 };
                 crate::api::create_node(&req).await
@@ -413,10 +675,22 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
             match result {
                 Ok(saved_node) => {
+                    if node.is_none() {
+                        // Invalidate any pending draft-write timeout before
+                        // clearing, or it would resurrect the draft for a
+                        // node that now exists.
+                        autosave_v.set(autosave_v.get_untracked() + 1);
+                        crate::draft::clear_draft();
+                    }
+                    // Mark the saved snapshot as the baseline so the unmount
+                    // flush (triggered by the navigation below) is a no-op.
+                    baseline.set(Some(snap));
+                    save_state.set(SaveState::Saved);
                     refresh.update(|n| *n += 1);
                     nav(&format!("/nodes/{}", saved_node.id), Default::default());
                 }
                 Err(e) => {
+                    save_state.set(SaveState::Failed);
                     error_msg.set(Some(format!("{e}")));
                 }
             }
@@ -574,6 +848,20 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         <option value="published">"Published"</option>
                         <option value="archived">"Archived"</option>
                     </select>
+                    // Save-state indicator (autosave / local draft).
+                    <span
+                        class=move || {
+                            let base = "text-xs whitespace-nowrap";
+                            if save_state.get() == SaveState::Failed {
+                                format!("{base} text-red-600 dark:text-red-400")
+                            } else {
+                                format!("{base} text-stone-400 dark:text-stone-500")
+                            }
+                        }
+                        aria-live="polite"
+                    >
+                        {move || save_state.get().label(node.is_some())}
+                    </span>
                     // Preview toggle button
                     <button
                         class=move || {
