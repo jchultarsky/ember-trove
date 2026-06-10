@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Local graph on node pages; orphans lens on the global graph
+- Every node page gains a collapsible **Local Graph** panel: the node and its
+  direct connections (outgoing edges + backlinks, deduped) in a small radial
+  map. Click a neighbor to navigate; beyond 12 connections a "+N more" hint
+  links to the full graph. Loads lazily on first open.
+- The global graph's legend gains an **Orphans only** toggle: show just the
+  nodes with no links anywhere — a maintenance lens for finding notes that
+  never got connected. (Type and tag filters already existed.)
+
 ### Changed — Accessibility pass (SPA fundamentals)
 - **Modals** (quick capture, command palette, delete confirm, help) now trap
   `Tab` focus inside the dialog and return focus to the triggering element on

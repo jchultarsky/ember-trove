@@ -82,6 +82,11 @@ pub async fn update_node(id: NodeId, req: &UpdateNodeRequest) -> Result<Node, Ui
     put_json(&format!("/nodes/{id}"), req).await
 }
 
+/// `GET /api/nodes/:id/neighbors` — nodes this node links to (outgoing edges).
+pub async fn fetch_neighbors(id: NodeId) -> Result<Vec<Node>, UiError> {
+    get_json(&format!("/nodes/{id}/neighbors")).await
+}
+
 /// `PUT /api/nodes/:id/pin` — toggle a node's pinned flag.  Used by
 /// the v2.9.0 dashboard pin button.
 pub async fn set_node_pinned(id: NodeId, pinned: bool) -> Result<Node, UiError> {

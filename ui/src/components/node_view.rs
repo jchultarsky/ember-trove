@@ -357,6 +357,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         // External links panel — grouped with other collapsible sections
                                         <LinksPanel node_id=id is_editor=is_owner />
                                         <EdgePanel node_id=id />
+                                        <crate::components::local_graph::LocalGraphPanel node_id=id title=n.title.clone() />
                                         <BacklinksPanel node_id=id title=n.title.clone() />
                                         <AttachmentPanel node_id=id />
                                         <PermissionPanel node_id=id is_owner=is_owner />
