@@ -3,18 +3,28 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-06-06)
+## Current state (2026-06-10)
 
-- **Released:** v2.20.4. The v2.20.1–2.20.4 patches restored login, which the v2.20.0
-  deploy had broken in two stacked ways: (1) the `/api/auth/callback` redirect used an
-  inline `<script>` that the new strict CSP (nonce + `strict-dynamic`) blocked → blank
-  page; fixed with a real HTTP 303 redirect. (2) `jsonwebtoken` 9→10 ships **no** built-in
-  crypto backend, so RS256 session-token verification panicked → 502 on every authed
-  request; fixed by enabling the `aws_lc_rs` backend (matches our rustls/AWS-SDK provider;
-  avoids the `rsa` crate / RUSTSEC-2023-0071). Also: auth rate limits loosened for active
-  dev (`/api/auth/me` carved into its own zone so the AuthGate can't loop), a pre-commit
-  secret scan + "no private keys in tests" policy, and a fixed local Docker stack
-  (`COOKIE_KEY` required from `.env.local`).
+- **Released:** v2.21.0 — the full 2026-06-09 UI usability review, shipped across ten
+  feature branches and verified on prod (`/api/health` → 2.21.0, DB ok).
+  **Trust tier:** editor autosave + create-mode localStorage drafts + save-state
+  indicator (with server-side version-snapshot dedupe and 15-min "Edited" activity
+  coalescing); optimistic-rollback sweep (all 18 fire-and-forget mutations now revert
+  + toast on failure); undo-toast deletion via soft delete (migration 030 `deleted_at`
+  tombstones on tasks/notes, `POST /{tasks,notes}/:id/restore`, 30-day purge at startup
+  + daily). **Feature tier:** unlinked mentions with one-click wikilink conversion
+  (`common::markdown::link_first_mention`); NL quick-add tokens (`common::quickadd`,
+  "buy milk friday p1"); keyboard inbox triage ("Process" mode, t/s/a/d/j/k); command
+  palette app commands with shortcut hints + node-context actions; a11y pass (modal
+  focus traps + focus return, route-change `document.title` + focus, live-region
+  toasts, ARIA tabs, labeled priority dots); local graph panel on node pages +
+  orphans-only lens on the global graph; skeletons for Search/Templates;
+  `prefers-color-scheme` default. Also fixed: a failed node load can no longer be
+  saved back as an empty body. Local Docker stack verified pre-release (migration 030
+  applied cleanly on `postgres:16`).
+- **Prior (v2.20.x):** login restoration patches (CSP 303 redirect, `jsonwebtoken`
+  `aws_lc_rs` backend), auth rate-limit tuning, pre-commit secret scan, fixed local
+  Docker stack (`COOKIE_KEY` from `.env.local`).
 - **Prior (v2.19.x):** closed the deep security review/audit (sprints 7–9): CSP nonce +
   `strict-dynamic` (removed `script-src 'unsafe-inline'`), Cognito admin hardening,
   activity-log scoping, backup/restore authz, rate-limiting coverage, full
@@ -26,14 +36,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
-- 2026-06-09 usability review: **fully shipped** (Tier 1: autosave,
-  rollback sweep, undo-delete; Tier 2/3: skeletons + OS dark default,
-  unlinked mentions, NL quick-add, inbox triage, palette commands, a11y pass,
-  local graph + orphans lens). Remaining nice-to-haves, unscheduled: local graph on node pages
-  + global-graph filters/orphans; unlinked mentions under backlinks; keyboard
-  inbox-triage mode; NL quick-add parsing; palette actions beyond nodes;
-  a11y pass (focus trap/return, route-change focus, color-only priority dots);
-  skeletons in Notes/Search/Templates; `prefers-color-scheme` default.
+- 2026-06-09 usability review: **fully shipped in v2.21.0** (see Current state).
+  Unscheduled nice-to-haves that came out of it: My Day carryovers as one-click
+  "still today?" suggestions + collapsible overdue section; calendar
+  click-day-to-add-task; saved-search presets UI; focus trap on the remaining
+  modals (create-node, add-favorite); deferred block references (heading links
+  cover most of the value).
 - UI test strategy: more logic pushed into `common/` for host-target unit coverage;
   decide on a WASM/browser e2e harness. **Needs a direction** — this is an
   architecture choice (Playwright vs. `wasm-bindgen-test` headless vs. none), not a
