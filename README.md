@@ -297,6 +297,10 @@ make verify             # or ./scripts/verify.sh — runs the full suite below
 
 - **Formatting:** default `rustfmt`, edition 2024. Configure your editor to format with
   `--edition 2024` so it matches the CI gate.
+- **E2E smoke tests:** `./scripts/e2e.sh` runs the Playwright suite against a dedicated
+  Docker stack (auth bypassed via the `e2e-bypass` cargo feature, ephemeral DB; no local
+  Node required — Playwright runs in its official image). Also a CI job. See
+  [`e2e/README.md`](e2e/README.md).
 - **Coverage:** `make coverage` (CI reports it via `cargo llvm-cov`; currently report-only).
 - **Dependencies:** [Dependabot](.github/dependabot.yml) proposes weekly `cargo` and
   `github-actions` updates against `develop`; Actions are pinned to commit SHAs.

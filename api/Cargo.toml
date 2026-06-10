@@ -11,6 +11,15 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# E2E auth bypass for Playwright smoke tests — see e2e/README.md.
+#
+# SECURITY: never enable this feature in a release artifact. The production
+# Dockerfile (deploy/Dockerfile.api) builds without features, so the bypass
+# code is not present in shipped binaries; even when compiled in, it must
+# additionally be armed at runtime with E2E_AUTH_BYPASS=1.
+e2e-bypass = []
+
 [dependencies]
 common             = { path = "../common" }
 tracing            = { workspace = true }

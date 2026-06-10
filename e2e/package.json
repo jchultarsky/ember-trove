@@ -1,0 +1,12 @@
+{
+  "name": "ember-trove-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright smoke tests for Ember Trove — see e2e/README.md",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.57.0"
+  }
+}
