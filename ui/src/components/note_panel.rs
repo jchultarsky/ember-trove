@@ -399,6 +399,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                         {
                                                                             editor_heights.update(|m| { m.insert(note_id.0, h); });
                                                                             wasm_bindgen_futures::spawn_local(async move {
+                                                                                // Best-effort: losing a height pref is cosmetic.
                                                                                 let _ = crate::api::set_editor_pref("note", note_id.0, h).await;
                                                                             });
                                                                         }

@@ -114,8 +114,13 @@ pub fn TagBar(node_id: NodeId) -> impl IntoView {
                                                     on:click=move |_| {
                                                         let node_id = node_id;
                                                         wasm_bindgen_futures::spawn_local(async move {
-                                                            let _ = crate::api::detach_tag(node_id, tag_id).await;
-                                                            refresh_tags.update(|n| *n += 1);
+                                                            match crate::api::detach_tag(node_id, tag_id).await {
+                                                                Ok(_) => refresh_tags.update(|n| *n += 1),
+                                                                Err(e) => crate::components::toast::push_toast(
+                                                                    crate::components::toast::ToastLevel::Error,
+                                                                    format!("Couldn't remove tag: {e}"),
+                                                                ),
+                                                            }
                                                         });
                                                     }
                                                 >

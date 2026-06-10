@@ -81,10 +81,16 @@ pub fn NotesView() -> impl IntoView {
         }
         deleting.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_note(note_id).await;
+            let result = crate::api::delete_note(note_id).await;
             confirming_delete.set(None);
             deleting.set(false);
-            reload.update(|n| *n += 1);
+            match result {
+                Ok(_) => reload.update(|n| *n += 1),
+                Err(e) => crate::components::toast::push_toast(
+                    crate::components::toast::ToastLevel::Error,
+                    format!("Delete failed: {e}"),
+                ),
+            }
         });
     };
 

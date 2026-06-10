@@ -683,8 +683,13 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                                             text-xs transition-opacity"
                                                         on:click=move |_| {
                                                             wasm_bindgen_futures::spawn_local(async move {
-                                                                let _ = crate::api::delete_edge(edge_id).await;
-                                                                refresh_edges.update(|n| *n += 1);
+                                                                match crate::api::delete_edge(edge_id).await {
+                                                                    Ok(_) => refresh_edges.update(|n| *n += 1),
+                                                                    Err(e) => crate::components::toast::push_toast(
+                                                                        crate::components::toast::ToastLevel::Error,
+                                                                        format!("Couldn't remove edge: {e}"),
+                                                                    ),
+                                                                }
                                                             });
                                                         }
                                                     >

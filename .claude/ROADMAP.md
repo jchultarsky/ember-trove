@@ -27,13 +27,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
 ## Backlog / candidate work
 
 - **UI trust fixes, Tier 1 remainder (from the 2026-06-09 usability review;
-  editor autosave shipped first):**
-  (a) *Optimistic-rollback sweep* — `task_row.rs:206/219` and
-  `my_day_view.rs:263` fire mutations with `let _ =` after an optimistic signal
-  update: on API failure the UI shows success with no toast and no rollback.
-  Make every optimistic path revert + toast on `Err` (the toggle-done path at
-  `task_row.rs:179` is the correct template).
-  (b) *Undo-toast economy* — tasks (`d` key!) and notes delete instantly with no
+  editor autosave and the optimistic-rollback sweep have shipped):**
+  *Undo-toast economy* — tasks (`d` key!) and notes delete instantly with no
   confirm and no undo, while nodes/tags get modals. Adopt instant-action +
   undo toast for tasks/notes (likely needs a soft-delete/restore API), keep one
   specific confirm ("Delete node 'X'?", verb-labeled buttons) for node delete.

@@ -263,8 +263,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             node_id: Some(Some(node_id)),
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't attach to node: {e}")),
+            }
         });
     };
 
@@ -286,6 +288,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         let new_due: Option<Option<NaiveDate>> =
             Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         editing.set(false);
+        let prev_title = orig_title.get_untracked();
+        let prev_priority = priority_val.get_untracked();
         orig_title.set(new_title.clone());
         priority_val.set(priority_value(&new_priority).to_string());
         let req = UpdateTaskRequest {
@@ -298,8 +302,15 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic title/priority display.
+                    orig_title.set(prev_title);
+                    priority_val.set(prev_priority);
+                    push_toast(ToastLevel::Error, format!("Save failed: {e}"));
+                }
+            }
         });
     };
 
@@ -317,8 +328,14 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         };
         status_val.set(next.to_string());
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip.
+                    status_val.set(current);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
@@ -340,15 +357,23 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip.
+                    in_my_day.set(currently_in);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
     let on_delete = move |_| {
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_task(task_id).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::delete_task(task_id).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            }
         });
     };
 
@@ -400,6 +425,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                         })
                                         on_resize=Callback::new(move |h: i32| {
                                             wasm_bindgen_futures::spawn_local(async move {
+                                                // Best-effort: losing a height pref is cosmetic.
                                                 let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
                                             });
                                         })
