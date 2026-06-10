@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — My Day: carryover prompt and foldable overdue section
+Carried-over tasks (focused on a previous day, still open) now ask
+"still today?" inline: **Yes** re-stamps the focus date to today (clearing
+the badge), **No** drops the task back to the backlog — making the morning
+carry-over decision one click instead of silent stickiness. Overdue tasks
+get their own foldable "Overdue · N" section above the backlog (red accent,
+expanded by default) instead of mixing into the top of the list — visible,
+but never a pinned guilt pile. Keyboard j/k order follows the display order
+and skips folded overdue rows. The binary `focus_date` model is unchanged
+(see the 2026-04-28 ADR).
+
 ### Tooling — E2E coverage for saved search presets
 The presets UI (save current filters under a name, load, delete) already
 existed but was untested and mislisted as missing in the ROADMAP backlog —

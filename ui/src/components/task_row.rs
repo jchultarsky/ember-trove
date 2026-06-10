@@ -392,6 +392,43 @@ pub fn KanbanTaskRow(
                                   title=title_attr>
                                 " · carried from " {label}
                             </span>
+                            // One-click answer to "still today?" — Yes
+                            // re-stamps focus_date to today (badge clears);
+                            // No is the existing remove-from-today gesture.
+                            <span class="flex items-center gap-1 flex-shrink-0 text-xs"
+                                  data-testid="carryover-prompt">
+                                <span class="text-stone-400 dark:text-stone-500">"— still today?"</span>
+                                <button
+                                    type="button"
+                                    class="px-1.5 rounded text-amber-600 dark:text-amber-400
+                                           hover:bg-amber-50 dark:hover:bg-amber-950/40
+                                           font-semibold transition-colors cursor-pointer
+                                           disabled:opacity-50"
+                                    prop:disabled=move || busy.get()
+                                    title="Keep on today (re-stamps the focus date)"
+                                    on:click=move |ev: web_sys::MouseEvent| {
+                                        ev.stop_propagation();
+                                        patch_focus(Some(today), "Kept for today");
+                                    }
+                                >
+                                    "Yes"
+                                </button>
+                                <button
+                                    type="button"
+                                    class="px-1.5 rounded text-stone-500 dark:text-stone-400
+                                           hover:bg-stone-100 dark:hover:bg-stone-800
+                                           font-semibold transition-colors cursor-pointer
+                                           disabled:opacity-50"
+                                    prop:disabled=move || busy.get()
+                                    title="Back to the backlog"
+                                    on:click=move |ev: web_sys::MouseEvent| {
+                                        ev.stop_propagation();
+                                        patch_focus(None, "Moved to backlog");
+                                    }
+                                >
+                                    "No"
+                                </button>
+                            </span>
                         }
                     })}
                 </div>
