@@ -14,6 +14,7 @@ pub mod inbox_triage;
 pub mod inbox_view;
 pub mod layout;
 pub mod links_panel;
+pub mod local_graph;
 pub mod modals;
 pub mod my_day_view;
 pub mod new_task_form;

@@ -26,9 +26,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
-- Tier 2/3 usability candidates from the 2026-06-09 usability review (Tier 1 —
-  editor autosave, optimistic-rollback sweep, undo-toast soft delete — has
-  shipped): local graph on node pages
+- 2026-06-09 usability review: **fully shipped** (Tier 1: autosave,
+  rollback sweep, undo-delete; Tier 2/3: skeletons + OS dark default,
+  unlinked mentions, NL quick-add, inbox triage, palette commands, a11y pass,
+  local graph + orphans lens). Remaining nice-to-haves, unscheduled: local graph on node pages
   + global-graph filters/orphans; unlinked mentions under backlinks; keyboard
   inbox-triage mode; NL quick-add parsing; palette actions beyond nodes;
   a11y pass (focus trap/return, route-change focus, color-only priority dots);

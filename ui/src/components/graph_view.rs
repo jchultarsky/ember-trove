@@ -81,7 +81,7 @@ struct EdgeHover {
 
 // ── Node-type helpers ────────────────────────────────────────────────────────
 
-fn node_fill(nt: &NodeType) -> &'static str {
+pub(crate) fn node_fill(nt: &NodeType) -> &'static str {
     match nt {
         NodeType::Article => "#d97706",
         NodeType::Project => "#2563eb",
@@ -91,7 +91,7 @@ fn node_fill(nt: &NodeType) -> &'static str {
     }
 }
 
-fn node_stroke_color(nt: &NodeType) -> &'static str {
+pub(crate) fn node_stroke_color(nt: &NodeType) -> &'static str {
     match nt {
         NodeType::Article => "#92400e",
         NodeType::Project => "#1e40af",
@@ -102,7 +102,7 @@ fn node_stroke_color(nt: &NodeType) -> &'static str {
 }
 
 /// Diamond (rotated square) points for Project nodes.
-fn diamond_points(cx: f64, cy: f64) -> String {
+pub(crate) fn diamond_points(cx: f64, cy: f64) -> String {
     let r = 22.0_f64;
     format!(
         "{:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1}",
@@ -118,7 +118,7 @@ fn diamond_points(cx: f64, cy: f64) -> String {
 }
 
 /// Regular-hexagon points for Resource nodes.
-fn hexagon_points(cx: f64, cy: f64) -> String {
+pub(crate) fn hexagon_points(cx: f64, cy: f64) -> String {
     let r = 20.0_f64;
     (0..6)
         .map(|i| {
@@ -130,7 +130,7 @@ fn hexagon_points(cx: f64, cy: f64) -> String {
 }
 
 /// Upward-pointing equilateral triangle for Reference nodes.
-fn triangle_points(cx: f64, cy: f64) -> String {
+pub(crate) fn triangle_points(cx: f64, cy: f64) -> String {
     let r = 22.0_f64;
     let hx = r * 0.866_f64; // sqrt(3)/2
     format!(
@@ -812,6 +812,11 @@ pub fn GraphView() -> impl IntoView {
     let show_resources: RwSignal<bool> = RwSignal::new(true);
     let show_references: RwSignal<bool> = RwSignal::new(true);
 
+    // ── Orphans filter ───────────────────────────────────────────────────────
+    // When on, only nodes with no edges at all are shown — a maintenance lens
+    // for spotting notes that never got linked into the graph.
+    let show_orphans_only: RwSignal<bool> = RwSignal::new(false);
+
     // ── Tag filter signal ────────────────────────────────────────────────────
     // When Some(tag_id), only nodes with that tag are rendered.
     // Set by clicking a tag dot; cleared by clicking the same dot or the × button.
@@ -1212,6 +1217,25 @@ pub fn GraphView() -> impl IntoView {
                     <LegendToggle label="Resource"  color="#9333ea" shape="hexagon"  show=show_resources />
                     <LegendToggle label="Reference" color="#dc2626" shape="triangle" show=show_references />
                 </div>
+                // Orphans-only maintenance lens.
+                <button
+                    class=move || {
+                        let base = "flex items-center gap-1.5 mt-1 pt-1 border-t \
+                                    border-stone-200 dark:border-stone-700 cursor-pointer \
+                                    text-[10px] font-semibold uppercase tracking-wide";
+                        if show_orphans_only.get() {
+                            format!("{base} text-amber-600 dark:text-amber-400")
+                        } else {
+                            format!("{base} text-stone-500 dark:text-stone-400 \
+                                     hover:text-stone-700 dark:hover:text-stone-200")
+                        }
+                    }
+                    title="Show only nodes with no links (good for cleanup)"
+                    on:click=move |_| show_orphans_only.update(|v| *v = !*v)
+                >
+                    <span class="material-symbols-outlined" style="font-size:12px;">"link_off"</span>
+                    {move || if show_orphans_only.get() { "Orphans only ✓" } else { "Orphans only" }}
+                </button>
                 // Tag filter active indicator — shown when a tag dot has been clicked.
                 {move || tag_filter.get().map(|_| view! {
                     <div class="flex items-center gap-1.5 mt-1 pt-1
@@ -1388,6 +1412,19 @@ pub fn GraphView() -> impl IntoView {
 
                 // Apply type-visibility filter + optional tag filter.
                 let active_tag = tag_filter.get();
+                // Orphan lens: degree computed over ALL edges, so a node only
+                // counts as orphaned when nothing links it anywhere — not
+                // merely when its neighbors are filtered out of view.
+                let orphans_only = show_orphans_only.get();
+                let linked_ids: std::collections::HashSet<Uuid> = if orphans_only {
+                    edges_sig
+                        .get()
+                        .iter()
+                        .flat_map(|e| [e.source_id.0, e.target_id.0])
+                        .collect()
+                } else {
+                    std::collections::HashSet::new()
+                };
                 let nodes: Vec<Node> = all_nodes
                     .into_iter()
                     .filter(|n| {
@@ -1401,7 +1438,8 @@ pub fn GraphView() -> impl IntoView {
                         let tag_visible = active_tag
                             .map(|tid| n.tags.iter().any(|t| t.id == tid))
                             .unwrap_or(true);
-                        type_visible && tag_visible
+                        let orphan_visible = !orphans_only || !linked_ids.contains(&n.id.0);
+                        type_visible && tag_visible && orphan_visible
                     })
                     .collect();
 
