@@ -5,7 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-06-10)
 
-- **Released:** v2.21.1 — hotfix for two UI bugs found by live prod testing of
+- **Released:** v2.21.2 — Playwright e2e smoke suite (`e2e/`, `scripts/e2e.sh`,
+  CI job `e2e`), the direct answer to the v2.21.1 lesson that host-side gates
+  cannot see WASM runtime bugs. Five specs (shell, NL quick capture,
+  delete→undo→restore, zombie-listener regression, editor autosave) run
+  against a dedicated Docker stack: api built with the new `e2e-bypass` cargo
+  feature (synthetic non-admin user; release images build featureless so the
+  code path never ships, and runtime arming needs `E2E_AUTH_BYPASS=1`),
+  tmpfs Postgres, separate compose project. Playwright runs in its official
+  Docker image — no local Node. Every push now gets browser-level coverage;
+  release verified on prod (`/api/health` → 2.21.2). Grow specs alongside new
+  UI surfaces.
+- **Prior (v2.21.1):** — hotfix for two UI bugs found by live prod testing of
   v2.21.0 minutes after release: (1) `MyDayView` leaked its window keydown
   listener on unmount (the handle's Drop does not detach; a zombie listener
   panicked on disposed signals and poisoned all WASM event dispatch);
