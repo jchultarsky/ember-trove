@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.3] - 2026-06-10
+
 ### Tooling — E2E specs for inbox triage and the command palette
 Eight new Playwright specs (13 total): triage `t`/`s`/`a` decisions with
 API-verified server state, skip-wrapping and no-changes exit; palette
