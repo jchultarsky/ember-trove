@@ -38,9 +38,9 @@ async fn quick_capture(
         title,
         node_id: None,
         status: Some(TaskStatus::Open),
-        priority: Some(TaskPriority::Medium),
+        priority: Some(req.priority.unwrap_or(TaskPriority::Medium)),
         focus_date: None,
-        due_date: None,
+        due_date: req.due_date,
         recurrence: None,
     };
 

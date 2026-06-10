@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Natural-language quick add
+The quick-capture box (`n`) now parses date and priority tokens from the
+first line: `buy milk friday p1` captures "buy milk" due next Friday at high
+priority. Supported: `today`, `tomorrow`/`tmrw`, weekday names (`fri`,
+`friday`, …), ISO dates (`2026-07-01`), and `p1`/`p2`/`p3` or
+`!high`/`!medium`/`!low`. Chips under the box preview the interpretation live
+before you submit; later lines (shared URLs, pasted text) are never scanned,
+last token per category wins, and an input that is *only* tokens stays a
+plain title. Parser: `common::quickadd` (unit-tested); the wire format gains
+optional `due_date`/`priority` on `POST /api/inbox/quick` (older clients —
+the iOS share sheet — are unaffected).
+
 ### Added — Unlinked mentions under "Linked Here"
 The backlinks panel on a node page now lists **Mentions**: nodes whose text
 contains this node's title without linking to it (full-text matches, minus

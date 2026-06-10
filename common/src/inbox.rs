@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::id::TaskId;
+use crate::task::TaskPriority;
 
 /// Maximum length of a captured task title.  Matches `CreateTaskRequest::title`.
 pub const QUICK_CAPTURE_MAX_LEN: usize = 500;
@@ -34,6 +35,17 @@ pub struct QuickCaptureRequest {
     #[garde(length(max = 5000))]
     #[serde(default)]
     pub body: Option<String>,
+
+    /// Optional due date, parsed client-side from natural-language tokens
+    /// ("friday", "tomorrow", "2026-07-01") — see `common::quickadd`.
+    #[garde(skip)]
+    #[serde(default)]
+    pub due_date: Option<chrono::NaiveDate>,
+
+    /// Optional priority, parsed client-side ("p1"/"!high" etc.).
+    #[garde(skip)]
+    #[serde(default)]
+    pub priority: Option<TaskPriority>,
 }
 
 /// Response body for `POST /api/inbox/quick`.
