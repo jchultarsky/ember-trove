@@ -52,6 +52,18 @@ impl PartialEq for Toast {
 
 // ── State (held in context) ────────────────────────────────────────────────────
 
+thread_local! {
+    /// Global handle to the app's single ToastState (WASM is single-threaded).
+    ///
+    /// Needed because `use_context` only works under a reactive owner — and
+    /// code resumed after an `.await` inside `wasm_bindgen_futures::spawn_local`
+    /// has none, so context lookups there return `None` and the toast is
+    /// silently dropped (v2.21.0: undo toasts never rendered in production).
+    /// `push_toast` / `push_undo_toast` fall back to this handle.
+    static GLOBAL_TOAST_STATE: std::cell::Cell<Option<ToastState>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// Shared toast state — placed in context at app root.
 #[derive(Clone, Copy)]
 pub struct ToastState {
@@ -61,10 +73,12 @@ pub struct ToastState {
 
 impl ToastState {
     pub fn new() -> Self {
-        Self {
+        let state = Self {
             toasts: RwSignal::new(Vec::new()),
             next_id: RwSignal::new(0),
-        }
+        };
+        GLOBAL_TOAST_STATE.with(|g| g.set(Some(state)));
+        state
     }
 
     pub fn push(&self, level: ToastLevel, message: impl Into<String>) {
@@ -110,23 +124,30 @@ impl ToastState {
     }
 }
 
-// ── Free helper (callable from spawn_local / event handlers) ──────────────────
+// ── Free helpers (callable from spawn_local / event handlers) ─────────────────
 
-/// Push a toast. Must be called within a Leptos reactive owner.
+/// Resolve the toast state: reactive context when an owner is present,
+/// otherwise the global handle (post-`.await` continuations have no owner).
+fn resolve_state() -> Option<ToastState> {
+    use_context::<ToastState>().or_else(|| GLOBAL_TOAST_STATE.with(std::cell::Cell::get))
+}
+
+/// Push a toast. Callable from anywhere, including `spawn_local`
+/// continuations after an `.await`.
 pub fn push_toast(level: ToastLevel, message: impl Into<String>) {
-    if let Some(state) = use_context::<ToastState>() {
+    if let Some(state) = resolve_state() {
         state.push(level, message);
     }
 }
 
 /// Push a success toast with an "Undo" button. Clicking it runs `on_undo`
-/// and dismisses the toast. Must be called within a Leptos reactive owner;
-/// `on_undo` itself must not rely on one (see [`ToastAction`]).
+/// and dismisses the toast. Callable from anywhere; `on_undo` must not rely
+/// on a reactive owner (see [`ToastAction`]).
 pub fn push_undo_toast(
     message: impl Into<String>,
     on_undo: std::sync::Arc<dyn Fn() + Send + Sync>,
 ) {
-    if let Some(state) = use_context::<ToastState>() {
+    if let Some(state) = resolve_state() {
         state.push_with_action(
             ToastLevel::Success,
             message,

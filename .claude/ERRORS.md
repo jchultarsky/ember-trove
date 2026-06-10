@@ -63,6 +63,29 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   handler's response. Real example: `task_restore_returns_restored_task_for_owner`
   in `api/src/tests.rs`. (2026-06-10)
 
+### Zombie `window_event_listener` panics after view unmount
+- **Symptom:** WASM `RuntimeError: unreachable` in the console on a keypress,
+  stack through `window_event_listener::{{closure}}` → `get_untracked`; after the
+  first panic ALL event handling silently dies (poisoned dispatch). In prod
+  v2.21.0 this killed quick-capture and toasts after leaving My Day.
+- **Cause:** `window_event_listener` returns a handle whose **Drop does NOT
+  detach the listener**. Discarding the handle leaks the listener past the
+  view's lifetime; its closure then reads disposed signals and panics.
+- **Fix:** always `let handle = window_event_listener(...); on_cleanup(move ||
+  handle.remove());` (layout.rs is the canonical example; my_day_view.rs was
+  the offender — its comment even claimed auto-cleanup). (2026-06-10)
+
+### Toasts silently dropped from `spawn_local` continuations
+- **Symptom:** `push_toast`/`push_undo_toast` after an API call shows nothing —
+  no error, no toast. v2.21.0 undo toasts never rendered in production.
+- **Cause:** code resumed after an `.await` inside
+  `wasm_bindgen_futures::spawn_local` has **no reactive owner**, so
+  `use_context::<ToastState>()` returns `None` and the push is a no-op.
+- **Fix:** `toast.rs` keeps a `thread_local` global handle set in
+  `ToastState::new()`; the free helpers fall back to it when context is absent.
+  General rule: never rely on `use_context` after an `.await` — capture
+  context values before spawning. (2026-06-10)
+
 ## CI / tooling
 
 ### `cargo fmt --check` fails across the whole repo
