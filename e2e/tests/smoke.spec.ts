@@ -33,7 +33,7 @@ test.describe('app shell', () => {
 });
 
 test.describe('quick capture with natural-language tokens', () => {
-  test('parses tokens, previews chips, lands in the inbox', async ({ page }) => {
+  test('parses tokens, previews chips, lands in the inbox', async ({ page, request }) => {
     const title = `e2e capture ${Date.now()}`;
     await page.goto('/tasks/my-day');
     await focusNeutral(page);
@@ -55,6 +55,11 @@ test.describe('quick capture with natural-language tokens', () => {
     const row = page.locator('[data-task-id]', { hasText: title });
     await expect(row).toBeVisible();
     await expect(row.getByText('High')).toBeVisible();
+
+    // Clean up — later specs (triage) assume they control the inbox.
+    const inbox = await (await request.get('/api/tasks/inbox')).json();
+    const created = inbox.find((t: { title: string }) => t.title === title);
+    if (created) await request.delete(`/api/tasks/${created.id}`);
   });
 });
 

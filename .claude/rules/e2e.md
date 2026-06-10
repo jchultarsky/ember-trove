@@ -18,6 +18,10 @@ CI job is too slow a feedback loop for selector work.
 - **Placeholders use the Unicode ellipsis** (`…`, U+2026), not `...` — this
   codebase uses `\u{2026}` throughout. `getByPlaceholder('Task title...')`
   fails; `getByPlaceholder('Task title…')` matches.
+- **Hidden duplicates cause strict-mode violations.** Triage hides the inbox
+  list with CSS (`hidden`) — the task title then exists twice in the DOM.
+  Scope assertions to a container (`getByTestId('triage-card')`); give new
+  overlay-style surfaces a `data-testid`.
 - **Element refs go stale across re-renders** — a list refetch between a
   `find` and a click invalidates refs. Re-locate just before acting, or drive
   the assertion through `expect(locator)` auto-waiting.

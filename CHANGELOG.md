@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — E2E specs for inbox triage and the command palette
+Eight new Playwright specs (13 total): triage `t`/`s`/`a` decisions with
+API-verified server state, skip-wrapping and no-changes exit; palette
+open/close, synonym command matching ("theme" finds dark mode), navigation
+dispatch, dark-mode round-trip, node search→open, and node-context commands.
+Triage specs clear the inbox up front (the working set is a mount-time
+snapshot) and the smoke capture spec now cleans up its task. The triage card
+gained a `data-testid` — task titles also exist in the CSS-hidden list behind
+it, which strict mode rightly rejects; lesson recorded in
+`.claude/rules/e2e.md`.
+
 ## [2.21.2] - 2026-06-10
 
 ### Tooling — Playwright e2e smoke suite

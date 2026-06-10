@@ -357,8 +357,11 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                 let title_html = crate::markdown::render_markdown_inline(&task.title);
                 let due_label = task.due_date.map(|d| format!("due {}", d.format("%b %-d")));
                 view! {
-                    <div class="bg-white dark:bg-stone-900 rounded-2xl shadow-lg
-                                border border-stone-200 dark:border-stone-700 p-6 space-y-5">
+                    <div
+                        data-testid="triage-card"
+                        class="bg-white dark:bg-stone-900 rounded-2xl shadow-lg
+                               border border-stone-200 dark:border-stone-700 p-6 space-y-5"
+                    >
                         // Progress + exit
                         <div class="flex items-center justify-between text-xs
                                     text-stone-400 dark:text-stone-500">
