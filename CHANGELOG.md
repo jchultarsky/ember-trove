@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.0] - 2026-06-10
+
 ### Added — Local graph on node pages; orphans lens on the global graph
 - Every node page gains a collapsible **Local Graph** panel: the node and its
   direct connections (outgoing edges + backlinks, deduped) in a small radial
