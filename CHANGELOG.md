@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — Focus traps on the remaining modals
+Create-node and add-favorite now trap Tab focus, return focus on close, and
+carry `role="dialog"`/`aria-modal` — completing the modal a11y pass started
+in v2.21.0 (quick capture, palette, delete confirm, help).
+
 ## [2.21.4] - 2026-06-10
 
 ### Fixed — Palette: commands no longer hijacked by body-text node matches

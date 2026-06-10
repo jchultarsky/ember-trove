@@ -116,12 +116,16 @@ pub fn AddFavoriteModal(
         });
     };
 
+    let panel_ref: NodeRef<leptos::html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
+
     let handle_keydown = move |ev: leptos::ev::KeyboardEvent| {
         if ev.key() == "Escape" {
             on_close.run(());
-        }
-        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+        } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
             handle_submit();
+        } else if let Some(panel) = panel_ref.get_untracked() {
+            super::trap_focus(&ev, &panel);
         }
     };
 
@@ -134,7 +138,13 @@ pub fn AddFavoriteModal(
                     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
                     on:keydown=handle_keydown
                 >
-                    <div class="bg-white dark:bg-stone-900 rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+                    <div
+                        class="bg-white dark:bg-stone-900 rounded-xl shadow-xl w-full max-w-md mx-4 p-6"
+                        node_ref=panel_ref
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Add to favorites"
+                    >
                         // Header
                         <div class="flex items-center justify-between mb-4">
                             <h2 class="text-base font-semibold text-stone-800 dark:text-stone-100">
