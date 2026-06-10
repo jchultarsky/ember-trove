@@ -79,7 +79,9 @@ pub fn App() -> impl IntoView {
 
     let auth_state = provide_auth_state();
 
-    // Persist theme in localStorage
+    // Persist theme in localStorage; with no stored preference, follow the
+    // OS (`prefers-color-scheme`) — matches the static loading screen, which
+    // already honors the media query, so first paint and app agree.
     let initial_theme = storage_get("theme")
         .map(|s| {
             if s == "dark" {
@@ -88,7 +90,17 @@ pub fn App() -> impl IntoView {
                 Theme::Light
             }
         })
-        .unwrap_or(Theme::Light);
+        .unwrap_or_else(|| {
+            let prefers_dark = web_sys::window()
+                .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
+                .map(|m| m.matches())
+                .unwrap_or(false);
+            if prefers_dark {
+                Theme::Dark
+            } else {
+                Theme::Light
+            }
+        });
 
     let theme = RwSignal::new(initial_theme);
     provide_context(theme);

@@ -807,12 +807,13 @@ pub fn SearchView() -> impl IntoView {
                     })
                 }}
 
-                // Loading state on first render
+                // Loading state on first render — content-shaped skeleton
+                // instead of a bare "Loading…" line.
                 {move || {
                     if results.get().is_none() && loading.get() {
                         Some(view! {
-                            <div class="text-center py-16 text-stone-400 dark:text-stone-600">
-                                <span class="text-sm animate-pulse">"Loading\u{2026}"</span>
+                            <div class="py-4">
+                                <crate::components::skeleton::SkeletonList rows=8 />
                             </div>
                         }.into_any())
                     } else {
