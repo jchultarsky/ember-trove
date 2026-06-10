@@ -25,6 +25,19 @@ since the last manual Save. Now:
   so screen readers hear save outcomes. The manual Save button still works and
   navigates to the node view as before.
 
+### Fixed — Mutations no longer fail silently (optimistic-rollback sweep)
+A sweep of every `let _ = crate::api::…` fire-and-forget mutation in the UI
+(18 sites). Previously a failed PATCH/DELETE after an optimistic update left
+the screen showing success while the server kept the old state — no toast, no
+rollback. Now every mutation surfaces an error toast on failure; optimistic
+flips revert (task done-checkbox in My Day/Inbox/node task panel, My Day
+add/remove, inline title/priority edits); task reordering refetches to restore
+the server's order; "Clear all completed" reports how many deletes failed; and
+note, edge, tag-detach, and node-link removals report errors. List refetches
+now run only on success, so a dead network no longer triggers refetch storms.
+The four `set_editor_pref` height-preference writes stay deliberately
+fire-and-forget (cosmetic) and are annotated as such.
+
 ### Fixed — Failed node load can no longer be saved back as an empty node
 In edit mode, if the initial `fetch_node` failed, the editor showed empty fields
 with Save enabled — clicking it would overwrite the real node with an empty body.

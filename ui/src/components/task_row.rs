@@ -186,7 +186,8 @@ pub fn KanbanTaskRow(
         if busy.get_untracked() {
             return;
         }
-        let next = if status_done(&status_sig.get_untracked()) {
+        let prev = status_sig.get_untracked();
+        let next = if status_done(&prev) {
             TaskStatus::Open
         } else {
             TaskStatus::Done
@@ -203,9 +204,17 @@ pub fn KanbanTaskRow(
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
+            let result = crate::api::update_task(task_id, &req).await;
             busy.set(false);
-            refresh.update(|n| *n += 1);
+            match result {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip — the server still has
+                    // the old status, so the checkbox must not lie.
+                    status_sig.set(prev);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
@@ -216,9 +225,12 @@ pub fn KanbanTaskRow(
         }
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_task(task_id).await;
+            let result = crate::api::delete_task(task_id).await;
             busy.set(false);
-            refresh.update(|n| *n += 1);
+            match result {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            }
         });
     };
 
@@ -388,6 +400,7 @@ pub fn KanbanTaskRow(
                                 on_escape=Callback::new(move |()| editing_id_sig.set(None))
                                 on_resize=Callback::new(move |h: i32| {
                                     wasm_bindgen_futures::spawn_local(async move {
+                                        // Best-effort: losing a height pref is cosmetic.
                                         let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
                                     });
                                 })

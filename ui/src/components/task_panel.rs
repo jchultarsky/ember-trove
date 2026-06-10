@@ -12,6 +12,7 @@ use crate::components::task_common::{
     is_in_my_day, parse_priority, parse_status, priority_color, priority_icon, priority_label,
     priority_value, sort_tasks_by_order, status_done, status_label, status_value,
 };
+use crate::components::toast::{ToastLevel, push_toast};
 
 // ── TaskPanel ─────────────────────────────────────────────────────────────────
 
@@ -141,7 +142,14 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                                 .map(|(i, t)| (t.id, (i as i32) * 10))
                                 .collect();
                             wasm_bindgen_futures::spawn_local(async move {
-                                let _ = crate::api::reorder_tasks(&updates).await;
+                                if let Err(e) = crate::api::reorder_tasks(&updates).await {
+                                    push_toast(
+                                        ToastLevel::Error,
+                                        format!("Reorder failed: {e}"),
+                                    );
+                                    // Refetch restores the server's order.
+                                    task_refresh.update(|n| *n += 1);
+                                }
                             });
                         }
                         drag_src.set(None);
@@ -195,9 +203,21 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                             on:click=move |_| {
                                 let ids = ids_for_clear.clone();
                                 wasm_bindgen_futures::spawn_local(async move {
+                                    let mut failed = 0usize;
                                     for id in ids {
-                                        let _ = crate::api::delete_task(id).await;
+                                        if crate::api::delete_task(id).await.is_err() {
+                                            failed += 1;
+                                        }
                                     }
+                                    if failed > 0 {
+                                        let noun = if failed == 1 { "task" } else { "tasks" };
+                                        push_toast(
+                                            ToastLevel::Error,
+                                            format!("Couldn't delete {failed} {noun}"),
+                                        );
+                                    }
+                                    // Refetch regardless — some deletes may
+                                    // have succeeded before a failure.
                                     task_refresh.update(|n| *n += 1);
                                 });
                             }
@@ -260,8 +280,10 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            task_refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => task_refresh.update(|n| *n += 1),
+                Err(e) => push_toast(ToastLevel::Error, format!("Save failed: {e}")),
+            }
         });
     };
 
@@ -281,8 +303,14 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
         };
         status_sig.set(next.to_string());
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            task_refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => task_refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip.
+                    status_sig.set(current);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
@@ -301,16 +329,24 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            task_refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => task_refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip.
+                    in_my_day.set(currently);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
     // Delete
     let on_delete = move |_| {
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_task(task_id).await;
-            task_refresh.update(|n| *n += 1);
+            match crate::api::delete_task(task_id).await {
+                Ok(_) => task_refresh.update(|n| *n += 1),
+                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            }
         });
     };
 
@@ -358,6 +394,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                 })
                                 on_resize=Callback::new(move |h: i32| {
                                     wasm_bindgen_futures::spawn_local(async move {
+                                        // Best-effort: losing a height pref is cosmetic.
                                         let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
                                     });
                                 })

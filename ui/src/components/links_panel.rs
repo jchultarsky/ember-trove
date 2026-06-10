@@ -278,8 +278,13 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                 title="Delete link"
                                                                                 on:click=move |_| {
                                                                                     wasm_bindgen_futures::spawn_local(async move {
-                                                                                        let _ = crate::api::delete_node_link(node_id, link_id).await;
-                                                                                        refresh.update(|n| *n += 1);
+                                                                                        match crate::api::delete_node_link(node_id, link_id).await {
+                                                                                            Ok(_) => refresh.update(|n| *n += 1),
+                                                                                            Err(e) => crate::components::toast::push_toast(
+                                                                                                crate::components::toast::ToastLevel::Error,
+                                                                                                format!("Delete failed: {e}"),
+                                                                                            ),
+                                                                                        }
                                                                                     });
                                                                                 }
                                                                             >
