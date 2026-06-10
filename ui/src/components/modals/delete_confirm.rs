@@ -1,6 +1,8 @@
 /// Confirmation dialog for destructive deletes.
+use leptos::html;
 use leptos::portal::Portal;
 use leptos::prelude::*;
+use leptos::wasm_bindgen::{JsCast, closure::Closure};
 
 #[component]
 pub fn DeleteConfirmModal(
@@ -9,6 +11,33 @@ pub fn DeleteConfirmModal(
     on_confirm: Callback<()>,
     on_cancel: Callback<()>,
 ) -> impl IntoView {
+    let panel_ref: NodeRef<html::Div> = NodeRef::new();
+    let cancel_ref: NodeRef<html::Button> = NodeRef::new();
+    super::return_focus_on_close(show);
+
+    // Autofocus the safe action (Cancel) when the dialog opens.
+    Effect::new(move |_| {
+        if show.get()
+            && let Some(win) = web_sys::window()
+        {
+            let cb = Closure::once_into_js(move || {
+                if let Some(el) = cancel_ref.get_untracked() {
+                    let _ = el.focus();
+                }
+            });
+            let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
+        }
+    });
+
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Escape" {
+            ev.prevent_default();
+            on_cancel.run(());
+        } else if let Some(panel) = panel_ref.get_untracked() {
+            super::trap_focus(&ev, &panel);
+        }
+    };
+
     view! {
         <Show when=move || show.get()>
             <Portal>
@@ -20,10 +49,15 @@ pub fn DeleteConfirmModal(
                 // Panel
                 <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
                     <div
+                        node_ref=panel_ref
                         class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl
                                border border-stone-200 dark:border-stone-700
                                w-full max-w-sm p-6 flex flex-col gap-4"
+                        role="alertdialog"
+                        aria-modal="true"
+                        aria-label="Confirm delete"
                         on:click=|ev| ev.stop_propagation()
+                        on:keydown=on_keydown
                     >
                         // Icon + title
                         <div class="flex items-center gap-3">
@@ -49,6 +83,7 @@ pub fn DeleteConfirmModal(
                         // Actions
                         <div class="flex justify-end gap-2 pt-1">
                             <button
+                                node_ref=cancel_ref
                                 class="px-4 py-2 text-sm rounded-lg
                                        text-stone-600 dark:text-stone-400
                                        hover:bg-stone-100 dark:hover:bg-stone-800

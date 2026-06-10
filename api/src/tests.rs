@@ -48,7 +48,9 @@ use common::{
     permission::{GrantPermissionRequest, Permission, PermissionRole},
     search::{CreateSearchPresetRequest, SearchPreset, SearchQuery, SearchResponse},
     tag::{CreateTagRequest, Tag, UpdateTagRequest},
-    task::{CreateTaskRequest, MyDayTask, Task, TaskCounts, UpdateTaskRequest},
+    task::{
+        CreateTaskRequest, MyDayTask, Task, TaskCounts, TaskPriority, TaskStatus, UpdateTaskRequest,
+    },
     template::{CreateTemplateRequest, NodeTemplate, UpdateTemplateRequest},
     webhook::{CreateWebhookRequest, UpdateWebhookRequest, Webhook},
 };
@@ -195,6 +197,25 @@ impl TagRepo for StubTagRepo {
     }
 }
 
+/// Canned task for the restore-handler tests. Owned by [`fake_claims`]'s sub
+/// so the handler's owner check passes.
+fn stub_task(id: TaskId) -> Task {
+    Task {
+        id,
+        node_id: None,
+        owner_id: "test-sub".to_string(),
+        title: "stub".to_string(),
+        status: TaskStatus::Open,
+        priority: TaskPriority::Medium,
+        focus_date: None,
+        due_date: None,
+        recurrence: None,
+        sort_order: 0,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
 struct StubTaskRepo;
 #[async_trait]
 impl TaskRepo for StubTaskRepo {
@@ -217,6 +238,21 @@ impl TaskRepo for StubTaskRepo {
     }
     async fn delete(&self, _: TaskId) -> Result<(), EmberTroveError> {
         unimplemented!()
+    }
+    // The restore-flow stubs return canned data (instead of panicking) so the
+    // restore-handler tests below can drive the real handler through a bare
+    // router slice with injected claims.
+    async fn get_deleted(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        Ok(stub_task(id))
+    }
+    async fn restore(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        Ok(stub_task(id))
+    }
+    async fn purge_deleted_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        Ok(0)
     }
     async fn list_my_day(&self, _: &str, _: NaiveDate) -> Result<Vec<MyDayTask>, EmberTroveError> {
         unimplemented!()
@@ -289,6 +325,27 @@ impl NoteRepo for StubNoteRepo {
     }
     async fn delete(&self, _: common::id::NoteId, _: &str) -> Result<(), EmberTroveError> {
         unimplemented!()
+    }
+    async fn restore(
+        &self,
+        id: common::id::NoteId,
+        owner_id: &str,
+    ) -> Result<Note, EmberTroveError> {
+        Ok(Note {
+            id,
+            node_id: None,
+            owner_id: owner_id.to_string(),
+            body: "restored".to_string(),
+            color: "yellow".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        })
+    }
+    async fn purge_deleted_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        Ok(0)
     }
     async fn feed(
         &self,
@@ -1024,6 +1081,67 @@ async fn inbox_quick_route_registered() {
 #[tokio::test]
 async fn tasks_all_open_route_registered() {
     assert_route_registered("GET", "/tasks/all").await;
+}
+
+// ── Soft delete + undo (restore endpoints) ────────────────────────────────────
+// `assert_route_registered` is vacuous for nested paths: the auth layer answers
+// 500 before route matching, so even an unregistered path passes the !=404
+// assertion (verified 2026-06-10; see .claude/ERRORS.md). These tests instead
+// drive the real handlers through a bare router slice with claims injected.
+
+fn fake_claims() -> common::auth::AuthClaims {
+    common::auth::AuthClaims {
+        sub: "test-sub".to_string(),
+        email: None,
+        name: None,
+        roles: vec![],
+        exp: i64::MAX,
+    }
+}
+
+#[tokio::test]
+async fn task_restore_returns_restored_task_for_owner() {
+    let app = Router::new()
+        .nest("/tasks", crate::routes::tasks::task_router())
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state());
+    let id = Uuid::new_v4();
+    let resp = app
+        .oneshot(
+            Request::post(format!("/tasks/{id}/restore"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["id"], id.to_string());
+}
+
+#[tokio::test]
+async fn note_restore_returns_restored_note_for_owner() {
+    let app = Router::new()
+        .nest("/notes", crate::routes::notes::note_router())
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state());
+    let id = Uuid::new_v4();
+    let resp = app
+        .oneshot(
+            Request::post(format!("/notes/{id}/restore"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["id"], id.to_string());
+    // Restore is owner-scoped: the stub echoes the owner the handler passed,
+    // which must be the caller's sub.
+    assert_eq!(json["owner_id"], "test-sub");
 }
 
 // ── Dashboard recent activity recap (Phase 7 / v2.9.0) ───────────────────────

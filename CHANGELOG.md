@@ -6,6 +6,148 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.0] - 2026-06-10
+
+### Added — Local graph on node pages; orphans lens on the global graph
+- Every node page gains a collapsible **Local Graph** panel: the node and its
+  direct connections (outgoing edges + backlinks, deduped) in a small radial
+  map. Click a neighbor to navigate; beyond 12 connections a "+N more" hint
+  links to the full graph. Loads lazily on first open.
+- The global graph's legend gains an **Orphans only** toggle: show just the
+  nodes with no links anywhere — a maintenance lens for finding notes that
+  never got connected. (Type and tag filters already existed.)
+
+### Changed — Accessibility pass (SPA fundamentals)
+- **Modals** (quick capture, command palette, delete confirm, help) now trap
+  `Tab` focus inside the dialog and return focus to the triggering element on
+  close; all carry `role="dialog"`/`"alertdialog"` + `aria-modal`. The delete
+  confirmation autofocuses Cancel (the safe action) and closes on `Escape`.
+- **Route changes** update `document.title` ("My Day — Ember Trove", …) and
+  move focus to the main region so screen readers announce navigation.
+- **Toasts** are a `role="status"` polite live region — save/delete/undo
+  outcomes are announced.
+- **Task tabs** (My Day / Inbox / Calendar) follow the ARIA tabs pattern:
+  roving tabindex and left/right arrow keys switch tabs.
+- **Priority dots** carry `title`/`aria-label` ("High priority") instead of
+  being color-only.
+
+### Added — Command palette actions
+The Cmd-K palette now runs commands, not just node search: navigation
+("Go to My Day / Inbox / Calendar / Dashboard / Graph / Notes / All Nodes /
+Tags / Templates"), "New task (quick capture)", "New node…", "Toggle dark
+mode", and "Help & shortcuts" — each matched against synonyms ("theme" finds
+dark mode) and showing its global shortcut in the row so the palette teaches
+the keyboard layer. On a node page, "Edit current node" and "Duplicate
+current node" join the list. The empty-query view shows Recent plus the two
+capture commands.
+
+### Added — Keyboard inbox triage ("Process" mode)
+A **Process** button on the Inbox opens a one-task-at-a-time triage card:
+`t` adds to today, `s` schedules a due date, `a` attaches to a node (with the
+debounced picker), `d` deletes (undoable), `j`/`k` skip/go back, `Esc` exits.
+Handled tasks leave the working set; skipped ones come around again. The
+working set is a snapshot, so nothing shifts mid-flow; the inbox refetches
+once on exit. Shortcuts are documented in the Help modal.
+
+### Added — Natural-language quick add
+The quick-capture box (`n`) now parses date and priority tokens from the
+first line: `buy milk friday p1` captures "buy milk" due next Friday at high
+priority. Supported: `today`, `tomorrow`/`tmrw`, weekday names (`fri`,
+`friday`, …), ISO dates (`2026-07-01`), and `p1`/`p2`/`p3` or
+`!high`/`!medium`/`!low`. Chips under the box preview the interpretation live
+before you submit; later lines (shared URLs, pasted text) are never scanned,
+last token per category wins, and an input that is *only* tokens stays a
+plain title. Parser: `common::quickadd` (unit-tested); the wire format gains
+optional `due_date`/`priority` on `POST /api/inbox/quick` (older clients —
+the iOS share sheet — are unaffected).
+
+### Added — Unlinked mentions under "Linked Here"
+The backlinks panel on a node page now lists **Mentions**: nodes whose text
+contains this node's title without linking to it (full-text matches, minus
+existing backlinks). Each row has a one-click **Link** action that rewrites
+the first plain-text occurrence in the mentioning node into a wikilink —
+prose casing is preserved via the alias form (`[[Title|prose text]]`), word
+boundaries are respected, and text already inside `[[...]]` is never touched
+(`common::markdown::link_first_mention`, unit-tested). The rewrite goes
+through the normal node update path, so it versions, syncs wikilinks (the
+mention immediately becomes a backlink), and respects edit permissions.
+
+### Changed — Loading & theme polish
+- Search results and the Templates gallery now show content-shaped skeletons
+  while loading instead of bare "Loading…" text.
+- With no stored theme preference, the app follows the OS
+  (`prefers-color-scheme`) instead of defaulting to light — first paint (the
+  static loading screen already honored the media query) and the app now agree.
+
+### Added — Undo for task & note deletion (soft delete)
+Tasks and notes previously hard-deleted instantly — including via the My Day
+`d` shortcut — with no confirmation and no way back, while nodes/tags got
+confirm modals. Deletion now follows the undo-toast pattern (instant action,
+recoverable) instead of interrupting with dialogs:
+
+- **API**: `DELETE` on tasks/notes tombstones the row (`deleted_at`,
+  migration 030) instead of erasing it; new `POST /tasks/:id/restore` and
+  `POST /notes/:id/restore` endpoints un-delete (authorization mirrors
+  delete). Every live query — lists, feeds, dashboards, counts, calendar,
+  backups — filters tombstones out. Tombstones older than 30 days are purged
+  at API startup and daily thereafter.
+- **UI**: every task/note delete (My Day rows + `d` key, Inbox cards, the
+  node task panel, the notes feed) shows a "Task/Note deleted — Undo" toast
+  for 8 s; Undo restores the item in place. "Clear all completed" gets a
+  bulk undo ("Deleted N completed tasks — Undo"). The notes feed's inline
+  are-you-sure confirmation is gone — delete is instant and recoverable.
+  Node deletion keeps its specific confirm modal (nodes cascade to their
+  tasks/notes/attachments, so a dialog is still warranted there).
+
+### Added — Editor autosave & unsaved-work protection
+The node editor could silently lose work: no autosave, no dirty tracking, and the
+global `Escape` handler (or any sidebar click / tab close) discarded everything
+since the last manual Save. Now:
+
+- **Edit mode autosaves**: changes PATCH automatically 2 s after typing pauses
+  (debounced; in-flight saves coalesce, with a recheck after each round-trip).
+  Navigating away flushes any still-unsaved edits as the editor unmounts, and
+  closing/refreshing the tab while dirty triggers the browser's native
+  unsaved-changes prompt. Failed autosaves keep the edits locally and retry on
+  the next change instead of hammering the API.
+- **Create mode keeps a local draft**: `/nodes/new` content (title, body, type,
+  status) persists to `localStorage` as you type, is restored on the next visit,
+  and is cleared on successful create. A pristine scaffold is never persisted.
+- **Save-state indicator** in the editor header ("Unsaved changes… / Saving… /
+  Saved / Draft kept locally / Couldn't save — edits kept here"), `aria-live`
+  so screen readers hear save outcomes. The manual Save button still works and
+  navigates to the node view as before.
+
+### Fixed — Mutations no longer fail silently (optimistic-rollback sweep)
+A sweep of every `let _ = crate::api::…` fire-and-forget mutation in the UI
+(18 sites). Previously a failed PATCH/DELETE after an optimistic update left
+the screen showing success while the server kept the old state — no toast, no
+rollback. Now every mutation surfaces an error toast on failure; optimistic
+flips revert (task done-checkbox in My Day/Inbox/node task panel, My Day
+add/remove, inline title/priority edits); task reordering refetches to restore
+the server's order; "Clear all completed" reports how many deletes failed; and
+note, edge, tag-detach, and node-link removals report errors. List refetches
+now run only on success, so a dead network no longer triggers refetch storms.
+The four `set_editor_pref` height-preference writes stay deliberately
+fire-and-forget (cosmetic) and are annotated as such.
+
+### Fixed — Failed node load can no longer be saved back as an empty node
+In edit mode, if the initial `fetch_node` failed, the editor showed empty fields
+with Save enabled — clicking it would overwrite the real node with an empty body.
+A load failure now shows an error banner and keeps Save (and autosave) disabled.
+
+### Changed — Version snapshots dedupe; "Edited" activity coalesces
+With autosave PATCHing every few seconds, two server-side behaviors needed tuning
+(both also improve manual saves):
+
+- `PUT /nodes/:id` skips the `node_versions` snapshot when the body is unchanged
+  from the latest stored version (title/status-only saves previously inserted
+  pure duplicates). Snapshots are now awaited inline rather than spawned, so
+  rapid saves can't record versions out of order.
+- Consecutive `Edited` activity entries by the same user on the same node within
+  15 minutes coalesce into one, so the dashboard recap shows one line per editing
+  session instead of one per autosave.
+
 ## [2.20.4] - 2026-06-06
 
 ### Documentation — Rewrite local-dev docs for the Cognito reality (remove stale Keycloak)

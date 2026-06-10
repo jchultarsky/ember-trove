@@ -415,7 +415,8 @@ All routes are nested under `/api`. Interactive docs at `/swagger-ui/` when the 
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
 | POST | `/api/nodes/{id}/tasks` | Create task |
 | PUT | `/api/tasks/{id}` | Update task (toggle, rename, set focus date) |
-| DELETE | `/api/tasks/{id}` | Delete task |
+| DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
+| POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
 | GET | `/api/tasks/my-day` | Tasks scheduled for today (current user) |
 
 ### Notes
@@ -425,7 +426,8 @@ All routes are nested under `/api`. Interactive docs at `/swagger-ui/` when the 
 | GET | `/api/nodes/{id}/notes` | List notes for a node (newest first) |
 | POST | `/api/nodes/{id}/notes` | Append a note |
 | PATCH | `/api/notes/{id}` | Edit a note body (owner-only) |
-| DELETE | `/api/notes/{id}` | Delete a note |
+| DELETE | `/api/notes/{id}` | Delete a note (soft delete — restorable for 30 days) |
+| POST | `/api/notes/{id}/restore` | Un-delete a note (backs the UI's undo toast) |
 | GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first) |
 
 ### Permissions (standalone)

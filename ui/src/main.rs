@@ -2,6 +2,7 @@ mod api;
 mod app;
 mod auth;
 mod components;
+mod draft;
 mod error;
 mod focus_note;
 mod focus_task;

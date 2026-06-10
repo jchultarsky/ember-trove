@@ -56,8 +56,15 @@ pub trait NoteRepo: Send + Sync {
         req: UpdateNoteRequest,
     ) -> Result<Note, EmberTroveError>;
 
-    /// Delete a note. Only the note's owner may delete it.
+    /// Soft-delete a note (tombstone; restorable). Only the note's owner may
+    /// delete it.
     async fn delete(&self, note_id: NoteId, owner_id: &str) -> Result<(), EmberTroveError>;
+
+    /// Un-delete a tombstoned note. Owner-scoped like [`NoteRepo::delete`].
+    async fn restore(&self, note_id: NoteId, owner_id: &str) -> Result<Note, EmberTroveError>;
+
+    /// Hard-delete tombstones older than `cutoff`. Returns rows purged.
+    async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError>;
 
     /// All notes for a node, newest first.
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError>;
@@ -179,7 +186,7 @@ impl NoteRepo for PgNoteRepo {
             r#"
             UPDATE node_notes
             SET body = $1, color = $2
-            WHERE id = $3 AND owner_id = $4
+            WHERE id = $3 AND owner_id = $4 AND deleted_at IS NULL
             RETURNING id, node_id, owner_id, body, color, created_at, updated_at
             "#,
         )
@@ -196,16 +203,48 @@ impl NoteRepo for PgNoteRepo {
     }
 
     async fn delete(&self, note_id: NoteId, owner_id: &str) -> Result<(), EmberTroveError> {
-        let result = sqlx::query("DELETE FROM node_notes WHERE id = $1 AND owner_id = $2")
-            .bind(note_id.0)
-            .bind(owner_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| EmberTroveError::Internal(format!("delete note failed: {e}")))?;
+        // Soft delete: tombstone the row so the undo toast can restore it.
+        let result = sqlx::query(
+            "UPDATE node_notes SET deleted_at = now()
+             WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(note_id.0)
+        .bind(owner_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("delete note failed: {e}")))?;
         if result.rows_affected() == 0 {
             return Err(EmberTroveError::NotFound("note not found".to_string()));
         }
         Ok(())
+    }
+
+    async fn restore(&self, note_id: NoteId, owner_id: &str) -> Result<Note, EmberTroveError> {
+        let row = sqlx::query_as::<_, NoteRow>(
+            r#"
+            UPDATE node_notes SET deleted_at = NULL
+            WHERE id = $1 AND owner_id = $2 AND deleted_at IS NOT NULL
+            RETURNING id, node_id, owner_id, body, color, created_at, updated_at
+            "#,
+        )
+        .bind(note_id.0)
+        .bind(owner_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("restore note failed: {e}")))?
+        .ok_or_else(|| EmberTroveError::NotFound("deleted note not found".to_string()))?;
+
+        Ok(row.into_note())
+    }
+
+    async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError> {
+        let result =
+            sqlx::query("DELETE FROM node_notes WHERE deleted_at IS NOT NULL AND deleted_at < $1")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| EmberTroveError::Internal(format!("purge notes failed: {e}")))?;
+        Ok(result.rows_affected())
     }
 
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError> {
@@ -214,6 +253,7 @@ impl NoteRepo for PgNoteRepo {
             SELECT id, node_id, owner_id, body, color, created_at, updated_at
             FROM node_notes
             WHERE node_id = $1
+              AND deleted_at IS NULL
             ORDER BY created_at DESC
             "#,
         )
@@ -230,6 +270,7 @@ impl NoteRepo for PgNoteRepo {
             r#"
             SELECT id, node_id, owner_id, body, color, created_at, updated_at
             FROM node_notes
+            WHERE deleted_at IS NULL
             ORDER BY created_at ASC
             "#,
         )
@@ -260,7 +301,8 @@ impl NoteRepo for PgNoteRepo {
                 nd.title AS node_title
             FROM node_notes n
             LEFT JOIN nodes nd ON nd.id = n.node_id
-            WHERE ($1::text IS NULL OR n.owner_id = $1)
+            WHERE n.deleted_at IS NULL
+              AND ($1::text IS NULL OR n.owner_id = $1)
               AND ($2::uuid IS NULL OR n.node_id = $2)
               AND (NOT $3 OR n.node_id IS NULL)
               AND ($4::timestamptz IS NULL OR n.created_at >= $4)

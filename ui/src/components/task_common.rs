@@ -4,7 +4,40 @@
 //! Centralises status / priority / recurrence parsing, formatting, and
 //! comparison so that every task-related view speaks the same language.
 
+use std::sync::Arc;
+
+use common::id::TaskId;
 use common::task::{RecurrenceRule, Task, TaskPriority, TaskStatus};
+use leptos::prelude::*;
+
+use crate::components::toast::{ToastLevel, ToastState};
+
+// ── Undo (soft delete) ──────────────────────────────────────────────────────
+
+/// Build the "Undo" action for a deleted task: restores it server-side and
+/// bumps `refresh` so the list refetches.
+///
+/// Owner-independent by design (see `ToastAction`): captures only Copy values
+/// (id, app-root signals, `ToastState`), so it stays valid after the deleting
+/// row has unmounted.
+pub fn undo_restore_task(
+    task_id: TaskId,
+    refresh: RwSignal<u32>,
+    toast_state: Option<ToastState>,
+) -> Arc<dyn Fn() + Send + Sync> {
+    Arc::new(move || {
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::api::restore_task(task_id).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    if let Some(ts) = toast_state {
+                        ts.push(ToastLevel::Error, format!("Undo failed: {e}"));
+                    }
+                }
+            }
+        });
+    })
+}
 
 // ── Status ──────────────────────────────────────────────────────────────────
 

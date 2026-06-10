@@ -10,6 +10,7 @@ use leptos_router::hooks::use_navigate;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_picker::NodePicker;
 use crate::components::resizable_editor::ResizableEditor;
+use crate::components::toast::{ToastLevel, ToastState, push_undo_toast};
 use crate::markdown::render_markdown_plain;
 
 /// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
@@ -72,19 +73,43 @@ pub fn NotesView() -> impl IntoView {
     let error = RwSignal::<Option<String>>::new(None);
 
     // ── Delete state ────────────────────────────────────────────────────────
-    // The note currently awaiting delete confirmation (inline, no modal).
-    let confirming_delete = RwSignal::<Option<NoteId>>::new(None);
+    // Instant delete + undo toast (the API soft-deletes, so the toast's Undo
+    // can restore). Replaces the old inline are-you-sure confirmation.
     let deleting = RwSignal::new(false);
+    // Captured at setup for the undo closure, which outlives the note card.
+    let toast_state = use_context::<ToastState>();
     let do_delete = move |note_id: NoteId| {
         if deleting.get_untracked() {
             return;
         }
         deleting.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_note(note_id).await;
-            confirming_delete.set(None);
+            let result = crate::api::delete_note(note_id).await;
             deleting.set(false);
-            reload.update(|n| *n += 1);
+            match result {
+                Ok(_) => {
+                    reload.update(|n| *n += 1);
+                    push_undo_toast(
+                        "Note deleted",
+                        std::sync::Arc::new(move || {
+                            wasm_bindgen_futures::spawn_local(async move {
+                                match crate::api::restore_note(note_id).await {
+                                    Ok(_) => reload.update(|n| *n += 1),
+                                    Err(e) => {
+                                        if let Some(ts) = toast_state {
+                                            ts.push(ToastLevel::Error, format!("Undo failed: {e}"));
+                                        }
+                                    }
+                                }
+                            });
+                        }),
+                    );
+                }
+                Err(e) => crate::components::toast::push_toast(
+                    ToastLevel::Error,
+                    format!("Delete failed: {e}"),
+                ),
+            }
         });
     };
 
@@ -430,37 +455,13 @@ pub fn NotesView() -> impl IntoView {
                                         <div class=format!("rounded-lg border px-4 py-3 {card_class}")>
                                             <div class="flex items-start justify-between gap-2 mb-2">
                                                 {header}
-                                                // Delete: inline confirm (no modal).
-                                                {move || if confirming_delete.get() == Some(note_id) {
-                                                    view! {
-                                                        <span class="flex items-center gap-1 text-xs">
-                                                            <button
-                                                                class="px-2 py-0.5 rounded bg-red-600 text-white
-                                                                    hover:bg-red-700 disabled:opacity-50"
-                                                                disabled=move || deleting.get()
-                                                                on:click=move |_| do_delete(note_id)
-                                                            >
-                                                                "Delete"
-                                                            </button>
-                                                            <button
-                                                                class="px-2 py-0.5 rounded text-stone-500
-                                                                    hover:bg-stone-100 dark:hover:bg-stone-800"
-                                                                on:click=move |_| confirming_delete.set(None)
-                                                            >
-                                                                "Cancel"
-                                                            </button>
-                                                        </span>
-                                                    }.into_any()
-                                                } else {
-                                                    view! {
-                                                        <IconButton
-                                                            icon="delete"
-                                                            label="Delete note"
-                                                            variant=IconButtonVariant::Danger
-                                                            on_click=Callback::new(move |()| confirming_delete.set(Some(note_id)))
-                                                        />
-                                                    }.into_any()
-                                                }}
+                                                // Delete: instant, with an Undo toast (soft delete).
+                                                <IconButton
+                                                    icon="delete"
+                                                    label="Delete note"
+                                                    variant=IconButtonVariant::Danger
+                                                    on_click=Callback::new(move |()| do_delete(note_id))
+                                                />
                                             </div>
                                             <div
                                                 class="prose prose-sm max-w-none dark:prose-invert

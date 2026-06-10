@@ -20,9 +20,9 @@ use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, parse_status,
     priority_dot_color, priority_label, priority_value, recurrence_label, recurrence_value,
-    status_done, status_value,
+    status_done, status_value, undo_restore_task,
 };
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 use crate::focus_task::schedule_focus_task;
 
 // ── InboxView ─────────────────────────────────────────────────────────────────
@@ -98,28 +98,55 @@ pub fn InboxView() -> impl IntoView {
         }
     });
 
+    // Triage ("Process") mode — one task at a time, keyboard-driven.
+    let triage = RwSignal::new(false);
+
     view! {
         <div class="flex flex-col h-full">
             // ── Header ────────────────────────────────────────────────────────
             <div class="flex-shrink-0 px-4 py-4 border-b border-stone-200 dark:border-stone-800">
-                <div class="flex items-center gap-3">
-                    <span class="material-symbols-outlined text-amber-500" style="font-size: 26px;">
-                        "inbox"
-                    </span>
-                    <div>
-                        <h1 class="text-xl font-semibold text-stone-900 dark:text-stone-100">
-                            "Inbox"
-                        </h1>
-                        <p class="text-xs text-stone-500 dark:text-stone-400">
-                            "Capture tasks — link to a node when ready"
-                        </p>
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-amber-500" style="font-size: 26px;">
+                            "inbox"
+                        </span>
+                        <div>
+                            <h1 class="text-xl font-semibold text-stone-900 dark:text-stone-100">
+                                "Inbox"
+                            </h1>
+                            <p class="text-xs text-stone-500 dark:text-stone-400">
+                                "Capture tasks — link to a node when ready"
+                            </p>
+                        </div>
                     </div>
+                    {move || (!triage.get()).then(|| view! {
+                        <button
+                            class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg
+                                   border border-stone-200 dark:border-stone-700
+                                   text-stone-600 dark:text-stone-300
+                                   hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400
+                                   transition-colors cursor-pointer"
+                            title="Process the inbox one task at a time (keyboard-driven)"
+                            on:click=move |_| triage.set(true)
+                        >
+                            <span class="material-symbols-outlined" style="font-size:16px;">"playlist_add_check"</span>
+                            "Process"
+                        </button>
+                    })}
                 </div>
             </div>
 
             // ── Scrollable content ────────────────────────────────────────────
             <div class="flex-1 overflow-auto px-4 py-4 space-y-4">
 
+                {move || triage.get().then(|| view! {
+                    <crate::components::inbox_triage::InboxTriage
+                        refresh=refresh
+                        on_exit=Callback::new(move |()| triage.set(false))
+                    />
+                })}
+
+                <div class=move || if triage.get() { "hidden" } else { "contents" }>
                 // ── Add-task form — shared with the node-detail TaskPanel ─────
                 // node_id omitted ⇒ standalone capture with the optional picker.
                 <NewTaskForm refresh=refresh />
@@ -185,6 +212,7 @@ pub fn InboxView() -> impl IntoView {
                         }.into_any()
                     }}
                 </Suspense>
+                </div>  // close triage-hidden wrapper
             </div>
         </div>
     }
@@ -194,6 +222,8 @@ pub fn InboxView() -> impl IntoView {
 
 #[component]
 fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
+    // Captured at setup for the undo closure, which outlives this row.
+    let toast_state = use_context::<ToastState>();
     let task_id = task.id;
     let today = crate::components::format_helpers::local_today();
 
@@ -263,8 +293,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             node_id: Some(Some(node_id)),
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't attach to node: {e}")),
+            }
         });
     };
 
@@ -286,6 +318,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         let new_due: Option<Option<NaiveDate>> =
             Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         editing.set(false);
+        let prev_title = orig_title.get_untracked();
+        let prev_priority = priority_val.get_untracked();
         orig_title.set(new_title.clone());
         priority_val.set(priority_value(&new_priority).to_string());
         let req = UpdateTaskRequest {
@@ -298,8 +332,15 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic title/priority display.
+                    orig_title.set(prev_title);
+                    priority_val.set(prev_priority);
+                    push_toast(ToastLevel::Error, format!("Save failed: {e}"));
+                }
+            }
         });
     };
 
@@ -317,8 +358,14 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         };
         status_val.set(next.to_string());
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip.
+                    status_val.set(current);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
@@ -340,15 +387,29 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::update_task(task_id, &req).await {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip.
+                    in_my_day.set(currently_in);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
     let on_delete = move |_| {
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_task(task_id).await;
-            refresh.update(|n| *n += 1);
+            match crate::api::delete_task(task_id).await {
+                Ok(_) => {
+                    refresh.update(|n| *n += 1);
+                    push_undo_toast(
+                        "Task deleted",
+                        undo_restore_task(task_id, refresh, toast_state),
+                    );
+                }
+                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            }
         });
     };
 
@@ -400,6 +461,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                         })
                                         on_resize=Callback::new(move |h: i32| {
                                             wasm_bindgen_futures::spawn_local(async move {
+                                                // Best-effort: losing a height pref is cosmetic.
                                                 let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
                                             });
                                         })

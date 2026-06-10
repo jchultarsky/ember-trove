@@ -29,14 +29,19 @@
 //! Keeps debounce + stale-response guard from
 //! `.claude/patterns/reactive-effect-debounce.rs`.
 
+use common::id::NodeId;
 use common::search::SearchResult;
 use leptos::html;
 use leptos::portal::Portal;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::{JsCast, closure::Closure};
-use leptos_router::hooks::use_navigate;
+use leptos_router::hooks::{use_location, use_navigate};
 use wasm_bindgen_futures::spawn_local;
 
+use crate::app::ShowCapture;
+use crate::components::dark_mode_toggle::Theme;
+use crate::components::layout::ShowHelp;
+use crate::components::toast::{ToastLevel, push_toast};
 use crate::recent::{RecentEntry, read_recent};
 
 // ── PaletteAction ─────────────────────────────────────────────────────────────
@@ -55,6 +60,8 @@ enum PaletteAction {
     },
     /// Open the structured `CreateNodeModal` with `title` pre-filled.
     CreateNode { title: String },
+    /// An app command (navigation, capture, theme, …).
+    Command(&'static CommandSpec),
 }
 
 impl PaletteAction {
@@ -62,20 +69,186 @@ impl PaletteAction {
         match self {
             PaletteAction::OpenNode { icon, .. } => icon,
             PaletteAction::CreateNode { .. } => "add",
+            PaletteAction::Command(spec) => spec.icon,
         }
     }
     fn primary(&self) -> &str {
         match self {
             PaletteAction::OpenNode { title, .. } => title,
             PaletteAction::CreateNode { title } => title,
+            PaletteAction::Command(spec) => spec.label,
         }
     }
     fn secondary(&self) -> &'static str {
         match self {
             PaletteAction::OpenNode { .. } => "Open",
             PaletteAction::CreateNode { .. } => "Create new node",
+            // The global shortcut, shown so the palette teaches the faster path.
+            PaletteAction::Command(spec) => spec.hint,
         }
     }
+}
+
+// ── Commands ─────────────────────────────────────────────────────────────────
+//
+// Every command the palette can run. `keywords` are extra search aliases so
+// users can find a command in their own vocabulary ("dark", "theme", …);
+// `hint` is the existing global shortcut (empty when there is none) — shown
+// in the row so the palette doubles as shortcut documentation.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Command {
+    GoMyDay,
+    GoInbox,
+    GoCalendar,
+    GoDashboard,
+    GoGraph,
+    GoNotes,
+    GoNodes,
+    GoTags,
+    GoTemplates,
+    NewTask,
+    NewNode,
+    ToggleDark,
+    OpenHelp,
+    EditCurrentNode,
+    DuplicateCurrentNode,
+}
+
+#[derive(PartialEq, Eq)]
+struct CommandSpec {
+    cmd: Command,
+    label: &'static str,
+    icon: &'static str,
+    keywords: &'static str,
+    hint: &'static str,
+}
+
+/// Commands always available, in palette display order.
+const GLOBAL_COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        cmd: Command::NewTask,
+        label: "New task (quick capture)",
+        icon: "bolt",
+        keywords: "add create todo capture inbox",
+        hint: "n",
+    },
+    CommandSpec {
+        cmd: Command::NewNode,
+        label: "New node…",
+        icon: "add_circle",
+        keywords: "add create article project area note",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoMyDay,
+        label: "Go to My Day",
+        icon: "wb_sunny",
+        keywords: "today tasks kanban",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoInbox,
+        label: "Go to Inbox",
+        icon: "inbox",
+        keywords: "tasks triage process",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoCalendar,
+        label: "Go to Calendar",
+        icon: "calendar_month",
+        keywords: "due dates schedule",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoDashboard,
+        label: "Go to Dashboard",
+        icon: "space_dashboard",
+        keywords: "projects overview recap",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoGraph,
+        label: "Go to Graph",
+        icon: "hub",
+        keywords: "knowledge map network",
+        hint: "g",
+    },
+    CommandSpec {
+        cmd: Command::GoNotes,
+        label: "Go to Notes",
+        icon: "sticky_note_2",
+        keywords: "feed journal",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoNodes,
+        label: "Go to All Nodes",
+        icon: "list",
+        keywords: "browse articles projects",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoTags,
+        label: "Go to Tags",
+        icon: "sell",
+        keywords: "labels manage",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoTemplates,
+        label: "Go to Templates",
+        icon: "stacks",
+        keywords: "scaffold prefill",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::ToggleDark,
+        label: "Toggle dark mode",
+        icon: "dark_mode",
+        keywords: "theme light appearance",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::OpenHelp,
+        label: "Help & shortcuts",
+        icon: "help",
+        keywords: "keyboard reference docs",
+        hint: "?",
+    },
+];
+
+/// Commands offered only while viewing a node (`/nodes/<uuid>`).
+const NODE_COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        cmd: Command::EditCurrentNode,
+        label: "Edit current node",
+        icon: "edit",
+        keywords: "modify body",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::DuplicateCurrentNode,
+        label: "Duplicate current node",
+        icon: "content_copy",
+        keywords: "copy clone",
+        hint: "d",
+    },
+];
+
+/// Parse `/nodes/<uuid>` (view route only — not /new, not /edit).
+fn node_route_id(path: &str) -> Option<NodeId> {
+    let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+    match segs.as_slice() {
+        ["nodes", id] => id.parse::<NodeId>().ok(),
+        _ => None,
+    }
+}
+
+fn command_matches(spec: &CommandSpec, q: &str) -> bool {
+    let q = q.to_lowercase();
+    spec.label.to_lowercase().contains(&q) || spec.keywords.to_lowercase().contains(&q)
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -102,8 +275,16 @@ pub fn CommandPalette(
     let highlight: RwSignal<usize> = RwSignal::new(0);
     let version: RwSignal<u32> = RwSignal::new(0);
     let input_ref: NodeRef<html::Input> = NodeRef::new();
+    let panel_ref: NodeRef<html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
 
     let navigate = StoredValue::new(use_navigate());
+    let location = use_location();
+    // Contexts the commands act on (all provided at app/layout root).
+    let show_capture = use_context::<ShowCapture>();
+    let show_help = use_context::<ShowHelp>();
+    let theme = use_context::<RwSignal<Theme>>();
+    let refresh = use_context::<RwSignal<u32>>();
 
     // Reset state every time the palette opens, populate Recent from
     // localStorage, and focus the input on the next animation frame
@@ -156,16 +337,25 @@ pub fn CommandPalette(
     let actions = Memo::new(move |_| {
         let q = query.get();
         let trimmed = q.trim();
+        let on_node_page = node_route_id(&location.pathname.get()).is_some();
         let mut out: Vec<PaletteAction> = Vec::new();
 
         if trimmed.is_empty() {
-            // Recent only — the "no-typing-needed" path.
+            // Recent + a few core commands — the "no-typing-needed" path.
             for r in recent.get().into_iter().take(5) {
                 out.push(PaletteAction::OpenNode {
                     id: r.id,
                     title: r.title,
                     icon: r.icon,
                 });
+            }
+            for spec in GLOBAL_COMMANDS.iter().take(2) {
+                out.push(PaletteAction::Command(spec));
+            }
+            if on_node_page {
+                for spec in NODE_COMMANDS {
+                    out.push(PaletteAction::Command(spec));
+                }
             }
         } else {
             for sr in results.get() {
@@ -175,6 +365,17 @@ pub fn CommandPalette(
                     icon: type_to_icon(&sr.node_type),
                 });
             }
+            // Matching commands (node-context ones first when applicable).
+            let mut cmds: Vec<&'static CommandSpec> = Vec::new();
+            if on_node_page {
+                cmds.extend(NODE_COMMANDS.iter().filter(|s| command_matches(s, trimmed)));
+            }
+            cmds.extend(
+                GLOBAL_COMMANDS
+                    .iter()
+                    .filter(|s| command_matches(s, trimmed)),
+            );
+            out.extend(cmds.into_iter().take(5).map(PaletteAction::Command));
             // Always offer Create as the bottom action when typing.
             out.push(PaletteAction::CreateNode {
                 title: trimmed.to_string(),
@@ -208,6 +409,68 @@ pub fn CommandPalette(
                 on_close.run(());
                 on_create.run(title);
             }
+            PaletteAction::Command(spec) => {
+                on_close.run(());
+                let nav = navigate.get_value();
+                match spec.cmd {
+                    Command::GoMyDay => nav("/tasks/my-day", Default::default()),
+                    Command::GoInbox => nav("/tasks/inbox", Default::default()),
+                    Command::GoCalendar => nav("/tasks/calendar", Default::default()),
+                    Command::GoDashboard => nav("/dashboard", Default::default()),
+                    Command::GoGraph => nav("/graph", Default::default()),
+                    Command::GoNotes => nav("/notes", Default::default()),
+                    Command::GoNodes => nav("/nodes", Default::default()),
+                    Command::GoTags => nav("/tags", Default::default()),
+                    Command::GoTemplates => nav("/templates", Default::default()),
+                    Command::NewTask => {
+                        if let Some(c) = show_capture {
+                            c.0.set(true);
+                        }
+                    }
+                    Command::NewNode => on_create.run(String::new()),
+                    Command::ToggleDark => {
+                        if let Some(t) = theme {
+                            t.update(|v| {
+                                *v = if *v == Theme::Dark {
+                                    Theme::Light
+                                } else {
+                                    Theme::Dark
+                                };
+                            });
+                        }
+                    }
+                    Command::OpenHelp => {
+                        if let Some(h) = show_help {
+                            h.0.set(true);
+                        }
+                    }
+                    Command::EditCurrentNode => {
+                        if let Some(id) = node_route_id(&location.pathname.get_untracked()) {
+                            nav(&format!("/nodes/{id}/edit"), Default::default());
+                        }
+                    }
+                    Command::DuplicateCurrentNode => {
+                        if let Some(id) = node_route_id(&location.pathname.get_untracked()) {
+                            let nav2 = navigate.get_value();
+                            spawn_local(async move {
+                                match crate::api::duplicate_node(id).await {
+                                    Ok(dup) => {
+                                        push_toast(ToastLevel::Success, "Node duplicated.");
+                                        if let Some(r) = refresh {
+                                            r.update(|n| *n += 1);
+                                        }
+                                        nav2(&format!("/nodes/{}", dup.id), Default::default());
+                                    }
+                                    Err(e) => push_toast(
+                                        ToastLevel::Error,
+                                        format!("Duplicate failed: {e}"),
+                                    ),
+                                }
+                            });
+                        }
+                    }
+                }
+            }
         }
     };
 
@@ -235,7 +498,11 @@ pub fn CommandPalette(
             ev.prevent_default();
             pick(highlight.get_untracked());
         }
-        _ => {}
+        _ => {
+            if let Some(panel) = panel_ref.get_untracked() {
+                super::trap_focus(&ev, &panel);
+            }
+        }
     };
 
     view! {
@@ -252,9 +519,13 @@ pub fn CommandPalette(
                            pointer-events-none"
                 >
                     <div
+                        node_ref=panel_ref
                         class="pointer-events-auto bg-white dark:bg-stone-900 \
                                rounded-2xl shadow-2xl border border-stone-200 \
                                dark:border-stone-700 overflow-hidden"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Command palette"
                         on:keydown=on_keydown
                     >
                         // Search input

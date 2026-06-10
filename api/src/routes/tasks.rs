@@ -38,6 +38,7 @@ pub fn task_router() -> Router<AppState> {
         .route("/inbox", get(list_inbox))
         .route("/all", get(list_all_open))
         .route("/{id}", patch(update_task).delete(delete_task))
+        .route("/{id}/restore", post(restore_task))
         .route("/reorder", put(reorder_tasks))
 }
 
@@ -266,6 +267,33 @@ async fn delete_task(
         &owner_id,
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /tasks/:id/restore — un-delete a soft-deleted task. Backs the undo
+/// toast; authorization mirrors delete (owner, admin, or editor of the parent
+/// node).
+async fn restore_task(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Task>, ApiError> {
+    let existing = state.tasks.get_deleted(TaskId(id)).await?;
+    if existing.owner_id != claims.sub && !is_admin(&claims) {
+        if let Some(nid) = existing.node_id {
+            require_editor(state.permissions.as_ref(), &claims, nid).await?;
+        } else {
+            return Err(ApiError::Forbidden("access denied".to_string()));
+        }
+    }
+    let restored = state.tasks.restore(TaskId(id)).await?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_UPDATED,
+        restored.node_id,
+        &claims.sub,
+        &restored.owner_id,
+    );
+    Ok(Json(restored))
 }
 
 /// PUT /tasks/reorder — bulk update sort_order for drag-to-reorder in My Day.

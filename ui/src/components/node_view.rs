@@ -357,7 +357,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         // External links panel — grouped with other collapsible sections
                                         <LinksPanel node_id=id is_editor=is_owner />
                                         <EdgePanel node_id=id />
-                                        <BacklinksPanel node_id=id />
+                                        <crate::components::local_graph::LocalGraphPanel node_id=id title=n.title.clone() />
+                                        <BacklinksPanel node_id=id title=n.title.clone() />
                                         <AttachmentPanel node_id=id />
                                         <PermissionPanel node_id=id is_owner=is_owner />
                                         <SharePanel node_id=id is_owner=is_owner />
@@ -683,8 +684,13 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                                             text-xs transition-opacity"
                                                         on:click=move |_| {
                                                             wasm_bindgen_futures::spawn_local(async move {
-                                                                let _ = crate::api::delete_edge(edge_id).await;
-                                                                refresh_edges.update(|n| *n += 1);
+                                                                match crate::api::delete_edge(edge_id).await {
+                                                                    Ok(_) => refresh_edges.update(|n| *n += 1),
+                                                                    Err(e) => crate::components::toast::push_toast(
+                                                                        crate::components::toast::ToastLevel::Error,
+                                                                        format!("Couldn't remove edge: {e}"),
+                                                                    ),
+                                                                }
                                                             });
                                                         }
                                                     >
@@ -709,14 +715,21 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
     }
 }
 
-/// Shows nodes that link to this node (incoming edges from other nodes).
+/// Shows nodes that link to this node (incoming edges from other nodes),
+/// plus "Mentions": nodes whose text matches this node's title without
+/// linking to it, each with a one-click convert-to-wikilink action.
 #[component]
-fn BacklinksPanel(node_id: NodeId) -> impl IntoView {
+fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let open = RwSignal::new(false);
+    // Bumped after a successful "link it" so both lists refetch (the rewritten
+    // node becomes a real backlink via the server's wikilink sync).
+    let refresh = RwSignal::new(0u32);
+    let title_sv = StoredValue::new(title);
 
     let backlinks = LocalResource::new(move || {
         let is_open = open.get();
+        let _ = refresh.get();
         let node_id = node_id;
         async move {
             if !is_open {
@@ -725,6 +738,94 @@ fn BacklinksPanel(node_id: NodeId) -> impl IntoView {
             crate::api::fetch_backlinks(node_id).await
         }
     });
+
+    // Unlinked mentions: full-text hits on this node's title, minus the node
+    // itself and anything that already links here. Only node-body matches —
+    // note/task hits can't be rewritten into wikilinks.
+    let mentions = LocalResource::new(move || {
+        let is_open = open.get();
+        let _ = refresh.get();
+        let title = title_sv.get_value();
+        async move {
+            if !is_open || title.trim().is_empty() {
+                return Ok::<_, crate::error::UiError>(vec![]);
+            }
+            let linked: std::collections::HashSet<NodeId> = crate::api::fetch_backlinks(node_id)
+                .await
+                .unwrap_or_default()
+                .iter()
+                .map(|n| n.id)
+                .collect();
+            let resp = crate::api::search_nodes(
+                &title,
+                false,
+                None,
+                None,
+                &[],
+                "or",
+                Some("relevance"),
+                None,
+                None,
+                1,
+                25,
+            )
+            .await?;
+            Ok(resp
+                .results
+                .into_iter()
+                .filter(|r| {
+                    r.node_id != node_id
+                        && !linked.contains(&r.node_id)
+                        && r.match_source.as_deref() == Some("node")
+                })
+                .take(10)
+                .collect::<Vec<_>>())
+        }
+    });
+
+    // Convert the first plain-text mention in `mention_id`'s body into a
+    // wikilink to this node. The PATCH triggers the server's wikilink sync,
+    // so on refresh the node moves from Mentions up to Linked Here.
+    let linking = RwSignal::new(false);
+    let do_link = move |mention_id: NodeId| {
+        if linking.get_untracked() {
+            return;
+        }
+        linking.set(true);
+        let title = title_sv.get_value();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = async {
+                let n = crate::api::fetch_node(mention_id).await?;
+                let body = n.body.unwrap_or_default();
+                match common::markdown::link_first_mention(&body, &title) {
+                    Some(new_body) => {
+                        let req = common::node::UpdateNodeRequest {
+                            title: None,
+                            body: Some(new_body),
+                            metadata: None,
+                            status: None,
+                        };
+                        crate::api::update_node(mention_id, &req).await.map(Some)
+                    }
+                    None => Ok(None),
+                }
+            }
+            .await;
+            linking.set(false);
+            use crate::components::toast::{ToastLevel, push_toast};
+            match result {
+                Ok(Some(_)) => {
+                    push_toast(ToastLevel::Success, "Mention linked.");
+                    refresh.update(|n| *n += 1);
+                }
+                Ok(None) => push_toast(
+                    ToastLevel::Info,
+                    "No literal mention found — the match may be a different word form.",
+                ),
+                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't link: {e}")),
+            }
+        });
+    };
 
     view! {
         <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
@@ -813,6 +914,57 @@ fn BacklinksPanel(node_id: NodeId) -> impl IntoView {
                                     <div class="text-xs text-red-500">{format!("Error: {e}")}</div>
                                 }.into_any(),
                             }
+                        })
+                    }}
+                </Suspense>
+
+                // ── Unlinked mentions ─────────────────────────────────────
+                <Suspense fallback=|| ()>
+                    {move || {
+                        mentions.get().and_then(|result| {
+                            let hits = result.ok().filter(|v| !v.is_empty())?;
+                            Some(view! {
+                                <div class="mt-4">
+                                    <p class="text-xs font-semibold uppercase tracking-wide
+                                              text-stone-400 dark:text-stone-500 mb-1">
+                                        "Mentions"
+                                    </p>
+                                    <div class="space-y-1">
+                                        {hits.into_iter().map(|hit| {
+                                            let nav = navigate.get_value();
+                                            let hit_id = hit.node_id;
+                                            let hit_title = hit.title.clone();
+                                            view! {
+                                                <div class="flex items-center gap-1 group">
+                                                    <button
+                                                        class="flex items-center gap-2 flex-1 min-w-0 text-left py-1.5 px-2 rounded
+                                                            text-xs hover:bg-stone-50 dark:hover:bg-stone-800/50
+                                                            text-stone-600 dark:text-stone-400
+                                                            hover:text-amber-600 dark:hover:text-amber-400"
+                                                        title="Open the mentioning node"
+                                                        on:click=move |_| nav(&format!("/nodes/{hit_id}"), Default::default())
+                                                    >
+                                                        <span class="material-symbols-outlined text-stone-400 dark:text-stone-600"
+                                                            style="font-size: 14px;">"alternate_email"</span>
+                                                        <span class="font-medium truncate">{hit_title}</span>
+                                                    </button>
+                                                    <button
+                                                        class="text-xs px-2 py-0.5 rounded border border-stone-200 dark:border-stone-700
+                                                            text-stone-500 dark:text-stone-400
+                                                            hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400
+                                                            disabled:opacity-50 transition-colors shrink-0"
+                                                        title="Turn the first plain-text mention into a wikilink"
+                                                        disabled=move || linking.get()
+                                                        on:click=move |_| do_link(hit_id)
+                                                    >
+                                                        "Link"
+                                                    </button>
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                </div>
+                            })
                         })
                     }}
                 </Suspense>

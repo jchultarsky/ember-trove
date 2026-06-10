@@ -43,8 +43,9 @@ use leptos_router::hooks::use_navigate;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
+    undo_restore_task,
 };
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// Which zone of the Kanban this row currently lives in.  Determines which
 /// zone-swap button (× Remove vs ☀ Add) is shown and the colour of the
@@ -145,6 +146,8 @@ pub fn KanbanTaskRow(
 
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
+    // Captured at setup for the undo closure, which outlives this row.
+    let toast_state = use_context::<ToastState>();
 
     // Carry-over context: a row whose focus_date is strictly before today was
     // committed to My Day on a previous day and never finished.  Such tasks
@@ -186,7 +189,8 @@ pub fn KanbanTaskRow(
         if busy.get_untracked() {
             return;
         }
-        let next = if status_done(&status_sig.get_untracked()) {
+        let prev = status_sig.get_untracked();
+        let next = if status_done(&prev) {
             TaskStatus::Open
         } else {
             TaskStatus::Done
@@ -203,9 +207,17 @@ pub fn KanbanTaskRow(
             node_id: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::update_task(task_id, &req).await;
+            let result = crate::api::update_task(task_id, &req).await;
             busy.set(false);
-            refresh.update(|n| *n += 1);
+            match result {
+                Ok(_) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // Roll back the optimistic flip — the server still has
+                    // the old status, so the checkbox must not lie.
+                    status_sig.set(prev);
+                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+                }
+            }
         });
     };
 
@@ -216,9 +228,18 @@ pub fn KanbanTaskRow(
         }
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::api::delete_task(task_id).await;
+            let result = crate::api::delete_task(task_id).await;
             busy.set(false);
-            refresh.update(|n| *n += 1);
+            match result {
+                Ok(_) => {
+                    refresh.update(|n| *n += 1);
+                    push_undo_toast(
+                        "Task deleted",
+                        undo_restore_task(task_id, refresh, toast_state),
+                    );
+                }
+                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            }
         });
     };
 
@@ -288,9 +309,11 @@ pub fn KanbanTaskRow(
 
     // ── Render ────────────────────────────────────────────────────────
 
+    // Style + accessible name: the dot is colour-coded for sighted users,
+    // with title/aria-label carrying the same information non-visually.
     let priority_dot = match priority {
-        TaskPriority::High => Some("color:#ef4444;"),
-        TaskPriority::Medium => Some("color:#f59e0b;"),
+        TaskPriority::High => Some(("color:#ef4444;", "High priority")),
+        TaskPriority::Medium => Some(("color:#f59e0b;", "Medium priority")),
         TaskPriority::Low => None,
     };
 
@@ -388,6 +411,7 @@ pub fn KanbanTaskRow(
                                 on_escape=Callback::new(move |()| editing_id_sig.set(None))
                                 on_resize=Callback::new(move |h: i32| {
                                     wasm_bindgen_futures::spawn_local(async move {
+                                        // Best-effort: losing a height pref is cosmetic.
                                         let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
                                     });
                                 })
@@ -479,8 +503,13 @@ pub fn KanbanTaskRow(
                     // ── Display row ──────────────────────────────────
                     view! {
                         <div class="flex items-center gap-2 mt-0.5">
-                            {priority_dot.map(|s| view! {
-                                <span style=format!("{s}font-size:8px;line-height:1;")>"●"</span>
+                            {priority_dot.map(|(s, label)| view! {
+                                <span
+                                    style=format!("{s}font-size:8px;line-height:1;")
+                                    title=label
+                                    aria-label=label
+                                    role="img"
+                                >"●"</span>
                             })}
                             <span class="text-sm text-stone-800 dark:text-stone-200 truncate"
                                   style=move || if status_done(&status_sig.get()) {

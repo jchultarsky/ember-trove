@@ -48,6 +48,8 @@ pub fn FastCaptureModal(
     let loading = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
     let textarea_ref: NodeRef<html::Textarea> = NodeRef::new();
+    let panel_ref: NodeRef<html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
 
     // Reset every time the modal opens, then focus the textarea on the next
     // animation frame (we cannot focus an element that hasn't yet been
@@ -70,26 +72,34 @@ pub fn FastCaptureModal(
         }
     });
 
+    // Live natural-language parse: "buy milk friday p1" → due + priority.
+    // Re-derives on every keystroke; the chips below the textarea preview
+    // the interpretation so token misfires are visible before submitting.
+    let parsed = Memo::new(move |_| {
+        let input = text.get();
+        let today = crate::components::format_helpers::local_today();
+        common::quickadd::parse_quick_add(&input, today)
+    });
+
     let submit_pending = RwSignal::new(false);
     Effect::new(move |_| {
         if !submit_pending.get() {
             return;
         }
         submit_pending.set(false);
-        let body = text.get_untracked();
-        let trimmed = body.trim();
-        if trimmed.is_empty() {
+        let p = parsed.get_untracked();
+        if p.title.trim().is_empty() {
             error.set(Some("Type something to capture.".to_string()));
             return;
         }
-        // Send everything as `body` so the API's coalesce_capture treats it
-        // as a single chunk; `title` is left empty and gets derived server-
-        // side via truncation.
-        let owned = trimmed.to_string();
+        // Send the de-tokenized text as `body` so the API's coalesce_capture
+        // treats it as a single chunk; `title` is left empty and gets derived
+        // server-side via truncation.
+        let owned = p.title.clone();
         loading.set(true);
         error.set(None);
         spawn_local(async move {
-            match quick_capture("", Some(&owned)).await {
+            match quick_capture("", Some(&owned), p.due_date, p.priority).await {
                 Ok(resp) => {
                     loading.set(false);
                     let msg = if resp.truncated {
@@ -115,6 +125,8 @@ pub fn FastCaptureModal(
         } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
             ev.prevent_default();
             submit_pending.set(true);
+        } else if let Some(panel) = panel_ref.get_untracked() {
+            super::trap_focus(&ev, &panel);
         }
     };
 
@@ -131,9 +143,13 @@ pub fn FastCaptureModal(
             />
             <div class="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-8 pointer-events-none">
                 <div
+                    node_ref=panel_ref
                     class="w-full max-w-xl bg-stone-50 dark:bg-stone-900 rounded-2xl shadow-2xl \
                            border border-stone-200 dark:border-stone-700 pointer-events-auto \
                            mt-8 sm:mt-16"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Quick capture"
                     on:keydown=handle_keydown
                 >
                     <div class="p-4 flex items-center justify-between border-b border-stone-200 \
@@ -158,7 +174,7 @@ pub fn FastCaptureModal(
                             class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
                                    placeholder-stone-400 dark:placeholder-stone-500 outline-none \
                                    resize-none text-base leading-relaxed min-h-[6rem]"
-                            placeholder="What's on your mind? (Cmd/Ctrl+Enter to save)"
+                            placeholder="What's on your mind? Try \u{201c}buy milk friday p1\u{201d} (Cmd/Ctrl+Enter to save)"
                             rows="4"
                             prop:value=move || text.get()
                             on:input=move |ev| {
@@ -166,6 +182,37 @@ pub fn FastCaptureModal(
                                 text.set(v);
                             }
                         ></textarea>
+                        // Parse preview — what the date/priority tokens will become.
+                        {move || {
+                            let p = parsed.get();
+                            (p.due_date.is_some() || p.priority.is_some()).then(|| view! {
+                                <div class="mt-2 flex items-center gap-2 flex-wrap" aria-live="polite">
+                                    {p.due_date.map(|d| view! {
+                                        <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
+                                                     bg-amber-50 dark:bg-amber-900/30
+                                                     text-amber-700 dark:text-amber-400">
+                                            <span class="material-symbols-outlined" style="font-size:12px;">"event"</span>
+                                            {format!("Due {}", d.format("%a, %b %-d"))}
+                                        </span>
+                                    })}
+                                    {p.priority.map(|pr| {
+                                        let label = match pr {
+                                            common::task::TaskPriority::High => "High priority",
+                                            common::task::TaskPriority::Medium => "Medium priority",
+                                            common::task::TaskPriority::Low => "Low priority",
+                                        };
+                                        view! {
+                                            <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
+                                                         bg-stone-100 dark:bg-stone-800
+                                                         text-stone-600 dark:text-stone-300">
+                                                <span class="material-symbols-outlined" style="font-size:12px;">"flag"</span>
+                                                {label}
+                                            </span>
+                                        }
+                                    })}
+                                </div>
+                            })
+                        }}
                         <Show when=move || error.get().is_some()>
                             <div class="mt-2 text-sm text-red-600 dark:text-red-400">
                                 {move || error.get().unwrap_or_default()}
