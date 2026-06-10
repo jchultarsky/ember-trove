@@ -107,3 +107,43 @@ test('offers node-context commands on a node page', async ({ page, request }) =>
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+test('command-intent queries beat body-text node matches', async ({ page, request }) => {
+  // A node whose BODY mentions "dark" but whose title does not — before the
+  // v2.21.4 ranking fix this outranked the command and hijacked Enter.
+  const title = `e2e bait ${Date.now()}`;
+  const created = await request.post('/api/nodes', {
+    data: {
+      title,
+      node_type: 'article',
+      body: 'all about dark mode preferences and dark themes',
+      metadata: {},
+      status: 'draft',
+    },
+  });
+  expect(created.ok()).toBeTruthy();
+  const node = await created.json();
+
+  try {
+    await gotoApp(page, '/tasks/my-day');
+    const html = page.locator('html');
+    await expect(html).not.toHaveClass(/dark/);
+
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByPlaceholder(PALETTE_INPUT).fill('dark');
+    // The bait node shows up in the list (the scenario is real)…
+    await expect(page.getByRole('button', { name: new RegExp(title) })).toBeVisible();
+    // …but Enter runs the highlighted FIRST row, which must be the command.
+    await page.keyboard.press('Enter');
+    await expect(html).toHaveClass(/dark/);
+    await expect(page).toHaveURL(/\/tasks\/my-day$/);
+
+    // Restore the theme.
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.getByPlaceholder(PALETTE_INPUT).fill('dark');
+    await page.getByRole('button', { name: /Toggle dark mode/ }).click();
+    await expect(html).not.toHaveClass(/dark/);
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
