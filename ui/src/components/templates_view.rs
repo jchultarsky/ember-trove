@@ -369,7 +369,7 @@ pub fn TemplatesView() -> impl IntoView {
 
             // ── Template gallery grid ─────────────────────────────────────────
             <Transition fallback=move || view! {
-                <div class="text-sm text-stone-400 dark:text-stone-500">"Loading..."</div>
+                <crate::components::skeleton::SkeletonCards cards=6 />
             }>
                 {move || templates.get().map(|list| {
                     let filter = type_filter.get();

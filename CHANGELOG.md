@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — Loading & theme polish
+- Search results and the Templates gallery now show content-shaped skeletons
+  while loading instead of bare "Loading…" text.
+- With no stored theme preference, the app follows the OS
+  (`prefers-color-scheme`) instead of defaulting to light — first paint (the
+  static loading screen already honored the media query) and the app now agree.
+
 ### Added — Undo for task & note deletion (soft delete)
 Tasks and notes previously hard-deleted instantly — including via the My Day
 `d` shortcut — with no confirmation and no way back, while nodes/tags got
