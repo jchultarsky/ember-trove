@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Keyboard inbox triage ("Process" mode)
+A **Process** button on the Inbox opens a one-task-at-a-time triage card:
+`t` adds to today, `s` schedules a due date, `a` attaches to a node (with the
+debounced picker), `d` deletes (undoable), `j`/`k` skip/go back, `Esc` exits.
+Handled tasks leave the working set; skipped ones come around again. The
+working set is a snapshot, so nothing shifts mid-flow; the inbox refetches
+once on exit. Shortcuts are documented in the Help modal.
+
 ### Added — Natural-language quick add
 The quick-capture box (`n`) now parses date and priority tokens from the
 first line: `buy milk friday p1` captures "buy milk" due next Friday at high

@@ -98,28 +98,55 @@ pub fn InboxView() -> impl IntoView {
         }
     });
 
+    // Triage ("Process") mode — one task at a time, keyboard-driven.
+    let triage = RwSignal::new(false);
+
     view! {
         <div class="flex flex-col h-full">
             // ── Header ────────────────────────────────────────────────────────
             <div class="flex-shrink-0 px-4 py-4 border-b border-stone-200 dark:border-stone-800">
-                <div class="flex items-center gap-3">
-                    <span class="material-symbols-outlined text-amber-500" style="font-size: 26px;">
-                        "inbox"
-                    </span>
-                    <div>
-                        <h1 class="text-xl font-semibold text-stone-900 dark:text-stone-100">
-                            "Inbox"
-                        </h1>
-                        <p class="text-xs text-stone-500 dark:text-stone-400">
-                            "Capture tasks — link to a node when ready"
-                        </p>
+                <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <span class="material-symbols-outlined text-amber-500" style="font-size: 26px;">
+                            "inbox"
+                        </span>
+                        <div>
+                            <h1 class="text-xl font-semibold text-stone-900 dark:text-stone-100">
+                                "Inbox"
+                            </h1>
+                            <p class="text-xs text-stone-500 dark:text-stone-400">
+                                "Capture tasks — link to a node when ready"
+                            </p>
+                        </div>
                     </div>
+                    {move || (!triage.get()).then(|| view! {
+                        <button
+                            class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg
+                                   border border-stone-200 dark:border-stone-700
+                                   text-stone-600 dark:text-stone-300
+                                   hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400
+                                   transition-colors cursor-pointer"
+                            title="Process the inbox one task at a time (keyboard-driven)"
+                            on:click=move |_| triage.set(true)
+                        >
+                            <span class="material-symbols-outlined" style="font-size:16px;">"playlist_add_check"</span>
+                            "Process"
+                        </button>
+                    })}
                 </div>
             </div>
 
             // ── Scrollable content ────────────────────────────────────────────
             <div class="flex-1 overflow-auto px-4 py-4 space-y-4">
 
+                {move || triage.get().then(|| view! {
+                    <crate::components::inbox_triage::InboxTriage
+                        refresh=refresh
+                        on_exit=Callback::new(move |()| triage.set(false))
+                    />
+                })}
+
+                <div class=move || if triage.get() { "hidden" } else { "contents" }>
                 // ── Add-task form — shared with the node-detail TaskPanel ─────
                 // node_id omitted ⇒ standalone capture with the optional picker.
                 <NewTaskForm refresh=refresh />
@@ -185,6 +212,7 @@ pub fn InboxView() -> impl IntoView {
                         }.into_any()
                     }}
                 </Suspense>
+                </div>  // close triage-hidden wrapper
             </div>
         </div>
     }
