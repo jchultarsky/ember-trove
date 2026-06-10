@@ -251,6 +251,109 @@ fn command_matches(spec: &CommandSpec, q: &str) -> bool {
     spec.label.to_lowercase().contains(&q) || spec.keywords.to_lowercase().contains(&q)
 }
 
+/// Order the non-empty-query action list:
+///
+/// 1. nodes whose **title** contains the query — the quick-switcher core,
+/// 2. matching commands,
+/// 3. nodes that matched only via body/notes/tasks text,
+/// 4. the Create action (always last).
+///
+/// Commands outrank body-only node hits so a command-intent query ("theme",
+/// "dark") isn't hijacked by prose that merely mentions the word — found
+/// live-testing v2.21.3 (ROADMAP, 2026-06-10). Typing a node's actual title
+/// still puts that node first.
+fn ranked_actions(
+    results: &[SearchResult],
+    cmds: Vec<&'static CommandSpec>,
+    trimmed: &str,
+) -> Vec<PaletteAction> {
+    let q = trimmed.to_lowercase();
+    let open = |r: &SearchResult| PaletteAction::OpenNode {
+        id: r.node_id.0,
+        title: r.title.clone(),
+        icon: type_to_icon(&r.node_type),
+    };
+    let (title_hits, body_hits): (Vec<&SearchResult>, Vec<&SearchResult>) = results
+        .iter()
+        .partition(|r| r.title.to_lowercase().contains(&q));
+
+    let mut out: Vec<PaletteAction> = title_hits.into_iter().map(open).collect();
+    out.extend(cmds.into_iter().map(PaletteAction::Command));
+    out.extend(body_hits.into_iter().map(open));
+    out.push(PaletteAction::CreateNode {
+        title: trimmed.to_string(),
+    });
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::id::NodeId;
+
+    fn result(title: &str) -> SearchResult {
+        SearchResult {
+            node_id: NodeId(uuid::Uuid::new_v4()),
+            title: title.to_string(),
+            slug: String::new(),
+            snippet: None,
+            rank: 1.0,
+            node_type: "article".to_string(),
+            status: "draft".to_string(),
+            match_source: Some("node".to_string()),
+            highlighted_title: None,
+        }
+    }
+
+    fn labels(actions: &[PaletteAction]) -> Vec<String> {
+        actions.iter().map(|a| a.primary().to_string()).collect()
+    }
+
+    #[test]
+    fn commands_outrank_body_only_node_matches() {
+        // "theme" matched two nodes via body text only — the command must
+        // come first (the v2.21.3 hijack).
+        let results = vec![result("Dartmouth Seminar"), result("Product Definition")];
+        let cmds = vec![&GLOBAL_COMMANDS[11]]; // Toggle dark mode
+        let out = ranked_actions(&results, cmds, "theme");
+        assert_eq!(
+            labels(&out),
+            vec![
+                "Toggle dark mode",
+                "Dartmouth Seminar",
+                "Product Definition",
+                "theme", // Create action carries the query as its title
+            ]
+        );
+    }
+
+    #[test]
+    fn title_matched_nodes_stay_above_commands() {
+        // Quick-switcher behavior: typing a node's title puts it first even
+        // when a command also matches.
+        let results = vec![result("Dark Patterns Research"), result("Unrelated")];
+        let cmds = vec![&GLOBAL_COMMANDS[11]];
+        let out = ranked_actions(&results, cmds, "dark");
+        assert_eq!(
+            labels(&out),
+            vec![
+                "Dark Patterns Research",
+                "Toggle dark mode",
+                "Unrelated",
+                "dark",
+            ]
+        );
+    }
+
+    #[test]
+    fn title_match_is_case_insensitive_and_create_is_last() {
+        let results = vec![result("my PROJECT plan")];
+        let out = ranked_actions(&results, vec![], "project");
+        assert_eq!(labels(&out), vec!["my PROJECT plan", "project"]);
+        assert!(matches!(out.last(), Some(PaletteAction::CreateNode { .. })));
+    }
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 /// `CommandPalette` is rendered once at the layout root and toggled
@@ -358,13 +461,6 @@ pub fn CommandPalette(
                 }
             }
         } else {
-            for sr in results.get() {
-                out.push(PaletteAction::OpenNode {
-                    id: sr.node_id.0,
-                    title: sr.title,
-                    icon: type_to_icon(&sr.node_type),
-                });
-            }
             // Matching commands (node-context ones first when applicable).
             let mut cmds: Vec<&'static CommandSpec> = Vec::new();
             if on_node_page {
@@ -375,11 +471,8 @@ pub fn CommandPalette(
                     .iter()
                     .filter(|s| command_matches(s, trimmed)),
             );
-            out.extend(cmds.into_iter().take(5).map(PaletteAction::Command));
-            // Always offer Create as the bottom action when typing.
-            out.push(PaletteAction::CreateNode {
-                title: trimmed.to_string(),
-            });
+            cmds.truncate(5);
+            out.extend(ranked_actions(&results.get(), cmds, trimmed));
         }
         out
     });
