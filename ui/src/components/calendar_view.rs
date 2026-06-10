@@ -1,9 +1,10 @@
 use chrono::{Datelike, NaiveDate, Weekday};
-use common::task::MyDayTask;
+use common::task::{CreateTaskRequest, MyDayTask};
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
 use crate::components::task_common::{priority_color_hex, status_done};
+use crate::components::toast::{ToastLevel, push_toast};
 use leptos_router::hooks::use_navigate;
 
 fn next_month(year: i32, month: u32) -> (i32, u32) {
@@ -82,10 +83,53 @@ fn two_month_label(y1: i32, m1: u32, y2: i32, m2: u32) -> String {
 // ── MonthGrid (inner component) ──────────────────────────────────────────────
 
 #[component]
-fn MonthGrid(year: i32, month: u32, tasks: Vec<MyDayTask>, today: NaiveDate) -> impl IntoView {
+fn MonthGrid(
+    year: i32,
+    month: u32,
+    tasks: Vec<MyDayTask>,
+    today: NaiveDate,
+    /// The date whose cell currently shows the quick-add composer (shared
+    /// across both month grids so only one composer is open at a time).
+    composing: RwSignal<Option<NaiveDate>>,
+    refresh: RwSignal<u32>,
+) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let days = days_in_month(year, month);
     let offset = first_weekday(year, month);
+
+    // Quick-add: Enter in the in-cell composer creates a standalone task due
+    // on that day (same capture path as the Inbox form; it shows up in the
+    // Inbox for triage like any other task).
+    let compose_title: RwSignal<String> = RwSignal::new(String::new());
+    let submit_compose = move |date: NaiveDate| {
+        let title = compose_title.get_untracked().trim().to_string();
+        if title.is_empty() {
+            return;
+        }
+        let req = CreateTaskRequest {
+            title,
+            node_id: None,
+            status: None,
+            priority: None,
+            focus_date: None,
+            due_date: Some(date),
+            recurrence: None,
+        };
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::api::create_standalone_task(&req).await {
+                Ok(_) => {
+                    composing.set(None);
+                    compose_title.set(String::new());
+                    push_toast(
+                        ToastLevel::Success,
+                        format!("Task added — due {}", date.format("%b %-d")),
+                    );
+                    refresh.update(|n| *n += 1);
+                }
+                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't add task: {e}")),
+            }
+        });
+    };
 
     view! {
         <div>
@@ -137,9 +181,43 @@ fn MonthGrid(year: i32, month: u32, tasks: Vec<MyDayTask>, today: NaiveDate) -> 
                     };
 
                     view! {
-                        <div class=cell_class>
+                        <div
+                            class=format!("{cell_class} cursor-pointer")
+                            data-date=date.to_string()
+                            title="Add a task due this day"
+                            on:click=move |_| {
+                                compose_title.set(String::new());
+                                composing.set(Some(date));
+                            }
+                        >
                             // Day number
                             <span class=day_label_class>{day.to_string()}</span>
+
+                            // Quick-add composer (one cell at a time)
+                            {move || (composing.get() == Some(date)).then(|| view! {
+                                <input
+                                    type="text"
+                                    autofocus
+                                    placeholder="New task…"
+                                    class="w-full text-xs rounded border border-amber-400
+                                           bg-white dark:bg-stone-800
+                                           text-stone-800 dark:text-stone-200
+                                           px-1.5 py-0.5 focus:outline-none
+                                           focus:ring-1 focus:ring-amber-500"
+                                    prop:value=move || compose_title.get()
+                                    on:input=move |ev| compose_title.set(event_target_value(&ev))
+                                    on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()
+                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                        if ev.key() == "Enter" {
+                                            ev.prevent_default();
+                                            submit_compose(date);
+                                        } else if ev.key() == "Escape" {
+                                            ev.stop_propagation();
+                                            composing.set(None);
+                                        }
+                                    }
+                                />
+                            })}
 
                             // Task chips
                             {day_tasks.into_iter().map(|mt| {
@@ -164,7 +242,8 @@ fn MonthGrid(year: i32, month: u32, tasks: Vec<MyDayTask>, today: NaiveDate) -> 
                                             }
                                         )
                                         title=title.clone()
-                                        on:click=move |_| {
+                                        on:click=move |ev: web_sys::MouseEvent| {
+                                            ev.stop_propagation();
                                             if let Some(nid) = node_id {
                                                 navigate.get_value()(&format!("/nodes/{nid}"), Default::default());
                                             }
@@ -190,6 +269,8 @@ pub fn CalendarView() -> impl IntoView {
     let today = crate::components::format_helpers::local_today();
     let year_sig = RwSignal::new(today.year());
     let month_sig = RwSignal::new(today.month());
+    // Quick-add composer state, shared by both month grids.
+    let composing: RwSignal<Option<NaiveDate>> = RwSignal::new(None);
 
     // Derived signals for the second month
     let year2 = Memo::new(move |_| {
@@ -292,8 +373,10 @@ pub fn CalendarView() -> impl IntoView {
 
                     view! {
                         <div class="grid grid-cols-1 gap-8">
-                            <MonthGrid year=y1 month=m1 tasks=tasks_1 today=today />
-                            <MonthGrid year=y2 month=m2 tasks=tasks_2 today=today />
+                            <MonthGrid year=y1 month=m1 tasks=tasks_1 today=today
+                                composing=composing refresh=task_refresh />
+                            <MonthGrid year=y2 month=m2 tasks=tasks_2 today=today
+                                composing=composing refresh=task_refresh />
                         </div>
                     }
                 }}
