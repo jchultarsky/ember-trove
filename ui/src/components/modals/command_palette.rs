@@ -275,6 +275,8 @@ pub fn CommandPalette(
     let highlight: RwSignal<usize> = RwSignal::new(0);
     let version: RwSignal<u32> = RwSignal::new(0);
     let input_ref: NodeRef<html::Input> = NodeRef::new();
+    let panel_ref: NodeRef<html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
 
     let navigate = StoredValue::new(use_navigate());
     let location = use_location();
@@ -496,7 +498,11 @@ pub fn CommandPalette(
             ev.prevent_default();
             pick(highlight.get_untracked());
         }
-        _ => {}
+        _ => {
+            if let Some(panel) = panel_ref.get_untracked() {
+                super::trap_focus(&ev, &panel);
+            }
+        }
     };
 
     view! {
@@ -513,9 +519,13 @@ pub fn CommandPalette(
                            pointer-events-none"
                 >
                     <div
+                        node_ref=panel_ref
                         class="pointer-events-auto bg-white dark:bg-stone-900 \
                                rounded-2xl shadow-2xl border border-stone-200 \
                                dark:border-stone-700 overflow-hidden"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Command palette"
                         on:keydown=on_keydown
                     >
                         // Search input

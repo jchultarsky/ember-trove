@@ -326,6 +326,8 @@ const WORKFLOW_STEPS: &[WorkflowStep] = &[
 #[component]
 pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> impl IntoView {
     let active = RwSignal::new(HelpTab::Shortcuts);
+    let panel_ref: NodeRef<leptos::html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
 
     // Reset to the Shortcuts tab every time the modal opens — the
     // shortcut reference is the most-frequently-needed surface and a
@@ -347,11 +349,20 @@ pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> im
                 // Panel
                 <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
                     <div
+                        node_ref=panel_ref
                         class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl
                                border border-stone-200 dark:border-stone-700
                                w-full max-w-2xl flex flex-col
                                max-h-[85vh] overflow-hidden"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="Help and shortcuts"
                         on:click=|ev| ev.stop_propagation()
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if let Some(panel) = panel_ref.get_untracked() {
+                                super::trap_focus(&ev, &panel);
+                            }
+                        }
                     >
                         // Header
                         <div class="flex items-center justify-between px-6 pt-5 pb-3 \

@@ -48,6 +48,8 @@ pub fn FastCaptureModal(
     let loading = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
     let textarea_ref: NodeRef<html::Textarea> = NodeRef::new();
+    let panel_ref: NodeRef<html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
 
     // Reset every time the modal opens, then focus the textarea on the next
     // animation frame (we cannot focus an element that hasn't yet been
@@ -123,6 +125,8 @@ pub fn FastCaptureModal(
         } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
             ev.prevent_default();
             submit_pending.set(true);
+        } else if let Some(panel) = panel_ref.get_untracked() {
+            super::trap_focus(&ev, &panel);
         }
     };
 
@@ -139,9 +143,13 @@ pub fn FastCaptureModal(
             />
             <div class="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-8 pointer-events-none">
                 <div
+                    node_ref=panel_ref
                     class="w-full max-w-xl bg-stone-50 dark:bg-stone-900 rounded-2xl shadow-2xl \
                            border border-stone-200 dark:border-stone-700 pointer-events-auto \
                            mt-8 sm:mt-16"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Quick capture"
                     on:keydown=handle_keydown
                 >
                     <div class="p-4 flex items-center justify-between border-b border-stone-200 \

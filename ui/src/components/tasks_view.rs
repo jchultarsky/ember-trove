@@ -38,6 +38,22 @@ impl TasksTab {
             Self::Calendar => "/tasks/calendar",
         }
     }
+    /// Tab to the right (wraps) — for ArrowRight on the tablist.
+    fn next(self) -> Self {
+        match self {
+            Self::MyDay => Self::Inbox,
+            Self::Inbox => Self::Calendar,
+            Self::Calendar => Self::MyDay,
+        }
+    }
+    /// Tab to the left (wraps) — for ArrowLeft on the tablist.
+    fn prev(self) -> Self {
+        match self {
+            Self::MyDay => Self::Calendar,
+            Self::Inbox => Self::MyDay,
+            Self::Calendar => Self::Inbox,
+        }
+    }
 }
 
 #[component]
@@ -58,10 +74,23 @@ pub fn TasksView(active: TasksTab) -> impl IntoView {
 
 #[component]
 fn TasksTabBar(active: TasksTab) -> impl IntoView {
+    let navigate = StoredValue::new(use_navigate());
+    // ARIA tabs keyboard support: left/right arrows switch tabs (automatic
+    // activation — switching navigates the route).
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        let target = match ev.key().as_str() {
+            "ArrowRight" => active.next(),
+            "ArrowLeft" => active.prev(),
+            _ => return,
+        };
+        ev.prevent_default();
+        navigate.get_value()(target.path(), Default::default());
+    };
     view! {
         <div class="flex items-center gap-1 px-4 sm:px-6 pt-2 border-b border-stone-200 dark:border-stone-800
                     bg-stone-50/50 dark:bg-stone-900/40"
-             role="tablist" aria-label="Tasks views">
+             role="tablist" aria-label="Tasks views"
+             on:keydown=on_keydown>
             <TabButton tab=TasksTab::MyDay    active=active />
             <TabButton tab=TasksTab::Inbox    active=active />
             <TabButton tab=TasksTab::Calendar active=active />
@@ -94,6 +123,9 @@ fn TabButton(tab: TasksTab, active: TasksTab) -> impl IntoView {
             role="tab"
             aria-selected=if is_active { "true" } else { "false" }
             aria-current=if is_active { "page" } else { "false" }
+            // Roving tabindex (ARIA APG): the active tab is the tab stop;
+            // arrows on the tablist move between tabs.
+            tabindex=if is_active { "0" } else { "-1" }
             on:click=move |_| {
                 if !is_active {
                     navigate.get_value()(path, Default::default());
