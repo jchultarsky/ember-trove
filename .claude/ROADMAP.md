@@ -9,9 +9,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
   new surfaces hand-tested live after deploy: calendar day-click captured a
   due-today task; the carryover prompt's Yes re-stamped and cleared the
   badge; the Overdue section rendered, counted, and folded. One operational
-  observation: each deploy logs active sessions out (re-login needed) —
-  likely COOKIE_KEY or session handling across API restarts; worth a look
-  before release cadence increases. My Day carryovers now
+  observation, diagnosed: each deploy forces open tabs to re-login. NOT
+  key rotation — the deploy reuses the host's persistent `deploy/.env.prod`
+  (stable COOKIE_KEY). Root cause is client-side: `AuthGate` treats ANY
+  `/api/auth/me` failure as Unauthenticated, so the seconds of API downtime
+  during the container restart bounce the tab to Cognito (new PKCE state →
+  login form) even though the session cookie is still valid. Candidate fix:
+  distinguish 401 from network/5xx in AuthGate and retry with short backoff
+  before redirecting. My Day carryovers now
   prompt "still today?" (Yes re-stamps, No drops to backlog) and overdue
   tasks group into a foldable red-accented section (binary `focus_date` ADR
   unchanged); the Calendar adds click-a-day quick capture (`data-date` cells,
