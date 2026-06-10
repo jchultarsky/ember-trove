@@ -33,7 +33,20 @@ pub trait TaskRepo: Send + Sync {
 
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError>;
 
+    /// Soft-delete: stamps `deleted_at`; the row becomes invisible to every
+    /// other query but can be brought back with [`TaskRepo::restore`].
     async fn delete(&self, id: TaskId) -> Result<(), EmberTroveError>;
+
+    /// Fetch a tombstoned task (`deleted_at IS NOT NULL`) — used by the
+    /// restore endpoint's authorization check. [`TaskRepo::get`] deliberately
+    /// excludes tombstones.
+    async fn get_deleted(&self, id: TaskId) -> Result<Task, EmberTroveError>;
+
+    /// Un-delete a tombstoned task (clears `deleted_at`).
+    async fn restore(&self, id: TaskId) -> Result<Task, EmberTroveError>;
+
+    /// Hard-delete tombstones older than `cutoff`. Returns rows purged.
+    async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError>;
 
     /// Tasks the caller has marked for focus on `date` (My Day), with node titles.
     async fn list_my_day(
@@ -307,6 +320,7 @@ impl TaskRepo for PgTaskRepo {
             SELECT {SELECT_COLS}
             FROM node_tasks
             WHERE node_id = $1
+              AND deleted_at IS NULL
             ORDER BY sort_order ASC, created_at ASC
             "#
         ))
@@ -320,7 +334,7 @@ impl TaskRepo for PgTaskRepo {
 
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError> {
         let row = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"SELECT {SELECT_COLS} FROM node_tasks WHERE id = $1"#
+            r#"SELECT {SELECT_COLS} FROM node_tasks WHERE id = $1 AND deleted_at IS NULL"#
         ))
         .bind(id.0)
         .fetch_optional(&self.pool)
@@ -352,7 +366,7 @@ impl TaskRepo for PgTaskRepo {
                 due_date   = CASE WHEN $7  THEN $8  ELSE due_date   END,
                 recurrence = CASE WHEN $9  THEN $10 ELSE recurrence END,
                 node_id    = CASE WHEN $11 THEN $12 ELSE node_id    END
-            WHERE id = $1
+            WHERE id = $1 AND deleted_at IS NULL
             RETURNING {SELECT_COLS}
             "#
         ))
@@ -377,16 +391,59 @@ impl TaskRepo for PgTaskRepo {
     }
 
     async fn delete(&self, id: TaskId) -> Result<(), EmberTroveError> {
-        let result = sqlx::query("DELETE FROM node_tasks WHERE id = $1")
-            .bind(id.0)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| EmberTroveError::Internal(format!("delete task failed: {e}")))?;
+        // Soft delete: tombstone the row so the undo toast can restore it.
+        let result = sqlx::query(
+            "UPDATE node_tasks SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(id.0)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("delete task failed: {e}")))?;
 
         if result.rows_affected() == 0 {
             return Err(EmberTroveError::NotFound(format!("task {id} not found")));
         }
         Ok(())
+    }
+
+    async fn get_deleted(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        let row = sqlx::query_as::<_, TaskRow>(&format!(
+            r#"SELECT {SELECT_COLS} FROM node_tasks WHERE id = $1 AND deleted_at IS NOT NULL"#
+        ))
+        .bind(id.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("get deleted task failed: {e}")))?
+        .ok_or_else(|| EmberTroveError::NotFound(format!("deleted task {id} not found")))?;
+
+        row.into_task()
+    }
+
+    async fn restore(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        let row = sqlx::query_as::<_, TaskRow>(&format!(
+            r#"
+            UPDATE node_tasks SET deleted_at = NULL
+            WHERE id = $1 AND deleted_at IS NOT NULL
+            RETURNING {SELECT_COLS}
+            "#
+        ))
+        .bind(id.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("restore task failed: {e}")))?
+        .ok_or_else(|| EmberTroveError::NotFound(format!("deleted task {id} not found")))?;
+
+        row.into_task()
+    }
+
+    async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError> {
+        let result =
+            sqlx::query("DELETE FROM node_tasks WHERE deleted_at IS NOT NULL AND deleted_at < $1")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| EmberTroveError::Internal(format!("purge tasks failed: {e}")))?;
+        Ok(result.rows_affected())
     }
 
     async fn list_my_day(
@@ -406,6 +463,7 @@ impl TaskRepo for PgTaskRepo {
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id
             WHERE t.owner_id = $1
+              AND t.deleted_at IS NULL
               AND t.focus_date IS NOT NULL
               AND t.focus_date <= $2
               AND (
@@ -438,6 +496,7 @@ impl TaskRepo for PgTaskRepo {
             SELECT {SELECT_COLS}
             FROM node_tasks
             WHERE owner_id = $1
+              AND deleted_at IS NULL
               AND node_id IS NULL
             ORDER BY
                 sort_order ASC,
@@ -475,6 +534,7 @@ impl TaskRepo for PgTaskRepo {
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id
             WHERE t.owner_id = $1
+              AND t.deleted_at IS NULL
               AND t.due_date >= $2
               AND t.due_date <= $3
             ORDER BY t.due_date,
@@ -513,6 +573,7 @@ impl TaskRepo for PgTaskRepo {
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id
             WHERE t.owner_id = $1
+              AND t.deleted_at IS NULL
               AND t.status::text NOT IN ('done', 'cancelled')
             ORDER BY
                 t.due_date ASC NULLS LAST,
@@ -561,6 +622,7 @@ impl TaskRepo for PgTaskRepo {
                 COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelled
             FROM node_tasks
             WHERE node_id = ANY($1)
+              AND deleted_at IS NULL
             GROUP BY node_id
             "#,
         )
@@ -631,6 +693,7 @@ impl TaskRepo for PgTaskRepo {
                        ) AS rn
                 FROM node_tasks
                 WHERE node_id = ANY($1)
+                  AND deleted_at IS NULL
                   AND status::text IN ('open', 'in_progress')
             ) ranked
             WHERE rn <= $2
@@ -697,6 +760,7 @@ impl TaskRepo for PgTaskRepo {
             SELECT node_id, MAX(updated_at) AS max_updated
             FROM node_tasks
             WHERE node_id = ANY($1)
+              AND deleted_at IS NULL
             GROUP BY node_id
             "#,
         )
@@ -719,6 +783,7 @@ impl TaskRepo for PgTaskRepo {
             SELECT {SELECT_COLS}
             FROM node_tasks
             WHERE owner_id = $1
+              AND deleted_at IS NULL
             ORDER BY created_at ASC
             "#
         ))
@@ -735,6 +800,7 @@ impl TaskRepo for PgTaskRepo {
             r#"
             SELECT {SELECT_COLS}
             FROM node_tasks
+            WHERE deleted_at IS NULL
             ORDER BY created_at ASC
             "#
         ))
@@ -767,6 +833,7 @@ impl TaskRepo for PgTaskRepo {
             ) AS u
             WHERE node_tasks.id = u.id
               AND node_tasks.owner_id = $3
+              AND node_tasks.deleted_at IS NULL
             "#,
         )
         .bind(&ids)

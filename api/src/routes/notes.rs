@@ -31,6 +31,7 @@ pub fn note_router() -> Router<AppState> {
         .route("/", post(create_standalone_note))
         .route("/feed", get(note_feed))
         .route("/{note_id}", patch(update_note).delete(delete_note))
+        .route("/{note_id}/restore", post(restore_note))
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
@@ -109,6 +110,17 @@ async fn delete_note(
 ) -> Result<StatusCode, ApiError> {
     state.notes.delete(NoteId(note_id), &claims.sub).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /notes/:note_id/restore — un-delete a soft-deleted note (owner only,
+/// mirroring delete's authorization). Backs the undo toast.
+async fn restore_note(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(note_id): Path<Uuid>,
+) -> Result<Json<Note>, ApiError> {
+    let note = state.notes.restore(NoteId(note_id), &claims.sub).await?;
+    Ok(Json(note))
 }
 
 /// GET /notes/feed — notes with node titles, filtered + sorted per query params

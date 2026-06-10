@@ -26,13 +26,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
-- **UI trust fixes, Tier 1 remainder (from the 2026-06-09 usability review;
-  editor autosave and the optimistic-rollback sweep have shipped):**
-  *Undo-toast economy* — tasks (`d` key!) and notes delete instantly with no
-  confirm and no undo, while nodes/tags get modals. Adopt instant-action +
-  undo toast for tasks/notes (likely needs a soft-delete/restore API), keep one
-  specific confirm ("Delete node 'X'?", verb-labeled buttons) for node delete.
-- Tier 2/3 usability candidates from the same review: local graph on node pages
+- Tier 2/3 usability candidates from the 2026-06-09 usability review (Tier 1 —
+  editor autosave, optimistic-rollback sweep, undo-toast soft delete — has
+  shipped): local graph on node pages
   + global-graph filters/orphans; unlinked mentions under backlinks; keyboard
   inbox-triage mode; NL quick-add parsing; palette actions beyond nodes;
   a11y pass (focus trap/return, route-change focus, color-only priority dots);

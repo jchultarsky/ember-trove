@@ -121,7 +121,7 @@ const MY_DAY: &[Shortcut] = &[
     },
     Shortcut {
         key: "d",
-        description: "Delete focused task",
+        description: "Delete focused task (undo via toast)",
     },
 ];
 

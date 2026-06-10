@@ -43,8 +43,9 @@ use leptos_router::hooks::use_navigate;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
+    undo_restore_task,
 };
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// Which zone of the Kanban this row currently lives in.  Determines which
 /// zone-swap button (× Remove vs ☀ Add) is shown and the colour of the
@@ -145,6 +146,8 @@ pub fn KanbanTaskRow(
 
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
+    // Captured at setup for the undo closure, which outlives this row.
+    let toast_state = use_context::<ToastState>();
 
     // Carry-over context: a row whose focus_date is strictly before today was
     // committed to My Day on a previous day and never finished.  Such tasks
@@ -228,7 +231,13 @@ pub fn KanbanTaskRow(
             let result = crate::api::delete_task(task_id).await;
             busy.set(false);
             match result {
-                Ok(_) => refresh.update(|n| *n += 1),
+                Ok(_) => {
+                    refresh.update(|n| *n += 1);
+                    push_undo_toast(
+                        "Task deleted",
+                        undo_restore_task(task_id, refresh, toast_state),
+                    );
+                }
                 Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
             }
         });
