@@ -129,10 +129,11 @@ pub fn MyDayView() -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
 
     // ── Window keydown handler ─────────────────────────────────────────
-    // Attached on mount (window_event_listener returns a Handle that
-    // Leptos drops automatically when the view unmounts, removing the
-    // listener — no manual cleanup needed).
-    window_event_listener(ev::keydown, move |ev| {
+    // The returned handle must be removed explicitly on cleanup: dropping
+    // it does NOT detach the listener (v2.21.0 regression hunt — a zombie
+    // listener from an unmounted MyDayView reads disposed signals on the
+    // next keypress, panics, and poisons all WASM event dispatch).
+    let key_handle = window_event_listener(ev::keydown, move |ev| {
         // Modifier keys are reserved for app-level shortcuts (Cmd-K
         // arrives in v2.8.0) — never consume them here.
         if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
@@ -277,6 +278,7 @@ pub fn MyDayView() -> impl IntoView {
             _ => {}
         }
     });
+    on_cleanup(move || key_handle.remove());
 
     view! {
         <div class="flex flex-col h-full">

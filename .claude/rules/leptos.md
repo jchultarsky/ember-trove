@@ -31,6 +31,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
 ## Reactivity gotchas
 
+- **`window_event_listener` handles MUST be removed in `on_cleanup`** — Drop
+  does not detach; a leaked listener panics on disposed signals and poisons
+  all event dispatch (see ERRORS.md, 2026-06-10).
+- **No `use_context` after an `.await`** in `wasm_bindgen_futures::spawn_local`
+  — there is no reactive owner there; capture context values before spawning
+  (toast.rs has a global fallback for this reason).
+
 - **Static `style=` / `title=` must be closures** — `style=move || ...` — for reactive attrs.
 - **Moving a non-`Copy` value into an inner closure makes it `FnOnce` and breaks
   reactivity.** Clone signals/`navigate` before the inner `move ||` in each `map` iteration.

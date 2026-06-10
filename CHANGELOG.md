@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.1] - 2026-06-10
+
+### Fixed — Zombie keyboard listener panics (hotfix)
+`MyDayView` discarded its `window_event_listener` handle behind a comment
+claiming Leptos auto-removes it on unmount — it does not. Every unmounted
+My Day instance left a zombie keydown listener that read disposed signals on
+the next keypress, panicked the WASM runtime, and poisoned all event dispatch
+(quick capture and toasts went dead until reload). The handle is now removed
+in `on_cleanup`, matching the layout.rs convention.
+
+### Fixed — Undo toasts (and other post-await toasts) never rendered
+`push_toast`/`push_undo_toast` resolved `ToastState` via `use_context`, which
+returns `None` in code resumed after an `.await` inside
+`wasm_bindgen_futures::spawn_local` (no reactive owner) — so v2.21.0's undo
+toasts, and several older success/error toasts pushed from API continuations,
+were silently dropped. The helpers now fall back to a thread-local global
+handle set when the app creates its `ToastState`.
+
 ## [2.21.0] - 2026-06-10
 
 ### Added — Local graph on node pages; orphans lens on the global graph
