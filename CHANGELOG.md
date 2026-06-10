@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.2] - 2026-06-10
+
+### Tooling — Playwright e2e smoke suite
+Browser-level smoke tests (`e2e/`, `scripts/e2e.sh`, CI job `e2e`) — the
+direct response to v2.21.1, where both hotfix bugs were structurally
+invisible to `cargo test`/clippy. Five specs: app shell + route title,
+NL quick-capture (chips → inbox), soft delete → undo toast → restore,
+the zombie-window-listener regression, and editor autosave (indicator +
+server state). The suite runs against a dedicated Docker stack
+(`deploy/docker-compose.e2e.yml`, compose project `ember-e2e`, tmpfs
+Postgres) whose api is built with the new `e2e-bypass` cargo feature —
+auth is short-circuited to a synthetic non-admin user. **Security:** the
+release Dockerfile builds without features, so the bypass code path never
+exists in shipped binaries, and even a feature-built binary requires
+`E2E_AUTH_BYPASS=1` at runtime. No local Node needed: Playwright runs in
+its official Docker image (`E2E_RUNNER=native` opts into local node).
+Also: optional env vars (OIDC/S3) now treat empty strings as unset so
+compose overrides can disable them.
+
 ## [2.21.1] - 2026-06-10
 
 ### Fixed — Zombie keyboard listener panics (hotfix)

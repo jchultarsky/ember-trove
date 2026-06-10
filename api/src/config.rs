@@ -97,15 +97,15 @@ impl Config {
 
         Ok(Self {
             database_url: require("DATABASE_URL")?,
-            s3_endpoint: env::var("S3_ENDPOINT").ok(),
-            s3_bucket: env::var("S3_BUCKET").ok(),
-            s3_access_key: env::var("S3_ACCESS_KEY").ok(),
-            s3_secret_key: env::var("S3_SECRET_KEY").ok(),
+            s3_endpoint: optional("S3_ENDPOINT"),
+            s3_bucket: optional("S3_BUCKET"),
+            s3_access_key: optional("S3_ACCESS_KEY"),
+            s3_secret_key: optional("S3_SECRET_KEY"),
             s3_region: env::var("S3_REGION").unwrap_or_else(|_| "us-east-1".to_string()),
-            oidc_issuer: env::var("OIDC_ISSUER").ok(),
-            oidc_client_id: env::var("OIDC_CLIENT_ID").ok(),
-            oidc_client_secret: env::var("OIDC_CLIENT_SECRET").ok(),
-            cognito_user_pool_id: env::var("COGNITO_USER_POOL_ID").ok(),
+            oidc_issuer: optional("OIDC_ISSUER"),
+            oidc_client_id: optional("OIDC_CLIENT_ID"),
+            oidc_client_secret: optional("OIDC_CLIENT_SECRET"),
+            cognito_user_pool_id: optional("COGNITO_USER_POOL_ID"),
             cognito_region: env::var("COGNITO_REGION").unwrap_or_else(|_| "us-east-2".to_string()),
             aws_access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
             aws_secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
@@ -127,4 +127,11 @@ impl Config {
 
 fn require(name: &'static str) -> Result<String, ConfigError> {
     env::var(name).map_err(|_| ConfigError::MissingVar(name))
+}
+
+/// Optional env var; an empty (or whitespace-only) value counts as unset.
+/// Lets docker-compose overrides disable a feature by blanking the variable
+/// — compose has no way to *unset* an inherited variable.
+fn optional(name: &'static str) -> Option<String> {
+    env::var(name).ok().filter(|v| !v.trim().is_empty())
 }

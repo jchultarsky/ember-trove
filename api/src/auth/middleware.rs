@@ -20,6 +20,24 @@ pub async fn require_auth(
     mut request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
+    // ── E2E auth bypass ──────────────────────────────────────────────────
+    // Compiled ONLY with the `e2e-bypass` cargo feature, which no release
+    // artifact enables (deploy/Dockerfile.api builds without features), and
+    // armed ONLY when E2E_AUTH_BYPASS=1 is set at runtime. Lets Playwright
+    // drive the UI without a Cognito session — see e2e/README.md.
+    #[cfg(feature = "e2e-bypass")]
+    if std::env::var("E2E_AUTH_BYPASS").as_deref() == Ok("1") {
+        let claims = AuthClaims {
+            sub: std::env::var("E2E_BYPASS_SUB").unwrap_or_else(|_| "e2e-test-user".to_string()),
+            email: Some("e2e@test.local".to_string()),
+            name: Some("E2E Test".to_string()),
+            roles: vec![],
+            exp: i64::MAX,
+        };
+        request.extensions_mut().insert(claims);
+        return Ok(next.run(request).await);
+    }
+
     let oidc = state
         .oidc
         .as_ref()

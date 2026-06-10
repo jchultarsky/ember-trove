@@ -1,6 +1,11 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
 FROM rust:latest AS builder
 
+# Extra cargo features, e.g. "e2e-bypass" for the Playwright stack
+# (deploy/docker-compose.e2e.yml). Empty for production builds — the
+# release image must never contain the auth-bypass code path.
+ARG CARGO_FEATURES=""
+
 RUN apt-get update && apt-get install -y \
     pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -29,7 +34,7 @@ COPY migrations/ ./migrations/
 RUN find common/src api/src -name '*.rs' -exec touch {} +
 
 # Build for real (only changed crates recompile)
-RUN cargo build --release -p api
+RUN cargo build --release -p api ${CARGO_FEATURES:+--features "$CARGO_FEATURES"}
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM debian:trixie-slim
