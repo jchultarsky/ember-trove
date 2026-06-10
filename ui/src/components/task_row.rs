@@ -309,9 +309,11 @@ pub fn KanbanTaskRow(
 
     // ── Render ────────────────────────────────────────────────────────
 
+    // Style + accessible name: the dot is colour-coded for sighted users,
+    // with title/aria-label carrying the same information non-visually.
     let priority_dot = match priority {
-        TaskPriority::High => Some("color:#ef4444;"),
-        TaskPriority::Medium => Some("color:#f59e0b;"),
+        TaskPriority::High => Some(("color:#ef4444;", "High priority")),
+        TaskPriority::Medium => Some(("color:#f59e0b;", "Medium priority")),
         TaskPriority::Low => None,
     };
 
@@ -501,8 +503,13 @@ pub fn KanbanTaskRow(
                     // ── Display row ──────────────────────────────────
                     view! {
                         <div class="flex items-center gap-2 mt-0.5">
-                            {priority_dot.map(|s| view! {
-                                <span style=format!("{s}font-size:8px;line-height:1;")>"●"</span>
+                            {priority_dot.map(|(s, label)| view! {
+                                <span
+                                    style=format!("{s}font-size:8px;line-height:1;")
+                                    title=label
+                                    aria-label=label
+                                    role="img"
+                                >"●"</span>
                             })}
                             <span class="text-sm text-stone-800 dark:text-stone-200 truncate"
                                   style=move || if status_done(&status_sig.get()) {

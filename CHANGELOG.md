@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — Accessibility pass (SPA fundamentals)
+- **Modals** (quick capture, command palette, delete confirm, help) now trap
+  `Tab` focus inside the dialog and return focus to the triggering element on
+  close; all carry `role="dialog"`/`"alertdialog"` + `aria-modal`. The delete
+  confirmation autofocuses Cancel (the safe action) and closes on `Escape`.
+- **Route changes** update `document.title` ("My Day — Ember Trove", …) and
+  move focus to the main region so screen readers announce navigation.
+- **Toasts** are a `role="status"` polite live region — save/delete/undo
+  outcomes are announced.
+- **Task tabs** (My Day / Inbox / Calendar) follow the ARIA tabs pattern:
+  roving tabindex and left/right arrow keys switch tabs.
+- **Priority dots** carry `title`/`aria-label` ("High priority") instead of
+  being color-only.
+
 ### Added — Command palette actions
 The Cmd-K palette now runs commands, not just node search: navigation
 ("Go to My Day / Inbox / Calendar / Dashboard / Graph / Notes / All Nodes /

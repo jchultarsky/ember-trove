@@ -145,7 +145,11 @@ pub fn ToastOverlay() -> impl IntoView {
     let state = expect_context::<ToastState>();
 
     view! {
-        <div class="fixed bottom-24 right-6 z-50 flex flex-col gap-2 pointer-events-none">
+        <div
+            class="fixed bottom-24 right-6 z-50 flex flex-col gap-2 pointer-events-none"
+            role="status"
+            aria-live="polite"
+        >
             <For
                 each=move || state.toasts.get()
                 key=|t| t.id

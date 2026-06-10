@@ -219,6 +219,29 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     };
     on_cleanup(move || handle.remove());
 
+    // ── SPA route-change a11y ──────────────────────────────────────────────
+    // On navigation, update `document.title` and move focus to the <main>
+    // region so screen readers announce the new view (standard SPA WCAG
+    // guidance). The initial load is skipped so startup focus (e.g. the
+    // capture box opened via a PWA shortcut) isn't disturbed.
+    {
+        let location = use_location();
+        Effect::new(move |prev: Option<String>| {
+            let path = location.pathname.get();
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                doc.set_title(&format!("{} — Ember Trove", section_title(&path)));
+                if prev.is_some()
+                    && prev.as_deref() != Some(path.as_str())
+                    && let Some(main) = doc.get_element_by_id("main-content")
+                    && let Ok(el) = main.dyn_into::<web_sys::HtmlElement>()
+                {
+                    let _ = el.focus();
+                }
+            }
+            path
+        });
+    }
+
     view! {
         <AuthGate auth_state=auth_state>
             <div class="flex flex-col md:flex-row h-screen overflow-hidden bg-stone-50 dark:bg-stone-950">
@@ -310,7 +333,11 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                     </button>
                 </aside>
 
-                <main class="flex-1 overflow-auto flex flex-col min-w-0">
+                <main
+                    id="main-content"
+                    tabindex="-1"
+                    class="flex-1 overflow-auto flex flex-col min-w-0 focus:outline-none"
+                >
                     <Routes fallback=|| view! { <Redirect path="/tasks/my-day" /> }>
                         <Route path=path!("/")                 view=|| view! { <Redirect path="/tasks/my-day" /> } />
                         <Route path=path!("/tasks")            view=|| view! { <Redirect path="/tasks/my-day" /> } />
@@ -468,6 +495,41 @@ fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
                 </div>
             </div>
         </div>
+    }
+}
+
+/// Human-readable section name for `document.title`, derived from the path.
+fn section_title(path: &str) -> &'static str {
+    if path.starts_with("/tasks/my-day") {
+        "My Day"
+    } else if path.starts_with("/tasks/inbox") {
+        "Inbox"
+    } else if path.starts_with("/tasks/calendar") {
+        "Calendar"
+    } else if path.starts_with("/dashboard") {
+        "Dashboard"
+    } else if path.starts_with("/graph") {
+        "Graph"
+    } else if path.starts_with("/search") {
+        "Search"
+    } else if path.starts_with("/notes") {
+        "Notes"
+    } else if path == "/nodes/new" {
+        "New Node"
+    } else if path.starts_with("/nodes/") && path.ends_with("/edit") {
+        "Edit Node"
+    } else if path.starts_with("/nodes/") {
+        "Node"
+    } else if path.starts_with("/nodes") {
+        "All Nodes"
+    } else if path.starts_with("/tags") {
+        "Tags"
+    } else if path.starts_with("/templates") {
+        "Templates"
+    } else if path.starts_with("/admin") {
+        "Admin"
+    } else {
+        "Ember Trove"
     }
 }
 
