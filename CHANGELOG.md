@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Unlinked mentions under "Linked Here"
+The backlinks panel on a node page now lists **Mentions**: nodes whose text
+contains this node's title without linking to it (full-text matches, minus
+existing backlinks). Each row has a one-click **Link** action that rewrites
+the first plain-text occurrence in the mentioning node into a wikilink —
+prose casing is preserved via the alias form (`[[Title|prose text]]`), word
+boundaries are respected, and text already inside `[[...]]` is never touched
+(`common::markdown::link_first_mention`, unit-tested). The rewrite goes
+through the normal node update path, so it versions, syncs wikilinks (the
+mention immediately becomes a backlink), and respects edit permissions.
+
 ### Changed — Loading & theme polish
 - Search results and the Templates gallery now show content-shaped skeletons
   while loading instead of bare "Loading…" text.
