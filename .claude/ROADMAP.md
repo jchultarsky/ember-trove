@@ -5,7 +5,20 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-06-10)
 
-- **Released:** v2.21.0 — the full 2026-06-09 UI usability review, shipped across ten
+- **Released:** v2.21.1 — hotfix for two UI bugs found by live prod testing of
+  v2.21.0 minutes after release: (1) `MyDayView` leaked its window keydown
+  listener on unmount (the handle's Drop does not detach; a zombie listener
+  panicked on disposed signals and poisoned all WASM event dispatch);
+  (2) toasts pushed after an `.await` in `wasm_bindgen_futures::spawn_local`
+  were silently dropped (`use_context` has no owner there) — undo toasts never
+  rendered, nor had several older continuation toasts. Both lessons recorded
+  in `.claude/ERRORS.md` and `.claude/rules/leptos.md`. Fixes verified live in
+  prod post-deploy: the v2.21.0 crash repro (My Day → tab switch → keypress) is
+  clean, and the delete → Undo → restore cycle works end-to-end. **Process lesson:**
+  post-release live testing in prod caught in 10 minutes what unit tests and
+  clippy structurally cannot — WASM runtime behavior needs the browser; the
+  e2e-harness backlog item just got its strongest argument yet.
+- **Prior (v2.21.0):** — the full 2026-06-09 UI usability review, shipped across ten
   feature branches and verified on prod (`/api/health` → 2.21.0, DB ok).
   **Trust tier:** editor autosave + create-mode localStorage drafts + save-state
   indicator (with server-side version-snapshot dedupe and 15-min "Edited" activity
