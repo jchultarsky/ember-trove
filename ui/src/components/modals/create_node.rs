@@ -164,12 +164,17 @@ pub fn CreateNodeModal(
         });
     });
 
-    // Keyboard handler: Escape closes, Ctrl+Enter submits.
+    let panel_ref: NodeRef<leptos::html::Div> = NodeRef::new();
+    super::return_focus_on_close(show);
+
+    // Keyboard handler: Escape closes, Ctrl+Enter submits, Tab is trapped.
     let handle_keydown = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == "Escape" {
             on_close.run(());
         } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
             submit_pending.set(true);
+        } else if let Some(panel) = panel_ref.get_untracked() {
+            super::trap_focus(&ev, &panel);
         }
     };
 
@@ -188,6 +193,10 @@ pub fn CreateNodeModal(
                 <div class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl
                             border border-stone-200 dark:border-stone-700
                             w-full max-w-lg flex flex-col gap-4 p-6"
+                    node_ref=panel_ref
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="Create node"
                     // Prevent backdrop click from closing when clicking inside
                     on:click=|ev| ev.stop_propagation()
                 >

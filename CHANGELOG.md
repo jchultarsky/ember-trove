@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.22.0] - 2026-06-10
+
+### Added — My Day: carryover prompt and foldable overdue section
+Carried-over tasks (focused on a previous day, still open) now ask
+"still today?" inline: **Yes** re-stamps the focus date to today (clearing
+the badge), **No** drops the task back to the backlog — making the morning
+carry-over decision one click instead of silent stickiness. Overdue tasks
+get their own foldable "Overdue · N" section above the backlog (red accent,
+expanded by default) instead of mixing into the top of the list — visible,
+but never a pinned guilt pile. Keyboard j/k order follows the display order
+and skips folded overdue rows. The binary `focus_date` model is unchanged
+(see the 2026-04-28 ADR).
+
+### Tooling — E2E coverage for saved search presets
+The presets UI (save current filters under a name, load, delete) already
+existed but was untested and mislisted as missing in the ROADMAP backlog —
+now pinned by an e2e spec (save → reload-persist → load applies the query →
+delete).
+
+### Added — Calendar quick-add
+Clicking a day cell on the Calendar opens an inline composer; Enter creates a
+standalone task due that day (it lands in the Inbox for triage like any other
+capture), Escape cancels. Task chips still navigate to their node — clicks no
+longer fall through to the cell. Day cells carry `data-date` attributes.
+
+### Changed — Focus traps on the remaining modals
+Create-node and add-favorite now trap Tab focus, return focus on close, and
+carry `role="dialog"`/`aria-modal` — completing the modal a11y pass started
+in v2.21.0 (quick capture, palette, delete confirm, help).
+
 ## [2.21.4] - 2026-06-10
 
 ### Fixed — Palette: commands no longer hijacked by body-text node matches
