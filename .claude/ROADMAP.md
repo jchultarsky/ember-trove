@@ -5,7 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-06-10)
 
-- **Released:** v2.21.2 — Playwright e2e smoke suite (`e2e/`, `scripts/e2e.sh`,
+- **Released:** v2.21.3 — e2e suite grown to 13 specs: triage flows (`t`/`s`/`a`
+  decisions with API-verified server state, skip-wrap, no-changes exit) and the
+  command palette (synonym matching, navigation dispatch, dark-mode round-trip,
+  node search, context commands). Only app change: a `data-testid` on the
+  triage card. The first cloud run caught a real spec bug (Cmd+K fired before
+  the WASM listener registered on cold runners — invisible on warm local
+  stacks); fixed with a render gate and recorded in `.claude/rules/e2e.md`,
+  which now carries five selector/timing lessons. Verified on prod
+  (`/api/health` → 2.21.3).
+- **Prior (v2.21.2):** — Playwright e2e smoke suite (`e2e/`, `scripts/e2e.sh`,
   CI job `e2e`), the direct answer to the v2.21.1 lesson that host-side gates
   cannot see WASM runtime bugs. Five specs (shell, NL quick capture,
   delete→undo→restore, zombie-listener regression, editor autosave) run
@@ -60,6 +69,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Backlog / candidate work
 
+- **Palette ranking: command-keyword hits should beat body-text node matches**
+  (found live-testing v2.21.3, 2026-06-10): typing "theme" surfaces "Toggle
+  dark mode" but two nodes whose *bodies* mention "theme" rank above it, so
+  Enter opens a node instead of running the command. Options: rank exact
+  command-keyword matches above body-only (non-title) node matches, or add a
+  `>` prefix for command-only mode (the established palette convention).
+  `match_source` on `SearchResult` already distinguishes title vs body hits,
+  so the ranking fix is likely cheap.
 - 2026-06-09 usability review: **fully shipped in v2.21.0** (see Current state).
   Unscheduled nice-to-haves that came out of it: My Day carryovers as one-click
   "still today?" suggestions + collapsible overdue section; calendar

@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.21.4] - 2026-06-10
+
+### Fixed — Palette: commands no longer hijacked by body-text node matches
+Typing a command-intent query like "theme" or "dark" could rank nodes whose
+*bodies* mention the word above the command itself, so Enter opened a node
+instead of running the command (found live-testing v2.21.3). The non-empty
+query list is now ordered: title-matched nodes (the quick-switcher core) →
+commands → body-only node matches → Create. Unit-tested (`ranked_actions`)
+and pinned by an e2e regression with a bait node (14 specs total).
+
 ## [2.21.3] - 2026-06-10
 
 ### Tooling — E2E specs for inbox triage and the command palette
