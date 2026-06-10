@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — E2E coverage for saved search presets
+The presets UI (save current filters under a name, load, delete) already
+existed but was untested and mislisted as missing in the ROADMAP backlog —
+now pinned by an e2e spec (save → reload-persist → load applies the query →
+delete).
+
 ### Added — Calendar quick-add
 Clicking a day cell on the Calendar opens an inline composer; Enter creates a
 standalone task due that day (it lands in the Inbox for triage like any other
