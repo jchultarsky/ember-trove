@@ -19,6 +19,7 @@ This file is the lean, always-loaded summary; depth lives in `.claude/`.
 - `.claude/patterns/` — canonical code patterns (navigate, submit, debounce, double-opt)
 - `.claude/rules/leptos.md` — Leptos/UI rules (relevant for `ui/`)
 - `.claude/rules/api.md` — API/backend rules (relevant for `api/`)
+- `.claude/rules/e2e.md` — Playwright rules & selector gotchas (relevant for `e2e/`)
 - `.claude/ROADMAP.md` — current state, backlog, architecture decisions
 
 ---
