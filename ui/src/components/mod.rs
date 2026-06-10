@@ -10,6 +10,7 @@ pub mod favorites_section;
 pub mod format_helpers;
 pub mod graph_view;
 pub mod icon_button;
+pub mod inbox_triage;
 pub mod inbox_view;
 pub mod layout;
 pub mod links_panel;

@@ -125,6 +125,33 @@ const MY_DAY: &[Shortcut] = &[
     },
 ];
 
+const INBOX_TRIAGE: &[Shortcut] = &[
+    Shortcut {
+        key: "t",
+        description: "Add to today",
+    },
+    Shortcut {
+        key: "s",
+        description: "Schedule a due date",
+    },
+    Shortcut {
+        key: "a",
+        description: "Attach to a node",
+    },
+    Shortcut {
+        key: "d",
+        description: "Delete (undo via toast)",
+    },
+    Shortcut {
+        key: "j / k",
+        description: "Skip / go back",
+    },
+    Shortcut {
+        key: "Escape",
+        description: "Exit triage",
+    },
+];
+
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "Anywhere",
@@ -133,6 +160,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "My Day Kanban",
         items: MY_DAY,
+    },
+    ShortcutGroup {
+        title: "Inbox triage (Process)",
+        items: INBOX_TRIAGE,
     },
     ShortcutGroup {
         title: "Node view",
