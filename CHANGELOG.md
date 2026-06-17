@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Operations — TLS auto-renewal repaired + documented
+Production HTTPS cert expired (2026-06-17) after ~30 days of silently failed
+auto-renewals: the host's certbot renewal config used `authenticator =
+standalone`, which can't bind port 80 because the nginx proxy container owns
+it. Switched renewal to the `webroot` method (the architecture nginx was
+already built for), reissued the cert, and replaced the post-renewal nginx
+reload hook with a Docker-direct version (no compose/env dependency). Proven
+end to end with `certbot renew --dry-run`. The renewal setup — which lived
+only on the host and had no repo record — is now captured in
+`deploy/TLS-RENEWAL.md` (+ a version-controlled `deploy/renewal-hooks/reload-nginx.sh`).
+
+
 ## [2.22.2] - 2026-06-10
 
 ### Documentation — ROADMAP updates (v2.22.0 prod verification, AuthGate fix record)
