@@ -1,0 +1,53 @@
+name: Cert expiry monitor
+
+# Backstop for silent TLS-renewal failures (the 2026-06-17 outage went
+# unnoticed for ~30 days because failed certbot renewals alert no one). This
+# checks the *live* served cert daily and fails the run — which emails the
+# maintainer via GitHub's failed-workflow notifications — when expiry is near.
+# Checking the served cert end-to-end also catches "renewed but nginx not
+# reloaded" and DNS/reachability problems, not just renewal itself.
+#
+# Recovery when this fires: deploy/TLS-RENEWAL.md.
+#
+# NOTE: `on: schedule` only runs from the repository's default branch, so this
+# file must live on `main` to fire automatically.
+
+on:
+  schedule:
+    - cron: '17 7 * * *' # daily, 07:17 UTC
+  workflow_dispatch: {} # allow manual checks
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check trove.chultarsky.me TLS expiry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HOST: trove.chultarsky.me
+      WARN_DAYS: 25 # renewal should fire at 30 days left; <25 means it's overdue
+      FAIL_DAYS: 14 # hard alert — ~2 weeks of runway to fix
+    steps:
+      - name: Read served certificate and evaluate days remaining
+        run: |
+          set -euo pipefail
+          end_date="$(echo | openssl s_client -servername "$HOST" -connect "$HOST:443" 2>/dev/null \
+            | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2 || true)"
+          if [ -z "$end_date" ]; then
+            echo "::error::Could not read the TLS certificate for $HOST — host unreachable or TLS handshake failed. See deploy/TLS-RENEWAL.md"
+            exit 1
+          fi
+          end_epoch="$(date -u -d "$end_date" +%s)"
+          now_epoch="$(date -u +%s)"
+          days=$(( (end_epoch - now_epoch) / 86400 ))
+          echo "$HOST certificate expires: $end_date ($days days remaining)"
+          echo "::notice::$HOST TLS cert: $days days remaining (expires $end_date)"
+          if [ "$days" -lt "$FAIL_DAYS" ]; then
+            echo "::error::$HOST TLS cert expires in $days days (< $FAIL_DAYS). Auto-renewal is likely broken — renew now per deploy/TLS-RENEWAL.md"
+            exit 1
+          fi
+          if [ "$days" -lt "$WARN_DAYS" ]; then
+            echo "::warning::$HOST TLS cert has $days days left (< $WARN_DAYS). Renewal (due at 30 days) appears overdue — check deploy/TLS-RENEWAL.md"
+          fi
