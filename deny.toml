@@ -35,8 +35,9 @@ allow = [
 ]
 confidence-threshold = 0.8
 
-# Our own workspace crates (api/common/ui) carry no LICENSE and are marked
-# `publish = false`; skip license checks on them rather than inventing a license.
+# Our own workspace crates (api/common/ui) are MIT (repo LICENSE, `license = "MIT"`
+# in each manifest) but marked `publish = false`; skipping them keeps the check
+# focused on third-party deps.
 private = { ignore = true }
 
 [bans]

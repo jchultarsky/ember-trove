@@ -1,0 +1,54 @@
+name: Bug report
+description: Something doesn't work the way it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug!
+        **Security issue?** Please do NOT file it here — use
+        [private vulnerability reporting](https://github.com/jchultarsky/ember-trove/security/advisories/new) instead (see SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Created a node with …
+        2. Clicked …
+        3. Expected …, but got …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version shown by `/api/health` (or the git tag/commit you built).
+      placeholder: "2.22.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - API / backend
+        - UI / frontend (WASM)
+        - Deployment / Docker
+        - Documentation
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or console output
+      description: |
+        API logs, browser console errors, or a screenshot. **Redact anything
+        personal — node contents, emails, tokens — before pasting.**
+      render: text
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "Browser + OS, Docker vs native, PostgreSQL version, …"
