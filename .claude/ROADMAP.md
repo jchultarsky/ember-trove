@@ -5,6 +5,28 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-07-17)
 
+- **v2.23.0 shipped** — the "trust the suite" release (2026-07-17 review plan,
+  below). Coverage inverted-vs-risk is corrected: registration + behavior
+  tests for the six previously-untested privileged route groups (admin,
+  backup, metrics, export, attachments, editor-prefs — 91→110 api tests);
+  e2e specs for the graph view (`graph.spec.ts` — the largest UI surface, was
+  untested); repo-layer tests against real Postgres (`pg-tests` feature +
+  `#[sqlx::test]`, new CI job `repo tests (postgres)`); coverage floor raised
+  17→24 (measured baseline 25.96%). Both product decisions resolved:
+  **webhooks** shipped a UI (`/webhooks`) — and building it surfaced/fixed a
+  secret-wiping `PUT` bug (unconditional secret write vs. masked-secret reads;
+  now `deser_double_opt` PATCH semantics). **`/search`** kept (sidebar box
+  already navigates there); closed the real gap with `Go to Search`/`Go to
+  Webhooks` palette commands. Also folded in the earlier unreleased work:
+  three security fixes (rate-limit `/share/{token}`, node-scoped token revoke,
+  webhook-dispatch DNS re-vet + pinning — `api/src/ssrf.rs`) and the
+  community-health set (SECURITY.md, CoC, issue/PR templates, `license = MIT`).
+- **v3 groundwork (post-2.23.0, on `feature/jc/local-auth`):** zero-AWS local
+  login via a bundled Keycloak issuer (`./scripts/dev-local.sh`) whose
+  `cognito:groups` protocol mapper leaves the token path unchanged; only API
+  change is a Cognito-only guard on `/auth/change-password`. Verified
+  end-to-end (login → `/api/auth/me` roles:["admin"]). Known follow-up: the
+  Keycloak login page renders unstyled through the proxy (cosmetic).
 - **v2.22.3 shipped** — first release under the personal `jchultarsky` account
   (repo transferred from `jchultarsky101`, 2026-07). Patched RUSTSEC-2026-0193
   (ammonia mXSS — the user-markdown sanitizer, a stored-XSS vector here) and
