@@ -99,7 +99,7 @@ ember-trove/  common/ (DTOs, errors, IDs) · api/ (Axum, :3003) · ui/ (Leptos/T
 
 - **Admin sub:** `f1eb2590-0091-70e4-d9b3-24e4a23d24d1` (`julian@chultarsky.com`).
   Cognito pool `us-east-2_4RQfxhKqn` · client `eogq2sehdad3uc8nmar7aneol`. (More in `.claude/rules/api.md`.)
-- **Prod:** `ubuntu@18.221.254.95` (SSH `~/.ssh/lightsail-ember-trove.pem`). Deploy via
+- **Prod:** `ubuntu@18.221.254.95` (`ssh trove` — key `~/.ssh/lightsail-julian`). Deploy via
   `git push origin main develop --tags` (tag → GHA → GHCR → EC2). Verify
   `curl https://trove.chultarsky.me/api/health`. Migrations auto-run at startup.
 
