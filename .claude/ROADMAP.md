@@ -5,6 +5,28 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-07-17)
 
+- **v2.23.0 shipped** — the "trust the suite" release (2026-07-17 review plan,
+  below). Coverage inverted-vs-risk is corrected: registration + behavior
+  tests for the six previously-untested privileged route groups (admin,
+  backup, metrics, export, attachments, editor-prefs — 91→110 api tests);
+  e2e specs for the graph view (`graph.spec.ts` — the largest UI surface, was
+  untested); repo-layer tests against real Postgres (`pg-tests` feature +
+  `#[sqlx::test]`, new CI job `repo tests (postgres)`); coverage floor raised
+  17→24 (measured baseline 25.96%). Both product decisions resolved:
+  **webhooks** shipped a UI (`/webhooks`) — and building it surfaced/fixed a
+  secret-wiping `PUT` bug (unconditional secret write vs. masked-secret reads;
+  now `deser_double_opt` PATCH semantics). **`/search`** kept (sidebar box
+  already navigates there); closed the real gap with `Go to Search`/`Go to
+  Webhooks` palette commands. Also folded in the earlier unreleased work:
+  three security fixes (rate-limit `/share/{token}`, node-scoped token revoke,
+  webhook-dispatch DNS re-vet + pinning — `api/src/ssrf.rs`) and the
+  community-health set (SECURITY.md, CoC, issue/PR templates, `license = MIT`).
+- **v3 groundwork (post-2.23.0, on `feature/jc/local-auth`):** zero-AWS local
+  login via a bundled Keycloak issuer (`./scripts/dev-local.sh`) whose
+  `cognito:groups` protocol mapper leaves the token path unchanged; only API
+  change is a Cognito-only guard on `/auth/change-password`. Verified
+  end-to-end (login → `/api/auth/me` roles:["admin"]). Known follow-up: the
+  Keycloak login page renders unstyled through the proxy (cosmetic).
 - **v2.22.3 shipped** — first release under the personal `jchultarsky` account
   (repo transferred from `jchultarsky101`, 2026-07). Patched RUSTSEC-2026-0193
   (ammonia mXSS — the user-markdown sanitizer, a stored-XSS vector here) and
@@ -41,10 +63,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
   surfaces); e2e specs for the knowledge-graph half (graph_view.rs 2.4k lines,
   node_editor, node_view have none today); repo-layer tests against real
   Postgres (reuse the CI migration-validation container); raise the coverage
-  floor above 17% as this lands. Product decisions due: **webhooks** (complete,
-  SSRF-hardened backend, zero UI — ship a UI or cut it) and the **orphaned
-  `/search` view** (994 lines reachable only by URL since `/` opens the
-  palette — fold presets into the palette or re-surface the view).
+  floor above 17% as this lands. Product decisions due: **webhooks** —
+  DECIDED 2026-07-17: shipped the UI (`/webhooks`; building it surfaced and
+  fixed the secret-wiping update semantics). **`/search` view** — DECIDED
+  2026-07-17: KEEP. The "orphaned" claim was overstated (the sidebar search
+  box navigates there on Enter / "View all"); the real gap was palette
+  parity, closed with `Go to Search` (+ `Go to Webhooks`) commands. Do not
+  fold the full search page into the palette — presets/filters/full results
+  are a different job than quick-jump.
 - **v3 candidates — OSS launch:** self-contained local auth (Keycloak/dex with
   a `cognito:groups` claim mapper) to restore zero-AWS clone-and-run —
   **promoted from deferred**: it is the main adoption barrier now the repo is
@@ -182,9 +208,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   reformat; enforced by hook + CI. Editors format with `--edition 2024`.
 - **SHA-pinned GitHub Actions + Dependabot.** Supply-chain hardening consistent with the
   project's security posture; Dependabot keeps pins current.
-- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 17`
-  (baseline ~18.7% on 2026-06-05). The floor sits under the baseline so it never blocks the
-  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05)
+- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 24`
+  (baseline 25.96% on 2026-07-17, post-"trust the suite"; previously 17 under an 18.7%
+  baseline, 2026-06-05). The floor sits ~2 points under the baseline so it never blocks the
+  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05,
+  raised 2026-07-17)
 - **`cargo-deny` added for licenses + bans + sources only** (2026-06-05). Advisories stay with
   `cargo audit` (`.cargo/audit.toml` is the single source of truth) so the two never diverge —
   cargo-deny runs only the non-overlapping checks, resolving the earlier "avoid overlap"

@@ -107,6 +107,8 @@ enum Command {
     GoNodes,
     GoTags,
     GoTemplates,
+    GoSearch,
+    GoWebhooks,
     NewTask,
     NewNode,
     ToggleDark,
@@ -201,6 +203,20 @@ const GLOBAL_COMMANDS: &[CommandSpec] = &[
         label: "Go to Templates",
         icon: "stacks",
         keywords: "scaffold prefill",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoSearch,
+        label: "Go to Search",
+        icon: "search",
+        keywords: "find query full-text advanced presets filters",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::GoWebhooks,
+        label: "Go to Webhooks",
+        icon: "webhook",
+        keywords: "hooks integrations notify endpoints",
         hint: "",
     },
     CommandSpec {
@@ -515,6 +531,8 @@ pub fn CommandPalette(
                     Command::GoNodes => nav("/nodes", Default::default()),
                     Command::GoTags => nav("/tags", Default::default()),
                     Command::GoTemplates => nav("/templates", Default::default()),
+                    Command::GoSearch => nav("/search", Default::default()),
+                    Command::GoWebhooks => nav("/webhooks", Default::default()),
                     Command::NewTask => {
                         if let Some(c) = show_capture {
                             c.0.set(true);
