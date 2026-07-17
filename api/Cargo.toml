@@ -20,6 +20,11 @@ workspace = true
 # code is not present in shipped binaries; even when compiled in, it must
 # additionally be armed at runtime with E2E_AUTH_BYPASS=1.
 e2e-bypass = []
+# Repo-layer tests against a real PostgreSQL (api/src/repo/pg_tests.rs).
+# Feature-gated so the default `cargo test` run (and the pre-push hook) needs
+# no database; enable with DATABASE_URL set:
+#   cargo test -p api --features pg-tests
+pg-tests = []
 
 [dependencies]
 common             = { path = "../common" }
