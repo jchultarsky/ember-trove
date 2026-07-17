@@ -3,9 +3,10 @@ name       = "api"
 version = "2.22.3"
 edition    = "2024"
 repository = "https://github.com/jchultarsky/ember-trove"
-# Self-hosted application crate — never published to a registry. Marks the crate
-# "private" so cargo-deny's license check skips it (no LICENSE in the repo; this
-# is not an OSS-distribution artifact). See deny.toml `[licenses].private`.
+license    = "MIT"
+# Self-hosted application crate — never published to a registry (`publish = false`),
+# though the source is MIT-licensed (repo LICENSE). cargo-deny still skips license
+# checks on private workspace crates; see deny.toml `[licenses].private`.
 publish = false
 
 [lints]

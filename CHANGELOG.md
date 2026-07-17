@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation — open-source community health files
+Added the standard community set for the now-intentionally-public repo:
+`SECURITY.md` (private vulnerability reporting, scope, supported versions),
+`CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), issue templates (bug/feature,
+with a security-report redirect) and a PR template mirroring the gates.
+Declared `license = "MIT"` in all three crate manifests and corrected the
+stale "no LICENSE in the repo" comments (the MIT `LICENSE` has existed since
+the repo went public); `CONTRIBUTING.md` now links the new files and explains
+the fork → `develop` flow for external contributors.
+
 ## [2.22.3] - 2026-07-16
 
 ### Security — patched ammonia mXSS and quinn-proto DoS advisories
