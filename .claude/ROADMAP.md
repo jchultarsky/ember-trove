@@ -3,7 +3,64 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-06-10)
+## Current state (2026-07-17)
+
+- **v2.22.3 shipped** — first release under the personal `jchultarsky` account
+  (repo transferred from `jchultarsky101`, 2026-07). Patched RUSTSEC-2026-0193
+  (ammonia mXSS — the user-markdown sanitizer, a stored-XSS vector here) and
+  RUSTSEC-2026-0185 (quinn-proto; verified an unreachable orphan lock subtree).
+  Owner-pinned references repointed (GHCR image paths in deploy/, badges,
+  docs); GHCR packages pre-seeded, made public, and repo-linked with Actions
+  Write under the new owner; prod deploy SSH key rotated (dedicated GHA key
+  lives only in `LIGHTSAIL_SSH_KEY`; personal key `~/.ssh/lightsail-julian`,
+  `ssh trove`) and proven end-to-end by the release deploy.
+- **Repo is public BY INTENT** — declared an open-source project (sole
+  contributor today). Community set added: SECURITY.md (private vulnerability
+  reporting enabled on the repo), Contributor Covenant 2.1, issue/PR
+  templates, `license = "MIT"` in all crate manifests.
+- **2026-07-17 full-codebase review** (backend + frontend + test-infra survey)
+  produced the plan of record below. Three concrete security findings are in
+  progress on `feature/jc/security-hardening` (target v2.22.4).
+
+## Plan of record (2026-07-17 review)
+
+- **v2.22.4 — security patch (in progress):**
+  1. `/share/{token}` joins the rate-limited router group — it was the only
+     unauthenticated, ungoverned endpoint, and it performs a token lookup.
+  2. `revoke_share_token` scopes the DELETE to the node in the path
+     (`WHERE id = $1 AND node_id = $2`) — previously any node owner could
+     revoke any share token by id (cross-node).
+  3. Webhook dispatch re-resolves and re-vets the target host, then pins the
+     HTTP client to the vetted addresses (`resolve_to_addrs`) — closes the
+     DNS-rebinding TOCTOU left by create/update-time-only SSRF validation.
+  Plus: clear the Dependabot backlog (incl. the month-old tower-http 0.6→0.7
+  semver-major, which needs a real review).
+- **v2.23.0 — "trust the suite":** the review found coverage inverted vs risk.
+  Registration + behavior tests for the six untested route groups (admin,
+  backup, metrics, export, attachments, editor_prefs — the privileged
+  surfaces); e2e specs for the knowledge-graph half (graph_view.rs 2.4k lines,
+  node_editor, node_view have none today); repo-layer tests against real
+  Postgres (reuse the CI migration-validation container); raise the coverage
+  floor above 17% as this lands. Product decisions due: **webhooks** (complete,
+  SSRF-hardened backend, zero UI — ship a UI or cut it) and the **orphaned
+  `/search` view** (994 lines reachable only by URL since `/` opens the
+  palette — fold presets into the palette or re-surface the view).
+- **v3 candidates — OSS launch:** self-contained local auth (Keycloak/dex with
+  a `cognito:groups` claim mapper) to restore zero-AWS clone-and-run —
+  **promoted from deferred**: it is the main adoption barrier now the repo is
+  public by intent. A11y systematization beyond modals (~44 aria occurrences
+  crate-wide; keyboard dispatch hand-rolled in 23 files).
+- **Opportunistic refactors** (do while touching the area, never big-bang):
+  consolidate the three parallel task-row components (task_row / task_panel /
+  inbox_view); extract a shared debounce helper (pattern re-derived in 6
+  files); merge the three `repo/search.rs` query builders (kills the
+  `too_many_arguments` allows); adopt `#[from] sqlx::Error` in repos (~146
+  `Internal(format!)` sites); split `graph_view.rs` (move pure layout
+  algorithms out) and `routes/nodes.rs` (27 handlers); route node export
+  through the UI API client (raw `<a href>` today); drop the duplicate
+  `nodes(owner_id)` index (migration 021 duplicates 001).
+
+## Prior state (2026-06-10)
 
 - **Released & prod-verified:** v2.22.0 — the ROADMAP backlog cleared. All
   new surfaces hand-tested live after deploy: calendar day-click captured a

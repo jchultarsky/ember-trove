@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — share-token and webhook-dispatch hardening (2026-07-17 review)
+Three findings from the full-codebase security review, each with a regression test:
+- `/share/{token}` now sits inside the rate-limited router group. It was the
+  only unauthenticated endpoint outside the governor — and the one that
+  performs a token lookup.
+- `DELETE /nodes/{id}/share/{token_id}` scopes the revocation to the node in
+  the path (`WHERE id = $1 AND node_id = $2`). Previously the repo deleted by
+  token id alone, so the owner of any node could revoke any share token.
+- Webhook delivery re-resolves and re-vets the target host at dispatch time
+  and pins the HTTP client to the vetted addresses
+  (`reqwest resolve_to_addrs`), closing the DNS-rebinding TOCTOU left by
+  create/update-time-only SSRF validation. The SSRF guards moved to a shared
+  `api/src/ssrf.rs` used by both validation and dispatch.
+
 ### Documentation — open-source community health files
 Added the standard community set for the now-intentionally-public repo:
 `SECURITY.md` (private vulnerability reporting, scope, supported versions),

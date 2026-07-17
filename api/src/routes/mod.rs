@@ -129,17 +129,20 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/editor-prefs", editor_prefs::router())
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // Rate-limited public routes (auth callbacks, etc.) + protected routes.
-    // Health is intentionally excluded — monitoring tools must never be rate-limited.
+    // Rate-limited public routes (auth callbacks, public share links) +
+    // protected routes. `/share/{token}` is unauthenticated and performs a
+    // token lookup, so it MUST sit behind the governor like every other
+    // public endpoint. Health is intentionally excluded — monitoring tools
+    // must never be rate-limited.
     let rate_limited = Router::new()
         .merge(auth::public_router())
+        .nest("/share", share::public_share_router())
         .merge(protected)
         .layer(rate_limit);
 
     // Public routes — no auth required.
     let router = Router::new()
         .route("/health", get(health))
-        .nest("/share", share::public_share_router())
         .merge(rate_limited)
         // Count every response by status class (includes /health). Applied here
         // so it wraps all routes; reads/writes the counters in AppState.

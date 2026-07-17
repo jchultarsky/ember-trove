@@ -7,6 +7,7 @@ mod notify;
 mod object_store;
 mod repo;
 mod routes;
+mod ssrf;
 mod state;
 mod webhook_dispatch;
 mod wikilink;

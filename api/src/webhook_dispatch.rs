@@ -45,24 +45,42 @@ pub fn dispatch(
         };
         // Only fan out to the resource owner's own webhooks.
         hooks.retain(|h| h.owner_id == owner_id);
-        // If client construction fails (e.g. TLS backend init error) abort
-        // the whole dispatch rather than silently falling back to a client
-        // with no timeout — a slow webhook endpoint on the default client
-        // would pin the tokio task indefinitely. Redirects are disabled so a
-        // 30x to a private/IMDS address can't be followed (SSRF).
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("webhook dispatch: reqwest client build failed: {e}");
-                return;
-            }
-        };
 
         for hook in hooks {
+            // SECURITY: re-vet the URL at dispatch time, not just at
+            // create/update. A hostname vetted at creation can be re-pointed
+            // at a private/IMDS address later (DNS rebinding); resolving here
+            // and pinning the client to the vetted addresses closes that
+            // TOCTOU — the connection can only reach what we just checked.
+            let target = match crate::ssrf::vet_url_for_dispatch(&hook.url).await {
+                Ok(t) => t,
+                Err(reason) => {
+                    warn!("webhook {} skipped (SSRF guard): {reason}", hook.id);
+                    continue;
+                }
+            };
+
+            // Per-hook client so the DNS pin is scoped to this hook's host.
+            // Timeout: a slow endpoint must not pin the tokio task. Redirects
+            // are disabled so a 30x to a private/IMDS address can't be
+            // followed (second SSRF layer).
+            let mut builder = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none());
+            if let crate::ssrf::DispatchTarget::Pinned {
+                ref host,
+                ref addrs,
+            } = target
+            {
+                builder = builder.resolve_to_addrs(host, addrs);
+            }
+            let client = match builder.build() {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("webhook dispatch: reqwest client build failed: {e}");
+                    continue;
+                }
+            };
             let payload = WebhookPayload {
                 event: event.clone(),
                 webhook_id: hook.id,

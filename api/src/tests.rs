@@ -504,6 +504,11 @@ impl FavoriteRepo for StubFavoriteRepo {
     }
 }
 
+/// The one share token the stub "database" holds: token `STUB_SHARE_TOKEN_ID`
+/// belongs to node `STUB_SHARE_NODE_ID`. Lets tests prove node-scoping.
+const STUB_SHARE_TOKEN_ID: u128 = 0x5eed_0001;
+const STUB_SHARE_NODE_ID: u128 = 0x5eed_0002;
+
 struct StubShareTokenRepo;
 #[async_trait]
 impl ShareTokenRepo for StubShareTokenRepo {
@@ -528,10 +533,21 @@ impl ShareTokenRepo for StubShareTokenRepo {
         &self,
         _: Uuid,
     ) -> Result<Option<common::share_token::ShareToken>, EmberTroveError> {
-        unimplemented!()
+        // No matching token — the public share handler turns this into 404.
+        Ok(None)
     }
-    async fn revoke(&self, _: ShareTokenId) -> Result<(), EmberTroveError> {
-        unimplemented!()
+    async fn revoke(&self, id: ShareTokenId, node_id: NodeId) -> Result<(), EmberTroveError> {
+        // Mirror the production SQL (`WHERE id = $1 AND node_id = $2`): only
+        // the canned (token, node) pair exists; anything else is NotFound.
+        if id.inner() == Uuid::from_u128(STUB_SHARE_TOKEN_ID)
+            && node_id.inner() == Uuid::from_u128(STUB_SHARE_NODE_ID)
+        {
+            Ok(())
+        } else {
+            Err(EmberTroveError::NotFound(format!(
+                "share token {id} not found"
+            )))
+        }
     }
 }
 
@@ -1206,4 +1222,106 @@ async fn auth_callback_redirects_when_state_param_missing() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+}
+
+// ── Share-token security (v2.22.4 hardening) ─────────────────────────────────
+
+fn admin_claims() -> common::auth::AuthClaims {
+    common::auth::AuthClaims {
+        roles: vec!["admin".to_string()],
+        ..fake_claims()
+    }
+}
+
+/// Mini-router for the protected share endpoints with injected claims —
+/// same pattern as the task/note restore tests.
+fn share_test_app() -> Router {
+    Router::new()
+        .nest(
+            "/nodes/{node_id}/share",
+            crate::routes::share::node_share_router(),
+        )
+        .layer(axum::Extension(admin_claims()))
+        .with_state(test_state())
+}
+
+#[tokio::test]
+async fn share_revoke_succeeds_for_the_owning_node() {
+    let node = Uuid::from_u128(STUB_SHARE_NODE_ID);
+    let token = Uuid::from_u128(STUB_SHARE_TOKEN_ID);
+    let resp = share_test_app()
+        .oneshot(
+            Request::delete(format!("/nodes/{node}/share/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn share_revoke_is_scoped_to_the_path_node() {
+    // Regression (v2.22.4): revoke used to delete by token id alone, so an
+    // owner of ANY node could revoke another node's token. The repo call now
+    // carries the path's node id; a mismatched node must be NotFound.
+    let other_node = Uuid::from_u128(0xbad_c0de);
+    let token = Uuid::from_u128(STUB_SHARE_TOKEN_ID);
+    let resp = share_test_app()
+        .oneshot(
+            Request::delete(format!("/nodes/{other_node}/share/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "a token belonging to a different node must not be revocable"
+    );
+}
+
+#[tokio::test]
+async fn public_share_route_is_rate_limited() {
+    // Regression (v2.22.4): /share/{token} used to be mounted OUTSIDE the
+    // governor — the only ungoverned unauthenticated endpoint. Behind the
+    // governor, a request with no derivable client IP (no X-Real-IP /
+    // X-Forwarded-For / ConnectInfo) is rejected by the key extractor instead
+    // of reaching the handler.
+    let resp = test_app()
+        .oneshot(
+            Request::get(format!("/share/{}", Uuid::new_v4()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_server_error(),
+        "governor must gate /share/{{token}}; got {}",
+        resp.status()
+    );
+}
+
+#[tokio::test]
+async fn public_share_route_still_reachable_behind_governor() {
+    // With a client IP the governor admits the request; the stub repo has no
+    // matching token, so the HANDLER's 404 (JSON error body) proves the route
+    // is registered — an unmatched route would 404 with an empty body.
+    let resp = test_app()
+        .oneshot(
+            Request::get(format!("/share/{}", Uuid::new_v4()))
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        String::from_utf8_lossy(&body).contains("share token"),
+        "expected the share handler's JSON error body, not a bare route miss"
+    );
 }
