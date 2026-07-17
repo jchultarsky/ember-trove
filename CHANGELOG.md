@@ -6,6 +6,91 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.23.0] - 2026-07-17
+
+### Tooling — coverage floor raised 17% → 24%
+The v2.23.0 test work lifted api+common line coverage from ~18.7% to 25.96%;
+the CI floor follows it up (same ~2-point margin as the original gate), so
+the gains are now protected against regression.
+
+### Added — palette commands for Search and Webhooks
+The command palette is the primary navigation surface (since `/` opens it),
+but `/search` had no Go-command — the 2026-07-17 review flagged the full
+search page (presets, filters, full-text results) as near-undiscoverable.
+Decision recorded in `.claude/ROADMAP.md`: keep the page, close the parity
+gap. Adds `Go to Search` and `Go to Webhooks` palette commands with synonym
+keywords; e2e-covered in `palette.spec.ts`.
+
+### Added — webhooks management UI (`/webhooks`)
+The webhooks backend (complete and SSRF-hardened since its introduction) was
+headless — no UI called it. New sidebar entry + view: list with per-hook
+Active/Paused toggle and signed indicator, create/edit form with per-event
+checkboxes and HTTPS endpoint field, delete via the standard confirm modal.
+Server validation errors (e.g. SSRF-blocked URLs) surface as toasts.
+Covered by `e2e/tests/webhooks.spec.ts`.
+
+### Fixed — webhook updates no longer wipe the stored secret
+`PUT /webhooks/{id}` wrote `secret` unconditionally, and clients only ever
+see the masked secret — so any UI edit (even an Active toggle) would have
+silently cleared or corrupted the signing secret. `UpdateWebhookRequest.secret`
+now uses the `deser_double_opt` PATCH pattern (absent → keep, null → clear,
+value → replace) and the repo SQL only touches the column when the field was
+present. Serde regression tests pin all three cases; the e2e spec verifies a
+toggle leaves the secret in place.
+
+### Tooling — repo-layer tests against real PostgreSQL (v2.23.0)
+The repo layer's SQL was previously verified by nothing (stub-only router
+tests). New `pg-tests` cargo feature gates `api/src/repo/pg_tests.rs`:
+`#[sqlx::test]` gives each test its own freshly-migrated database. First
+four tests pin node owner-scoping (`list_all_for_owner` vs `list_all`),
+share-token expiry filtering, the node-scoped revoke SQL from the v2.22.4
+security fix, and the task soft-delete → restore → purge lifecycle. New CI
+job `repo tests (postgres)` runs them against the same postgres:16 service
+the migration check uses; the default `cargo test` run stays database-free.
+
+### Security — share-token and webhook-dispatch hardening (2026-07-17 review)
+Three findings from the full-codebase security review, each with a regression test:
+- `/share/{token}` now sits inside the rate-limited router group. It was the
+  only unauthenticated endpoint outside the governor — and the one that
+  performs a token lookup.
+- `DELETE /nodes/{id}/share/{token_id}` scopes the revocation to the node in
+  the path (`WHERE id = $1 AND node_id = $2`). Previously the repo deleted by
+  token id alone, so the owner of any node could revoke any share token.
+- Webhook delivery re-resolves and re-vets the target host at dispatch time
+  and pins the HTTP client to the vetted addresses
+  (`reqwest resolve_to_addrs`), closing the DNS-rebinding TOCTOU left by
+  create/update-time-only SSRF validation. The SSRF guards moved to a shared
+  `api/src/ssrf.rs` used by both validation and dispatch.
+
+### Tooling — tests for the six previously-untested route groups (v2.23.0 start)
+admin, backup, metrics, export, attachments, and editor-prefs — the most
+privileged surfaces — had no tests at all (2026-07-17 review finding).
+Added registration tests for all 15 routes plus behavior tests: non-admin
+403s on admin/backup/metrics (including backup restore), export ZIP
+owner-scoping (non-admin gets only their nodes; admin gets all), attachment
+404s on unknown ids, and editor-prefs validation (entity-kind allowlist,
+height clamp → 422). Test stubs now model canned nodes/attachments instead
+of `unimplemented!` where these paths need them. Suite: 91 → 110 api tests.
+
+### Tooling — e2e coverage for the graph view (v2.23.0)
+The single largest UI surface (graph_view.rs, ~2.4k lines) had no e2e specs.
+`graph.spec.ts` adds four: canvas rendering of created nodes, double-click
+navigation to the node page, the full Add-Edge flow (source/target selection →
+New Edge dialog → server-verified edge), and the orphans-only lens. Node
+groups now carry `data-node-id` as a stable selector hook. Canvas
+interactions use `dispatchEvent` — Playwright's positional clicks hang on
+SVG actionability checks (recorded in `.claude/rules/e2e.md`).
+
+### Documentation — open-source community health files
+Added the standard community set for the now-intentionally-public repo:
+`SECURITY.md` (private vulnerability reporting, scope, supported versions),
+`CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), issue templates (bug/feature,
+with a security-report redirect) and a PR template mirroring the gates.
+Declared `license = "MIT"` in all three crate manifests and corrected the
+stale "no LICENSE in the repo" comments (the MIT `LICENSE` has existed since
+the repo went public); `CONTRIBUTING.md` now links the new files and explains
+the fork → `develop` flow for external contributors.
+
 ## [2.22.3] - 2026-07-16
 
 ### Security — patched ammonia mXSS and quinn-proto DoS advisories

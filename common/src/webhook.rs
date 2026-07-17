@@ -81,6 +81,35 @@ mod tests {
     }
 
     #[test]
+    fn update_request_secret_absent_null_and_value_deserialize_distinctly() {
+        let base = r#""url":"https://x.example/h","events":[],"is_active":true"#;
+        let absent: UpdateWebhookRequest =
+            serde_json::from_str(&format!("{{{base}}}")).expect("absent");
+        assert_eq!(absent.secret, None, "absent field must mean keep");
+        let null: UpdateWebhookRequest =
+            serde_json::from_str(&format!("{{{base},\"secret\":null}}")).expect("null");
+        assert_eq!(null.secret, Some(None), "null must mean clear");
+        let set: UpdateWebhookRequest =
+            serde_json::from_str(&format!("{{{base},\"secret\":\"s3cret\"}}")).expect("value");
+        assert_eq!(set.secret, Some(Some("s3cret".to_string())));
+    }
+
+    #[test]
+    fn update_request_serializes_absent_secret_as_absent() {
+        let req = UpdateWebhookRequest {
+            url: "https://x.example/h".to_string(),
+            secret: None,
+            events: vec![],
+            is_active: true,
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(
+            !json.contains("secret"),
+            "None must serialize as an absent field (keep), got {json}"
+        );
+    }
+
+    #[test]
     fn default_events_match_available() {
         let defaults = default_events();
         let avail: Vec<String> = available_events()
@@ -95,8 +124,19 @@ mod tests {
 pub struct UpdateWebhookRequest {
     #[garde(skip)]
     pub url: String,
+    /// PATCH semantics via `deser_double_opt` (the `UpdateTaskRequest`
+    /// pattern): field **absent** → keep the stored secret unchanged;
+    /// **null** → clear it; **string** → replace it. Clients only ever see
+    /// the masked secret, so "echo it back" is never correct — absence is
+    /// the only safe default.
     #[garde(skip)]
-    pub secret: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::task::deser_double_opt"
+    )]
+    #[schema(value_type = Option<String>, nullable)]
+    pub secret: Option<Option<String>>,
     #[garde(skip)]
     pub events: Vec<String>,
     #[garde(skip)]

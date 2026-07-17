@@ -1,11 +1,12 @@
 [package]
 name       = "api"
-version = "2.22.3"
+version = "2.23.0"
 edition    = "2024"
 repository = "https://github.com/jchultarsky/ember-trove"
-# Self-hosted application crate — never published to a registry. Marks the crate
-# "private" so cargo-deny's license check skips it (no LICENSE in the repo; this
-# is not an OSS-distribution artifact). See deny.toml `[licenses].private`.
+license    = "MIT"
+# Self-hosted application crate — never published to a registry (`publish = false`),
+# though the source is MIT-licensed (repo LICENSE). cargo-deny still skips license
+# checks on private workspace crates; see deny.toml `[licenses].private`.
 publish = false
 
 [lints]
@@ -19,6 +20,11 @@ workspace = true
 # code is not present in shipped binaries; even when compiled in, it must
 # additionally be armed at runtime with E2E_AUTH_BYPASS=1.
 e2e-bypass = []
+# Repo-layer tests against a real PostgreSQL (api/src/repo/pg_tests.rs).
+# Feature-gated so the default `cargo test` run (and the pre-push hook) needs
+# no database; enable with DATABASE_URL set:
+#   cargo test -p api --features pg-tests
+pg-tests = []
 
 [dependencies]
 common             = { path = "../common" }

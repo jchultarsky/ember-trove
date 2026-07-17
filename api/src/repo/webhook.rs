@@ -131,18 +131,27 @@ impl WebhookRepo for PgWebhookRepo {
         owner_id: &str,
         req: UpdateWebhookRequest,
     ) -> Result<Webhook, EmberTroveError> {
+        // Secret PATCH semantics (see UpdateWebhookRequest): only touch the
+        // stored secret when the field was present in the request. Clients
+        // only ever receive the masked secret, so unconditionally writing
+        // req.secret would wipe (or corrupt) it on every unrelated edit.
+        let set_secret = req.secret.is_some();
+        let secret_value: Option<String> = req.secret.clone().flatten();
         let row = sqlx::query_as::<_, WebhookRow>(
             "UPDATE webhooks \
-             SET url = $1, secret = $2, events = $3, is_active = $4, updated_at = now() \
+             SET url = $1, \
+                 secret = CASE WHEN $2 THEN $7 ELSE secret END, \
+                 events = $3, is_active = $4, updated_at = now() \
              WHERE id = $5 AND owner_id = $6 \
              RETURNING id, owner_id, url, secret, events, is_active, created_at, updated_at",
         )
         .bind(&req.url)
-        .bind(&req.secret)
+        .bind(set_secret)
         .bind(&req.events)
         .bind(req.is_active)
         .bind(id.0)
         .bind(owner_id)
+        .bind(secret_value)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("update webhook: {e}")))?;

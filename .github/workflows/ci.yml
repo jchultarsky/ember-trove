@@ -102,10 +102,13 @@ jobs:
     name: coverage (api + common)
     runs-on: ubuntu-latest
     # Now a hard gate: fails if api+common line coverage drops below the floor
-    # below. The floor (17%) sits under the measured baseline (~18.7% lines on
-    # 2026-06-05) so it never blocks the existing suite, but it does block a
-    # real regression. Raise it deliberately as the suite grows (ui is WASM and
-    # excluded, so its logic should live in `common/` to be counted).
+    # below. The floor (24%) sits ~2 points under the measured baseline
+    # (25.96% lines on 2026-07-17, after the v2.23.0 "trust the suite" work;
+    # previously 17% under an 18.7% baseline, 2026-06-05) so it never blocks
+    # the existing suite, but it does block a real regression. Raise it
+    # deliberately as the suite grows (ui is WASM and excluded, so its logic
+    # should live in `common/` to be counted; the pg-tests job is feature-
+    # gated and does not contribute here).
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -132,7 +135,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Coverage summary + floor (api + common; ui is WASM, excluded)
-        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 17
+        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 24
 
   audit:
     name: cargo audit (security)
@@ -237,6 +240,49 @@ jobs:
         env:
           DATABASE_URL: postgres://ember_trove:ember_trove_dev@localhost:5432/ember_trove
         run: sqlx migrate run --source migrations
+
+  repo-tests:
+    name: repo tests (postgres)
+    runs-on: ubuntu-latest
+    # Repo-layer tests against real SQL (api/src/repo/pg_tests.rs). Gated
+    # behind the `pg-tests` feature so the plain `cargo test` job stays
+    # database-free; #[sqlx::test] creates one migrated DB per test.
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ember_trove
+          POSTGRES_PASSWORD: ember_trove_dev
+          POSTGRES_DB: ember_trove
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Install Rust (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Cache cargo build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-pgtests-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-cargo-pgtests-
+
+      - name: Run repo tests against Postgres
+        env:
+          DATABASE_URL: postgres://ember_trove:ember_trove_dev@localhost:5432/ember_trove
+        run: cargo test -p api --features pg-tests pg_tests
 
   docker-build:
     name: docker build validation

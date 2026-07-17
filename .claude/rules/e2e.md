@@ -30,6 +30,12 @@ CI job is too slow a feedback loop for selector work.
 - **Element refs go stale across re-renders** — a list refetch between a
   `find` and a click invalidates refs. Re-locate just before acting, or drive
   the assertion through `expect(locator)` auto-waiting.
+- **Positional clicks hang on SVG canvas children** (2026-07-17, graph spec):
+  `locator.click()`/`.dblclick()` on elements inside the graph `<svg>` time
+  out in Playwright's actionability phase (scroll-into-view/stability) even
+  though `toBeVisible()` passes. Use `locator.dispatchEvent('click' |
+  'dblclick')` — it still runs the app's real handlers. Address graph nodes
+  via `g[data-node-id="<uuid>"]`.
 
 ## Writing new specs
 

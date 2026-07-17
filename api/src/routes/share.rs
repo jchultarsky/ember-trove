@@ -74,7 +74,12 @@ async fn revoke_share_token(
     Path((node_id, token_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     require_owner(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
-    state.share_tokens.revoke(ShareTokenId(token_id)).await?;
+    // SECURITY: pass the node id so the repo scopes the DELETE — ownership was
+    // proven for `node_id`, so only that node's tokens may be revoked here.
+    state
+        .share_tokens
+        .revoke(ShareTokenId(token_id), NodeId(node_id))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -1663,6 +1663,9 @@ pub fn GraphView() -> impl IntoView {
 
                         view! {
                             <g
+                                // Stable hook for e2e specs (graph.spec.ts) — the
+                                // only non-visual way to address a node on the canvas.
+                                data-node-id=node_id.to_string()
                                 style=move || {
                                     if edge_create_mode.get() {
                                         "cursor: crosshair;"

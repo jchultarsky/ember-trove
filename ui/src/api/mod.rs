@@ -20,6 +20,7 @@ mod tags;
 mod tasks;
 mod templates;
 mod versions;
+mod webhooks;
 
 use gloo_net::http::Request;
 use serde::{Deserialize, Serialize};
@@ -296,3 +297,4 @@ pub use tags::*;
 pub use tasks::*;
 pub use templates::*;
 pub use versions::*;
+pub use webhooks::*;

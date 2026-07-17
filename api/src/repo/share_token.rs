@@ -23,7 +23,10 @@ pub trait ShareTokenRepo: Send + Sync {
 
     async fn find_by_token(&self, token: Uuid) -> Result<Option<ShareToken>, EmberTroveError>;
 
-    async fn revoke(&self, id: ShareTokenId) -> Result<(), EmberTroveError>;
+    /// Revoke a token, scoped to its owning node: the DELETE matches both the
+    /// token id and `node_id`, so a token id from another node is NotFound
+    /// rather than revoked (the caller has only proven ownership of `node_id`).
+    async fn revoke(&self, id: ShareTokenId, node_id: NodeId) -> Result<(), EmberTroveError>;
 }
 
 pub struct PgShareTokenRepo {
@@ -131,9 +134,10 @@ impl ShareTokenRepo for PgShareTokenRepo {
         Ok(row.map(|r| r.into_share_token()))
     }
 
-    async fn revoke(&self, id: ShareTokenId) -> Result<(), EmberTroveError> {
-        let result = sqlx::query("DELETE FROM share_tokens WHERE id = $1")
+    async fn revoke(&self, id: ShareTokenId, node_id: NodeId) -> Result<(), EmberTroveError> {
+        let result = sqlx::query("DELETE FROM share_tokens WHERE id = $1 AND node_id = $2")
             .bind(id.inner())
+            .bind(node_id.inner())
             .execute(&self.pool)
             .await
             .map_err(|e| EmberTroveError::Internal(format!("revoke share token failed: {e}")))?;

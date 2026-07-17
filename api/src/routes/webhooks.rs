@@ -11,28 +11,7 @@ use common::{
 };
 use uuid::Uuid;
 
-use crate::{error::ApiError, state::AppState};
-
-/// True if `ip` is loopback / private / link-local / IMDS / unspecified — i.e.
-/// a target a webhook must never reach (SSRF).
-fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.octets()[0] == 0
-                || (v4.octets()[0] == 169 && v4.octets()[1] == 254)
-        }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 (ULA)
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
-        }
-    }
-}
+use crate::{error::ApiError, ssrf::is_blocked_ip, state::AppState};
 
 /// Reject webhook URLs targeting private/internal networks (SSRF prevention).
 /// Synchronous structural checks (scheme, literal IPs, internal hostnames).
@@ -86,8 +65,9 @@ fn validate_webhook_url(url: &str) -> Result<(), ApiError> {
 
 /// Resolve the webhook host and reject if ANY resolved IP is private/internal.
 /// Closes the SSRF bypass where a public hostname resolves to a private/IMDS
-/// address. (Does not defeat DNS-rebinding TOCTOU; dispatch also disables
-/// redirects as a second layer.)
+/// address. The DNS-rebinding TOCTOU this leaves open is closed at dispatch
+/// time: `webhook_dispatch` re-vets the host and pins the client to the vetted
+/// addresses (`crate::ssrf::vet_url_for_dispatch`).
 async fn validate_webhook_dns(url: &str) -> Result<(), ApiError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|_| ApiError::Validation("invalid webhook URL".to_string()))?;
@@ -195,31 +175,9 @@ async fn delete_webhook(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_blocked_ip, mask_value, validate_webhook_url};
+    use super::{mask_value, validate_webhook_url};
 
-    #[test]
-    fn is_blocked_ip_flags_private_and_imds() {
-        use std::net::IpAddr;
-        for ip in [
-            "127.0.0.1",
-            "10.0.0.5",
-            "192.168.1.1",
-            "172.16.0.1",
-            "169.254.169.254", // AWS IMDS
-            "0.0.0.0",
-        ] {
-            assert!(
-                is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
-                "{ip} should be blocked"
-            );
-        }
-        for ip in ["8.8.8.8", "1.1.1.1", "93.184.216.34"] {
-            assert!(
-                !is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
-                "{ip} should be allowed"
-            );
-        }
-    }
+    // `is_blocked_ip` tests live with the function in `crate::ssrf`.
 
     #[test]
     fn mask_value_is_char_safe_on_multibyte_secret() {

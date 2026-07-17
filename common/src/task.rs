@@ -115,7 +115,7 @@ pub struct ProjectDashboardEntry {
 /// - field absent        → `None`           (via `#[serde(default)]`)
 /// - field present/null  → `Some(None)`
 /// - field present/value → `Some(Some(v))`
-fn deser_double_opt<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+pub(crate) fn deser_double_opt<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: serde::Deserialize<'de>,
     D: serde::Deserializer<'de>,

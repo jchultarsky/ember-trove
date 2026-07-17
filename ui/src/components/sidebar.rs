@@ -104,6 +104,7 @@ pub fn Sidebar(
             // ── Section 3: Content tools ───────────────────────────────────────
             <SidebarLink icon="label"        label="Tags"      on_click=nav!("/tags")      collapsed=collapsed />
             <SidebarLink icon="content_copy" label="Templates" on_click=nav!("/templates") collapsed=collapsed />
+            <SidebarLink icon="webhook"      label="Webhooks"  on_click=nav!("/webhooks")  collapsed=collapsed />
             // ── Section 4: Admin (only visible to admins) ─────────────────────
             {move || {
                 if let AuthStatus::Authenticated(ref u) = auth_state.get()

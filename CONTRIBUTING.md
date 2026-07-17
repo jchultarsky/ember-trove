@@ -7,7 +7,14 @@ a pull request.
 
 ## Code of Conduct
 
-Be respectful and constructive. Harassment of any kind is not tolerated.
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Be
+respectful and constructive; harassment of any kind is not tolerated.
+
+## Security Issues
+
+**Never report security problems in a public issue or PR.** Use
+[private vulnerability reporting](https://github.com/jchultarsky/ember-trove/security/advisories/new)
+instead — see [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -62,9 +69,13 @@ cargo fmt --all --check && cargo clippy -- -D warnings && cargo check && cargo t
 This project follows [Git Flow](https://nvie.com/posts/a-successful-git-branching-model/).
 `v1.0.0` is the first production tag on `main`.
 
-| Branch type | Pattern              | Branched from | Merges into       | Notes                                      |
-|-------------|----------------------|---------------|-------------------|--------------------------------------------|
-| Feature     | `feature/jc/<name>`  | `develop`     | `develop`         | `--no-ff`; delete branch + worktree after  |
+External contributors: fork the repo, branch from `develop` (e.g.
+`feature/<your-initials>/<name>`), and open the pull request against `develop`.
+Release and hotfix branches are cut by the maintainer.
+
+| Branch type | Pattern                    | Branched from | Merges into       | Notes                                      |
+|-------------|----------------------------|---------------|-------------------|--------------------------------------------|
+| Feature     | `feature/<initials>/<name>`| `develop`     | `develop`         | `--no-ff`; delete branch + worktree after  |
 | Release     | `release/<semver>`   | `develop`     | `main` + `develop`| Tag `v<semver>` on `main` after merge      |
 | Hotfix      | `hotfix/<name>`      | `main`        | `main` + `develop`| Tag patch bump on `main` after merge       |
 

@@ -3,6 +3,7 @@ name       = "ui"
 version    = "0.1.0"
 edition    = "2024"
 repository = "https://github.com/jchultarsky/ember-trove"
+license    = "MIT"
 # Self-hosted application crate — never published (see api/Cargo.toml rationale).
 publish = false
 

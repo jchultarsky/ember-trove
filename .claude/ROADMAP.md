@@ -3,7 +3,90 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-06-10)
+## Current state (2026-07-17)
+
+- **v2.23.0 shipped** — the "trust the suite" release (2026-07-17 review plan,
+  below). Coverage inverted-vs-risk is corrected: registration + behavior
+  tests for the six previously-untested privileged route groups (admin,
+  backup, metrics, export, attachments, editor-prefs — 91→110 api tests);
+  e2e specs for the graph view (`graph.spec.ts` — the largest UI surface, was
+  untested); repo-layer tests against real Postgres (`pg-tests` feature +
+  `#[sqlx::test]`, new CI job `repo tests (postgres)`); coverage floor raised
+  17→24 (measured baseline 25.96%). Both product decisions resolved:
+  **webhooks** shipped a UI (`/webhooks`) — and building it surfaced/fixed a
+  secret-wiping `PUT` bug (unconditional secret write vs. masked-secret reads;
+  now `deser_double_opt` PATCH semantics). **`/search`** kept (sidebar box
+  already navigates there); closed the real gap with `Go to Search`/`Go to
+  Webhooks` palette commands. Also folded in the earlier unreleased work:
+  three security fixes (rate-limit `/share/{token}`, node-scoped token revoke,
+  webhook-dispatch DNS re-vet + pinning — `api/src/ssrf.rs`) and the
+  community-health set (SECURITY.md, CoC, issue/PR templates, `license = MIT`).
+- **v3 groundwork (post-2.23.0, on `feature/jc/local-auth`):** zero-AWS local
+  login via a bundled Keycloak issuer (`./scripts/dev-local.sh`) whose
+  `cognito:groups` protocol mapper leaves the token path unchanged; only API
+  change is a Cognito-only guard on `/auth/change-password`. Verified
+  end-to-end (login → `/api/auth/me` roles:["admin"]). Known follow-up: the
+  Keycloak login page renders unstyled through the proxy (cosmetic).
+- **v2.22.3 shipped** — first release under the personal `jchultarsky` account
+  (repo transferred from `jchultarsky101`, 2026-07). Patched RUSTSEC-2026-0193
+  (ammonia mXSS — the user-markdown sanitizer, a stored-XSS vector here) and
+  RUSTSEC-2026-0185 (quinn-proto; verified an unreachable orphan lock subtree).
+  Owner-pinned references repointed (GHCR image paths in deploy/, badges,
+  docs); GHCR packages pre-seeded, made public, and repo-linked with Actions
+  Write under the new owner; prod deploy SSH key rotated (dedicated GHA key
+  lives only in `LIGHTSAIL_SSH_KEY`; personal key `~/.ssh/lightsail-julian`,
+  `ssh trove`) and proven end-to-end by the release deploy.
+- **Repo is public BY INTENT** — declared an open-source project (sole
+  contributor today). Community set added: SECURITY.md (private vulnerability
+  reporting enabled on the repo), Contributor Covenant 2.1, issue/PR
+  templates, `license = "MIT"` in all crate manifests.
+- **2026-07-17 full-codebase review** (backend + frontend + test-infra survey)
+  produced the plan of record below. Three concrete security findings are in
+  progress on `feature/jc/security-hardening` (target v2.22.4).
+
+## Plan of record (2026-07-17 review)
+
+- **v2.22.4 — security patch (in progress):**
+  1. `/share/{token}` joins the rate-limited router group — it was the only
+     unauthenticated, ungoverned endpoint, and it performs a token lookup.
+  2. `revoke_share_token` scopes the DELETE to the node in the path
+     (`WHERE id = $1 AND node_id = $2`) — previously any node owner could
+     revoke any share token by id (cross-node).
+  3. Webhook dispatch re-resolves and re-vets the target host, then pins the
+     HTTP client to the vetted addresses (`resolve_to_addrs`) — closes the
+     DNS-rebinding TOCTOU left by create/update-time-only SSRF validation.
+  Plus: clear the Dependabot backlog (incl. the month-old tower-http 0.6→0.7
+  semver-major, which needs a real review).
+- **v2.23.0 — "trust the suite":** the review found coverage inverted vs risk.
+  Registration + behavior tests for the six untested route groups (admin,
+  backup, metrics, export, attachments, editor_prefs — the privileged
+  surfaces); e2e specs for the knowledge-graph half (graph_view.rs 2.4k lines,
+  node_editor, node_view have none today); repo-layer tests against real
+  Postgres (reuse the CI migration-validation container); raise the coverage
+  floor above 17% as this lands. Product decisions due: **webhooks** —
+  DECIDED 2026-07-17: shipped the UI (`/webhooks`; building it surfaced and
+  fixed the secret-wiping update semantics). **`/search` view** — DECIDED
+  2026-07-17: KEEP. The "orphaned" claim was overstated (the sidebar search
+  box navigates there on Enter / "View all"); the real gap was palette
+  parity, closed with `Go to Search` (+ `Go to Webhooks`) commands. Do not
+  fold the full search page into the palette — presets/filters/full results
+  are a different job than quick-jump.
+- **v3 candidates — OSS launch:** self-contained local auth (Keycloak/dex with
+  a `cognito:groups` claim mapper) to restore zero-AWS clone-and-run —
+  **promoted from deferred**: it is the main adoption barrier now the repo is
+  public by intent. A11y systematization beyond modals (~44 aria occurrences
+  crate-wide; keyboard dispatch hand-rolled in 23 files).
+- **Opportunistic refactors** (do while touching the area, never big-bang):
+  consolidate the three parallel task-row components (task_row / task_panel /
+  inbox_view); extract a shared debounce helper (pattern re-derived in 6
+  files); merge the three `repo/search.rs` query builders (kills the
+  `too_many_arguments` allows); adopt `#[from] sqlx::Error` in repos (~146
+  `Internal(format!)` sites); split `graph_view.rs` (move pure layout
+  algorithms out) and `routes/nodes.rs` (27 handlers); route node export
+  through the UI API client (raw `<a href>` today); drop the duplicate
+  `nodes(owner_id)` index (migration 021 duplicates 001).
+
+## Prior state (2026-06-10)
 
 - **Released & prod-verified:** v2.22.0 — the ROADMAP backlog cleared. All
   new surfaces hand-tested live after deploy: calendar day-click captured a
@@ -125,9 +208,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   reformat; enforced by hook + CI. Editors format with `--edition 2024`.
 - **SHA-pinned GitHub Actions + Dependabot.** Supply-chain hardening consistent with the
   project's security posture; Dependabot keeps pins current.
-- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 17`
-  (baseline ~18.7% on 2026-06-05). The floor sits under the baseline so it never blocks the
-  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05)
+- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 24`
+  (baseline 25.96% on 2026-07-17, post-"trust the suite"; previously 17 under an 18.7%
+  baseline, 2026-06-05). The floor sits ~2 points under the baseline so it never blocks the
+  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05,
+  raised 2026-07-17)
 - **`cargo-deny` added for licenses + bans + sources only** (2026-06-05). Advisories stay with
   `cargo audit` (`.cargo/audit.toml` is the single source of truth) so the two never diverge —
   cargo-deny runs only the non-overlapping checks, resolving the earlier "avoid overlap"
