@@ -48,7 +48,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 | Frontend    | Leptos 0.8 CSR/WASM · Tailwind CSS v4   |
 | Database    | PostgreSQL 16 · sqlx 0.8               |
 | File Store  | S3-compatible (MinIO / Lightsail Object Storage / AWS S3) |
-| Auth        | Amazon Cognito (OIDC; hosted UI + custom CSS) |
+| Auth        | OIDC — Amazon Cognito (prod) / bundled Keycloak (local dev) |
 | Markdown    | pulldown-cmark · ammonia               |
 | OpenAPI     | utoipa + Swagger UI                     |
 | Build       | Trunk (UI) · cargo workspace            |
@@ -99,12 +99,32 @@ See **[docs/deploy-aws.md](docs/deploy-aws.md)** for a complete step-by-step gui
 
 ## Running Locally
 
-There are two ways to run the stack on your machine:
+### Quickstart — zero AWS required
 
-- **[Option A — Full Docker stack](#option-a--full-docker-stack-recommended)** (recommended): everything in containers.
+```bash
+./scripts/dev-local.sh
+```
+
+That's the whole setup: the full Docker stack **plus a bundled Keycloak identity
+provider** — no AWS account, no Cognito pool, no secrets file. When the build
+finishes, open **http://localhost:8003** and log in as:
+
+| User | Password | Role |
+|------|----------|------|
+| `admin` | `admin-devpassword` | admin (full access) |
+| `user`  | `user-devpassword`  | regular user |
+
+(Seeded by `deploy/keycloak/realm-ember-trove.json` — local-only fixtures, not
+secrets. Manage local users in the Keycloak console at **http://localhost:8081**,
+`admin`/`admin-devpassword`. The in-app `/admin/users` page and password change
+are Cognito-backed and inactive in this stack.)
+
+### Other ways to run
+
+- **[Option A — Full Docker stack](#option-a--full-docker-stack-recommended)**: everything in containers, against a real Cognito pool.
 - **[Option B — Native API + UI](#option-b--native-api--ui-faster-iteration)**: the app from source, backing services in Docker (faster rebuilds).
 
-Both need an OIDC identity provider for login — see **[Auth: bring your own Cognito](#auth-bring-your-own-cognito)** first.
+Options A and B need an OIDC identity provider for login — see **[Auth: bring your own Cognito](#auth-bring-your-own-cognito)** first (or reuse the quickstart's Keycloak by pointing `OIDC_ISSUER` at it).
 
 ### Prerequisites
 
@@ -123,9 +143,12 @@ Both need an OIDC identity provider for login — see **[Auth: bring your own Co
 
 ### Auth: bring your own Cognito
 
-Ember Trove authenticates via **OIDC against Amazon Cognito**. It reads roles from the
-Cognito `cognito:groups` claim and expects a Cognito **ID token**, so there is no
-bundled local identity provider — to log in locally you point it at a Cognito user pool.
+Ember Trove authenticates via **OIDC** and reads roles from the `cognito:groups`
+claim. Production uses **Amazon Cognito**; the local quickstart bundles
+**Keycloak** with a protocol mapper that emits group membership under that same
+claim name (see `deploy/docker-compose.local-auth.yml`), so the API code is
+identical in both setups. Use this section when you want to run against a real
+Cognito pool instead of the bundled Keycloak.
 
 - **Maintainer:** use the existing pool. Put its app-client secret and (optionally) the
   admin IAM keys into `deploy/.env.local` (below). The pool/client IDs are already the
@@ -242,9 +265,9 @@ All API configuration is provided via environment variables.
 | `HOST` | No | Bind address (default: `0.0.0.0`) |
 | `PORT` | No | Bind port (default: `3003`) |
 | `RUST_LOG` | No | Log level (default: `info`) |
-| `OIDC_ISSUER` | Auth | Cognito issuer URL (`https://cognito-idp.<region>.amazonaws.com/<pool-id>`) |
-| `OIDC_CLIENT_ID` | Auth | Cognito app-client ID |
-| `OIDC_CLIENT_SECRET` | Auth | Cognito app-client secret |
+| `OIDC_ISSUER` | Auth | OIDC issuer URL — Cognito (`https://cognito-idp.<region>.amazonaws.com/<pool-id>`) or any OIDC provider (the local quickstart uses Keycloak) |
+| `OIDC_CLIENT_ID` | Auth | OIDC app-client ID |
+| `OIDC_CLIENT_SECRET` | Auth | OIDC app-client secret |
 | `COGNITO_USER_POOL_ID` | Admin | User Pool ID — enables `/api/admin/*` when set (optional) |
 | `COGNITO_REGION` | Admin | AWS region of the User Pool (default: `us-east-2`) |
 | `AWS_ACCESS_KEY_ID` | Admin | IAM key for Cognito admin operations |

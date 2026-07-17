@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — zero-AWS local login via bundled Keycloak (v3 groundwork)
+`./scripts/dev-local.sh` brings up the full stack **plus a Keycloak OIDC
+issuer** — no AWS account, Cognito pool, or secrets file needed to log in and
+evaluate the app (the main OSS-adoption barrier). A protocol mapper emits
+group membership under the same `cognito:groups` claim the app already reads,
+so the security-critical token-validation path is **unchanged** — the only API
+change is a guard on `/auth/change-password` (Cognito-only) that returns a
+clean "managed by your identity provider" message against other issuers,
+with a host-suffix detection helper + unit test. Realm fixture seeds `admin`
+and `user` accounts (dev-only, not secrets). Verified end-to-end: login →
+Keycloak → callback → `/api/auth/me` returns `roles:["admin"]` from the mapped
+claim, and admin-only UI (Users/Permissions/Backup) renders. Files:
+`deploy/keycloak/realm-ember-trove.json`, `deploy/docker-compose.local-auth.yml`,
+`deploy/nginx.local-auth.conf`, `scripts/dev-local.sh`; README quickstart.
+Known follow-up: the Keycloak login page renders unstyled through the proxy
+(theme resource path not yet mapped) — functional, cosmetic only.
+
 ### Added — webhooks management UI (`/webhooks`)
 The webhooks backend (complete and SSRF-hardened since its introduction) was
 headless — no UI called it. New sidebar entry + view: list with per-hook

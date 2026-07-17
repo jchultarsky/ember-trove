@@ -1,0 +1,72 @@
+# Zero-AWS local login — Keycloak as the OIDC issuer (v3 OSS-launch work).
+#
+#   ./scripts/dev-local.sh            # = docker compose -f deploy/docker-compose.yml \
+#                                     #                  -f deploy/docker-compose.local-auth.yml up --build
+#
+# Seeded users (deploy/keycloak/realm-ember-trove.json — dev-only, NOT secrets):
+#   admin / admin-devpassword   (in the `admin` group → cognito:groups=["admin"])
+#   user  / user-devpassword
+#
+# URL model (the issuer must look identical to the browser and the api,
+# because the api pins `iss`):
+#   - Browser-facing realm URLs ride the existing ui/nginx proxy on
+#     http://localhost:8003 (/realms/*, /resources/* — see nginx.local-auth.conf),
+#     so KC_HOSTNAME is localhost:8003 and tokens carry that issuer.
+#   - The api reaches Keycloak directly at http://keycloak:8080;
+#     KC_HOSTNAME_BACKCHANNEL_DYNAMIC makes the token/JWKS endpoints in the
+#     discovery doc follow that host while `issuer` stays the frontend URL —
+#     exactly the split api/src/auth/oidc.rs expects (it trusts the discovery
+#     doc's own `issuer` for validation).
+#   - The Keycloak ADMIN CONSOLE is NOT proxied ( /admin belongs to the SPA );
+#     it is published directly on http://localhost:8081 (KC_HOSTNAME_ADMIN).
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-devpassword
+      KC_HOSTNAME: http://localhost:8003
+      KC_HOSTNAME_ADMIN: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      # The Keycloak image ships no curl/wget; poke the realm discovery doc
+      # with bash's /dev/tcp instead. Healthy = realm imported and serving.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080 &&
+          printf 'GET /realms/ember-trove/.well-known/openid-configuration HTTP/1.0\r\nHost: localhost:8003\r\n\r\n' >&3 &&
+          grep -q token_endpoint <&3
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  api:
+    environment:
+      OIDC_ISSUER: http://keycloak:8080/realms/ember-trove
+      OIDC_CLIENT_ID: ember-trove-local
+      OIDC_CLIENT_SECRET: ember-trove-local-dev-secret
+      # Blank = unset (config::optional treats empty as absent): no Cognito
+      # admin API, no SES locally. /admin/* user management is Keycloak's
+      # console (http://localhost:8081) in this stack.
+      COGNITO_USER_POOL_ID: ""
+      AWS_ACCESS_KEY_ID: ""
+      AWS_SECRET_ACCESS_KEY: ""
+      SES_FROM_EMAIL: ""
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    # Belt-and-braces: if the api races Keycloak's first-boot realm import,
+    # OIDC discovery fails at startup — let compose retry it.
+    restart: on-failure
+
+  ui:
+    volumes:
+      - ./nginx.local-auth.conf:/etc/nginx/conf.d/default.conf:ro
