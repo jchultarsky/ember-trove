@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.22.3] - 2026-07-16
+
 ### Security — patched ammonia mXSS and quinn-proto DoS advisories
 - `ammonia` 4.1.2 → 4.1.3 (RUSTSEC-2026-0193): mXSS bypass via MathML
   `annotation-xml` encoding strip. Directly relevant — ammonia sanitizes all
