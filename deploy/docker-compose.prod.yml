@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: ghcr.io/jchultarsky101/ember-trove-api:${IMAGE_TAG}
+    image: ghcr.io/jchultarsky/ember-trove-api:${IMAGE_TAG}
     environment:
       DATABASE_URL: postgres://ember_trove:${POSTGRES_PASSWORD}@postgres/ember_trove
       # Lightsail Object Storage (S3-compatible; no S3_ENDPOINT = native AWS S3)
@@ -47,7 +47,7 @@ services:
     restart: unless-stopped
 
   ui:
-    image: ghcr.io/jchultarsky101/ember-trove-ui:${IMAGE_TAG}
+    image: ghcr.io/jchultarsky/ember-trove-ui:${IMAGE_TAG}
     restart: unless-stopped
 
   proxy:
