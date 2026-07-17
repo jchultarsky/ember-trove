@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/jchultarsky101/ember-trove-api:latest
+          image: ghcr.io/jchultarsky/ember-trove-api:latest
           ports:
             - containerPort: 3003
           envFrom:

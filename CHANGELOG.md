@@ -6,6 +6,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.22.3] - 2026-07-16
+
+### Security — patched ammonia mXSS and quinn-proto DoS advisories
+- `ammonia` 4.1.2 → 4.1.3 (RUSTSEC-2026-0193): mXSS bypass via MathML
+  `annotation-xml` encoding strip. Directly relevant — ammonia sanitizes all
+  user-supplied markdown before render, so the bypass was a stored-XSS vector.
+  Brings the html5ever 0.39 transitive chain along (semver-compatible).
+- `quinn-proto` 0.11.14 → 0.11.16 (RUSTSEC-2026-0185, high 7.5): remote memory
+  exhaustion via unbounded out-of-order stream reassembly (transitive dep).
+
+### Changed — GitHub repository ownership moved to `jchultarsky`
+The repo moved from `jchultarsky101/ember-trove` to `jchultarsky/ember-trove`.
+Repointed all owner-pinned references: the prod/k8s GHCR image paths
+(`ghcr.io/jchultarsky/ember-trove-{api,ui}`, previously pinned to the old owner
+while the release workflow — which uses `${{ github.repository_owner }}` — now
+publishes under the new one), the `repository` fields in `api`/`ui` `Cargo.toml`,
+the README build-status badge, and the clone/tag URLs in docs. GitHub's rename
+redirect keeps old URLs working, but the shields.io badge does not follow it.
+
+### Operations — TLS auto-renewal repaired + documented
+Production HTTPS cert expired (2026-06-17) after ~30 days of silently failed
+auto-renewals: the host's certbot renewal config used `authenticator =
+standalone`, which can't bind port 80 because the nginx proxy container owns
+it. Switched renewal to the `webroot` method (the architecture nginx was
+already built for), reissued the cert, and replaced the post-renewal nginx
+reload hook with a Docker-direct version (no compose/env dependency). Proven
+end to end with `certbot renew --dry-run`. The renewal setup — which lived
+only on the host and had no repo record — is now captured in
+`deploy/TLS-RENEWAL.md` (+ a version-controlled `deploy/renewal-hooks/reload-nginx.sh`).
+
+
 ## [2.22.2] - 2026-06-10
 
 ### Documentation — ROADMAP updates (v2.22.0 prod verification, AuthGate fix record)
@@ -1762,7 +1793,7 @@ keyboards).
 
 ---
 
-<!-- Note: versions 1.52.0–1.75.3 (24 releases) are documented in git commit history: https://github.com/jchultarsky101/ember-trove/tags -->
+<!-- Note: versions 1.52.0–1.75.3 (24 releases) are documented in git commit history: https://github.com/jchultarsky/ember-trove/tags -->
 
 ---
 
