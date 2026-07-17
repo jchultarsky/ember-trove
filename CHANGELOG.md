@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — webhooks management UI (`/webhooks`)
+The webhooks backend (complete and SSRF-hardened since its introduction) was
+headless — no UI called it. New sidebar entry + view: list with per-hook
+Active/Paused toggle and signed indicator, create/edit form with per-event
+checkboxes and HTTPS endpoint field, delete via the standard confirm modal.
+Server validation errors (e.g. SSRF-blocked URLs) surface as toasts.
+Covered by `e2e/tests/webhooks.spec.ts`.
+
+### Fixed — webhook updates no longer wipe the stored secret
+`PUT /webhooks/{id}` wrote `secret` unconditionally, and clients only ever
+see the masked secret — so any UI edit (even an Active toggle) would have
+silently cleared or corrupted the signing secret. `UpdateWebhookRequest.secret`
+now uses the `deser_double_opt` PATCH pattern (absent → keep, null → clear,
+value → replace) and the repo SQL only touches the column when the field was
+present. Serde regression tests pin all three cases; the e2e spec verifies a
+toggle leaves the secret in place.
+
 ### Security — share-token and webhook-dispatch hardening (2026-07-17 review)
 Three findings from the full-codebase security review, each with a regression test:
 - `/share/{token}` now sits inside the rate-limited router group. It was the
