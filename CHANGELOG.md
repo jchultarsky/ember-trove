@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.23.0] - 2026-07-17
+
 ### Tooling — coverage floor raised 17% → 24%
 The v2.23.0 test work lifted api+common line coverage from ~18.7% to 25.96%;
 the CI floor follows it up (same ~2-point margin as the original gate), so
