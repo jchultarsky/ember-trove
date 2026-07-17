@@ -20,8 +20,14 @@ Keycloak → callback → `/api/auth/me` returns `roles:["admin"]` from the mapp
 claim, and admin-only UI (Users/Permissions/Backup) renders. Files:
 `deploy/keycloak/realm-ember-trove.json`, `deploy/docker-compose.local-auth.yml`,
 `deploy/nginx.local-auth.conf`, `scripts/dev-local.sh`; README quickstart.
-Known follow-up: the Keycloak login page renders unstyled through the proxy
-(theme resource path not yet mapped) — functional, cosmetic only.
+
+### Fixed — Keycloak local-login page now renders styled
+The local-auth login page loaded unstyled: Keycloak's theme assets
+(`/resources/**.css|.js|.ico`) were captured by the SPA's static-asset regex
+location (`~* \.(css|js|ico…)$`), which nginx evaluates *before* the
+`/resources/` proxy prefix, so they 404'd from the SPA root. Marked the
+`/realms/` and `/resources/` proxy locations `^~` so the prefix wins over the
+regex; all theme assets now serve 200 from Keycloak. Verified in a browser.
 
 ## [2.23.0] - 2026-07-17
 
