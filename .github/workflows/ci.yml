@@ -102,10 +102,13 @@ jobs:
     name: coverage (api + common)
     runs-on: ubuntu-latest
     # Now a hard gate: fails if api+common line coverage drops below the floor
-    # below. The floor (17%) sits under the measured baseline (~18.7% lines on
-    # 2026-06-05) so it never blocks the existing suite, but it does block a
-    # real regression. Raise it deliberately as the suite grows (ui is WASM and
-    # excluded, so its logic should live in `common/` to be counted).
+    # below. The floor (24%) sits ~2 points under the measured baseline
+    # (25.96% lines on 2026-07-17, after the v2.23.0 "trust the suite" work;
+    # previously 17% under an 18.7% baseline, 2026-06-05) so it never blocks
+    # the existing suite, but it does block a real regression. Raise it
+    # deliberately as the suite grows (ui is WASM and excluded, so its logic
+    # should live in `common/` to be counted; the pg-tests job is feature-
+    # gated and does not contribute here).
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -132,7 +135,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Coverage summary + floor (api + common; ui is WASM, excluded)
-        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 17
+        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 24
 
   audit:
     name: cargo audit (security)
