@@ -1,0 +1,83 @@
+{
+  "realm": "ember-trove",
+  "enabled": true,
+  "displayName": "Ember Trove (local dev)",
+  "registrationAllowed": false,
+  "sslRequired": "none",
+  "clients": [
+    {
+      "clientId": "ember-trove-local",
+      "name": "Ember Trove local client",
+      "description": "Local-dev OIDC client. The secret below is NOT a secret: it only gates a Keycloak container on your own machine (see deploy/docker-compose.local-auth.yml).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "ember-trove-local-dev-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:8003/api/auth/callback"],
+      "webOrigins": ["http://localhost:8003"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:8003"
+      },
+      "protocolMappers": [
+        {
+          "name": "cognito-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "cognito:groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "name": "admin",
+      "path": "/admin"
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "email": "admin@local.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Local",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin-devpassword",
+          "temporary": false
+        }
+      ],
+      "groups": ["/admin"]
+    },
+    {
+      "username": "user",
+      "email": "user@local.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Local",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user-devpassword",
+          "temporary": false
+        }
+      ],
+      "groups": []
+    }
+  ]
+}
