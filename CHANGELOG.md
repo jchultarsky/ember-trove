@@ -31,6 +31,16 @@ value → replace) and the repo SQL only touches the column when the field was
 present. Serde regression tests pin all three cases; the e2e spec verifies a
 toggle leaves the secret in place.
 
+### Tooling — repo-layer tests against real PostgreSQL (v2.23.0)
+The repo layer's SQL was previously verified by nothing (stub-only router
+tests). New `pg-tests` cargo feature gates `api/src/repo/pg_tests.rs`:
+`#[sqlx::test]` gives each test its own freshly-migrated database. First
+four tests pin node owner-scoping (`list_all_for_owner` vs `list_all`),
+share-token expiry filtering, the node-scoped revoke SQL from the v2.22.4
+security fix, and the task soft-delete → restore → purge lifecycle. New CI
+job `repo tests (postgres)` runs them against the same postgres:16 service
+the migration check uses; the default `cargo test` run stays database-free.
+
 ### Security — share-token and webhook-dispatch hardening (2026-07-17 review)
 Three findings from the full-codebase security review, each with a regression test:
 - `/share/{token}` now sits inside the rate-limited router group. It was the
