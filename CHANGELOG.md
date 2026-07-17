@@ -30,6 +30,15 @@ owner-scoping (non-admin gets only their nodes; admin gets all), attachment
 height clamp → 422). Test stubs now model canned nodes/attachments instead
 of `unimplemented!` where these paths need them. Suite: 91 → 110 api tests.
 
+### Tooling — e2e coverage for the graph view (v2.23.0)
+The single largest UI surface (graph_view.rs, ~2.4k lines) had no e2e specs.
+`graph.spec.ts` adds four: canvas rendering of created nodes, double-click
+navigation to the node page, the full Add-Edge flow (source/target selection →
+New Edge dialog → server-verified edge), and the orphans-only lens. Node
+groups now carry `data-node-id` as a stable selector hook. Canvas
+interactions use `dispatchEvent` — Playwright's positional clicks hang on
+SVG actionability checks (recorded in `.claude/rules/e2e.md`).
+
 ### Documentation — open-source community health files
 Added the standard community set for the now-intentionally-public repo:
 `SECURITY.md` (private vulnerability reporting, scope, supported versions),
