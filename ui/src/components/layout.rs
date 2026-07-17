@@ -29,6 +29,7 @@ use crate::{
         tasks_view::{TasksTab, TasksView},
         templates_view::TemplatesView,
         toast::ToastOverlay,
+        webhooks_view::WebhooksView,
     },
 };
 use common::id::NodeId;
@@ -359,6 +360,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/tags")           view=TagManager />
                         <Route path=path!("/notes")          view=NotesView />
                         <Route path=path!("/templates")      view=TemplatesView />
+                                <Route path=path!("/webhooks")       view=WebhooksView />
                         <Route path=path!("/admin/users")       view=AdminView />
                         <Route path=path!("/admin/permissions") view=BulkPermissionsView />
                         <Route path=path!("/admin/backup")      view=BackupView />
@@ -526,6 +528,8 @@ fn section_title(path: &str) -> &'static str {
         "Tags"
     } else if path.starts_with("/templates") {
         "Templates"
+    } else if path.starts_with("/webhooks") {
+        "Webhooks"
     } else if path.starts_with("/admin") {
         "Admin"
     } else {

@@ -43,3 +43,4 @@ pub mod tasks_view;
 pub mod templates_view;
 pub mod toast;
 pub mod version_panel;
+pub mod webhooks_view;
