@@ -47,6 +47,27 @@ test('matches commands by synonym and dispatches navigation', async ({ page }) =
   await expect(page).toHaveTitle('Calendar — Ember Trove');
 });
 
+test('Go to Search and Go to Webhooks commands navigate (palette parity)', async ({ page }) => {
+  // The palette is the primary nav surface since `/` opens it — every routed
+  // destination needs a Go-command. Search and Webhooks were the gaps
+  // (2026-07-17 review / webhooks UI).
+  await gotoApp(page, '/tasks/my-day');
+
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByPlaceholder(PALETTE_INPUT).fill('advanced');
+  await expect(page.getByRole('button', { name: /Go to Search/ })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/search$/);
+  await expect(page).toHaveTitle('Search — Ember Trove');
+
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.getByPlaceholder(PALETTE_INPUT).fill('hooks');
+  await expect(page.getByRole('button', { name: /Go to Webhooks/ })).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/webhooks$/);
+  await expect(page).toHaveTitle('Webhooks — Ember Trove');
+});
+
 test('toggle dark mode flips the html class (and back)', async ({ page }) => {
   await gotoApp(page, '/tasks/my-day');
   const html = page.locator('html');

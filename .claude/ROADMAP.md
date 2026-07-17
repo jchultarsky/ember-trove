@@ -41,10 +41,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
   surfaces); e2e specs for the knowledge-graph half (graph_view.rs 2.4k lines,
   node_editor, node_view have none today); repo-layer tests against real
   Postgres (reuse the CI migration-validation container); raise the coverage
-  floor above 17% as this lands. Product decisions due: **webhooks** (complete,
-  SSRF-hardened backend, zero UI — ship a UI or cut it) and the **orphaned
-  `/search` view** (994 lines reachable only by URL since `/` opens the
-  palette — fold presets into the palette or re-surface the view).
+  floor above 17% as this lands. Product decisions due: **webhooks** —
+  DECIDED 2026-07-17: shipped the UI (`/webhooks`; building it surfaced and
+  fixed the secret-wiping update semantics). **`/search` view** — DECIDED
+  2026-07-17: KEEP. The "orphaned" claim was overstated (the sidebar search
+  box navigates there on Enter / "View all"); the real gap was palette
+  parity, closed with `Go to Search` (+ `Go to Webhooks`) commands. Do not
+  fold the full search page into the palette — presets/filters/full results
+  are a different job than quick-jump.
 - **v3 candidates — OSS launch:** self-contained local auth (Keycloak/dex with
   a `cognito:groups` claim mapper) to restore zero-AWS clone-and-run —
   **promoted from deferred**: it is the main adoption barrier now the repo is

@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — palette commands for Search and Webhooks
+The command palette is the primary navigation surface (since `/` opens it),
+but `/search` had no Go-command — the 2026-07-17 review flagged the full
+search page (presets, filters, full-text results) as near-undiscoverable.
+Decision recorded in `.claude/ROADMAP.md`: keep the page, close the parity
+gap. Adds `Go to Search` and `Go to Webhooks` palette commands with synonym
+keywords; e2e-covered in `palette.spec.ts`.
+
 ### Added — webhooks management UI (`/webhooks`)
 The webhooks backend (complete and SSRF-hardened since its introduction) was
 headless — no UI called it. New sidebar entry + view: list with per-hook
