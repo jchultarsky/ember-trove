@@ -31,7 +31,7 @@
 | Job | Details |
 |-----|---------|
 | **release** | Extracts release notes from CHANGELOG.md, creates GitHub Release via `gh release create` |
-| **build** | Needs: release. Patches api/Cargo.toml version, logs into GHCR, builds & pushes Docker images (api + ui) to `ghcr.io/jchultarsky101/ember-trove-{api,ui}` using Docker Buildx with GHA cache |
+| **build** | Needs: release. Patches api/Cargo.toml version, logs into GHCR, builds & pushes Docker images (api + ui) to `ghcr.io/jchultarsky/ember-trove-{api,ui}` using Docker Buildx with GHA cache |
 | **deploy** | Needs: build, requires `DEPLOY_ENABLED=true`. SSH to Lightsail EC2, pulls pre-built images, fetches latest compose config from git main, restarts via docker-compose, verifies `localhost:3003/api/health`, cleans old images. Concurrency: `production-ec2-deploy` |
 
 ### Key gotchas
@@ -301,7 +301,7 @@ All use **Material Symbols Outlined** icons.
 - `--env-file deploy/.env.local` for secrets
 
 ### Production (`deploy/docker-compose.prod.yml`)
-- Pulls pre-built images from GHCR (`ghcr.io/jchultarsky101/ember-trove-{api,ui}`)
+- Pulls pre-built images from GHCR (`ghcr.io/jchultarsky/ember-trove-{api,ui}`)
 - nginx reverse proxy with Let's Encrypt certificates
 - AWS S3 (not MinIO), Cognito OIDC
 

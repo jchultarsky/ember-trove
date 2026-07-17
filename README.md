@@ -1,6 +1,6 @@
 # Ember Trove
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/jchultarsky101/ember-trove/ci.yml?branch=main&style=flat-square)](https://github.com/jchultarsky101/ember-trove/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/jchultarsky/ember-trove/ci.yml?branch=main&style=flat-square)](https://github.com/jchultarsky/ember-trove/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg?style=flat-square)](https://www.rust-lang.org/)
 [![Leptos](https://img.shields.io/badge/leptos-0.8-purple.svg?style=flat-square)](https://leptos.dev/)

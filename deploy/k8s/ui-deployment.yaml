@@ -20,7 +20,7 @@ spec:
         runAsUser: 101
       containers:
         - name: ui
-          image: ghcr.io/jchultarsky101/ember-trove-ui:latest
+          image: ghcr.io/jchultarsky/ember-trove-ui:latest
           ports:
             - containerPort: 8080
           resources:

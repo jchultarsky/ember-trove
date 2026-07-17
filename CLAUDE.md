@@ -73,7 +73,7 @@ cargo check -p ui --target wasm32-unknown-unknown
 - **Docker PATH:** `export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"`.
 - **`cat` aliased to `bat`:** use plain `-m "..."` for commit messages (not heredoc via cat).
 - **`grep`/`tail`/`head`/`rg` unavailable:** use the Grep tool, Read with offset/limit,
-  `python3 -c` for JSON. **`gh` is installed (Homebrew) and authenticated** (`jchultarsky101`,
+  `python3 -c` for JSON. **`gh` is installed (Homebrew) and authenticated** (`jchultarsky`,
   scopes incl. `repo`+`workflow`) — usable for runs/PRs/releases. Its https credential helper
   also lets `git push` succeed from tool shells (the sandbox osxkeychain does **not** unlock
   non-interactively, so without gh, pushes fail with "could not read Username").

@@ -294,7 +294,7 @@ sudo apt-get install -y certbot
 ## Step 7 — Clone the Repository
 
 ```bash
-git clone https://github.com/jchultarsky101/ember-trove.git
+git clone https://github.com/jchultarsky/ember-trove.git
 cd ember-trove
 ```
 
