@@ -186,9 +186,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   reformat; enforced by hook + CI. Editors format with `--edition 2024`.
 - **SHA-pinned GitHub Actions + Dependabot.** Supply-chain hardening consistent with the
   project's security posture; Dependabot keeps pins current.
-- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 17`
-  (baseline ~18.7% on 2026-06-05). The floor sits under the baseline so it never blocks the
-  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05)
+- **Coverage is now a floor gate, not report-only.** `cargo llvm-cov … --fail-under-lines 24`
+  (baseline 25.96% on 2026-07-17, post-"trust the suite"; previously 17 under an 18.7%
+  baseline, 2026-06-05). The floor sits ~2 points under the baseline so it never blocks the
+  existing suite but catches a regression; raise deliberately as the suite grows. (2026-06-05,
+  raised 2026-07-17)
 - **`cargo-deny` added for licenses + bans + sources only** (2026-06-05). Advisories stay with
   `cargo audit` (`.cargo/audit.toml` is the single source of truth) so the two never diverge —
   cargo-deny runs only the non-overlapping checks, resolving the earlier "avoid overlap"

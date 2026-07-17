@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — coverage floor raised 17% → 24%
+The v2.23.0 test work lifted api+common line coverage from ~18.7% to 25.96%;
+the CI floor follows it up (same ~2-point margin as the original gate), so
+the gains are now protected against regression.
+
 ### Added — palette commands for Search and Webhooks
 The command palette is the primary navigation surface (since `/` opens it),
 but `/search` had no Go-command — the 2026-07-17 review flagged the full
