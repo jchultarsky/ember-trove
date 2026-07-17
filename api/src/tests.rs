@@ -42,7 +42,10 @@ use common::{
         TemplateId,
     },
     id::{NodeLinkId, SearchPresetId, WebhookId},
-    node::{CreateNodeRequest, Node, NodeListParams, NodeTitleEntry, UpdateNodeRequest},
+    node::{
+        CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeTitleEntry, NodeType,
+        UpdateNodeRequest,
+    },
     node_link::{CreateNodeLinkRequest, NodeLink, UpdateNodeLinkRequest},
     note::{CreateNoteRequest, FeedNote, Note},
     permission::{GrantPermissionRequest, Permission, PermissionRole},
@@ -116,8 +119,10 @@ impl NodeRepo for StubNodeRepo {
     ) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> {
         unimplemented!()
     }
-    async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Node>, EmberTroveError> {
-        unimplemented!()
+    async fn list_all_for_owner(&self, owner: &str) -> Result<Vec<Node>, EmberTroveError> {
+        // One node owned by the caller — lets the export test prove
+        // owner-scoping against `list_all` (which returns two).
+        Ok(vec![fake_node("owned-node", owner)])
     }
     async fn area_for_nodes(
         &self,
@@ -129,7 +134,10 @@ impl NodeRepo for StubNodeRepo {
         unimplemented!()
     }
     async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError> {
-        unimplemented!()
+        Ok(vec![
+            fake_node("owned-node", "test-sub"),
+            fake_node("other-users-node", "someone-else"),
+        ])
     }
 }
 
@@ -378,8 +386,12 @@ impl AttachmentRepo for StubAttachmentRepo {
     async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError> {
         unimplemented!()
     }
-    async fn get(&self, _: AttachmentId) -> Result<Attachment, EmberTroveError> {
-        unimplemented!()
+    async fn get(&self, id: AttachmentId) -> Result<Attachment, EmberTroveError> {
+        // The stub "database" holds no attachments — handlers must surface
+        // this as 404 before any permission or S3 work.
+        Err(EmberTroveError::NotFound(format!(
+            "attachment {id} not found"
+        )))
     }
     async fn delete(&self, _: AttachmentId) -> Result<String, EmberTroveError> {
         unimplemented!()
@@ -501,6 +513,25 @@ impl FavoriteRepo for StubFavoriteRepo {
     }
     async fn reorder(&self, _: &str, _: &[FavoriteId]) -> Result<Vec<Favorite>, EmberTroveError> {
         unimplemented!()
+    }
+}
+
+/// A minimal well-formed node for stubs that must return data (export tests).
+fn fake_node(slug: &str, owner: &str) -> Node {
+    Node {
+        id: NodeId(Uuid::new_v4()),
+        owner_id: owner.to_string(),
+        node_type: NodeType::Article,
+        title: format!("Title of {slug}"),
+        slug: slug.to_string(),
+        body: Some("body text".to_string()),
+        metadata: serde_json::json!({}),
+        status: NodeStatus::Published,
+        tags: vec![],
+        pinned: false,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        edge_count: 0,
     }
 }
 
@@ -1302,6 +1333,215 @@ async fn public_share_route_is_rate_limited() {
         "governor must gate /share/{{token}}; got {}",
         resp.status()
     );
+}
+
+// ── Privileged & previously-untested route groups (v2.23.0) ──────────────────
+// admin, backup, metrics, export, attachments, editor-prefs had no tests at
+// all — the most privileged surfaces in the app. Registration first, then
+// behavior where the stubs allow it.
+
+#[tokio::test]
+async fn admin_routes_registered() {
+    assert_route_registered("GET", "/admin/users").await;
+    assert_route_registered("POST", "/admin/users").await;
+    assert_route_registered("GET", "/admin/users/roles").await;
+    let id = Uuid::new_v4();
+    assert_route_registered("DELETE", &format!("/admin/users/{id}")).await;
+    assert_route_registered("PUT", &format!("/admin/users/{id}/roles")).await;
+}
+
+#[tokio::test]
+async fn backup_routes_registered() {
+    assert_route_registered("GET", "/admin/backups").await;
+    assert_route_registered("POST", "/admin/backups").await;
+    let id = Uuid::new_v4();
+    assert_route_registered("DELETE", &format!("/admin/backups/{id}")).await;
+    assert_route_registered("GET", &format!("/admin/backups/{id}/download")).await;
+    assert_route_registered("GET", &format!("/admin/backups/{id}/preview")).await;
+    assert_route_registered("POST", &format!("/admin/backups/{id}/restore")).await;
+}
+
+#[tokio::test]
+async fn metrics_export_attachments_editor_prefs_routes_registered() {
+    assert_route_registered("GET", "/metrics").await;
+    assert_route_registered("GET", "/export").await;
+    let id = Uuid::new_v4();
+    assert_route_registered("GET", &format!("/attachments/{id}/download")).await;
+    assert_route_registered("DELETE", &format!("/attachments/{id}")).await;
+    assert_route_registered("GET", "/editor-prefs").await;
+    assert_route_registered("PUT", "/editor-prefs").await;
+}
+
+/// Mini-router around one protected sub-router with injected (non-admin) claims.
+fn claims_app(path: &str, router: Router<crate::state::AppState>) -> Router {
+    Router::new()
+        .nest(path, router)
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state())
+}
+
+#[tokio::test]
+async fn admin_users_rejects_non_admin() {
+    let resp = claims_app("/admin", crate::routes::admin::router())
+        .oneshot(Request::get("/admin/users").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn backup_list_and_restore_reject_non_admin() {
+    // The two most dangerous backup endpoints: read the archive list and
+    // execute a restore. Both must 403 for a non-admin before any work runs.
+    let app = claims_app("/admin/backups", crate::routes::backup::router());
+    let resp = app
+        .clone()
+        .oneshot(Request::get("/admin/backups").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let id = Uuid::new_v4();
+    let resp = app
+        .oneshot(
+            Request::post(format!("/admin/backups/{id}/restore"))
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn metrics_rejects_non_admin() {
+    let resp = claims_app("/metrics", crate::routes::metrics::router())
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// Count the entries in a ZIP body and return their names.
+fn zip_entry_names(bytes: &[u8]) -> Vec<String> {
+    let cursor = std::io::Cursor::new(bytes.to_vec());
+    let mut archive = zip::ZipArchive::new(cursor).expect("valid zip archive");
+    (0..archive.len())
+        .map(|i| archive.by_index(i).expect("zip entry").name().to_string())
+        .collect()
+}
+
+#[tokio::test]
+async fn export_scopes_to_owned_nodes_for_non_admin() {
+    // The stub returns 1 node for the owner and 2 for list_all — a non-admin
+    // export must contain exactly the owner's node.
+    let resp = claims_app("/export", crate::routes::export::router())
+        .oneshot(Request::get("/export").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .unwrap(),
+        "application/zip"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(zip_entry_names(&body), vec!["owned-node.md"]);
+}
+
+#[tokio::test]
+async fn export_includes_all_nodes_for_admin() {
+    let app = Router::new()
+        .nest("/export", crate::routes::export::router())
+        .layer(axum::Extension(admin_claims()))
+        .with_state(test_state());
+    let resp = app
+        .oneshot(Request::get("/export").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let names = zip_entry_names(&body);
+    assert_eq!(names.len(), 2, "admin export must include all nodes");
+    assert!(names.contains(&"other-users-node.md".to_string()));
+}
+
+#[tokio::test]
+async fn attachment_download_and_delete_unknown_id_return_not_found() {
+    // The stub holds no attachments: both handlers must 404 from the lookup,
+    // before permissions or S3 are consulted.
+    let app = claims_app("/attachments", crate::routes::attachments::router());
+    let id = Uuid::new_v4();
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/attachments/{id}/download"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let resp = app
+        .oneshot(
+            Request::delete(format!("/attachments/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn editor_prefs_list_returns_json_array() {
+    let resp = claims_app("/editor-prefs", crate::routes::editor_prefs::router())
+        .oneshot(Request::get("/editor-prefs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.is_array());
+}
+
+#[tokio::test]
+async fn editor_prefs_set_validates_and_accepts() {
+    let app = claims_app("/editor-prefs", crate::routes::editor_prefs::router());
+    let put = |body: &str| {
+        Request::put("/editor-prefs")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let id = Uuid::new_v4();
+    // Valid task pref → 204.
+    let resp = app
+        .clone()
+        .oneshot(put(&format!(
+            r#"{{"entity_kind":"task","entity_id":"{id}","height":240}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    // Unknown entity kind → 422 (ApiError::Validation).
+    let resp = app
+        .clone()
+        .oneshot(put(&format!(
+            r#"{{"entity_kind":"widget","entity_id":"{id}","height":240}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Height outside the 60–4000 clamp → 422.
+    let resp = app
+        .oneshot(put(&format!(
+            r#"{{"entity_kind":"note","entity_id":"{id}","height":12}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

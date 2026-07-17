@@ -20,6 +20,16 @@ Three findings from the full-codebase security review, each with a regression te
   create/update-time-only SSRF validation. The SSRF guards moved to a shared
   `api/src/ssrf.rs` used by both validation and dispatch.
 
+### Tooling — tests for the six previously-untested route groups (v2.23.0 start)
+admin, backup, metrics, export, attachments, and editor-prefs — the most
+privileged surfaces — had no tests at all (2026-07-17 review finding).
+Added registration tests for all 15 routes plus behavior tests: non-admin
+403s on admin/backup/metrics (including backup restore), export ZIP
+owner-scoping (non-admin gets only their nodes; admin gets all), attachment
+404s on unknown ids, and editor-prefs validation (entity-kind allowlist,
+height clamp → 422). Test stubs now model canned nodes/attachments instead
+of `unimplemented!` where these paths need them. Suite: 91 → 110 api tests.
+
 ### Documentation — open-source community health files
 Added the standard community set for the now-intentionally-public repo:
 `SECURITY.md` (private vulnerability reporting, scope, supported versions),
