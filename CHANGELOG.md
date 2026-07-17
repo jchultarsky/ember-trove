@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — GitHub account transfer (jchultarsky101 → jchultarsky)
+The repository moved from the `jchultarsky101` (work) account to the personal
+`jchultarsky` account. Repointed the GHCR image references in
+`deploy/docker-compose.prod.yml` and `deploy/k8s/{api,ui}-deployment.yaml` to
+`ghcr.io/jchultarsky/ember-trove-{api,ui}`. The release workflow already derived
+its owner from `${{ github.repository_owner }}`, so it pushed and pulled the new
+path while compose still named the old one — the next deploy would have failed to
+resolve the tag (or silently re-run a stale cached image). Also updated the
+repository URLs in `api/Cargo.toml`, `ui/Cargo.toml`, the README CI badge,
+`docs/deploy-aws.md`, `QWEN.md`, and a CHANGELOG history link.
+
 ### Operations — TLS auto-renewal repaired + documented
 Production HTTPS cert expired (2026-06-17) after ~30 days of silently failed
 auto-renewals: the host's certbot renewal config used `authenticator =
@@ -1774,7 +1785,7 @@ keyboards).
 
 ---
 
-<!-- Note: versions 1.52.0–1.75.3 (24 releases) are documented in git commit history: https://github.com/jchultarsky101/ember-trove/tags -->
+<!-- Note: versions 1.52.0–1.75.3 (24 releases) are documented in git commit history: https://github.com/jchultarsky/ember-trove/tags -->
 
 ---
 
