@@ -3,8 +3,22 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-07-17)
+## Current state (2026-07-18)
 
+- **Graph auto-arrange re-architected (unreleased, `feature/jc/graph-cluster-layout`):**
+  the BFS-row `smart_layout` + load-time `force_layout_expanded` (both WASM-only,
+  untested) are replaced by one pure engine, `common::graph_layout::cluster_layout`
+  (force-directed; 10 host tests). Contract worth keeping: **gentle mode** (mostly
+  seeded) uses Hooke springs with *seeded distances* as rest lengths and a local
+  repulsion cutoff — it untangles without contracting the user's deliberate
+  cluster separations; **pinned** seeds (initial page load pins all saved
+  positions) never move, so loading the graph can't shift a hand-made layout;
+  fresh layouts get a full FR anneal. Deterministic via UUID-hash jitter (WASM
+  `Math.random` is gone from layout). The algorithm was tuned against Julian's
+  real hand-made layout (backup: `~/projects/ember-trove-layout-backups/`).
+  Known non-goals this pass: the Fit button still hard-resets (doesn't
+  fit-to-content) and 14 stale `node_positions` rows exist on prod despite the
+  FK cascade — both noted for a later pass.
 - **v2.23.0 shipped** — the "trust the suite" release (2026-07-17 review plan,
   below). Coverage inverted-vs-risk is corrected: registration + behavior
   tests for the six previously-untested privileged route groups (admin,

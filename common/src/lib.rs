@@ -8,6 +8,7 @@ pub mod editor_pref;
 pub mod error;
 pub mod favorite;
 pub mod graph;
+pub mod graph_layout;
 pub mod id;
 pub mod inbox;
 pub mod keyboard;

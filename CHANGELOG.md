@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — auto-arrange clusters connected nodes instead of laying rows
+The graph's Auto-arrange button ran a BFS-layered hierarchical layout: every
+node was assigned a layer and each layer became a horizontal row — connectivity
+had almost no influence on proximity. It now runs a force-directed cluster
+layout (`common::graph_layout::cluster_layout`, pure + host-tested): edges
+attract, nodes repel, so hubs become star centres with satellite rings that
+widen with degree, and weakly-connected groups separate into distinct clusters.
+The refinement is **mental-map preserving** — it seeds from the current
+arrangement, keeps the user's chosen edge lengths as spring rest lengths
+(deliberate long bridges between clusters are not contracted), and preserves
+the coordinate frame. Initial page load uses the same engine with all saved
+positions *pinned*: a node that has never been placed settles near its
+neighbours instead of being scattered randomly, and saved positions never
+move. Deterministic (UUID-hash jitter, no `Math.random`), with a minimum
+node-spacing pass and grid packing for never-placed disconnected components.
+Replaces ~450 lines of WASM-only untested layout code; covered by 10 unit
+tests plus an e2e regression ("clusters a star around its hub, not in rows").
+
 ### Added — the graph is keyboard-navigable and screen-reader-legible (keyboard phase 3)
 Graph nodes were mouse-only and invisible to assistive tech. Each node is now
 a focusable `button` — `tabindex="0"`, `role="button"`, an `aria-label`
