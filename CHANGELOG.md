@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.1] - 2026-07-18
+
 ### Fixed — Fit actually fits (and the minimap stops lying about the viewport)
 The graph's Fit button hard-reset to 100% zoom at the origin, which could
 leave a clustered layout entirely off-screen. It now computes a real
