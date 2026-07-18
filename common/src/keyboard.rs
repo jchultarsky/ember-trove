@@ -47,13 +47,20 @@ pub enum GlobalAction {
 }
 
 /// One registry row: the action, the `KeyboardEvent.key` it matches, whether it
-/// requires the Ctrl/Cmd modifier, and how it is shown + described in help.
+/// requires the Ctrl/Cmd modifier, whether it still fires while an exclusive
+/// overlay (palette/help/modal) owns the keyboard, and how it is shown +
+/// described in help.
 pub struct GlobalShortcut {
     pub action: GlobalAction,
     /// The `KeyboardEvent.key()` value to match (ASCII-case-insensitive when `cmd`).
     pub key: &'static str,
     /// Requires Ctrl or Cmd (and is allowed even while an input is focused).
     pub cmd: bool,
+    /// Fires even while an overlay is open. The navigating shortcuts
+    /// (`n`/`g`/`/`) are `false` — they must not act *through* an open overlay
+    /// (keyboard phase 2); the overlay-control keys (`⌘K`/`?`/`Escape`) are
+    /// `true`.
+    pub in_overlay: bool,
     /// Human-facing key label for the help table (e.g. `"⌘K"`).
     pub display: &'static str,
     pub desc: &'static str,
@@ -65,6 +72,7 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         action: GlobalAction::QuickCapture,
         key: "n",
         cmd: false,
+        in_overlay: false,
         display: "n",
         desc: "Quick capture (Inbox)",
     },
@@ -72,6 +80,7 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         action: GlobalAction::GoGraph,
         key: "g",
         cmd: false,
+        in_overlay: false,
         display: "g",
         desc: "Graph view",
     },
@@ -79,6 +88,7 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         action: GlobalAction::OpenPalette,
         key: "/",
         cmd: false,
+        in_overlay: false,
         display: "/",
         desc: "Open command palette",
     },
@@ -86,6 +96,7 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         action: GlobalAction::TogglePalette,
         key: "k",
         cmd: true,
+        in_overlay: true,
         display: "⌘K",
         desc: "Open command palette (alt)",
     },
@@ -93,6 +104,7 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         action: GlobalAction::ToggleHelp,
         key: "?",
         cmd: false,
+        in_overlay: true,
         display: "?",
         desc: "Show this help",
     },
@@ -100,32 +112,40 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         action: GlobalAction::Escape,
         key: "Escape",
         cmd: false,
+        in_overlay: true,
         display: "Escape",
         desc: "Close modal / back",
     },
 ];
 
 /// Resolve a keydown to a global action, or `None` if no global shortcut
-/// applies. Pure so it is host-tested; the UI supplies the modifier flags and
-/// the `editable` result from [`target_is_editable`].
+/// applies. Pure so it is host-tested; the UI supplies the modifier flags, the
+/// `editable` result from [`target_is_editable`], and whether an exclusive
+/// overlay is open.
 ///
-/// Rules (preserving the pre-registry behavior): a `cmd` shortcut fires only on
-/// exactly Ctrl/Cmd (no Shift/Alt) and works even while editing; a plain
-/// shortcut fires only with no Ctrl/Cmd/Alt and only when not editing (Shift is
-/// allowed, since e.g. `?` is Shift+`/`).
+/// Rules: a `cmd` shortcut fires only on exactly Ctrl/Cmd (no Shift/Alt) and
+/// works even while editing; a plain shortcut fires only with no Ctrl/Cmd/Alt
+/// and only when not editing (Shift is allowed, since e.g. `?` is Shift+`/`).
+/// When `overlay_active`, a shortcut fires only if it is `in_overlay` — so the
+/// navigating keys don't leak through an open overlay.
 pub fn match_global(
     key: &str,
     ctrl_or_meta: bool,
     shift: bool,
     alt: bool,
     editable: bool,
+    overlay_active: bool,
 ) -> Option<GlobalAction> {
     for s in GLOBAL {
-        if s.cmd {
-            if ctrl_or_meta && !shift && !alt && key.eq_ignore_ascii_case(s.key) {
-                return Some(s.action);
+        let key_matches = if s.cmd {
+            ctrl_or_meta && !shift && !alt && key.eq_ignore_ascii_case(s.key)
+        } else {
+            !ctrl_or_meta && !alt && !editable && key == s.key
+        };
+        if key_matches {
+            if overlay_active && !s.in_overlay {
+                return None;
             }
-        } else if !ctrl_or_meta && !alt && !editable && key == s.key {
             return Some(s.action);
         }
     }
@@ -175,24 +195,24 @@ mod tests {
     #[test]
     fn plain_shortcuts_resolve_when_not_editing() {
         assert_eq!(
-            match_global("n", false, false, false, false),
+            match_global("n", false, false, false, false, false),
             Some(GlobalAction::QuickCapture)
         );
         assert_eq!(
-            match_global("g", false, false, false, false),
+            match_global("g", false, false, false, false, false),
             Some(GlobalAction::GoGraph)
         );
         assert_eq!(
-            match_global("/", false, false, false, false),
+            match_global("/", false, false, false, false, false),
             Some(GlobalAction::OpenPalette)
         );
         // `?` is Shift+`/`; shift is allowed for plain shortcuts.
         assert_eq!(
-            match_global("?", false, true, false, false),
+            match_global("?", false, true, false, false, false),
             Some(GlobalAction::ToggleHelp)
         );
         assert_eq!(
-            match_global("Escape", false, false, false, false),
+            match_global("Escape", false, false, false, false, false),
             Some(GlobalAction::Escape)
         );
     }
@@ -201,7 +221,7 @@ mod tests {
     fn plain_shortcuts_suppressed_while_editing() {
         for key in ["n", "g", "/", "?", "Escape"] {
             assert_eq!(
-                match_global(key, false, false, false, true),
+                match_global(key, false, false, false, true, false),
                 None,
                 "{key} must not fire while an input is focused"
             );
@@ -212,24 +232,49 @@ mod tests {
     fn cmd_k_fires_even_while_editing_but_not_with_extra_mods() {
         // ⌘K / Ctrl-K works mid-edit (a system-wide affordance)…
         assert_eq!(
-            match_global("k", true, false, false, true),
+            match_global("k", true, false, false, true, false),
             Some(GlobalAction::TogglePalette)
         );
         assert_eq!(
-            match_global("K", true, false, false, false),
+            match_global("K", true, false, false, false, false),
             Some(GlobalAction::TogglePalette)
         );
         // …but not with Shift or Alt also held.
-        assert_eq!(match_global("k", true, true, false, false), None);
-        assert_eq!(match_global("k", true, false, true, false), None);
+        assert_eq!(match_global("k", true, true, false, false, false), None);
+        assert_eq!(match_global("k", true, false, true, false, false), None);
     }
 
     #[test]
     fn plain_key_with_modifier_or_unknown_key_is_none() {
         // A plain shortcut key held with Ctrl/Cmd is NOT the plain shortcut.
-        assert_eq!(match_global("g", true, false, false, false), None);
-        assert_eq!(match_global("n", false, false, true, false), None); // Alt+n
-        assert_eq!(match_global("z", false, false, false, false), None); // unmapped
+        assert_eq!(match_global("g", true, false, false, false, false), None);
+        assert_eq!(match_global("n", false, false, true, false, false), None); // Alt+n
+        assert_eq!(match_global("z", false, false, false, false, false), None); // unmapped
+    }
+
+    #[test]
+    fn overlay_suppresses_navigation_but_not_control_keys() {
+        // With an overlay open, the navigating shortcuts must NOT fire…
+        for key in ["n", "g", "/"] {
+            assert_eq!(
+                match_global(key, false, false, false, false, true),
+                None,
+                "{key} must be suppressed while an overlay is open"
+            );
+        }
+        // …but the overlay-control keys still do.
+        assert_eq!(
+            match_global("?", false, true, false, false, true),
+            Some(GlobalAction::ToggleHelp)
+        );
+        assert_eq!(
+            match_global("Escape", false, false, false, false, true),
+            Some(GlobalAction::Escape)
+        );
+        assert_eq!(
+            match_global("k", true, false, false, false, true),
+            Some(GlobalAction::TogglePalette)
+        );
     }
 
     /// Anti-drift guarantee: every registry row is reachable through
@@ -239,9 +284,9 @@ mod tests {
     fn every_registry_row_round_trips() {
         for s in GLOBAL {
             let got = if s.cmd {
-                match_global(s.key, true, false, false, false)
+                match_global(s.key, true, false, false, false, false)
             } else {
-                match_global(s.key, false, false, false, false)
+                match_global(s.key, false, false, false, false, false)
             };
             assert_eq!(
                 got,
