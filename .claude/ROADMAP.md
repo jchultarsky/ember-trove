@@ -5,7 +5,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-07-18)
 
-- **Graph auto-arrange re-architected (unreleased, `feature/jc/graph-cluster-layout`):**
+- **v2.24.0 shipped — graph auto-arrange re-architected:**
   the BFS-row `smart_layout` + load-time `force_layout_expanded` (both WASM-only,
   untested) are replaced by one pure engine, `common::graph_layout::cluster_layout`
   (force-directed; 10 host tests). Contract worth keeping: **gentle mode** (mostly
