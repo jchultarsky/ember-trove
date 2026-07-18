@@ -1,8 +1,10 @@
-/// Visual knowledge graph — SVG node-link diagram with hierarchical layout.
+/// Visual knowledge graph — SVG node-link diagram with force-directed layout.
 ///
-/// Fetches all nodes and edges, runs a BFS-layered smart layout that places
-/// root nodes at the top and connected nodes in layers below.  An "Auto-arrange"
-/// button re-computes positions.  Saved positions from the API are overlaid.
+/// Fetches all nodes and edges. Saved positions are authoritative on load
+/// (pinned); nodes never placed before settle near their neighbours via
+/// `common::graph_layout::cluster_layout`.  The "Auto-arrange" button refines
+/// the current arrangement with the same spring embedder: connected nodes
+/// cluster around hubs and the user's groupings/spacing are preserved.
 /// Nodes are draggable; positions are persisted to the DB on mouse-up.
 /// The canvas supports pan (drag on background) and zoom (wheel).
 ///
@@ -24,6 +26,7 @@ use web_sys::{MouseEvent, TouchEvent, WheelEvent};
 
 use common::{
     edge::{CreateEdgeRequest, Edge, EdgeType},
+    graph_layout::cluster_layout,
     id::{EdgeId, NodeId, TagId},
     node::{Node, NodeType},
 };
@@ -302,455 +305,67 @@ fn compute_path(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
     )
 }
 
-// ── Layout ───────────────────────────────────────────────────────────────────
+// ── Layout ─────────────────────────────────────────────────────────────────────────────
 
-fn force_layout_expanded(
-    node_ids: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-    cw: f64,
-    ch: f64,
-    margin: f64,
-) -> HashMap<Uuid, (f64, f64)> {
-    let n = node_ids.len();
-    if n == 0 {
-        return HashMap::new();
-    }
-    if n == 1 {
-        let mut m = HashMap::new();
-        m.insert(node_ids[0], (cw / 2.0, ch / 2.0));
-        return m;
-    }
+// The clustering algorithm itself lives in `common::graph_layout`
+// (pure + host-tested); this section only keeps the viewport helpers.
 
-    let uw = cw - 2.0 * margin;
-    let uh = ch - 2.0 * margin;
-
-    let mut px: Vec<f64> = (0..n)
-        .map(|_| margin + js_sys::Math::random() * uw)
-        .collect();
-    let mut py: Vec<f64> = (0..n)
-        .map(|_| margin + js_sys::Math::random() * uh)
-        .collect();
-
-    let k = (uw * uh / n as f64).sqrt();
-
-    // Pre-compute id→index so the attractive-force loop is O(m) per iter,
-    // not O(m·n) from `node_ids.iter().position(...)`. Edges to/from IDs
-    // not in `node_ids` (orphans from deleted nodes) are skipped here too.
-    let idx_of: HashMap<Uuid, usize> = node_ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
-    let edge_idx: Vec<(usize, usize)> = edge_pairs
-        .iter()
-        .filter_map(|(src, tgt)| Some((*idx_of.get(src)?, *idx_of.get(tgt)?)))
-        .collect();
-
-    for iter in 0..200_u32 {
-        let mut disp_x = vec![0.0_f64; n];
-        let mut disp_y = vec![0.0_f64; n];
-
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let ddx = px[i] - px[j];
-                let ddy = py[i] - py[j];
-                let dist = (ddx * ddx + ddy * ddy).sqrt().max(1.0);
-                let force = k * k / dist;
-                let fx = ddx / dist * force;
-                let fy = ddy / dist * force;
-                disp_x[i] += fx;
-                disp_y[i] += fy;
-                disp_x[j] -= fx;
-                disp_y[j] -= fy;
-            }
-        }
-
-        for &(si, ti) in &edge_idx {
-            let ddx = px[si] - px[ti];
-            let ddy = py[si] - py[ti];
-            let dist = (ddx * ddx + ddy * ddy).sqrt().max(1.0);
-            let force = dist * dist / k;
-            let fx = ddx / dist * force;
-            let fy = ddy / dist * force;
-            disp_x[si] -= fx;
-            disp_y[si] -= fy;
-            disp_x[ti] += fx;
-            disp_y[ti] += fy;
-        }
-
-        let temp = 200.0_f64 * (1.0 - iter as f64 / 200.0).max(0.01);
-        for i in 0..n {
-            let mag = (disp_x[i] * disp_x[i] + disp_y[i] * disp_y[i])
-                .sqrt()
-                .max(0.001);
-            let step = mag.min(temp);
-            px[i] = (px[i] + disp_x[i] / mag * step).clamp(margin, cw - margin);
-            py[i] = (py[i] + disp_y[i] / mag * step).clamp(margin, ch - margin);
-        }
-    }
-
-    node_ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, (px[i], py[i])))
-        .collect()
-}
-
-// ── Smart Auto-Arrange Layout ────────────────────────────────────────────────
-
-/// Minimum clearance per-node to prevent text/tag overlap.
-/// Node shape radius (~22) + title pill (at cy+22..cy+36) + tag dots (at cy+42, r=5)
-/// = ~69px below center, ~22px above center → ~91px total vertical envelope.
+/// Vertical glyph envelope: shape radius + title pill + tag dots.
 const NODE_H: f64 = 90.0;
-/// Horizontal envelope: node diameter + title text width (~5px/char avg).
+/// Horizontal glyph envelope: node diameter + title text width.
 const NODE_W: f64 = 80.0;
 
-/// Vertical spacing between BFS layers (center-to-center).
-const LAYER_SPACING: f64 = 100.0;
-/// Spacing between disconnected components (grid cell size).
-const COMPONENT_SPACING: f64 = 200.0;
-
-/// Result of smart layout computation: positions + auto-fit transform.
-struct LayoutResult {
-    positions: HashMap<Uuid, (f64, f64)>,
-    fit_pan_x: f64,
-    fit_pan_y: f64,
-    fit_zoom: f64,
-}
-
-/// Compute the in-degree for each node from edge pairs.
-fn compute_in_degree(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> HashMap<Uuid, usize> {
-    let mut deg: HashMap<Uuid, usize> = node_ids.iter().map(|id| (*id, 0)).collect();
-    for (_src, tgt) in edge_pairs {
-        if let Some(d) = deg.get_mut(tgt) {
-            *d += 1;
-        }
-    }
-    deg
-}
-
-/// Build adjacency list (undirected) for BFS traversal.
-fn build_adjacency(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> HashMap<Uuid, Vec<Uuid>> {
-    let mut adj: HashMap<Uuid, Vec<Uuid>> = node_ids.iter().map(|id| (*id, Vec::new())).collect();
-    for (src, tgt) in edge_pairs {
-        if let Some(v) = adj.get_mut(src) {
-            v.push(*tgt);
-        }
-        if let Some(v) = adj.get_mut(tgt) {
-            v.push(*src);
-        }
-    }
-    adj
-}
-
-/// Find connected components via BFS.
-fn find_components(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> Vec<Vec<Uuid>> {
-    let adj = build_adjacency(node_ids, edge_pairs);
-    let mut visited = std::collections::HashSet::new();
-    let mut components = Vec::new();
-
-    for &nid in node_ids {
-        if visited.contains(&nid) {
-            continue;
-        }
-        let mut component = Vec::new();
-        let mut queue = vec![nid];
-        visited.insert(nid);
-        while let Some(cur) = queue.pop() {
-            component.push(cur);
-            if let Some(neighbors) = adj.get(&cur) {
-                for &nb in neighbors {
-                    if visited.insert(nb) {
-                        queue.push(nb);
-                    }
-                }
-            }
-        }
-        components.push(component);
-    }
-    components
-}
-
-/// Assign BFS layers starting from root nodes (in-degree == 0).
-/// If no roots exist, pick the highest-degree node as the starting point.
-fn assign_layers(
-    component: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-    in_degree: &HashMap<Uuid, usize>,
-) -> Vec<Vec<Uuid>> {
-    // Find roots (in-degree 0) within this component.
-    let comp_set: std::collections::HashSet<Uuid> = component.iter().copied().collect();
-    let mut roots: Vec<Uuid> = component
-        .iter()
-        .filter(|id| in_degree.get(id).copied().unwrap_or(0) == 0)
-        .copied()
-        .collect();
-
-    // If no roots, pick the node with highest total degree as artificial root.
-    if roots.is_empty() {
-        let mut deg: HashMap<Uuid, usize> = component.iter().map(|id| (*id, 0)).collect();
-        for (src, tgt) in edge_pairs {
-            if comp_set.contains(src) {
-                *deg.entry(*src).or_default() += 1;
-            }
-            if comp_set.contains(tgt) {
-                *deg.entry(*tgt).or_default() += 1;
-            }
-        }
-        roots.push(
-            component
-                .iter()
-                .max_by_key(|id| deg[id])
-                .copied()
-                .unwrap_or(component[0]),
-        );
-    }
-
-    // BFS layering.
-    let adj = build_adjacency(component, edge_pairs);
-    let mut layers: Vec<Vec<Uuid>> = Vec::new();
-    let mut visited = std::collections::HashSet::new();
-
-    let current_layer = roots;
-    for r in &current_layer {
-        visited.insert(*r);
-    }
-    layers.push(current_layer);
-
-    while let Some(layer) = layers.last() {
-        let mut next_layer = Vec::new();
-        for &nid in layer {
-            if let Some(neighbors) = adj.get(&nid) {
-                for &nb in neighbors {
-                    if visited.insert(nb) {
-                        next_layer.push(nb);
-                    }
-                }
-            }
-        }
-        if next_layer.is_empty() {
-            break;
-        }
-        layers.push(next_layer);
-    }
-
-    layers
-}
-
-/// Compute total degree for sorting within layers (hubs toward center).
-fn compute_total_degree(node_ids: &[Uuid], edge_pairs: &[(Uuid, Uuid)]) -> HashMap<Uuid, usize> {
-    let mut deg: HashMap<Uuid, usize> = node_ids.iter().map(|id| (*id, 0)).collect();
-    for (src, tgt) in edge_pairs {
-        if let Some(d) = deg.get_mut(src) {
-            *d += 1;
-        }
-        if let Some(d) = deg.get_mut(tgt) {
-            *d += 1;
-        }
-    }
-    deg
-}
-
-/// Hierarchical initial placement for a single component.
-/// Roots at top, BFS layers below, hubs centered within each layer.
-/// Positions start at (origin_x, origin_y) with no overlap.
-fn place_component(
-    component: &[Uuid],
-    edge_pairs: &[(Uuid, Uuid)],
-    in_degree: &HashMap<Uuid, usize>,
-    origin_x: f64,
-    origin_y: f64,
-) -> HashMap<Uuid, (f64, f64)> {
-    let layers = assign_layers(component, edge_pairs, in_degree);
-    let mut positions = HashMap::new();
-
-    // Pre-compute total degree for all nodes (for hub sorting).
-    let deg = compute_total_degree(component, edge_pairs);
-
-    for (_li, layer) in layers.iter().enumerate() {
-        let y = origin_y + _li as f64 * LAYER_SPACING;
-        let n = layer.len() as f64;
-        let layer_w = (n - 1.0) * NODE_W;
-        // Center each layer within the component's max width.
-        let start_x = origin_x - layer_w / 2.0;
-
-        // Sort: hubs toward center, others outward.  Defensive lookup —
-        // even with edge filtering at the smart_layout entry, a future caller
-        // path could pass through here with a stray ID; default-to-0 avoids
-        // a HashMap-index panic in production.
-        let mut sorted = layer.clone();
-        sorted.sort_by(|a, b| {
-            let da = deg.get(a).copied().unwrap_or(0);
-            let db = deg.get(b).copied().unwrap_or(0);
-            db.cmp(&da)
-        });
-
-        for (i, nid) in sorted.iter().enumerate() {
-            let x = start_x + i as f64 * NODE_W;
-            positions.insert(*nid, (x, y));
-        }
-    }
-
-    positions
-}
-
-/// Smart layout: hierarchical BFS layering with no force simulation.
-/// Roots placed at top, layers fan out below, hubs centered within layers.
-/// Disconnected components arranged in a grid.
-/// Returns positions + auto-fit pan/zoom that guarantees readability.
-fn smart_layout(
-    nodes: &[Node],
-    edge_pairs: &[(Uuid, Uuid)],
+/// Pan/zoom that frames the given positions in the viewport with padding.
+/// Zoom is clamped to [0.5, 3.0] so nodes stay readable.
+fn fit_transform(
+    positions: &HashMap<Uuid, (f64, f64)>,
     viewport_w: f64,
     viewport_h: f64,
-) -> LayoutResult {
-    let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
-    let n = node_ids.len();
-    if n == 0 {
-        return LayoutResult {
-            positions: HashMap::new(),
-            fit_pan_x: 0.0,
-            fit_pan_y: 0.0,
-            fit_zoom: 1.0,
-        };
+) -> (f64, f64, f64) {
+    if positions.is_empty() {
+        return (0.0, 0.0, 1.0);
     }
-    if n == 1 {
-        return LayoutResult {
-            positions: [node_ids[0]].iter().map(|id| (*id, (0.0, 0.0))).collect(),
-            fit_pan_x: viewport_w / 2.0 - NODE_W / 2.0,
-            fit_pan_y: viewport_h / 2.0 - NODE_H / 2.0,
-            fit_zoom: 1.0,
-        };
-    }
-
-    // Drop orphan edges (endpoints not in the current node set). Without this,
-    // BFS in `find_components` / `assign_layers` walks into UUIDs that have no
-    // entry in `compute_total_degree`'s map, panicking the sort closure in
-    // `place_component`. Orphans appear when an edge row outlives its node
-    // (or when nodes are paginated but edges are not).
-    let id_set: HashSet<Uuid> = node_ids.iter().copied().collect();
-    let edge_pairs: Vec<(Uuid, Uuid)> = edge_pairs
-        .iter()
-        .copied()
-        .filter(|(s, t)| id_set.contains(s) && id_set.contains(t))
-        .collect();
-    let edge_pairs = edge_pairs.as_slice();
-
-    let in_degree = compute_in_degree(&node_ids, edge_pairs);
-    let components = find_components(&node_ids, edge_pairs);
-
-    // ── Phase 1: Hierarchical placement (no force simulation needed) ────────
-    let mut all_positions = HashMap::new();
-
-    if components.len() == 1 {
-        let comp = &components[0];
-        let pos = place_component(comp, edge_pairs, &in_degree, 0.0, 0.0);
-        all_positions.extend(pos);
-    } else {
-        // Multiple components: arrange in a grid, each independently laid out.
-        // Two-pass: first compute each component's bounding box and accumulate
-        // per-column max widths + per-row max heights, then place with cumulative
-        // offsets so wider/taller components in one cell cannot overlap neighbours.
-        let cols = (components.len() as f64).sqrt().ceil() as usize;
-        let rows = components.len().div_ceil(cols);
-        struct CompPlacement {
-            pos: HashMap<Uuid, (f64, f64)>,
-            min_x: f64,
-            min_y: f64,
-        }
-        let mut placements: Vec<CompPlacement> = Vec::new();
-        let mut col_widths = vec![0.0_f64; cols];
-        let mut row_heights = vec![0.0_f64; rows];
-
-        for (ci, comp) in components.iter().enumerate() {
-            let col = ci % cols;
-            let row = ci / cols;
-            let pos = place_component(comp, edge_pairs, &in_degree, 0.0, 0.0);
-            let c_min_x = pos.values().map(|p| p.0).fold(f64::INFINITY, f64::min);
-            let c_max_x = pos.values().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-            let c_min_y = pos.values().map(|p| p.1).fold(f64::INFINITY, f64::min);
-            let c_max_y = pos.values().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-            let c_w = c_max_x - c_min_x + COMPONENT_SPACING;
-            let c_h = c_max_y - c_min_y + COMPONENT_SPACING;
-            col_widths[col] = col_widths[col].max(c_w);
-            row_heights[row] = row_heights[row].max(c_h);
-            placements.push(CompPlacement {
-                pos,
-                min_x: c_min_x,
-                min_y: c_min_y,
-            });
-        }
-
-        // Cumulative column/row offsets derived from the widest/tallest cell.
-        let col_offsets: Vec<f64> = (0..cols).map(|i| col_widths[..i].iter().sum()).collect();
-        let row_offsets: Vec<f64> = (0..rows).map(|i| row_heights[..i].iter().sum()).collect();
-
-        for (ci, p) in placements.into_iter().enumerate() {
-            let col = ci % cols;
-            let row = ci / cols;
-            let ox = col_offsets[col];
-            let oy = row_offsets[row];
-            for (nid, (px, py)) in p.pos {
-                all_positions.insert(nid, (px - p.min_x + ox, py - p.min_y + oy));
-            }
-        }
-    }
-
-    // ── Phase 1.5: Translate so all positions fall inside drag-and-drop bounds ─
-    // Drag clamping enforces [eff_margin, eff_{W,H} - eff_margin].  Auto-arrange
-    // produces positions near (0,0) which is outside that range, causing a
-    // visible snap the first time the user clicks a freshly-arranged node.
-    {
-        let grow_factor = (n as f64 / 50.0).clamp(1.0, 4.0);
-        let eff_margin = MARGIN * grow_factor;
-        let raw_min_x = all_positions
-            .values()
-            .map(|p| p.0)
-            .fold(f64::INFINITY, f64::min);
-        let raw_min_y = all_positions
-            .values()
-            .map(|p| p.1)
-            .fold(f64::INFINITY, f64::min);
-        let shift_x = eff_margin - raw_min_x;
-        let shift_y = eff_margin - raw_min_y;
-        for pos in all_positions.values_mut() {
-            pos.0 += shift_x;
-            pos.1 += shift_y;
-        }
-    }
-
-    // ── Phase 2: Compute bounding box and auto-fit transform ────────────────
     let mut min_x = f64::MAX;
     let mut max_x = f64::MIN;
     let mut min_y = f64::MAX;
     let mut max_y = f64::MIN;
-    for &(x, y) in all_positions.values() {
+    for &(x, y) in positions.values() {
         min_x = min_x.min(x - NODE_W / 2.0);
         max_x = max_x.max(x + NODE_W / 2.0);
         min_y = min_y.min(y - NODE_H / 2.0);
         max_y = max_y.max(y + NODE_H / 2.0);
     }
-
-    let graph_w = max_x - min_x;
-    let graph_h = max_y - min_y;
-    let graph_cx = (min_x + max_x) / 2.0;
-    let graph_cy = (min_y + max_y) / 2.0;
-
-    // Fit the graph into the viewport with padding.
+    let graph_w = (max_x - min_x).max(1.0);
+    let graph_h = (max_y - min_y).max(1.0);
     let padding = 60.0;
-    let fit_w = viewport_w - padding * 2.0;
-    let fit_h = viewport_h - padding * 2.0;
-    // Zoom: fit the graph, but never go below 0.5x (nodes stay readable).
-    let fit_zoom = (fit_w / graph_w).min(fit_h / graph_h).clamp(0.5, 3.0);
-    // Center the graph in the viewport.
-    let fit_pan_x = viewport_w / 2.0 - graph_cx * fit_zoom;
-    let fit_pan_y = viewport_h / 2.0 - graph_cy * fit_zoom;
+    let fit_zoom = ((viewport_w - padding * 2.0) / graph_w)
+        .min((viewport_h - padding * 2.0) / graph_h)
+        .clamp(0.5, 3.0);
+    let fit_pan_x = viewport_w / 2.0 - (min_x + max_x) / 2.0 * fit_zoom;
+    let fit_pan_y = viewport_h / 2.0 - (min_y + max_y) / 2.0 * fit_zoom;
+    (fit_pan_x, fit_pan_y, fit_zoom)
+}
 
-    LayoutResult {
-        positions: all_positions,
-        fit_pan_x,
-        fit_pan_y,
-        fit_zoom,
+/// Shift all positions right/down just enough that none sits outside the
+/// drag-clamp lower bound (`eff_margin`). A layout already in bounds is left
+/// untouched — auto-arrange preserves the user's coordinate frame, so this
+/// only acts when refinement nudged a node past the edge.
+fn shift_into_bounds(positions: &mut HashMap<Uuid, (f64, f64)>, eff_margin: f64) {
+    let min_x = positions
+        .values()
+        .map(|p| p.0)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = positions
+        .values()
+        .map(|p| p.1)
+        .fold(f64::INFINITY, f64::min);
+    let dx = (eff_margin - min_x).max(0.0);
+    let dy = (eff_margin - min_y).max(0.0);
+    if dx > 0.0 || dy > 0.0 {
+        for p in positions.values_mut() {
+            p.0 += dx;
+            p.1 += dy;
+        }
     }
 }
 
@@ -783,6 +398,10 @@ pub fn GraphView() -> impl IntoView {
     let drag_node: RwSignal<Option<Uuid>> = RwSignal::new(None);
     let drag_offset: RwSignal<(f64, f64)> = RwSignal::new((0.0, 0.0));
     let did_drag = RwSignal::new(false);
+    // The keyboard-focused node (by inner Uuid), for the focus ring. Driven by
+    // native focus (each node <g> is tabindex=0), so it needs no custom cursor
+    // or scope model — Tab moves between nodes, Enter/Space activates.
+    let focused_node: RwSignal<Option<Uuid>> = RwSignal::new(None);
 
     // Re-layout trigger: when set to true, re-runs the force simulation.
     let re_layout: RwSignal<bool> = RwSignal::new(false);
@@ -847,12 +466,26 @@ pub fn GraphView() -> impl IntoView {
                     let eff_h = H * grow_factor;
                     let eff_margin = MARGIN * grow_factor;
 
-                    let mut layout =
-                        force_layout_expanded(&node_ids, &edge_pairs, eff_w, eff_h, eff_margin);
-
-                    if let Ok(saved) = fetch_positions().await {
-                        for pos in saved {
-                            layout.insert(pos.node_id.0, (pos.x, pos.y));
+                    // Saved positions are authoritative on load: pin them all
+                    // and let only never-placed nodes settle near neighbours.
+                    let seeds: HashMap<Uuid, (f64, f64)> = fetch_positions()
+                        .await
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|p| (p.node_id.0, (p.x, p.y)))
+                        .collect();
+                    let pinned: HashSet<Uuid> = seeds.keys().copied().collect();
+                    let mut layout = cluster_layout(&node_ids, &edge_pairs, &seeds, &pinned);
+                    if pinned.is_empty() {
+                        shift_into_bounds(&mut layout, eff_margin);
+                    } else {
+                        // Keep pinned nodes exactly where the user left them;
+                        // clamp only computed spots into the drag bounds.
+                        for (id, p) in layout.iter_mut() {
+                            if !pinned.contains(id) {
+                                p.0 = p.0.clamp(eff_margin, eff_w - eff_margin);
+                                p.1 = p.1.clamp(eff_margin, eff_h - eff_margin);
+                            }
                         }
                     }
 
@@ -870,7 +503,7 @@ pub fn GraphView() -> impl IntoView {
         });
     });
 
-    // ── Re-layout effect: runs smart layout, overriding ALL saved positions ──
+    // ── Re-layout effect: cluster refinement seeded from current positions ──
     Effect::new(move |_| {
         if !re_layout.get() {
             return;
@@ -878,11 +511,13 @@ pub fn GraphView() -> impl IntoView {
         re_layouting.set(true);
         let nodes = nodes_sig.get_untracked();
         let edges = edges_sig.get_untracked();
+        let seeds = positions.get_untracked();
 
         // Use a timeout to let the spinner render before blocking computation.
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(80).await;
 
+            let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
             let edge_pairs: Vec<(Uuid, Uuid)> = edges
                 .iter()
                 .map(|e| (e.source_id.0, e.target_id.0))
@@ -897,11 +532,16 @@ pub fn GraphView() -> impl IntoView {
                 .and_then(|v| v.as_f64())
                 .unwrap_or(800.0);
 
-            let result = smart_layout(&nodes, &edge_pairs, viewport_w, viewport_h);
+            // Seeded with the on-screen arrangement, nothing pinned: connected
+            // nodes cluster around hubs while the user's groupings survive.
+            let mut new_positions = cluster_layout(&node_ids, &edge_pairs, &seeds, &HashSet::new());
+            let grow_factor = (node_ids.len() as f64 / 50.0).clamp(1.0, 4.0);
+            shift_into_bounds(&mut new_positions, MARGIN * grow_factor);
+            let (fit_pan_x, fit_pan_y, fit_zoom) =
+                fit_transform(&new_positions, viewport_w, viewport_h);
 
             // Persist all positions to the DB in a single batch call.
-            let batch: Vec<(NodeId, f64, f64)> = result
-                .positions
+            let batch: Vec<(NodeId, f64, f64)> = new_positions
                 .iter()
                 .map(|(id, (x, y))| (NodeId(*id), *x, *y))
                 .collect();
@@ -909,11 +549,11 @@ pub fn GraphView() -> impl IntoView {
                 tracing::error!("Failed to save auto-arrange positions: {e}");
             }
 
-            positions.set(result.positions);
-            pan_x.set(result.fit_pan_x);
-            pan_y.set(result.fit_pan_y);
-            zoom.set(result.fit_zoom);
-            zoom_input.set(format!("{:.0}", result.fit_zoom * 100.0));
+            positions.set(new_positions);
+            pan_x.set(fit_pan_x);
+            pan_y.set(fit_pan_y);
+            zoom.set(fit_zoom);
+            zoom_input.set(format!("{:.0}", fit_zoom * 100.0));
 
             re_layout.set(false);
             re_layouting.set(false);
@@ -991,7 +631,7 @@ pub fn GraphView() -> impl IntoView {
                                      hover:bg-stone-50 dark:hover:bg-stone-800")
                         }
                     }
-                    title="Auto-arrange nodes to prevent overlap (overrides manual positions)"
+                    title="Cluster connected nodes around hubs (refines your current arrangement)"
                     disabled=move || re_layouting.get()
                     on:click=move |_| {
                         re_layout.set(true);
@@ -1541,6 +1181,9 @@ pub fn GraphView() -> impl IntoView {
                         let title = node.title.clone();
                         let title_text = title.clone();
                         let node_type = node.node_type.clone();
+                        // Accessible name for the focusable node group.
+                        let aria_label =
+                            format!("{}, {} node", node.title, format!("{node_type:?}").to_lowercase());
                         let fill = node_fill(&node_type);
                         let stroke_c = node_stroke_color(&node_type);
 
@@ -1666,6 +1309,38 @@ pub fn GraphView() -> impl IntoView {
                                 // Stable hook for e2e specs (graph.spec.ts) — the
                                 // only non-visual way to address a node on the canvas.
                                 data-node-id=node_id.to_string()
+                                // Keyboard/a11y (keyboard phase 3): each node is a
+                                // focusable button so the graph is Tab-navigable and
+                                // screen-reader-legible; Enter/Space activates it.
+                                tabindex="0"
+                                role="button"
+                                aria-label=aria_label
+                                on:focusin=move |_| focused_node.set(Some(id))
+                                on:focusout=move |_| {
+                                    if focused_node.get_untracked() == Some(id) {
+                                        focused_node.set(None);
+                                    }
+                                }
+                                on:keydown={
+                                    let nav = navigate.clone();
+                                    move |ev: web_sys::KeyboardEvent| {
+                                        let k = ev.key();
+                                        if k != "Enter" && k != " " {
+                                            return;
+                                        }
+                                        ev.prevent_default();
+                                        if edge_create_mode.get_untracked() {
+                                            // Mirror the click behavior in edge-create mode.
+                                            match edge_src.get_untracked() {
+                                                None => edge_src.set(Some(id)),
+                                                Some(src) if src == id => edge_src.set(None),
+                                                Some(src) => edge_pair.set(Some((src, id))),
+                                            }
+                                        } else {
+                                            nav(&format!("/nodes/{node_id}"), Default::default());
+                                        }
+                                    }
+                                }
                                 style=move || {
                                     if edge_create_mode.get() {
                                         "cursor: crosshair;"
@@ -1734,6 +1409,26 @@ pub fn GraphView() -> impl IntoView {
                                 }
                             >
                                 <title>{title}</title>
+                                // Sky-blue ring when this node holds keyboard focus.
+                                {move || (focused_node.get() == Some(id)).then(|| view! {
+                                    <circle
+                                        cx=move || {
+                                            format!(
+                                                "{:.1}",
+                                                positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
+                                            )
+                                        }
+                                        cy=move || {
+                                            format!(
+                                                "{:.1}",
+                                                positions.with(|m| m.get(&id).map(|p| p.1).unwrap_or(H / 2.0))
+                                            )
+                                        }
+                                        r="34"
+                                        style="fill: none; stroke: #0ea5e9; stroke-width: 2.5px; \
+                                               opacity: 0.95; pointer-events: none;"
+                                    />
+                                })}
                                 // Amber dashed ring when this node is the selected edge source.
                                 {move || (edge_src.get() == Some(id)).then(|| view! {
                                     <circle

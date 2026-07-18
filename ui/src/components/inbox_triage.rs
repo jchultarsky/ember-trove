@@ -279,18 +279,11 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
             if sub.get_untracked() != SubMode::Keys {
                 return;
             }
-            // Don't steal keys from the capture box or other inputs.
-            let in_input = web_sys::window()
-                .and_then(|w| w.document())
-                .and_then(|d| d.active_element())
-                .map(|el| {
-                    matches!(
-                        el.tag_name().to_uppercase().as_str(),
-                        "INPUT" | "TEXTAREA" | "SELECT"
-                    )
-                })
-                .unwrap_or(false);
-            if in_input {
+            // Don't steal keys from the capture box or other inputs. Shared
+            // guard (crate::keyboard) — reconciled with layout/my_day, which
+            // previously also covered <button> and contenteditable; harmless
+            // here since nothing is focused in SubMode::Keys.
+            if crate::keyboard::active_element_is_editable() {
                 return;
             }
             match ev.key().as_str() {

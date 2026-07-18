@@ -10,6 +10,20 @@ use crate::error::ApiError;
 /// TTL for JWKS cache — refresh after 1 hour to handle key rotation.
 const JWKS_TTL: Duration = Duration::from_secs(3600);
 
+/// True when the token endpoint belongs to AWS Cognito — the only provider
+/// whose proprietary `ChangePassword` service call we implement. Parses the
+/// URL and matches the HOST suffix (never a substring of the whole URL, so
+/// `x.amazonaws.com.evil.example` does not qualify).
+fn is_cognito_token_endpoint(token_endpoint: &str) -> bool {
+    reqwest::Url::parse(token_endpoint)
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| h == "amazonaws.com" || h.ends_with(".amazonaws.com"))
+        })
+        .unwrap_or(false)
+}
+
 /// Cached JWKS with timestamp for TTL invalidation.
 struct CachedJwks {
     jwks: JwkSet,
@@ -325,12 +339,23 @@ impl OidcClient {
     /// Calls the Cognito Identity Provider service directly via HTTP — no AWS
     /// SDK dependency required.  The service URL is derived from the token
     /// endpoint (same AWS hostname, different path).
+    ///
+    /// Cognito-only: with any other issuer (e.g. the local Keycloak stack,
+    /// deploy/docker-compose.local-auth.yml) this returns a clean Validation
+    /// error instead of firing the AWS-proprietary call at a server that
+    /// cannot understand it.
     pub async fn change_password(
         &self,
         access_token: &str,
         previous_password: &str,
         proposed_password: &str,
     ) -> Result<(), ApiError> {
+        if !is_cognito_token_endpoint(&self.token_endpoint) {
+            return Err(ApiError::Validation(
+                "password changes are managed by your identity provider, not Ember Trove"
+                    .to_string(),
+            ));
+        }
         // Derive the Cognito service root from the token_endpoint URL.
         // token_endpoint: https://cognito-idp.<region>.amazonaws.com/<pool>/oauth2/token
         // service root:   https://cognito-idp.<region>.amazonaws.com/
@@ -424,6 +449,24 @@ impl OidcClient {
 mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+
+    #[test]
+    fn cognito_endpoint_detection_is_host_suffix_based() {
+        use super::is_cognito_token_endpoint as is_cognito;
+        // Real Cognito shape.
+        assert!(is_cognito(
+            "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_x/oauth2/token"
+        ));
+        // Local Keycloak (docker-compose.local-auth.yml) and generic IdPs.
+        assert!(!is_cognito(
+            "http://keycloak:8080/realms/ember-trove/protocol/openid-connect/token"
+        ));
+        assert!(!is_cognito("https://idp.example.com/oauth2/token"));
+        // Host-suffix matching, not substring: a lookalike domain fails.
+        assert!(!is_cognito("https://x.amazonaws.com.evil.example/token"));
+        // Unparseable input fails closed.
+        assert!(!is_cognito("not a url"));
+    }
 
     // Test-only RSA-2048 PUBLIC key (public keys are not secrets). The matching
     // private key is deliberately NOT committed — this test never signs a token,

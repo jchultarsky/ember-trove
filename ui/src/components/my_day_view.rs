@@ -150,23 +150,10 @@ pub fn MyDayView() -> impl IntoView {
             return;
         }
 
-        // Skip when typing — input, textarea, select, button, or
-        // anything contenteditable.  Buttons are excluded so Enter on
-        // a focused tap-button doesn't trigger the row Enter shortcut.
-        let editable = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.active_element())
-            .map(|el| {
-                let tag = el.tag_name().to_uppercase();
-                if matches!(tag.as_str(), "INPUT" | "TEXTAREA" | "SELECT" | "BUTTON") {
-                    return true;
-                }
-                el.get_attribute("contenteditable")
-                    .map(|v| v != "false")
-                    .unwrap_or(false)
-            })
-            .unwrap_or(false);
-        if editable {
+        // Skip when typing — input, textarea, select, button, or anything
+        // contenteditable (so e.g. Enter on a focused tap-button doesn't also
+        // trigger the row Enter shortcut). Shared guard: crate::keyboard.
+        if crate::keyboard::active_element_is_editable() {
             return;
         }
 

@@ -3,8 +3,22 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-07-17)
+## Current state (2026-07-18)
 
+- **v2.24.0 shipped — graph auto-arrange re-architected:**
+  the BFS-row `smart_layout` + load-time `force_layout_expanded` (both WASM-only,
+  untested) are replaced by one pure engine, `common::graph_layout::cluster_layout`
+  (force-directed; 10 host tests). Contract worth keeping: **gentle mode** (mostly
+  seeded) uses Hooke springs with *seeded distances* as rest lengths and a local
+  repulsion cutoff — it untangles without contracting the user's deliberate
+  cluster separations; **pinned** seeds (initial page load pins all saved
+  positions) never move, so loading the graph can't shift a hand-made layout;
+  fresh layouts get a full FR anneal. Deterministic via UUID-hash jitter (WASM
+  `Math.random` is gone from layout). The algorithm was tuned against Julian's
+  real hand-made layout (backup: `~/projects/ember-trove-layout-backups/`).
+  Known non-goals this pass: the Fit button still hard-resets (doesn't
+  fit-to-content) and 14 stale `node_positions` rows exist on prod despite the
+  FK cascade — both noted for a later pass.
 - **v2.23.0 shipped** — the "trust the suite" release (2026-07-17 review plan,
   below). Coverage inverted-vs-risk is corrected: registration + behavior
   tests for the six previously-untested privileged route groups (admin,
@@ -45,6 +59,47 @@ Keep it current as part of each change (see `POLICY.md` §10).
   progress on `feature/jc/security-hardening` (target v2.22.4).
 
 ## Plan of record (2026-07-17 review)
+
+- **v2.24.0 — "keyboard & a11y" (planned 2026-07-18):** unify the ad-hoc
+  keyboard handling into one model. Current state (inventory): no central
+  dispatcher — 3 window-level keydown listeners (layout, my_day, inbox_triage)
+  + ~15 element-scoped handlers, the editable-guard copy-pasted 3× with the
+  triage copy diverging (omits BUTTON/contenteditable), the `help.rs` shortcut
+  table display-only and free to drift from real dispatch, a leaked Cmd-K
+  listener (`layout.rs:131`, no `on_cleanup`), and the graph with zero keyboard
+  support. Target: one global dispatcher owned by `Layout`; a shortcut registry
+  whose match logic is a pure `common/` fn (host-testable) that also generates
+  the help table (no drift); a `KeyboardScope` context replacing "which
+  component is mounted" (Global/MyDay/Graph + exclusive Triage/Palette/Modal);
+  one shared `is_editable_target()`. Phases, each a shippable PR:
+  0. Extract `is_editable_target()` + reconcile the 3 copies; fix the Cmd-K
+     leak. Two bug fixes, no UX change. *(in progress)*
+  1. Registry + pure match fn in `common/`; help table generated from it;
+     collapse the two `layout.rs` listeners into one.
+  2. Overlay-scope suppression: `in_overlay` flag per registry row +
+     `overlay_active` arg to `match_global`, so navigating keys don't leak
+     through the palette/help (fixed a real bug — `g` navigated through the
+     open help modal). *Reframed from the original "full KeyboardScope + view
+     registration": that was mostly redundant with the phase-0 editable-guard,
+     and the view-scope abstraction's real consumer is phase 3 — so it folds
+     there rather than shipping as unused infrastructure.*
+  3. Graph keyboard/a11y baseline (shipped): each node is a focusable
+     `button` (tabindex/role/aria-label) with a focus ring and Enter/Space
+     activation — the graph is Tab-navigable and screen-reader-legible, done
+     with **native focus** (no custom cursor). *Finding: this is the THIRD
+     phase where the `KeyboardScope` model proved unnecessary (0 used the
+     editable-guard, 1 the registry, 2 overlay flags, 3 native focus). The
+     scope model was a solution without a problem — **dropped from the plan.**
+     The only thing that would want it is optional arrow-key SPATIAL graph
+     navigation (a "3b" UX enhancement, not an a11y requirement); revisit only
+     if that's wanted.*
+  4. a11y sweep on touched surfaces (`aria-selected`/`aria-activedescendant`).
+  Boundary: do NOT centralize the palette/triage internal state machines —
+  centralize guard/registry/dispatch/scope only. Risk to watch: a panic in the
+  dispatcher poisons ALL keyboard handling (the v2.21.1 lesson), so its core
+  is a pure fn and every e2e collects `pageerror`. Only destructive shortcut is
+  `d`=delete, and both paths are reversible (soft-delete/undo) — no new
+  security surface.
 
 - **v2.22.4 — security patch (in progress):**
   1. `/share/{token}` joins the rate-limited router group — it was the only

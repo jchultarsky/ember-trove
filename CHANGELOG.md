@@ -6,6 +6,104 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.0] - 2026-07-18
+
+### Changed — auto-arrange clusters connected nodes instead of laying rows
+The graph's Auto-arrange button ran a BFS-layered hierarchical layout: every
+node was assigned a layer and each layer became a horizontal row — connectivity
+had almost no influence on proximity. It now runs a force-directed cluster
+layout (`common::graph_layout::cluster_layout`, pure + host-tested): edges
+attract, nodes repel, so hubs become star centres with satellite rings that
+widen with degree, and weakly-connected groups separate into distinct clusters.
+The refinement is **mental-map preserving** — it seeds from the current
+arrangement, keeps the user's chosen edge lengths as spring rest lengths
+(deliberate long bridges between clusters are not contracted), and preserves
+the coordinate frame. Initial page load uses the same engine with all saved
+positions *pinned*: a node that has never been placed settles near its
+neighbours instead of being scattered randomly, and saved positions never
+move. Deterministic (UUID-hash jitter, no `Math.random`), with a minimum
+node-spacing pass and grid packing for never-placed disconnected components.
+Replaces ~450 lines of WASM-only untested layout code; covered by 10 unit
+tests plus an e2e regression ("clusters a star around its hub, not in rows").
+
+### Added — the graph is keyboard-navigable and screen-reader-legible (keyboard phase 3)
+Graph nodes were mouse-only and invisible to assistive tech. Each node is now
+a focusable `button` — `tabindex="0"`, `role="button"`, an `aria-label`
+("〈title〉, 〈type〉 node") — with a sky-blue focus ring and Enter/Space
+activation (open the node, or select it in edge-create mode). Tab moves between
+nodes; done with native focus, so no custom cursor. (Arrow-key *spatial*
+navigation and the once-planned `KeyboardScope` model are not needed for this
+and are dropped/deferred — see `.claude/ROADMAP.md`.) Covered by a new
+`graph.spec.ts` case.
+
+### Fixed — global shortcuts no longer leak through an open overlay (keyboard phase 2)
+With the help modal open, pressing a global shortcut like `g` navigated away
+*through* the modal — help (unlike the other modals) doesn't move focus into
+itself, so the editable-guard didn't catch it. Each registry entry now carries
+an `in_overlay` flag and `match_global` takes an `overlay_active` argument: the
+navigating shortcuts (`n`/`g`/`/` and the contextual `d`) are suppressed while
+the palette or help owns the keyboard, but the overlay-control keys
+(`⌘K`/`?`/`Escape`) still work. (Regression-tested red→green in
+`palette.spec.ts`.) This is the overlay-scope slice of the phase-2 plan; the
+broader view-scope model folds into phase 3, where the graph keyboard cursor
+gives it a concrete consumer — see `.claude/ROADMAP.md`.
+
+### Changed — shortcut registry (unified-keyboard-model, phase 1)
+The six global shortcuts (`n` `g` `/` `⌘K` `?` `Escape`) now live in one
+registry, `common::keyboard::GLOBAL`, that drives **both** dispatch (via the
+host-tested pure `match_global`) **and** the help modal's "Anywhere" table
+(rendered from the same table) — so a documented shortcut that doesn't fire,
+or vice-versa, is now impossible. The two `layout.rs` window listeners are
+collapsed into one owned dispatcher with a single `on_cleanup`. No user-facing
+behavior change. Adds an e2e for the help modal (`?`), which was untested.
+(View-specific shortcuts and the contextual `d` migrate to the registry with
+the phase-2 scope model.)
+
+### Fixed — keyboard-handling foundation (unified-keyboard-model, phase 0)
+First step of the v2.24.0 keyboard/a11y plan (`.claude/ROADMAP.md`), fixing two
+real bugs with no UX change:
+- The "is the focused element editable?" guard that stops single-key shortcuts
+  from firing while typing was copy-pasted in three handlers, and the inbox-
+  triage copy had **drifted** — it omitted `<button>` and `contenteditable`, so
+  a shortcut could fire mid-edit there. Extracted one shared guard
+  (`ui/src/keyboard.rs` over a host-tested pure fn
+  `common::keyboard::target_is_editable`) and reconciled all three call sites.
+- The Cmd/Ctrl-K palette window listener (`layout.rs`) had no `on_cleanup`,
+  leaking a handle that violates the project's listener-lifecycle rule; added
+  the cleanup.
+
+### Tooling — `scripts/preserve-ghcr-tags.sh` (GHCR image-tag archival)
+One-time helper to copy release image tags from the old `jchultarsky101` GHCR
+namespace (pre-2026-07 transfer) into the new `jchultarsky` one before the old
+packages are deleted — registry-to-registry, idempotent, resumable. Optional
+`TAG_FILTER` (ERE) restricts the range and `DRY_RUN=1` previews without
+copying; the summary refuses to say "safe to delete" while any tags remain
+filtered-out and old-namespace-only. Requires a `write:packages` PAT +
+`docker login` (package writes are credential-scoped).
+
+### Added — zero-AWS local login via bundled Keycloak (v3 groundwork)
+`./scripts/dev-local.sh` brings up the full stack **plus a Keycloak OIDC
+issuer** — no AWS account, Cognito pool, or secrets file needed to log in and
+evaluate the app (the main OSS-adoption barrier). A protocol mapper emits
+group membership under the same `cognito:groups` claim the app already reads,
+so the security-critical token-validation path is **unchanged** — the only API
+change is a guard on `/auth/change-password` (Cognito-only) that returns a
+clean "managed by your identity provider" message against other issuers,
+with a host-suffix detection helper + unit test. Realm fixture seeds `admin`
+and `user` accounts (dev-only, not secrets). Verified end-to-end: login →
+Keycloak → callback → `/api/auth/me` returns `roles:["admin"]` from the mapped
+claim, and admin-only UI (Users/Permissions/Backup) renders. Files:
+`deploy/keycloak/realm-ember-trove.json`, `deploy/docker-compose.local-auth.yml`,
+`deploy/nginx.local-auth.conf`, `scripts/dev-local.sh`; README quickstart.
+
+### Fixed — Keycloak local-login page now renders styled
+The local-auth login page loaded unstyled: Keycloak's theme assets
+(`/resources/**.css|.js|.ico`) were captured by the SPA's static-asset regex
+location (`~* \.(css|js|ico…)$`), which nginx evaluates *before* the
+`/resources/` proxy prefix, so they 404'd from the SPA root. Marked the
+`/realms/` and `/resources/` proxy locations `^~` so the prefix wins over the
+regex; all theme assets now serve 200 from Keycloak. Verified in a browser.
+
 ## [2.23.0] - 2026-07-17
 
 ### Tooling — coverage floor raised 17% → 24%

@@ -123,98 +123,91 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     let palette_create_title: RwSignal<String> = RwSignal::new(String::new());
     let show_structured_from_palette: RwSignal<bool> = RwSignal::new(false);
 
-    // Cmd-K / Ctrl-K — separate listener because the main shortcut
-    // handler below short-circuits on any modifier key (which is
-    // correct for /, n, g, etc.).  This one only fires on the modifier
-    // path and doesn't care about input focus: ⌘K is a system-wide
-    // affordance that should work even mid-edit.
-    {
-        let _palette_handle =
-            window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
-                if (ev.meta_key() || ev.ctrl_key())
-                    && !ev.shift_key()
-                    && !ev.alt_key()
-                    && ev.key().eq_ignore_ascii_case("k")
-                {
-                    ev.prevent_default();
-                    show_palette.update(|v| *v = !*v);
-                }
-            });
-    }
-
+    // Single global keydown dispatcher (Phase 1 of the keyboard-model work).
+    // The six genuinely-global shortcuts are resolved by the shared registry
+    // `common::keyboard::match_global` — the same `GLOBAL` table the help modal
+    // renders, so docs and dispatch can't drift. The contextual `d` (duplicate,
+    // node pages only) stays inline here; it joins the registry with the Phase
+    // 2 `KeyboardScope` model. One owned listener with one `on_cleanup` (the
+    // previous two both risked the disposed-signal leak; see leptos.md).
     let handle = {
         let navigate = navigate.clone();
         window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
-            if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
-                return;
-            }
-            let is_editable = web_sys::window()
-                .and_then(|w| w.document())
-                .and_then(|d| d.active_element())
-                .map(|el| {
-                    let tag = el.tag_name().to_uppercase();
-                    if matches!(tag.as_str(), "INPUT" | "TEXTAREA" | "SELECT" | "BUTTON") {
-                        return true;
-                    }
-                    el.get_attribute("contenteditable")
-                        .map(|v| v != "false")
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if is_editable {
-                return;
-            }
+            use common::keyboard::GlobalAction::*;
+            let key = ev.key();
+            let cmd = ev.ctrl_key() || ev.meta_key();
+            let editable = crate::keyboard::active_element_is_editable();
+            // An exclusive overlay (palette or help) owns the keyboard: the
+            // navigating shortcuts must not act *through* it. Other modals trap
+            // focus, so the editable-guard already covers them; help doesn't
+            // move focus into itself, which is the leak this closes.
+            let overlay = show_palette.get_untracked() || show_shortcuts.get_untracked();
 
-            match ev.key().as_str() {
-                "?" => show_shortcuts.update(|v| *v = !*v),
-                "n" => show_capture.set(true),
-                "g" => navigate("/graph", Default::default()),
-                "/" => {
-                    // v2.8.0: `/` opens the Cmd-K palette over the
-                    // current view instead of navigating to the
-                    // full-page `/search` (which is still reachable
-                    // by typing the URL or via the legacy redirect).
-                    ev.prevent_default();
-                    show_palette.set(true);
-                }
-                "d" => {
-                    // Duplicate the currently open node (only when on /nodes/<uuid>).
-                    let path = location.pathname.get_untracked();
-                    let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
-                    if segs.len() == 2
-                        && segs[0] == "nodes"
-                        && let Ok(node_id) = segs[1].parse::<NodeId>()
-                    {
-                        let nav = navigate.clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            match crate::api::duplicate_node(node_id).await {
-                                Ok(dup) => {
-                                    crate::components::toast::push_toast(
-                                        crate::components::toast::ToastLevel::Success,
-                                        "Node duplicated.",
-                                    );
-                                    refresh.update(|n| *n += 1);
-                                    nav(&format!("/nodes/{}", dup.id), Default::default());
-                                }
-                                Err(e) => crate::components::toast::push_toast(
-                                    crate::components::toast::ToastLevel::Error,
-                                    format!("Duplicate failed: {e}"),
-                                ),
-                            }
-                        });
+            if let Some(action) = common::keyboard::match_global(
+                &key,
+                cmd,
+                ev.shift_key(),
+                ev.alt_key(),
+                editable,
+                overlay,
+            ) {
+                match action {
+                    TogglePalette => {
+                        ev.prevent_default();
+                        show_palette.update(|v| *v = !*v);
                     }
-                }
-                "Escape" => {
-                    if show_shortcuts.get_untracked() {
-                        show_shortcuts.set(false);
-                    } else {
-                        let path = location.pathname.get_untracked();
-                        if path.starts_with("/nodes") {
-                            navigate("/nodes", Default::default());
+                    OpenPalette => {
+                        // `/` opens the palette over the current view instead of
+                        // navigating to the full-page `/search` (still reachable
+                        // by URL / legacy redirect).
+                        ev.prevent_default();
+                        show_palette.set(true);
+                    }
+                    ToggleHelp => show_shortcuts.update(|v| *v = !*v),
+                    QuickCapture => show_capture.set(true),
+                    GoGraph => navigate("/graph", Default::default()),
+                    Escape => {
+                        if show_shortcuts.get_untracked() {
+                            show_shortcuts.set(false);
+                        } else {
+                            let path = location.pathname.get_untracked();
+                            if path.starts_with("/nodes") {
+                                navigate("/nodes", Default::default());
+                            }
                         }
                     }
                 }
-                _ => {}
+                return;
+            }
+
+            // Contextual: `d` duplicates the open node (only on /nodes/<uuid>).
+            // Same "plain key, not editing, no overlay" conditions as the
+            // registry keys.
+            if !cmd && !ev.alt_key() && !editable && !overlay && key == "d" {
+                let path = location.pathname.get_untracked();
+                let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
+                if segs.len() == 2
+                    && segs[0] == "nodes"
+                    && let Ok(node_id) = segs[1].parse::<NodeId>()
+                {
+                    let nav = navigate.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match crate::api::duplicate_node(node_id).await {
+                            Ok(dup) => {
+                                crate::components::toast::push_toast(
+                                    crate::components::toast::ToastLevel::Success,
+                                    "Node duplicated.",
+                                );
+                                refresh.update(|n| *n += 1);
+                                nav(&format!("/nodes/{}", dup.id), Default::default());
+                            }
+                            Err(e) => crate::components::toast::push_toast(
+                                crate::components::toast::ToastLevel::Error,
+                                format!("Duplicate failed: {e}"),
+                            ),
+                        }
+                    });
+                }
             }
         })
     };
