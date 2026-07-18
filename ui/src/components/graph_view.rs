@@ -783,6 +783,10 @@ pub fn GraphView() -> impl IntoView {
     let drag_node: RwSignal<Option<Uuid>> = RwSignal::new(None);
     let drag_offset: RwSignal<(f64, f64)> = RwSignal::new((0.0, 0.0));
     let did_drag = RwSignal::new(false);
+    // The keyboard-focused node (by inner Uuid), for the focus ring. Driven by
+    // native focus (each node <g> is tabindex=0), so it needs no custom cursor
+    // or scope model — Tab moves between nodes, Enter/Space activates.
+    let focused_node: RwSignal<Option<Uuid>> = RwSignal::new(None);
 
     // Re-layout trigger: when set to true, re-runs the force simulation.
     let re_layout: RwSignal<bool> = RwSignal::new(false);
@@ -1541,6 +1545,9 @@ pub fn GraphView() -> impl IntoView {
                         let title = node.title.clone();
                         let title_text = title.clone();
                         let node_type = node.node_type.clone();
+                        // Accessible name for the focusable node group.
+                        let aria_label =
+                            format!("{}, {} node", node.title, format!("{node_type:?}").to_lowercase());
                         let fill = node_fill(&node_type);
                         let stroke_c = node_stroke_color(&node_type);
 
@@ -1666,6 +1673,38 @@ pub fn GraphView() -> impl IntoView {
                                 // Stable hook for e2e specs (graph.spec.ts) — the
                                 // only non-visual way to address a node on the canvas.
                                 data-node-id=node_id.to_string()
+                                // Keyboard/a11y (keyboard phase 3): each node is a
+                                // focusable button so the graph is Tab-navigable and
+                                // screen-reader-legible; Enter/Space activates it.
+                                tabindex="0"
+                                role="button"
+                                aria-label=aria_label
+                                on:focusin=move |_| focused_node.set(Some(id))
+                                on:focusout=move |_| {
+                                    if focused_node.get_untracked() == Some(id) {
+                                        focused_node.set(None);
+                                    }
+                                }
+                                on:keydown={
+                                    let nav = navigate.clone();
+                                    move |ev: web_sys::KeyboardEvent| {
+                                        let k = ev.key();
+                                        if k != "Enter" && k != " " {
+                                            return;
+                                        }
+                                        ev.prevent_default();
+                                        if edge_create_mode.get_untracked() {
+                                            // Mirror the click behavior in edge-create mode.
+                                            match edge_src.get_untracked() {
+                                                None => edge_src.set(Some(id)),
+                                                Some(src) if src == id => edge_src.set(None),
+                                                Some(src) => edge_pair.set(Some((src, id))),
+                                            }
+                                        } else {
+                                            nav(&format!("/nodes/{node_id}"), Default::default());
+                                        }
+                                    }
+                                }
                                 style=move || {
                                     if edge_create_mode.get() {
                                         "cursor: crosshair;"
@@ -1734,6 +1773,26 @@ pub fn GraphView() -> impl IntoView {
                                 }
                             >
                                 <title>{title}</title>
+                                // Sky-blue ring when this node holds keyboard focus.
+                                {move || (focused_node.get() == Some(id)).then(|| view! {
+                                    <circle
+                                        cx=move || {
+                                            format!(
+                                                "{:.1}",
+                                                positions.with(|m| m.get(&id).map(|p| p.0).unwrap_or(W / 2.0))
+                                            )
+                                        }
+                                        cy=move || {
+                                            format!(
+                                                "{:.1}",
+                                                positions.with(|m| m.get(&id).map(|p| p.1).unwrap_or(H / 2.0))
+                                            )
+                                        }
+                                        r="34"
+                                        style="fill: none; stroke: #0ea5e9; stroke-width: 2.5px; \
+                                               opacity: 0.95; pointer-events: none;"
+                                    />
+                                })}
                                 // Amber dashed ring when this node is the selected edge source.
                                 {move || (edge_src.get() == Some(id)).then(|| view! {
                                     <circle

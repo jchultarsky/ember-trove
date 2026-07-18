@@ -64,6 +64,33 @@ test.describe('graph view', () => {
     }
   });
 
+  test('a node is keyboard-focusable, labelled, and Enter opens it', async ({ page, request }) => {
+    // Keyboard/a11y baseline (keyboard phase 3): nodes are focusable buttons
+    // with an accessible name, show a focus ring, and activate on Enter.
+    const errors = collectPageErrors(page);
+    const title = `e2e graph kbd ${Date.now()}`;
+    const node = await createNode(request, title);
+    try {
+      await gotoGraph(page);
+      const g = nodeG(page, node.id);
+      await expect(g).toBeVisible();
+      await expect(g).toHaveAttribute('role', 'button');
+      await expect(g).toHaveAttribute('tabindex', '0');
+      await expect(g).toHaveAttribute('aria-label', new RegExp(title));
+
+      // Focusing the node adds the focus ring (article shape circle + ring = 2).
+      await g.focus();
+      await expect(g.locator('circle')).toHaveCount(2);
+
+      // Enter activates → opens the node page.
+      await page.keyboard.press('Enter');
+      await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
+      expect(errors).toEqual([]);
+    } finally {
+      await request.delete(`/api/nodes/${node.id}`);
+    }
+  });
+
   test('double-click on a node opens its page', async ({ page, request }) => {
     const errors = collectPageErrors(page);
     const title = `e2e graph nav ${Date.now()}`;
