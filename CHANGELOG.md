@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.0] - 2026-07-18
+
 ### Changed — auto-arrange clusters connected nodes instead of laying rows
 The graph's Auto-arrange button ran a BFS-layered hierarchical layout: every
 node was assigned a layer and each layer became a horizontal row — connectivity
