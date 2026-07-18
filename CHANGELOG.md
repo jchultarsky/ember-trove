@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — Fit actually fits (and the minimap stops lying about the viewport)
+The graph's Fit button hard-reset to 100% zoom at the origin, which could
+leave a clustered layout entirely off-screen. It now computes a real
+fit-to-content transform (`common::graph_layout::fit_transform`, moved from
+the UI so it is host-tested) from the current positions. All viewport math —
+Fit, auto-arrange framing, minimap click-to-centre, and the minimap's
+viewport-indicator rectangle — now measures the actual graph canvas
+(`#graph-svg`) instead of the window, removing a sidebar-width bias that
+overshot fits to the right and oversized the minimap indicator. E2e
+regression: far-away nodes are brought into the viewport by Fit.
+
 ## [2.24.0] - 2026-07-18
 
 ### Changed — auto-arrange clusters connected nodes instead of laying rows

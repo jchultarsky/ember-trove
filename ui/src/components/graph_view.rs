@@ -26,7 +26,7 @@ use web_sys::{MouseEvent, TouchEvent, WheelEvent};
 
 use common::{
     edge::{CreateEdgeRequest, Edge, EdgeType},
-    graph_layout::cluster_layout,
+    graph_layout::{cluster_layout, fit_transform},
     id::{EdgeId, NodeId, TagId},
     node::{Node, NodeType},
 };
@@ -310,42 +310,6 @@ fn compute_path(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
 // The clustering algorithm itself lives in `common::graph_layout`
 // (pure + host-tested); this section only keeps the viewport helpers.
 
-/// Vertical glyph envelope: shape radius + title pill + tag dots.
-const NODE_H: f64 = 90.0;
-/// Horizontal glyph envelope: node diameter + title text width.
-const NODE_W: f64 = 80.0;
-
-/// Pan/zoom that frames the given positions in the viewport with padding.
-/// Zoom is clamped to [0.5, 3.0] so nodes stay readable.
-fn fit_transform(
-    positions: &HashMap<Uuid, (f64, f64)>,
-    viewport_w: f64,
-    viewport_h: f64,
-) -> (f64, f64, f64) {
-    if positions.is_empty() {
-        return (0.0, 0.0, 1.0);
-    }
-    let mut min_x = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut min_y = f64::MAX;
-    let mut max_y = f64::MIN;
-    for &(x, y) in positions.values() {
-        min_x = min_x.min(x - NODE_W / 2.0);
-        max_x = max_x.max(x + NODE_W / 2.0);
-        min_y = min_y.min(y - NODE_H / 2.0);
-        max_y = max_y.max(y + NODE_H / 2.0);
-    }
-    let graph_w = (max_x - min_x).max(1.0);
-    let graph_h = (max_y - min_y).max(1.0);
-    let padding = 60.0;
-    let fit_zoom = ((viewport_w - padding * 2.0) / graph_w)
-        .min((viewport_h - padding * 2.0) / graph_h)
-        .clamp(0.5, 3.0);
-    let fit_pan_x = viewport_w / 2.0 - (min_x + max_x) / 2.0 * fit_zoom;
-    let fit_pan_y = viewport_h / 2.0 - (min_y + max_y) / 2.0 * fit_zoom;
-    (fit_pan_x, fit_pan_y, fit_zoom)
-}
-
 /// Shift all positions right/down just enough that none sits outside the
 /// drag-clamp lower bound (`eff_margin`). A layout already in bounds is left
 /// untouched — auto-arrange preserves the user's coordinate frame, so this
@@ -367,6 +331,32 @@ fn shift_into_bounds(positions: &mut HashMap<Uuid, (f64, f64)>, eff_margin: f64)
             p.1 += dy;
         }
     }
+}
+
+/// Client size of the graph canvas (`#graph-svg`). The window is wider than
+/// the canvas (sidebar on the left), so fitting/centring against
+/// `window.inner_*` overshoots to the right and oversizes the minimap's
+/// viewport indicator. Falls back to the window before first render.
+fn canvas_size() -> (f64, f64) {
+    if let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("graph-svg"))
+    {
+        let r = el.get_bounding_client_rect();
+        if r.width() > 0.0 && r.height() > 0.0 {
+            return (r.width(), r.height());
+        }
+    }
+    let win = web_sys::window();
+    (
+        win.as_ref()
+            .and_then(|w| w.inner_width().ok())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1200.0),
+        win.and_then(|w| w.inner_height().ok())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(800.0),
+    )
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -523,14 +513,7 @@ pub fn GraphView() -> impl IntoView {
                 .map(|e| (e.source_id.0, e.target_id.0))
                 .collect();
 
-            let viewport_w = web_sys::window()
-                .and_then(|w| w.inner_width().ok())
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1200.0);
-            let viewport_h = web_sys::window()
-                .and_then(|w| w.inner_height().ok())
-                .and_then(|v| v.as_f64())
-                .unwrap_or(800.0);
+            let (viewport_w, viewport_h) = canvas_size();
 
             // Seeded with the on-screen arrangement, nothing pinned: connected
             // nodes cluster around hubs while the user's groupings survive.
@@ -610,10 +593,13 @@ pub fn GraphView() -> impl IntoView {
                            border-r border-stone-200 dark:border-stone-700"
                     title="Fit all nodes into view"
                     on:click=move |_| {
-                        pan_x.set(0.0);
-                        pan_y.set(0.0);
-                        zoom.set(1.0);
-                        zoom_input.set("100".to_string());
+                        let (viewport_w, viewport_h) = canvas_size();
+                        let (fx, fy, fz) =
+                            fit_transform(&positions.get_untracked(), viewport_w, viewport_h);
+                        pan_x.set(fx);
+                        pan_y.set(fy);
+                        zoom.set(fz);
+                        zoom_input.set(format!("{:.0}", fz * 100.0));
                     }
                 >
                     "Fit"
@@ -972,14 +958,7 @@ pub fn GraphView() -> impl IntoView {
                             let gx = mx / MINI_SCALE_X;
                             let gy = my / MINI_SCALE_Y;
                             let z = zoom.get_untracked();
-                            let vw = web_sys::window()
-                                .and_then(|w| w.inner_width().ok())
-                                .and_then(|v| v.as_f64())
-                                .unwrap_or(1200.0);
-                            let vh = web_sys::window()
-                                .and_then(|w| w.inner_height().ok())
-                                .and_then(|v| v.as_f64())
-                                .unwrap_or(800.0);
+                            let (vw, vh) = canvas_size();
                             pan_x.set(vw / 2.0 - gx * z);
                             pan_y.set(vh / 2.0 - gy * z);
                         }
@@ -998,17 +977,11 @@ pub fn GraphView() -> impl IntoView {
                                     format!("{:.1}", -pan_y.get() / zoom.get() * MINI_SCALE_Y)
                                 }
                                 width=move || {
-                                    let vw = web_sys::window()
-                                        .and_then(|w| w.inner_width().ok())
-                                        .and_then(|v| v.as_f64())
-                                        .unwrap_or(1200.0);
+                                    let (vw, _) = canvas_size();
                                     format!("{:.1}", vw / zoom.get() * MINI_SCALE_X)
                                 }
                                 height=move || {
-                                    let vh = web_sys::window()
-                                        .and_then(|w| w.inner_height().ok())
-                                        .and_then(|v| v.as_f64())
-                                        .unwrap_or(800.0);
+                                    let (_, vh) = canvas_size();
                                     format!("{:.1}", vh / zoom.get() * MINI_SCALE_Y)
                                 }
                                 style="fill: rgba(245,158,11,0.12); \

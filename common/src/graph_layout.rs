@@ -30,6 +30,43 @@ pub const MIN_SPACING: f64 = 90.0;
 pub const IDEAL_EDGE: f64 = 220.0;
 /// Gap between packed disconnected components.
 pub const COMPONENT_GAP: f64 = 200.0;
+/// Node glyph envelope for viewport fitting: shape radius + title pill + tag
+/// dots vertically; node diameter + title text width horizontally.
+pub const NODE_ENVELOPE_W: f64 = 80.0;
+pub const NODE_ENVELOPE_H: f64 = 90.0;
+
+/// Pan/zoom `(pan_x, pan_y, zoom)` that frames the given positions in the
+/// viewport with padding, centred. Zoom is clamped to [0.5, 3.0] so nodes
+/// stay readable: a graph larger than ~2x the viewport is centred at 50%
+/// rather than shrunk into illegibility.
+pub fn fit_transform(
+    positions: &HashMap<Uuid, (f64, f64)>,
+    viewport_w: f64,
+    viewport_h: f64,
+) -> (f64, f64, f64) {
+    if positions.is_empty() {
+        return (0.0, 0.0, 1.0);
+    }
+    let mut min_x = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut min_y = f64::MAX;
+    let mut max_y = f64::MIN;
+    for &(x, y) in positions.values() {
+        min_x = min_x.min(x - NODE_ENVELOPE_W / 2.0);
+        max_x = max_x.max(x + NODE_ENVELOPE_W / 2.0);
+        min_y = min_y.min(y - NODE_ENVELOPE_H / 2.0);
+        max_y = max_y.max(y + NODE_ENVELOPE_H / 2.0);
+    }
+    let graph_w = (max_x - min_x).max(1.0);
+    let graph_h = (max_y - min_y).max(1.0);
+    let padding = 60.0;
+    let fit_zoom = ((viewport_w - padding * 2.0) / graph_w)
+        .min((viewport_h - padding * 2.0) / graph_h)
+        .clamp(0.5, 3.0);
+    let fit_pan_x = viewport_w / 2.0 - (min_x + max_x) / 2.0 * fit_zoom;
+    let fit_pan_y = viewport_h / 2.0 - (min_y + max_y) / 2.0 * fit_zoom;
+    (fit_pan_x, fit_pan_y, fit_zoom)
+}
 
 /// Compute a clustered layout for the graph.
 ///
@@ -720,6 +757,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn fit_transform_frames_content() {
+        // Empty → identity.
+        assert_eq!(
+            fit_transform(&HashMap::new(), 1280.0, 720.0),
+            (0.0, 0.0, 1.0)
+        );
+
+        // A far-away cluster is brought into view: every node's screen
+        // position (graph * zoom + pan) lands inside the viewport.
+        let positions: HashMap<Uuid, (f64, f64)> = [
+            (uuid(1), (2000.0, 1500.0)),
+            (uuid(2), (2400.0, 1600.0)),
+            (uuid(3), (2200.0, 1900.0)),
+        ]
+        .into_iter()
+        .collect();
+        let (pan_x, pan_y, zoom) = fit_transform(&positions, 1280.0, 720.0);
+        for &(x, y) in positions.values() {
+            let sx = x * zoom + pan_x;
+            let sy = y * zoom + pan_y;
+            assert!(
+                (0.0..=1280.0).contains(&sx),
+                "screen x {sx} out of viewport"
+            );
+            assert!((0.0..=720.0).contains(&sy), "screen y {sy} out of viewport");
+        }
+        assert!((0.5..=3.0).contains(&zoom));
+
+        // Content much larger than the viewport hits the readability floor
+        // (0.5) instead of shrinking further; it is still centred.
+        let huge: HashMap<Uuid, (f64, f64)> =
+            [(uuid(1), (0.0, 0.0)), (uuid(2), (10_000.0, 8_000.0))]
+                .into_iter()
+                .collect();
+        let (hx, hy, hz) = fit_transform(&huge, 1280.0, 720.0);
+        assert_eq!(hz, 0.5);
+        let centre_sx = 5_000.0 * hz + hx;
+        let centre_sy = 4_000.0 * hz + hy;
+        assert!(
+            (centre_sx - 640.0).abs() < 1.0,
+            "not centred x: {centre_sx}"
+        );
+        assert!(
+            (centre_sy - 360.0).abs() < 1.0,
+            "not centred y: {centre_sy}"
+        );
     }
 
     #[test]

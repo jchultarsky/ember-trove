@@ -44,7 +44,9 @@ const dispatchOnNode = (page: Page, id: string, event: 'click' | 'dblclick') =>
 /** Wait until the graph canvas is interactive (toolbar rendered after load). */
 async function gotoGraph(page: Page) {
   await page.goto('/graph');
-  await expect(page.getByRole('button', { name: 'Fit' })).toBeVisible();
+  // exact: graph nodes are role=button too, and a node title containing
+  // "fit" would otherwise make this a strict-mode violation.
+  await expect(page.getByRole('button', { name: 'Fit', exact: true })).toBeVisible();
 }
 
 test.describe('graph view', () => {
@@ -157,6 +159,48 @@ test.describe('graph view', () => {
       for (const id of edgeIds) await request.delete(`/api/edges/${id}`);
       await request.delete(`/api/nodes/${hub.id}`);
       for (const s of sats) await request.delete(`/api/nodes/${s.id}`);
+    }
+  });
+
+  test('Fit brings far-away content into the viewport', async ({ page, request }) => {
+    // Regression: Fit used to hard-reset to 100%/origin, which could leave a
+    // clustered layout entirely off-screen. It must now frame the content.
+    const errors = collectPageErrors(page);
+    const stamp = Date.now();
+    const a = await createNode(request, `e2e frame far-a ${stamp}`);
+    const b = await createNode(request, `e2e frame far-b ${stamp}`);
+    try {
+      // Park both nodes far outside the default 100%/origin viewport.
+      for (const [n, x, y] of [
+        [a, 2600, 1700],
+        [b, 3000, 1900],
+      ] as const) {
+        const r = await request.put(`/api/graph/positions/${n.id}`, { data: { x, y } });
+        expect(r.ok()).toBeTruthy();
+      }
+
+      await gotoGraph(page);
+      const viewport = page.viewportSize()!;
+      // Sanity: at the default transform the nodes are off-screen.
+      const before = await nodeG(page, a.id).boundingBox();
+      expect(before && before.x < viewport.width && before.y < viewport.height).toBeFalsy();
+
+      await page.getByRole('button', { name: 'Fit', exact: true }).click();
+      // Assert on the node glyph (the article circle), not the whole <g>:
+      // these machine-generated titles are far wider than any real-world
+      // label and would poke past the fit padding by design.
+      for (const n of [a, b]) {
+        const box = await nodeG(page, n.id).locator('circle').first().boundingBox();
+        expect(box).toBeTruthy();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.y).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+        expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+      }
+      expect(errors).toEqual([]);
+    } finally {
+      await request.delete(`/api/nodes/${a.id}`);
+      await request.delete(`/api/nodes/${b.id}`);
     }
   });
 
