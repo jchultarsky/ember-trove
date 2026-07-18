@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — `scripts/preserve-ghcr-tags.sh` (GHCR image-tag archival)
+One-time helper to copy release image tags from the old `jchultarsky101` GHCR
+namespace (pre-2026-07 transfer) into the new `jchultarsky` one before the old
+packages are deleted — registry-to-registry, idempotent, resumable. Optional
+`TAG_FILTER` (ERE) restricts the range and `DRY_RUN=1` previews without
+copying; the summary refuses to say "safe to delete" while any tags remain
+filtered-out and old-namespace-only. Requires a `write:packages` PAT +
+`docker login` (package writes are credential-scoped).
+
 ### Added — zero-AWS local login via bundled Keycloak (v3 groundwork)
 `./scripts/dev-local.sh` brings up the full stack **plus a Keycloak OIDC
 issuer** — no AWS account, Cognito pool, or secrets file needed to log in and
