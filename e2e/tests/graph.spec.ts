@@ -91,6 +91,75 @@ test.describe('graph view', () => {
     }
   });
 
+  test('auto-arrange clusters a star around its hub, not in rows', async ({ page, request }) => {
+    // Regression for the BFS-row layout: arranging a hub with satellites must
+    // produce a ring (spread in BOTH axes), keep satellites within spring
+    // range of the hub, and persist the result via the batch positions API.
+    const errors = collectPageErrors(page);
+    const stamp = Date.now();
+    const hub = await createNode(request, `e2e cluster hub ${stamp}`);
+    const sats = [];
+    for (let i = 0; i < 6; i++) sats.push(await createNode(request, `e2e cluster sat${i} ${stamp}`));
+    const edgeIds: string[] = [];
+    try {
+      for (const s of sats) {
+        const r = await request.post('/api/edges', {
+          data: { source_id: hub.id, target_id: s.id, edge_type: 'references' },
+        });
+        expect(r.ok()).toBeTruthy();
+        edgeIds.push((await r.json()).id);
+      }
+
+      await gotoGraph(page);
+      await expect(nodeG(page, hub.id)).toBeVisible();
+      await page.getByRole('button', { name: 'Auto-arrange' }).click();
+
+      // Arrange saves every position in one batch; poll until ours land.
+      const ids = [hub.id, ...sats.map((s) => s.id)];
+      await expect
+        .poll(
+          async () => {
+            const saved = await (await request.get('/api/graph/positions')).json();
+            return ids.filter((id) => saved.some((p: { node_id: string }) => p.node_id === id))
+              .length;
+          },
+          { timeout: 15_000 },
+        )
+        .toBe(ids.length);
+
+      const saved = await (await request.get('/api/graph/positions')).json();
+      const pos = new Map<string, { x: number; y: number }>(
+        saved.map((p: { node_id: string; x: number; y: number }) => [p.node_id, p]),
+      );
+      const h = pos.get(hub.id)!;
+      const satPos = sats.map((s) => pos.get(s.id)!);
+
+      // Every satellite within spring range of the hub (ring band).
+      for (const p of satPos) {
+        const d = Math.hypot(p.x - h.x, p.y - h.y);
+        expect(d).toBeGreaterThan(100);
+        expect(d).toBeLessThan(700);
+      }
+      // A row collapses one axis; a ring spreads both.
+      const stddev = (vals: number[]) => {
+        const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+        return Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length);
+      };
+      expect(stddev(satPos.map((p) => p.x))).toBeGreaterThan(40);
+      expect(stddev(satPos.map((p) => p.y))).toBeGreaterThan(40);
+      // Minimum readable spacing between all pairs.
+      const all = [h, ...satPos];
+      for (let a = 0; a < all.length; a++)
+        for (let b = a + 1; b < all.length; b++)
+          expect(Math.hypot(all[a].x - all[b].x, all[a].y - all[b].y)).toBeGreaterThan(60);
+      expect(errors).toEqual([]);
+    } finally {
+      for (const id of edgeIds) await request.delete(`/api/edges/${id}`);
+      await request.delete(`/api/nodes/${hub.id}`);
+      for (const s of sats) await request.delete(`/api/nodes/${s.id}`);
+    }
+  });
+
   test('double-click on a node opens its page', async ({ page, request }) => {
     const errors = collectPageErrors(page);
     const title = `e2e graph nav ${Date.now()}`;
