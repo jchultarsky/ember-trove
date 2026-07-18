@@ -16,9 +16,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
   fresh layouts get a full FR anneal. Deterministic via UUID-hash jitter (WASM
   `Math.random` is gone from layout). The algorithm was tuned against Julian's
   real hand-made layout (backup: `~/projects/ember-trove-layout-backups/`).
-  Known non-goals this pass: the Fit button still hard-resets (doesn't
-  fit-to-content) and 14 stale `node_positions` rows exist on prod despite the
-  FK cascade — both noted for a later pass.
+  Both follow-ups from this pass are closed: the Fit button now
+  fit-to-contents (PR #52, which also fixed the sidebar-width bias in all
+  viewport math incl. the minimap indicator), and the "14 stale
+  `node_positions` rows" were a diagnostic artifact — they are archived
+  nodes, invisible to `/api/nodes` without `include_archived=true`
+  (`list_positions` JOINs `nodes`, so true orphans cannot appear; the FK
+  cascade is fine). Verified against prod 2026-07-18: 84 positions = 70
+  active + 14 archived, zero orphans.
 - **v2.23.0 shipped** — the "trust the suite" release (2026-07-17 review plan,
   below). Coverage inverted-vs-risk is corrected: registration + behavior
   tests for the six previously-untested privileged route groups (admin,
