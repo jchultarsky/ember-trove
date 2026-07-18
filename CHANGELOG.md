@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — shortcut registry (unified-keyboard-model, phase 1)
+The six global shortcuts (`n` `g` `/` `⌘K` `?` `Escape`) now live in one
+registry, `common::keyboard::GLOBAL`, that drives **both** dispatch (via the
+host-tested pure `match_global`) **and** the help modal's "Anywhere" table
+(rendered from the same table) — so a documented shortcut that doesn't fire,
+or vice-versa, is now impossible. The two `layout.rs` window listeners are
+collapsed into one owned dispatcher with a single `on_cleanup`. No user-facing
+behavior change. Adds an e2e for the help modal (`?`), which was untested.
+(View-specific shortcuts and the contextual `d` migrate to the registry with
+the phase-2 scope model.)
+
 ### Fixed — keyboard-handling foundation (unified-keyboard-model, phase 0)
 First step of the v2.24.0 keyboard/a11y plan (`.claude/ROADMAP.md`), fixing two
 real bugs with no UX change:
