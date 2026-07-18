@@ -47,6 +47,35 @@ test('matches commands by synonym and dispatches navigation', async ({ page }) =
   await expect(page).toHaveTitle('Calendar — Ember Trove');
 });
 
+test('? opens help; the Anywhere group renders from the shortcut registry', async ({ page }) => {
+  // Verifies the Phase-1 keyboard-model wiring end to end: the `?` shortcut
+  // dispatches ToggleHelp through the single registry-driven listener, and the
+  // help modal's "Anywhere" table is generated from common::keyboard::GLOBAL
+  // (so docs and dispatch can't drift).
+  await gotoApp(page, '/tasks/my-day');
+  await page.locator('main').click({ position: { x: 5, y: 5 } }); // neutral focus
+
+  await page.keyboard.press('?');
+  const dialog = page.getByRole('dialog', { name: 'Help and shortcuts' });
+  await expect(dialog).toBeVisible();
+
+  // The Anywhere section and its registry-sourced rows.
+  await expect(dialog.getByRole('heading', { name: 'Anywhere' })).toBeVisible();
+  for (const desc of [
+    'Quick capture (Inbox)',
+    'Graph view',
+    'Open command palette',
+    'Open command palette (alt)',
+    'Show this help',
+    'Close modal / back',
+  ]) {
+    await expect(dialog.getByText(desc, { exact: true })).toBeVisible();
+  }
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+});
+
 test('Go to Search and Go to Webhooks commands navigate (palette parity)', async ({ page }) => {
   // The palette is the primary nav surface since `/` opens it — every routed
   // destination needs a Go-command. Search and Webhooks were the gaps
