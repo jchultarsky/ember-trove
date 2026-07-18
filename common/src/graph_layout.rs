@@ -188,16 +188,17 @@ fn layout_seeded_component(
     }
 
     // Gentle refinement keeps the user's chosen edge lengths as spring rest
-    // lengths (never shorter than IDEAL_EDGE): zero force at the current
-    // arrangement, so deliberate long bridges between clusters are preserved
-    // instead of contracted toward IDEAL_EDGE. Edges with a new endpoint get
-    // the default rest length and settle at ring distance.
+    // lengths: zero force at the current arrangement, so deliberate long
+    // bridges between clusters are preserved (not contracted toward
+    // IDEAL_EDGE) and deliberately *tight* satellites are respected too —
+    // the only floor is MIN_SPACING, the readability guarantee. Edges with a
+    // new endpoint get the default rest length and settle at ring distance.
     let gentle = comp_seeds.len() * 2 >= comp.len();
     let rest_edges: Vec<(usize, usize, f64)> = comp_edges
         .iter()
         .map(|&(a, b)| {
             let rest = match (gentle, seed_of(a), seed_of(b)) {
-                (true, Some(pa), Some(pb)) => (pa.0 - pb.0).hypot(pa.1 - pb.1).max(IDEAL_EDGE),
+                (true, Some(pa), Some(pb)) => (pa.0 - pb.0).hypot(pa.1 - pb.1).max(MIN_SPACING),
                 _ => IDEAL_EDGE,
             };
             (a, b, rest)
@@ -326,8 +327,15 @@ fn force_refine(
     let temp_start = if gentle { k * 0.6 } else { k * 3.0 };
     // Gentle mode resolves *local* crowding only: long-range repulsion would
     // accumulate across a large seeded layout and shove whole clusters around
-    // (the exact mental-map damage gentle mode exists to avoid).
+    // (the exact mental-map damage gentle mode exists to avoid). Its strength
+    // is also scaled down to the readability radius — full k² repulsion would
+    // inflate deliberately tight hand-made satellite rings toward IDEAL_EDGE.
     let repulse_cutoff = if gentle { k * 1.25 } else { f64::INFINITY };
+    let repulse_k2 = if gentle {
+        MIN_SPACING * MIN_SPACING
+    } else {
+        k * k
+    };
 
     let local_idx: HashMap<usize, usize> = comp.iter().enumerate().map(|(a, &i)| (i, a)).collect();
 
@@ -343,7 +351,7 @@ fn force_refine(
                 if d > repulse_cutoff {
                     continue;
                 }
-                let f = k * k / d;
+                let f = repulse_k2 / d;
                 disp[a].0 += dx / d * f;
                 disp[a].1 += dy / d * f;
                 disp[b].0 -= dx / d * f;
