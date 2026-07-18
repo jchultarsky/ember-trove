@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — keyboard-handling foundation (unified-keyboard-model, phase 0)
+First step of the v2.24.0 keyboard/a11y plan (`.claude/ROADMAP.md`), fixing two
+real bugs with no UX change:
+- The "is the focused element editable?" guard that stops single-key shortcuts
+  from firing while typing was copy-pasted in three handlers, and the inbox-
+  triage copy had **drifted** — it omitted `<button>` and `contenteditable`, so
+  a shortcut could fire mid-edit there. Extracted one shared guard
+  (`ui/src/keyboard.rs` over a host-tested pure fn
+  `common::keyboard::target_is_editable`) and reconciled all three call sites.
+- The Cmd/Ctrl-K palette window listener (`layout.rs`) had no `on_cleanup`,
+  leaking a handle that violates the project's listener-lifecycle rule; added
+  the cleanup.
+
 ### Tooling — `scripts/preserve-ghcr-tags.sh` (GHCR image-tag archival)
 One-time helper to copy release image tags from the old `jchultarsky101` GHCR
 namespace (pre-2026-07 transfer) into the new `jchultarsky` one before the old

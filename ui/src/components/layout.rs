@@ -128,19 +128,19 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     // correct for /, n, g, etc.).  This one only fires on the modifier
     // path and doesn't care about input focus: ⌘K is a system-wide
     // affordance that should work even mid-edit.
-    {
-        let _palette_handle =
-            window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
-                if (ev.meta_key() || ev.ctrl_key())
-                    && !ev.shift_key()
-                    && !ev.alt_key()
-                    && ev.key().eq_ignore_ascii_case("k")
-                {
-                    ev.prevent_default();
-                    show_palette.update(|v| *v = !*v);
-                }
-            });
-    }
+    let palette_handle = window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
+        if (ev.meta_key() || ev.ctrl_key())
+            && !ev.shift_key()
+            && !ev.alt_key()
+            && ev.key().eq_ignore_ascii_case("k")
+        {
+            ev.prevent_default();
+            show_palette.update(|v| *v = !*v);
+        }
+    });
+    // Detach on unmount — a leaked window listener panics on disposed signals
+    // and poisons all event dispatch (.claude/rules/leptos.md).
+    on_cleanup(move || palette_handle.remove());
 
     let handle = {
         let navigate = navigate.clone();
@@ -148,20 +148,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
             if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
                 return;
             }
-            let is_editable = web_sys::window()
-                .and_then(|w| w.document())
-                .and_then(|d| d.active_element())
-                .map(|el| {
-                    let tag = el.tag_name().to_uppercase();
-                    if matches!(tag.as_str(), "INPUT" | "TEXTAREA" | "SELECT" | "BUTTON") {
-                        return true;
-                    }
-                    el.get_attribute("contenteditable")
-                        .map(|v| v != "false")
-                        .unwrap_or(false)
-                })
-                .unwrap_or(false);
-            if is_editable {
+            if crate::keyboard::active_element_is_editable() {
                 return;
             }
 

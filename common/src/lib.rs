@@ -10,6 +10,7 @@ pub mod favorite;
 pub mod graph;
 pub mod id;
 pub mod inbox;
+pub mod keyboard;
 pub mod markdown;
 pub mod node;
 pub mod node_link;
