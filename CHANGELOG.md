@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — the graph is keyboard-navigable and screen-reader-legible (keyboard phase 3)
+Graph nodes were mouse-only and invisible to assistive tech. Each node is now
+a focusable `button` — `tabindex="0"`, `role="button"`, an `aria-label`
+("〈title〉, 〈type〉 node") — with a sky-blue focus ring and Enter/Space
+activation (open the node, or select it in edge-create mode). Tab moves between
+nodes; done with native focus, so no custom cursor. (Arrow-key *spatial*
+navigation and the once-planned `KeyboardScope` model are not needed for this
+and are dropped/deferred — see `.claude/ROADMAP.md`.) Covered by a new
+`graph.spec.ts` case.
+
 ### Fixed — global shortcuts no longer leak through an open overlay (keyboard phase 2)
 With the help modal open, pressing a global shortcut like `g` navigated away
 *through* the modal — help (unlike the other modals) doesn't move focus into

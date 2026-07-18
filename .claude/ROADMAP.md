@@ -69,9 +69,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
      registration": that was mostly redundant with the phase-0 editable-guard,
      and the view-scope abstraction's real consumer is phase 3 — so it folds
      there rather than shipping as unused infrastructure.*
-  3. Graph keyboard model (net-new) + the view-scope model it needs: node focus
-     cursor, tabindex/role/aria, arrow-nav, Enter-open, Esc-clear, and
-     My-Day/triage/graph registering scope. Biggest daily-use win.
+  3. Graph keyboard/a11y baseline (shipped): each node is a focusable
+     `button` (tabindex/role/aria-label) with a focus ring and Enter/Space
+     activation — the graph is Tab-navigable and screen-reader-legible, done
+     with **native focus** (no custom cursor). *Finding: this is the THIRD
+     phase where the `KeyboardScope` model proved unnecessary (0 used the
+     editable-guard, 1 the registry, 2 overlay flags, 3 native focus). The
+     scope model was a solution without a problem — **dropped from the plan.**
+     The only thing that would want it is optional arrow-key SPATIAL graph
+     navigation (a "3b" UX enhancement, not an a11y requirement); revisit only
+     if that's wanted.*
   4. a11y sweep on touched surfaces (`aria-selected`/`aria-activedescendant`).
   Boundary: do NOT centralize the palette/triage internal state machines —
   centralize guard/registry/dispatch/scope only. Risk to watch: a panic in the
