@@ -46,6 +46,34 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Plan of record (2026-07-17 review)
 
+- **v2.24.0 — "keyboard & a11y" (planned 2026-07-18):** unify the ad-hoc
+  keyboard handling into one model. Current state (inventory): no central
+  dispatcher — 3 window-level keydown listeners (layout, my_day, inbox_triage)
+  + ~15 element-scoped handlers, the editable-guard copy-pasted 3× with the
+  triage copy diverging (omits BUTTON/contenteditable), the `help.rs` shortcut
+  table display-only and free to drift from real dispatch, a leaked Cmd-K
+  listener (`layout.rs:131`, no `on_cleanup`), and the graph with zero keyboard
+  support. Target: one global dispatcher owned by `Layout`; a shortcut registry
+  whose match logic is a pure `common/` fn (host-testable) that also generates
+  the help table (no drift); a `KeyboardScope` context replacing "which
+  component is mounted" (Global/MyDay/Graph + exclusive Triage/Palette/Modal);
+  one shared `is_editable_target()`. Phases, each a shippable PR:
+  0. Extract `is_editable_target()` + reconcile the 3 copies; fix the Cmd-K
+     leak. Two bug fixes, no UX change. *(in progress)*
+  1. Registry + pure match fn in `common/`; help table generated from it;
+     collapse the two `layout.rs` listeners into one.
+  2. `KeyboardScope` context; My-Day + triage register scope; global keys
+     suppressed under exclusive scopes.
+  3. Graph keyboard model (net-new): node focus cursor, tabindex/role/aria,
+     arrow-nav, Enter-open, Esc-clear. Biggest daily-use win.
+  4. a11y sweep on touched surfaces (`aria-selected`/`aria-activedescendant`).
+  Boundary: do NOT centralize the palette/triage internal state machines —
+  centralize guard/registry/dispatch/scope only. Risk to watch: a panic in the
+  dispatcher poisons ALL keyboard handling (the v2.21.1 lesson), so its core
+  is a pure fn and every e2e collects `pageerror`. Only destructive shortcut is
+  `d`=delete, and both paths are reversible (soft-delete/undo) — no new
+  security surface.
+
 - **v2.22.4 — security patch (in progress):**
   1. `/share/{token}` joins the rate-limited router group — it was the only
      unauthenticated, ungoverned endpoint, and it performs a token lookup.

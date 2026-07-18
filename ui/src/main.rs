@@ -6,6 +6,7 @@ mod draft;
 mod error;
 mod focus_note;
 mod focus_task;
+mod keyboard;
 mod markdown;
 mod recent;
 mod templates;
