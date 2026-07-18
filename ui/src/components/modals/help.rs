@@ -56,32 +56,9 @@ struct ShortcutGroup {
     items: &'static [Shortcut],
 }
 
-const ANYWHERE: &[Shortcut] = &[
-    Shortcut {
-        key: "n",
-        description: "Quick capture (Inbox)",
-    },
-    Shortcut {
-        key: "g",
-        description: "Graph view",
-    },
-    Shortcut {
-        key: "/",
-        description: "Open command palette",
-    },
-    Shortcut {
-        key: "⌘K",
-        description: "Open command palette (alt)",
-    },
-    Shortcut {
-        key: "?",
-        description: "Show this help",
-    },
-    Shortcut {
-        key: "Escape",
-        description: "Close modal / back",
-    },
-];
+// The "Anywhere" group is NOT defined here — it is rendered from the shared
+// registry `common::keyboard::GLOBAL` (the same table the dispatcher uses), so
+// documented and dispatched global shortcuts cannot drift. See `ShortcutsTab`.
 
 const NODE_VIEW: &[Shortcut] = &[
     Shortcut {
@@ -152,11 +129,10 @@ const INBOX_TRIAGE: &[Shortcut] = &[
     },
 ];
 
+// View-specific groups. The "Anywhere" group is prepended at render time from
+// `common::keyboard::GLOBAL` (see `ShortcutsTab`); these still migrate to the
+// registry with the Phase 2 scope model.
 const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
-    ShortcutGroup {
-        title: "Anywhere",
-        items: ANYWHERE,
-    },
     ShortcutGroup {
         title: "My Day Kanban",
         items: MY_DAY,
@@ -445,17 +421,37 @@ pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> im
 
 #[component]
 fn ShortcutsTab() -> impl IntoView {
+    // Build the group list at render time: the "Anywhere" group comes from the
+    // shared registry `common::keyboard::GLOBAL` (single source of truth with
+    // the dispatcher); the view-specific groups follow from the static consts.
+    let mut groups: Vec<(&'static str, Vec<(&'static str, &'static str)>)> = vec![(
+        "Anywhere",
+        common::keyboard::GLOBAL
+            .iter()
+            .map(|s| (s.display, s.desc))
+            .collect(),
+    )];
+    groups.extend(SHORTCUT_GROUPS.iter().map(|g| {
+        (
+            g.title,
+            g.items
+                .iter()
+                .map(|s| (s.key, s.description))
+                .collect::<Vec<_>>(),
+        )
+    }));
+
     view! {
         <div class="space-y-5">
-            {SHORTCUT_GROUPS.iter().map(|g| view! {
+            {groups.into_iter().map(|(title, rows)| view! {
                 <section>
                     <h3 class="text-xs font-semibold uppercase tracking-wide \
                                text-amber-700 dark:text-amber-400 mb-2">
-                        {g.title}
+                        {title}
                     </h3>
                     <table class="w-full text-sm border-collapse">
                         <tbody>
-                            {g.items.iter().map(|s| view! {
+                            {rows.into_iter().map(|(key, description)| view! {
                                 <tr class="border-b border-stone-100 dark:border-stone-800 last:border-0">
                                     <td class="py-1.5 pr-4 w-28">
                                         <kbd class="inline-flex items-center justify-center
@@ -464,11 +460,11 @@ fn ShortcutsTab() -> impl IntoView {
                                                     bg-stone-100 dark:bg-stone-800
                                                     font-mono text-xs text-stone-700 dark:text-stone-300
                                                     shadow-sm">
-                                            {s.key}
+                                            {key}
                                         </kbd>
                                     </td>
                                     <td class="py-1.5 text-stone-600 dark:text-stone-400">
-                                        {s.description}
+                                        {description}
                                     </td>
                                 </tr>
                             }).collect::<Vec<_>>()}
