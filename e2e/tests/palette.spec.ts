@@ -76,6 +76,28 @@ test('? opens help; the Anywhere group renders from the shortcut registry', asyn
   await expect(dialog).not.toBeVisible();
 });
 
+test('global navigation shortcuts do not fire through an open overlay', async ({ page }) => {
+  // Regression (keyboard phase 2): with the help modal open, a global
+  // shortcut like `g` used to leak through to the window listener and navigate
+  // away, because the help modal doesn't move focus into itself so the
+  // editable-guard didn't catch it. Overlay-scope suppression now blocks the
+  // navigating global shortcuts while an overlay is open.
+  await gotoApp(page, '/tasks/my-day');
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+
+  await page.keyboard.press('?');
+  const dialog = page.getByRole('dialog', { name: 'Help and shortcuts' });
+  await expect(dialog).toBeVisible();
+
+  await page.keyboard.press('g'); // would navigate to /graph without the fix
+  await expect(dialog).toBeVisible(); // overlay still open
+  await expect(page).toHaveURL(/\/tasks\/my-day$/); // did NOT navigate
+
+  // Overlay-control keys still work: Escape closes.
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+});
+
 test('Go to Search and Go to Webhooks commands navigate (palette parity)', async ({ page }) => {
   // The palette is the primary nav surface since `/` opens it — every routed
   // destination needs a Go-command. Search and Webhooks were the gaps

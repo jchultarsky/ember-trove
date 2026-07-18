@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — global shortcuts no longer leak through an open overlay (keyboard phase 2)
+With the help modal open, pressing a global shortcut like `g` navigated away
+*through* the modal — help (unlike the other modals) doesn't move focus into
+itself, so the editable-guard didn't catch it. Each registry entry now carries
+an `in_overlay` flag and `match_global` takes an `overlay_active` argument: the
+navigating shortcuts (`n`/`g`/`/` and the contextual `d`) are suppressed while
+the palette or help owns the keyboard, but the overlay-control keys
+(`⌘K`/`?`/`Escape`) still work. (Regression-tested red→green in
+`palette.spec.ts`.) This is the overlay-scope slice of the phase-2 plan; the
+broader view-scope model folds into phase 3, where the graph keyboard cursor
+gives it a concrete consumer — see `.claude/ROADMAP.md`.
+
 ### Changed — shortcut registry (unified-keyboard-model, phase 1)
 The six global shortcuts (`n` `g` `/` `⌘K` `?` `Escape`) now live in one
 registry, `common::keyboard::GLOBAL`, that drives **both** dispatch (via the

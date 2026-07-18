@@ -62,10 +62,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
      leak. Two bug fixes, no UX change. *(in progress)*
   1. Registry + pure match fn in `common/`; help table generated from it;
      collapse the two `layout.rs` listeners into one.
-  2. `KeyboardScope` context; My-Day + triage register scope; global keys
-     suppressed under exclusive scopes.
-  3. Graph keyboard model (net-new): node focus cursor, tabindex/role/aria,
-     arrow-nav, Enter-open, Esc-clear. Biggest daily-use win.
+  2. Overlay-scope suppression: `in_overlay` flag per registry row +
+     `overlay_active` arg to `match_global`, so navigating keys don't leak
+     through the palette/help (fixed a real bug — `g` navigated through the
+     open help modal). *Reframed from the original "full KeyboardScope + view
+     registration": that was mostly redundant with the phase-0 editable-guard,
+     and the view-scope abstraction's real consumer is phase 3 — so it folds
+     there rather than shipping as unused infrastructure.*
+  3. Graph keyboard model (net-new) + the view-scope model it needs: node focus
+     cursor, tabindex/role/aria, arrow-nav, Enter-open, Esc-clear, and
+     My-Day/triage/graph registering scope. Biggest daily-use win.
   4. a11y sweep on touched surfaces (`aria-selected`/`aria-activedescendant`).
   Boundary: do NOT centralize the palette/triage internal state machines —
   centralize guard/registry/dispatch/scope only. Risk to watch: a panic in the

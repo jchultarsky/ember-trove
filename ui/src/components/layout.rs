@@ -137,10 +137,20 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
             let key = ev.key();
             let cmd = ev.ctrl_key() || ev.meta_key();
             let editable = crate::keyboard::active_element_is_editable();
+            // An exclusive overlay (palette or help) owns the keyboard: the
+            // navigating shortcuts must not act *through* it. Other modals trap
+            // focus, so the editable-guard already covers them; help doesn't
+            // move focus into itself, which is the leak this closes.
+            let overlay = show_palette.get_untracked() || show_shortcuts.get_untracked();
 
-            if let Some(action) =
-                common::keyboard::match_global(&key, cmd, ev.shift_key(), ev.alt_key(), editable)
-            {
+            if let Some(action) = common::keyboard::match_global(
+                &key,
+                cmd,
+                ev.shift_key(),
+                ev.alt_key(),
+                editable,
+                overlay,
+            ) {
                 match action {
                     TogglePalette => {
                         ev.prevent_default();
@@ -171,8 +181,9 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
             }
 
             // Contextual: `d` duplicates the open node (only on /nodes/<uuid>).
-            // Same "plain key, not editing" conditions as the registry keys.
-            if !cmd && !ev.alt_key() && !editable && key == "d" {
+            // Same "plain key, not editing, no overlay" conditions as the
+            // registry keys.
+            if !cmd && !ev.alt_key() && !editable && !overlay && key == "d" {
                 let path = location.pathname.get_untracked();
                 let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
                 if segs.len() == 2
