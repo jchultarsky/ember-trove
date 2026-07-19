@@ -83,3 +83,14 @@ Verify from outside:
 curl -sS -o /dev/null -w "%{http_code} ssl_verify_result=%{ssl_verify_result}\n" \
   https://trove.chultarsky.me/api/health     # expect: 200 ssl_verify_result=0
 ```
+
+## Monitoring (added 2026-07-18)
+
+A daily GitHub Actions workflow (`.github/workflows/cert-check.yml`) reads the
+live cert from `trove.chultarsky.me:443` and **fails when fewer than 21 days
+remain** (certbot renews at 30 days out, so a healthy cert always shows ≥ ~60;
+below 21 means renewals have been failing for a week+). It also fails if the
+served chain doesn't verify. A failing run notifies the maintainer via
+GitHub's normal workflow-failure email — the silent-failure window that caused
+the 2026-06-17 outage no longer exists. Run it on demand from the Actions tab
+(workflow_dispatch) after any renewal work.

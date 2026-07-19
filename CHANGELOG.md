@@ -12,6 +12,15 @@ clippy lints. New watch item surfaced by 1.97: a future-incompatibility
 warning for the transitive `proc-macro-error2 2.0.1` (via the Leptos macro
 crates) — build-time only, upstream's to fix, re-check on the next Leptos bump.
 
+### Tooling — daily TLS cert-expiry monitor for prod
+The 2026-06-17 HTTPS outage was a silent renewal failure: nothing alerted
+until the cert actually expired. A scheduled GitHub Actions workflow
+(`cert-check.yml`) now checks the live cert daily and fails — emailing the
+maintainer via normal workflow-failure notifications — when under 21 days
+remain (healthy renewals keep it ≥ ~60) or when the served chain doesn't
+verify. Lives in the repo rather than on the host precisely because host-side
+renewal state is where the config drifted unseen last time.
+
 ## [2.24.1] - 2026-07-18
 
 ### Fixed — Fit actually fits (and the minimap stops lying about the viewport)
