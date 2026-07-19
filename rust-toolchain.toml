@@ -1,10 +1,10 @@
 [toolchain]
 # Pinned to the current stable for reproducible builds. Matches CI's
-# dtolnay/rust-toolchain@stable and the `rust:latest` Docker base (both 1.96),
-# and the locally-installed cargo. Bump deliberately rather than tracking
+# dtolnay/rust-toolchain@stable and the `rust:latest` Docker base, and the
+# locally-installed cargo (all 1.97 as of 2026-07-18). Bump deliberately rather than tracking
 # "stable" so a new release can't silently land a clippy lint that breaks CI.
 # (AWS SDK crates require rustc >= 1.91.1; 1.96 clears that comfortably.)
-channel = "1.96"
+channel = "1.97"
 targets = ["wasm32-unknown-unknown"]
 # clippy AND rustfmt must be listed here — dtolnay/rust-toolchain ignores workflow
 # `components:` when rust-toolchain.toml is present, so the CI `fmt` job (cargo fmt

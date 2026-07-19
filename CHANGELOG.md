@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — Rust toolchain 1.96 → 1.97.1
+Routine ~6-week stable review (policy §12). Full gate green with zero new
+clippy lints. New watch item surfaced by 1.97: a future-incompatibility
+warning for the transitive `proc-macro-error2 2.0.1` (via the Leptos macro
+crates) — build-time only, upstream's to fix, re-check on the next Leptos bump.
+
 ### Tooling — daily TLS cert-expiry monitor for prod
 The 2026-06-17 HTTPS outage was a silent renewal failure: nothing alerted
 until the cert actually expired. A scheduled GitHub Actions workflow
