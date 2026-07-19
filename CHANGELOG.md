@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.2] - 2026-07-18
+
 ### Tooling — Rust toolchain 1.96 → 1.97.1
 Routine ~6-week stable review (policy §12). Full gate green with zero new
 clippy lints. New watch item surfaced by 1.97: a future-incompatibility
