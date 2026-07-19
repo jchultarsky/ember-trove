@@ -1,0 +1,60 @@
+# TLS certificate expiry monitor for prod.
+#
+# Why this exists: on 2026-06-17 the site had a full HTTPS outage because
+# host-side certbot renewals had been silently failing for ~30 days (config
+# drift to --standalone; see deploy/TLS-RENEWAL.md). Renewal state lives on
+# the host where the repo can't see it drift — so the *monitor* lives here,
+# where a failure emails the maintainer through GitHub's normal
+# workflow-failure notifications and needs no host credentials or secrets.
+#
+# certbot renews at 30 days before expiry, so a healthy cert always shows
+# >= ~60 days. Below 21 days means renewals have been failing for over a
+# week — early enough to fix calmly, late enough to never false-positive.
+name: Cert Check
+
+on:
+  schedule:
+    - cron: "17 9 * * *" # daily; odd minute to avoid the top-of-hour spike
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  cert-expiry:
+    name: prod cert expiry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check days until trove.chultarsky.me cert expires
+        run: |
+          set -euo pipefail
+          HOST=trove.chultarsky.me
+          THRESHOLD_DAYS=21
+
+          end=$(echo \
+            | openssl s_client -servername "$HOST" -connect "$HOST:443" 2>/dev/null \
+            | openssl x509 -noout -enddate \
+            | cut -d= -f2)
+          if [ -z "$end" ]; then
+            echo "::error::could not read the certificate from $HOST:443"
+            exit 1
+          fi
+
+          end_epoch=$(date -u -d "$end" +%s)
+          now_epoch=$(date -u +%s)
+          days=$(( (end_epoch - now_epoch) / 86400 ))
+          echo "certificate for $HOST expires: $end ($days days)"
+
+          if [ "$days" -lt "$THRESHOLD_DAYS" ]; then
+            echo "::error::certificate expires in $days days (< $THRESHOLD_DAYS) — renewals are likely failing. Runbook: deploy/TLS-RENEWAL.md"
+            exit 1
+          fi
+
+      - name: Verify the served chain is valid
+        run: |
+          set -euo pipefail
+          HOST=trove.chultarsky.me
+          # `-verify_return_error` makes the handshake fail on an invalid /
+          # incomplete / untrusted chain (e.g. a fallback self-signed cert).
+          echo | openssl s_client -servername "$HOST" -connect "$HOST:443" \
+            -verify_return_error >/dev/null
+          echo "chain for $HOST verifies against the system trust store"
