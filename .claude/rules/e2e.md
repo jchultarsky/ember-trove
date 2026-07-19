@@ -36,6 +36,13 @@ CI job is too slow a feedback loop for selector work.
   though `toBeVisible()` passes. Use `locator.dispatchEvent('click' |
   'dblclick')` — it still runs the app's real handlers. Address graph nodes
   via `g[data-node-id="<uuid>"]`.
+- **Graph node titles collide with toolbar button lookups** (2026-07-18):
+  every graph node `<g>` is `role="button"` with the node *title* as its
+  accessible name (keyboard phase 3), and `getByRole('button', { name })`
+  substring-matches by default — a fixture titled "e2e fit far-a" makes
+  `getByRole('button', { name: 'Fit' })` a strict-mode violation. Use
+  `exact: true` for toolbar buttons on the graph page (`gotoGraph` in
+  graph.spec.ts), and don't give fixtures titles that echo toolbar labels.
 
 ## Writing new specs
 
@@ -43,6 +50,14 @@ CI job is too slow a feedback loop for selector work.
   tests share one backend DB.
 - Unique titles via `Date.now()`; clean up created data (API `request`
   fixture is authenticated by the bypass — `finally { request.delete(...) }`).
+- **Specs must be retry-safe, not just self-cleaning** (2026-07-18): the
+  shared DB persists across Playwright retries, so a mid-test failure leaves
+  its fixtures behind and poisons attempt 2 (duplicate rows → strict-mode
+  violations; empty states never appear). A `finally` alone doesn't cover a
+  crash before it runs on the *first* attempt's leftovers — wipe the spec's
+  data via the API **before AND after** each attempt (`wipePresets` in
+  search.spec.ts; found via develop run 29662335087, green on PR CI, red only
+  on the retry).
 - Collect `pageerror` events in any test that exercises keyboard listeners or
   navigation — a WASM panic poisons event dispatch silently otherwise (the
   v2.21.1 lesson; see `.claude/ERRORS.md`).
