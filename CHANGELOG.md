@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.3] - 2026-07-19
+
 ### Fixed — the graph works on touch devices
 On a phone or tablet the graph was pan/zoom only — and worse, the canvas
 touchstart's preventDefault suppressed the browser's synthesized clicks, so
