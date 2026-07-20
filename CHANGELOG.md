@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.3] - 2026-07-19
+
+### Fixed — the graph works on touch devices
+On a phone or tablet the graph was pan/zoom only — and worse, the canvas
+touchstart's preventDefault suppressed the browser's synthesized clicks, so
+nodes couldn't be dragged, opened, or used for edge-create at all. Nodes now
+handle touch directly: drag with a finger (position persists on release, and
+on iOS touch-cancel), tap to open the node (double-tap is an OS zoom gesture,
+so tap replaces double-click on touch), and tap to pick source/target in
+edge-create mode. Mouse and touch drags share one code path.
+
 ## [2.24.2] - 2026-07-18
 
 ### Tooling — Rust toolchain 1.96 → 1.97.1
