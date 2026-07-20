@@ -204,6 +204,65 @@ test.describe('graph view', () => {
     }
   });
 
+  test('touch: drag moves a node and persists; tap opens it', async ({ page, request }) => {
+    // Touch support regression: before this, the canvas touchstart's
+    // preventDefault suppressed ALL synthesized clicks, leaving graph nodes
+    // completely inert on touch devices (pan/zoom only). Touch events are
+    // constructed in-page — Playwright's dispatchEvent JSON can't express
+    // Touch objects.
+    const errors = collectPageErrors(page);
+    const stamp = Date.now();
+    const dragee = await createNode(request, `e2e touch drag ${stamp}`);
+    const tappee = await createNode(request, `e2e touch tap ${stamp}`);
+    const fireTouch = ([id, moves]: [string, [number, number][]]) => {
+      const g = document.querySelector(`g[data-node-id="${id}"]`)!;
+      const fire = (type: string, x: number, y: number) => {
+        const touch = new Touch({ identifier: 1, target: g, clientX: x, clientY: y });
+        const end = type === 'touchend';
+        g.dispatchEvent(
+          new TouchEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            touches: end ? [] : [touch],
+            targetTouches: end ? [] : [touch],
+            changedTouches: [touch],
+          }),
+        );
+      };
+      const r = g.getBoundingClientRect();
+      let [x, y] = [r.x + r.width / 2, r.y + r.height / 2];
+      fire('touchstart', x, y);
+      for (const [dx, dy] of moves) fire('touchmove', (x += dx), (y += dy));
+      fire('touchend', x, y);
+    };
+    try {
+      await gotoGraph(page);
+      await expect(nodeG(page, dragee.id)).toBeVisible();
+
+      // Drag by touch: position lands in the DB via the drag-end save.
+      await page.evaluate(fireTouch, [dragee.id, [[60, 40], [60, 40]]] as [
+        string,
+        [number, number][],
+      ]);
+      await expect
+        .poll(async () => {
+          const saved = await (await request.get('/api/graph/positions')).json();
+          return saved.some((p: { node_id: string }) => p.node_id === dragee.id);
+        })
+        .toBe(true);
+      // A drag must NOT navigate.
+      await expect(page).toHaveURL(/\/graph$/);
+
+      // Tap (no movement) opens the node page.
+      await page.evaluate(fireTouch, [tappee.id, []] as [string, [number, number][]]);
+      await expect(page).toHaveURL(new RegExp(`/nodes/${tappee.id}`));
+      expect(errors).toEqual([]);
+    } finally {
+      await request.delete(`/api/nodes/${dragee.id}`);
+      await request.delete(`/api/nodes/${tappee.id}`);
+    }
+  });
+
   test('double-click on a node opens its page', async ({ page, request }) => {
     const errors = collectPageErrors(page);
     const title = `e2e graph nav ${Date.now()}`;
