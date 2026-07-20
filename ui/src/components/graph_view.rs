@@ -388,6 +388,43 @@ pub fn GraphView() -> impl IntoView {
     let drag_node: RwSignal<Option<Uuid>> = RwSignal::new(None);
     let drag_offset: RwSignal<(f64, f64)> = RwSignal::new((0.0, 0.0));
     let did_drag = RwSignal::new(false);
+
+    // Shared drag-move math for mouse AND touch: move the dragged node so its
+    // grab point follows the pointer, clamped to the auto-grown canvas bounds.
+    let drag_move_to = move |client_x: f64, client_y: f64| {
+        let Some(nid) = drag_node.get_untracked() else {
+            return;
+        };
+        did_drag.set(true);
+        let n = positions.with_untracked(|m| m.len()) as f64;
+        let grow_factor = (n / 50.0).clamp(1.0, 4.0);
+        let eff_w = W * grow_factor;
+        let eff_h = H * grow_factor;
+        let eff_margin = MARGIN * grow_factor;
+        let mx = (client_x - pan_x.get_untracked()) / zoom.get_untracked();
+        let my = (client_y - pan_y.get_untracked()) / zoom.get_untracked();
+        let (ox, oy) = drag_offset.get_untracked();
+        positions.update(|map| {
+            map.insert(
+                nid,
+                (
+                    (mx - ox).clamp(eff_margin, eff_w - eff_margin),
+                    (my - oy).clamp(eff_margin, eff_h - eff_margin),
+                ),
+            );
+        });
+    };
+
+    // Persist and clear the active drag (mouse-up/-leave, touch-end/-cancel).
+    let end_drag_and_save = move || {
+        if let Some(nid) = drag_node.get_untracked() {
+            let (x, y) = positions.with_untracked(|m| m.get(&nid).copied().unwrap_or((0.0, 0.0)));
+            spawn_local(async move {
+                let _ = save_position(nid, x, y).await;
+            });
+            drag_node.set(None);
+        }
+    };
     // The keyboard-focused node (by inner Uuid), for the focus ring. Driven by
     // native focus (each node <g> is tabindex=0), so it needs no custom cursor
     // or scope model — Tab moves between nodes, Enter/Space activates.
@@ -1380,6 +1417,54 @@ pub fn GraphView() -> impl IntoView {
                                     drag_offset.set((mx - nx, my - ny));
                                     drag_node.set(Some(id));
                                 }
+                                // ── Touch: finger-down mirrors mousedown (drag setup);
+                                // finger-up resolves tap-vs-drag. The canvas touchstart
+                                // prevent_default suppresses ALL synthesized clicks, so
+                                // taps are synthesized here: tap = open the node (double-
+                                // tap is an iOS zoom gesture, so dblclick never arrives),
+                                // or select source/target in edge-create mode.
+                                on:touchstart=move |ev: TouchEvent| {
+                                    ev.stop_propagation();
+                                    ev.prevent_default();
+                                    did_drag.set(false);
+                                    if edge_create_mode.get_untracked() || re_layouting.get_untracked() {
+                                        return;
+                                    }
+                                    if let Some(t) = ev.touches().get(0) {
+                                        let (nx, ny) = positions
+                                            .with_untracked(|m| m.get(&id).copied().unwrap_or((0.0, 0.0)));
+                                        let mx = (t.client_x() as f64 - pan_x.get_untracked())
+                                            / zoom.get_untracked();
+                                        let my = (t.client_y() as f64 - pan_y.get_untracked())
+                                            / zoom.get_untracked();
+                                        drag_offset.set((mx - nx, my - ny));
+                                        drag_node.set(Some(id));
+                                    }
+                                }
+                                on:touchend={
+                                    let nav = navigate.clone();
+                                    move |ev: TouchEvent| {
+                                        ev.stop_propagation();
+                                        end_drag_and_save();
+                                        if did_drag.get_untracked() {
+                                            did_drag.set(false);
+                                            return;
+                                        }
+                                        if re_layouting.get_untracked() {
+                                            return;
+                                        }
+                                        // A tap (no movement since finger-down).
+                                        if edge_create_mode.get_untracked() {
+                                            match edge_src.get_untracked() {
+                                                None => edge_src.set(Some(id)),
+                                                Some(src) if src == id => edge_src.set(None),
+                                                Some(src) => edge_pair.set(Some((src, id))),
+                                            }
+                                        } else {
+                                            nav(&format!("/nodes/{node_id}"), Default::default());
+                                        }
+                                    }
+                                }
                             >
                                 <title>{title}</title>
                                 // Sky-blue ring when this node holds keyboard focus.
@@ -1722,26 +1807,9 @@ pub fn GraphView() -> impl IntoView {
                             }
                         }
                         on:mousemove=move |ev: MouseEvent| {
-                            if let Some(nid) = drag_node.get_untracked() {
+                            if drag_node.get_untracked().is_some() {
                                 ev.prevent_default();
-                                did_drag.set(true);
-                                // Compute expanded bounds same as the layout effect.
-                                let n = positions.with(|m| m.len()) as f64;
-                                let grow_factor = (n / 50.0).clamp(1.0, 4.0);
-                                let eff_w = W * grow_factor;
-                                let eff_h = H * grow_factor;
-                                let eff_margin = MARGIN * grow_factor;
-
-                                let mx = (ev.client_x() as f64 - pan_x.get_untracked())
-                                    / zoom.get_untracked();
-                                let my = (ev.client_y() as f64 - pan_y.get_untracked())
-                                    / zoom.get_untracked();
-                                let (ox, oy) = drag_offset.get_untracked();
-                                let new_x = (mx - ox).clamp(eff_margin, eff_w - eff_margin);
-                                let new_y = (my - oy).clamp(eff_margin, eff_h - eff_margin);
-                                positions.update(|map| {
-                                    map.insert(nid, (new_x, new_y));
-                                });
+                                drag_move_to(ev.client_x() as f64, ev.client_y() as f64);
                             } else if panning.get_untracked() {
                                 let mx = ev.client_x() as f64;
                                 let my = ev.client_y() as f64;
@@ -1752,25 +1820,11 @@ pub fn GraphView() -> impl IntoView {
                             }
                         }
                         on:mouseup=move |_ev: MouseEvent| {
-                            if let Some(nid) = drag_node.get_untracked() {
-                                let (x, y) = positions
-                                    .with_untracked(|m| m.get(&nid).copied().unwrap_or((0.0, 0.0)));
-                                spawn_local(async move {
-                                    let _ = save_position(nid, x, y).await;
-                                });
-                                drag_node.set(None);
-                            }
+                            end_drag_and_save();
                             panning.set(false);
                         }
                         on:mouseleave=move |_: MouseEvent| {
-                            if let Some(nid) = drag_node.get_untracked() {
-                                let (x, y) = positions
-                                    .with_untracked(|m| m.get(&nid).copied().unwrap_or((0.0, 0.0)));
-                                spawn_local(async move {
-                                    let _ = save_position(nid, x, y).await;
-                                });
-                                drag_node.set(None);
-                            }
+                            end_drag_and_save();
                             panning.set(false);
                         }
                         on:wheel=move |ev: WheelEvent| {
@@ -1779,13 +1833,16 @@ pub fn GraphView() -> impl IntoView {
                             zoom.update(|z| *z = (*z * factor).clamp(ZOOM_MIN, ZOOM_MAX));
                             zoom_input.set(format!("{:.0}", zoom.get_untracked() * 100.0));
                         }
-                        // ── Touch: single-finger pan, two-finger pinch-to-zoom ──────
+                        // ── Touch: single-finger pan (or node drag — see the node
+                        // <g> touch handlers), two-finger pinch-to-zoom ─────────────
                         on:touchstart=move |ev: TouchEvent| {
                             ev.prevent_default();
                             let touches = ev.touches();
                             match touches.length() {
                                 1 => {
-                                    if let Some(t) = touches.get(0) {
+                                    if drag_node.get_untracked().is_none()
+                                        && let Some(t) = touches.get(0)
+                                    {
                                         last_tx.set(t.client_x() as f64);
                                         last_ty.set(t.client_y() as f64);
                                         panning.set(true);
@@ -1811,7 +1868,14 @@ pub fn GraphView() -> impl IntoView {
                             let touches = ev.touches();
                             match touches.length() {
                                 1 => {
-                                    if panning.get_untracked()
+                                    if drag_node.get_untracked().is_some() {
+                                        if let Some(t) = touches.get(0) {
+                                            drag_move_to(
+                                                t.client_x() as f64,
+                                                t.client_y() as f64,
+                                            );
+                                        }
+                                    } else if panning.get_untracked()
                                         && let Some(t) = touches.get(0)
                                     {
                                         let tx = t.client_x() as f64;
@@ -1849,9 +1913,16 @@ pub fn GraphView() -> impl IntoView {
                             }
                         }
                         on:touchend=move |_: TouchEvent| {
+                            // Fallback save — normally the node's own touchend
+                            // handles an active drag (and stops propagation).
+                            end_drag_and_save();
                             panning.set(false);
                         }
                         on:touchcancel=move |_: TouchEvent| {
+                            // iOS can cancel a touch mid-drag (e.g. system
+                            // gesture) — persist what the user dragged so far,
+                            // mirroring on:mouseleave.
+                            end_drag_and_save();
                             panning.set(false);
                         }
                     >
