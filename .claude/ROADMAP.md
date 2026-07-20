@@ -3,8 +3,31 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-07-18)
+## Current state (2026-07-19)
 
+- **v2.24.1–v2.24.3 shipped (2026-07-18/19)** — the post-clustering polish arc,
+  each prod-verified:
+  - **v2.24.1**: Fit actually fits-to-content (`fit_transform` moved to
+    `common::graph_layout`, host-tested), and ALL graph viewport math (Fit,
+    auto-arrange framing, minimap click-to-centre + indicator rect) measures
+    the `#graph-svg` canvas instead of the window — the sidebar biased fits
+    ~230px right. Plus the retry-safe search-preset e2e (shared DB persists
+    across Playwright retries; wipe before AND after — `.claude/rules/e2e.md`).
+  - **v2.24.2**: daily TLS cert-expiry monitor (`cert-check.yml`, alerts <21
+    days or bad chain; first scheduled run green 2026-07-19) and Rust
+    toolchain 1.96 → 1.97.1 (zero new lints; watch transitive
+    `proc-macro-error2` future-incompat via Leptos macros at the next Leptos
+    bump). Release forced by a real constraint: **scheduled workflows only run
+    from the default branch** — inert on develop.
+  - **v2.24.3**: graph touch support. Root cause was deeper than missing drag
+    wiring: canvas `touchstart` preventDefault suppressed ALL synthesized
+    clicks, so nodes were fully inert on touch. Now: finger-drag persists
+    (incl. iOS touchcancel), tap opens (replaces dblclick — double-tap is an
+    OS zoom gesture), tap-pairs drive edge-create; one shared drag path for
+    mouse + touch. Verified on prod at iPhone viewport with constructed
+    TouchEvents; Julian confirms on-device.
+  - Remaining graph non-goals: tag-dot taps fall through to node-open (5px
+    dots aren't a touch target); hover cards stay mouse-only.
 - **v2.24.0 shipped — graph auto-arrange re-architected:**
   the BFS-row `smart_layout` + load-time `force_layout_expanded` (both WASM-only,
   untested) are replaced by one pure engine, `common::graph_layout::cluster_layout`
