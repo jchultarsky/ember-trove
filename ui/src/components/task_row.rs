@@ -36,7 +36,7 @@
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{Task, TaskPriority, TaskStatus, UpdateTaskRequest};
+use common::task::{Task, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -44,6 +44,9 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
     undo_restore_task,
+};
+use crate::components::task_row_scaffold::{
+    TITLE_CLASS, TaskRowBody, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -309,14 +312,6 @@ pub fn KanbanTaskRow(
 
     // ── Render ────────────────────────────────────────────────────────
 
-    // Style + accessible name: the dot is colour-coded for sighted users,
-    // with title/aria-label carrying the same information non-visually.
-    let priority_dot = match priority {
-        TaskPriority::High => Some(("color:#ef4444;", "High priority")),
-        TaskPriority::Medium => Some(("color:#f59e0b;", "Medium priority")),
-        TaskPriority::Low => None,
-    };
-
     let zone_accent = match zone {
         KanbanZone::Today => "border-l-2 border-amber-400",
         KanbanZone::Backlog => "border-l-2 border-stone-200 dark:border-stone-700",
@@ -372,67 +367,8 @@ pub fn KanbanTaskRow(
                 })}
             </button>
 
-            // Body — project chip + title + meta, OR inline edit form
+            // Body — title first, supporting meta below, OR inline edit form
             <div class="flex-1 min-w-0">
-                // Parent-node chip — amber so it pops against the title
-                // (the app's accent colour; matches the Today-zone left
-                // border, the priority dots, and the focused-task flash).
-                <div class="flex items-center gap-1.5">
-                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
-                          style="font-size:13px;">{node_icon}</span>
-                    <span class="text-xs font-semibold uppercase tracking-wide \
-                                 text-amber-700 dark:text-amber-400 truncate">
-                        {parent}
-                    </span>
-                    {carryover_from.map(|d| {
-                        let label = d.format("%b %-d").to_string();
-                        let title_attr = format!("Was focused on {label}");
-                        view! {
-                            <span class="text-xs text-stone-500 dark:text-stone-400 flex-shrink-0"
-                                  title=title_attr>
-                                " · carried from " {label}
-                            </span>
-                            // One-click answer to "still today?" — Yes
-                            // re-stamps focus_date to today (badge clears);
-                            // No is the existing remove-from-today gesture.
-                            <span class="flex items-center gap-1 flex-shrink-0 text-xs"
-                                  data-testid="carryover-prompt">
-                                <span class="text-stone-400 dark:text-stone-500">"— still today?"</span>
-                                <button
-                                    type="button"
-                                    class="px-1.5 rounded text-amber-600 dark:text-amber-400
-                                           hover:bg-amber-50 dark:hover:bg-amber-950/40
-                                           font-semibold transition-colors cursor-pointer
-                                           disabled:opacity-50"
-                                    prop:disabled=move || busy.get()
-                                    title="Keep on today (re-stamps the focus date)"
-                                    on:click=move |ev: web_sys::MouseEvent| {
-                                        ev.stop_propagation();
-                                        patch_focus(Some(today), "Kept for today");
-                                    }
-                                >
-                                    "Yes"
-                                </button>
-                                <button
-                                    type="button"
-                                    class="px-1.5 rounded text-stone-500 dark:text-stone-400
-                                           hover:bg-stone-100 dark:hover:bg-stone-800
-                                           font-semibold transition-colors cursor-pointer
-                                           disabled:opacity-50"
-                                    prop:disabled=move || busy.get()
-                                    title="Back to the backlog"
-                                    on:click=move |ev: web_sys::MouseEvent| {
-                                        ev.stop_propagation();
-                                        patch_focus(None, "Moved to backlog");
-                                    }
-                                >
-                                    "No"
-                                </button>
-                            </span>
-                        }
-                    })}
-                </div>
-
                 {move || if is_editing() {
                     // ── Inline edit form ─────────────────────────────
                     let saved_height = use_context::<TaskEditorHeights>()
@@ -537,46 +473,74 @@ pub fn KanbanTaskRow(
                         </div>
                     }.into_any()
                 } else {
-                    // ── Display row ──────────────────────────────────
-                    // Phone widths wrap the full title (items-start keeps the
-                    // dot/due pinned to the first line); sm+ keeps the
-                    // single-line truncate for list density.
-                    view! {
-                        <div class="flex items-start sm:items-center gap-2 mt-0.5">
-                            {priority_dot.map(|(s, label)| view! {
-                                <span
-                                    class="flex-shrink-0 mt-1.5 sm:mt-0"
-                                    style=format!("{s}font-size:8px;line-height:1;")
-                                    title=label
-                                    aria-label=label
-                                    role="img"
-                                >"●"</span>
-                            })}
-                            <span class="text-sm text-stone-800 dark:text-stone-200 \
-                                         min-w-0 break-words sm:truncate"
-                                  style=move || if status_done(&status_sig.get()) {
-                                      "text-decoration:line-through;"
-                                  } else { "" }
-                                  inner_html=move || crate::markdown::render_markdown_inline(&title_sig.get())>
+                    // ── Display: title first, meta second ────────────
+                    // Geometry comes from the shared TaskRowBody scaffold;
+                    // this branch only supplies the content.
+                    let parent_disp = parent.clone();
+                    let title_line = view! {
+                        {priority_dot_view(&priority)}
+                        <span class=TITLE_CLASS
+                              style=move || if status_done(&status_sig.get()) {
+                                  "text-decoration:line-through;"
+                              } else { "" }
+                              inner_html=move || crate::markdown::render_markdown_inline(&title_sig.get())>
+                        </span>
+                    }
+                    .into_any();
+                    let meta_line = view! {
+                        // Parent-node chip — amber, matching the zone
+                        // accent / priority dots / focus flash.
+                        <span class="inline-flex items-center gap-1 min-w-0">
+                            <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                                  style="font-size:13px;">{node_icon}</span>
+                            <span class="font-semibold uppercase tracking-wide \
+                                         text-amber-700 dark:text-amber-400 truncate max-w-[12rem]">
+                                {parent_disp}
                             </span>
-                            {due.map(|d| {
-                                let overdue = d < today && !matches!(status_sig.get_untracked(), TaskStatus::Done | TaskStatus::Cancelled);
-                                let style = if overdue {
-                                    "color:#dc2626;font-size:11px;font-weight:600;"
-                                } else {
-                                    "color:#9ca3af;font-size:11px;"
-                                };
-                                let label = if overdue {
-                                    format!("⚠ due {}", d.format("%b %-d"))
-                                } else {
-                                    format!("due {}", d.format("%b %-d"))
-                                };
+                        </span>
+                        {due.map(|d| {
+                            let overdue = d < today
+                                && !matches!(
+                                    status_sig.get_untracked(),
+                                    TaskStatus::Done | TaskStatus::Cancelled
+                                );
+                            due_badge_view(d, overdue)
+                        })}
+                        // Carryover badge: the date IS the question; ✓
+                        // keeps it on today. "No" is the existing ✕
+                        // (remove from today) in the action cluster.
+                        {carryover_from.map(|d| {
+                                let label = d.format("%b %-d").to_string();
+                                let title_attr = format!("Was focused on {label} — keep with ✓, or remove with ✕");
                                 view! {
-                                    <span style=style class="flex-shrink-0" title="External deadline">{label}</span>
+                                    <span class="inline-flex items-center gap-1 pl-1.5 pr-0.5 rounded-full \
+                                                 bg-amber-100 dark:bg-amber-950/50 \
+                                                 text-amber-700 dark:text-amber-400 flex-shrink-0"
+                                          data-testid="carryover-prompt"
+                                          title=title_attr>
+                                        "carried " {label}
+                                        <button
+                                            type="button"
+                                            class="material-symbols-outlined rounded-full \
+                                                   hover:bg-amber-200 dark:hover:bg-amber-900 \
+                                                   transition-colors cursor-pointer \
+                                                   disabled:opacity-50"
+                                            style="font-size:14px;padding:1px;"
+                                            prop:disabled=move || busy.get()
+                                            aria-label="Keep on today"
+                                            title="Keep on today (re-stamps the focus date)"
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                ev.stop_propagation();
+                                                patch_focus(Some(today), "Kept for today");
+                                            }
+                                        >"check"</button>
+                                    </span>
                                 }
                             })}
-                        </div>
-                    }.into_any()
+                    }
+                    .into_any();
+                    view! { <TaskRowBody title_line=title_line meta_line=meta_line/> }
+                        .into_any()
                 }}
             </div>
 

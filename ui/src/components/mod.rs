@@ -39,6 +39,7 @@ pub mod tag_manager;
 pub mod task_common;
 pub mod task_panel;
 pub mod task_row;
+pub mod task_row_scaffold;
 pub mod tasks_view;
 pub mod templates_view;
 pub mod toast;

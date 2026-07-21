@@ -19,8 +19,11 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, parse_status,
-    priority_dot_color, priority_label, priority_value, recurrence_label, recurrence_value,
-    status_done, status_value, undo_restore_task,
+    priority_value, recurrence_label, recurrence_value, status_done, status_value,
+    undo_restore_task,
+};
+use crate::components::task_row_scaffold::{
+    CHECKBOX_CLASS, TITLE_CLASS, TaskRowBody, action_btn_class, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 use crate::focus_task::schedule_focus_task;
@@ -180,7 +183,12 @@ pub fn InboxView() -> impl IntoView {
                         let show_done   = RwSignal::new(false);
                         let done_stored = StoredValue::new(done);
                         view! {
-                            <div class="space-y-2">
+                            // One bordered container of flat rows (divide-y),
+                            // matching the My Day zone-box look.
+                            <div class="rounded-xl border border-stone-100 dark:border-stone-800 \
+                                        bg-white dark:bg-stone-900 \
+                                        divide-y divide-stone-100 dark:divide-stone-800 \
+                                        overflow-hidden">
                                 {active.into_iter().map(|task| view! {
                                     <InboxTaskRow task=task refresh=refresh />
                                 }).collect_view()}
@@ -414,31 +422,20 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     };
 
     view! {
-        <div
-            class="bg-white dark:bg-stone-900 rounded-xl
-                border border-stone-100 dark:border-stone-800
-                shadow-sm overflow-hidden"
-            data-task-id=task_id.0.to_string()
-        >
-
-            // ── Main content area ─────────────────────────────────────────────
-            <div class="px-3 pt-3 pb-2 space-y-2">
-
-                // Row 1: checkbox + title (+ badges in read mode)
-                <div class="flex items-start gap-2.5">
-                    // Checkbox
+        <div class="px-3 py-2" data-task-id=task_id.0.to_string()>
+            // Row: checkbox | body | actions — geometry per task_row_scaffold.
+            <div class="flex items-start gap-2">
                     <button
-                        class="flex-shrink-0 mt-0.5 w-5 h-5 rounded border-2 border-stone-300
-                            dark:border-stone-600 flex items-center justify-center
-                            hover:border-amber-500 active:border-amber-600
-                            transition-colors cursor-pointer"
+                        class=CHECKBOX_CLASS
+                        style=move || if status_val.get() == "done" {
+                            "background:#d97706;border-color:#d97706;"
+                        } else { "" }
                         on:click=on_toggle
+                        title="Toggle done"
                     >
                         {move || (status_val.get() == "done").then(|| view! {
-                            <span class="material-symbols-outlined text-amber-500"
-                                style="font-size: 14px; font-variation-settings: 'FILL' 1;">
-                                "check"
-                            </span>
+                            <span class="material-symbols-outlined text-white"
+                                style="font-size:13px;">"check"</span>
                         })}
                     </button>
 
@@ -533,157 +530,99 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 </div>
                             }.into_any()
                         } else {
-                            // ── Read mode ──────────────────────────────────────
-                            view! {
-                                <div class="space-y-1">
-                                    // Title — wraps naturally; no truncation on mobile
-                                    <p
-                                        class="text-sm leading-snug text-stone-800
-                                            dark:text-stone-200"
-                                        style=move || {
-                                            let mut s = String::new();
-                                            if status_val.get() == "done" {
-                                                s.push_str("text-decoration:line-through;\
-                                                             opacity:0.45;");
-                                            }
-                                            if overdue { s.push_str("color:#ef4444;") }
-                                            s
-                                        }
-                                        inner_html=move || crate::markdown::render_markdown_inline(&orig_title.get())
-                                    ></p>
-                                    // Badges row (due + recurrence)
-                                    {(due.is_some() || has_recurrence).then(|| {
-                                        let tip = recurrence_tip.unwrap_or("");
-                                        view! {
-                                            <div class="flex items-center gap-2 flex-wrap">
-                                                {due.map(|d| {
-                                                    let label = d.format("%b %-d").to_string();
-                                                    let style = if overdue {
-                                                        "color:#ef4444;"
-                                                    } else {
-                                                        "color:#6b7280;"
-                                                    };
-                                                    view! {
-                                                        <span class="text-xs flex-shrink-0"
-                                                            style=style>
-                                                            {if overdue {
-                                                                format!("⚠ {label}")
-                                                            } else {
-                                                                label
-                                                            }}
-                                                        </span>
-                                                    }
-                                                })}
-                                                {has_recurrence.then(|| view! {
-                                                    <span
-                                                        class="flex items-center gap-0.5 text-xs
-                                                            text-stone-400 dark:text-stone-500"
-                                                        title=format!("Repeats: {tip}")
-                                                    >
-                                                        <span class="material-symbols-outlined"
-                                                            style="font-size: 13px;">"repeat"</span>
-                                                        <span>{tip}</span>
-                                                    </span>
-                                                })}
-                                            </div>
-                                        }
-                                    })}
-                                </div>
-                            }.into_any()
-                        }}
-                    </div>
-                </div>
-
-                // ── Action bar — always visible, never hover-gated ────────────
-                {move || (!editing.get()).then(|| view! {
-                    <div class="flex items-center gap-0.5 pt-1
-                        border-t border-stone-50 dark:border-stone-800">
-                        // Priority pill (left side)
-                        {move || {
-                            let p = parse_priority(&priority_val.get());
-                            view! {
-                                <div class="flex items-center gap-1.5 flex-1">
-                                    <div
-                                        class="w-2 h-2 rounded-full flex-shrink-0"
-                                        style=priority_dot_color(&p)
-                                    />
-                                    <span class="text-xs text-stone-400 dark:text-stone-500">
-                                        {priority_label(&p)}
+                            // ── Read mode: shared scaffold (title, then meta).
+                            // Overdue now colours the due badge, not the title.
+                            let title_line = view! {
+                                {move || priority_dot_view(&parse_priority(&priority_val.get()))}
+                                <span class=TITLE_CLASS
+                                      style=move || if status_val.get() == "done" {
+                                          "text-decoration:line-through;"
+                                      } else { "" }
+                                      inner_html=move || crate::markdown::render_markdown_inline(&orig_title.get())>
+                                </span>
+                            }
+                            .into_any();
+                            let tip = recurrence_tip.unwrap_or("");
+                            let meta_line = view! {
+                                {due.map(|d| due_badge_view(d, overdue))}
+                                {has_recurrence.then(|| view! {
+                                    <span
+                                        class="flex items-center gap-0.5 text-stone-400 dark:text-stone-500"
+                                        title=format!("Repeats: {tip}")
+                                    >
+                                        <span class="material-symbols-outlined"
+                                            style="font-size: 13px;">"repeat"</span>
+                                        <span>{tip}</span>
                                     </span>
-                                </div>
+                                })}
                             }
+                            .into_any();
+                            view! { <TaskRowBody title_line=title_line meta_line=meta_line/> }
+                                .into_any()
                         }}
-
-                        // Action buttons (right side)
-                        <button
-                            class="p-2 rounded-lg text-stone-400 hover:text-blue-500
-                                dark:text-stone-500 dark:hover:text-blue-400
-                                active:bg-stone-100 dark:active:bg-stone-800
-                                transition-colors cursor-pointer"
-                            title="Assign to node"
-                            on:click=move |_| assigning.set(true)
-                        >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
-                                "call_merge"
-                            </span>
-                        </button>
-                        <button
-                            class=move || if in_my_day.get() {
-                                "p-2 rounded-lg text-amber-500 bg-amber-50 \
-                                 dark:text-amber-400 dark:bg-amber-900/30 \
-                                 hover:text-amber-600 dark:hover:text-amber-300 \
-                                 transition-colors cursor-pointer"
-                            } else {
-                                "p-2 rounded-lg text-stone-400 hover:text-amber-500 \
-                                 dark:text-stone-500 dark:hover:text-amber-400 \
-                                 active:bg-stone-100 dark:active:bg-stone-800 \
-                                 transition-colors cursor-pointer"
-                            }
-                            title=move || if in_my_day.get() { "Remove from My Day" } else { "Add to My Day" }
-                            on:click=on_toggle_my_day
-                        >
-                            <span
-                                class="material-symbols-outlined"
-                                style=move || if in_my_day.get() {
-                                    "font-size: 18px; font-variation-settings: 'FILL' 1;"
-                                } else {
-                                    "font-size: 18px;"
-                                }
-                            >
-                                "wb_sunny"
-                            </span>
-                        </button>
-                        <button
-                            class="p-2 rounded-lg text-stone-400 hover:text-stone-600
-                                dark:text-stone-500 dark:hover:text-stone-300
-                                active:bg-stone-100 dark:active:bg-stone-800
-                                transition-colors cursor-pointer"
-                            title="Edit"
-                            on:click=move |_| editing.set(true)
-                        >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
-                                "edit"
-                            </span>
-                        </button>
-                        <button
-                            class="p-2 rounded-lg text-stone-400 hover:text-red-500
-                                dark:text-stone-500 dark:hover:text-red-400
-                                active:bg-stone-100 dark:active:bg-stone-800
-                                transition-colors cursor-pointer"
-                            title="Delete"
-                            on:click=on_delete
-                        >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
-                                "delete"
-                            </span>
-                        </button>
                     </div>
-                })}
+
+                    // Actions — right cluster, hidden while editing.
+                    // Order matches My Day: context actions, edit, delete.
+                    {move || (!editing.get()).then(|| view! {
+                        <div class="flex items-center gap-0.5 flex-shrink-0">
+                            <button
+                                class=action_btn_class("hover:text-blue-500 dark:hover:text-blue-400")
+                                title="Assign to node"
+                                on:click=move |_| assigning.set(true)
+                            >
+                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                    "call_merge"
+                                </span>
+                            </button>
+                            <button
+                                class=move || if in_my_day.get() {
+                                    "p-1.5 rounded text-amber-500 bg-amber-50 \
+                                     dark:text-amber-400 dark:bg-amber-900/30 \
+                                     hover:text-amber-600 dark:hover:text-amber-300 \
+                                     transition-colors cursor-pointer".to_string()
+                                } else {
+                                    action_btn_class("hover:text-amber-500 dark:hover:text-amber-400")
+                                }
+                                title=move || if in_my_day.get() { "Remove from My Day" } else { "Add to My Day" }
+                                on:click=on_toggle_my_day
+                            >
+                                <span
+                                    class="material-symbols-outlined"
+                                    style=move || if in_my_day.get() {
+                                        "font-size:16px; font-variation-settings: 'FILL' 1;"
+                                    } else {
+                                        "font-size:16px;"
+                                    }
+                                >
+                                    "wb_sunny"
+                                </span>
+                            </button>
+                            <button
+                                class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
+                                title="Edit"
+                                on:click=move |_| editing.set(true)
+                            >
+                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                    "edit"
+                                </span>
+                            </button>
+                            <button
+                                class=action_btn_class("hover:text-red-500 dark:hover:text-red-400")
+                                title="Delete"
+                                on:click=on_delete
+                            >
+                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                    "delete"
+                                </span>
+                            </button>
+                        </div>
+                    })}
             </div>
 
-            // ── Node picker — full-width expansion below the card ─────────────
+            // ── Node picker — full-width expansion below the row ──────────────
             {move || assigning.get().then(|| view! {
-                <div class="border-t border-stone-100 dark:border-stone-800 px-3 py-3 space-y-2
+                <div class="mt-2 rounded-lg px-3 py-3 space-y-2
                     bg-stone-50 dark:bg-stone-800/50">
                     // Search input row
                     <div class="flex items-center gap-2">

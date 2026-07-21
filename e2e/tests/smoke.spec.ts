@@ -54,7 +54,7 @@ test.describe('quick capture with natural-language tokens', () => {
     await page.goto('/tasks/inbox');
     const row = page.locator('[data-task-id]', { hasText: title });
     await expect(row).toBeVisible();
-    await expect(row.getByText('High')).toBeVisible();
+    await expect(row.getByRole('img', { name: 'High priority' })).toBeVisible();
 
     // Clean up — later specs (triage) assume they control the inbox.
     const inbox = await (await request.get('/api/tasks/inbox')).json();

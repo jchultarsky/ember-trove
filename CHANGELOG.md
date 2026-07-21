@@ -6,6 +6,39 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.25.0] - 2026-07-20
+
+### Changed — node task panel joins the shared task-row layout (task-row phase 3)
+The node page's task rows adopt the shared scaffold: standard checkbox,
+priority as the colour dot beside the title (was an icon+label badge), the
+standard `⚠ due ‹date›` badge (was `event` icon + "· overdue"), unified
+action order (my-day · edit · delete) with the shared compact button style,
+and the panel's first responsive behavior — titles wrap on phones and
+truncate on desktop like every other task list. The status badge
+(in-progress/cancelled) stays. Completes the three-list unification.
+
+### Changed — Inbox rows match My Day; shared task-row scaffold (task-row phase 2)
+The Inbox rendered tasks as cards with a bottom action bar and its own
+badge conventions; My Day, the Inbox, and the node task panel each
+hand-rolled a different row. A shared display-mode scaffold
+(`task_row_scaffold.rs`: geometry, checkbox/title classes, priority-dot and
+due-badge builders) now drives both My Day and the Inbox: flat rows in one
+bordered list, title first, wrapping meta line (due + recurrence), compact
+right-side action cluster in the same order (context · edit · delete).
+Priority is the colour dot with an accessible label everywhere; overdue
+colours the due badge, not the title. Node-panel port follows in phase 3.
+
+### Changed — My Day rows: title first, compact icon carryover (task-row phase 1)
+The My Day row led with a metadata line (parent chip, "carried from … —
+still today? Yes No") and buried the task text under it; the due date floated
+at the row's right edge and five controls fought for one cramped line on
+phones. Rows now lead with the title; a small wrapping meta line below holds
+the parent chip, due date, and a "carried ‹date›" badge whose single ✓
+re-stamps the task to today (aria-label "Keep on today"). The "No" text
+button is gone — it duplicated the ✕ remove-from-today action already in the
+cluster. Desktop keeps single-line density; phones wrap. First step of the
+unified task-row plan (Inbox and node-panel rows follow).
+
 ## [2.24.4] - 2026-07-20
 
 ### Fixed — My Day task titles wrap on phone widths

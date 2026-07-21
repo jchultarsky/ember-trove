@@ -25,15 +25,15 @@ test('carried-over task prompts "still today?" — Yes re-stamps to today', asyn
     await page.goto('/tasks/my-day');
     const row = page.locator('[data-task-id]', { hasText: title });
     await expect(row).toBeVisible();
-    await expect(row.getByText(/carried from/)).toBeVisible();
+    await expect(row.getByText(/carried/)).toBeVisible();
     await expect(row.getByTestId('carryover-prompt')).toBeVisible();
 
-    await row.getByRole('button', { name: 'Yes', exact: true }).click();
+    await row.getByRole('button', { name: 'Keep on today' }).click();
     await expect(page.locator('[role="status"]').getByText('Kept for today')).toBeVisible();
     // After the refetch the focus date is today → badge and prompt are gone.
     const fresh = page.locator('[data-task-id]', { hasText: title });
     await expect(fresh).toBeVisible();
-    await expect(fresh.getByText(/carried from/)).not.toBeVisible();
+    await expect(fresh.getByText(/carried/)).not.toBeVisible();
   } finally {
     await request.delete(`/api/tasks/${task.id}`);
   }

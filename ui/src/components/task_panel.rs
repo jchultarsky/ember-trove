@@ -9,9 +9,11 @@ use crate::app::TaskRefresh;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_common::{
-    is_in_my_day, parse_priority, parse_status, priority_color, priority_icon, priority_label,
-    priority_value, sort_tasks_by_order, status_done, status_label, status_value,
-    undo_restore_task,
+    is_in_my_day, parse_priority, parse_status, priority_value, sort_tasks_by_order, status_done,
+    status_label, status_value, undo_restore_task,
+};
+use crate::components::task_row_scaffold::{
+    CHECKBOX_CLASS, TITLE_CLASS, TaskRowBody, action_btn_class, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -272,9 +274,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let is_done = status_done(&task.status);
     let status_val = status_value(&task.status).to_string();
     let priority = task.priority.clone();
-    let p_icon = priority_icon(&task.priority);
-    let p_color = priority_color(&task.priority);
-    let p_label = priority_label(&task.priority);
+    let prio = task.priority.clone();
     let due = task.due_date;
 
     let today = crate::components::format_helpers::local_today();
@@ -397,11 +397,9 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             class="group flex items-start gap-2 py-2 border-b border-stone-100 dark:border-stone-800 last:border-0"
             data-task-id=task_id.0.to_string()
         >
-            // Checkbox
+            // Checkbox — shared style (task_row_scaffold)
             <button
-                class="mt-0.5 flex-shrink-0 w-4 h-4 rounded border border-stone-400 dark:border-stone-500
-                    flex items-center justify-center transition-colors
-                    hover:border-amber-500"
+                class=CHECKBOX_CLASS
                 style=move || if status_done(&parse_status(&status_sig.get())) {
                     "background: #d97706; border-color: #d97706;"
                 } else { "" }
@@ -410,7 +408,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             >
                 {move || status_done(&parse_status(&status_sig.get())).then(|| view! {
                     <span class="material-symbols-outlined text-white"
-                        style="font-size: 12px;">{"check"}</span>
+                        style="font-size:13px;">{"check"}</span>
                 })}
             </button>
 
@@ -481,78 +479,61 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                         </div>
                     }.into_any()
                 } else {
+                    // ── Display: shared scaffold (title, then meta) ──
                     let td = title_display.clone();
-                    view! {
-                        <p
-                            class="text-sm text-stone-800 dark:text-stone-200 leading-snug"
-                            style=move || if status_done(&parse_status(&status_sig.get())) {
-                                "text-decoration: line-through; opacity: 0.5;"
-                            } else { "" }
-                            inner_html=crate::markdown::render_markdown_inline(&td)
-                        ></p>
-                    }.into_any()
-                }}
-                <div class="flex items-center gap-2 mt-0.5">
-                    // Priority badge
-                    <span class="flex items-center gap-0.5 text-xs" style=p_color
-                        title=p_label>
-                        <span class="material-symbols-outlined" style="font-size:12px;">{p_icon}</span>
-                        {p_label}
-                    </span>
-                    // Due date
-                    {due.map(|d| {
-                        let due_style = if overdue {
-                            "color: #dc2626; font-weight: 600;"
-                        } else {
-                            "color: #6b7280;"
-                        };
-                        view! {
-                            <span class="flex items-center gap-0.5 text-xs" style=due_style>
-                                <span class="material-symbols-outlined" style="font-size:12px;">{"event"}</span>
-                                {d.format("%b %-d").to_string()}
-                                {overdue.then_some(" · overdue")}
-                            </span>
-                        }
-                    })}
-                    // Recurrence badge
-                    {has_recurrence.then(|| view! {
-                        <span class="flex items-center gap-0.5 text-xs text-stone-400 dark:text-stone-500"
-                            title="Recurring task">
-                            <span class="material-symbols-outlined" style="font-size:12px;">"repeat"</span>
+                    let prio_disp = prio.clone();
+                    let sv = status_val.clone();
+                    let title_line = view! {
+                        {priority_dot_view(&prio_disp)}
+                        <span class=TITLE_CLASS
+                              style=move || if status_done(&parse_status(&status_sig.get())) {
+                                  "text-decoration: line-through;"
+                              } else { "" }
+                              inner_html=crate::markdown::render_markdown_inline(&td)>
                         </span>
-                    })}
-                    // Status badge (if not open/done)
-                    {(!matches!(parse_status(&status_val), TaskStatus::Open | TaskStatus::Done)).then(|| {
-                        let lbl = status_label(&parse_status(&status_val));
-                        view! {
-                            <span class="text-xs text-stone-400 dark:text-stone-500">{lbl}</span>
-                        }
-                    })}
-                </div>
+                    }
+                    .into_any();
+                    let meta_line = view! {
+                        {due.map(|d| due_badge_view(d, overdue))}
+                        {has_recurrence.then(|| view! {
+                            <span class="flex items-center gap-0.5 text-stone-400 dark:text-stone-500"
+                                title="Recurring task">
+                                <span class="material-symbols-outlined" style="font-size:12px;">"repeat"</span>
+                            </span>
+                        })}
+                        // Status badge (if not open/done)
+                        {(!matches!(parse_status(&sv), TaskStatus::Open | TaskStatus::Done)).then(|| {
+                            let lbl = status_label(&parse_status(&sv));
+                            view! {
+                                <span class="text-stone-400 dark:text-stone-500">{lbl}</span>
+                            }
+                        })}
+                    }
+                    .into_any();
+                    view! { <TaskRowBody title_line=title_line meta_line=meta_line/> }
+                        .into_any()
+                }}
             </div>
 
-            // Actions — always visible
-            <div class="flex items-center gap-1 flex-shrink-0">
-                // Edit task
+            // Actions — right cluster; unified order (context, edit, delete)
+            <div class="flex items-center gap-0.5 flex-shrink-0">
                 <button
-                    class="p-1 rounded text-stone-300 dark:text-stone-600 hover:text-amber-500 dark:hover:text-amber-400 transition-colors"
-                    title="Edit task"
-                    on:click=move |_| editing_title.set(true)
-                >
-                    <span class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
-                </button>
-                // My Day toggle
-                <button
-                    class="p-1 rounded transition-colors"
-                    style=move || if in_my_day.get() { "color: #d97706;" } else { "color: #d6d3d1;" }
+                    class=action_btn_class("hover:text-amber-500 dark:hover:text-amber-400")
+                    style=move || if in_my_day.get() { "color: #d97706;" } else { "" }
                     title=move || if in_my_day.get() { "Remove from My Day" } else { "Add to My Day" }
                     on:click=on_toggle_focus
                 >
                     <span class="material-symbols-outlined" style="font-size:16px;">{"wb_sunny"}</span>
                 </button>
-                // Delete
                 <button
-                    class="p-1 rounded text-stone-300 dark:text-stone-600 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                    class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
+                    title="Edit task"
+                    on:click=move |_| editing_title.set(true)
+                >
+                    <span class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
+                </button>
+                <button
+                    class=action_btn_class("hover:text-red-500 dark:hover:text-red-400")
                     title="Delete task"
                     on:click=on_delete
                 >
