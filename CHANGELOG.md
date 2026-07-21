@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — My Day rows: title first, compact icon carryover (task-row phase 1)
+The My Day row led with a metadata line (parent chip, "carried from … —
+still today? Yes No") and buried the task text under it; the due date floated
+at the row's right edge and five controls fought for one cramped line on
+phones. Rows now lead with the title; a small wrapping meta line below holds
+the parent chip, due date, and a "carried ‹date›" badge whose single ✓
+re-stamps the task to today (aria-label "Keep on today"). The "No" text
+button is gone — it duplicated the ✕ remove-from-today action already in the
+cluster. Desktop keeps single-line density; phones wrap. First step of the
+unified task-row plan (Inbox and node-panel rows follow).
+
 ## [2.24.4] - 2026-07-20
 
 ### Fixed — My Day task titles wrap on phone widths
