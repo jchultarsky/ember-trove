@@ -108,15 +108,6 @@ pub fn priority_color_hex(p: &TaskPriority) -> &'static str {
     }
 }
 
-/// Inline CSS for a small filled circle used as a priority indicator.
-pub fn priority_dot_color(p: &TaskPriority) -> &'static str {
-    match p {
-        TaskPriority::High => "background:#dc2626;",
-        TaskPriority::Medium => "background:#d97706;",
-        TaskPriority::Low => "background:#6b7280;",
-    }
-}
-
 /// Material Symbols icon name for the priority level.
 pub fn priority_icon(p: &TaskPriority) -> &'static str {
     match p {
