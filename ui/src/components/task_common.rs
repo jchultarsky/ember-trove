@@ -91,38 +91,12 @@ pub fn priority_value(p: &TaskPriority) -> &'static str {
     }
 }
 
-pub fn priority_label(p: &TaskPriority) -> &'static str {
-    match p {
-        TaskPriority::High => "High",
-        TaskPriority::Medium => "Medium",
-        TaskPriority::Low => "Low",
-    }
-}
-
 /// Raw hex colour string for a priority level (e.g. `"#dc2626"`).
 pub fn priority_color_hex(p: &TaskPriority) -> &'static str {
     match p {
         TaskPriority::High => "#dc2626",
         TaskPriority::Medium => "#d97706",
         TaskPriority::Low => "#6b7280",
-    }
-}
-
-/// Material Symbols icon name for the priority level.
-pub fn priority_icon(p: &TaskPriority) -> &'static str {
-    match p {
-        TaskPriority::High => "keyboard_double_arrow_up",
-        TaskPriority::Medium => "drag_handle",
-        TaskPriority::Low => "keyboard_double_arrow_down",
-    }
-}
-
-/// Inline CSS colour for the priority icon / label text.
-pub fn priority_color(p: &TaskPriority) -> &'static str {
-    match p {
-        TaskPriority::High => "color: #dc2626;",
-        TaskPriority::Medium => "color: #d97706;",
-        TaskPriority::Low => "color: #6b7280;",
     }
 }
 

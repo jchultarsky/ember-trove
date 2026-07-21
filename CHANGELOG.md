@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — node task panel joins the shared task-row layout (task-row phase 3)
+The node page's task rows adopt the shared scaffold: standard checkbox,
+priority as the colour dot beside the title (was an icon+label badge), the
+standard `⚠ due ‹date›` badge (was `event` icon + "· overdue"), unified
+action order (my-day · edit · delete) with the shared compact button style,
+and the panel's first responsive behavior — titles wrap on phones and
+truncate on desktop like every other task list. The status badge
+(in-progress/cancelled) stays. Completes the three-list unification.
+
 ### Changed — Inbox rows match My Day; shared task-row scaffold (task-row phase 2)
 The Inbox rendered tasks as cards with a bottom action bar and its own
 badge conventions; My Day, the Inbox, and the node task panel each
