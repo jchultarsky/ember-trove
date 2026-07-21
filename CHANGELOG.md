@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.24.4] - 2026-07-20
+
 ### Fixed — My Day task titles wrap on phone widths
 On an iPhone the My Day column is narrow and the row's `truncate` cut every
 long title to one ellipsised line. Small screens now wrap the full title
