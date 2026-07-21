@@ -36,7 +36,7 @@
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{Task, TaskPriority, TaskStatus, UpdateTaskRequest};
+use common::task::{Task, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -44,6 +44,9 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
     undo_restore_task,
+};
+use crate::components::task_row_scaffold::{
+    TITLE_CLASS, TaskRowBody, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -309,14 +312,6 @@ pub fn KanbanTaskRow(
 
     // ── Render ────────────────────────────────────────────────────────
 
-    // Style + accessible name: the dot is colour-coded for sighted users,
-    // with title/aria-label carrying the same information non-visually.
-    let priority_dot = match priority {
-        TaskPriority::High => Some(("color:#ef4444;", "High priority")),
-        TaskPriority::Medium => Some(("color:#f59e0b;", "Medium priority")),
-        TaskPriority::Low => None,
-    };
-
     let zone_accent = match zone {
         KanbanZone::Today => "border-l-2 border-amber-400",
         KanbanZone::Backlog => "border-l-2 border-stone-200 dark:border-stone-700",
@@ -479,61 +474,42 @@ pub fn KanbanTaskRow(
                     }.into_any()
                 } else {
                     // ── Display: title first, meta second ────────────
-                    // The task text is the content; chip/due/carryover are
-                    // supporting meta on a small second line that wraps
-                    // freely on phones. Title wraps below `sm`, truncates
-                    // at sm+ for list density.
+                    // Geometry comes from the shared TaskRowBody scaffold;
+                    // this branch only supplies the content.
                     let parent_disp = parent.clone();
-                    view! {
-                        <div class="flex items-start sm:items-center gap-2">
-                            {priority_dot.map(|(s, label)| view! {
-                                <span
-                                    class="flex-shrink-0 mt-1.5 sm:mt-0"
-                                    style=format!("{s}font-size:8px;line-height:1;")
-                                    title=label
-                                    aria-label=label
-                                    role="img"
-                                >"●"</span>
-                            })}
-                            <span class="text-sm text-stone-800 dark:text-stone-200 \
-                                         min-w-0 break-words sm:truncate"
-                                  style=move || if status_done(&status_sig.get()) {
-                                      "text-decoration:line-through;"
-                                  } else { "" }
-                                  inner_html=move || crate::markdown::render_markdown_inline(&title_sig.get())>
+                    let title_line = view! {
+                        {priority_dot_view(&priority)}
+                        <span class=TITLE_CLASS
+                              style=move || if status_done(&status_sig.get()) {
+                                  "text-decoration:line-through;"
+                              } else { "" }
+                              inner_html=move || crate::markdown::render_markdown_inline(&title_sig.get())>
+                        </span>
+                    }
+                    .into_any();
+                    let meta_line = view! {
+                        // Parent-node chip — amber, matching the zone
+                        // accent / priority dots / focus flash.
+                        <span class="inline-flex items-center gap-1 min-w-0">
+                            <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                                  style="font-size:13px;">{node_icon}</span>
+                            <span class="font-semibold uppercase tracking-wide \
+                                         text-amber-700 dark:text-amber-400 truncate max-w-[12rem]">
+                                {parent_disp}
                             </span>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-xs">
-                            // Parent-node chip — amber, matching the zone
-                            // accent / priority dots / focus flash.
-                            <span class="inline-flex items-center gap-1 min-w-0">
-                                <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
-                                      style="font-size:13px;">{node_icon}</span>
-                                <span class="font-semibold uppercase tracking-wide \
-                                             text-amber-700 dark:text-amber-400 truncate max-w-[12rem]">
-                                    {parent_disp}
-                                </span>
-                            </span>
-                            {due.map(|d| {
-                                let overdue = d < today && !matches!(status_sig.get_untracked(), TaskStatus::Done | TaskStatus::Cancelled);
-                                let style = if overdue {
-                                    "color:#dc2626;font-weight:600;"
-                                } else {
-                                    "color:#9ca3af;"
-                                };
-                                let label = if overdue {
-                                    format!("⚠ due {}", d.format("%b %-d"))
-                                } else {
-                                    format!("due {}", d.format("%b %-d"))
-                                };
-                                view! {
-                                    <span style=style class="flex-shrink-0" title="External deadline">{label}</span>
-                                }
-                            })}
-                            // Carryover badge: the date IS the question; ✓
-                            // keeps it on today. "No" is the existing ✕
-                            // (remove from today) in the action cluster.
-                            {carryover_from.map(|d| {
+                        </span>
+                        {due.map(|d| {
+                            let overdue = d < today
+                                && !matches!(
+                                    status_sig.get_untracked(),
+                                    TaskStatus::Done | TaskStatus::Cancelled
+                                );
+                            due_badge_view(d, overdue)
+                        })}
+                        // Carryover badge: the date IS the question; ✓
+                        // keeps it on today. "No" is the existing ✕
+                        // (remove from today) in the action cluster.
+                        {carryover_from.map(|d| {
                                 let label = d.format("%b %-d").to_string();
                                 let title_attr = format!("Was focused on {label} — keep with ✓, or remove with ✕");
                                 view! {
@@ -561,8 +537,10 @@ pub fn KanbanTaskRow(
                                     </span>
                                 }
                             })}
-                        </div>
-                    }.into_any()
+                    }
+                    .into_any();
+                    view! { <TaskRowBody title_line=title_line meta_line=meta_line/> }
+                        .into_any()
                 }}
             </div>
 

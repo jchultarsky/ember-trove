@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — Inbox rows match My Day; shared task-row scaffold (task-row phase 2)
+The Inbox rendered tasks as cards with a bottom action bar and its own
+badge conventions; My Day, the Inbox, and the node task panel each
+hand-rolled a different row. A shared display-mode scaffold
+(`task_row_scaffold.rs`: geometry, checkbox/title classes, priority-dot and
+due-badge builders) now drives both My Day and the Inbox: flat rows in one
+bordered list, title first, wrapping meta line (due + recurrence), compact
+right-side action cluster in the same order (context · edit · delete).
+Priority is the colour dot with an accessible label everywhere; overdue
+colours the due badge, not the title. Node-panel port follows in phase 3.
+
 ### Changed — My Day rows: title first, compact icon carryover (task-row phase 1)
 The My Day row led with a metadata line (parent chip, "carried from … —
 still today? Yes No") and buried the task text under it; the due date floated
