@@ -39,6 +39,40 @@ test('carried-over task prompts "still today?" — Yes re-stamps to today', asyn
   }
 });
 
+test('long task titles wrap on phone widths, truncate on desktop', async ({
+  page,
+  request,
+}) => {
+  // On an iPhone the My Day column is narrow and `truncate` cut titles to
+  // one ellipsised line. Small screens now wrap the full title; sm+ keeps
+  // the single-line truncation for list density.
+  const stamp = Date.now();
+  const title =
+    `e2e wrap ${stamp} — a deliberately verbose task title that cannot ` +
+    `possibly fit on a single 375px-wide line of small text`;
+  const created = await request.post('/api/tasks', {
+    data: { title, focus_date: localISO(0) },
+  });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  const SINGLE_LINE_MAX_PX = 30; // text-sm line ≈ 20px; 2 wrapped lines ≥ 36px
+
+  try {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto('/tasks/my-day');
+    const titleEl = page.getByText(`e2e wrap ${stamp}`, { exact: false });
+    await expect(titleEl).toBeVisible();
+    const mobile = await titleEl.boundingBox();
+    expect(mobile!.height).toBeGreaterThan(SINGLE_LINE_MAX_PX);
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const desktop = await titleEl.boundingBox();
+    expect(desktop!.height).toBeLessThan(SINGLE_LINE_MAX_PX);
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+  }
+});
+
 test('overdue tasks group into a foldable section', async ({ page, request }) => {
   const title = `e2e overdue ${Date.now()}`;
   const created = await request.post('/api/tasks', {
