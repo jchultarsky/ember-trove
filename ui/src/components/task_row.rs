@@ -538,17 +538,22 @@ pub fn KanbanTaskRow(
                     }.into_any()
                 } else {
                     // ── Display row ──────────────────────────────────
+                    // Phone widths wrap the full title (items-start keeps the
+                    // dot/due pinned to the first line); sm+ keeps the
+                    // single-line truncate for list density.
                     view! {
-                        <div class="flex items-center gap-2 mt-0.5">
+                        <div class="flex items-start sm:items-center gap-2 mt-0.5">
                             {priority_dot.map(|(s, label)| view! {
                                 <span
+                                    class="flex-shrink-0 mt-1.5 sm:mt-0"
                                     style=format!("{s}font-size:8px;line-height:1;")
                                     title=label
                                     aria-label=label
                                     role="img"
                                 >"●"</span>
                             })}
-                            <span class="text-sm text-stone-800 dark:text-stone-200 truncate"
+                            <span class="text-sm text-stone-800 dark:text-stone-200 \
+                                         min-w-0 break-words sm:truncate"
                                   style=move || if status_done(&status_sig.get()) {
                                       "text-decoration:line-through;"
                                   } else { "" }
