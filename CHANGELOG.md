@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — My Day task titles wrap on phone widths
+On an iPhone the My Day column is narrow and the row's `truncate` cut every
+long title to one ellipsised line. Small screens now wrap the full title
+across multiple lines (priority dot and due date stay pinned to the first
+line); `sm:` and up keep the single-line truncation so desktop list density
+is unchanged. The Inbox and node task-panel rows already wrapped — only the
+`KanbanTaskRow` truncated. E2e pins both behaviors by measuring the rendered
+title height at 375px vs 1280px.
+
 ## [2.24.3] - 2026-07-19
 
 ### Fixed — the graph works on touch devices
