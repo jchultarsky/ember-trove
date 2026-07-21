@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.25.0] - 2026-07-20
+
 ### Changed — node task panel joins the shared task-row layout (task-row phase 3)
 The node page's task rows adopt the shared scaffold: standard checkbox,
 priority as the colour dot beside the title (was an icon+label badge), the

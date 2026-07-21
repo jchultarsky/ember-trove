@@ -3,7 +3,24 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-07-19)
+## Current state (2026-07-20)
+
+- **v2.25.0 shipped — unified task rows (three-phase arc, PRs #60–#62):** all
+  task lists (My Day, Inbox, node task panel) render through one display-mode
+  scaffold (`ui/src/components/task_row_scaffold.rs`): checkbox | title line
+  over a wrapping meta line | compact right action cluster in one order
+  (context · edit · delete). Title leads everywhere; meta (parent chip, due
+  badge, recurrence, status, carryover) sits below and wraps on phones;
+  titles wrap below `sm`, truncate at sm+. Carryover became a "carried
+  ‹date›" badge with one ✓ (aria "Keep on today") — the "No" button
+  duplicated the ✕ remove action and was deleted. Inbox de-carded (flat rows
+  in one bordered divide-y list); priority is the colour dot with accessible
+  name everywhere (label/icon variants and their helpers deleted); overdue
+  colours the due badge, not the title. Design was mockup-approved before
+  implementation; each phase verified at 375px + desktop. Also in this
+  release window: v2.24.4 (My Day titles wrap on phones — superseded by the
+  full arc same-day).
+
 
 - **v2.24.1–v2.24.3 shipped (2026-07-18/19)** — the post-clustering polish arc,
   each prod-verified:
