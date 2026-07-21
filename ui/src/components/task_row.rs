@@ -372,67 +372,8 @@ pub fn KanbanTaskRow(
                 })}
             </button>
 
-            // Body — project chip + title + meta, OR inline edit form
+            // Body — title first, supporting meta below, OR inline edit form
             <div class="flex-1 min-w-0">
-                // Parent-node chip — amber so it pops against the title
-                // (the app's accent colour; matches the Today-zone left
-                // border, the priority dots, and the focused-task flash).
-                <div class="flex items-center gap-1.5">
-                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
-                          style="font-size:13px;">{node_icon}</span>
-                    <span class="text-xs font-semibold uppercase tracking-wide \
-                                 text-amber-700 dark:text-amber-400 truncate">
-                        {parent}
-                    </span>
-                    {carryover_from.map(|d| {
-                        let label = d.format("%b %-d").to_string();
-                        let title_attr = format!("Was focused on {label}");
-                        view! {
-                            <span class="text-xs text-stone-500 dark:text-stone-400 flex-shrink-0"
-                                  title=title_attr>
-                                " · carried from " {label}
-                            </span>
-                            // One-click answer to "still today?" — Yes
-                            // re-stamps focus_date to today (badge clears);
-                            // No is the existing remove-from-today gesture.
-                            <span class="flex items-center gap-1 flex-shrink-0 text-xs"
-                                  data-testid="carryover-prompt">
-                                <span class="text-stone-400 dark:text-stone-500">"— still today?"</span>
-                                <button
-                                    type="button"
-                                    class="px-1.5 rounded text-amber-600 dark:text-amber-400
-                                           hover:bg-amber-50 dark:hover:bg-amber-950/40
-                                           font-semibold transition-colors cursor-pointer
-                                           disabled:opacity-50"
-                                    prop:disabled=move || busy.get()
-                                    title="Keep on today (re-stamps the focus date)"
-                                    on:click=move |ev: web_sys::MouseEvent| {
-                                        ev.stop_propagation();
-                                        patch_focus(Some(today), "Kept for today");
-                                    }
-                                >
-                                    "Yes"
-                                </button>
-                                <button
-                                    type="button"
-                                    class="px-1.5 rounded text-stone-500 dark:text-stone-400
-                                           hover:bg-stone-100 dark:hover:bg-stone-800
-                                           font-semibold transition-colors cursor-pointer
-                                           disabled:opacity-50"
-                                    prop:disabled=move || busy.get()
-                                    title="Back to the backlog"
-                                    on:click=move |ev: web_sys::MouseEvent| {
-                                        ev.stop_propagation();
-                                        patch_focus(None, "Moved to backlog");
-                                    }
-                                >
-                                    "No"
-                                </button>
-                            </span>
-                        }
-                    })}
-                </div>
-
                 {move || if is_editing() {
                     // ── Inline edit form ─────────────────────────────
                     let saved_height = use_context::<TaskEditorHeights>()
@@ -537,12 +478,14 @@ pub fn KanbanTaskRow(
                         </div>
                     }.into_any()
                 } else {
-                    // ── Display row ──────────────────────────────────
-                    // Phone widths wrap the full title (items-start keeps the
-                    // dot/due pinned to the first line); sm+ keeps the
-                    // single-line truncate for list density.
+                    // ── Display: title first, meta second ────────────
+                    // The task text is the content; chip/due/carryover are
+                    // supporting meta on a small second line that wraps
+                    // freely on phones. Title wraps below `sm`, truncates
+                    // at sm+ for list density.
+                    let parent_disp = parent.clone();
                     view! {
-                        <div class="flex items-start sm:items-center gap-2 mt-0.5">
+                        <div class="flex items-start sm:items-center gap-2">
                             {priority_dot.map(|(s, label)| view! {
                                 <span
                                     class="flex-shrink-0 mt-1.5 sm:mt-0"
@@ -559,12 +502,24 @@ pub fn KanbanTaskRow(
                                   } else { "" }
                                   inner_html=move || crate::markdown::render_markdown_inline(&title_sig.get())>
                             </span>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-xs">
+                            // Parent-node chip — amber, matching the zone
+                            // accent / priority dots / focus flash.
+                            <span class="inline-flex items-center gap-1 min-w-0">
+                                <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                                      style="font-size:13px;">{node_icon}</span>
+                                <span class="font-semibold uppercase tracking-wide \
+                                             text-amber-700 dark:text-amber-400 truncate max-w-[12rem]">
+                                    {parent_disp}
+                                </span>
+                            </span>
                             {due.map(|d| {
                                 let overdue = d < today && !matches!(status_sig.get_untracked(), TaskStatus::Done | TaskStatus::Cancelled);
                                 let style = if overdue {
-                                    "color:#dc2626;font-size:11px;font-weight:600;"
+                                    "color:#dc2626;font-weight:600;"
                                 } else {
-                                    "color:#9ca3af;font-size:11px;"
+                                    "color:#9ca3af;"
                                 };
                                 let label = if overdue {
                                     format!("⚠ due {}", d.format("%b %-d"))
@@ -573,6 +528,37 @@ pub fn KanbanTaskRow(
                                 };
                                 view! {
                                     <span style=style class="flex-shrink-0" title="External deadline">{label}</span>
+                                }
+                            })}
+                            // Carryover badge: the date IS the question; ✓
+                            // keeps it on today. "No" is the existing ✕
+                            // (remove from today) in the action cluster.
+                            {carryover_from.map(|d| {
+                                let label = d.format("%b %-d").to_string();
+                                let title_attr = format!("Was focused on {label} — keep with ✓, or remove with ✕");
+                                view! {
+                                    <span class="inline-flex items-center gap-1 pl-1.5 pr-0.5 rounded-full \
+                                                 bg-amber-100 dark:bg-amber-950/50 \
+                                                 text-amber-700 dark:text-amber-400 flex-shrink-0"
+                                          data-testid="carryover-prompt"
+                                          title=title_attr>
+                                        "carried " {label}
+                                        <button
+                                            type="button"
+                                            class="material-symbols-outlined rounded-full \
+                                                   hover:bg-amber-200 dark:hover:bg-amber-900 \
+                                                   transition-colors cursor-pointer \
+                                                   disabled:opacity-50"
+                                            style="font-size:14px;padding:1px;"
+                                            prop:disabled=move || busy.get()
+                                            aria-label="Keep on today"
+                                            title="Keep on today (re-stamps the focus date)"
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                ev.stop_propagation();
+                                                patch_focus(Some(today), "Kept for today");
+                                            }
+                                        >"check"</button>
+                                    </span>
                                 }
                             })}
                         </div>
