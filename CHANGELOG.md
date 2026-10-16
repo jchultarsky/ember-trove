@@ -22,6 +22,16 @@ tokio task) indefinitely. All IdP calls (discovery, JWKS, token
 exchange/refresh, revocation, ChangePassword) now share a client with a 10 s
 total timeout, matching the webhook dispatcher.
 
+### Security — dependency advisories (cargo audit)
+Lockfile-only bumps clearing 12 RUSTSEC advisories published since v2.28.0:
+`ammonia` 4.1.4 → 4.2.3 (RUSTSEC-2021-0157/0158, sanitizer XSS + CSS `url()`
+escaping), `rustls` 0.23.40 → 0.23.46 (RUSTSEC-2026-0285/0346/0348/0349; pulls
+`aws-lc-rs` 1.18.2 / `aws-lc-sys` 0.46.0), `h2` 0.4.20 (RUSTSEC-2026-0258),
+`quinn-proto` 0.11.19 (RUSTSEC-2026-0338..0342), `event-listener` 5.4.2.
+Remaining informational warnings (not failures): `proc-macro-error2`
+unmaintained (RUSTSEC-2026-0173) and `lru` unsound (RUSTSEC-2026-0253), both
+transitive.
+
 ### Tests — Cognito additive token/discovery changes (rollout from 2026-11-04)
 Regression tests pin that `OidcClaims` and the OIDC discovery document parse
 tokens and metadata carrying Cognito's new `acr` / array-valued `amr` claims
