@@ -6,6 +6,57 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.28.1] - 2026-10-16
+
+### Security — JWKS refetch on unknown `kid` (key rotation)
+The JWKS cache previously refreshed only on its 1-hour TTL, so a Cognito
+signing-key rotation would reject every login until the cache lapsed. A token
+whose `kid` is missing from a fresh cache now triggers one refetch, rate-limited
+to once per 60 s (the `kid` is unauthenticated input, so forged kids cannot
+force a fetch per request). Concurrent requests share a single refetch, and a
+failed refetch keeps serving the still-valid cached set instead of failing auth.
+The cache policy is a pure function (`jwks_action`) with unit tests.
+
+### Security — timeout on all IdP HTTP calls
+The OIDC client was built with `reqwest::Client::new()`, which has no timeout,
+so a hung Cognito endpoint could pin a login/refresh/JWKS request (and its
+tokio task) indefinitely. All IdP calls (discovery, JWKS, token
+exchange/refresh, revocation, ChangePassword) now share a client with a 10 s
+total timeout, matching the webhook dispatcher.
+
+### Changed — local/e2e S3 is now SeaweedFS (MinIO images withdrawn)
+MinIO's community images (`minio/minio`, `minio/mc`) were removed from Docker
+Hub and quay, breaking `docker compose up` and the CI `e2e smoke` job. The dev,
+e2e and k8s stacks now run SeaweedFS (`chrislusf/seaweedfs:4.48`, Apache-2.0)
+as service `s3` on :9000 with the same credentials; `s3-init` creates the
+bucket idempotently. Production (AWS / Lightsail S3) is unaffected.
+- **Security:** the local bucket is now **private** — the old init made it
+  anonymously readable (`mc anonymous set download`), which was never needed
+  because the API serves downloads via presigned URLs.
+- The MinIO console (:9001) is gone. The old `deploy_miniodata` volume is no
+  longer used; remove it with `docker volume rm deploy_miniodata` once you no
+  longer need its local test attachments.
+- k8s: `deploy/k8s/minio.yaml` → `deploy/k8s/s3.yaml` (StatefulSet/Service
+  `s3`, readiness probe on `/healthz`); `S3_ENDPOINT` → `http://s3:9000`.
+
+### Security — dependency advisories (cargo audit)
+Lockfile-only bumps clearing 12 RUSTSEC advisories published since v2.28.0:
+`ammonia` 4.1.4 → 4.2.3 (RUSTSEC-2021-0157/0158, sanitizer XSS + CSS `url()`
+escaping), `rustls` 0.23.40 → 0.23.46 (RUSTSEC-2026-0285/0346/0348/0349; pulls
+`aws-lc-rs` 1.18.2 / `aws-lc-sys` 0.46.0), `h2` 0.4.20 (RUSTSEC-2026-0258),
+`quinn-proto` 0.11.19 (RUSTSEC-2026-0338..0342), `event-listener` 5.4.2.
+Remaining informational warnings (not failures): `proc-macro-error2`
+unmaintained (RUSTSEC-2026-0173) and `lru` unsound (RUSTSEC-2026-0253), both
+transitive.
+
+### Tests — Cognito additive token/discovery changes (rollout from 2026-11-04)
+Regression tests pin that `OidcClaims` and the OIDC discovery document parse
+tokens and metadata carrying Cognito's new `acr` / array-valued `amr` claims
+and `acr_values_supported` / `code_challenge_methods_supported` /
+`grant_types_supported` members. No behaviour change was needed: parsing
+already ignores unknown fields. The tests guard against a future
+`deny_unknown_fields` locking every user out.
+
 ## [2.28.0] - 2026-07-25
 
 ### Changed — graph node palette muted to earth tones

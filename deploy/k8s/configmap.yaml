@@ -4,7 +4,7 @@ metadata:
   name: ember-trove-config
   namespace: ember-trove
 data:
-  S3_ENDPOINT:       "http://minio:9000"
+  S3_ENDPOINT:       "http://s3:9000"
   S3_BUCKET:         "ember-trove"
   S3_REGION:         "us-east-1"
   OIDC_ISSUER:       "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_XXXXXXXXX"

@@ -295,8 +295,8 @@ All use **Material Symbols Outlined** icons.
 ## Deployment
 
 ### Local dev (`deploy/docker-compose.yml`)
-- PostgreSQL 16, MinIO (S3-compatible), api, ui services
-- MinIO-init creates bucket on first boot
+- PostgreSQL 16, SeaweedFS (S3-compatible), api, ui services
+- s3-init creates the private bucket on first boot
 - UI served on port 8003, API on 3003
 - `--env-file deploy/.env.local` for secrets
 

@@ -15,35 +15,39 @@ services:
       timeout: 5s
       retries: 10
 
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
+  # Local S3 (MinIO's community images were withdrawn from Docker Hub/quay in
+  # 2026). SeaweedFS: single container, S3 gateway on :9000; the admin identity
+  # comes from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY. Prod uses AWS S3.
+  s3:
+    image: chrislusf/seaweedfs:4.48
+    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=9000
     environment:
-      MINIO_ROOT_USER: ember_trove
-      MINIO_ROOT_PASSWORD: ember_trove_dev
+      AWS_ACCESS_KEY_ID: ember_trove
+      AWS_SECRET_ACCESS_KEY: ember_trove_dev
     ports:
       - "9000:9000"
-      - "9001:9001"
     volumes:
-      - miniodata:/data
+      - s3data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9000/healthz"]
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 20
 
   # Creates the S3 bucket on first boot so attachment uploads work immediately.
-  minio-init:
-    image: minio/mc
+  # The bucket stays PRIVATE: the API serves downloads via presigned URLs, so
+  # anonymous read access is never needed. Idempotent across restarts.
+  s3-init:
+    image: chrislusf/seaweedfs:4.48
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-        mc alias set local http://minio:9000 ember_trove ember_trove_dev &&
-        mc mb --ignore-existing local/ember-trove &&
-        mc anonymous set download local/ember-trove &&
-        echo 'MinIO bucket ready.'
+        out=$$(echo 's3.bucket.create -name ember-trove' | weed shell -master=s3:9333 2>&1);
+        echo \"$$out\";
+        echo \"$$out\" | grep -Eq 'created bucket|already exists' &&
+        echo 'S3 bucket ready.'
       "
     restart: on-failure
 
@@ -55,7 +59,7 @@ services:
     # See deploy/.env.local.example for the required variables.
     environment:
       DATABASE_URL: postgres://ember_trove:ember_trove_dev@postgres/ember_trove
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: http://s3:9000
       S3_BUCKET: ember-trove
       S3_ACCESS_KEY: ember_trove
       S3_SECRET_KEY: ember_trove_dev
@@ -84,7 +88,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-init:
+      s3-init:
         condition: service_completed_successfully
 
   ui:
@@ -98,4 +102,4 @@ services:
 
 volumes:
   pgdata:
-  miniodata:
+  s3data:
