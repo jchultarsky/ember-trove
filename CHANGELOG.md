@@ -22,6 +22,21 @@ tokio task) indefinitely. All IdP calls (discovery, JWKS, token
 exchange/refresh, revocation, ChangePassword) now share a client with a 10 s
 total timeout, matching the webhook dispatcher.
 
+### Changed — local/e2e S3 is now SeaweedFS (MinIO images withdrawn)
+MinIO's community images (`minio/minio`, `minio/mc`) were removed from Docker
+Hub and quay, breaking `docker compose up` and the CI `e2e smoke` job. The dev,
+e2e and k8s stacks now run SeaweedFS (`chrislusf/seaweedfs:4.48`, Apache-2.0)
+as service `s3` on :9000 with the same credentials; `s3-init` creates the
+bucket idempotently. Production (AWS / Lightsail S3) is unaffected.
+- **Security:** the local bucket is now **private** — the old init made it
+  anonymously readable (`mc anonymous set download`), which was never needed
+  because the API serves downloads via presigned URLs.
+- The MinIO console (:9001) is gone. The old `deploy_miniodata` volume is no
+  longer used; remove it with `docker volume rm deploy_miniodata` once you no
+  longer need its local test attachments.
+- k8s: `deploy/k8s/minio.yaml` → `deploy/k8s/s3.yaml` (StatefulSet/Service
+  `s3`, readiness probe on `/healthz`); `S3_ENDPOINT` → `http://s3:9000`.
+
 ### Security — dependency advisories (cargo audit)
 Lockfile-only bumps clearing 12 RUSTSEC advisories published since v2.28.0:
 `ammonia` 4.1.4 → 4.2.3 (RUSTSEC-2021-0157/0158, sanitizer XSS + CSS `url()`

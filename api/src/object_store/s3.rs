@@ -19,7 +19,7 @@ pub struct S3ObjectStore {
 
 impl S3ObjectStore {
     /// Build an S3ObjectStore. When `endpoint` is provided the client uses path-style
-    /// access (required for MinIO); otherwise the standard AWS region is used.
+    /// access (required for SeaweedFS/MinIO-style endpoints); otherwise the standard AWS region is used.
     pub fn new(
         bucket_name: &str,
         region: &str,

@@ -88,7 +88,7 @@ cargo check -p ui --target wasm32-unknown-unknown
 ## Project: Ember Trove
 
 Self-hosted, graph-centric PKM. Backend: Rust · Axum 0.8 · Tokio. Frontend: Leptos 0.8
-CSR/WASM · Tailwind v4. DB: PostgreSQL 16 · sqlx 0.8. Storage: S3 (MinIO/AWS). Auth: OIDC
+CSR/WASM · Tailwind v4. DB: PostgreSQL 16 · sqlx 0.8. Storage: S3 (SeaweedFS locally/AWS). Auth: OIDC
 via Cognito. Markdown: pulldown-cmark · ammonia. OpenAPI: utoipa. Edition 2024, toolchain
 pinned in `rust-toolchain.toml`.
 

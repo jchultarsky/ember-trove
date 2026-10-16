@@ -20,7 +20,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Markdown-native** — split-pane editor with collapsible live preview (auto-hidden on mobile), rendered via `pulldown-cmark` + `ammonia`. Wiki-link `[[title]]` syntax auto-creates edges and provides autocomplete. **Drag-and-drop or paste images** directly into the editor to upload and embed them inline.
 - **Full-text + fuzzy search** — PostgreSQL `tsvector` full-text search and `pg_trgm` trigram similarity, covering nodes, notes, and tasks. Length-normalised ranking with visual relevance indicator. Save and restore search presets.
 - **Multi-tag filtering** — AND/OR tag filters across node list, search results, and graph view. Tags can be attached directly from the node list without opening the node.
-- **S3 attachments** — bulk drag-and-drop upload; inline preview for images and PDFs. Stored in MinIO (local) or Lightsail Object Storage / AWS S3.
+- **S3 attachments** — bulk drag-and-drop upload; inline preview for images and PDFs. Stored in SeaweedFS (local) or Lightsail Object Storage / AWS S3.
 - **Tasks & My Day** — per-node task lists with create / toggle / edit / delete. Daily planning view aggregates today's tasks across all nodes.
 - **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed.
 - **Node versioning** — body snapshot on every save; version history timeline with one-click restore.
@@ -47,7 +47,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 | Backend     | Rust · Axum 0.8 · Tokio                 |
 | Frontend    | Leptos 0.8 CSR/WASM · Tailwind CSS v4   |
 | Database    | PostgreSQL 16 · sqlx 0.8               |
-| File Store  | S3-compatible (MinIO / Lightsail Object Storage / AWS S3) |
+| File Store  | S3-compatible (SeaweedFS locally / Lightsail Object Storage / AWS S3) |
 | Auth        | OIDC — Amazon Cognito (prod) / bundled Keycloak (local dev) |
 | Markdown    | pulldown-cmark · ammonia               |
 | OpenAPI     | utoipa + Swagger UI                     |
@@ -174,7 +174,7 @@ Cognito pool instead of the bundled Keycloak.
 
 ### Option A — Full Docker stack (recommended)
 
-Runs every service as a container: PostgreSQL, MinIO (local S3, bucket auto-created), the
+Runs every service as a container: PostgreSQL, SeaweedFS (local S3, private bucket auto-created), the
 API, and the UI (nginx serving the WASM SPA and proxying `/api/`).
 
 ```bash
@@ -195,12 +195,11 @@ Open **http://localhost:8003**. (First build is slow — Rust + WASM compile.)
 |------------|------------------------|-----------------------------------|
 | UI (nginx) | http://localhost:8003  | — (log in via Cognito)            |
 | API        | http://localhost:3003  | —                                 |
-| MinIO API  | http://localhost:9000  | `ember_trove` / `ember_trove_dev` |
-| MinIO UI   | http://localhost:9001  | `ember_trove` / `ember_trove_dev` |
+| S3 (SeaweedFS) | http://localhost:9000 | `ember_trove` / `ember_trove_dev` |
 | PostgreSQL | `localhost:5432`       | `ember_trove` / `ember_trove_dev` |
 
 Stop with `docker compose -f deploy/docker-compose.yml down` (add `-v` to also wipe the
-Postgres/MinIO volumes).
+Postgres/S3 volumes).
 
 ---
 
@@ -209,13 +208,11 @@ Postgres/MinIO volumes).
 Run only the backing services in Docker and the app from source — rebuilds are much faster
 than re-baking images.
 
-**1. Start Postgres + MinIO:**
+**1. Start Postgres + S3 (SeaweedFS):**
 
 ```bash
-docker compose -f deploy/docker-compose.yml up -d postgres minio
-# Create the S3 bucket (the API does not auto-create it in native mode):
-docker exec deploy-minio-1 mc alias set local http://localhost:9000 ember_trove ember_trove_dev
-docker exec deploy-minio-1 mc mb --ignore-existing local/ember-trove
+# s3-init creates the private `ember-trove` bucket (idempotent) and exits.
+docker compose -f deploy/docker-compose.yml up -d postgres s3 s3-init
 ```
 
 **2. Build and run the API** (migrations apply automatically on startup):
