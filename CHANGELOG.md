@@ -21,6 +21,16 @@ bucket idempotently. Production (AWS / Lightsail S3) is unaffected.
 - k8s: `deploy/k8s/minio.yaml` → `deploy/k8s/s3.yaml` (StatefulSet/Service
   `s3`, readiness probe on `/healthz`); `S3_ENDPOINT` → `http://s3:9000`.
 
+### Security — dependency advisories (cargo audit)
+Lockfile-only bumps clearing 12 RUSTSEC advisories published since v2.28.0:
+`ammonia` 4.1.4 → 4.2.3 (RUSTSEC-2021-0157/0158, sanitizer XSS + CSS `url()`
+escaping), `rustls` 0.23.40 → 0.23.46 (RUSTSEC-2026-0285/0346/0348/0349; pulls
+`aws-lc-rs` 1.18.2 / `aws-lc-sys` 0.46.0), `h2` 0.4.20 (RUSTSEC-2026-0258),
+`quinn-proto` 0.11.19 (RUSTSEC-2026-0338..0342), `event-listener` 5.4.2.
+Remaining informational warnings (not failures): `proc-macro-error2`
+unmaintained (RUSTSEC-2026-0173) and `lru` unsound (RUSTSEC-2026-0253), both
+transitive.
+
 ## [2.28.0] - 2026-07-25
 
 ### Changed — graph node palette muted to earth tones
