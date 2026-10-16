@@ -10,6 +10,20 @@ use crate::error::ApiError;
 /// TTL for JWKS cache — refresh after 1 hour to handle key rotation.
 const JWKS_TTL: Duration = Duration::from_secs(3600);
 
+/// Total per-request timeout for every IdP call (discovery, JWKS, token
+/// exchange/refresh, revocation, ChangePassword). `reqwest::Client::new()` has
+/// none, so a hung IdP would otherwise pin the request — and its tokio task —
+/// indefinitely.
+const IDP_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Build the HTTP client used for all IdP calls, bounded by `timeout`.
+fn idp_http_client(timeout: Duration) -> Result<reqwest::Client, ApiError> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| ApiError::Internal(format!("OIDC HTTP client build failed: {e}")))
+}
+
 /// True when the token endpoint belongs to AWS Cognito — the only provider
 /// whose proprietary `ChangePassword` service call we implement. Parses the
 /// URL and matches the HOST suffix (never a substring of the whole URL, so
@@ -24,10 +38,49 @@ fn is_cognito_token_endpoint(token_endpoint: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Cached JWKS with timestamp for TTL invalidation.
+/// Minimum spacing between JWKS refetches triggered by an unknown `kid`.
+/// The `kid` comes from an unauthenticated token header, so without this a
+/// stream of forged kids would turn every request into an upstream fetch.
+const JWKS_UNKNOWN_KID_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// Cached JWKS with timestamps for TTL invalidation and refetch rate-limiting.
 struct CachedJwks {
     jwks: JwkSet,
     fetched_at: Instant,
+    /// Last unknown-`kid` refetch attempt, successful or not — the cooldown
+    /// anchor. Set to `fetched_at` on every successful fetch.
+    last_forced_attempt: Instant,
+}
+
+/// What `get_jwks` should do for a given `kid`; see [`jwks_action`].
+#[derive(Debug, PartialEq, Eq)]
+enum JwksAction {
+    /// The cached set is fresh and either has the `kid` or is inside the
+    /// unknown-`kid` cooldown — use it as is.
+    UseCached,
+    /// Nothing cached or the TTL lapsed — fetch; a failure is an error.
+    Fetch,
+    /// The cache is fresh but lacks the `kid` (likely a key rotation) and the
+    /// cooldown has elapsed — refetch once; on failure keep the cached set.
+    RefreshForUnknownKid,
+}
+
+/// Pure JWKS cache policy: TTL refresh plus a rate-limited refetch on an
+/// unknown `kid`, so Cognito key rotation is picked up immediately rather than
+/// failing logins for up to `JWKS_TTL`.
+fn jwks_action(cached: Option<&CachedJwks>, kid: &str, now: Instant) -> JwksAction {
+    let Some(c) = cached else {
+        return JwksAction::Fetch;
+    };
+    if now.saturating_duration_since(c.fetched_at) >= JWKS_TTL {
+        return JwksAction::Fetch;
+    }
+    if c.jwks.find(kid).is_some()
+        || now.saturating_duration_since(c.last_forced_attempt) < JWKS_UNKNOWN_KID_COOLDOWN
+    {
+        return JwksAction::UseCached;
+    }
+    JwksAction::RefreshForUnknownKid
 }
 
 /// OIDC discovery document (subset of fields we need).
@@ -103,7 +156,7 @@ impl OidcClient {
         client_id: String,
         client_secret: String,
     ) -> Result<Self, ApiError> {
-        let http = reqwest::Client::new();
+        let http = idp_http_client(IDP_HTTP_TIMEOUT)?;
         let url = format!(
             "{}/.well-known/openid-configuration",
             issuer.trim_end_matches('/')
@@ -278,8 +331,6 @@ impl OidcClient {
     /// detailed reason is logged server-side to avoid leaking implementation
     /// details (key IDs, audience mismatches, etc.).
     pub async fn validate_token(&self, token: &str) -> Result<OidcClaims, ApiError> {
-        let jwks = self.get_jwks().await?;
-
         let header = jsonwebtoken::decode_header(token).map_err(|e| {
             tracing::warn!(%e, "JWT decode header failed");
             ApiError::Unauthorized("invalid token".to_string())
@@ -290,14 +341,12 @@ impl OidcClient {
             .as_deref()
             .ok_or_else(|| ApiError::Unauthorized("invalid token".to_string()))?;
 
-        let jwk = jwks
-            .keys
-            .iter()
-            .find(|k| k.common.key_id.as_deref() == Some(kid))
-            .ok_or_else(|| {
-                tracing::warn!(%kid, "JWT references unknown key ID");
-                ApiError::Unauthorized("invalid token".to_string())
-            })?;
+        let jwks = self.get_jwks(kid).await?;
+
+        let jwk = jwks.find(kid).ok_or_else(|| {
+            tracing::warn!(%kid, "JWT references unknown key ID");
+            ApiError::Unauthorized("invalid token".to_string())
+        })?;
 
         let decoding_key = DecodingKey::from_jwk(jwk).map_err(|e| {
             tracing::warn!(%e, %kid, "failed to derive decoding key from JWK");
@@ -414,17 +463,51 @@ impl OidcClient {
         }
     }
 
-    /// Fetch (and cache) the JWKS from the OIDC provider.
-    async fn get_jwks(&self) -> Result<JwkSet, ApiError> {
-        {
+    /// Return the JWKS to verify a token signed with `kid`, fetching from the
+    /// provider per [`jwks_action`] (TTL expiry, or a rate-limited refetch when
+    /// the `kid` is unknown — Cognito key rotation).
+    async fn get_jwks(&self, kid: &str) -> Result<JwkSet, ApiError> {
+        let action = {
             let cached = self.jwks.read().await;
-            if let Some(ref cached) = *cached
-                && cached.fetched_at.elapsed() < JWKS_TTL
-            {
-                return Ok(cached.jwks.clone());
+            let action = jwks_action(cached.as_ref(), kid, Instant::now());
+            if let (JwksAction::UseCached, Some(c)) = (&action, cached.as_ref()) {
+                return Ok(c.jwks.clone());
             }
+            action
+        };
+
+        if action == JwksAction::RefreshForUnknownKid {
+            // Claim the attempt under the write lock (re-checking, since another
+            // request may have just refreshed) so concurrent requests don't each
+            // hit the IdP — without holding the lock across the network call.
+            let fallback = {
+                let mut guard = self.jwks.write().await;
+                let now = Instant::now();
+                match guard.as_mut() {
+                    Some(c) if jwks_action(Some(c), kid, now) == action => {
+                        c.last_forced_attempt = now;
+                        c.jwks.clone()
+                    }
+                    Some(c) => return Ok(c.jwks.clone()),
+                    None => return self.fetch_and_cache_jwks().await,
+                }
+            };
+            // A failed rotation refetch must not take auth down: keep serving
+            // the still-valid cached set (the unknown kid is then rejected).
+            return match self.fetch_and_cache_jwks().await {
+                Ok(jwks) => Ok(jwks),
+                Err(e) => {
+                    tracing::warn!(%e, "JWKS refetch for unknown kid failed; using cached set");
+                    Ok(fallback)
+                }
+            };
         }
 
+        self.fetch_and_cache_jwks().await
+    }
+
+    /// Fetch the JWKS from the provider and replace the cache.
+    async fn fetch_and_cache_jwks(&self) -> Result<JwkSet, ApiError> {
         let jwks: JwkSet = self
             .http
             .get(&self.jwks_uri)
@@ -435,10 +518,12 @@ impl OidcClient {
             .await
             .map_err(|e| ApiError::Internal(format!("JWKS parse failed: {e}")))?;
 
+        let now = Instant::now();
         let mut cached = self.jwks.write().await;
         *cached = Some(CachedJwks {
             jwks: jwks.clone(),
-            fetched_at: Instant::now(),
+            fetched_at: now,
+            last_forced_attempt: now,
         });
 
         Ok(jwks)
@@ -466,6 +551,149 @@ mod tests {
         assert!(!is_cognito("https://x.amazonaws.com.evil.example/token"));
         // Unparseable input fails closed.
         assert!(!is_cognito("not a url"));
+    }
+
+    /// Cognito's additive token-claim rollout (from 2026-11-04) adds `acr` and
+    /// an array-valued `amr`. Claim parsing must ignore claims it does not read
+    /// — a `deny_unknown_fields` on `OidcClaims` would lock every user out.
+    #[test]
+    fn claims_tolerate_additive_cognito_claims() {
+        let payload = serde_json::json!({
+            "sub": "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111",
+            "iss": "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_x",
+            "aud": "client",
+            "token_use": "id",
+            "email": "jane@example.com",
+            "cognito:groups": ["admin"],
+            "iat": 1_790_000_000,
+            "exp": 1_790_003_600,
+            "acr": "urn:cognito:loa:4",
+            "amr": ["pwd", "otp", "mfa"],
+            "some_future_claim": { "nested": [1, 2, 3] }
+        });
+        let claims: super::OidcClaims =
+            serde_json::from_value(payload).expect("additive claims must not break parsing");
+        assert_eq!(claims.sub, "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111");
+        assert_eq!(claims.token_use.as_deref(), Some("id"));
+        assert_eq!(claims.groups, Some(vec!["admin".to_string()]));
+        assert_eq!(claims.exp, 1_790_003_600);
+    }
+
+    /// Same contract for `/.well-known/openid-configuration`: new optional
+    /// members (`acr_values_supported`, `code_challenge_methods_supported`,
+    /// `grant_types_supported`, …) must not fail discovery at startup.
+    #[test]
+    fn discovery_tolerates_additive_metadata() {
+        let doc = serde_json::json!({
+            "issuer": "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_x",
+            "authorization_endpoint": "https://auth.example/oauth2/authorize",
+            "token_endpoint": "https://auth.example/oauth2/token",
+            "jwks_uri": "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_x/.well-known/jwks.json",
+            "end_session_endpoint": "https://auth.example/logout",
+            "revocation_endpoint": "https://auth.example/oauth2/revoke",
+            "acr_values_supported": ["urn:cognito:loa:1", "urn:cognito:loa:4"],
+            "code_challenge_methods_supported": ["S256"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "some_future_member": { "x": true }
+        });
+        let d: super::OidcDiscovery =
+            serde_json::from_value(doc).expect("additive metadata must not break discovery");
+        assert_eq!(d.token_endpoint, "https://auth.example/oauth2/token");
+        assert!(d.jwks_uri.ends_with("/.well-known/jwks.json"));
+    }
+
+    /// A hung IdP must not hang auth: the client gives up after its timeout.
+    /// The listener accepts the connection but never answers.
+    #[tokio::test]
+    async fn idp_client_times_out_on_unresponsive_server() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _hold = tokio::spawn(async move {
+            let (_sock, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+
+        let client = super::idp_http_client(std::time::Duration::from_millis(200)).unwrap();
+        let started = std::time::Instant::now();
+        let err = client
+            .get(format!("http://{addr}/.well-known/jwks.json"))
+            .send()
+            .await
+            .expect_err("request to a silent server must fail");
+        assert!(err.is_timeout(), "expected a timeout, got {err:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    fn cached_with_kid(kid: &str, at: std::time::Instant) -> super::CachedJwks {
+        let jwks = serde_json::from_value(serde_json::json!({
+            "keys": [{ "kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig",
+                       "n": "AQAB", "e": "AQAB" }]
+        }))
+        .unwrap();
+        super::CachedJwks {
+            jwks,
+            fetched_at: at,
+            last_forced_attempt: at,
+        }
+    }
+
+    #[test]
+    fn jwks_action_fetches_when_nothing_cached() {
+        use super::{JwksAction, jwks_action};
+        let now = std::time::Instant::now();
+        assert_eq!(jwks_action(None, "k1", now), JwksAction::Fetch);
+    }
+
+    #[test]
+    fn jwks_action_uses_fresh_cache_for_known_kid() {
+        use super::{JwksAction, jwks_action};
+        let t0 = std::time::Instant::now();
+        let c = cached_with_kid("k1", t0);
+        let later = t0 + std::time::Duration::from_secs(600);
+        assert_eq!(jwks_action(Some(&c), "k1", later), JwksAction::UseCached);
+    }
+
+    #[test]
+    fn jwks_action_refetches_after_ttl_even_for_known_kid() {
+        use super::{JWKS_TTL, JwksAction, jwks_action};
+        let t0 = std::time::Instant::now();
+        let c = cached_with_kid("k1", t0);
+        assert_eq!(
+            jwks_action(Some(&c), "k1", t0 + JWKS_TTL),
+            JwksAction::Fetch
+        );
+    }
+
+    /// Key rotation: a token signed with a kid we have not seen yet triggers one
+    /// refetch instead of failing every login until the hourly TTL lapses.
+    #[test]
+    fn jwks_action_refreshes_for_unknown_kid_after_cooldown() {
+        use super::{JWKS_UNKNOWN_KID_COOLDOWN, JwksAction, jwks_action};
+        let t0 = std::time::Instant::now();
+        let c = cached_with_kid("k1", t0);
+        assert_eq!(
+            jwks_action(Some(&c), "k2", t0 + JWKS_UNKNOWN_KID_COOLDOWN),
+            JwksAction::RefreshForUnknownKid
+        );
+    }
+
+    /// SECURITY: the kid comes from an unauthenticated header, so a stream of
+    /// forged kids must not turn every request into an upstream JWKS fetch.
+    #[test]
+    fn jwks_action_rate_limits_unknown_kid_refetches() {
+        use super::{JWKS_UNKNOWN_KID_COOLDOWN, JwksAction, jwks_action};
+        let t0 = std::time::Instant::now();
+        let mut c = cached_with_kid("k1", t0);
+        // Just after a fetch: inside the cooldown.
+        let soon = t0 + JWKS_UNKNOWN_KID_COOLDOWN - std::time::Duration::from_secs(1);
+        assert_eq!(jwks_action(Some(&c), "forged", soon), JwksAction::UseCached);
+        // A forced attempt (even a failed one) restarts the cooldown.
+        let t1 = t0 + JWKS_UNKNOWN_KID_COOLDOWN;
+        c.last_forced_attempt = t1;
+        assert_eq!(
+            jwks_action(Some(&c), "forged", t1 + std::time::Duration::from_secs(1)),
+            JwksAction::UseCached
+        );
     }
 
     // Test-only RSA-2048 PUBLIC key (public keys are not secrets). The matching
