@@ -15,6 +15,13 @@ force a fetch per request). Concurrent requests share a single refetch, and a
 failed refetch keeps serving the still-valid cached set instead of failing auth.
 The cache policy is a pure function (`jwks_action`) with unit tests.
 
+### Security — timeout on all IdP HTTP calls
+The OIDC client was built with `reqwest::Client::new()`, which has no timeout,
+so a hung Cognito endpoint could pin a login/refresh/JWKS request (and its
+tokio task) indefinitely. All IdP calls (discovery, JWKS, token
+exchange/refresh, revocation, ChangePassword) now share a client with a 10 s
+total timeout, matching the webhook dispatcher.
+
 ### Tests — Cognito additive token/discovery changes (rollout from 2026-11-04)
 Regression tests pin that `OidcClaims` and the OIDC discovery document parse
 tokens and metadata carrying Cognito's new `acr` / array-valued `amr` claims

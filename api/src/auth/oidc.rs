@@ -10,6 +10,20 @@ use crate::error::ApiError;
 /// TTL for JWKS cache — refresh after 1 hour to handle key rotation.
 const JWKS_TTL: Duration = Duration::from_secs(3600);
 
+/// Total per-request timeout for every IdP call (discovery, JWKS, token
+/// exchange/refresh, revocation, ChangePassword). `reqwest::Client::new()` has
+/// none, so a hung IdP would otherwise pin the request — and its tokio task —
+/// indefinitely.
+const IDP_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Build the HTTP client used for all IdP calls, bounded by `timeout`.
+fn idp_http_client(timeout: Duration) -> Result<reqwest::Client, ApiError> {
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|e| ApiError::Internal(format!("OIDC HTTP client build failed: {e}")))
+}
+
 /// True when the token endpoint belongs to AWS Cognito — the only provider
 /// whose proprietary `ChangePassword` service call we implement. Parses the
 /// URL and matches the HOST suffix (never a substring of the whole URL, so
@@ -142,7 +156,7 @@ impl OidcClient {
         client_id: String,
         client_secret: String,
     ) -> Result<Self, ApiError> {
-        let http = reqwest::Client::new();
+        let http = idp_http_client(IDP_HTTP_TIMEOUT)?;
         let url = format!(
             "{}/.well-known/openid-configuration",
             issuer.trim_end_matches('/')
@@ -586,6 +600,28 @@ mod tests {
             serde_json::from_value(doc).expect("additive metadata must not break discovery");
         assert_eq!(d.token_endpoint, "https://auth.example/oauth2/token");
         assert!(d.jwks_uri.ends_with("/.well-known/jwks.json"));
+    }
+
+    /// A hung IdP must not hang auth: the client gives up after its timeout.
+    /// The listener accepts the connection but never answers.
+    #[tokio::test]
+    async fn idp_client_times_out_on_unresponsive_server() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _hold = tokio::spawn(async move {
+            let (_sock, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+
+        let client = super::idp_http_client(std::time::Duration::from_millis(200)).unwrap();
+        let started = std::time::Instant::now();
+        let err = client
+            .get(format!("http://{addr}/.well-known/jwks.json"))
+            .send()
+            .await
+            .expect_err("request to a silent server must fail");
+        assert!(err.is_timeout(), "expected a timeout, got {err:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     fn cached_with_kid(kid: &str, at: std::time::Instant) -> super::CachedJwks {
