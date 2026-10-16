@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.28.1] - 2026-10-16
+
 ### Security — JWKS refetch on unknown `kid` (key rotation)
 The JWKS cache previously refreshed only on its 1-hour TTL, so a Cognito
 signing-key rotation would reject every login until the cache lapsed. A token

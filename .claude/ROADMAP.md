@@ -3,7 +3,19 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-07-25)
+## Current state (2026-10-16)
+
+- **v2.28.1 shipped — Cognito forward-compat + CI unblock (PRs #85, #86):**
+  Cognito's additive `acr`/`amr` claims and new discovery members (rollout from
+  2026-11-04) need no change — regression tests pin the tolerance. JWKS now
+  refetches on an unknown `kid` (key rotation; rate-limited 60 s, shared
+  attempt, falls back to cache on failure) and all IdP HTTP calls have a 10 s
+  timeout. Lockfile cleared 12 RUSTSEC advisories (ammonia 4.2.3, rustls
+  0.23.46, h2, quinn-proto). MinIO's community images were withdrawn, so
+  local/e2e/k8s S3 is now SeaweedFS 4.48 (private bucket). Repo now allows
+  auto-merge and requires all 11 CI checks on develop+main.
+  Backlog: e2e trips the API write rate limiter (429) when run fast locally —
+  CI passes; consider an e2e-bypass-gated limiter budget if it reaches CI.
 
 - **v2.28.0 shipped — earth-tone graph palette (PR #73):** approved comp
   (brick-red variant) implemented; ember (Article) is the sole warm anchor,
