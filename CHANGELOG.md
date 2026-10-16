@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — e2e flakes from the API write rate limiter (HTTP 429)
+The Playwright suite shares one client IP and creates its fixtures through the
+API, so on fast runners it exceeded the production write budget (10 req/s,
+burst 100) and a random handful of specs failed — intermittently on develop CI
+once all 11 checks became required. The budget is now chosen by a pure
+`rate_limit_budget()`: the relaxed e2e budget requires **both** the
+`e2e-bypass` cargo feature (never in release images; checked via `cfg!` at
+compile time) **and** `E2E_AUTH_BYPASS=1` — the same double gate as the auth
+bypass — and logs a warning when active. Production limits are unchanged and
+pinned by a unit test.
+
 ## [2.28.1] - 2026-10-16
 
 ### Security — JWKS refetch on unknown `kid` (key rotation)

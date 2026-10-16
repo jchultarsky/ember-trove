@@ -45,6 +45,17 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   third-party images to exact tags so a registry change fails loudly in one place.
   (2026-10-16)
 
+### e2e: random specs fail with `"Too Many R"... is not valid JSON` / fixture `resp.ok()` false
+- **Symptom:** a different handful of Playwright specs fails each run (graph
+  fixtures, toasts, search presets); one surfaces `SyntaxError: Unexpected token
+  'T', "Too Many R"...`. More frequent on fast machines; intermittent in CI.
+- **Cause:** the API's write rate limiter (10 req/s, burst 100 per IP) — the
+  whole suite shares one client IP and creates fixtures via the API.
+- **Fix:** `rate_limit_budget` in `api/src/routes/mod.rs` relaxes the budget only
+  when compiled with `e2e-bypass` AND armed with `E2E_AUTH_BYPASS=1` (release
+  images can't select it). Don't "fix" this by retrying 429s in specs — that
+  hides real limiter regressions. (2026-10-16)
+
 ## Axum / API (HTTP)
 
 ### Browser-navigation endpoint renders JSON or a blank page

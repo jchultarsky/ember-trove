@@ -10,6 +10,9 @@
 #   E2E_AUTH_BYPASS=1, so every request is authenticated as a synthetic test
 #   user — no Cognito session needed. Production images are never built with
 #   this feature (deploy/Dockerfile.api defaults CARGO_FEATURES to empty).
+# * The same feature+env double gate also relaxes the API's write rate
+#   limiter (api/src/routes/mod.rs `rate_limit_budget`): the suite shares one
+#   client IP and outran the production budget (HTTP 429 flakes).
 # * OIDC is blanked (empty value == unset, see api/src/config.rs `optional`),
 #   so the stack runs fully offline.
 # * Postgres data is ephemeral (tmpfs) — every `up` starts from a clean
