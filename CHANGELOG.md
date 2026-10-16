@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — local/e2e S3 is now SeaweedFS (MinIO images withdrawn)
+MinIO's community images (`minio/minio`, `minio/mc`) were removed from Docker
+Hub and quay, breaking `docker compose up` and the CI `e2e smoke` job. The dev,
+e2e and k8s stacks now run SeaweedFS (`chrislusf/seaweedfs:4.48`, Apache-2.0)
+as service `s3` on :9000 with the same credentials; `s3-init` creates the
+bucket idempotently. Production (AWS / Lightsail S3) is unaffected.
+- **Security:** the local bucket is now **private** — the old init made it
+  anonymously readable (`mc anonymous set download`), which was never needed
+  because the API serves downloads via presigned URLs.
+- The MinIO console (:9001) is gone. The old `deploy_miniodata` volume is no
+  longer used; remove it with `docker volume rm deploy_miniodata` once you no
+  longer need its local test attachments.
+- k8s: `deploy/k8s/minio.yaml` → `deploy/k8s/s3.yaml` (StatefulSet/Service
+  `s3`, readiness probe on `/healthz`); `S3_ENDPOINT` → `http://s3:9000`.
+
 ## [2.28.0] - 2026-07-25
 
 ### Changed — graph node palette muted to earth tones

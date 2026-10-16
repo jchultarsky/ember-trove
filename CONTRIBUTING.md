@@ -32,7 +32,7 @@ cargo install sqlx-cli --features postgres
 
 ```bash
 # Backing services only (the API auto-applies migrations on startup):
-docker compose -f deploy/docker-compose.yml up -d postgres minio
+docker compose -f deploy/docker-compose.yml up -d postgres s3 s3-init
 ```
 
 See [README.md](README.md#running-locally) for the full guide — both the Docker and native

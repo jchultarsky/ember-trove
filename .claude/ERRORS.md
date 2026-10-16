@@ -32,6 +32,19 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 - **Fix:** `.cargo/audit.toml` is the **single source of truth**; CI runs bare
   `cargo audit`. Never add inline `--ignore`. Each ignore is transitive-only and dated. — 2026-05-29
 
+### e2e/dev stack: `pull access denied for minio/minio`
+- **Symptom:** `e2e smoke` fails in ~6 s at `docker compose up` with
+  `pull access denied for minio/minio, repository does not exist` (also `minio/mc`).
+- **Cause:** MinIO withdrew its community images from Docker Hub and quay
+  (2026); there is no tag to pin back to.
+- **Fix:** local/e2e/k8s S3 is SeaweedFS (`chrislusf/seaweedfs`, pinned tag) —
+  service `s3` on :9000, admin identity from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`,
+  `-ip.bind=0.0.0.0` (else in-container healthchecks get "connection refused"),
+  private bucket created by `s3-init` via `weed shell` (`s3.bucket.create`; it
+  prints "already exists" with exit 0 on re-run, so grep the output). Pin
+  third-party images to exact tags so a registry change fails loudly in one place.
+  (2026-10-16)
+
 ## Axum / API (HTTP)
 
 ### Browser-navigation endpoint renders JSON or a blank page
