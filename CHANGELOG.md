@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — UI image installs a pinned, checksum-verified trunk
+`deploy/Dockerfile.ui` piped an unpinned installer script from cargo-binstall's
+`main` branch into `bash` and installed whatever trunk was latest. When the
+binary download timed out (develop CI, 2026-10-16) binstall fell back to
+`cargo install trunk` without `--locked`, resolved newer dependencies
+(`lightningcss` vs `cssparser`) and failed to compile, breaking the e2e job — and
+the same Dockerfile builds the release image. The image now downloads the
+trunk **0.21.14** release binary for the build arch (x86_64 / aarch64),
+verifies its **SHA-256** (published values cross-checked against the
+tarballs), retries transient network errors, and never builds from source.
+Native-mode docs now pin `cargo install trunk --version 0.21.14 --locked`.
+
 ### Fixed — e2e flakes from the API write rate limiter (HTTP 429)
 The Playwright suite shares one client IP and creates its fixtures through the
 API, so on fast runners it exceeded the production write budget (10 req/s,

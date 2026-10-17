@@ -133,7 +133,7 @@ Options A and B need an OIDC identity provider for login — see **[Auth: bring 
 | Docker Desktop | latest | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
 | Rust | stable ≥ 1.91.1 | [rustup.rs](https://rustup.rs) — *native mode only* |
 | wasm32 target | — | `rustup target add wasm32-unknown-unknown` — *native mode only* |
-| Trunk | latest | `cargo install trunk` — *native mode only* |
+| Trunk | 0.21.14 (pinned in `deploy/Dockerfile.ui`) | `cargo install trunk --version 0.21.14 --locked` — *native mode only* |
 | sqlx-cli | latest | `cargo install sqlx-cli --features postgres` — *only to author new migrations* |
 
 > **Note:** `aws-sdk-s3` requires Rust ≥ 1.91.1. Run `rustup update stable` if your toolchain is older.
