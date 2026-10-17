@@ -24,7 +24,7 @@ instead — see [SECURITY.md](SECURITY.md).
 
 ```bash
 rustup target add wasm32-unknown-unknown
-cargo install trunk
+cargo install trunk --version 0.21.14 --locked  # match deploy/Dockerfile.ui
 cargo install sqlx-cli --features postgres
 ```
 

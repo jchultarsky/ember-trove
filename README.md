@@ -50,7 +50,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 | File Store  | S3-compatible (SeaweedFS locally / Lightsail Object Storage / AWS S3) |
 | Auth        | OIDC — Amazon Cognito (prod) / bundled Keycloak (local dev) |
 | Markdown    | pulldown-cmark · ammonia               |
-| OpenAPI     | utoipa + Swagger UI                     |
+| OpenAPI     | utoipa (schema annotations)             |
 | Build       | Trunk (UI) · cargo workspace            |
 | Deploy      | Docker multi-stage · Kubernetes         |
 
@@ -133,7 +133,7 @@ Options A and B need an OIDC identity provider for login — see **[Auth: bring 
 | Docker Desktop | latest | [docs.docker.com/get-docker](https://docs.docker.com/get-docker/) |
 | Rust | stable ≥ 1.91.1 | [rustup.rs](https://rustup.rs) — *native mode only* |
 | wasm32 target | — | `rustup target add wasm32-unknown-unknown` — *native mode only* |
-| Trunk | latest | `cargo install trunk` — *native mode only* |
+| Trunk | 0.21.14 (pinned in `deploy/Dockerfile.ui`) | `cargo install trunk --version 0.21.14 --locked` — *native mode only* |
 | sqlx-cli | latest | `cargo install sqlx-cli --features postgres` — *only to author new migrations* |
 
 > **Note:** `aws-sdk-s3` requires Rust ≥ 1.91.1. Run `rustup update stable` if your toolchain is older.
@@ -238,7 +238,6 @@ cargo run -p api
 ```
 
 Verify: `curl http://localhost:3003/api/health` → `{"status":"ok",...}`.
-Swagger UI (loopback only): **http://localhost:3003/swagger-ui/**.
 
 **3. Build and run the UI dev server** (`ui/Trunk.toml` proxies `/api` → `localhost:3003`):
 
@@ -331,7 +330,7 @@ make verify             # or ./scripts/verify.sh — runs the full suite below
 
 ## API Reference
 
-All routes are nested under `/api`. Interactive docs at `/swagger-ui/` when the API is running.
+All routes are nested under `/api`.
 
 ### Auth (public)
 

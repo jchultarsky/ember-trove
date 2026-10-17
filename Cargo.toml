@@ -49,7 +49,6 @@ tower_governor = { version = "0.8", features = ["axum"] }
 
 # OpenAPI
 utoipa            = { version = "5", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
 # Auth / JWT
 # jsonwebtoken 10 has NO built-in crypto backend (unlike 9's bundled ring): a

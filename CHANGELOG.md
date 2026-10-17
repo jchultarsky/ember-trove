@@ -6,6 +6,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — ammonia 4.2.4, zip 9 (new advisories)
+- `ammonia` 4.2.3 → 4.2.4 (RUSTSEC-2026-0373: CSS `url(` matched
+  case-sensitively — sanitizer bypass).
+- Direct `zip` dependency 8 → 9.0.4 (RUSTSEC-2026-0367/0368/0369: extraction
+  symlink escape, SUID bits, permissions through symlinks). Ember Trove only
+  *writes* ZIPs (`routes/export.rs`), so it never hit the extraction paths, but
+  the vulnerable crate is gone from the runtime graph. zip 9's `name()` now
+  returns `Result`; the export test helper was updated.
+- Removed the unused `utoipa-swagger-ui` dependency. Its build script pulled
+  `zip` 3.0.0 (same three advisories) to unpack a Swagger UI bundle that was
+  never mounted: no route served `/swagger-ui/`, despite README saying so (README
+  corrected). Removal beats suppression: `cargo audit` is clean with no new
+  ignores, and `Cargo.lock` sheds ~100 lines. The prod nginx deny rule for
+  `/swagger-ui` and `/api-docs` stays as defense in depth.
+
+### Security — UI image installs a pinned, checksum-verified trunk
+`deploy/Dockerfile.ui` piped an unpinned installer script from cargo-binstall's
+`main` branch into `bash` and installed whatever trunk was latest. When the
+binary download timed out (develop CI, 2026-10-16) binstall fell back to
+`cargo install trunk` without `--locked`, resolved newer dependencies
+(`lightningcss` vs `cssparser`) and failed to compile, breaking the e2e job — and
+the same Dockerfile builds the release image. The image now downloads the
+trunk **0.21.14** release binary for the build arch (x86_64 / aarch64),
+verifies its **SHA-256** (published values cross-checked against the
+tarballs), retries transient network errors, and never builds from source.
+Native-mode docs now pin `cargo install trunk --version 0.21.14 --locked`.
+
 ### Fixed — e2e flakes from the API write rate limiter (HTTP 429)
 The Playwright suite shares one client IP and creates its fixtures through the
 API, so on fast runners it exceeded the production write budget (10 req/s,

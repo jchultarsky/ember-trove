@@ -5,12 +5,34 @@ RUN apt-get update && apt-get install -y \
     pkg-config libssl-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cargo-binstall, then use it to download the pre-built trunk binary
-# (avoids compiling trunk from source, saving 10+ minutes in CI)
-RUN curl -L --proto '=https' --tlsv1.2 -sSf \
-    https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh \
-    | bash \
-    && cargo binstall -y trunk
+# Install a PINNED, checksum-verified trunk release binary.
+# SECURITY / reproducibility (2026-10-16): this replaced `curl … binstall
+# script from main | bash && cargo binstall trunk`, which ran an unpinned
+# script and installed whatever trunk was latest. When binstall's download
+# timed out it fell back to `cargo install trunk` WITHOUT --locked, resolved
+# newer deps (lightningcss vs cssparser) and broke the build (develop CI,
+# 2026-10-16). Now: exact version, published SHA-256s (cross-checked against
+# the downloaded tarballs), transient network errors retried, never a source
+# build. To bump: update TRUNK_VERSION and both checksums from the release's
+# `<asset>.sha256` files, and verify them against the tarballs.
+ARG TRUNK_VERSION=0.21.14
+ARG TRUNK_SHA256_X86_64=f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
+ARG TRUNK_SHA256_AARCH64=b1d8e60e454f7fc182d9a4d95d1506ffbae947d8ba90f8f6f02da93b60f980f9
+RUN set -eu; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64)  sha="$TRUNK_SHA256_X86_64" ;; \
+      aarch64) sha="$TRUNK_SHA256_AARCH64" ;; \
+      *) echo "unsupported build arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    asset="trunk-${arch}-unknown-linux-gnu.tar.gz"; \
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 3 \
+      -o "/tmp/$asset" \
+      "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/${asset}"; \
+    echo "$sha  /tmp/$asset" | sha256sum -c -; \
+    tar -xzf "/tmp/$asset" -C /usr/local/bin trunk; \
+    rm "/tmp/$asset"; \
+    trunk --version
 
 RUN rustup target add wasm32-unknown-unknown
 

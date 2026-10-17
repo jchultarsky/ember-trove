@@ -307,7 +307,7 @@ All use **Material Symbols Outlined** icons.
 
 ### Docker images — multi-stage builds
 - **API**: `rust:latest` → `debian:trixie-slim`. Dependency caching via stub sources.
-- **UI**: `rust:latest` (with `trunk` via `cargo-binstall`) → `nginx:alpine`
+- **UI**: `rust:latest` (pinned, SHA-256-verified `trunk` release binary) → `nginx:alpine`
 
 ---
 
