@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — command palette sometimes ignored Escape
+Escape only closed the Cmd-K palette when focus was inside it, and the input
+was focused on the next animation frame after opening — so an Escape pressed in
+that window (or after clicking the panel chrome) was silently dropped. This was
+the intermittent `palette.spec.ts` "closes on Esc" e2e failure. The global
+keyboard dispatcher now closes the palette on Escape regardless of focus
+(priority resolved by a pure, unit-tested `common::keyboard::escape_target`:
+palette → help → node-page back), the panel's own handler stops propagation so
+Escape is never handled twice, and the input is focused as soon as it mounts
+instead of on a (throttleable) animation frame. New e2e regression: Escape with
+the input blurred still closes the palette.
+
 ### Fixed — e2e flakes from the API write rate limiter (HTTP 429)
 The Playwright suite shares one client IP and creates its fixtures through the
 API, so on fast runners it exceeded the production write budget (10 req/s,
