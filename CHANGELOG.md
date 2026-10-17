@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — ammonia 4.2.4, zip 9 (new advisories)
+- `ammonia` 4.2.3 → 4.2.4 (RUSTSEC-2026-0373: CSS `url(` matched
+  case-sensitively — sanitizer bypass).
+- Direct `zip` dependency 8 → 9.0.4 (RUSTSEC-2026-0367/0368/0369: extraction
+  symlink escape, SUID bits, permissions through symlinks). Ember Trove only
+  *writes* ZIPs (`routes/export.rs`), so it never hit the extraction paths, but
+  the vulnerable crate is gone from the runtime graph. zip 9's `name()` now
+  returns `Result`; the export test helper was updated.
+
 ### Security — UI image installs a pinned, checksum-verified trunk
 `deploy/Dockerfile.ui` piped an unpinned installer script from cargo-binstall's
 `main` branch into `bash` and installed whatever trunk was latest. When the
