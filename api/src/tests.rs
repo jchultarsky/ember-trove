@@ -1427,7 +1427,14 @@ fn zip_entry_names(bytes: &[u8]) -> Vec<String> {
     let cursor = std::io::Cursor::new(bytes.to_vec());
     let mut archive = zip::ZipArchive::new(cursor).expect("valid zip archive");
     (0..archive.len())
-        .map(|i| archive.by_index(i).expect("zip entry").name().to_string())
+        .map(|i| {
+            archive
+                .by_index(i)
+                .expect("zip entry")
+                .name()
+                .expect("valid entry name") // zip 9: name() validates and returns Result
+                .to_string()
+        })
         .collect()
 }
 

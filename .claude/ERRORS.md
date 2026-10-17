@@ -56,6 +56,19 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   images can't select it). Don't "fix" this by retrying 429s in specs — that
   hides real limiter regressions. (2026-10-16)
 
+### UI image build: `CSSString<'i>: cssparser::serializer::ToCss` not satisfied (lightningcss)
+- **Symptom:** `docker build -f deploy/Dockerfile.ui` (e2e job or release) fails
+  compiling trunk; log shows `cargo-binstall: WARN Timeout reached while checking
+  fetcher` then `will be installed from source`.
+- **Cause:** binstall's download timed out and it fell back to `cargo install
+  trunk` WITHOUT `--locked`, pulling a newer `cssparser` that `lightningcss`
+  alpha doesn't build against.
+- **Fix:** the Dockerfile now curls a pinned trunk release binary and checks
+  its SHA-256 (no binstall, no source fallback). Bumping trunk = update
+  `TRUNK_VERSION` + both checksums from the release's `.sha256` assets, verified
+  against the tarballs. Any `cargo install` of a binary tool: use `--locked`.
+  (2026-10-16)
+
 ## Axum / API (HTTP)
 
 ### Browser-navigation endpoint renders JSON or a blank page
