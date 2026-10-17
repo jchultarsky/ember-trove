@@ -24,10 +24,31 @@ test('opens with Cmd+K, lists capture commands on empty query, closes on Esc', a
 
   const input = page.getByPlaceholder(PALETTE_INPUT);
   await expect(input).toBeVisible();
+  // Autofocus contract: typing right after ⌘K lands in the query.
+  await expect(input).toBeFocused();
   await expect(page.getByRole('button', { name: /New task \(quick capture\)/ })).toBeVisible();
 
   await page.keyboard.press('Escape');
   await expect(input).not.toBeVisible();
+});
+
+test('Esc closes the palette even when focus is outside the input', async ({ page }) => {
+  // Regression (2026-10-17 flake): Escape was only handled by the panel's own
+  // keydown, which needs focus inside it. Focus lands asynchronously after
+  // open, so an Escape in that window — or after focus leaves the input —
+  // reached the window dispatcher, which ignored the palette. Blurring
+  // reproduces the race deterministically.
+  await gotoApp(page, '/tasks/my-day');
+  await page.keyboard.press('ControlOrMeta+k');
+
+  const input = page.getByPlaceholder(PALETTE_INPUT);
+  await expect(input).toBeFocused();
+  await input.blur();
+  await expect(input).not.toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(input).not.toBeVisible();
+  await expect(page).toHaveURL(/\/tasks\/my-day$/);
 });
 
 test('matches commands by synonym and dispatches navigation', async ({ page }) => {

@@ -34,7 +34,6 @@ use common::search::SearchResult;
 use leptos::html;
 use leptos::portal::Portal;
 use leptos::prelude::*;
-use leptos::wasm_bindgen::{JsCast, closure::Closure};
 use leptos_router::hooks::{use_location, use_navigate};
 use wasm_bindgen_futures::spawn_local;
 
@@ -374,7 +373,7 @@ mod tests {
 
 /// `CommandPalette` is rendered once at the layout root and toggled
 /// open/closed via the `show` signal.  When opened, the input
-/// autofocuses on the next animation frame.
+/// autofocuses as soon as it mounts.
 ///
 /// Props:
 /// * `show`     — visibility signal driven by the global hotkey handler.
@@ -405,24 +404,26 @@ pub fn CommandPalette(
     let theme = use_context::<RwSignal<Theme>>();
     let refresh = use_context::<RwSignal<u32>>();
 
-    // Reset state every time the palette opens, populate Recent from
-    // localStorage, and focus the input on the next animation frame
-    // (the input doesn't exist in the DOM yet at the moment `show`
-    // flips to true).
+    // Reset state every time the palette opens and populate Recent from
+    // localStorage.
     Effect::new(move |_| {
         if show.get() {
             query.set(String::new());
             results.set(Vec::new());
             recent.set(read_recent());
             highlight.set(0);
-            if let Some(win) = web_sys::window() {
-                let cb = Closure::once_into_js(move || {
-                    if let Some(el) = input_ref.get_untracked() {
-                        let _ = el.focus();
-                    }
-                });
-                let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
-            }
+        }
+    });
+
+    // Autofocus the input as soon as it mounts. Tracking the NodeRef (not a
+    // `requestAnimationFrame` callback, which headless/background tabs
+    // throttle) re-runs this the moment `<Show>` inserts a fresh input, so
+    // focus no longer trails the palette becoming visible (2026-10-17 flake).
+    Effect::new(move |_| {
+        if show.get()
+            && let Some(el) = input_ref.get()
+        {
+            let _ = el.focus();
         }
     });
 
@@ -591,6 +592,11 @@ pub fn CommandPalette(
     let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
         "Escape" => {
             ev.prevent_default();
+            // Handled here: don't let it bubble to the window dispatcher,
+            // which (palette now closed) would treat it as "back" on a node
+            // page. The dispatcher only closes the palette when focus is
+            // outside it — see `common::keyboard::escape_target`.
+            ev.stop_propagation();
             on_close.run(());
         }
         "ArrowDown" => {

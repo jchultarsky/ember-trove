@@ -164,6 +164,23 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 - **Fix:** `let navigate = StoredValue::new(use_navigate());` then
   `navigate.get_value()("/path", Default::default())`. — (carried from CLAUDE.md)
 
+### Overlay ignores Escape intermittently (palette e2e flake)
+- **Symptom:** `palette.spec.ts` › "…closes on Esc" times out on
+  `expect(input).not.toBeVisible()` — the palette stays open after
+  `keyboard.press('Escape')`; the immediate re-run passes.
+- **Cause:** Escape was handled only by the panel's own `on:keydown`, which needs
+  focus *inside* the panel, while the input was focused in a
+  `requestAnimationFrame` callback after open. Playwright's `toBeVisible()` checks
+  layout, not paint, so it can pass — and the Escape fire — before that frame
+  (rAF is throttled in loaded/headless runners). The key then reached the window
+  dispatcher, whose Escape arm knew only help + node-page back-nav.
+- **Fix:** every exclusive overlay must be closable from the window dispatcher
+  regardless of focus (`common::keyboard::escape_target`, palette first); the
+  panel handler `stop_propagation()`s so the two never both run (otherwise the
+  now-closed palette lets Escape fall through to "back" on `/nodes/*`). Focus on
+  mount by tracking the `NodeRef` in an `Effect`, not via rAF. Specs assert
+  `toBeFocused()` before relying on focus-dependent keys. — 2026-10-17
+
 ### Graph auto-arrange spinner hangs forever
 - **Symptom:** clicking auto-arrange in the graph spins indefinitely — no PUT fires, no error
   toast, spinner never clears.

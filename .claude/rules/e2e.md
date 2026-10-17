@@ -27,6 +27,9 @@ CI job is too slow a feedback loop for selector work.
   `page.locator('main')` to be visible after `goto` before pressing keys
   (`gotoApp` helper in palette.spec.ts). Clicking a real element first
   (auto-waiting) achieves the same.
+- **Visible ≠ focused** (2026-10-17, palette spec): `toBeVisible()` checks
+  layout, not focus — before pressing a key whose handler needs focus, assert
+  `await expect(input).toBeFocused()`. Better still, make the UI not need it.
 - **Element refs go stale across re-renders** — a list refetch between a
   `find` and a click invalidates refs. Re-locate just before acting, or drive
   the assertion through `expect(locator)` auto-waiting.
