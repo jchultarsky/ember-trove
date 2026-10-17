@@ -14,6 +14,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   *writes* ZIPs (`routes/export.rs`), so it never hit the extraction paths, but
   the vulnerable crate is gone from the runtime graph. zip 9's `name()` now
   returns `Result`; the export test helper was updated.
+- Removed the unused `utoipa-swagger-ui` dependency. Its build script pulled
+  `zip` 3.0.0 (same three advisories) to unpack a Swagger UI bundle that was
+  never mounted: no route served `/swagger-ui/`, despite README saying so (README
+  corrected). Removal beats suppression: `cargo audit` is clean with no new
+  ignores, and `Cargo.lock` sheds ~100 lines. The prod nginx deny rule for
+  `/swagger-ui` and `/api-docs` stays as defense in depth.
 
 ### Security — UI image installs a pinned, checksum-verified trunk
 `deploy/Dockerfile.ui` piped an unpinned installer script from cargo-binstall's
