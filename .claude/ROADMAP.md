@@ -3,7 +3,17 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-16)
+## Current state (2026-10-17)
+
+- **v2.28.2 shipped — security deps + build/e2e hardening (PRs #88, #90, #91):**
+  ammonia 4.2.4 (RUSTSEC-2026-0373, CSS `url(` sanitizer bypass); direct `zip`
+  8 → 9 and the unused `utoipa-swagger-ui` removed (it pulled vulnerable zip
+  3.0.0 at build time and was never mounted) — `cargo audit` clean, no new
+  ignores. `Dockerfile.ui` installs a pinned, SHA-256-verified trunk 0.21.14
+  binary (no more unpinned `curl | bash` binstall + unlocked source fallback).
+  e2e flakes fixed: write rate limit relaxed only in armed e2e-bypass builds
+  (resolves the v2.28.1 backlog note), and the palette now closes on Escape
+  regardless of focus timing.
 
 - **v2.28.1 shipped — Cognito forward-compat + CI unblock (PRs #85, #86):**
   Cognito's additive `acr`/`amr` claims and new discovery members (rollout from
