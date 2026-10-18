@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.28.2] - 2026-10-17
+
 ### Security — ammonia 4.2.4, zip 9 (new advisories)
 - `ammonia` 4.2.3 → 4.2.4 (RUSTSEC-2026-0373: CSS `url(` matched
   case-sensitively — sanitizer bypass).
