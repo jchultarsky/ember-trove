@@ -152,6 +152,36 @@ pub fn match_global(
     None
 }
 
+/// What a global [`GlobalAction::Escape`] should do, innermost layer first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EscapeTarget {
+    ClosePalette,
+    CloseHelp,
+    /// Leave a node page for the node list.
+    BackToNodes,
+}
+
+/// Resolve the window-level Escape. The palette is closed here too, not only
+/// by its own panel handler: that one needs focus inside the panel, and focus
+/// lands asynchronously after open — an Escape in that window (or after the
+/// user clicks the panel chrome) used to be silently dropped (e2e flake,
+/// 2026-10-17). The panel handler stops propagation, so the two never both run.
+pub fn escape_target(
+    palette_open: bool,
+    help_open: bool,
+    on_node_page: bool,
+) -> Option<EscapeTarget> {
+    if palette_open {
+        Some(EscapeTarget::ClosePalette)
+    } else if help_open {
+        Some(EscapeTarget::CloseHelp)
+    } else if on_node_page {
+        Some(EscapeTarget::BackToNodes)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::target_is_editable;
@@ -275,6 +305,43 @@ mod tests {
             match_global("k", true, false, false, false, true),
             Some(GlobalAction::TogglePalette)
         );
+    }
+
+    // ── escape_target ────────────────────────────────────────────────────────
+    use super::{EscapeTarget, escape_target};
+
+    #[test]
+    fn escape_closes_palette_first() {
+        // The palette closes from the window dispatcher regardless of focus —
+        // the 2026-10-17 e2e flake: Escape pressed before the input received
+        // focus fell through to here and was ignored.
+        for help in [false, true] {
+            for node_page in [false, true] {
+                assert_eq!(
+                    escape_target(true, help, node_page),
+                    Some(EscapeTarget::ClosePalette)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn escape_closes_help_when_no_palette() {
+        for node_page in [false, true] {
+            assert_eq!(
+                escape_target(false, true, node_page),
+                Some(EscapeTarget::CloseHelp)
+            );
+        }
+    }
+
+    #[test]
+    fn escape_backs_out_of_node_pages_only_with_no_overlay() {
+        assert_eq!(
+            escape_target(false, false, true),
+            Some(EscapeTarget::BackToNodes)
+        );
+        assert_eq!(escape_target(false, false, false), None);
     }
 
     /// Anti-drift guarantee: every registry row is reachable through

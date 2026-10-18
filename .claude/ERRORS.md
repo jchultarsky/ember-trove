@@ -45,6 +45,30 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   third-party images to exact tags so a registry change fails loudly in one place.
   (2026-10-16)
 
+### e2e: random specs fail with `"Too Many R"... is not valid JSON` / fixture `resp.ok()` false
+- **Symptom:** a different handful of Playwright specs fails each run (graph
+  fixtures, toasts, search presets); one surfaces `SyntaxError: Unexpected token
+  'T', "Too Many R"...`. More frequent on fast machines; intermittent in CI.
+- **Cause:** the API's write rate limiter (10 req/s, burst 100 per IP) — the
+  whole suite shares one client IP and creates fixtures via the API.
+- **Fix:** `rate_limit_budget` in `api/src/routes/mod.rs` relaxes the budget only
+  when compiled with `e2e-bypass` AND armed with `E2E_AUTH_BYPASS=1` (release
+  images can't select it). Don't "fix" this by retrying 429s in specs — that
+  hides real limiter regressions. (2026-10-16)
+
+### UI image build: `CSSString<'i>: cssparser::serializer::ToCss` not satisfied (lightningcss)
+- **Symptom:** `docker build -f deploy/Dockerfile.ui` (e2e job or release) fails
+  compiling trunk; log shows `cargo-binstall: WARN Timeout reached while checking
+  fetcher` then `will be installed from source`.
+- **Cause:** binstall's download timed out and it fell back to `cargo install
+  trunk` WITHOUT `--locked`, pulling a newer `cssparser` that `lightningcss`
+  alpha doesn't build against.
+- **Fix:** the Dockerfile now curls a pinned trunk release binary and checks
+  its SHA-256 (no binstall, no source fallback). Bumping trunk = update
+  `TRUNK_VERSION` + both checksums from the release's `.sha256` assets, verified
+  against the tarballs. Any `cargo install` of a binary tool: use `--locked`.
+  (2026-10-16)
+
 ## Axum / API (HTTP)
 
 ### Browser-navigation endpoint renders JSON or a blank page
@@ -139,6 +163,23 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 - **Cause:** `NavigateFn` is `Clone`, not `Copy`.
 - **Fix:** `let navigate = StoredValue::new(use_navigate());` then
   `navigate.get_value()("/path", Default::default())`. — (carried from CLAUDE.md)
+
+### Overlay ignores Escape intermittently (palette e2e flake)
+- **Symptom:** `palette.spec.ts` › "…closes on Esc" times out on
+  `expect(input).not.toBeVisible()` — the palette stays open after
+  `keyboard.press('Escape')`; the immediate re-run passes.
+- **Cause:** Escape was handled only by the panel's own `on:keydown`, which needs
+  focus *inside* the panel, while the input was focused in a
+  `requestAnimationFrame` callback after open. Playwright's `toBeVisible()` checks
+  layout, not paint, so it can pass — and the Escape fire — before that frame
+  (rAF is throttled in loaded/headless runners). The key then reached the window
+  dispatcher, whose Escape arm knew only help + node-page back-nav.
+- **Fix:** every exclusive overlay must be closable from the window dispatcher
+  regardless of focus (`common::keyboard::escape_target`, palette first); the
+  panel handler `stop_propagation()`s so the two never both run (otherwise the
+  now-closed palette lets Escape fall through to "back" on `/nodes/*`). Focus on
+  mount by tracking the `NodeRef` in an `Effect`, not via rAF. Specs assert
+  `toBeFocused()` before relying on focus-dependent keys. — 2026-10-17
 
 ### Graph auto-arrange spinner hangs forever
 - **Symptom:** clicking auto-arrange in the graph spins indefinitely — no PUT fires, no error

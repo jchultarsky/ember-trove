@@ -38,20 +38,64 @@ use tracing::Level;
 
 use crate::{auth::middleware::require_auth, state::AppState};
 
+/// Per-IP budget for the write (mutating-method) rate limiter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RateLimitBudget {
+    /// Milliseconds to replenish one token.
+    replenish_ms: u64,
+    /// Bucket size — the largest burst allowed before throttling.
+    burst: u32,
+}
+
+/// Production budget: 10 req/s sustained, burst of 100.
+const PROD_RATE_LIMIT: RateLimitBudget = RateLimitBudget {
+    replenish_ms: 100,
+    burst: 100,
+};
+
+/// Playwright stack only. The whole suite shares one client IP and writes its
+/// fixtures through the API, so on a fast runner it outruns the production
+/// budget and specs fail on HTTP 429 (2026-10-16, flaky on develop CI).
+const E2E_RATE_LIMIT: RateLimitBudget = RateLimitBudget {
+    replenish_ms: 1,
+    burst: 10_000,
+};
+
+/// Choose the write rate-limit budget.
+///
+/// SECURITY: the e2e budget needs BOTH the `e2e-bypass` cargo feature (which no
+/// release image is built with — the caller passes `cfg!`, a compile-time
+/// constant) AND `E2E_AUTH_BYPASS=1` at runtime: the same double gate as the
+/// auth bypass in `auth::middleware`. Everything else gets `PROD_RATE_LIMIT`.
+fn rate_limit_budget(e2e_bypass_compiled: bool, bypass_env: Option<&str>) -> RateLimitBudget {
+    if e2e_bypass_compiled && bypass_env == Some("1") {
+        E2E_RATE_LIMIT
+    } else {
+        PROD_RATE_LIMIT
+    }
+}
+
 pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     // --- Rate limiting -------------------------------------------------------
-    // 10 req/s sustained per peer IP; burst cap of 100 tokens.
+    // PROD_RATE_LIMIT per peer IP (see rate_limit_budget for the e2e case).
     // Only applies to mutating methods (POST/PUT/DELETE/PATCH) to keep read
     // traffic snappy for a single-user PKM.
     // SmartIpKeyExtractor reads X-Real-IP / X-Forwarded-For (set by nginx) and
     // falls back to ConnectInfo<SocketAddr> for direct connections.
-    // const_* methods are only on PeerIpKeyExtractor builders, so we set period
-    // and burst first, then switch extractor via key_extractor().
-    let mut base = GovernorConfigBuilder::default()
-        .const_per_millisecond(100) // replenish 1 token per 100 ms = 10 req/s
-        .const_burst_size(100);
-    let mut smart = base.key_extractor(SmartIpKeyExtractor);
-    let governor_conf = smart
+    let budget = rate_limit_budget(
+        cfg!(feature = "e2e-bypass"),
+        std::env::var("E2E_AUTH_BYPASS").ok().as_deref(),
+    );
+    if budget != PROD_RATE_LIMIT {
+        tracing::warn!(
+            ?budget,
+            "e2e bypass armed: write rate limit relaxed (NEVER in production)"
+        );
+    }
+    let governor_conf = GovernorConfigBuilder::default()
+        .key_extractor(SmartIpKeyExtractor)
+        .per_millisecond(budget.replenish_ms)
+        .burst_size(budget.burst)
         .finish()
         .ok_or_else(|| anyhow::anyhow!("invalid rate-limit governor config"))?;
     let governor_limiter = governor_conf.limiter().clone();
@@ -196,18 +240,65 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
 mod tests {
     use tower_governor::governor::GovernorConfigBuilder;
 
-    /// Verify that the rate-limit configuration we use at startup is valid
+    use super::{E2E_RATE_LIMIT, PROD_RATE_LIMIT, RateLimitBudget, rate_limit_budget};
+
+    /// Verify that every rate-limit budget we can select at startup is valid
     /// (non-zero period and burst size) and therefore `finish()` returns `Some`.
     #[test]
     fn governor_config_is_valid() {
         use tower_governor::key_extractor::SmartIpKeyExtractor;
-        let mut base = GovernorConfigBuilder::default()
-            .const_per_millisecond(100)
-            .const_burst_size(100);
-        let conf = base.key_extractor(SmartIpKeyExtractor).finish();
-        assert!(
-            conf.is_some(),
-            "governor config with SmartIpKeyExtractor must be valid"
+        for budget in [PROD_RATE_LIMIT, E2E_RATE_LIMIT] {
+            let conf = GovernorConfigBuilder::default()
+                .key_extractor(SmartIpKeyExtractor)
+                .per_millisecond(budget.replenish_ms)
+                .burst_size(budget.burst)
+                .finish();
+            assert!(
+                conf.is_some(),
+                "governor config must be valid for {budget:?}"
+            );
+        }
+    }
+
+    /// SECURITY: pin the production budget so it can't be loosened by accident.
+    #[test]
+    fn production_budget_is_ten_per_second_burst_hundred() {
+        assert_eq!(
+            PROD_RATE_LIMIT,
+            RateLimitBudget {
+                replenish_ms: 100,
+                burst: 100
+            }
         );
+    }
+
+    /// SECURITY: without the `e2e-bypass` feature (every release image), the
+    /// environment can never select the e2e budget — not even E2E_AUTH_BYPASS=1.
+    #[test]
+    fn release_builds_ignore_the_bypass_env() {
+        for env in [None, Some("1"), Some("0"), Some("true")] {
+            assert_eq!(
+                rate_limit_budget(false, env),
+                PROD_RATE_LIMIT,
+                "env={env:?}"
+            );
+        }
+    }
+
+    /// e2e builds stay on the production budget unless explicitly armed with
+    /// exactly "1" — the same rule as the auth bypass.
+    #[test]
+    fn e2e_builds_need_the_bypass_armed() {
+        for env in [None, Some("0"), Some("true"), Some("")] {
+            assert_eq!(rate_limit_budget(true, env), PROD_RATE_LIMIT, "env={env:?}");
+        }
+        assert_eq!(rate_limit_budget(true, Some("1")), E2E_RATE_LIMIT);
+    }
+
+    /// The e2e budget must actually be looser, or the flake it fixes returns.
+    #[test]
+    fn e2e_budget_is_looser_than_production() {
+        assert!(E2E_RATE_LIMIT.burst > PROD_RATE_LIMIT.burst);
+        assert!(E2E_RATE_LIMIT.replenish_ms < PROD_RATE_LIMIT.replenish_ms);
     }
 }

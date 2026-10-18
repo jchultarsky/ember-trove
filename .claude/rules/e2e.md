@@ -27,6 +27,9 @@ CI job is too slow a feedback loop for selector work.
   `page.locator('main')` to be visible after `goto` before pressing keys
   (`gotoApp` helper in palette.spec.ts). Clicking a real element first
   (auto-waiting) achieves the same.
+- **Visible ≠ focused** (2026-10-17, palette spec): `toBeVisible()` checks
+  layout, not focus — before pressing a key whose handler needs focus, assert
+  `await expect(input).toBeFocused()`. Better still, make the UI not need it.
 - **Element refs go stale across re-renders** — a list refetch between a
   `find` and a click invalidates refs. Re-locate just before acting, or drive
   the assertion through `expect(locator)` auto-waiting.
@@ -70,6 +73,10 @@ CI job is too slow a feedback loop for selector work.
 - The api image must be built with `--features e2e-bypass` AND armed with
   `E2E_AUTH_BYPASS=1`; `scripts/e2e.sh` refuses to run if `/api/auth/me`
   doesn't answer without a session. Release images never carry the feature.
+- The same `e2e-bypass` + `E2E_AUTH_BYPASS=1` gate relaxes the API write rate
+  limiter (`rate_limit_budget` in `api/src/routes/mod.rs`). Without it the suite
+  (one client IP, API-created fixtures) trips HTTP 429 on fast runners —
+  symptom: random fixture `resp.ok()` failures / missing toasts (2026-10-16).
 - Compose overlay caveats (already encoded in `deploy/docker-compose.e2e.yml`):
   `${VAR:?}` interpolation happens before override merging (the script exports
   COOKIE_KEY), and clearing an inherited list needs `!reset`.

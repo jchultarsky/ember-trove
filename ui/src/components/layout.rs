@@ -167,13 +167,21 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                     QuickCapture => show_capture.set(true),
                     GoGraph => navigate("/graph", Default::default()),
                     Escape => {
-                        if show_shortcuts.get_untracked() {
-                            show_shortcuts.set(false);
-                        } else {
-                            let path = location.pathname.get_untracked();
-                            if path.starts_with("/nodes") {
-                                navigate("/nodes", Default::default());
+                        use common::keyboard::EscapeTarget;
+                        match common::keyboard::escape_target(
+                            show_palette.get_untracked(),
+                            show_shortcuts.get_untracked(),
+                            location.pathname.get_untracked().starts_with("/nodes"),
+                        ) {
+                            Some(EscapeTarget::ClosePalette) => {
+                                ev.prevent_default();
+                                show_palette.set(false);
                             }
+                            Some(EscapeTarget::CloseHelp) => show_shortcuts.set(false),
+                            Some(EscapeTarget::BackToNodes) => {
+                                navigate("/nodes", Default::default())
+                            }
+                            None => {}
                         }
                     }
                 }

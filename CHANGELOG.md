@@ -6,6 +6,58 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.28.2] - 2026-10-17
+
+### Security — ammonia 4.2.4, zip 9 (new advisories)
+- `ammonia` 4.2.3 → 4.2.4 (RUSTSEC-2026-0373: CSS `url(` matched
+  case-sensitively — sanitizer bypass).
+- Direct `zip` dependency 8 → 9.0.4 (RUSTSEC-2026-0367/0368/0369: extraction
+  symlink escape, SUID bits, permissions through symlinks). Ember Trove only
+  *writes* ZIPs (`routes/export.rs`), so it never hit the extraction paths, but
+  the vulnerable crate is gone from the runtime graph. zip 9's `name()` now
+  returns `Result`; the export test helper was updated.
+- Removed the unused `utoipa-swagger-ui` dependency. Its build script pulled
+  `zip` 3.0.0 (same three advisories) to unpack a Swagger UI bundle that was
+  never mounted: no route served `/swagger-ui/`, despite README saying so (README
+  corrected). Removal beats suppression: `cargo audit` is clean with no new
+  ignores, and `Cargo.lock` sheds ~100 lines. The prod nginx deny rule for
+  `/swagger-ui` and `/api-docs` stays as defense in depth.
+
+### Security — UI image installs a pinned, checksum-verified trunk
+`deploy/Dockerfile.ui` piped an unpinned installer script from cargo-binstall's
+`main` branch into `bash` and installed whatever trunk was latest. When the
+binary download timed out (develop CI, 2026-10-16) binstall fell back to
+`cargo install trunk` without `--locked`, resolved newer dependencies
+(`lightningcss` vs `cssparser`) and failed to compile, breaking the e2e job — and
+the same Dockerfile builds the release image. The image now downloads the
+trunk **0.21.14** release binary for the build arch (x86_64 / aarch64),
+verifies its **SHA-256** (published values cross-checked against the
+tarballs), retries transient network errors, and never builds from source.
+Native-mode docs now pin `cargo install trunk --version 0.21.14 --locked`.
+
+### Fixed — command palette sometimes ignored Escape
+Escape only closed the Cmd-K palette when focus was inside it, and the input
+was focused on the next animation frame after opening — so an Escape pressed in
+that window (or after clicking the panel chrome) was silently dropped. This was
+the intermittent `palette.spec.ts` "closes on Esc" e2e failure. The global
+keyboard dispatcher now closes the palette on Escape regardless of focus
+(priority resolved by a pure, unit-tested `common::keyboard::escape_target`:
+palette → help → node-page back), the panel's own handler stops propagation so
+Escape is never handled twice, and the input is focused as soon as it mounts
+instead of on a (throttleable) animation frame. New e2e regression: Escape with
+the input blurred still closes the palette.
+
+### Fixed — e2e flakes from the API write rate limiter (HTTP 429)
+The Playwright suite shares one client IP and creates its fixtures through the
+API, so on fast runners it exceeded the production write budget (10 req/s,
+burst 100) and a random handful of specs failed — intermittently on develop CI
+once all 11 checks became required. The budget is now chosen by a pure
+`rate_limit_budget()`: the relaxed e2e budget requires **both** the
+`e2e-bypass` cargo feature (never in release images; checked via `cfg!` at
+compile time) **and** `E2E_AUTH_BYPASS=1` — the same double gate as the auth
+bypass — and logs a warning when active. Production limits are unchanged and
+pinned by a unit test.
+
 ## [2.28.1] - 2026-10-16
 
 ### Security — JWKS refetch on unknown `kid` (key rotation)
