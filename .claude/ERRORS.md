@@ -69,6 +69,27 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   against the tarballs. Any `cargo install` of a binary tool: use `--locked`.
   (2026-10-16)
 
+### UI build: `the trait Parse is not implemented for syn::Path` (Leptos `server_fn_macro`)
+- **Symptom:** a Dependabot cargo group bumping Leptos (e.g. #87:
+  `leptos_router` 0.8.15 → 0.8.17) fails `check (wasm32)`, `docker build
+  validation` and `e2e smoke` with `server_fn_macro_default-0.8.5/src/lib.rs:
+  ... Parse is not implemented for syn::path::Path` and "multiple different
+  versions of crate `syn`" (2.x vs 3.x).
+- **Cause:** a partial lockfile update. `leptos_router` 0.8.17 → `leptos`
+  ^0.8.22 → `leptos_macro` =0.8.19 → `server_fn_macro` =0.8.12, which moved to
+  **syn 3**. `server_fn_macro_default` 0.8.5 (syn 2) declares the loose
+  `server_fn_macro ^0.8.5`, so Cargo keeps it and pairs it with 0.8.12. The
+  matching `server_fn_macro_default` **0.8.6** (syn 3, `=0.8.12`) exists, but it
+  is transitive (`server_fn` asks `^0.8.5`), so Dependabot never bumps it.
+- **Fix:** move it with the rest of the family:
+  `cargo update -p leptos_router --precise <ver> && cargo update -p
+  server_fn_macro_default`. Verified 2026-10-22: leptos 0.8.22 /
+  leptos_router 0.8.17 / server_fn_macro 0.8.12 / server_fn_macro_default 0.8.6
+  builds for wasm32 (and drops the unmaintained `proc-macro-error2`). Don't
+  "fix" it by holding Leptos back. #87 did that on 2026-10-18 (Leptos kept at
+  0.8.20 / 0.8.15) before the real cause was found. Pinning individual
+  `--precise` versions down the chain is whack-a-mole. (2026-10-22)
+
 ## Axum / API (HTTP)
 
 ### Browser-navigation endpoint renders JSON or a blank page

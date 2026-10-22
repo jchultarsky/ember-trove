@@ -6,6 +6,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.28.3] - 2026-10-22
+
+### Fixed — notes can be deleted from a node's page
+The note panel on a node page offered Edit but no Delete, so a note could only
+be removed from the Notes feed. Each note card now has a "Delete note" button
+next to Edit (owner only, same gate as Edit) with the feed's behaviour: instant
+soft delete plus an Undo toast. Both surfaces call the new shared
+`note_actions::delete_note_with_undo` instead of the feed's inline copy. The
+API was already owner-scoped (`DELETE /notes/{id}`, `/restore`); no backend
+change. New e2e spec `notes.spec.ts` covers delete and Undo on the node page.
+
+### Changed — Leptos 0.8.22 (unblocked)
+`leptos` 0.8.20 → 0.8.22 and `leptos_router` 0.8.15 → 0.8.17, with the
+transitive `server_fn_macro_default` 0.8.5 → 0.8.6 moved explicitly. The
+Dependabot group bump (#87) left it on 0.8.5 (syn 2) next to
+`server_fn_macro` 0.8.12 (syn 3) and broke the wasm build, so #87 held Leptos
+back. The real fix is updating that one transitive crate (`.claude/ERRORS.md`).
+Side effect: the unmaintained `proc-macro-error2` (RUSTSEC-2026-0173, and a
+future-incompat warning) leaves the dependency graph.
+
+### Security — TLS certificate verification advisories
+Lockfile bumps for two advisories published 2026-10-19/20 that let TLS
+verification trust distrusted intermediate certificates on the API's outbound
+HTTPS (Cognito, S3, webhooks): `rustls-webpki` 0.103.15 → 0.103.16
+(RUSTSEC-2026-0382) and `webpki-root-certs` 1.0.7 → 1.0.10 (RUSTSEC-2026-0383,
+distrusted emSign intermediates). `cargo audit` is clean again.
+
+### Changed — dependency updates (#87, #89)
+- Cargo minor/patch (#87): tokio 1.53.3, serde_json 1.0.154, reqwest 0.13.5,
+  jsonwebtoken 11.1.0, uuid 1.28.0, thiserror 2.0.21, tokio-util, async-trait,
+  sha2, base64, flate2, http-body-util.
+- GitHub Actions (#89): taiki-e/install-action 2.87.28,
+  docker/setup-buildx-action 4.4.1, docker/build-push-action 7.4.0,
+  actions/upload-artifact 7.0.2, docker/login-action 4.6.0 (every new SHA pin
+  verified against its release tag).
+
 ## [2.28.2] - 2026-10-17
 
 ### Security — ammonia 4.2.4, zip 9 (new advisories)
