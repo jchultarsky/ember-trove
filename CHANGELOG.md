@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — Leptos 0.8.22 (unblocked)
+`leptos` 0.8.20 → 0.8.22 and `leptos_router` 0.8.15 → 0.8.17, with the
+transitive `server_fn_macro_default` 0.8.5 → 0.8.6 moved explicitly. The
+Dependabot group bump (#87) left it on 0.8.5 (syn 2) next to
+`server_fn_macro` 0.8.12 (syn 3) and broke the wasm build, so #87 held Leptos
+back. The real fix is updating that one transitive crate (`.claude/ERRORS.md`).
+Side effect: the unmaintained `proc-macro-error2` (RUSTSEC-2026-0173, and a
+future-incompat warning) leaves the dependency graph. Also includes the
+`rustls-webpki` / `webpki-root-certs` advisory bumps (same lines as #93).
+
 ## [2.28.2] - 2026-10-17
 
 ### Security — ammonia 4.2.4, zip 9 (new advisories)
