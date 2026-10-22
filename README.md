@@ -22,7 +22,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Multi-tag filtering** — AND/OR tag filters across node list, search results, and graph view. Tags can be attached directly from the node list without opening the node.
 - **S3 attachments** — bulk drag-and-drop upload; inline preview for images and PDFs. Stored in SeaweedFS (local) or Lightsail Object Storage / AWS S3.
 - **Tasks & My Day** — per-node task lists with create / toggle / edit / delete. Daily planning view aggregates today's tasks across all nodes.
-- **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed.
+- **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed. On a node page each note collapses to its first line (Markdown stripped, so it doubles as a title), with Collapse all / Expand all; collapse state is saved per account.
 - **Node versioning** — body snapshot on every save; version history timeline with one-click restore.
 - **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
 - **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. `p` key toggles pin on the open node.
@@ -452,6 +452,14 @@ All routes are nested under `/api`.
 | DELETE | `/api/notes/{id}` | Delete a note (soft delete — restorable for 30 days) |
 | POST | `/api/notes/{id}/restore` | Un-delete a note (backs the UI's undo toast) |
 | GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first) |
+
+### Editor prefs (per-user UI state)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/editor-prefs` | The caller's saved per-item prefs (editor heights, note collapse state) |
+| PUT | `/api/editor-prefs` | Save one item's prefs; only the fields sent (`height`, `collapsed`) change |
+| PUT | `/api/editor-prefs/collapsed` | Collapse / expand up to 500 notes at once |
 
 ### Permissions (standalone)
 

@@ -146,17 +146,117 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     // textareas open at the saved height and persist a new height on resize.
     let editor_heights =
         RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
+    // Notes collapsed to their title line — per account, saved in the same
+    // editor prefs. Absent = expanded (the default).
+    let collapsed_notes =
+        RwSignal::<std::collections::HashSet<uuid::Uuid>>::new(Default::default());
+    // A note deep-linked from the Notes feed is shown expanded even if it is
+    // saved as collapsed, without changing the saved state.
+    let force_open = RwSignal::new(
+        crate::focus_note::pending_focus_note().and_then(|s| uuid::Uuid::parse_str(&s).ok()),
+    );
     wasm_bindgen_futures::spawn_local(async move {
         if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            editor_heights.set(
-                prefs
-                    .into_iter()
-                    .filter(|p| p.entity_kind == "note")
-                    .map(|p| (p.entity_id, p.height))
-                    .collect(),
+            let notes = prefs.into_iter().filter(|p| p.entity_kind == "note");
+            let (mut heights, mut folded) = (
+                std::collections::HashMap::new(),
+                std::collections::HashSet::new(),
             );
+            for p in notes {
+                if let Some(h) = p.height {
+                    heights.insert(p.entity_id, h);
+                }
+                if p.collapsed {
+                    folded.insert(p.entity_id);
+                }
+            }
+            editor_heights.set(heights);
+            collapsed_notes.set(folded);
         }
     });
+
+    // Whether a note is currently shown collapsed (saved state, unless it is
+    // the deep-linked note being forced open).
+    let is_collapsed = move |id: uuid::Uuid| {
+        collapsed_notes.with(|s| s.contains(&id)) && force_open.get() != Some(id)
+    };
+
+    // Toggle one note: update the screen immediately, then persist; on failure
+    // roll back and say so.
+    let toggle_note = move |id: uuid::Uuid| {
+        let want_collapsed = !is_collapsed(id);
+        if force_open.get_untracked() == Some(id) {
+            force_open.set(None);
+        }
+        let saved = collapsed_notes.with_untracked(|s| s.contains(&id));
+        if saved == want_collapsed {
+            // Clearing the deep-link override already shows the wanted state.
+            return;
+        }
+        let apply = move |collapse: bool| {
+            collapsed_notes.update(|s| {
+                if collapse {
+                    s.insert(id);
+                } else {
+                    s.remove(&id);
+                }
+            });
+        };
+        apply(want_collapsed);
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(e) = crate::api::set_note_collapsed(id, want_collapsed).await {
+                apply(!want_collapsed);
+                crate::components::toast::push_toast(
+                    crate::components::toast::ToastLevel::Error,
+                    format!("Couldn't save note state: {e}"),
+                );
+            }
+        });
+    };
+
+    // Ids of this node's notes, for Collapse all / Expand all.
+    let note_ids = move || -> Vec<uuid::Uuid> {
+        notes_resource
+            .get()
+            .and_then(|r| r.ok())
+            .map(|notes| notes.iter().map(|n| n.id.0).collect())
+            .unwrap_or_default()
+    };
+    let all_collapsed = move || {
+        let ids = note_ids();
+        !ids.is_empty() && ids.iter().all(|id| is_collapsed(*id))
+    };
+    // Collapse or expand every note on the node in one request per
+    // MAX_BULK_COLLAPSE ids; on failure restore the previous state.
+    let set_all = move |collapse: bool| {
+        let ids = note_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let previous = collapsed_notes.get_untracked();
+        force_open.set(None);
+        collapsed_notes.update(|s| {
+            for id in &ids {
+                if collapse {
+                    s.insert(*id);
+                } else {
+                    s.remove(id);
+                }
+            }
+        });
+        wasm_bindgen_futures::spawn_local(async move {
+            for chunk in ids.chunks(common::editor_pref::MAX_BULK_COLLAPSE) {
+                if let Err(e) = crate::api::set_notes_collapsed(chunk.to_vec(), collapse).await {
+                    collapsed_notes.set(previous);
+                    crate::components::toast::push_toast(
+                        crate::components::toast::ToastLevel::Error,
+                        format!("Couldn't save note state: {e}"),
+                    );
+                    return;
+                }
+            }
+        });
+    };
 
     let do_add = move || {
         let text = body.get_untracked();
@@ -215,18 +315,31 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                     </span>
                 </button>
 
-                {move || (is_owner && !collapsed.get()).then(|| view! {
-                    <button
-                        class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                        title=move || if show_form.get() { "Cancel" } else { "Add note" }
-                        on:click=move |_| show_form.update(|v| *v = !*v)
-                    >
-                        <span class="material-symbols-outlined" style="font-size: 18px;">
-                            {move || if show_form.get() { "close" } else { "add" }}
-                        </span>
-                    </button>
-                })}
+                <div class="flex items-center gap-1">
+                    // Collapse all / Expand all — any viewer (state is per account).
+                    {move || (!collapsed.get() && !note_ids().is_empty()).then(|| view! {
+                        <button
+                            class="px-2 py-1 rounded-lg text-xs text-stone-400 hover:text-stone-600
+                                dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
+                                transition-colors cursor-pointer"
+                            on:click=move |_| set_all(!all_collapsed())
+                        >
+                            {move || if all_collapsed() { "Expand all" } else { "Collapse all" }}
+                        </button>
+                    })}
+                    {move || (is_owner && !collapsed.get()).then(|| view! {
+                        <button
+                            class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
+                                hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                            title=move || if show_form.get() { "Cancel" } else { "Add note" }
+                            on:click=move |_| show_form.update(|v| *v = !*v)
+                        >
+                            <span class="material-symbols-outlined" style="font-size: 18px;">
+                                {move || if show_form.get() { "close" } else { "add" }}
+                            </span>
+                        </button>
+                    })}
+                </div>
             </div>
 
             // ── Collapsible body ──────────────────────────────────────────
@@ -367,6 +480,8 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
 
                                                 // Pre-render Markdown (computed once per note in this iteration)
                                                 let body_html  = render_markdown_plain(&note.body);
+                                                // One-line title for the collapsed state.
+                                                let title      = common::note::note_title(&note.body);
                                                 let ts_display = ts.clone();
                                                 let card_class = palette_card_class(&note_color).to_string();
 
@@ -377,50 +492,97 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                     >
 
                                                         // ── Display mode ──────────────────────
+                                                        // Chevron toggles collapse; collapsed shows just the
+                                                        // title line + timestamp (click to expand).
                                                         {move || (!editing.get()).then({
                                                             let bh = body_html.clone();
                                                             let td = ts_display.clone();
-                                                            move || view! {
-                                                                <div
-                                                                    class="prose prose-sm max-w-none dark:prose-invert
-                                                                        prose-p:my-0.5 prose-ul:my-0.5 prose-ol:my-0.5
-                                                                        prose-li:my-0 prose-headings:mt-1 prose-headings:mb-0.5"
-                                                                    inner_html=bh.clone()
-                                                                />
-                                                                <div class="flex items-center justify-between mt-1.5">
-                                                                    <p class="text-xs text-stone-400 dark:text-stone-500">
-                                                                        {td.clone()}
-                                                                    </p>
-                                                                    {is_owner.then(|| view! {
-                                                                        <div class="flex items-center gap-0.5">
-                                                                            <button
-                                                                                class="p-0.5 rounded
-                                                                                    text-stone-300 dark:text-stone-600
-                                                                                    hover:text-amber-500 dark:hover:text-amber-400
-                                                                                    transition-colors"
-                                                                                title="Edit note"
-                                                                                on:click=move |_| editing.set(true)
-                                                                            >
-                                                                                <span class="material-symbols-outlined"
-                                                                                    style="font-size: 14px;">{"edit"}</span>
-                                                                            </button>
-                                                                            // Delete: instant, with an Undo toast (soft delete).
-                                                                            <IconButton
-                                                                                icon="delete"
-                                                                                label="Delete note"
-                                                                                variant=IconButtonVariant::Danger
-                                                                                on_click=Callback::new(move |()| {
-                                                                                    crate::note_actions::delete_note_with_undo(
-                                                                                        note_id,
-                                                                                        deleting,
-                                                                                        refetch_notes,
-                                                                                        toast_state,
-                                                                                    )
-                                                                                })
-                                                                            />
+                                                            let title = title.clone();
+                                                            move || {
+                                                                let folded = is_collapsed(note_id.0);
+                                                                let toggle_label = if folded { "Expand note" } else { "Collapse note" };
+                                                                view! {
+                                                                    <div class="flex items-start gap-1.5">
+                                                                        <button
+                                                                            class="mt-0.5 shrink-0 rounded
+                                                                                text-stone-400 dark:text-stone-500
+                                                                                hover:text-amber-500 dark:hover:text-amber-400
+                                                                                transition-colors cursor-pointer"
+                                                                            title=toggle_label
+                                                                            aria-label=toggle_label
+                                                                            aria-expanded=(!folded).to_string()
+                                                                            on:click=move |_| toggle_note(note_id.0)
+                                                                        >
+                                                                            <span class="material-symbols-outlined"
+                                                                                style="font-size: 16px;">
+                                                                                {if folded { "chevron_right" } else { "expand_more" }}
+                                                                            </span>
+                                                                        </button>
+                                                                        <div class="flex-1 min-w-0">
+                                                                            {if folded {
+                                                                                view! {
+                                                                                    <button
+                                                                                        class="w-full flex items-baseline gap-2 text-left cursor-pointer"
+                                                                                        title="Expand note"
+                                                                                        data-testid="note-collapsed-title"
+                                                                                        on:click=move |_| toggle_note(note_id.0)
+                                                                                    >
+                                                                                        <span class="flex-1 min-w-0 truncate text-sm font-medium
+                                                                                            text-stone-800 dark:text-stone-200">
+                                                                                            {title.clone()}
+                                                                                        </span>
+                                                                                        <span class="shrink-0 text-xs text-stone-400 dark:text-stone-500">
+                                                                                            {td.clone()}
+                                                                                        </span>
+                                                                                    </button>
+                                                                                }.into_any()
+                                                                            } else {
+                                                                                view! {
+                                                                                    <div
+                                                                                        class="prose prose-sm max-w-none dark:prose-invert
+                                                                                            prose-p:my-0.5 prose-ul:my-0.5 prose-ol:my-0.5
+                                                                                            prose-li:my-0 prose-headings:mt-1 prose-headings:mb-0.5"
+                                                                                        inner_html=bh.clone()
+                                                                                    />
+                                                                                    <div class="flex items-center justify-between mt-1.5">
+                                                                                        <p class="text-xs text-stone-400 dark:text-stone-500">
+                                                                                            {td.clone()}
+                                                                                        </p>
+                                                                                        {is_owner.then(|| view! {
+                                                                                            <div class="flex items-center gap-0.5">
+                                                                                                <button
+                                                                                                    class="p-0.5 rounded
+                                                                                                        text-stone-300 dark:text-stone-600
+                                                                                                        hover:text-amber-500 dark:hover:text-amber-400
+                                                                                                        transition-colors"
+                                                                                                    title="Edit note"
+                                                                                                    on:click=move |_| editing.set(true)
+                                                                                                >
+                                                                                                    <span class="material-symbols-outlined"
+                                                                                                        style="font-size: 14px;">{"edit"}</span>
+                                                                                                </button>
+                                                                                                // Delete: instant, with an Undo toast (soft delete).
+                                                                                                <IconButton
+                                                                                                    icon="delete"
+                                                                                                    label="Delete note"
+                                                                                                    variant=IconButtonVariant::Danger
+                                                                                                    on_click=Callback::new(move |()| {
+                                                                                                        crate::note_actions::delete_note_with_undo(
+                                                                                                            note_id,
+                                                                                                            deleting,
+                                                                                                            refetch_notes,
+                                                                                                            toast_state,
+                                                                                                        )
+                                                                                                    })
+                                                                                                />
+                                                                                            </div>
+                                                                                        })}
+                                                                                    </div>
+                                                                                }.into_any()
+                                                                            }}
                                                                         </div>
-                                                                    })}
-                                                                </div>
+                                                                    </div>
+                                                                }
                                                             }
                                                         })}
 

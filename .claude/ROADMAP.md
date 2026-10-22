@@ -5,6 +5,17 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-22)
 
+- **v2.29.0 shipped: collapsible notes + audit review (PRs #96, #97).** Each
+  note on a node page collapses to its first line (Markdown stripped via
+  `common::note::note_title`, so it works as a title), with Collapse all /
+  Expand all. State is per account in `editor_prefs` (migration 031:
+  `collapsed`, nullable `height`). PUT /editor-prefs changes only the fields
+  sent; bulk PUT /editor-prefs/collapsed takes up to 500 ids. cargo-audit
+  ignores reviewed: 4 → 2 (stale lru/rand dropped; newer lru fixed by
+  aws-sdk-s3 1.152; rsa rationale corrected: sqlx-mysql is lockfile-only),
+  and no warnings remain. chultarsky.online fully decommissioned (registration,
+  Route 53 zone and the leftover Lightsail DNS zone).
+
 - **v2.28.3 shipped — TLS advisories, Leptos 0.8.22, note delete (PRs #87,
   #89, #92–#95):** rustls-webpki 0.103.16 / webpki-root-certs 1.0.10
   (RUSTSEC-2026-0382/0383, distrusted intermediates on outbound TLS). Leptos

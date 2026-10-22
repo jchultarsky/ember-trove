@@ -6,6 +6,43 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.29.0] - 2026-10-22
+
+### Added — collapsible notes on a node page
+Nodes with many notes took a lot of scrolling. Each note in a node's note panel
+now has a chevron that collapses it to a single line: its first non-empty line
+with Markdown syntax stripped (`## Meeting **notes**` → "Meeting notes"), so it
+works as a title, plus the timestamp. Click the line or the chevron to expand.
+The section header has **Collapse all / Expand all**.
+- **Persistent per account.** State is saved server-side in the existing
+  per-user `editor_prefs` (migration `031`: new `collapsed` column, `height` now
+  nullable), so it follows you across devices and does not reset on refresh.
+  Notes default to expanded. Editing always shows the note expanded, and a note
+  deep-linked from the Notes feed opens expanded without changing what is saved.
+- **API.** `PUT /editor-prefs` now takes optional `height` and `collapsed`, and
+  changes only the fields sent (COALESCE upsert), so collapsing never resets a
+  saved height. New `PUT /editor-prefs/collapsed` handles bulk collapse/expand
+  (at most 500 ids; expanding only updates existing rows). Both are owner-scoped,
+  parameterized, and limited to notes.
+- **Tests.** Unit tests for `common::note::note_title`, route validation tests,
+  real-Postgres repo tests (field-by-field merge, bulk, duplicates, owner
+  isolation), and e2e specs for collapse persistence and Collapse/Expand all.
+
+### Security — cargo-audit ignore list reviewed (2026-10-22)
+- Dropped two stale ignores, RUSTSEC-2026-0002 (`lru`) and RUSTSEC-2026-0097
+  (`rand`). Neither matched `Cargo.lock` any more.
+- Fixed the newer `lru` advisory RUSTSEC-2026-0253 (unsound) by **upgrading**
+  rather than ignoring: `aws-sdk-s3` 1.138.1 → 1.152.0 (chosen over the
+  day-old 1.154.0) moves `lru` 0.16.4 → 0.18.5. It also refreshes the
+  `aws-smithy-*` runtime and drops the legacy `http-body` 0.4.
+- Re-reviewed the two remaining ignores. `paste` (RUSTSEC-2024-0436) is a UI-only
+  Leptos proc-macro. For `rsa` (RUSTSEC-2023-0071), the earlier rationale was
+  wrong: `sqlx-mysql` is never compiled at all; it appears only because
+  `Cargo.lock` records optional deps regardless of features. No fixed `rsa`
+  exists yet.
+- Moved off yanked `chacha20` 0.10.1 → 0.10.2 and `spin` 0.9.8/0.10.0 →
+  0.9.9/0.10.1. `cargo audit` now reports no vulnerabilities and no warnings.
+
 ## [2.28.3] - 2026-10-22
 
 ### Fixed — notes can be deleted from a node's page
