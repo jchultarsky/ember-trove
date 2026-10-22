@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.29.0] - 2026-10-22
+
 ### Added — collapsible notes on a node page
 Nodes with many notes took a lot of scrolling. Each note in a node's note panel
 now has a chevron that collapses it to a single line: its first non-empty line
