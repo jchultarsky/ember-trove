@@ -13,8 +13,14 @@ Dependabot group bump (#87) left it on 0.8.5 (syn 2) next to
 `server_fn_macro` 0.8.12 (syn 3) and broke the wasm build, so #87 held Leptos
 back. The real fix is updating that one transitive crate (`.claude/ERRORS.md`).
 Side effect: the unmaintained `proc-macro-error2` (RUSTSEC-2026-0173, and a
-future-incompat warning) leaves the dependency graph. Also includes the
-`rustls-webpki` / `webpki-root-certs` advisory bumps (same lines as #93).
+future-incompat warning) leaves the dependency graph.
+
+### Security — TLS certificate verification advisories
+Lockfile bumps for two advisories published 2026-10-19/20 that let TLS
+verification trust distrusted intermediate certificates on the API's outbound
+HTTPS (Cognito, S3, webhooks): `rustls-webpki` 0.103.15 → 0.103.16
+(RUSTSEC-2026-0382) and `webpki-root-certs` 1.0.7 → 1.0.10 (RUSTSEC-2026-0383,
+distrusted emSign intermediates). `cargo audit` is clean again.
 
 ## [2.28.2] - 2026-10-17
 
