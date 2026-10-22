@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — notes can be deleted from a node's page
+The note panel on a node page offered Edit but no Delete, so a note could only
+be removed from the Notes feed. Each note card now has a "Delete note" button
+next to Edit (owner only, same gate as Edit) with the feed's behaviour: instant
+soft delete plus an Undo toast. Both surfaces call the new shared
+`note_actions::delete_note_with_undo` instead of the feed's inline copy. The
+API was already owner-scoped (`DELETE /notes/{id}`, `/restore`); no backend
+change. New e2e spec `notes.spec.ts` covers delete and Undo on the node page.
+
 ## [2.28.2] - 2026-10-17
 
 ### Security — ammonia 4.2.4, zip 9 (new advisories)

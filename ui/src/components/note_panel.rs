@@ -181,6 +181,12 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         });
     };
 
+    // Instant delete + undo toast, shared with the Notes feed. Toast state is
+    // captured here: the undo closure runs after an await, outside any owner.
+    let deleting = RwSignal::new(false);
+    let toast_state = use_context::<crate::components::toast::ToastState>();
+    let refetch_notes = Callback::new(move |()| refresh.update(|n| *n += 1));
+
     let on_add = move |_| do_add();
     view! {
         <div class="border-t border-stone-200 dark:border-stone-800 pt-6">
@@ -386,17 +392,33 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                         {td.clone()}
                                                                     </p>
                                                                     {is_owner.then(|| view! {
-                                                                        <button
-                                                                            class="p-0.5 rounded
-                                                                                text-stone-300 dark:text-stone-600
-                                                                                hover:text-amber-500 dark:hover:text-amber-400
-                                                                                transition-colors"
-                                                                            title="Edit note"
-                                                                            on:click=move |_| editing.set(true)
-                                                                        >
-                                                                            <span class="material-symbols-outlined"
-                                                                                style="font-size: 14px;">{"edit"}</span>
-                                                                        </button>
+                                                                        <div class="flex items-center gap-0.5">
+                                                                            <button
+                                                                                class="p-0.5 rounded
+                                                                                    text-stone-300 dark:text-stone-600
+                                                                                    hover:text-amber-500 dark:hover:text-amber-400
+                                                                                    transition-colors"
+                                                                                title="Edit note"
+                                                                                on:click=move |_| editing.set(true)
+                                                                            >
+                                                                                <span class="material-symbols-outlined"
+                                                                                    style="font-size: 14px;">{"edit"}</span>
+                                                                            </button>
+                                                                            // Delete: instant, with an Undo toast (soft delete).
+                                                                            <IconButton
+                                                                                icon="delete"
+                                                                                label="Delete note"
+                                                                                variant=IconButtonVariant::Danger
+                                                                                on_click=Callback::new(move |()| {
+                                                                                    crate::note_actions::delete_note_with_undo(
+                                                                                        note_id,
+                                                                                        deleting,
+                                                                                        refetch_notes,
+                                                                                        toast_state,
+                                                                                    )
+                                                                                })
+                                                                            />
+                                                                        </div>
                                                                     })}
                                                                 </div>
                                                             }
