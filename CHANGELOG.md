@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — TLS certificate verification advisories
+Lockfile bumps for two advisories published 2026-10-19/20 that let TLS
+verification trust distrusted intermediate certificates on the API's outbound
+HTTPS (Cognito, S3, webhooks): `rustls-webpki` 0.103.15 → 0.103.16
+(RUSTSEC-2026-0382) and `webpki-root-certs` 1.0.7 → 1.0.10 (RUSTSEC-2026-0383,
+distrusted emSign intermediates). `cargo audit` is clean again.
+
 ## [2.28.2] - 2026-10-17
 
 ### Security — ammonia 4.2.4, zip 9 (new advisories)
