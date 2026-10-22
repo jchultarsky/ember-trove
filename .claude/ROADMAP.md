@@ -3,7 +3,18 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-17)
+## Current state (2026-10-22)
+
+- **v2.28.3 shipped — TLS advisories, Leptos 0.8.22, note delete (PRs #87,
+  #89, #92–#95):** rustls-webpki 0.103.16 / webpki-root-certs 1.0.10
+  (RUSTSEC-2026-0382/0383, distrusted intermediates on outbound TLS). Leptos
+  0.8.22 unblocked by moving the transitive server_fn_macro_default to 0.8.6
+  (ERRORS.md documents the syn-3 lockfile trap). Drops the unmaintained
+  proc-macro-error2. Notes can now be deleted from a node's page (shared
+  delete + undo with the Notes feed). Dependabot cargo + Actions bumps.
+  PHP2Shell (CVE-2026-109618/109619) checked: no PHP anywhere in repo, images
+  or the prod host. Open item: chultarsky.online A records still dangle at a
+  released Lightsail IP — delete in AWS (needs console/creds).
 
 - **v2.28.2 shipped — security deps + build/e2e hardening (PRs #88, #90, #91):**
   ammonia 4.2.4 (RUSTSEC-2026-0373, CSS `url(` sanitizer bypass); direct `zip`

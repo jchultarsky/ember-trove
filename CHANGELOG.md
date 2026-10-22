@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.28.3] - 2026-10-22
+
 ### Fixed — notes can be deleted from a node's page
 The note panel on a node page offered Edit but no Delete, so a note could only
 be removed from the Notes feed. Each note card now has a "Delete note" button
@@ -30,6 +32,15 @@ verification trust distrusted intermediate certificates on the API's outbound
 HTTPS (Cognito, S3, webhooks): `rustls-webpki` 0.103.15 → 0.103.16
 (RUSTSEC-2026-0382) and `webpki-root-certs` 1.0.7 → 1.0.10 (RUSTSEC-2026-0383,
 distrusted emSign intermediates). `cargo audit` is clean again.
+
+### Changed — dependency updates (#87, #89)
+- Cargo minor/patch (#87): tokio 1.53.3, serde_json 1.0.154, reqwest 0.13.5,
+  jsonwebtoken 11.1.0, uuid 1.28.0, thiserror 2.0.21, tokio-util, async-trait,
+  sha2, base64, flate2, http-body-util.
+- GitHub Actions (#89): taiki-e/install-action 2.87.28,
+  docker/setup-buildx-action 4.4.1, docker/build-push-action 7.4.0,
+  actions/upload-artifact 7.0.2, docker/login-action 4.6.0 (every new SHA pin
+  verified against its release tag).
 
 ## [2.28.2] - 2026-10-17
 
