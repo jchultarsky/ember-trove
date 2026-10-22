@@ -12,7 +12,7 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
 use crate::components::resizable_editor::ResizableEditor;
-use crate::components::toast::{ToastLevel, ToastState, push_undo_toast};
+use crate::components::toast::ToastState;
 use crate::markdown::render_markdown_plain;
 
 /// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
@@ -80,39 +80,9 @@ pub fn NotesView() -> impl IntoView {
     let deleting = RwSignal::new(false);
     // Captured at setup for the undo closure, which outlives the note card.
     let toast_state = use_context::<ToastState>();
+    let refetch_feed = Callback::new(move |()| reload.update(|n| *n += 1));
     let do_delete = move |note_id: NoteId| {
-        if deleting.get_untracked() {
-            return;
-        }
-        deleting.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::delete_note(note_id).await;
-            deleting.set(false);
-            match result {
-                Ok(_) => {
-                    reload.update(|n| *n += 1);
-                    push_undo_toast(
-                        "Note deleted",
-                        std::sync::Arc::new(move || {
-                            wasm_bindgen_futures::spawn_local(async move {
-                                match crate::api::restore_note(note_id).await {
-                                    Ok(_) => reload.update(|n| *n += 1),
-                                    Err(e) => {
-                                        if let Some(ts) = toast_state {
-                                            ts.push(ToastLevel::Error, format!("Undo failed: {e}"));
-                                        }
-                                    }
-                                }
-                            });
-                        }),
-                    );
-                }
-                Err(e) => crate::components::toast::push_toast(
-                    ToastLevel::Error,
-                    format!("Delete failed: {e}"),
-                ),
-            }
-        });
+        crate::note_actions::delete_note_with_undo(note_id, deleting, refetch_feed, toast_state);
     };
 
     // ── Filter / sort state ─────────────────────────────────────────────────
