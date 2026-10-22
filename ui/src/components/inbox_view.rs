@@ -97,7 +97,7 @@ pub fn InboxView() -> impl IntoView {
                 prefs
                     .into_iter()
                     .filter(|p| p.entity_kind == "task")
-                    .map(|p| (p.entity_id, p.height))
+                    .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
                     .collect(),
             );
         }

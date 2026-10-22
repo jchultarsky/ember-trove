@@ -743,7 +743,23 @@ impl crate::repo::editor_pref::EditorPrefRepo for StubEditorPrefRepo {
     ) -> Result<Vec<common::editor_pref::EditorPref>, EmberTroveError> {
         Ok(vec![])
     }
-    async fn set(&self, _: &str, _: &str, _: Uuid, _: i32) -> Result<(), EmberTroveError> {
+    async fn set(
+        &self,
+        _: &str,
+        _: &str,
+        _: Uuid,
+        _: Option<i32>,
+        _: Option<bool>,
+    ) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn set_collapsed_many(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[Uuid],
+        _: bool,
+    ) -> Result<(), EmberTroveError> {
         Ok(())
     }
 }
@@ -1545,6 +1561,99 @@ async fn editor_prefs_set_validates_and_accepts() {
     let resp = app
         .oneshot(put(&format!(
             r#"{{"entity_kind":"note","entity_id":"{id}","height":12}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn editor_prefs_set_collapse_needs_a_field_and_a_note() {
+    let app = claims_app("/editor-prefs", crate::routes::editor_prefs::router());
+    let put = |body: String| {
+        Request::put("/editor-prefs")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let id = Uuid::new_v4();
+    // Collapse-only pref for a note (no height) → 204.
+    let resp = app
+        .clone()
+        .oneshot(put(format!(
+            r#"{{"entity_kind":"note","entity_id":"{id}","collapsed":true}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    // Neither height nor collapsed → 422 (nothing to save).
+    let resp = app
+        .clone()
+        .oneshot(put(format!(
+            r#"{{"entity_kind":"note","entity_id":"{id}"}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Collapse is a note-only pref → 422 for tasks.
+    let resp = app
+        .oneshot(put(format!(
+            r#"{{"entity_kind":"task","entity_id":"{id}","collapsed":true}}"#
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn editor_prefs_bulk_collapse_validates_batch() {
+    let app = claims_app("/editor-prefs", crate::routes::editor_prefs::router());
+    let put = |body: String| {
+        Request::put("/editor-prefs/collapsed")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let ids = |n: usize| {
+        (0..n)
+            .map(|_| format!("\"{}\"", Uuid::new_v4()))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    // A normal batch of notes → 204.
+    let resp = app
+        .clone()
+        .oneshot(put(format!(
+            r#"{{"entity_kind":"note","entity_ids":[{}],"collapsed":true}}"#,
+            ids(3)
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    // Empty batch → 422.
+    let resp = app
+        .clone()
+        .oneshot(put(
+            r#"{"entity_kind":"note","entity_ids":[],"collapsed":false}"#.to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Over the MAX_BULK_COLLAPSE cap → 422.
+    let resp = app
+        .clone()
+        .oneshot(put(format!(
+            r#"{{"entity_kind":"note","entity_ids":[{}],"collapsed":true}}"#,
+            ids(common::editor_pref::MAX_BULK_COLLAPSE + 1)
+        )))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    // Collapse is note-only → 422 for tasks.
+    let resp = app
+        .oneshot(put(format!(
+            r#"{{"entity_kind":"task","entity_ids":[{}],"collapsed":true}}"#,
+            ids(1)
         )))
         .await
         .unwrap();

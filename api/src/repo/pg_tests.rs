@@ -28,6 +28,7 @@ use common::{
 use sqlx::PgPool;
 
 use super::{
+    editor_pref::{EditorPrefRepo, PgEditorPrefRepo},
     node::{NodeRepo, PgNodeRepo},
     share_token::{PgShareTokenRepo, ShareTokenRepo},
     task::{PgTaskRepo, TaskRepo},
@@ -217,4 +218,89 @@ async fn task_soft_delete_restore_and_purge(pool: PgPool) {
         tasks.restore(task.id).await,
         Err(EmberTroveError::NotFound(_))
     ));
+}
+
+// ── Editor prefs: per-field upsert + note collapse ────────────────────────────
+
+/// (height, collapsed) for one owner's note pref, or None if no row exists.
+async fn note_pref(
+    repo: &PgEditorPrefRepo,
+    owner: &str,
+    id: uuid::Uuid,
+) -> Option<(Option<i32>, bool)> {
+    repo.list_for_owner(owner)
+        .await
+        .expect("list prefs")
+        .into_iter()
+        .find(|p| p.entity_kind == "note" && p.entity_id == id)
+        .map(|p| (p.height, p.collapsed))
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn editor_pref_set_only_changes_the_fields_sent(pool: PgPool) {
+    let repo = PgEditorPrefRepo::new(pool);
+    let id = uuid::Uuid::new_v4();
+
+    repo.set("alice", "note", id, Some(300), None)
+        .await
+        .expect("height");
+    assert_eq!(
+        note_pref(&repo, "alice", id).await,
+        Some((Some(300), false))
+    );
+
+    // Collapsing must not reset the saved height…
+    repo.set("alice", "note", id, None, Some(true))
+        .await
+        .expect("collapse");
+    assert_eq!(note_pref(&repo, "alice", id).await, Some((Some(300), true)));
+
+    // …and resizing must not reset the collapse state.
+    repo.set("alice", "note", id, Some(420), None)
+        .await
+        .expect("resize");
+    assert_eq!(note_pref(&repo, "alice", id).await, Some((Some(420), true)));
+
+    // A collapse-only pref needs no height (column is nullable since 031).
+    let fresh = uuid::Uuid::new_v4();
+    repo.set("alice", "note", fresh, None, Some(true))
+        .await
+        .expect("collapse new");
+    assert_eq!(note_pref(&repo, "alice", fresh).await, Some((None, true)));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn editor_pref_bulk_collapse_and_expand(pool: PgPool) {
+    let repo = PgEditorPrefRepo::new(pool);
+    let (a, b, untouched) = (
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+        uuid::Uuid::new_v4(),
+    );
+    repo.set("alice", "note", a, Some(250), None)
+        .await
+        .expect("seed a");
+    // Bob's pref for the same note id must be unaffected by Alice's batches.
+    repo.set("bob", "note", a, None, Some(true))
+        .await
+        .expect("seed bob");
+
+    // Collapse all: upserts, keeps a's height, tolerates a duplicate id.
+    repo.set_collapsed_many("alice", "note", &[a, b, a], true)
+        .await
+        .expect("collapse many");
+    assert_eq!(note_pref(&repo, "alice", a).await, Some((Some(250), true)));
+    assert_eq!(note_pref(&repo, "alice", b).await, Some((None, true)));
+
+    // Expand all: updates existing rows only — no row appears for an id that
+    // was never collapsed (absent already means expanded).
+    repo.set_collapsed_many("alice", "note", &[a, b, untouched], false)
+        .await
+        .expect("expand many");
+    assert_eq!(note_pref(&repo, "alice", a).await, Some((Some(250), false)));
+    assert_eq!(note_pref(&repo, "alice", b).await, Some((None, false)));
+    assert_eq!(note_pref(&repo, "alice", untouched).await, None);
+
+    // Owner scoping: Bob's row is untouched by Alice's expand.
+    assert_eq!(note_pref(&repo, "bob", a).await, Some((None, true)));
 }

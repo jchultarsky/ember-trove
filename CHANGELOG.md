@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — collapsible notes on a node page
+Nodes with many notes took a lot of scrolling. Each note in a node's note panel
+now has a chevron that collapses it to a single line: its first non-empty line
+with Markdown syntax stripped (`## Meeting **notes**` → "Meeting notes"), so it
+works as a title, plus the timestamp. Click the line or the chevron to expand.
+The section header has **Collapse all / Expand all**.
+- **Persistent per account.** State is saved server-side in the existing
+  per-user `editor_prefs` (migration `031`: new `collapsed` column, `height` now
+  nullable), so it follows you across devices and does not reset on refresh.
+  Notes default to expanded. Editing always shows the note expanded, and a note
+  deep-linked from the Notes feed opens expanded without changing what is saved.
+- **API.** `PUT /editor-prefs` now takes optional `height` and `collapsed`, and
+  changes only the fields sent (COALESCE upsert), so collapsing never resets a
+  saved height. New `PUT /editor-prefs/collapsed` handles bulk collapse/expand
+  (at most 500 ids; expanding only updates existing rows). Both are owner-scoped,
+  parameterized, and limited to notes.
+- **Tests.** Unit tests for `common::note::note_title`, route validation tests,
+  real-Postgres repo tests (field-by-field merge, bulk, duplicates, owner
+  isolation), and e2e specs for collapse persistence and Collapse/Expand all.
+
 ### Security — cargo-audit ignore list reviewed (2026-10-22)
 - Dropped two stale ignores, RUSTSEC-2026-0002 (`lru`) and RUSTSEC-2026-0097
   (`rand`). Neither matched `Cargo.lock` any more.
