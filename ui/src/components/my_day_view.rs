@@ -48,7 +48,7 @@ use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::toggle_done;
+use crate::components::task_actions::{ToggleCtx, toggle_done};
 use crate::components::task_common::{status_done, undo_restore_task};
 use crate::components::task_row::{
     EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
@@ -205,8 +205,13 @@ pub fn MyDayView() -> impl IntoView {
                 toggle_done(
                     mdt.task.id,
                     mdt.task.status.clone(),
+                    mdt.task.focus_date,
                     None,
-                    task_refresh,
+                    ToggleCtx {
+                        today,
+                        refresh: task_refresh,
+                        toast_state,
+                    },
                     None,
                 );
             }

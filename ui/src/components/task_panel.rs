@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use crate::app::TaskRefresh;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
-use crate::components::task_actions::{RowSignals, toggle_done};
+use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
 use crate::components::task_common::{
     is_in_my_day, parse_priority, priority_value, sort_tasks_by_order, status_done, status_label,
     undo_restore_task,
@@ -283,6 +283,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
 
     let status_sig = RwSignal::new(task.status.clone());
     let busy = RwSignal::new(false);
+    let focus_date = task.focus_date;
 
     // Inline editing — title, priority, due date.
     let editing_title = RwSignal::new(false);
@@ -323,11 +324,16 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
         toggle_done(
             task_id,
             status_sig.get_untracked(),
+            focus_date,
             Some(RowSignals {
                 status: status_sig,
                 busy,
             }),
-            task_refresh,
+            ToggleCtx {
+                today,
+                refresh: task_refresh,
+                toast_state,
+            },
             Some(&ev),
         );
     };

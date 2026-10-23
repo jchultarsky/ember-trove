@@ -41,7 +41,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
-use crate::components::task_actions::{RowSignals, toggle_done};
+use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
     undo_restore_task,
@@ -187,11 +187,16 @@ pub fn KanbanTaskRow(
         toggle_done(
             task_id,
             status_sig.get_untracked(),
+            focus,
             Some(RowSignals {
                 status: status_sig,
                 busy,
             }),
-            refresh,
+            ToggleCtx {
+                today,
+                refresh,
+                toast_state,
+            },
             Some(&ev),
         );
     };

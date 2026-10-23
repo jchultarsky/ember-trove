@@ -19,7 +19,7 @@ use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::{RowSignals, toggle_done};
+use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, priority_value,
     recurrence_label, recurrence_value, status_done, undo_restore_task,
@@ -220,6 +220,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
 
     let status_sig = RwSignal::new(task.status.clone());
     let busy = RwSignal::new(false);
+    let focus_date = task.focus_date;
     let priority_val = RwSignal::new(priority_value(&task.priority).to_string());
 
     // Inline-edit state
@@ -333,11 +334,16 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         toggle_done(
             task_id,
             status_sig.get_untracked(),
+            focus_date,
             Some(RowSignals {
                 status: status_sig,
                 busy,
             }),
-            refresh,
+            ToggleCtx {
+                today,
+                refresh,
+                toast_state,
+            },
             Some(&ev),
         );
     };

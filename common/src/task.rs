@@ -198,6 +198,58 @@ pub struct UpdateTaskRequest {
     pub node_id: Option<Option<NodeId>>,
 }
 
+/// A done-toggle expressed as PATCHes: the change, and the one that undoes it.
+#[derive(Debug, Clone)]
+pub struct DoneToggle {
+    /// Status the task moves to ([`TaskStatus::toggled`]).
+    pub next: TaskStatus,
+    pub request: UpdateTaskRequest,
+    /// Restores the pre-toggle status (and `focus_date`, if it was stamped).
+    pub revert: UpdateTaskRequest,
+}
+
+impl DoneToggle {
+    /// `true` when the toggle completes the task (offer Undo, strike a spark).
+    pub fn completes(&self) -> bool {
+        self.next == TaskStatus::Done
+    }
+}
+
+/// Build the done-toggle for a task with `current` status and `focus_date`,
+/// given the viewer's local `today`.
+///
+/// Completing a task carried over from an earlier day re-stamps `focus_date`
+/// to `today` ("done today"): My Day keeps done tasks only when focused on
+/// the viewed day, so without the stamp the task would vanish on completion
+/// and never count toward "X / Y done". Computed client-side because "today"
+/// is the viewer's local date, not the server's UTC date.
+pub fn done_toggle(
+    current: &TaskStatus,
+    focus_date: Option<NaiveDate>,
+    today: NaiveDate,
+) -> DoneToggle {
+    let next = current.toggled();
+    let mut request = UpdateTaskRequest {
+        status: Some(next.clone()),
+        ..Default::default()
+    };
+    let mut revert = UpdateTaskRequest {
+        status: Some(current.clone()),
+        ..Default::default()
+    };
+    if next == TaskStatus::Done
+        && let Some(earlier) = focus_date.filter(|d| *d < today)
+    {
+        request.focus_date = Some(Some(today));
+        revert.focus_date = Some(Some(earlier));
+    }
+    DoneToggle {
+        next,
+        request,
+        revert,
+    }
+}
+
 /// One entry in a bulk sort-order update (drag-to-reorder in My Day).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTaskEntry {
@@ -236,6 +288,43 @@ mod tests {
         // "done", so a (ticked) Cancelled task was re-marked Done instead of
         // reopening.
         assert_eq!(TaskStatus::Cancelled.toggled(), TaskStatus::Open);
+    }
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 3, d).unwrap()
+    }
+
+    #[test]
+    fn completing_a_carried_over_task_stamps_today() {
+        let t = done_toggle(&TaskStatus::Open, Some(day(9)), day(12));
+        assert!(t.completes());
+        assert_eq!(t.request.status, Some(TaskStatus::Done));
+        assert_eq!(t.request.focus_date, Some(Some(day(12))));
+        // Undo restores both the status and the original commitment date.
+        assert_eq!(t.revert.status, Some(TaskStatus::Open));
+        assert_eq!(t.revert.focus_date, Some(Some(day(9))));
+    }
+
+    #[test]
+    fn completing_without_carry_over_leaves_focus_alone() {
+        for focus in [None, Some(day(12)), Some(day(20))] {
+            let t = done_toggle(&TaskStatus::InProgress, focus, day(12));
+            assert!(t.completes());
+            assert_eq!(t.request.focus_date, None, "focus {focus:?}");
+            assert_eq!(t.revert.focus_date, None);
+            // Undo returns to In Progress, not a generic Open.
+            assert_eq!(t.revert.status, Some(TaskStatus::InProgress));
+        }
+    }
+
+    #[test]
+    fn reopening_never_touches_focus() {
+        for from in [TaskStatus::Done, TaskStatus::Cancelled] {
+            let t = done_toggle(&from, Some(day(9)), day(12));
+            assert!(!t.completes());
+            assert_eq!(t.request.status, Some(TaskStatus::Open));
+            assert_eq!(t.request.focus_date, None);
+        }
     }
 
     #[test]
