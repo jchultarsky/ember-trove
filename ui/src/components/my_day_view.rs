@@ -41,13 +41,14 @@
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{MyDayTask, TaskStatus, UpdateTaskRequest};
+use common::task::{MyDayTask, UpdateTaskRequest};
 use leptos::wasm_bindgen::JsCast;
 use leptos::{ev, prelude::*};
 use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::page_header::PageHeader;
+use crate::components::task_actions::toggle_done;
 use crate::components::task_common::{status_done, undo_restore_task};
 use crate::components::task_row::{
     EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
@@ -199,24 +200,14 @@ pub fn MyDayView() -> impl IntoView {
                 };
                 ev.prevent_default();
                 let mdt = &flat[idx];
-                let next_status = if status_done(&mdt.task.status) {
-                    TaskStatus::Open
-                } else {
-                    TaskStatus::Done
-                };
-                patch_task(
+                // Same path as the row checkbox (no row signals: the
+                // refetch re-renders the row; no click, so no spark).
+                toggle_done(
                     mdt.task.id,
-                    UpdateTaskRequest {
-                        title: None,
-                        status: Some(next_status),
-                        priority: None,
-                        focus_date: None,
-                        due_date: None,
-                        recurrence: None,
-                        node_id: None,
-                    },
-                    "Toggled",
+                    mdt.task.status.clone(),
+                    None,
                     task_refresh,
+                    None,
                 );
             }
             "t" => {
@@ -235,13 +226,8 @@ pub fn MyDayView() -> impl IntoView {
                 patch_task(
                     mdt.task.id,
                     UpdateTaskRequest {
-                        title: None,
-                        status: None,
-                        priority: None,
                         focus_date: Some(new_focus),
-                        due_date: None,
-                        recurrence: None,
-                        node_id: None,
+                        ..Default::default()
                     },
                     msg,
                     task_refresh,
@@ -494,13 +480,8 @@ fn KanbanZoneRow(
             KanbanZone::Backlog => "Removed from today",
         };
         let req = UpdateTaskRequest {
-            title: None,
-            status: None,
-            priority: None,
             focus_date: Some(new_focus),
-            due_date: None,
-            recurrence: None,
-            node_id: None,
+            ..Default::default()
         };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {

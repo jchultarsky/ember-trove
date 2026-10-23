@@ -14,6 +14,25 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+impl TaskStatus {
+    /// `true` for terminal statuses (Done, Cancelled) — the ones a task
+    /// checkbox renders as ticked.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, TaskStatus::Done | TaskStatus::Cancelled)
+    }
+
+    /// The status a done-toggle (checkbox click, My Day `Space`) moves to:
+    /// a ticked task reopens, anything else completes. Every task list
+    /// shares this rule so a Cancelled task behaves the same everywhere.
+    pub fn toggled(&self) -> TaskStatus {
+        if self.is_terminal() {
+            TaskStatus::Open
+        } else {
+            TaskStatus::Done
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
@@ -142,7 +161,9 @@ pub struct CreateTaskRequest {
     pub recurrence: Option<RecurrenceRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// Every field is optional; `Default` is the no-op PATCH, so callers write
+/// `UpdateTaskRequest { status: Some(s), ..Default::default() }`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct UpdateTaskRequest {
     pub title: Option<String>,
     pub status: Option<TaskStatus>,
@@ -188,4 +209,45 @@ pub struct ReorderTaskEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTasksRequest {
     pub tasks: Vec<ReorderTaskEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_statuses_are_done_and_cancelled() {
+        assert!(TaskStatus::Done.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
+        assert!(!TaskStatus::Open.is_terminal());
+        assert!(!TaskStatus::InProgress.is_terminal());
+    }
+
+    #[test]
+    fn toggle_completes_open_and_in_progress() {
+        assert_eq!(TaskStatus::Open.toggled(), TaskStatus::Done);
+        assert_eq!(TaskStatus::InProgress.toggled(), TaskStatus::Done);
+    }
+
+    #[test]
+    fn toggle_reopens_terminal_statuses() {
+        assert_eq!(TaskStatus::Done.toggled(), TaskStatus::Open);
+        // Regression: the node panel and Inbox compared against the string
+        // "done", so a (ticked) Cancelled task was re-marked Done instead of
+        // reopening.
+        assert_eq!(TaskStatus::Cancelled.toggled(), TaskStatus::Open);
+    }
+
+    #[test]
+    fn default_update_request_serializes_as_noop() {
+        let json = serde_json::to_value(UpdateTaskRequest::default()).unwrap();
+        // Double-option fields are skipped entirely (absent = leave unchanged);
+        // plain options serialize as null, which the API also reads as None.
+        assert_eq!(
+            json,
+            serde_json::json!({ "title": null, "status": null, "priority": null })
+        );
+        let back: UpdateTaskRequest = serde_json::from_value(json).unwrap();
+        assert!(back.focus_date.is_none() && back.due_date.is_none());
+    }
 }

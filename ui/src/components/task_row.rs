@@ -41,12 +41,13 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::task_actions::{RowSignals, toggle_done};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
     undo_restore_task,
 };
 use crate::components::task_row_scaffold::{
-    TITLE_CLASS, TaskRowBody, due_badge_view, priority_dot_view,
+    TITLE_CLASS, TaskCheckbox, TaskRowBody, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -166,13 +167,8 @@ pub fn KanbanTaskRow(
         }
         busy.set(true);
         let req = UpdateTaskRequest {
-            title: None,
-            status: None,
-            priority: None,
             focus_date: Some(new_focus),
-            due_date: None,
-            recurrence: None,
-            node_id: None,
+            ..Default::default()
         };
         wasm_bindgen_futures::spawn_local(async move {
             let result = crate::api::update_task(task_id, &req).await;
@@ -188,43 +184,16 @@ pub fn KanbanTaskRow(
     };
 
     let on_toggle_done = move |ev: web_sys::MouseEvent| {
-        ev.stop_propagation();
-        if busy.get_untracked() {
-            return;
-        }
-        let prev = status_sig.get_untracked();
-        let next = if status_done(&prev) {
-            TaskStatus::Open
-        } else {
-            TaskStatus::Done
-        };
-        if next == TaskStatus::Done {
-            crate::spark::strike_spark(&ev);
-        }
-        status_sig.set(next.clone());
-        busy.set(true);
-        let req = UpdateTaskRequest {
-            title: None,
-            status: Some(next),
-            priority: None,
-            focus_date: None,
-            due_date: None,
-            recurrence: None,
-            node_id: None,
-        };
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::update_task(task_id, &req).await;
-            busy.set(false);
-            match result {
-                Ok(_) => refresh.update(|n| *n += 1),
-                Err(e) => {
-                    // Roll back the optimistic flip — the server still has
-                    // the old status, so the checkbox must not lie.
-                    status_sig.set(prev);
-                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
-                }
-            }
-        });
+        toggle_done(
+            task_id,
+            status_sig.get_untracked(),
+            Some(RowSignals {
+                status: status_sig,
+                busy,
+            }),
+            refresh,
+            Some(&ev),
+        );
     };
 
     let on_delete = move |ev: web_sys::MouseEvent| {
@@ -267,12 +236,10 @@ pub fn KanbanTaskRow(
             Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         let req = UpdateTaskRequest {
             title: Some(new_title.clone()),
-            status: None,
             priority: Some(new_priority),
-            focus_date: None,
             due_date: new_due,
             recurrence: Some(new_recurrence),
-            node_id: None,
+            ..Default::default()
         };
         title_sig.set(new_title);
         editing_id_sig.set(None);
@@ -353,22 +320,10 @@ pub fn KanbanTaskRow(
             title="Click to open the task in its parent node"
         >
             // Checkbox — toggles Open ↔ Done
-            <button
-                type="button"
-                class="flex-shrink-0 mt-0.5 w-5 h-5 rounded border-2 \
-                       border-stone-300 dark:border-stone-600 flex items-center \
-                       justify-center hover:border-amber-500 transition-colors \
-                       cursor-pointer"
-                style=move || if status_done(&status_sig.get()) {
-                    "background:#d97706;border-color:#d97706;"
-                } else { "" }
-                on:click=on_toggle_done
-                title="Toggle done"
-            >
-                {move || status_done(&status_sig.get()).then(|| view! {
-                    <span class="material-symbols-outlined text-white" style="font-size:13px;">"check"</span>
-                })}
-            </button>
+            <TaskCheckbox
+                done=Signal::derive(move || status_done(&status_sig.get()))
+                on_toggle=on_toggle_done
+            />
 
             // Body — title first, supporting meta below, OR inline edit form
             <div class="flex-1 min-w-0">
