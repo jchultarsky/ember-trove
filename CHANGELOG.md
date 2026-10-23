@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.30.0] - 2026-10-23
+
+### Dependencies
+- `utoipa` 5 → 6 (#102). We only use its `ToSchema`/`IntoParams` derives: no
+  spec is generated or served, and the removed features (expression `ignore`,
+  `serde_norway` YAML) are unused. MSRV 1.88 ≤ our 1.97.
+- `taiki-e/install-action` 2.87.28 → 2.87.29 (#99).
+- **Deferred:** the AWS SDK group bump (#100) does not compile. `aws-types`
+  1.7.0 moved to `aws-smithy-schema` 1.x while `aws-config` 1.12 and the SDK
+  crates are still on 0.2.1, and the version set that compiles pulls a
+  days-old RustCrypto rewrite (ecdsa 0.17 / p256 0.14) into SigV4 signing.
+  `tower-http` 0.7 (#101) would still build two copies alongside reqwest's
+  0.6. Both will be revisited.
+
+
 ### Added — Add to My Day while creating a task
 The add-task form (a node's task panel and the Inbox) has a ☀ toggle that puts
 the new task in My Day in the same request (#98, item 7), so you no longer
