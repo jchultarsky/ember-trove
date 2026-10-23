@@ -5,12 +5,21 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-23)
 
-- **In progress: #98 UI feedback review.** Item 2 (completion Undo,
-  carried-over "done today", recurring-occurrence retraction, owner fix) is on
-  `feature/jc/my-day-undo`; all done-toggles now go through
-  `task_actions::toggle_done`. Next: item 7 (Add to My Day in `NewTaskForm`,
-  UI-only), then 1 and 4. Follow-up refactor: consolidate delete-with-undo
-  (4 copies) and the My Day toggle (2 copies) into `task_actions`.
+- **v2.30.0 shipped: #98 UI feedback, items 2 + 7 (PRs #103, #104).**
+  Completing a task offers Undo everywhere. Carried-over tasks stay in My
+  Day as done (the browser re-stamps their My Day date to today). Reopening
+  a recurring task retracts its scheduled occurrence (migration 032
+  `recurrence_parent_id`). Security: occurrences keep the series owner
+  (they used to go to whoever completed the task). All done-toggles go
+  through `task_actions::toggle_done`. New-task form has an Add to My Day
+  toggle. ctutils RUSTSEC-2026-0385 fixed (0.4.5). utoipa 6 (#102).
+  Deferred: the AWS SDK group bump (#100, upstream schema skew + days-old
+  crypto) and tower-http 0.7 (#101). **#98 next:** item 1 (due-date echo +
+  past-date warning), item 4 (clear header search when leaving /search),
+  item 3 (slug+timestamp export name), item 6 (saved-at time), item 5
+  (built-in template prose → empty structure). **Follow-up refactor:** move
+  delete-with-undo (4 copies) and the My Day toggle (2 copies) into
+  `task_actions`.
 
 - **v2.29.0 shipped: collapsible notes + audit review (PRs #96, #97).** Each
   note on a node page collapses to its first line (Markdown stripped via
