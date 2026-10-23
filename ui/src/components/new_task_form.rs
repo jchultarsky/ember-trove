@@ -8,11 +8,18 @@
 //! form is a standalone/inbox capture and shows an *optional* debounced
 //! node-search picker so the user can link the task to a node — or leave it
 //! unlinked if no suitable node exists yet.
+//!
+//! The ☀ toggle commits the new task to My Day in the same request
+//! (`focus_date` = the viewer's local today), instead of a create-then-toggle
+//! second step. Editing a task deliberately has no such field: each row's own
+//! ☀ action already applies immediately, and a second, Save-gated control for
+//! the same state would drift from it.
 
 use chrono::NaiveDate;
 use common::{id::NodeId, task::CreateTaskRequest};
 use leptos::prelude::*;
 
+use crate::components::format_helpers::local_today;
 use crate::components::node_picker::NodePicker;
 use crate::components::task_common::{parse_priority, parse_recurrence_opt};
 
@@ -36,6 +43,7 @@ pub fn NewTaskForm(
     let new_priority = RwSignal::new("medium".to_string());
     let new_due = RwSignal::new(String::new());
     let new_recurrence = RwSignal::new(String::new());
+    let new_my_day = RwSignal::new(false);
     let adding = RwSignal::new(false);
     let add_error = RwSignal::new(Option::<String>::None);
 
@@ -51,6 +59,7 @@ pub fn NewTaskForm(
         let priority = parse_priority(&new_priority.get_untracked());
         let due_date = new_due.get_untracked().trim().parse::<NaiveDate>().ok();
         let recurrence = parse_recurrence_opt(&new_recurrence.get_untracked());
+        let focus_date = new_my_day.get_untracked().then(local_today);
         // Fixed prop node wins; otherwise use the optionally-picked node.
         let chosen_node = node_id.or_else(|| selected_node.get_untracked().map(|(id, _)| id));
         adding.set(true);
@@ -61,7 +70,7 @@ pub fn NewTaskForm(
                 node_id: chosen_node,
                 status: None,
                 priority: Some(priority),
-                focus_date: None,
+                focus_date,
                 due_date,
                 recurrence,
             };
@@ -77,6 +86,7 @@ pub fn NewTaskForm(
                     new_priority.set("medium".to_string());
                     new_due.set(String::new());
                     new_recurrence.set(String::new());
+                    new_my_day.set(false);
                     selected_node.set(None);
                     refresh.update(|n| *n += 1);
                     if let Some(cb) = on_added {
@@ -90,8 +100,11 @@ pub fn NewTaskForm(
     };
 
     view! {
-        <div class="p-3 rounded-lg bg-stone-50 dark:bg-stone-800/50
-            border border-stone-200 dark:border-stone-700 space-y-2">
+        <div
+            class="p-3 rounded-lg bg-stone-50 dark:bg-stone-800/50
+                border border-stone-200 dark:border-stone-700 space-y-2"
+            data-testid="new-task-form"
+        >
             <input
                 type="text"
                 placeholder="Task title…"
@@ -136,6 +149,31 @@ pub fn NewTaskForm(
                     <option value="monthly">"Monthly"</option>
                     <option value="yearly">"Yearly"</option>
                 </select>
+                // My Day — same glyph as the row action; filled when on.
+                <button
+                    type="button"
+                    class=move || if new_my_day.get() {
+                        "p-1 rounded-lg text-amber-500 bg-amber-50 dark:text-amber-400 \
+                         dark:bg-amber-900/30 transition-colors cursor-pointer"
+                    } else {
+                        "p-1 rounded-lg text-stone-400 dark:text-stone-500 \
+                         hover:text-amber-500 dark:hover:text-amber-400 \
+                         hover:bg-stone-100 dark:hover:bg-stone-700 transition-colors cursor-pointer"
+                    }
+                    title=move || if new_my_day.get() { "Will be added to My Day" } else { "Add to My Day" }
+                    aria-label="Add to My Day"
+                    aria-pressed=move || if new_my_day.get() { "true" } else { "false" }
+                    on:click=move |_| new_my_day.update(|v| *v = !*v)
+                >
+                    <span
+                        class="material-symbols-outlined"
+                        style=move || if new_my_day.get() {
+                            "font-size:18px; font-variation-settings: 'FILL' 1;"
+                        } else {
+                            "font-size:18px;"
+                        }
+                    >"wb_sunny"</span>
+                </button>
                 <span class="flex-1"/>
                 <button
                     class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400

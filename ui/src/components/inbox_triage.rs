@@ -29,18 +29,6 @@ enum SubMode {
     Attach,
 }
 
-fn blank_update() -> UpdateTaskRequest {
-    UpdateTaskRequest {
-        title: None,
-        status: None,
-        priority: None,
-        focus_date: None,
-        due_date: None,
-        recurrence: None,
-        node_id: None,
-    }
-}
-
 #[component]
 pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoView {
     let tasks: RwSignal<Vec<Task>> = RwSignal::new(Vec::new());
@@ -147,7 +135,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     let do_today = move || {
         let req = UpdateTaskRequest {
             focus_date: Some(Some(local_today())),
-            ..blank_update()
+            ..Default::default()
         };
         patch_current(req, "Added to today");
     };
@@ -183,7 +171,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
         };
         let req = UpdateTaskRequest {
             due_date: Some(Some(date)),
-            ..blank_update()
+            ..Default::default()
         };
         patch_current(req, "Due date set");
     };
@@ -191,7 +179,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     let do_attach = move |node_id: NodeId| {
         let req = UpdateTaskRequest {
             node_id: Some(Some(node_id)),
-            ..blank_update()
+            ..Default::default()
         };
         patch_current(req, "Attached to node");
     };

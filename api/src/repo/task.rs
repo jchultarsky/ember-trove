@@ -29,6 +29,26 @@ pub trait TaskRepo: Send + Sync {
         owner_id: &str,
     ) -> Result<Vec<Task>, EmberTroveError>;
 
+    /// Create the next occurrence of a recurring task, linked to `parent` —
+    /// the instance whose completion scheduled it — so that reopening
+    /// `parent` can retract it ([`TaskRepo::retract_occurrence`]).
+    async fn create_occurrence(
+        &self,
+        parent: TaskId,
+        owner_id: &str,
+        req: CreateTaskRequest,
+    ) -> Result<Task, EmberTroveError>;
+
+    /// Soft-delete the occurrence scheduled by completing `parent`, but only
+    /// while it is still untouched-open, live, and owned by `owner_id` (an
+    /// occurrence already started or finished is the user's work — keep it).
+    /// Returns the number of rows retracted (0 or 1).
+    async fn retract_occurrence(
+        &self,
+        parent: TaskId,
+        owner_id: &str,
+    ) -> Result<u64, EmberTroveError>;
+
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError>;
 
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError>;
@@ -118,6 +138,49 @@ impl PgTaskRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Shared INSERT behind [`TaskRepo::create`] and
+    /// [`TaskRepo::create_occurrence`] (the only caller that sets `parent`).
+    async fn insert(
+        &self,
+        node_id: Option<NodeId>,
+        owner_id: &str,
+        req: CreateTaskRequest,
+        parent: Option<TaskId>,
+    ) -> Result<Task, EmberTroveError> {
+        // node_id from path param takes precedence; fall back to body field.
+        let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
+        let status = req.status.as_ref().map_or("open", |s| status_str(s));
+        let priority = req.priority.as_ref().map_or("medium", |p| priority_str(p));
+        let recurrence = req
+            .recurrence
+            .as_ref()
+            .map(|r| recurrence_str(r).to_string());
+
+        let row = sqlx::query_as::<_, TaskRow>(&format!(
+            r#"
+            INSERT INTO node_tasks
+                (node_id, owner_id, title, status, priority, focus_date, due_date, recurrence,
+                 recurrence_parent_id)
+            VALUES ($1, $2, $3, $4::task_status, $5::task_priority, $6, $7, $8, $9)
+            RETURNING {SELECT_COLS}
+            "#
+        ))
+        .bind(resolved_node_id)
+        .bind(owner_id)
+        .bind(&req.title)
+        .bind(status)
+        .bind(priority)
+        .bind(req.focus_date)
+        .bind(req.due_date)
+        .bind(recurrence)
+        .bind(parent.map(|p| p.0))
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("create task failed: {e}")))?;
+
+        row.into_task()
     }
 }
 
@@ -278,36 +341,38 @@ impl TaskRepo for PgTaskRepo {
         owner_id: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError> {
-        // node_id from path param takes precedence; fall back to body field.
-        let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
-        let status = req.status.as_ref().map_or("open", |s| status_str(s));
-        let priority = req.priority.as_ref().map_or("medium", |p| priority_str(p));
-        let recurrence = req
-            .recurrence
-            .as_ref()
-            .map(|r| recurrence_str(r).to_string());
+        self.insert(node_id, owner_id, req, None).await
+    }
 
-        let row = sqlx::query_as::<_, TaskRow>(&format!(
+    async fn create_occurrence(
+        &self,
+        parent: TaskId,
+        owner_id: &str,
+        req: CreateTaskRequest,
+    ) -> Result<Task, EmberTroveError> {
+        self.insert(None, owner_id, req, Some(parent)).await
+    }
+
+    async fn retract_occurrence(
+        &self,
+        parent: TaskId,
+        owner_id: &str,
+    ) -> Result<u64, EmberTroveError> {
+        let result = sqlx::query(
             r#"
-            INSERT INTO node_tasks
-                (node_id, owner_id, title, status, priority, focus_date, due_date, recurrence)
-            VALUES ($1, $2, $3, $4::task_status, $5::task_priority, $6, $7, $8)
-            RETURNING {SELECT_COLS}
-            "#
-        ))
-        .bind(resolved_node_id)
+            UPDATE node_tasks SET deleted_at = now()
+            WHERE recurrence_parent_id = $1
+              AND owner_id = $2
+              AND status = 'open'::task_status
+              AND deleted_at IS NULL
+            "#,
+        )
+        .bind(parent.0)
         .bind(owner_id)
-        .bind(&req.title)
-        .bind(status)
-        .bind(priority)
-        .bind(req.focus_date)
-        .bind(req.due_date)
-        .bind(recurrence)
-        .fetch_one(&self.pool)
+        .execute(&self.pool)
         .await
-        .map_err(|e| EmberTroveError::Internal(format!("create task failed: {e}")))?;
-
-        row.into_task()
+        .map_err(|e| EmberTroveError::Internal(format!("retract occurrence failed: {e}")))?;
+        Ok(result.rows_affected())
     }
 
     async fn list_for_node(

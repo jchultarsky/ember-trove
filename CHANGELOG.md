@@ -6,6 +6,76 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.30.0] - 2026-10-23
+
+### Dependencies
+- `utoipa` 5 → 6 (#102). We only use its `ToSchema`/`IntoParams` derives: no
+  spec is generated or served, and the removed features (expression `ignore`,
+  `serde_norway` YAML) are unused. MSRV 1.88 ≤ our 1.97.
+- `taiki-e/install-action` 2.87.28 → 2.87.29 (#99).
+- **Deferred:** the AWS SDK group bump (#100) does not compile. `aws-types`
+  1.7.0 moved to `aws-smithy-schema` 1.x while `aws-config` 1.12 and the SDK
+  crates are still on 0.2.1, and the version set that compiles pulls a
+  days-old RustCrypto rewrite (ecdsa 0.17 / p256 0.14) into SigV4 signing.
+  `tower-http` 0.7 (#101) would still build two copies alongside reqwest's
+  0.6. Both will be revisited.
+
+
+### Added — Add to My Day while creating a task
+The add-task form (a node's task panel and the Inbox) has a ☀ toggle that puts
+the new task in My Day in the same request (#98, item 7), so you no longer
+create the task and then add it to My Day separately. It is off by default and
+resets after each add. Editing a task gets no extra control: each row's own ☀
+action already does this immediately, and a second control that waits for Save
+would drift from it.
+
+### Added — Undo when completing a task
+Completing a task anywhere (a My Day row or `Space`, a node's task panel, the
+Inbox) shows a "Task completed" toast with **Undo** (#98, item 2). Undo puts
+back the previous status (In Progress stays In Progress) and, for a task
+carried over from an earlier day, its original My Day date.
+
+### Fixed — completing tasks
+- **Carried-over tasks no longer vanish from My Day when completed.** My Day
+  keeps a done task only if its My Day date is the viewed day, so a task
+  carried over from an earlier day dropped out on completion: the "X / Y done"
+  counter shrank its total instead of counting it. Completing a carried-over
+  task now moves its My Day date to today ("done today"), using the viewer's
+  local date (`common::task::done_toggle`).
+- **No more duplicate occurrences of recurring tasks.** Completing a recurring
+  task schedules the next one; reopening it (unticking, or Undo) left that
+  occurrence behind, so completing it again created a duplicate. Reopening now
+  soft-deletes the scheduled occurrence if it is still open and untouched; one
+  you have already started or finished is kept. Migration `032` adds
+  `node_tasks.recurrence_parent_id`, used only for this link.
+- **Cancelled tasks behave the same in every list.** The node panel and Inbox
+  compared status against the string `"done"`, so clicking a ticked Cancelled
+  task marked it Done instead of reopening it (and the Inbox showed it
+  unticked). All lists now share one rule, `TaskStatus::toggled`.
+- **Double-clicking a checkbox no longer races two updates** in the node panel
+  and Inbox (only My Day had the in-flight guard).
+
+### Security — ctutils constant-time fix (RUSTSEC-2026-0385)
+`ctutils` 0.4.2 → 0.4.5 (lockfile only). Published 2026-10-23: mask generation
+and `u128` comparisons were not constant-time. It is transitive via `digest`
+0.11, which backs `hmac`/`sha2` (ours, the AWS SDK's request signing, sqlx,
+zip), so HMAC verification could leak timing. Upgraded rather than ignored;
+0.4.5 over the minimal 0.4.4 for its further Thumb-1/`Choice` hardening.
+
+### Security — recurring tasks keep their owner
+The next occurrence of a recurring task was created for whoever completed it.
+A node editor completing someone else's recurring task therefore took over
+the series, and it disappeared from the owner's lists. The occurrence is now
+always created for the series owner, and retracting one is owner-scoped.
+
+### Changed — one completion path (refactor)
+The four hand-written done-toggles are replaced by
+`ui::components::task_actions::toggle_done` and a shared `TaskCheckbox` in the
+row scaffold. `UpdateTaskRequest` derives `Default`, so updates no longer
+spell out every unchanged field as `None` (this also replaces `inbox_triage`'s
+`blank_update`). The
+`Space` shortcut no longer shows a bare "Toggled" toast.
+
 ## [2.29.0] - 2026-10-22
 
 ### Added — collapsible notes on a node page
