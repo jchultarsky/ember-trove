@@ -6,6 +6,46 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Undo when completing a task
+Completing a task anywhere (a My Day row or `Space`, a node's task panel, the
+Inbox) shows a "Task completed" toast with **Undo** (#98, item 2). Undo puts
+back the previous status (In Progress stays In Progress) and, for a task
+carried over from an earlier day, its original My Day date.
+
+### Fixed — completing tasks
+- **Carried-over tasks no longer vanish from My Day when completed.** My Day
+  keeps a done task only if its My Day date is the viewed day, so a task
+  carried over from an earlier day dropped out on completion: the "X / Y done"
+  counter shrank its total instead of counting it. Completing a carried-over
+  task now moves its My Day date to today ("done today"), using the viewer's
+  local date (`common::task::done_toggle`).
+- **No more duplicate occurrences of recurring tasks.** Completing a recurring
+  task schedules the next one; reopening it (unticking, or Undo) left that
+  occurrence behind, so completing it again created a duplicate. Reopening now
+  soft-deletes the scheduled occurrence if it is still open and untouched; one
+  you have already started or finished is kept. Migration `032` adds
+  `node_tasks.recurrence_parent_id`, used only for this link.
+- **Cancelled tasks behave the same in every list.** The node panel and Inbox
+  compared status against the string `"done"`, so clicking a ticked Cancelled
+  task marked it Done instead of reopening it (and the Inbox showed it
+  unticked). All lists now share one rule, `TaskStatus::toggled`.
+- **Double-clicking a checkbox no longer races two updates** in the node panel
+  and Inbox (only My Day had the in-flight guard).
+
+### Security — recurring tasks keep their owner
+The next occurrence of a recurring task was created for whoever completed it.
+A node editor completing someone else's recurring task therefore took over
+the series, and it disappeared from the owner's lists. The occurrence is now
+always created for the series owner, and retracting one is owner-scoped.
+
+### Changed — one completion path (refactor)
+The four hand-written done-toggles are replaced by
+`ui::components::task_actions::toggle_done` and a shared `TaskCheckbox` in the
+row scaffold. `UpdateTaskRequest` derives `Default`, so updates no longer
+spell out every unchanged field as `None` (this also replaces `inbox_triage`'s
+`blank_update`). The
+`Space` shortcut no longer shows a bare "Toggled" toast.
+
 ## [2.29.0] - 2026-10-22
 
 ### Added — collapsible notes on a node page

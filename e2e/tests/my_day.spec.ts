@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 
 /** My Day: carryover "still today?" prompt and the foldable overdue section. */
 
@@ -95,4 +95,101 @@ test('overdue tasks group into a foldable section', async ({ page, request }) =>
   } finally {
     await request.delete(`/api/tasks/${task.id}`);
   }
+});
+
+// ── Completion: Undo toast, carried-over "done today", recurring retraction ──
+//
+// Standalone (Inbox) fixtures so `/api/tasks/inbox` — every status, minus
+// tombstones — can both verify server state and wipe leftovers. Wiped
+// before AND after each attempt (retry-safety, .claude/rules/e2e.md).
+
+type InboxTask = { id: string; title: string; status: string; focus_date: string | null };
+
+const COMPLETE_PREFIX = 'e2e complete';
+
+async function inboxTasks(request: APIRequestContext, prefix: string): Promise<InboxTask[]> {
+  const resp = await request.get('/api/tasks/inbox');
+  expect(resp.ok()).toBeTruthy();
+  return ((await resp.json()) as InboxTask[]).filter((t) => t.title.startsWith(prefix));
+}
+
+async function wipeCompletion(request: APIRequestContext) {
+  for (const t of await inboxTasks(request, COMPLETE_PREFIX)) {
+    await request.delete(`/api/tasks/${t.id}`);
+  }
+}
+
+test.describe('completing a task', () => {
+  test.beforeEach(async ({ request }) => wipeCompletion(request));
+  test.afterEach(async ({ request }) => wipeCompletion(request));
+
+  test('carried-over task stays in Today as done; Undo restores it', async ({
+    page,
+    request,
+  }) => {
+    const title = `${COMPLETE_PREFIX} carried ${Date.now()}`;
+    const created = await request.post('/api/tasks', {
+      data: { title, focus_date: localISO(-2) },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+
+    await page.goto('/tasks/my-day');
+    const row = page.locator('[data-task-id]', { hasText: title });
+    await expect(row).toBeVisible();
+    const counter = page.getByText(/^\d+ \/ \d+ done$/);
+    await expect(counter).toBeVisible();
+    const [done0, total0] = ((await counter.textContent()) ?? '').match(/\d+/g)!.map(Number);
+
+    await row.locator('button[title="Toggle done"]').click();
+    const toast = page.locator('[role="status"]');
+    await expect(toast.getByText('Task completed')).toBeVisible();
+
+    // Regression: the completed carry-over used to drop out of My Day,
+    // shrinking the denominator ("0 / 3 → 0 / 2") instead of counting.
+    await expect(counter).toHaveText(`${done0 + 1} / ${total0} done`);
+    await expect(row.locator('button[title="Toggle done"]')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect(counter).toHaveText(`${done0} / ${total0} done`);
+    await expect(row.locator('button[title="Toggle done"]')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    // Undo restores the original commitment date, not just the status.
+    await expect(row.getByTestId('carryover-prompt')).toBeVisible();
+    const [after] = (await inboxTasks(request, title)).filter((t) => t.id === task.id);
+    expect(after).toMatchObject({ status: 'open', focus_date: localISO(-2) });
+  });
+
+  test('undoing a recurring completion leaves no duplicate occurrence', async ({
+    page,
+    request,
+  }) => {
+    const title = `${COMPLETE_PREFIX} recurring ${Date.now()}`;
+    const created = await request.post('/api/tasks', {
+      data: { title, focus_date: localISO(0), recurrence: 'daily' },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+
+    await page.goto('/tasks/my-day');
+    const row = page.locator('[data-task-id]', { hasText: title });
+    await row.locator('button[title="Toggle done"]').click();
+    const toast = page.locator('[role="status"]');
+    await expect(toast.getByText('Task completed')).toBeVisible();
+
+    // Completion scheduled tomorrow's occurrence.
+    await expect.poll(async () => (await inboxTasks(request, title)).length).toBe(2);
+
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    // Regression: reopening left the occurrence behind, so completing again
+    // produced a duplicate. Only the original — reopened — remains.
+    await expect
+      .poll(async () => (await inboxTasks(request, title)).map((t) => [t.id, t.status]))
+      .toEqual([[task.id, 'open']]);
+  });
 });
