@@ -238,6 +238,17 @@ impl TaskRepo for StubTaskRepo {
     async fn list_for_node(&self, _: NodeId, _: &str) -> Result<Vec<Task>, EmberTroveError> {
         unimplemented!()
     }
+    async fn create_occurrence(
+        &self,
+        _: TaskId,
+        _: &str,
+        _: CreateTaskRequest,
+    ) -> Result<Task, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn retract_occurrence(&self, _: TaskId, _: &str) -> Result<u64, EmberTroveError> {
+        unimplemented!()
+    }
     async fn get(&self, _: TaskId) -> Result<Task, EmberTroveError> {
         unimplemented!()
     }
