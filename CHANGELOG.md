@@ -32,6 +32,13 @@ carried over from an earlier day, its original My Day date.
 - **Double-clicking a checkbox no longer races two updates** in the node panel
   and Inbox (only My Day had the in-flight guard).
 
+### Security — ctutils constant-time fix (RUSTSEC-2026-0385)
+`ctutils` 0.4.2 → 0.4.5 (lockfile only). Published 2026-10-23: mask generation
+and `u128` comparisons were not constant-time. It is transitive via `digest`
+0.11, which backs `hmac`/`sha2` (ours, the AWS SDK's request signing, sqlx,
+zip), so HMAC verification could leak timing. Upgraded rather than ignored;
+0.4.5 over the minimal 0.4.4 for its further Thumb-1/`Choice` hardening.
+
 ### Security — recurring tasks keep their owner
 The next occurrence of a recurring task was created for whoever completed it.
 A node editor completing someone else's recurring task therefore took over
