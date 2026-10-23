@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Add to My Day while creating a task
+The add-task form (a node's task panel and the Inbox) has a ☀ toggle that puts
+the new task in My Day in the same request (#98, item 7), so you no longer
+create the task and then add it to My Day separately. It is off by default and
+resets after each add. Editing a task gets no extra control: each row's own ☀
+action already does this immediately, and a second control that waits for Save
+would drift from it.
+
 ## [2.29.0] - 2026-10-22
 
 ### Added — collapsible notes on a node page
