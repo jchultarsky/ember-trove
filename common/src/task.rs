@@ -14,6 +14,25 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+impl TaskStatus {
+    /// `true` for terminal statuses (Done, Cancelled) — the ones a task
+    /// checkbox renders as ticked.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, TaskStatus::Done | TaskStatus::Cancelled)
+    }
+
+    /// The status a done-toggle (checkbox click, My Day `Space`) moves to:
+    /// a ticked task reopens, anything else completes. Every task list
+    /// shares this rule so a Cancelled task behaves the same everywhere.
+    pub fn toggled(&self) -> TaskStatus {
+        if self.is_terminal() {
+            TaskStatus::Open
+        } else {
+            TaskStatus::Done
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskPriority {
@@ -142,7 +161,9 @@ pub struct CreateTaskRequest {
     pub recurrence: Option<RecurrenceRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+/// Every field is optional; `Default` is the no-op PATCH, so callers write
+/// `UpdateTaskRequest { status: Some(s), ..Default::default() }`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct UpdateTaskRequest {
     pub title: Option<String>,
     pub status: Option<TaskStatus>,
@@ -177,6 +198,58 @@ pub struct UpdateTaskRequest {
     pub node_id: Option<Option<NodeId>>,
 }
 
+/// A done-toggle expressed as PATCHes: the change, and the one that undoes it.
+#[derive(Debug, Clone)]
+pub struct DoneToggle {
+    /// Status the task moves to ([`TaskStatus::toggled`]).
+    pub next: TaskStatus,
+    pub request: UpdateTaskRequest,
+    /// Restores the pre-toggle status (and `focus_date`, if it was stamped).
+    pub revert: UpdateTaskRequest,
+}
+
+impl DoneToggle {
+    /// `true` when the toggle completes the task (offer Undo, strike a spark).
+    pub fn completes(&self) -> bool {
+        self.next == TaskStatus::Done
+    }
+}
+
+/// Build the done-toggle for a task with `current` status and `focus_date`,
+/// given the viewer's local `today`.
+///
+/// Completing a task carried over from an earlier day re-stamps `focus_date`
+/// to `today` ("done today"): My Day keeps done tasks only when focused on
+/// the viewed day, so without the stamp the task would vanish on completion
+/// and never count toward "X / Y done". Computed client-side because "today"
+/// is the viewer's local date, not the server's UTC date.
+pub fn done_toggle(
+    current: &TaskStatus,
+    focus_date: Option<NaiveDate>,
+    today: NaiveDate,
+) -> DoneToggle {
+    let next = current.toggled();
+    let mut request = UpdateTaskRequest {
+        status: Some(next.clone()),
+        ..Default::default()
+    };
+    let mut revert = UpdateTaskRequest {
+        status: Some(current.clone()),
+        ..Default::default()
+    };
+    if next == TaskStatus::Done
+        && let Some(earlier) = focus_date.filter(|d| *d < today)
+    {
+        request.focus_date = Some(Some(today));
+        revert.focus_date = Some(Some(earlier));
+    }
+    DoneToggle {
+        next,
+        request,
+        revert,
+    }
+}
+
 /// One entry in a bulk sort-order update (drag-to-reorder in My Day).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTaskEntry {
@@ -188,4 +261,82 @@ pub struct ReorderTaskEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTasksRequest {
     pub tasks: Vec<ReorderTaskEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_statuses_are_done_and_cancelled() {
+        assert!(TaskStatus::Done.is_terminal());
+        assert!(TaskStatus::Cancelled.is_terminal());
+        assert!(!TaskStatus::Open.is_terminal());
+        assert!(!TaskStatus::InProgress.is_terminal());
+    }
+
+    #[test]
+    fn toggle_completes_open_and_in_progress() {
+        assert_eq!(TaskStatus::Open.toggled(), TaskStatus::Done);
+        assert_eq!(TaskStatus::InProgress.toggled(), TaskStatus::Done);
+    }
+
+    #[test]
+    fn toggle_reopens_terminal_statuses() {
+        assert_eq!(TaskStatus::Done.toggled(), TaskStatus::Open);
+        // Regression: the node panel and Inbox compared against the string
+        // "done", so a (ticked) Cancelled task was re-marked Done instead of
+        // reopening.
+        assert_eq!(TaskStatus::Cancelled.toggled(), TaskStatus::Open);
+    }
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 3, d).unwrap()
+    }
+
+    #[test]
+    fn completing_a_carried_over_task_stamps_today() {
+        let t = done_toggle(&TaskStatus::Open, Some(day(9)), day(12));
+        assert!(t.completes());
+        assert_eq!(t.request.status, Some(TaskStatus::Done));
+        assert_eq!(t.request.focus_date, Some(Some(day(12))));
+        // Undo restores both the status and the original commitment date.
+        assert_eq!(t.revert.status, Some(TaskStatus::Open));
+        assert_eq!(t.revert.focus_date, Some(Some(day(9))));
+    }
+
+    #[test]
+    fn completing_without_carry_over_leaves_focus_alone() {
+        for focus in [None, Some(day(12)), Some(day(20))] {
+            let t = done_toggle(&TaskStatus::InProgress, focus, day(12));
+            assert!(t.completes());
+            assert_eq!(t.request.focus_date, None, "focus {focus:?}");
+            assert_eq!(t.revert.focus_date, None);
+            // Undo returns to In Progress, not a generic Open.
+            assert_eq!(t.revert.status, Some(TaskStatus::InProgress));
+        }
+    }
+
+    #[test]
+    fn reopening_never_touches_focus() {
+        for from in [TaskStatus::Done, TaskStatus::Cancelled] {
+            let t = done_toggle(&from, Some(day(9)), day(12));
+            assert!(!t.completes());
+            assert_eq!(t.request.status, Some(TaskStatus::Open));
+            assert_eq!(t.request.focus_date, None);
+        }
+    }
+
+    #[test]
+    fn default_update_request_serializes_as_noop() {
+        let json = serde_json::to_value(UpdateTaskRequest::default()).unwrap();
+        // Double-option fields are skipped entirely (absent = leave unchanged);
+        // plain options serialize as null, which the API also reads as None.
+        assert_eq!(
+            json,
+            serde_json::json!({ "title": null, "status": null, "priority": null })
+        );
+        let back: UpdateTaskRequest = serde_json::from_value(json).unwrap();
+        assert!(back.focus_date.is_none() && back.due_date.is_none());
+    }
 }

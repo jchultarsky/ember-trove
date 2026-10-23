@@ -43,25 +43,7 @@ pub fn undo_restore_task(
 
 /// Returns `true` for terminal statuses (Done, Cancelled).
 pub fn status_done(s: &TaskStatus) -> bool {
-    matches!(s, TaskStatus::Done | TaskStatus::Cancelled)
-}
-
-pub fn parse_status(s: &str) -> TaskStatus {
-    match s {
-        "in_progress" => TaskStatus::InProgress,
-        "done" => TaskStatus::Done,
-        "cancelled" => TaskStatus::Cancelled,
-        _ => TaskStatus::Open,
-    }
-}
-
-pub fn status_value(s: &TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Open => "open",
-        TaskStatus::InProgress => "in_progress",
-        TaskStatus::Done => "done",
-        TaskStatus::Cancelled => "cancelled",
-    }
+    s.is_terminal()
 }
 
 pub fn status_label(s: &TaskStatus) -> &'static str {

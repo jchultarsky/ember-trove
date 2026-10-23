@@ -47,6 +47,11 @@ CI job is too slow a feedback loop for selector work.
   `exact: true` for toolbar buttons on the graph page (`gotoGraph` in
   graph.spec.ts), and don't give fixtures titles that echo toolbar labels.
 
+- **Fixture titles that contain badge words** (2026-10-23, my_day spec): a
+  title like "e2e complete carried …" makes `row.getByText(/carried/)` match
+  the title as well as the carry-over badge (strict-mode violation). Locate
+  badges by `data-testid` (`carryover-prompt`), not by their text.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —
