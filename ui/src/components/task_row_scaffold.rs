@@ -23,6 +23,38 @@ pub const CHECKBOX_CLASS: &str = "flex-shrink-0 mt-0.5 w-5 h-5 rounded border-2 
      border-stone-300 dark:border-stone-600 flex items-center \
      justify-center hover:border-amber-500 transition-colors cursor-pointer";
 
+/// The task checkbox: ticked (amber fill + `check`) for terminal statuses.
+/// Clicks never bubble to the row (rows navigate on click). Wire `on_toggle`
+/// to [`crate::components::task_actions::toggle_done`], passing the event
+/// for the completion spark.
+#[component]
+pub fn TaskCheckbox(
+    /// Reactive "is this task ticked" (`status_done(&status.get())`).
+    #[prop(into)]
+    done: Signal<bool>,
+    #[prop(into)] on_toggle: Callback<web_sys::MouseEvent>,
+) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            class=CHECKBOX_CLASS
+            style=move || if done.get() {
+                "background:#d97706;border-color:#d97706;"
+            } else { "" }
+            on:click=move |ev: web_sys::MouseEvent| {
+                ev.stop_propagation();
+                on_toggle.run(ev);
+            }
+            title="Toggle done"
+            aria-pressed=move || if done.get() { "true" } else { "false" }
+        >
+            {move || done.get().then(|| view! {
+                <span class="material-symbols-outlined text-white" style="font-size:13px;">"check"</span>
+            })}
+        </button>
+    }
+}
+
 /// Title classes: wraps below `sm` (phone real estate), truncates at sm+
 /// (list density).
 pub const TITLE_CLASS: &str =

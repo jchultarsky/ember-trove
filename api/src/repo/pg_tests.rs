@@ -23,7 +23,7 @@ use common::{
     EmberTroveError,
     node::{CreateNodeRequest, Node, NodeType},
     share_token::CreateShareTokenRequest,
-    task::CreateTaskRequest,
+    task::{CreateTaskRequest, TaskStatus, UpdateTaskRequest},
 };
 use sqlx::PgPool;
 
@@ -218,6 +218,138 @@ async fn task_soft_delete_restore_and_purge(pool: PgPool) {
         tasks.restore(task.id).await,
         Err(EmberTroveError::NotFound(_))
     ));
+}
+
+// ── Recurring-task occurrence link ───────────────────────────────────────────
+
+fn status_req(status: TaskStatus) -> UpdateTaskRequest {
+    UpdateTaskRequest {
+        status: Some(status),
+        ..Default::default()
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn retract_occurrence_only_takes_the_owners_open_occurrence(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let parent = tasks
+        .create(None, "owner-a", task_req("weekly review"))
+        .await
+        .expect("create parent");
+    let next = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly review"))
+        .await
+        .expect("create occurrence");
+    // An unrelated task without a link is never touched.
+    let other = tasks
+        .create(None, "owner-a", task_req("unrelated"))
+        .await
+        .expect("create other");
+
+    // Owner-scoped: a mismatched owner retracts nothing.
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-b")
+            .await
+            .expect("retract (wrong owner)"),
+        0
+    );
+
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-a")
+            .await
+            .expect("retract"),
+        1
+    );
+    assert!(matches!(
+        tasks.get(next.id).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    // Soft delete, so it's restorable; and idempotent.
+    tasks.get_deleted(next.id).await.expect("tombstoned");
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-a")
+            .await
+            .expect("retract again"),
+        0
+    );
+    tasks.get(other.id).await.expect("unrelated task untouched");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn retract_occurrence_keeps_a_started_occurrence(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let parent = tasks
+        .create(None, "owner-a", task_req("daily standup"))
+        .await
+        .expect("create parent");
+    let next = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("daily standup"))
+        .await
+        .expect("create occurrence");
+    tasks
+        .update(next.id, status_req(TaskStatus::InProgress))
+        .await
+        .expect("start occurrence");
+
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-a")
+            .await
+            .expect("retract"),
+        0,
+        "an occurrence the user already started is their work — keep it"
+    );
+    tasks.get(next.id).await.expect("still live");
+}
+
+// ── My Day membership ─────────────────────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 12).expect("date");
+    let earlier = today - Duration::days(2);
+    let mk = |title: &str, focus| CreateTaskRequest {
+        focus_date: Some(focus),
+        ..task_req(title)
+    };
+    let done_today = tasks
+        .create(None, "owner-a", mk("done today", today))
+        .await
+        .expect("create");
+    let carried_open = tasks
+        .create(None, "owner-a", mk("carried open", earlier))
+        .await
+        .expect("create");
+    let carried_done = tasks
+        .create(None, "owner-a", mk("carried done", earlier))
+        .await
+        .expect("create");
+    for t in [&done_today, &carried_done] {
+        tasks
+            .update(t.id, status_req(TaskStatus::Done))
+            .await
+            .expect("complete");
+    }
+
+    let ids: Vec<_> = tasks
+        .list_my_day("owner-a", today)
+        .await
+        .expect("my day")
+        .into_iter()
+        .map(|t| t.task.id)
+        .collect();
+    assert!(
+        ids.contains(&done_today.id),
+        "done today stays (counts as done)"
+    );
+    assert!(ids.contains(&carried_open.id), "open carry-over is sticky");
+    // The query contract the UI's "done today" stamp exists for: a task
+    // completed while still carrying an earlier focus_date drops out.
+    assert!(!ids.contains(&carried_done.id));
 }
 
 // ── Editor prefs: per-field upsert + note collapse ────────────────────────────

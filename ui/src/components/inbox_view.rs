@@ -19,13 +19,13 @@ use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::page_header::PageHeader;
+use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
 use crate::components::task_common::{
-    is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, parse_status,
-    priority_value, recurrence_label, recurrence_value, status_done, status_value,
-    undo_restore_task,
+    is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, priority_value,
+    recurrence_label, recurrence_value, status_done, undo_restore_task,
 };
 use crate::components::task_row_scaffold::{
-    CHECKBOX_CLASS, TITLE_CLASS, TaskRowBody, action_btn_class, due_badge_view, priority_dot_view,
+    TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 use crate::focus_task::schedule_focus_task;
@@ -218,7 +218,9 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let task_id = task.id;
     let today = crate::components::format_helpers::local_today();
 
-    let status_val = RwSignal::new(status_value(&task.status).to_string());
+    let status_sig = RwSignal::new(task.status.clone());
+    let busy = RwSignal::new(false);
+    let focus_date = task.focus_date;
     let priority_val = RwSignal::new(priority_value(&task.priority).to_string());
 
     // Inline-edit state
@@ -275,13 +277,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         picker_query.set(String::new());
         picker_results.set(vec![]);
         let req = UpdateTaskRequest {
-            title: None,
-            status: None,
-            priority: None,
-            focus_date: None,
-            due_date: None,
-            recurrence: None,
             node_id: Some(Some(node_id)),
+            ..Default::default()
         };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {
@@ -315,12 +312,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         priority_val.set(priority_value(&new_priority).to_string());
         let req = UpdateTaskRequest {
             title: Some(new_title),
-            status: None,
             priority: Some(new_priority),
-            focus_date: None,
             due_date: new_due,
             recurrence: Some(new_recurrence),
-            node_id: None,
+            ..Default::default()
         };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {
@@ -336,31 +331,21 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     };
 
     let on_toggle = move |ev: web_sys::MouseEvent| {
-        let current = status_val.get_untracked();
-        let next = if current == "done" { "open" } else { "done" };
-        if next == "done" {
-            crate::spark::strike_spark(&ev);
-        }
-        let req = UpdateTaskRequest {
-            title: None,
-            status: Some(parse_status(next)),
-            priority: None,
-            focus_date: None,
-            due_date: None,
-            recurrence: None,
-            node_id: None,
-        };
-        status_val.set(next.to_string());
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => refresh.update(|n| *n += 1),
-                Err(e) => {
-                    // Roll back the optimistic flip.
-                    status_val.set(current);
-                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
-                }
-            }
-        });
+        toggle_done(
+            task_id,
+            status_sig.get_untracked(),
+            focus_date,
+            Some(RowSignals {
+                status: status_sig,
+                busy,
+            }),
+            ToggleCtx {
+                today,
+                refresh,
+                toast_state,
+            },
+            Some(&ev),
+        );
     };
 
     let on_toggle_my_day = move |_| {
@@ -372,13 +357,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         };
         in_my_day.set(!currently_in);
         let req = UpdateTaskRequest {
-            title: None,
-            status: None,
-            priority: None,
             focus_date: new_focus,
-            due_date: None,
-            recurrence: None,
-            node_id: None,
+            ..Default::default()
         };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::update_task(task_id, &req).await {
@@ -411,19 +391,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         <div class="px-3 py-2" data-task-id=task_id.0.to_string()>
             // Row: checkbox | body | actions — geometry per task_row_scaffold.
             <div class="flex items-start gap-2">
-                    <button
-                        class=CHECKBOX_CLASS
-                        style=move || if status_val.get() == "done" {
-                            "background:#d97706;border-color:#d97706;"
-                        } else { "" }
-                        on:click=on_toggle
-                        title="Toggle done"
-                    >
-                        {move || (status_val.get() == "done").then(|| view! {
-                            <span class="material-symbols-outlined text-white"
-                                style="font-size:13px;">"check"</span>
-                        })}
-                    </button>
+                    <TaskCheckbox
+                        done=Signal::derive(move || status_done(&status_sig.get()))
+                        on_toggle=on_toggle
+                    />
 
                     // Title area
                     <div class="flex-1 min-w-0">
@@ -521,7 +492,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                             let title_line = view! {
                                 {move || priority_dot_view(&parse_priority(&priority_val.get()))}
                                 <span class=TITLE_CLASS
-                                      style=move || if status_val.get() == "done" {
+                                      style=move || if status_done(&status_sig.get()) {
                                           "text-decoration:line-through;"
                                       } else { "" }
                                       inner_html=move || crate::markdown::render_markdown_inline(&orig_title.get())>

@@ -3,7 +3,14 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-22)
+## Current state (2026-10-23)
+
+- **In progress: #98 UI feedback review.** Item 2 (completion Undo,
+  carried-over "done today", recurring-occurrence retraction, owner fix) is on
+  `feature/jc/my-day-undo`; all done-toggles now go through
+  `task_actions::toggle_done`. Next: item 7 (Add to My Day in `NewTaskForm`,
+  UI-only), then 1 and 4. Follow-up refactor: consolidate delete-with-undo
+  (4 copies) and the My Day toggle (2 copies) into `task_actions`.
 
 - **v2.29.0 shipped: collapsible notes + audit review (PRs #96, #97).** Each
   note on a node page collapses to its first line (Markdown stripped via
