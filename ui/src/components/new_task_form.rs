@@ -19,6 +19,7 @@ use chrono::NaiveDate;
 use common::{id::NodeId, task::CreateTaskRequest};
 use leptos::prelude::*;
 
+use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::node_picker::NodePicker;
 use crate::components::task_common::{parse_priority, parse_recurrence_opt};
@@ -127,14 +128,7 @@ pub fn NewTaskForm(
                     <option value="medium">"Medium"</option>
                     <option value="low">"Low"</option>
                 </select>
-                <input
-                    type="date"
-                    class="text-xs bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-300
-                        rounded-lg px-2 py-1 focus:outline-none"
-                    title="Optional due date"
-                    prop:value=move || new_due.get()
-                    on:input=move |ev| new_due.set(event_target_value(&ev))
-                />
+                <DueDateField value=new_due />
                 <select
                     class="text-xs bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-300
                         rounded-lg px-2 py-1 focus:outline-none"

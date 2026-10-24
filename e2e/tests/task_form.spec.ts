@@ -85,3 +85,111 @@ test('inbox: ☀ is off by default and resets after adding', async ({ page, requ
     }
   }
 });
+
+// ── Due-date echo + past-date warning (#98 item 1) ──────────────────────────
+//
+// Fill date inputs as YYYY-MM-DD — never type into the native segments (a
+// stray digit in the Month segment is exactly the bug this guards against).
+
+test('editing a due date echoes it and warns before saving a past date', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e due node ${stamp}`);
+  const title = `e2e due edit ${stamp}`;
+  try {
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+      data: { title, due_date: localISO(3) },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+
+    await page.goto(`/nodes/${node.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    // The glyph text ("edit") is the accessible name; target the title.
+    await row.locator('button[title="Edit task"]').click();
+    const field = row.getByTestId('due-date-field');
+    const hint = field.getByTestId('due-hint');
+    const warning = field.getByTestId('due-warning');
+
+    // The saved date reads back in words; unchanged → no warning.
+    await expect(hint).toContainText('in 3 days');
+    await expect(warning).toBeEmpty();
+
+    await field.locator('input[type="date"]').fill(localISO(9));
+    await expect(hint).toContainText('in 9 days');
+    await expect(warning).toBeEmpty();
+
+    // A slip into the past is called out — but Save is not blocked.
+    await field.locator('input[type="date"]').fill(localISO(-30));
+    await expect(hint).toContainText('ago');
+    await expect(warning).toHaveText('This date is in the past');
+    await row.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(async () => {
+        const tasks: Task[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+        return (tasks.find((t) => t.id === task.id) as Task & { due_date: string })?.due_date;
+      })
+      .toBe(localISO(-30));
+  } finally {
+    const tasks: Task[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+    for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('the add-task form echoes the due date and warns on a past one', async ({ page }) => {
+  await page.goto('/tasks/inbox');
+  const field = page.getByTestId('new-task-form').getByTestId('due-date-field');
+  const input = field.locator('input[type="date"]');
+  await expect(field.getByTestId('due-hint')).toBeEmpty();
+
+  await input.fill(localISO(1));
+  await expect(field.getByTestId('due-hint')).toContainText('tomorrow');
+  await expect(field.getByTestId('due-warning')).toBeEmpty();
+
+  // New task: any past date is a change, so it warns.
+  await input.fill(localISO(-1));
+  await expect(field.getByTestId('due-hint')).toContainText('yesterday');
+  await expect(field.getByTestId('due-warning')).toHaveText('This date is in the past');
+
+  // Clearing removes both.
+  await input.fill('');
+  await expect(field.getByTestId('due-hint')).toBeEmpty();
+  await expect(field.getByTestId('due-warning')).toBeEmpty();
+});
+
+// ── Row ☀ action (task_actions::toggle_my_day + MyDayButton) ────────────────
+
+test('inbox: ☀ stays available while editing a task and applies immediately', async ({
+  page,
+  request,
+}) => {
+  const title = `e2e row sun ${Date.now()}`;
+  const created = await request.post('/api/tasks', { data: { title } });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit"]').click();
+    // Edit hides Assign/Edit/Delete — but not ☀ (it isn't Save-gated).
+    await expect(row.locator('button[title="Edit"]')).toHaveCount(0);
+    const sun = row.getByRole('button', { name: 'Add to My Day' });
+    await expect(sun).toHaveAttribute('aria-pressed', 'false');
+    await sun.click();
+    await expect(row.getByRole('button', { name: 'Remove from My Day' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect
+      .poll(async () => {
+        const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
+        return inbox.find((t) => t.id === task.id)?.focus_date ?? null;
+      })
+      .toBe(localISO(0));
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+  }
+});

@@ -140,7 +140,9 @@ test.describe('editor autosave', () => {
       await editor.pressSequentially(' plus autosaved text');
       await expect(page.getByText('Unsaved changes…')).toBeVisible();
       // Debounce is 2s; allow for the PATCH round-trip.
-      await expect(page.getByText('Saved', { exact: true })).toBeVisible({ timeout: 10_000 });
+      // Persistent label carries the local save time ("Saved · 4:02 PM" or
+      // "Saved · 16:02", per locale) — #98 item 6.
+      await expect(page.getByText(/^Saved · \d{1,2}:\d{2}/)).toBeVisible({ timeout: 10_000 });
 
       // Server state — not just the indicator.
       const fetched = await request.get(`/api/nodes/${node.id}`);

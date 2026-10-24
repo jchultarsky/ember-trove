@@ -6,6 +6,82 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.31.0] - 2026-10-24
+
+### Fixed — search results show full titles (#107)
+- **Result headings are always the node's full title.** The title highlight
+  came from `ts_headline` with fragment limits, so "Buy a gift for Sam"
+  appeared as "Gift for Sam", and a body-only match on "Master Bath Remodel"
+  appeared as just "Master". The same node showed under different names
+  depending on how you reached it. The server now uses `HighlightAll`, and
+  the UI uses a server highlight only when it equals the title plus `<mark>`s
+  (`common::search::title_highlight_is_full`).
+- **Search highlights actually show.** The sanitizer allowed only `<b>`
+  while the SQL emits `<mark>`, so every highlight was silently stripped.
+  It now allows `<mark>` (still ammonia, no attributes). Highlights are
+  styled in stone, not amber, since warm colours are reserved for urgency.
+- **The slug is gone from result cards and the header dropdown.** It was an
+  opaque id that read as debug output.
+
+### Added — clearer search results (#108)
+- Each result card has a metadata line: the type as text, "Updated 3d ago"
+  (`SearchResult` now carries `updated_at`), and for full-text node matches
+  "matched in title" / "matched in text", next to the existing note and task
+  badges.
+- Highlighting no longer depends on the mode: results without a server
+  highlight (fuzzy mode, note and task matches) get the query's words marked
+  in the browser (`common::search::highlight_segments`). These are rendered
+  as escaped text, never HTML.
+- A body snippet with no match (a title-only hit's leading words) is hidden.
+- An empty query is labelled "Recently updated · N nodes" rather than
+  "N results". Defaulting Search to the last preset was declined: silently
+  re-applying old filters would surprise more than it helps.
+
+### Changed — one delete and one ☀ action for every task list (refactor)
+Completing tasks already went through `task_actions::toggle_done`; now
+deleting (`delete_with_undo`) and the row ☀ (`toggle_my_day` plus a shared
+`MyDayButton`) do too. That replaces five delete copies and two My Day toggle
+copies. Behaviour fixes that come with it:
+- **Deleting is guarded against double-clicks in every list.** Only the My
+  Day row and Inbox triage had the guard; a fast double-click in the node
+  panel or Inbox sent two deletes.
+- **The ☀ button looks and behaves the same everywhere:** filled amber when
+  the task is in My Day, with `aria-pressed` for screen readers. The node
+  panel used a different, unfilled style.
+- **The Inbox keeps ☀ visible while you edit a task,** as the node panel
+  always did. It applies immediately and doesn't wait for Save.
+
+### Added — due dates read back in words, with a past-date warning
+Every task due-date input (row edit forms in My Day, a node's task panel and
+the Inbox, the add-task form, and Inbox triage) now spells out the chosen
+date next to the field, e.g. "Fri, Oct 30 · in 7 days" (#98, item 1). A
+stray keypress in a date segment, such as Oct turning into Jan, now reads as
+"Fri, Jan 30 · 9 months ago" before you save. Changing a due date to a day
+in the past also shows "This date is in the past". It is a warning, not a
+block: back-dating is legitimate, and editing an already-overdue task
+without touching its date does not warn. Screen readers get both through
+`aria-describedby`, since the browser's date segments can't be annotated.
+The five inputs now share one `DueDateField`; the logic is
+`common::task::{due_hint, warn_past_due}` (unit tested).
+
+### Changed — export names, header search, save time, templates (#98)
+- **Single-node export filenames** are now `{slug}-{YYYYMMDDTHHMM}.md` (or
+  `.json`), stamped with the node's last update. Repeated exports of an
+  edited node used to pile up as `Project (1).md`, `Project (2).md`, …, and
+  each file had to be opened to tell which version it was. The slug matches
+  the bulk ZIP's entry names (item 3).
+- **The header search clears when you leave for any page but Search.** A
+  term typed earlier stayed in the header on every node visited afterwards,
+  which read as if it filtered the page. Pressing Enter or "View all" still
+  carries it to the results page (item 4).
+- **The editor's save indicator shows the time:** "Saved · 4:02 PM" (in the
+  browser's locale), so a glance tells you your last edits landed. "Unsaved
+  changes…" and "Saving…" read a shade stronger (item 6).
+- **The built-in Area and Resource templates** start with empty bullets
+  instead of instructional prose, which used to be saved as real body text.
+  Templates you saved in Templates are your content and are not changed
+  (item 5).
+
 ## [2.30.0] - 2026-10-23
 
 ### Dependencies

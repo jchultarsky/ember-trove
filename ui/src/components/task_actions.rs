@@ -6,6 +6,10 @@
 //! against the string `"done"` (so a Cancelled task behaved three different
 //! ways) and two had no in-flight guard (a double-click raced two PATCHes).
 //! New task surfaces call [`toggle_done`] instead of hand-rolling the PATCH.
+//!
+//! The same goes for deleting ([`delete_with_undo`], five former copies, only
+//! two of which guarded against a double-click) and the row ☀ action
+//! ([`toggle_my_day`], two former copies).
 
 use std::sync::Arc;
 
@@ -14,6 +18,7 @@ use common::id::TaskId;
 use common::task::{TaskStatus, UpdateTaskRequest, done_toggle};
 use leptos::prelude::*;
 
+use crate::components::task_common::undo_restore_task;
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// A rendered row's optimistic state. List-level callers that have no row
@@ -26,11 +31,11 @@ pub struct RowSignals {
     pub busy: RwSignal<bool>,
 }
 
-/// The list-level context a toggle needs. All `Copy`, captured at component
-/// setup: the Undo action runs after the row may have unmounted, outside any
-/// reactive owner.
+/// The list-level context every task action needs. All `Copy`, captured at
+/// component setup: Undo actions run after the row may have unmounted,
+/// outside any reactive owner.
 #[derive(Clone, Copy)]
-pub struct ToggleCtx {
+pub struct TaskCtx {
     /// The viewer's local date (`format_helpers::local_today`).
     pub today: NaiveDate,
     /// Bumped after every successful write so the list refetches.
@@ -50,7 +55,7 @@ pub fn toggle_done(
     status: TaskStatus,
     focus_date: Option<NaiveDate>,
     row: Option<RowSignals>,
-    ctx: ToggleCtx,
+    ctx: TaskCtx,
     spark: Option<&web_sys::MouseEvent>,
 ) {
     if row.is_some_and(|r| r.busy.get_untracked()) {
@@ -97,7 +102,7 @@ pub fn toggle_done(
 fn undo_toggle(
     task_id: TaskId,
     revert: UpdateTaskRequest,
-    ctx: ToggleCtx,
+    ctx: TaskCtx,
 ) -> Arc<dyn Fn() + Send + Sync> {
     Arc::new(move || {
         let req = revert.clone();
@@ -112,4 +117,60 @@ fn undo_toggle(
             }
         });
     })
+}
+
+/// Soft-delete a task and offer Undo (which restores it).
+///
+/// `busy` is the row's in-flight guard, if it has one (a second click while a
+/// delete is in flight is ignored). `on_deleted` runs after a successful
+/// delete, for caller bookkeeping — Inbox triage advances to the next card.
+pub fn delete_with_undo(
+    task_id: TaskId,
+    busy: Option<RwSignal<bool>>,
+    ctx: TaskCtx,
+    on_deleted: impl FnOnce() + 'static,
+) {
+    if busy.is_some_and(|b| b.get_untracked()) {
+        return;
+    }
+    if let Some(b) = busy {
+        b.set(true);
+    }
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::delete_task(task_id).await;
+        if let Some(b) = busy {
+            b.set(false);
+        }
+        match result {
+            Ok(_) => {
+                ctx.refresh.update(|n| *n += 1);
+                push_undo_toast(
+                    "Task deleted",
+                    undo_restore_task(task_id, ctx.refresh, ctx.toast_state),
+                );
+                on_deleted();
+            }
+            Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+        }
+    });
+}
+
+/// The row ☀ action: commit the task to today's My Day, or take it out.
+/// `in_my_day` flips immediately and rolls back if the PATCH fails.
+pub fn toggle_my_day(task_id: TaskId, in_my_day: RwSignal<bool>, ctx: TaskCtx) {
+    let currently = in_my_day.get_untracked();
+    in_my_day.set(!currently);
+    let req = UpdateTaskRequest {
+        focus_date: Some((!currently).then_some(ctx.today)),
+        ..Default::default()
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        match crate::api::update_task(task_id, &req).await {
+            Ok(_) => ctx.refresh.update(|n| *n += 1),
+            Err(e) => {
+                in_my_day.set(currently);
+                push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+            }
+        }
+    });
 }
