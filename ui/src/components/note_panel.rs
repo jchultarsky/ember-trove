@@ -285,7 +285,6 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     // captured here: the undo closure runs after an await, outside any owner.
     let deleting = RwSignal::new(false);
     let toast_state = use_context::<crate::components::toast::ToastState>();
-    let refetch_notes = Callback::new(move |()| refresh.update(|n| *n += 1));
 
     let on_add = move |_| do_add();
     view! {
@@ -440,8 +439,9 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
 
                                                 let edited = (note.updated_at - note.created_at).num_seconds() > 2;
                                                 let ts = {
-                                                    let base = note.created_at
-                                                        .format("%b %-d, %Y %H:%M").to_string();
+                                                    // Local time (formatting the UTC value directly
+                                                    // showed UTC as if it were local).
+                                                    let base = crate::components::format_helpers::format_timestamp(&note.created_at);
                                                     if edited { format!("{base} · edited") } else { base }
                                                 };
 
@@ -570,7 +570,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                                                         crate::note_actions::delete_note_with_undo(
                                                                                                             note_id,
                                                                                                             deleting,
-                                                                                                            refetch_notes,
+                                                                                                            refresh,
                                                                                                             toast_state,
                                                                                                         )
                                                                                                     })

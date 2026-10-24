@@ -32,20 +32,38 @@ pub fn local_time_now() -> String {
         .into()
 }
 
-/// Format a UTC timestamp as a concise local date-time string using JS's
-/// `Intl.DateTimeFormat` (avoids a full `chrono-tz` / `time` WASM dependency).
+/// `Intl` options object from `(key, value)` pairs, for the locale formatters.
+fn intl_options(pairs: &[(&str, &str)]) -> js_sys::Object {
+    let opts = js_sys::Object::new();
+    for (k, v) in pairs {
+        let _ = js_sys::Reflect::set(&opts, &(*k).into(), &(*v).into());
+    }
+    opts
+}
+
+fn js_date(ts: &chrono::DateTime<chrono::Utc>) -> js_sys::Date {
+    js_sys::Date::new(&(ts.timestamp_millis() as f64).into())
+}
+
+/// Format a UTC timestamp as a concise local date-time string via
+/// `Date.prototype.toLocaleString` — no `eval` (CSP-safe) and no
+/// `chrono-tz` / `time` WASM dependency.
 ///
 /// Example output: `"Mar 25, 2026, 14:32"`
 pub fn format_timestamp(ts: &chrono::DateTime<chrono::Utc>) -> String {
-    let iso = ts.to_rfc3339();
-    let js = format!(
-        "new Intl.DateTimeFormat(undefined, {{year:'numeric',month:'short',day:'numeric',\
-         hour:'2-digit',minute:'2-digit'}}).format(new Date('{iso}'))"
-    );
-    js_sys::eval(&js)
-        .ok()
-        .and_then(|v| v.as_string())
-        .unwrap_or_else(|| iso[..16].replace('T', " "))
+    let opts = intl_options(&[
+        ("year", "numeric"),
+        ("month", "short"),
+        ("day", "numeric"),
+        ("hour", "2-digit"),
+        ("minute", "2-digit"),
+    ]);
+    let s: String = js_date(ts).to_locale_string("default", &opts).into();
+    if s.is_empty() {
+        ts.to_rfc3339()[..16].replace('T', " ")
+    } else {
+        s
+    }
 }
 
 /// Short relative-time label for scannable lists (e.g. "just now", "2h ago",
@@ -76,12 +94,31 @@ pub fn format_relative_short(ts: &chrono::DateTime<chrono::Utc>) -> String {
         return format!("{diff_days}d ago");
     }
     // Older than a week — show a short absolute date ("Apr 18") to remain scannable.
-    let iso = ts.to_rfc3339();
-    let js = format!(
-        "new Intl.DateTimeFormat(undefined, {{month:'short',day:'numeric'}}).format(new Date('{iso}'))"
-    );
-    js_sys::eval(&js)
-        .ok()
-        .and_then(|v| v.as_string())
-        .unwrap_or_else(|| iso[..10].to_string())
+    let opts = intl_options(&[("month", "short"), ("day", "numeric")]);
+    let s: String = js_date(ts).to_locale_date_string("default", &opts).into();
+    if s.is_empty() {
+        ts.to_rfc3339()[..10].to_string()
+    } else {
+        s
+    }
+}
+
+/// Copy `text` to the clipboard via `navigator.clipboard.writeText`, reached
+/// through `Reflect` — no `eval` (the old helpers built a JS string by hand,
+/// which broke under a CSP without 'unsafe-eval') and no extra web-sys
+/// features. Best-effort: the browser may refuse without a user gesture.
+pub fn copy_to_clipboard(text: &str) {
+    use wasm_bindgen::JsCast as _;
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    let get = |obj: &wasm_bindgen::JsValue, key: &str| js_sys::Reflect::get(obj, &key.into()).ok();
+    let Some(clipboard) = get(&win.into(), "navigator").and_then(|n| get(&n, "clipboard")) else {
+        return;
+    };
+    if let Some(write) =
+        get(&clipboard, "writeText").and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+    {
+        let _ = write.call1(&clipboard, &text.into());
+    }
 }

@@ -221,7 +221,10 @@ pub fn MyDayView() -> impl IntoView {
                 };
                 ev.prevent_default();
                 let mdt = &flat[idx];
-                let in_today = mdt.task.focus_date == Some(today);
+                // Same rule as the Today zone (focus_date on or before today):
+                // `t` on a carried-over row used to re-stamp it instead of
+                // removing it, contradicting the row's × button.
+                let in_today = mdt.task.focus_date.is_some_and(|d| d <= today);
                 let new_focus = if in_today { None } else { Some(today) };
                 let msg = if in_today {
                     "Removed from today"

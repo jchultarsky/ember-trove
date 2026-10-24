@@ -80,9 +80,8 @@ pub fn NotesView() -> impl IntoView {
     let deleting = RwSignal::new(false);
     // Captured at setup for the undo closure, which outlives the note card.
     let toast_state = use_context::<ToastState>();
-    let refetch_feed = Callback::new(move |()| reload.update(|n| *n += 1));
     let do_delete = move |note_id: NoteId| {
-        crate::note_actions::delete_note_with_undo(note_id, deleting, refetch_feed, toast_state);
+        crate::note_actions::delete_note_with_undo(note_id, deleting, reload, toast_state);
     };
 
     // ── Filter / sort state ─────────────────────────────────────────────────
@@ -369,9 +368,8 @@ pub fn NotesView() -> impl IntoView {
                                     let node_title = feed_note.node_title.clone();
                                     let body_html = render_markdown_plain(&feed_note.note.body);
                                     let card_class = palette_card_class(&feed_note.note.color).to_string();
-                                    let ts = feed_note.note.created_at
-                                        .format("%b %-d, %Y %H:%M")
-                                        .to_string();
+                                    // Local time, not the UTC value printed as-is.
+                                    let ts = crate::components::format_helpers::format_timestamp(&feed_note.note.created_at);
 
                                     // Header: clickable node label that deep-links to the
                                     // note inside its node (`?note=`); or an Inbox pill.
