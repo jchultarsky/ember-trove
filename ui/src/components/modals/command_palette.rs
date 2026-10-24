@@ -426,10 +426,9 @@ pub fn CommandPalette(
     on_create: Callback<String>,
 ) -> impl IntoView {
     let query: RwSignal<String> = RwSignal::new(String::new());
-    let results: RwSignal<Vec<SearchResult>> = RwSignal::new(Vec::new());
+    let results = crate::components::node_picker::use_node_search(query);
     let recent: RwSignal<Vec<RecentEntry>> = RwSignal::new(Vec::new());
     let highlight: RwSignal<usize> = RwSignal::new(0);
-    let version: RwSignal<u32> = RwSignal::new(0);
     let input_ref: NodeRef<html::Input> = NodeRef::new();
     let panel_ref: NodeRef<html::Div> = NodeRef::new();
     super::return_focus_on_close(show);
@@ -463,31 +462,6 @@ pub fn CommandPalette(
         {
             let _ = el.focus();
         }
-    });
-
-    // Debounced search effect.  Mirrors the canonical pattern at
-    // `.claude/patterns/reactive-effect-debounce.rs`: bump a monotonic
-    // version counter, sleep 300ms, drop stale responses on the way in
-    // and on the way out.
-    Effect::new(move |_| {
-        let q = query.get();
-        version.update(|v| *v += 1);
-        let my_v = version.get_untracked();
-        spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(300).await;
-            if version.get_untracked() != my_v {
-                return;
-            }
-            if q.trim().is_empty() {
-                results.set(Vec::new());
-                return;
-            }
-            if let Ok(rs) = crate::api::node_picker_search(&q).await
-                && version.get_untracked() == my_v
-            {
-                results.set(rs);
-            }
-        });
     });
 
     // Build the action list reactively.  The order here is the order

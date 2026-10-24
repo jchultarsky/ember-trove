@@ -8,7 +8,6 @@
 
 use common::{
     id::NodeId,
-    search::SearchResult,
     task::{Task, UpdateTaskRequest},
 };
 use leptos::prelude::*;
@@ -18,6 +17,7 @@ use crate::components::due_date_field::DueDateField;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
+use crate::components::node_picker::use_node_search;
 use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
@@ -238,30 +238,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     // Node-picker state
     let assigning = RwSignal::new(false);
     let picker_query = RwSignal::new(String::new());
-    let picker_results = RwSignal::<Vec<SearchResult>>::new(vec![]);
-    let pick_ver = RwSignal::new(0u32);
-
-    // Debounced search
-    Effect::new(move |_| {
-        let q = picker_query.get();
-        if q.trim().is_empty() {
-            picker_results.set(vec![]);
-            return;
-        }
-        pick_ver.update(|v| *v += 1);
-        let ver = pick_ver.get_untracked();
-        wasm_bindgen_futures::spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(300).await;
-            if pick_ver.get_untracked() != ver {
-                return;
-            }
-            if let Ok(results) = crate::api::node_picker_search(&q).await
-                && pick_ver.get_untracked() == ver
-            {
-                picker_results.set(results);
-            }
-        });
-    });
+    let picker_results = use_node_search(picker_query);
 
     let do_assign = move |node_id: NodeId| {
         assigning.set(false);
