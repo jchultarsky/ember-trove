@@ -5,6 +5,26 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-24)
 
+- **v2.32.0 shipped: #111 + AWS SDK update (#114, #113).** Every create
+  path resolves a new node's body by one rule
+  (`common::template::resolve_create_body`: prefill > draft > type default >
+  scaffold). Body swaps happen only while it's untouched (`may_replace_body`).
+  Sidebar "+" per type and palette "New <Type>" → `/nodes/new?type=…`.
+  "Use as default" in the picker; the picker is grouped by type. AWS SDK
+  bumped coherently (one aws-smithy-schema) now that `sigv4a` is gone.
+
+- **v2.31.1 shipped: security hotfix (#112).** Wiki links and
+  neighbors/backlinks/edges are scoped to what the owner or caller can see
+  (migration 033 archives the removed links); permission revoke is
+  node-scoped; there's a canonical-owner guard on all grant/update/revoke
+  paths; task re-parenting needs editor on the destination; SSRF judges
+  IPv4-in-IPv6 as IPv4; the graph single upsert is owner-scoped; webhook URLs
+  aren't logged; `sigv4a` dropped (RUSTSEC-2026-0387). **Open from the code
+  review:** handler-level authZ test harness (mocks), enum `as_str` rollout,
+  `task_actions` patch/editor-draft consolidation, search SQL perf
+  (ts_headline after paging, COUNT OVER), node-search hook, ModalShell,
+  e2e fixtures, UI unit tests in CI.
+
 - **v2.31.0 shipped: #98 complete + search results (#105, #106, #109,
   #110).** Due dates read back in words with a past-date warning (one
   `DueDateField` for all five inputs). Export names `{slug}-{updated_at}`.
