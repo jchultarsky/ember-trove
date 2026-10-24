@@ -32,6 +32,7 @@ use super::{
     editor_pref::{EditorPrefRepo, PgEditorPrefRepo},
     graph::{GraphRepo, PgGraphRepo},
     node::{NodeRepo, PgNodeRepo},
+    note::{NoteRepo, PgNoteRepo},
     permission::{PermissionRepo, PgPermissionRepo},
     search::{PgSearchRepo, SearchRepo},
     share_token::{PgShareTokenRepo, ShareTokenRepo},
@@ -471,6 +472,99 @@ async fn search_one(pool: &PgPool, owner: &str, q: &str) -> Vec<common::search::
         .await
         .expect("search")
         .results
+}
+
+fn search_query(q: &str, fuzzy: bool) -> common::search::SearchQuery {
+    common::search::SearchQuery {
+        q: q.to_string(),
+        fuzzy: Some(fuzzy),
+        node_type: None,
+        status: None,
+        tag_ids: None,
+        tag_op: None,
+        page: None,
+        per_page: None,
+        sort: None,
+        updated_after: None,
+        updated_before: None,
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
+    let search = PgSearchRepo::new(pool.clone());
+    let notes = PgNoteRepo::new(pool.clone());
+    let tasks = PgTaskRepo::new(pool.clone());
+    let host = create_node(&pool, "owner-a", "Host node").await;
+    let note = notes
+        .create(
+            Some(host.id),
+            "owner-a",
+            common::note::CreateNoteRequest {
+                body: "zebrafinch notebook".to_string(),
+                color: "default".to_string(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("note");
+    let task = tasks
+        .create(
+            Some(host.id),
+            "owner-a",
+            CreateTaskRequest {
+                node_id: Some(host.id),
+                ..task_req("quokkaparade errand")
+            },
+        )
+        .await
+        .expect("task");
+
+    for fuzzy in [false, true] {
+        for q in ["zebrafinch", "quokkaparade"] {
+            let hits = search
+                .search(&search_query(q, fuzzy), Some("owner-a"))
+                .await
+                .expect("search");
+            assert_eq!(hits.results.len(), 1, "{q} fuzzy={fuzzy} before delete");
+        }
+    }
+    notes.delete(note.id, "owner-a").await.expect("trash note");
+    tasks.delete(task.id).await.expect("trash task");
+    // Regression: trashed notes/tasks still matched (and showed snippets of
+    // the deleted body) for the 30-day tombstone window.
+    for fuzzy in [false, true] {
+        for q in ["zebrafinch", "quokkaparade"] {
+            let hits = search
+                .search(&search_query(q, fuzzy), Some("owner-a"))
+                .await
+                .expect("search");
+            assert!(hits.results.is_empty(), "{q} fuzzy={fuzzy} after delete");
+            assert_eq!(hits.total, 0);
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn fuzzy_search_treats_like_wildcards_literally(pool: PgPool) {
+    let search = PgSearchRepo::new(pool.clone());
+    create_node(&pool, "owner-a", "Plain one").await;
+    create_node(&pool, "owner-a", "Plain two").await;
+    // Regression: `%` used to become ILIKE '%%%' and match every body.
+    let hits = search
+        .search(&search_query("%", true), Some("owner-a"))
+        .await
+        .expect("search");
+    assert!(
+        hits.results.is_empty(),
+        "{:?}",
+        hits.results.iter().map(|r| &r.title).collect::<Vec<_>>()
+    );
+    // An absurd page number is an empty page, not an overflow.
+    let mut q = search_query("plain", true);
+    q.page = Some(u32::MAX);
+    let hits = search.search(&q, Some("owner-a")).await.expect("huge page");
+    assert!(hits.results.is_empty());
 }
 
 #[sqlx::test(migrations = "../migrations")]

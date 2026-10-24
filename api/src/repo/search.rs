@@ -115,7 +115,9 @@ impl SearchRepo for PgSearchRepo {
         let q = query.q.trim();
         let page = query.page.unwrap_or(1).max(1);
         let per_page = query.per_page.unwrap_or(20).min(100);
-        let offset = (page - 1) * per_page;
+        // Saturating: an absurd ?page= must not overflow (debug panic /
+        // release wrap) — it just yields an empty page.
+        let offset = page.saturating_sub(1).saturating_mul(per_page);
         let tag_ids = parse_tag_ids(&query.tag_ids);
         let and_mode = query.tag_op.as_deref() == Some("and");
 
@@ -351,12 +353,12 @@ impl PgSearchRepo {
                 n.search_vec @@ websearch_to_tsquery('english', $1)
                 OR EXISTS (
                     SELECT 1 FROM node_notes nn
-                    WHERE nn.node_id = n.id
+                    WHERE nn.node_id = n.id AND nn.deleted_at IS NULL
                       AND nn.search_vec @@ websearch_to_tsquery('english', $1)
                 )
                 OR EXISTS (
                     SELECT 1 FROM node_tasks nt
-                    WHERE nt.node_id = n.id
+                    WHERE nt.node_id = n.id AND nt.deleted_at IS NULL
                       AND to_tsvector('english', nt.title) @@ websearch_to_tsquery('english', $1)
                 )
               )
@@ -445,7 +447,7 @@ impl PgSearchRepo {
                         'note'::text AS match_source,
                         NULL::text AS highlighted_title
                     FROM node_notes nn
-                    JOIN nodes n ON n.id = nn.node_id
+                    JOIN nodes n ON n.id = nn.node_id AND nn.deleted_at IS NULL
                     WHERE n.id IN (SELECT id FROM valid_nodes)
                       AND nn.search_vec @@ websearch_to_tsquery('english', $1)
 
@@ -467,7 +469,7 @@ impl PgSearchRepo {
                         'task'::text AS match_source,
                         NULL::text AS highlighted_title
                     FROM node_tasks nt
-                    JOIN nodes n ON n.id = nt.node_id
+                    JOIN nodes n ON n.id = nt.node_id AND nt.deleted_at IS NULL
                     WHERE n.id IN (SELECT id FROM valid_nodes)
                       AND to_tsvector('english', nt.title) @@ websearch_to_tsquery('english', $1)
                 ),
@@ -534,7 +536,9 @@ impl PgSearchRepo {
     ) -> Result<SearchResponse, EmberTroveError> {
         let type_filter = node_type.as_ref().map(node_type_to_str);
         let status_filter = status.as_ref().map(node_status_to_str);
-        let like_pattern = format!("%{q}%");
+        // Escape %, _ and \ so the query matches literally (a bare `%` used to
+        // match everything); every `ILIKE $2` carries `ESCAPE '\'`.
+        let like_pattern = format!("%{}%", super::escape_like(q));
 
         let count_row = sqlx::query_as::<_, CountRow>(
             r#"
@@ -560,15 +564,15 @@ impl PgSearchRepo {
             WHERE n.id IN (SELECT id FROM valid_nodes)
               AND (
                 similarity(n.title, $1) > 0.1
-                OR n.body ILIKE $2
+                OR n.body ILIKE $2 ESCAPE '\'
                 OR EXISTS (
                     SELECT 1 FROM node_notes nn
-                    WHERE nn.node_id = n.id AND nn.body ILIKE $2
+                    WHERE nn.node_id = n.id AND nn.deleted_at IS NULL AND nn.body ILIKE $2 ESCAPE '\'
                 )
                 OR EXISTS (
                     SELECT 1 FROM node_tasks nt
-                    WHERE nt.node_id = n.id
-                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2)
+                    WHERE nt.node_id = n.id AND nt.deleted_at IS NULL
+                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2 ESCAPE '\')
                 )
               )
             "#,
@@ -611,13 +615,13 @@ impl PgSearchRepo {
                         n.id,
                         n.title,
                         n.slug,
-                        CASE WHEN n.body ILIKE $2
+                        CASE WHEN n.body ILIKE $2 ESCAPE '\'
                             THEN substring(n.body FROM 1 FOR 200)
                             ELSE NULL
                         END AS snippet,
                         GREATEST(
                             similarity(n.title, $1),
-                            CASE WHEN n.body ILIKE $2 THEN 0.05 ELSE 0.0 END
+                            CASE WHEN n.body ILIKE $2 ESCAPE '\' THEN 0.05 ELSE 0.0 END
                         ) AS rank,
                         n.node_type::text AS node_type,
                         n.status::text AS status,
@@ -625,7 +629,7 @@ impl PgSearchRepo {
                         NULL::text AS highlighted_title
                     FROM nodes n
                     WHERE n.id IN (SELECT id FROM valid_nodes)
-                      AND (similarity(n.title, $1) > 0.1 OR n.body ILIKE $2)
+                      AND (similarity(n.title, $1) > 0.1 OR n.body ILIKE $2 ESCAPE '\')
 
                     UNION ALL
 
@@ -641,9 +645,9 @@ impl PgSearchRepo {
                         'note'::text AS match_source,
                         NULL::text AS highlighted_title
                     FROM node_notes nn
-                    JOIN nodes n ON n.id = nn.node_id
+                    JOIN nodes n ON n.id = nn.node_id AND nn.deleted_at IS NULL
                     WHERE n.id IN (SELECT id FROM valid_nodes)
-                      AND nn.body ILIKE $2
+                      AND nn.body ILIKE $2 ESCAPE '\'
 
                     UNION ALL
 
@@ -659,9 +663,9 @@ impl PgSearchRepo {
                         'task'::text AS match_source,
                         NULL::text AS highlighted_title
                     FROM node_tasks nt
-                    JOIN nodes n ON n.id = nt.node_id
+                    JOIN nodes n ON n.id = nt.node_id AND nt.deleted_at IS NULL
                     WHERE n.id IN (SELECT id FROM valid_nodes)
-                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2)
+                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2 ESCAPE '\')
                 ),
                 best AS (
                     SELECT DISTINCT ON (id)

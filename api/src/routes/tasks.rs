@@ -4,15 +4,15 @@ use axum::{
     http::StatusCode,
     routing::{get, patch, post, put},
 };
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use common::{
     auth::AuthClaims,
     id::{NodeId, TaskId},
     markdown::extract_section,
     node::{NodeListParams, NodeType},
     task::{
-        CreateTaskRequest, MyDayTask, ProjectDashboardEntry, RecurrenceRule, ReorderTasksRequest,
-        Task, TaskCounts, TaskStatus, UpdateTaskRequest,
+        CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTasksRequest, Task, TaskCounts,
+        TaskStatus, UpdateTaskRequest,
     },
     webhook::{EVENT_TASK_CREATED, EVENT_TASK_DELETED, EVENT_TASK_UPDATED},
 };
@@ -67,29 +67,6 @@ pub fn dashboard_activity_router() -> Router<AppState> {
 
 // ── Recurrence helpers ────────────────────────────────────────────────────────
 
-/// Advance `d` by one recurrence interval. Falls back to `d` on edge cases
-/// (e.g. Feb 29 in non-leap year advances to Feb 28).
-fn advance_date(d: NaiveDate, rule: &RecurrenceRule) -> NaiveDate {
-    match rule {
-        RecurrenceRule::Daily => d + chrono::Duration::days(1),
-        RecurrenceRule::Weekly => d + chrono::Duration::weeks(1),
-        RecurrenceRule::Biweekly => d + chrono::Duration::weeks(2),
-        RecurrenceRule::Monthly => {
-            let (y, m) = if d.month() == 12 {
-                (d.year() + 1, 1u32)
-            } else {
-                (d.year(), d.month() + 1)
-            };
-            NaiveDate::from_ymd_opt(y, m, d.day())
-                .or_else(|| NaiveDate::from_ymd_opt(y, m, 28))
-                .unwrap_or(d)
-        }
-        RecurrenceRule::Yearly => NaiveDate::from_ymd_opt(d.year() + 1, d.month(), d.day())
-            .or_else(|| NaiveDate::from_ymd_opt(d.year() + 1, d.month(), 28))
-            .unwrap_or(d),
-    }
-}
-
 /// What a status change does to a recurring task's series.
 #[derive(Debug)]
 enum SeriesEffect {
@@ -126,8 +103,8 @@ fn series_effect(pre: &Task, new_status: Option<&TaskStatus>, today: NaiveDate) 
                     node_id: pre.node_id,
                     status: Some(TaskStatus::Open),
                     priority: Some(pre.priority.clone()),
-                    focus_date: Some(advance_date(base_focus, rule)),
-                    due_date: pre.due_date.map(|d| advance_date(d, rule)),
+                    focus_date: Some(rule.advance(base_focus)),
+                    due_date: pre.due_date.map(|d| rule.advance(d)),
                     recurrence: Some(rule.clone()),
                 },
             }
@@ -524,6 +501,7 @@ async fn dashboard_activity(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::task::RecurrenceRule;
 
     fn task(status: TaskStatus, recurrence: Option<RecurrenceRule>) -> Task {
         Task {

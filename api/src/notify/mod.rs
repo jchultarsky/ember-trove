@@ -58,7 +58,11 @@ impl SesNotifier {
         role: &str,
         node_id: &str,
     ) {
-        let node_url = format!("{}/node/{node_id}", self.frontend_url.trim_end_matches('/'));
+        // The UI route is /nodes/:id (the old /node/ path 404ed in invites).
+        let node_url = format!(
+            "{}/nodes/{node_id}",
+            self.frontend_url.trim_end_matches('/')
+        );
 
         // Subject + text body are plain text (SES encodes them); the HTML body
         // interpolates user-controlled values, so escape them to prevent HTML

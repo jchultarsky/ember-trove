@@ -317,7 +317,8 @@ impl NodeRepo for PgNodeRepo {
     async fn list(&self, params: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
         let page = params.page.unwrap_or(1).max(1);
         let per_page = params.per_page.unwrap_or(50).min(200);
-        let offset = (page - 1) * per_page;
+        // Saturating: an absurd ?page= must not overflow.
+        let offset = page.saturating_sub(1).saturating_mul(per_page);
 
         // Build dynamic count query with optional filters.
         let mut count_sql = String::from("SELECT COUNT(*) FROM nodes n");

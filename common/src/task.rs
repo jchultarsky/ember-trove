@@ -52,6 +52,23 @@ pub enum RecurrenceRule {
     Yearly,
 }
 
+impl RecurrenceRule {
+    /// The next occurrence after `d`. Months and years clamp to the target
+    /// month's last day (Jan 31 → Feb 28/29, Feb 29 → Feb 28 next year), the
+    /// way calendars do. It used to fall back to the 28th for every short
+    /// month, so a series on the 29th–31st drifted to the 28th permanently.
+    pub fn advance(&self, d: NaiveDate) -> NaiveDate {
+        use chrono::Months;
+        match self {
+            RecurrenceRule::Daily => d + chrono::Duration::days(1),
+            RecurrenceRule::Weekly => d + chrono::Duration::weeks(1),
+            RecurrenceRule::Biweekly => d + chrono::Duration::weeks(2),
+            RecurrenceRule::Monthly => d.checked_add_months(Months::new(1)).unwrap_or(d),
+            RecurrenceRule::Yearly => d.checked_add_months(Months::new(12)).unwrap_or(d),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Task {
     pub id: TaskId,
@@ -438,6 +455,39 @@ mod tests {
         assert!(!warn_past_due(Some(today), None, today));
         assert!(!warn_past_due(Some(date(2026, 12, 1)), past, today));
         assert!(!warn_past_due(None, past, today));
+    }
+
+    #[test]
+    fn recurrence_advance_clamps_to_month_end_without_drift() {
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd).unwrap();
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2026, 1, 31)),
+            d(2026, 2, 28)
+        );
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2028, 1, 31)),
+            d(2028, 2, 29)
+        );
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2026, 3, 31)),
+            d(2026, 4, 30)
+        );
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2026, 12, 15)),
+            d(2027, 1, 15)
+        );
+        assert_eq!(
+            RecurrenceRule::Yearly.advance(d(2028, 2, 29)),
+            d(2029, 2, 28)
+        );
+        assert_eq!(
+            RecurrenceRule::Weekly.advance(d(2026, 10, 30)),
+            d(2026, 11, 6)
+        );
+        assert_eq!(
+            RecurrenceRule::Biweekly.advance(d(2026, 12, 25)),
+            d(2027, 1, 8)
+        );
     }
 
     #[test]

@@ -382,16 +382,20 @@ pub async fn execute_restore(
     for note in &data.notes {
         sqlx::query(
             r#"
-            INSERT INTO node_notes (id, node_id, owner_id, body, created_at)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO node_notes (id, node_id, owner_id, body, color, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
+        // color + updated_at are restored too: they used to fall back to
+        // 'default' / NOW(), losing note colours and edit times.
         .bind(note.id.0)
         .bind(note.node_id.map(|n| n.0))
         .bind(&note.owner_id)
         .bind(&note.body)
+        .bind(&note.color)
         .bind(note.created_at)
+        .bind(note.updated_at)
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(format!("insert note failed: {e}")))?;
