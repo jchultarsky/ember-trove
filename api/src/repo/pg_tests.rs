@@ -30,6 +30,7 @@ use sqlx::PgPool;
 use super::{
     editor_pref::{EditorPrefRepo, PgEditorPrefRepo},
     node::{NodeRepo, PgNodeRepo},
+    search::{PgSearchRepo, SearchRepo},
     share_token::{PgShareTokenRepo, ShareTokenRepo},
     task::{PgTaskRepo, TaskRepo},
 };
@@ -218,6 +219,79 @@ async fn task_soft_delete_restore_and_purge(pool: PgPool) {
         tasks.restore(task.id).await,
         Err(EmberTroveError::NotFound(_))
     ));
+}
+
+// ── Search result titles (#107) ──────────────────────────────────────────────
+
+async fn search_one(pool: &PgPool, owner: &str, q: &str) -> Vec<common::search::SearchResult> {
+    let query = common::search::SearchQuery {
+        q: q.to_string(),
+        fuzzy: None,
+        node_type: None,
+        status: None,
+        tag_ids: None,
+        tag_op: None,
+        page: None,
+        per_page: None,
+        sort: None,
+        updated_after: None,
+        updated_before: None,
+    };
+    PgSearchRepo::new(pool.clone())
+        .search(&query, Some(owner))
+        .await
+        .expect("search")
+        .results
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn search_title_highlight_is_the_full_title(pool: PgPool) {
+    let nodes = PgNodeRepo::new(pool.clone());
+    for (title, body) in [
+        ("Buy a gift for Sam", "wrapping paper and a card"),
+        ("Master Bath Remodel", "pick the tile and the grout colour"),
+    ] {
+        nodes
+            .create(
+                "owner-a",
+                CreateNodeRequest {
+                    body: Some(body.to_string()),
+                    ..node_req(title)
+                },
+            )
+            .await
+            .expect("create node");
+    }
+
+    // Title match: the full title comes back, with the match marked.
+    let hits = search_one(&pool, "owner-a", "Sam").await;
+    let r = hits
+        .iter()
+        .find(|r| r.title == "Buy a gift for Sam")
+        .expect("title hit");
+    let hl = r.highlighted_title.as_deref().expect("highlighted title");
+    assert!(
+        common::search::title_highlight_is_full(hl, &r.title),
+        "{hl}"
+    );
+    assert!(common::search::has_mark(hl));
+    assert!(r.updated_at.is_some());
+
+    // Body-only match: still the full title (previously "Master"), unmarked.
+    let hits = search_one(&pool, "owner-a", "tile").await;
+    let r = hits
+        .iter()
+        .find(|r| r.title == "Master Bath Remodel")
+        .expect("body hit");
+    let hl = r.highlighted_title.as_deref().expect("highlighted title");
+    assert!(
+        common::search::title_highlight_is_full(hl, &r.title),
+        "{hl}"
+    );
+    assert!(!common::search::has_mark(hl));
+
+    // Owner-scoped as before.
+    assert!(search_one(&pool, "owner-b", "Sam").await.is_empty());
 }
 
 // ── Recurring-task occurrence link ───────────────────────────────────────────

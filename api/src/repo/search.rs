@@ -46,9 +46,7 @@ struct SearchRow {
     status: String,
     match_source: Option<String>,
     highlighted_title: Option<String>,
-    // Used by SQL `WHERE`/`ORDER BY` (recency); sqlx must map the column, but
-    // Rust never reads it after deserialization.
-    #[allow(dead_code)]
+    // Recency: used by SQL `ORDER BY` and shown on result cards.
     updated_at: DateTime<Utc>,
 }
 
@@ -64,6 +62,7 @@ impl SearchRow {
             status: self.status,
             match_source: self.match_source,
             highlighted_title: self.highlighted_title,
+            updated_at: Some(self.updated_at),
         }
     }
 }
@@ -413,11 +412,15 @@ impl PgSearchRepo {
                         n.node_type::text AS node_type,
                         n.status::text AS status,
                         'node'::text AS match_source,
+                        -- HighlightAll: the WHOLE title with matches marked. A
+                        -- fragment option set (MaxWords/MinWords) shortened
+                        -- titles ("Buy a gift for Sam" -> "Gift for Sam"),
+                        -- so one node showed under different names (#107).
                         ts_headline(
                             'english',
                             n.title,
                             websearch_to_tsquery('english', $1),
-                            'StartSel=<mark>, StopSel=</mark>, MaxFragments=1, MinWords=1, MaxWords=10'
+                            'StartSel=<mark>, StopSel=</mark>, HighlightAll=true'
                         ) AS highlighted_title
                     FROM nodes n
                     WHERE n.id IN (SELECT id FROM valid_nodes)
