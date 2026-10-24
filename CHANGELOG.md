@@ -6,6 +6,46 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.31.1] - 2026-10-24
+
+### Security — authorization hotfix
+All of these came out of a code review; each one now has a regression test.
+- **Wiki links could expose another user's private nodes.** `[[Title]]`
+  resolved against every owner's titles. So linking to a title you guessed
+  created an edge into someone else's node, and `GET /nodes/{id}/neighbors`
+  then returned that node with its full body. Titles now resolve only among
+  the source node's owner's nodes. `neighbors`, `backlinks` and
+  `GET /nodes/{id}/edges` also return only nodes the caller can see (owned or
+  shared), so links created before the fix can't leak either. Migration `033`
+  deletes existing cross-owner `wiki_link` edges; they are re-derived,
+  correctly scoped, on the next save. `POST /edges` now also requires access
+  to the target node.
+- **Revoking a permission could delete permissions on other nodes.** The
+  nested revoke checked ownership of the node in the URL, then deleted the
+  permission by id alone. Revoke is now node-scoped. This is the same bug
+  class as the share-token fix in 2.22.4.
+- **A granted Owner could revoke or downgrade a node's creator** through the
+  standalone `PUT`/`DELETE /permissions/{id}` routes. The nested routes
+  already forbade this. All four paths now share
+  `auth::permissions::guard_canonical_owner`.
+- **`PATCH /tasks/{id}` could move a task onto any node.** Only the task's
+  current node was checked. Moving it now requires editor access to the
+  destination, as creating a task already did.
+- **The webhook SSRF guard missed IPv4 addresses in IPv6 form.**
+  `::ffff:127.0.0.1`, `::ffff:169.254.169.254` and NAT64
+  (`64:ff9b::/96`) forms are now judged as IPv4. CGNAT (`100.64.0.0/10`),
+  broadcast and multicast are blocked too.
+- **A viewer could rewrite the owner's graph layout** through
+  `PUT /graph/positions/{id}`, unlike the batch route. It now uses the same
+  owner-scoped write.
+- **Webhook URLs are no longer logged.** Slack/Discord-style URLs carry their
+  secret in the path, and failed deliveries logged them in full.
+- **RUSTSEC-2026-0387** (`crypto-bigint` 0.5, timing variability, published
+  2026-10-23): the AWS SDK's `sigv4a` feature is no longer enabled. It is
+  only needed for S3 Multi-Region Access Points, which we don't use, and it
+  was the only path to `p256` / `elliptic-curve` / `crypto-bigint`. Those
+  crates are gone from the tree, with no new advisory ignores.
+
 ## [2.31.0] - 2026-10-24
 
 ### Fixed — search results show full titles (#107)
