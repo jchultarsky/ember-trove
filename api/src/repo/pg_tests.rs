@@ -32,6 +32,7 @@ use super::{
     editor_pref::{EditorPrefRepo, PgEditorPrefRepo},
     graph::{GraphRepo, PgGraphRepo},
     node::{NodeRepo, PgNodeRepo},
+    note::{NoteRepo, PgNoteRepo},
     permission::{PermissionRepo, PgPermissionRepo},
     search::{PgSearchRepo, SearchRepo},
     share_token::{PgShareTokenRepo, ShareTokenRepo},
@@ -471,6 +472,200 @@ async fn search_one(pool: &PgPool, owner: &str, q: &str) -> Vec<common::search::
         .await
         .expect("search")
         .results
+}
+
+fn search_query(q: &str, fuzzy: bool) -> common::search::SearchQuery {
+    common::search::SearchQuery {
+        q: q.to_string(),
+        fuzzy: Some(fuzzy),
+        node_type: None,
+        status: None,
+        tag_ids: None,
+        tag_op: None,
+        page: None,
+        per_page: None,
+        sort: None,
+        updated_after: None,
+        updated_before: None,
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn search_pagination_totals_and_per_source_snippets(pool: PgPool) {
+    let search = PgSearchRepo::new(pool.clone());
+    let nodes = PgNodeRepo::new(pool.clone());
+    for i in 0..25 {
+        nodes
+            .create(
+                "owner-a",
+                CreateNodeRequest {
+                    body: Some(format!("the nebulaorbit report number {i}")),
+                    ..node_req(&format!("Report {i:02}"))
+                },
+            )
+            .await
+            .expect("node");
+    }
+    let mut q = search_query("nebulaorbit", false);
+    q.per_page = Some(10);
+    let mut seen = std::collections::HashSet::new();
+    for (page, want) in [(1u32, 10usize), (2, 10), (3, 5)] {
+        q.page = Some(page);
+        let r = search.search(&q, Some("owner-a")).await.expect("page");
+        assert_eq!(r.total, 25, "total on page {page}");
+        assert_eq!(r.results.len(), want, "rows on page {page}");
+        for hit in &r.results {
+            assert!(seen.insert(hit.node_id), "duplicate across pages");
+            let snip = hit.snippet.as_deref().unwrap_or_default();
+            assert!(
+                snip.contains("<mark>"),
+                "body snippet marks the match: {snip}"
+            );
+        }
+    }
+    // Past the end: no rows, but the total still comes back (fallback count).
+    q.page = Some(4);
+    let r = search.search(&q, Some("owner-a")).await.expect("past end");
+    assert!(r.results.is_empty());
+    assert_eq!(r.total, 25);
+
+    // Note and task matches get their own snippets after the paging rewrite.
+    let host = create_node(&pool, "owner-a", "Snippet host").await;
+    PgNoteRepo::new(pool.clone())
+        .create(
+            Some(host.id),
+            "owner-a",
+            common::note::CreateNoteRequest {
+                body: "a heliotrope remark".to_string(),
+                color: "default".to_string(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("note");
+    PgTaskRepo::new(pool.clone())
+        .create(
+            Some(host.id),
+            "owner-a",
+            CreateTaskRequest {
+                node_id: Some(host.id),
+                ..task_req("buy saxifrage seeds")
+            },
+        )
+        .await
+        .expect("task");
+    let note_hit = &search
+        .search(&search_query("heliotrope", false), Some("owner-a"))
+        .await
+        .expect("n")
+        .results;
+    assert_eq!(note_hit.len(), 1);
+    assert_eq!(note_hit[0].match_source.as_deref(), Some("note"));
+    assert!(
+        note_hit[0]
+            .snippet
+            .as_deref()
+            .unwrap_or_default()
+            .contains("<mark>heliotrope</mark>")
+    );
+    assert!(note_hit[0].highlighted_title.is_none());
+    let task_hit = &search
+        .search(&search_query("saxifrage", false), Some("owner-a"))
+        .await
+        .expect("t")
+        .results;
+    assert_eq!(task_hit[0].match_source.as_deref(), Some("task"));
+    assert_eq!(task_hit[0].snippet.as_deref(), Some("buy saxifrage seeds"));
+
+    // Fuzzy mode: same window total and fallback.
+    let mut fq = search_query("nebulaorbit", true);
+    fq.per_page = Some(10);
+    fq.page = Some(3);
+    let r = search.search(&fq, Some("owner-a")).await.expect("fuzzy");
+    assert_eq!((r.total, r.results.len()), (25, 5));
+    fq.page = Some(9);
+    let r = search
+        .search(&fq, Some("owner-a"))
+        .await
+        .expect("fuzzy past end");
+    assert_eq!((r.total, r.results.len()), (25, 0));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
+    let search = PgSearchRepo::new(pool.clone());
+    let notes = PgNoteRepo::new(pool.clone());
+    let tasks = PgTaskRepo::new(pool.clone());
+    let host = create_node(&pool, "owner-a", "Host node").await;
+    let note = notes
+        .create(
+            Some(host.id),
+            "owner-a",
+            common::note::CreateNoteRequest {
+                body: "zebrafinch notebook".to_string(),
+                color: "default".to_string(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("note");
+    let task = tasks
+        .create(
+            Some(host.id),
+            "owner-a",
+            CreateTaskRequest {
+                node_id: Some(host.id),
+                ..task_req("quokkaparade errand")
+            },
+        )
+        .await
+        .expect("task");
+
+    for fuzzy in [false, true] {
+        for q in ["zebrafinch", "quokkaparade"] {
+            let hits = search
+                .search(&search_query(q, fuzzy), Some("owner-a"))
+                .await
+                .expect("search");
+            assert_eq!(hits.results.len(), 1, "{q} fuzzy={fuzzy} before delete");
+        }
+    }
+    notes.delete(note.id, "owner-a").await.expect("trash note");
+    tasks.delete(task.id).await.expect("trash task");
+    // Regression: trashed notes/tasks still matched (and showed snippets of
+    // the deleted body) for the 30-day tombstone window.
+    for fuzzy in [false, true] {
+        for q in ["zebrafinch", "quokkaparade"] {
+            let hits = search
+                .search(&search_query(q, fuzzy), Some("owner-a"))
+                .await
+                .expect("search");
+            assert!(hits.results.is_empty(), "{q} fuzzy={fuzzy} after delete");
+            assert_eq!(hits.total, 0);
+        }
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn fuzzy_search_treats_like_wildcards_literally(pool: PgPool) {
+    let search = PgSearchRepo::new(pool.clone());
+    create_node(&pool, "owner-a", "Plain one").await;
+    create_node(&pool, "owner-a", "Plain two").await;
+    // Regression: `%` used to become ILIKE '%%%' and match every body.
+    let hits = search
+        .search(&search_query("%", true), Some("owner-a"))
+        .await
+        .expect("search");
+    assert!(
+        hits.results.is_empty(),
+        "{:?}",
+        hits.results.iter().map(|r| &r.title).collect::<Vec<_>>()
+    );
+    // An absurd page number is an empty page, not an overflow.
+    let mut q = search_query("plain", true);
+    q.page = Some(u32::MAX);
+    let hits = search.search(&q, Some("owner-a")).await.expect("huge page");
+    assert!(hits.results.is_empty());
 }
 
 #[sqlx::test(migrations = "../migrations")]

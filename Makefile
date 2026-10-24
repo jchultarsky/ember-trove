@@ -25,8 +25,9 @@ lint: ## Clippy on api + common, warnings = errors
 lint-ui: ## Clippy on ui for the wasm32 target
 	cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
-test: ## Run the host test suite (excludes the WASM ui crate)
+test: ## Run the host test suite (api + common, then the ui crate's unit tests)
 	cargo test --workspace --exclude ui
+	cargo test -p ui
 
 check-ui: ## Type-check ui for the wasm32 target
 	cargo check -p ui --target wasm32-unknown-unknown

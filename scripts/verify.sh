@@ -41,6 +41,7 @@ run_step "cargo clippy"           "cargo clippy --workspace --exclude ui --quiet
 run_step "cargo check (wasm32)"   "cargo check -p ui --target wasm32-unknown-unknown --quiet"
 run_step "cargo clippy (wasm32)"  "cargo clippy --quiet -p ui --target wasm32-unknown-unknown -- -D warnings"
 run_step "cargo test"             "cargo test --workspace --exclude ui --quiet"
+run_step "cargo test (ui, host)"  "cargo test -p ui --quiet"
 run_step "git status clean"       "[ -z \"\$(git status --porcelain)\" ]"
 
 echo ""

@@ -1,14 +1,6 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, localISO, type APIRequestContext } from './fixtures';
 
 /** My Day: carryover "still today?" prompt and the foldable overdue section. */
-
-function localISO(offsetDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
-}
 
 test('carried-over task prompts "still today?" — Yes re-stamps to today', async ({
   page,
@@ -192,4 +184,41 @@ test.describe('completing a task', () => {
       .poll(async () => (await inboxTasks(request, title)).map((t) => [t.id, t.status]))
       .toEqual([[task.id, 'open']]);
   });
+});
+
+test('t on a carried-over task removes it from today (not re-stamped)', async ({
+  page,
+  request,
+}) => {
+  const title = `${COMPLETE_PREFIX} t-key ${Date.now()}`;
+  const created = await request.post('/api/tasks', {
+    data: { title, focus_date: localISO(-2) },
+  });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/my-day');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await expect(row).toBeVisible();
+    // Neutral focus for single-key shortcuts (e2e.md), then walk the j/k
+    // cursor to the row (its inline style gains the inset focus ring).
+    await page.getByRole('heading', { name: 'My Day' }).click();
+    let focused = false;
+    for (let i = 0; i < 40 && !focused; i++) {
+      await page.keyboard.press('j');
+      focused = await row.evaluate((el) => (el as HTMLElement).style.boxShadow.includes('inset'));
+    }
+    expect(focused).toBe(true);
+    await page.keyboard.press('t');
+    // Regression: `t` re-stamped a carried-over task to today instead of
+    // removing it (the Today zone is focus_date <= today).
+    await expect
+      .poll(async () => {
+        const inbox = (await (await request.get('/api/tasks/inbox')).json()) as InboxTask[];
+        return inbox.find((t) => t.id === task.id)?.focus_date ?? null;
+      })
+      .toBeNull();
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+  }
 });

@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 
 /**
  * Webhooks management view (/webhooks) — the UI shipped for the previously
@@ -9,15 +9,8 @@ import { test, expect, Page } from '@playwright/test';
  *     PATCH-semantics fix: absent field = keep)
  */
 
-function collectPageErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on('pageerror', (err) => errors.push(String(err)));
-  return errors;
-}
-
 test.describe('webhooks view', () => {
   test('create, toggle (secret survives), and delete a webhook', async ({ page, request }) => {
-    const errors = collectPageErrors(page);
     const url = `https://example.com/hooks/e2e-${Date.now()}`;
     let created: { id: string } | undefined;
     try {
@@ -55,15 +48,12 @@ test.describe('webhooks view', () => {
       await expect(page.locator('[role="status"]').getByText('Webhook deleted')).toBeVisible();
       await expect(row).not.toBeVisible();
       created = undefined;
-
-      expect(errors).toEqual([]);
     } finally {
       if (created) await request.delete(`/api/webhooks/${created.id}`);
     }
   });
 
   test('SSRF-blocked URL surfaces the server validation error', async ({ page, request }) => {
-    const errors = collectPageErrors(page);
     await page.goto('/webhooks');
     await page.getByRole('button', { name: 'New Webhook' }).click();
     await page.getByLabel('Endpoint URL (HTTPS)').fill('https://10.0.0.5/internal');
@@ -77,6 +67,5 @@ test.describe('webhooks view', () => {
     // Nothing persisted.
     const hooks = await (await request.get('/api/webhooks')).json();
     expect(hooks.find((h: { url: string }) => h.url.includes('10.0.0.5'))).toBeFalsy();
-    expect(errors).toEqual([]);
   });
 });

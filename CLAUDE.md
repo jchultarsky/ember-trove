@@ -48,6 +48,7 @@ cargo fmt --all --check
 cargo clippy --workspace --exclude ui -- -D warnings        # api + common
 cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace --exclude ui
+cargo test -p ui                                             # ui unit tests (host)
 cargo check -p ui --target wasm32-unknown-unknown
 ```
 

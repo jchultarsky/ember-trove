@@ -14,6 +14,13 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+wire_enum!(TaskStatus {
+    Open => "open",
+    InProgress => "in_progress",
+    Done => "done",
+    Cancelled => "cancelled",
+});
+
 impl TaskStatus {
     /// `true` for terminal statuses (Done, Cancelled) — the ones a task
     /// checkbox renders as ticked.
@@ -41,6 +48,12 @@ pub enum TaskPriority {
     High,
 }
 
+wire_enum!(TaskPriority {
+    Low => "low",
+    Medium => "medium",
+    High => "high",
+});
+
 /// How often a recurring task should repeat after being marked Done.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +63,31 @@ pub enum RecurrenceRule {
     Biweekly,
     Monthly,
     Yearly,
+}
+
+wire_enum!(RecurrenceRule {
+    Daily => "daily",
+    Weekly => "weekly",
+    Biweekly => "biweekly",
+    Monthly => "monthly",
+    Yearly => "yearly",
+});
+
+impl RecurrenceRule {
+    /// The next occurrence after `d`. Months and years clamp to the target
+    /// month's last day (Jan 31 → Feb 28/29, Feb 29 → Feb 28 next year), the
+    /// way calendars do. It used to fall back to the 28th for every short
+    /// month, so a series on the 29th–31st drifted to the 28th permanently.
+    pub fn advance(&self, d: NaiveDate) -> NaiveDate {
+        use chrono::Months;
+        match self {
+            RecurrenceRule::Daily => d + chrono::Duration::days(1),
+            RecurrenceRule::Weekly => d + chrono::Duration::weeks(1),
+            RecurrenceRule::Biweekly => d + chrono::Duration::weeks(2),
+            RecurrenceRule::Monthly => d.checked_add_months(Months::new(1)).unwrap_or(d),
+            RecurrenceRule::Yearly => d.checked_add_months(Months::new(12)).unwrap_or(d),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -309,6 +347,29 @@ pub fn warn_past_due(
     new.is_some_and(|d| d < today && Some(d) != original)
 }
 
+/// The PATCH for an inline task edit, from its form values (the strings the
+/// edit form's inputs hold). `None` when the title is blank. An empty due date
+/// or recurrence clears it; an unknown priority is Medium. Shared by every
+/// task list's inline editor (`task_actions::TaskEditDraft`).
+pub fn task_edit_request(
+    title: &str,
+    priority: &str,
+    due: &str,
+    recurrence: &str,
+) -> Option<UpdateTaskRequest> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some(UpdateTaskRequest {
+        title: Some(title.to_string()),
+        priority: Some(TaskPriority::parse(priority).unwrap_or(TaskPriority::Medium)),
+        due_date: Some(due.trim().parse::<NaiveDate>().ok()),
+        recurrence: Some(RecurrenceRule::parse(recurrence)),
+        ..Default::default()
+    })
+}
+
 /// One entry in a bulk sort-order update (drag-to-reorder in My Day).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTaskEntry {
@@ -438,6 +499,55 @@ mod tests {
         assert!(!warn_past_due(Some(today), None, today));
         assert!(!warn_past_due(Some(date(2026, 12, 1)), past, today));
         assert!(!warn_past_due(None, past, today));
+    }
+
+    #[test]
+    fn recurrence_advance_clamps_to_month_end_without_drift() {
+        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd).unwrap();
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2026, 1, 31)),
+            d(2026, 2, 28)
+        );
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2028, 1, 31)),
+            d(2028, 2, 29)
+        );
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2026, 3, 31)),
+            d(2026, 4, 30)
+        );
+        assert_eq!(
+            RecurrenceRule::Monthly.advance(d(2026, 12, 15)),
+            d(2027, 1, 15)
+        );
+        assert_eq!(
+            RecurrenceRule::Yearly.advance(d(2028, 2, 29)),
+            d(2029, 2, 28)
+        );
+        assert_eq!(
+            RecurrenceRule::Weekly.advance(d(2026, 10, 30)),
+            d(2026, 11, 6)
+        );
+        assert_eq!(
+            RecurrenceRule::Biweekly.advance(d(2026, 12, 25)),
+            d(2027, 1, 8)
+        );
+    }
+
+    #[test]
+    fn task_edit_request_maps_form_values() {
+        let r = task_edit_request("  Ship it  ", "high", "2026-11-03", "weekly").unwrap();
+        assert_eq!(r.title.as_deref(), Some("Ship it"));
+        assert_eq!(r.priority, Some(TaskPriority::High));
+        assert_eq!(r.due_date, Some(NaiveDate::from_ymd_opt(2026, 11, 3)));
+        assert_eq!(r.recurrence, Some(Some(RecurrenceRule::Weekly)));
+        // Empty due / recurrence clear (Some(None)); unknown priority = Medium.
+        let r = task_edit_request("x", "bogus", "", "").unwrap();
+        assert_eq!(r.priority, Some(TaskPriority::Medium));
+        assert_eq!(r.due_date, Some(None));
+        assert_eq!(r.recurrence, Some(None));
+        // Blank title: no request at all.
+        assert!(task_edit_request("   ", "high", "", "").is_none());
     }
 
     #[test]

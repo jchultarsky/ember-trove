@@ -22,7 +22,8 @@ use leptos::prelude::*;
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::node_picker::NodePicker;
-use crate::components::task_common::{parse_priority, parse_recurrence_opt};
+use crate::components::task_common::parse_priority;
+use crate::components::task_row_scaffold::RecurrenceOptions;
 
 /// Reusable "new task" form.
 ///
@@ -52,6 +53,11 @@ pub fn NewTaskForm(
     let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
 
     let do_add = move || {
+        // Enter bypassed the button's `disabled`: a fast double Enter created
+        // the task twice.
+        if adding.get_untracked() {
+            return;
+        }
         let title = new_title.get_untracked().trim().to_string();
         if title.is_empty() {
             add_error.set(Some("Title is required.".to_string()));
@@ -59,7 +65,7 @@ pub fn NewTaskForm(
         }
         let priority = parse_priority(&new_priority.get_untracked());
         let due_date = new_due.get_untracked().trim().parse::<NaiveDate>().ok();
-        let recurrence = parse_recurrence_opt(&new_recurrence.get_untracked());
+        let recurrence = common::task::RecurrenceRule::parse(&new_recurrence.get_untracked());
         let focus_date = new_my_day.get_untracked().then(local_today);
         // Fixed prop node wins; otherwise use the optionally-picked node.
         let chosen_node = node_id.or_else(|| selected_node.get_untracked().map(|(id, _)| id));
@@ -136,12 +142,7 @@ pub fn NewTaskForm(
                     prop:value=move || new_recurrence.get()
                     on:change=move |ev| new_recurrence.set(event_target_value(&ev))
                 >
-                    <option value="">"No repeat"</option>
-                    <option value="daily">"Daily"</option>
-                    <option value="weekly">"Weekly"</option>
-                    <option value="biweekly">"Every 2 weeks"</option>
-                    <option value="monthly">"Monthly"</option>
-                    <option value="yearly">"Yearly"</option>
+                    <RecurrenceOptions value=new_recurrence />
                 </select>
                 // My Day — same glyph as the row action; filled when on.
                 <button

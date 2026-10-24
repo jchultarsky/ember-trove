@@ -5,6 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-24)
 
+- **v2.32.1 shipped: the code-review backlog is closed (#115–#119).**
+  Review bugfixes (metrics, invite links, refresh renewing the access
+  cookie, month-end recurrence, trashed rows in search, no `js_sys::eval`).
+  Search highlights only the returned page (1,367 → 61 ms). `wire_enum!`
+  gives one wire table per enum. The UI has one task PATCH helper and
+  editor draft (`task_actions`), one node-search hook, `ModalShell` for
+  every modal and one editor-height store. The e2e fixtures guard every
+  spec against page errors. CI runs `cargo test -p ui`, and handler-level
+  authZ tests cover the v2.31.1 fixes. **Next candidates:** drop
+  `'unsafe-eval'` from the prod CSP (now possible, smoke-test first),
+  #101 tower-http (waiting on reqwest).
+
 - **v2.32.0 shipped: #111 + AWS SDK update (#114, #113).** Every create
   path resolves a new node's body by one rule
   (`common::template::resolve_create_body`: prefill > draft > type default >
@@ -19,11 +31,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   node-scoped; there's a canonical-owner guard on all grant/update/revoke
   paths; task re-parenting needs editor on the destination; SSRF judges
   IPv4-in-IPv6 as IPv4; the graph single upsert is owner-scoped; webhook URLs
-  aren't logged; `sigv4a` dropped (RUSTSEC-2026-0387). **Open from the code
-  review:** handler-level authZ test harness (mocks), enum `as_str` rollout,
-  `task_actions` patch/editor-draft consolidation, search SQL perf
-  (ts_headline after paging, COUNT OVER), node-search hook, ModalShell,
-  e2e fixtures, UI unit tests in CI.
+  aren't logged; `sigv4a` dropped (RUSTSEC-2026-0387). The review
+  follow-ups it listed shipped in v2.32.1.
 
 - **v2.31.0 shipped: #98 complete + search results (#105, #106, #109,
   #110).** Due dates read back in words with a past-date warning (one

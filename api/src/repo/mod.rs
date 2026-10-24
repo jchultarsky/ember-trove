@@ -1,3 +1,5 @@
+use common::EmberTroveError;
+
 pub mod activity;
 pub mod attachment;
 pub mod backup;
@@ -33,4 +35,24 @@ pub(crate) fn visible_to(alias: &str, param: u8) -> String {
         "(${param}::text IS NULL OR {alias}.owner_id = ${param}::text OR EXISTS ( \
          SELECT 1 FROM permissions vp WHERE vp.node_id = {alias}.id AND vp.subject_id = ${param}::text))"
     )
+}
+
+/// Escape SQL `LIKE`/`ILIKE` metacharacters (`\`, `%`, `_`) so a user-supplied
+/// substring is matched literally. Pair with `ESCAPE '\'` in the query.
+/// Shared by the notes feed and fuzzy search.
+pub(crate) fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// Parse a Postgres enum column through its `common` wire table
+/// (`wire_enum!`). An unknown value means the schema and the code disagree —
+/// a server-side invariant break, reported as Internal, never client input.
+pub(crate) fn parse_wire<T>(
+    s: &str,
+    kind: &str,
+    parse: fn(&str) -> Option<T>,
+) -> Result<T, EmberTroveError> {
+    parse(s).ok_or_else(|| EmberTroveError::Internal(format!("unknown {kind}: {s}")))
 }

@@ -32,11 +32,11 @@
 use common::id::NodeId;
 use common::search::SearchResult;
 use leptos::html;
-use leptos::portal::Portal;
 use leptos::prelude::*;
 use leptos_router::hooks::{use_location, use_navigate};
 use wasm_bindgen_futures::spawn_local;
 
+use super::{ModalPlacement, ModalShell};
 use crate::app::ShowCapture;
 use crate::components::dark_mode_toggle::Theme;
 use crate::components::layout::ShowHelp;
@@ -323,7 +323,7 @@ fn ranked_actions(
     let open = |r: &SearchResult| PaletteAction::OpenNode {
         id: r.node_id.0,
         title: r.title.clone(),
-        icon: type_to_icon(&r.node_type),
+        icon: crate::components::node_meta::type_icon(&r.node_type).to_string(),
     };
     let (title_hits, body_hits): (Vec<&SearchResult>, Vec<&SearchResult>) = results
         .iter()
@@ -358,6 +358,16 @@ mod tests {
         }
     }
 
+    /// A command by its label: indexing `GLOBAL_COMMANDS` broke silently when
+    /// #111 inserted the "New <type>" commands (index 11 became Go to Graph),
+    /// unnoticed because CI didn't run the ui crate's tests.
+    fn command(label: &str) -> &'static CommandSpec {
+        GLOBAL_COMMANDS
+            .iter()
+            .find(|c| c.label == label)
+            .expect("command exists")
+    }
+
     fn labels(actions: &[PaletteAction]) -> Vec<String> {
         actions.iter().map(|a| a.primary().to_string()).collect()
     }
@@ -367,7 +377,7 @@ mod tests {
         // "theme" matched two nodes via body text only — the command must
         // come first (the v2.21.3 hijack).
         let results = vec![result("Dartmouth Seminar"), result("Product Definition")];
-        let cmds = vec![&GLOBAL_COMMANDS[11]]; // Toggle dark mode
+        let cmds = vec![command("Toggle dark mode")];
         let out = ranked_actions(&results, cmds, "theme");
         assert_eq!(
             labels(&out),
@@ -385,7 +395,7 @@ mod tests {
         // Quick-switcher behavior: typing a node's title puts it first even
         // when a command also matches.
         let results = vec![result("Dark Patterns Research"), result("Unrelated")];
-        let cmds = vec![&GLOBAL_COMMANDS[11]];
+        let cmds = vec![command("Toggle dark mode")];
         let out = ranked_actions(&results, cmds, "dark");
         assert_eq!(
             labels(&out),
@@ -426,13 +436,10 @@ pub fn CommandPalette(
     on_create: Callback<String>,
 ) -> impl IntoView {
     let query: RwSignal<String> = RwSignal::new(String::new());
-    let results: RwSignal<Vec<SearchResult>> = RwSignal::new(Vec::new());
+    let results = crate::components::node_picker::use_node_search(query);
     let recent: RwSignal<Vec<RecentEntry>> = RwSignal::new(Vec::new());
     let highlight: RwSignal<usize> = RwSignal::new(0);
-    let version: RwSignal<u32> = RwSignal::new(0);
     let input_ref: NodeRef<html::Input> = NodeRef::new();
-    let panel_ref: NodeRef<html::Div> = NodeRef::new();
-    super::return_focus_on_close(show);
 
     let navigate = StoredValue::new(use_navigate());
     let location = use_location();
@@ -463,31 +470,6 @@ pub fn CommandPalette(
         {
             let _ = el.focus();
         }
-    });
-
-    // Debounced search effect.  Mirrors the canonical pattern at
-    // `.claude/patterns/reactive-effect-debounce.rs`: bump a monotonic
-    // version counter, sleep 300ms, drop stale responses on the way in
-    // and on the way out.
-    Effect::new(move |_| {
-        let q = query.get();
-        version.update(|v| *v += 1);
-        let my_v = version.get_untracked();
-        spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(300).await;
-            if version.get_untracked() != my_v {
-                return;
-            }
-            if q.trim().is_empty() {
-                results.set(Vec::new());
-                return;
-            }
-            if let Ok(rs) = crate::api::node_picker_search(&q).await
-                && version.get_untracked() == my_v
-            {
-                results.set(rs);
-            }
-        });
     });
 
     // Build the action list reactively.  The order here is the order
@@ -630,16 +612,9 @@ pub fn CommandPalette(
     // Keyboard handler on the palette container.  ↑/↓ move the
     // highlight, Enter picks, Esc closes.  Plain typing falls through
     // to the input element so the query updates normally.
+    // (Escape — stopped before the window dispatcher could treat it as
+    // "back" on a node page — and the Tab trap are ModalShell's.)
     let on_keydown = move |ev: web_sys::KeyboardEvent| match ev.key().as_str() {
-        "Escape" => {
-            ev.prevent_default();
-            // Handled here: don't let it bubble to the window dispatcher,
-            // which (palette now closed) would treat it as "back" on a node
-            // page. The dispatcher only closes the palette when focus is
-            // outside it — see `common::keyboard::escape_target`.
-            ev.stop_propagation();
-            on_close.run(());
-        }
         "ArrowDown" => {
             ev.prevent_default();
             let len = actions.get_untracked().len();
@@ -656,148 +631,111 @@ pub fn CommandPalette(
             ev.prevent_default();
             pick(highlight.get_untracked());
         }
-        _ => {
-            if let Some(panel) = panel_ref.get_untracked() {
-                super::trap_focus(&ev, &panel);
-            }
-        }
+        _ => {}
     };
 
     view! {
-        <Show when=move || show.get()>
-            <Portal>
-                // Backdrop — click closes
-                <div
-                    class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-                    on:click=move |_| on_close.run(())
+        <ModalShell
+            show=show
+            on_close=on_close
+            label="Command palette"
+            panel_class="w-full max-w-xl overflow-hidden"
+            placement=ModalPlacement::Top
+            on_key=Callback::new(on_keydown)
+        >
+            // Search input
+            <div class="flex items-center gap-2 px-4 py-3 border-b \
+                        border-stone-200 dark:border-stone-700">
+                <span class="material-symbols-outlined text-stone-400" style="font-size:18px;">
+                    "search"
+                </span>
+                <input
+                    node_ref=input_ref
+                    type="text"
+                    placeholder="Search nodes, or type a new title…"
+                    class="flex-1 bg-transparent text-sm text-stone-900 \
+                           dark:text-stone-100 placeholder-stone-400 \
+                           outline-none"
+                    prop:value=move || query.get()
+                    on:input=move |ev| {
+                        query.set(event_target_value(&ev));
+                        highlight.set(0);
+                    }
                 />
-                // Panel
-                <div
-                    class="fixed inset-x-0 top-16 z-50 mx-auto w-full max-w-xl px-4 \
-                           pointer-events-none"
-                >
-                    <div
-                        node_ref=panel_ref
-                        class="pointer-events-auto bg-white dark:bg-stone-900 \
-                               rounded-2xl shadow-2xl border border-stone-200 \
-                               dark:border-stone-700 overflow-hidden"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-label="Command palette"
-                        on:keydown=on_keydown
-                    >
-                        // Search input
-                        <div class="flex items-center gap-2 px-4 py-3 border-b \
-                                    border-stone-200 dark:border-stone-700">
-                            <span class="material-symbols-outlined text-stone-400" style="font-size:18px;">
-                                "search"
-                            </span>
-                            <input
-                                node_ref=input_ref
-                                type="text"
-                                placeholder="Search nodes, or type a new title…"
-                                class="flex-1 bg-transparent text-sm text-stone-900 \
-                                       dark:text-stone-100 placeholder-stone-400 \
-                                       outline-none"
-                                prop:value=move || query.get()
-                                on:input=move |ev| {
-                                    query.set(event_target_value(&ev));
-                                    highlight.set(0);
-                                }
-                            />
-                            <kbd class="text-[10px] font-mono px-1.5 py-0.5 rounded \
-                                        bg-stone-100 dark:bg-stone-800 \
-                                        text-stone-500 dark:text-stone-400">
-                                "Esc"
-                            </kbd>
-                        </div>
+                <kbd class="text-[10px] font-mono px-1.5 py-0.5 rounded \
+                            bg-stone-100 dark:bg-stone-800 \
+                            text-stone-500 dark:text-stone-400">
+                    "Esc"
+                </kbd>
+            </div>
 
-                        // Section header (Recent vs Results)
-                        {move || {
-                            let q = query.get();
-                            let acts = actions.get();
-                            if acts.is_empty() {
-                                return view! {
-                                    <p class="px-4 py-6 text-sm text-stone-400 dark:text-stone-500 text-center">
-                                        {if q.trim().is_empty() {
-                                            "No recent nodes — start typing to search.".to_string()
-                                        } else {
-                                            "No matches.".to_string()
-                                        }}
-                                    </p>
-                                }.into_any();
-                            }
-                            let header = if q.trim().is_empty() { "Recent" } else { "Matches" };
-                            view! {
-                                <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase \
-                                            tracking-wider text-amber-700 dark:text-amber-400">
-                                    {header}
-                                </div>
-                                <ul class="max-h-[60vh] overflow-auto">
-                                    {acts.into_iter().enumerate().map(|(idx, action)| {
-                                        let icon = action.icon().to_string();
-                                        let primary = action.primary().to_string();
-                                        let secondary = action.secondary();
-                                        view! {
-                                            <li>
-                                                <button
-                                                    type="button"
-                                                    class="w-full flex items-center gap-3 px-4 py-2 \
-                                                           text-left transition-colors cursor-pointer"
-                                                    style=move || if highlight.get() == idx {
-                                                        "background-color:rgba(245,158,11,0.12);"
-                                                    } else { "" }
-                                                    on:mouseenter=move |_| highlight.set(idx)
-                                                    on:click=move |_| pick(idx)
-                                                >
-                                                    <span class="material-symbols-outlined \
-                                                                 text-amber-600 dark:text-amber-500 \
-                                                                 flex-shrink-0"
-                                                          style="font-size:18px;">
-                                                        {icon}
-                                                    </span>
-                                                    <span class="flex-1 min-w-0 text-sm \
-                                                                 text-stone-800 dark:text-stone-200 \
-                                                                 truncate">
-                                                        {primary}
-                                                    </span>
-                                                    <span class="text-xs text-stone-400 \
-                                                                 dark:text-stone-500 flex-shrink-0">
-                                                        {secondary}
-                                                    </span>
-                                                </button>
-                                            </li>
-                                        }
-                                    }).collect_view()}
-                                </ul>
-                                <div class="px-3 py-2 text-[10px] text-stone-400 \
-                                            dark:text-stone-500 border-t border-stone-100 \
-                                            dark:border-stone-800 flex items-center gap-3">
-                                    <span><kbd class="font-mono">"↑↓"</kbd>" navigate"</span>
-                                    <span><kbd class="font-mono">"Enter"</kbd>" pick"</span>
-                                    <span><kbd class="font-mono">"Esc"</kbd>" close"</span>
-                                </div>
-                            }.into_any()
-                        }}
+            // Section header (Recent vs Results)
+            {move || {
+                let q = query.get();
+                let acts = actions.get();
+                if acts.is_empty() {
+                    return view! {
+                        <p class="px-4 py-6 text-sm text-stone-400 dark:text-stone-500 text-center">
+                            {if q.trim().is_empty() {
+                                "No recent nodes — start typing to search.".to_string()
+                            } else {
+                                "No matches.".to_string()
+                            }}
+                        </p>
+                    }.into_any();
+                }
+                let header = if q.trim().is_empty() { "Recent" } else { "Matches" };
+                view! {
+                    <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase \
+                                tracking-wider text-amber-700 dark:text-amber-400">
+                        {header}
                     </div>
-                </div>
-            </Portal>
-        </Show>
+                    <ul class="max-h-[60vh] overflow-auto">
+                        {acts.into_iter().enumerate().map(|(idx, action)| {
+                            let icon = action.icon().to_string();
+                            let primary = action.primary().to_string();
+                            let secondary = action.secondary();
+                            view! {
+                                <li>
+                                    <button
+                                        type="button"
+                                        class="w-full flex items-center gap-3 px-4 py-2 \
+                                               text-left transition-colors cursor-pointer"
+                                        style=move || if highlight.get() == idx {
+                                            "background-color:rgba(245,158,11,0.12);"
+                                        } else { "" }
+                                        on:mouseenter=move |_| highlight.set(idx)
+                                        on:click=move |_| pick(idx)
+                                    >
+                                        <span class="material-symbols-outlined \
+                                                     text-amber-600 dark:text-amber-500 \
+                                                     flex-shrink-0"
+                                              style="font-size:18px;">
+                                            {icon}
+                                        </span>
+                                        <span class="flex-1 min-w-0 text-sm \
+                                                     text-stone-800 dark:text-stone-200 \
+                                                     truncate">
+                                            {primary}
+                                        </span>
+                                        <span class="text-xs text-stone-400 \
+                                                     dark:text-stone-500 flex-shrink-0">
+                                            {secondary}
+                                        </span>
+                                    </button>
+                                </li>
+                            }
+                        }).collect_view()}
+                    </ul>
+                    <div class="px-3 py-2 text-[10px] text-stone-400 \
+                                dark:text-stone-500 border-t border-stone-100 \
+                                dark:border-stone-800 flex items-center gap-3">
+                        <span><kbd class="font-mono">"↑↓"</kbd>" navigate"</span>
+                        <span><kbd class="font-mono">"Enter"</kbd>" pick"</span>
+                        <span><kbd class="font-mono">"Esc"</kbd>" close"</span>
+                    </div>
+                }.into_any()
+            }}
+        </ModalShell>
     }
-}
-
-/// Map a node type string to a Material Symbols icon name.  Keeps the
-/// palette and the recent-list visually consistent (the recent helper
-/// stores the icon name directly so we don't have to do this mapping
-/// twice for that section).
-fn type_to_icon(node_type: &str) -> String {
-    match node_type {
-        "article" => "description",
-        "project" => "rocket_launch",
-        "area" => "category",
-        "resource" => "bookmarks",
-        "reference" => "menu_book",
-        _ => "note",
-    }
-    .to_string()
 }

@@ -1,8 +1,9 @@
 use common::{favorite::CreateFavoriteRequest, node::NodeTitleEntry};
-use leptos::portal::Portal;
 use leptos::prelude::*;
+
 use wasm_bindgen_futures::spawn_local;
 
+use super::ModalShell;
 use crate::{
     api::{create_favorite, fetch_node_titles},
     components::toast::{ToastLevel, push_toast},
@@ -116,214 +117,196 @@ pub fn AddFavoriteModal(
         });
     };
 
-    let panel_ref: NodeRef<leptos::html::Div> = NodeRef::new();
-    super::return_focus_on_close(show);
-
-    let handle_keydown = move |ev: leptos::ev::KeyboardEvent| {
-        if ev.key() == "Escape" {
-            on_close.run(());
-        } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+    let handle_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+            ev.prevent_default();
             handle_submit();
-        } else if let Some(panel) = panel_ref.get_untracked() {
-            super::trap_focus(&ev, &panel);
         }
     };
 
     view! {
-        {move || {
-            if !show.get() { return view! { <div /> }.into_any(); }
-            view! {
-                <Portal>
-                <div
-                    class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-                    on:keydown=handle_keydown
+        <ModalShell
+            show=show
+            on_close=on_close
+            label="Add to favorites"
+            panel_class="w-full max-w-md mx-4 p-6"
+            on_key=Callback::new(handle_keydown)
+        >
+            // Header
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-base font-semibold text-stone-800 dark:text-stone-100">
+                    "Add to Favorites"
+                </h2>
+                <button
+                    class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 cursor-pointer"
+                    on:click=move |_| on_close.run(())
                 >
-                    <div
-                        class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl border border-stone-200 dark:border-stone-700 w-full max-w-md mx-4 p-6"
-                        node_ref=panel_ref
-                        role="dialog"
-                        aria-modal="true"
-                        aria-label="Add to favorites"
-                    >
-                        // Header
-                        <div class="flex items-center justify-between mb-4">
-                            <h2 class="text-base font-semibold text-stone-800 dark:text-stone-100">
-                                "Add to Favorites"
-                            </h2>
-                            <button
-                                class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 cursor-pointer"
-                                on:click=move |_| on_close.run(())
-                            >
-                                <span class="material-symbols-outlined">"close"</span>
-                            </button>
-                        </div>
+                    <span class="material-symbols-outlined">"close"</span>
+                </button>
+            </div>
 
-                        // Mode toggle
-                        <div class="flex gap-2 mb-4 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg">
-                            <button
-                                class=move || {
-                                    let active = mode.get() == "node";
-                                    let base = "flex-1 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer";
-                                    if active {
-                                        format!("{base} bg-white dark:bg-stone-700 text-stone-800 dark:text-stone-100 shadow-sm")
-                                    } else {
-                                        format!("{base} text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300")
-                                    }
-                                }
-                                on:click=move |_| { mode.set("node".to_string()); selected_node.set(None); node_search.set(String::new()); }
-                            >
-                                "Internal Node"
-                            </button>
-                            <button
-                                class=move || {
-                                    let active = mode.get() == "url";
-                                    let base = "flex-1 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer";
-                                    if active {
-                                        format!("{base} bg-white dark:bg-stone-700 text-stone-800 dark:text-stone-100 shadow-sm")
-                                    } else {
-                                        format!("{base} text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300")
-                                    }
-                                }
-                                on:click=move |_| mode.set("url".to_string())
-                            >
-                                "External URL"
-                            </button>
-                        </div>
+            // Mode toggle
+            <div class="flex gap-2 mb-4 p-1 bg-stone-100 dark:bg-stone-800 rounded-lg">
+                <button
+                    class=move || {
+                        let active = mode.get() == "node";
+                        let base = "flex-1 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer";
+                        if active {
+                            format!("{base} bg-white dark:bg-stone-700 text-stone-800 dark:text-stone-100 shadow-sm")
+                        } else {
+                            format!("{base} text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300")
+                        }
+                    }
+                    on:click=move |_| { mode.set("node".to_string()); selected_node.set(None); node_search.set(String::new()); }
+                >
+                    "Internal Node"
+                </button>
+                <button
+                    class=move || {
+                        let active = mode.get() == "url";
+                        let base = "flex-1 py-1.5 rounded-md text-sm font-medium transition-colors cursor-pointer";
+                        if active {
+                            format!("{base} bg-white dark:bg-stone-700 text-stone-800 dark:text-stone-100 shadow-sm")
+                        } else {
+                            format!("{base} text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300")
+                        }
+                    }
+                    on:click=move |_| mode.set("url".to_string())
+                >
+                    "External URL"
+                </button>
+            </div>
 
-                        // Node mode
-                        {move || {
-                            if mode.get() != "node" { return view! { <div /> }.into_any(); }
+            // Node mode
+            {move || {
+                if mode.get() != "node" { return view! { <div /> }.into_any(); }
+                view! {
+                    <div class="space-y-3">
+                        {move || selected_node.get().map(|n| {
+                            let title = n.title.clone();
                             view! {
-                                <div class="space-y-3">
-                                    {move || selected_node.get().map(|n| {
-                                        let title = n.title.clone();
-                                        view! {
-                                            <div class="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-900/20
-                                                        border border-amber-200 dark:border-amber-700 rounded-lg">
-                                                <span class="material-symbols-outlined text-amber-500" style="font-size:16px">"star"</span>
-                                                <span class="text-sm text-stone-700 dark:text-stone-300 flex-1 truncate">{title}</span>
-                                                <button
-                                                    class="text-stone-400 hover:text-stone-600 cursor-pointer"
-                                                    on:click=move |_| selected_node.set(None)
-                                                >
-                                                    <span class="material-symbols-outlined" style="font-size:16px">"close"</span>
-                                                </button>
-                                            </div>
-                                        }.into_any()
-                                    })}
-                                    {move || {
-                                        if selected_node.get().is_some() { return view! { <div /> }.into_any(); }
-                                        view! {
-                                            <div class="relative">
-                                                <input
-                                                    type="text"
-                                                    class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
-                                                           rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
-                                                           placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                                    placeholder="Search nodes…"
-                                                    prop:value=move || node_search.get()
-                                                    on:input=move |ev| node_search.set(event_target_value(&ev))
-                                                />
-                                                <ul class="mt-1 max-h-48 overflow-y-auto border border-stone-200
-                                                           dark:border-stone-700 rounded-lg bg-white dark:bg-stone-900">
-                                                    {move || {
-                                                        let results = node_results.get();
-                                                        if results.is_empty() {
-                                                            return view! {
-                                                                <li class="px-3 py-2 text-sm text-stone-400 dark:text-stone-500">"No nodes found"</li>
-                                                            }.into_any();
-                                                        }
-                                                        results.into_iter().map(|n| {
-                                                            let title = n.title.clone();
-                                                            let n2 = n.clone();
-                                                            view! {
-                                                                <li>
-                                                                    <button
-                                                                        class="w-full text-left px-3 py-2 text-sm text-stone-700
-                                                                               dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
-                                                                               truncate cursor-pointer"
-                                                                        on:click=move |_| {
-                                                                            selected_node.set(Some(n2.clone()));
-                                                                        }
-                                                                    >
-                                                                        {title}
-                                                                    </button>
-                                                                </li>
-                                                            }
-                                                        }).collect_view().into_any()
-                                                    }}
-                                                </ul>
-                                            </div>
-                                        }.into_any()
-                                    }}
+                                <div class="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-900/20
+                                            border border-amber-200 dark:border-amber-700 rounded-lg">
+                                    <span class="material-symbols-outlined text-amber-500" style="font-size:16px">"star"</span>
+                                    <span class="text-sm text-stone-700 dark:text-stone-300 flex-1 truncate">{title}</span>
+                                    <button
+                                        class="text-stone-400 hover:text-stone-600 cursor-pointer"
+                                        on:click=move |_| selected_node.set(None)
+                                    >
+                                        <span class="material-symbols-outlined" style="font-size:16px">"close"</span>
+                                    </button>
                                 </div>
                             }.into_any()
-                        }}
-
-                        // URL mode
-                        {move || {
-                            if mode.get() != "url" { return view! { <div /> }.into_any(); }
-                            view! {
-                                <div class="space-y-3">
-                                    <div>
-                                        <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
-                                            "URL"
-                                        </label>
-                                        <input
-                                            type="url"
-                                            class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
-                                                   rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
-                                                   placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                            placeholder="https://…"
-                                            prop:value=move || url_input.get()
-                                            on:input=move |ev| url_input.set(event_target_value(&ev))
-                                        />
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
-                                            "Label"
-                                        </label>
-                                        <input
-                                            type="text"
-                                            class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
-                                                   rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
-                                                   placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                            placeholder="My Mailbox"
-                                            prop:value=move || label_input.get()
-                                            on:input=move |ev| label_input.set(event_target_value(&ev))
-                                        />
-                                    </div>
-                                </div>
-                            }.into_any()
-                        }}
-
-                        // Error banner
-                        {move || error.get().map(|e| view! {
-                            <p class="mt-3 text-xs text-red-500 dark:text-red-400">{e}</p>
                         })}
+                        {move || {
+                            if selected_node.get().is_some() { return view! { <div /> }.into_any(); }
+                            view! {
+                                <div class="relative">
+                                    <input
+                                        type="text"
+                                        class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
+                                               rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
+                                               placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                        placeholder="Search nodes…"
+                                        prop:value=move || node_search.get()
+                                        on:input=move |ev| node_search.set(event_target_value(&ev))
+                                    />
+                                    <ul class="mt-1 max-h-48 overflow-y-auto border border-stone-200
+                                               dark:border-stone-700 rounded-lg bg-white dark:bg-stone-900">
+                                        {move || {
+                                            let results = node_results.get();
+                                            if results.is_empty() {
+                                                return view! {
+                                                    <li class="px-3 py-2 text-sm text-stone-400 dark:text-stone-500">"No nodes found"</li>
+                                                }.into_any();
+                                            }
+                                            results.into_iter().map(|n| {
+                                                let title = n.title.clone();
+                                                let n2 = n.clone();
+                                                view! {
+                                                    <li>
+                                                        <button
+                                                            class="w-full text-left px-3 py-2 text-sm text-stone-700
+                                                                   dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
+                                                                   truncate cursor-pointer"
+                                                            on:click=move |_| {
+                                                                selected_node.set(Some(n2.clone()));
+                                                            }
+                                                        >
+                                                            {title}
+                                                        </button>
+                                                    </li>
+                                                }
+                                            }).collect_view().into_any()
+                                        }}
+                                    </ul>
+                                </div>
+                            }.into_any()
+                        }}
+                    </div>
+                }.into_any()
+            }}
 
-                        // Actions
-                        <div class="flex justify-end gap-3 mt-5">
-                            <button
-                                class="px-4 py-2 text-sm text-stone-600 dark:text-stone-400
-                                       hover:text-stone-800 dark:hover:text-stone-200 cursor-pointer"
-                                on:click=move |_| on_close.run(())
-                            >
-                                "Cancel"
-                            </button>
-                            <button
-                                class="px-4 py-2 text-sm font-medium bg-ember hover:bg-ember-strong
-                                       text-white rounded-lg disabled:opacity-50 cursor-pointer"
-                                disabled=move || loading.get()
-                                on:click=move |_| handle_submit()
-                            >
-                                {move || if loading.get() { "Adding…" } else { "Add" }}
-                            </button>
+            // URL mode
+            {move || {
+                if mode.get() != "url" { return view! { <div /> }.into_any(); }
+                view! {
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                                "URL"
+                            </label>
+                            <input
+                                type="url"
+                                class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
+                                       rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
+                                       placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                placeholder="https://…"
+                                prop:value=move || url_input.get()
+                                on:input=move |ev| url_input.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                                "Label"
+                            </label>
+                            <input
+                                type="text"
+                                class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
+                                       rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
+                                       placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                                placeholder="My Mailbox"
+                                prop:value=move || label_input.get()
+                                on:input=move |ev| label_input.set(event_target_value(&ev))
+                            />
                         </div>
                     </div>
-                </div>
-                </Portal>
-            }.into_any()
-        }}
+                }.into_any()
+            }}
+
+            // Error banner
+            {move || error.get().map(|e| view! {
+                <p class="mt-3 text-xs text-red-500 dark:text-red-400">{e}</p>
+            })}
+
+            // Actions
+            <div class="flex justify-end gap-3 mt-5">
+                <button
+                    class="px-4 py-2 text-sm text-stone-600 dark:text-stone-400
+                           hover:text-stone-800 dark:hover:text-stone-200 cursor-pointer"
+                    on:click=move |_| on_close.run(())
+                >
+                    "Cancel"
+                </button>
+                <button
+                    class="px-4 py-2 text-sm font-medium bg-ember hover:bg-ember-strong
+                           text-white rounded-lg disabled:opacity-50 cursor-pointer"
+                    disabled=move || loading.get()
+                    on:click=move |_| handle_submit()
+                >
+                    {move || if loading.get() { "Adding…" } else { "Add" }}
+                </button>
+            </div>
+        </ModalShell>
     }
 }

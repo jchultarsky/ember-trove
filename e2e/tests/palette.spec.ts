@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 
 /**
  * Cmd-K command palette: node search, app commands with synonym matching,

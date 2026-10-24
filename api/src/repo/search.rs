@@ -48,6 +48,10 @@ struct SearchRow {
     highlighted_title: Option<String>,
     // Recency: used by SQL `ORDER BY` and shown on result cards.
     updated_at: DateTime<Utc>,
+    /// `COUNT(*) OVER ()` from paged queries; absent (None) for queries that
+    /// count separately.
+    #[sqlx(default)]
+    total: Option<i64>,
 }
 
 impl SearchRow {
@@ -115,7 +119,9 @@ impl SearchRepo for PgSearchRepo {
         let q = query.q.trim();
         let page = query.page.unwrap_or(1).max(1);
         let per_page = query.per_page.unwrap_or(20).min(100);
-        let offset = (page - 1) * per_page;
+        // Saturating: an absurd ?page= must not overflow (debug panic /
+        // release wrap) — it just yields an empty page.
+        let offset = page.saturating_sub(1).saturating_mul(per_page);
         let tag_ids = parse_tag_ids(&query.tag_ids);
         let and_mode = query.tag_op.as_deref() == Some("and");
 
@@ -208,8 +214,8 @@ impl PgSearchRepo {
         offset: u32,
         subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
-        let type_filter = node_type.as_ref().map(node_type_to_str);
-        let status_filter = status.as_ref().map(node_status_to_str);
+        let type_filter = node_type.as_ref().map(|v| v.as_str());
+        let status_filter = status.as_ref().map(|v| v.as_str());
 
         let count_row = sqlx::query_as::<_, CountRow>(
             r#"
@@ -322,58 +328,15 @@ impl PgSearchRepo {
         offset: u32,
         subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
-        let type_filter = node_type.as_ref().map(node_type_to_str);
-        let status_filter = status.as_ref().map(node_status_to_str);
+        let type_filter = node_type.as_ref().map(|v| v.as_str());
+        let status_filter = status.as_ref().map(|v| v.as_str());
 
-        let count_row = sqlx::query_as::<_, CountRow>(
-            r#"
-            WITH valid_nodes AS (
-                SELECT id FROM nodes
-                WHERE ($2::text IS NULL OR node_type = $2::node_type)
-                  AND ($3::text IS NULL OR status = $3::node_status)
-                  AND (
-                    array_length($4::uuid[], 1) IS NULL
-                    OR id IN (
-                        SELECT node_id FROM node_tags
-                        WHERE tag_id = ANY($4::uuid[])
-                        GROUP BY node_id
-                        HAVING (NOT $5) OR COUNT(DISTINCT tag_id) = array_length($4::uuid[], 1)
-                    )
-                  )
-                  AND ($6::timestamptz IS NULL OR updated_at >= $6)
-                  AND ($7::timestamptz IS NULL OR updated_at < $7)
-                  AND ($8::text IS NULL OR owner_id = $8::text)
-            )
-            SELECT COUNT(DISTINCT n.id)::bigint AS total
-            FROM nodes n
-            WHERE n.id IN (SELECT id FROM valid_nodes)
-              AND (
-                n.search_vec @@ websearch_to_tsquery('english', $1)
-                OR EXISTS (
-                    SELECT 1 FROM node_notes nn
-                    WHERE nn.node_id = n.id
-                      AND nn.search_vec @@ websearch_to_tsquery('english', $1)
-                )
-                OR EXISTS (
-                    SELECT 1 FROM node_tasks nt
-                    WHERE nt.node_id = n.id
-                      AND to_tsvector('english', nt.title) @@ websearch_to_tsquery('english', $1)
-                )
-              )
-            "#,
-        )
-        .bind(q)
-        .bind(type_filter)
-        .bind(status_filter)
-        .bind(tag_ids)
-        .bind(and_mode)
-        .bind(updated_after)
-        .bind(updated_before)
-        .bind(subject)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("search count failed: {e}")))?;
-
+        // Rank-only candidates → one best source per node → order + page
+        // (COUNT(*) OVER for the total) → ts_headline for the returned page
+        // only. ts_headline re-parses the whole text, and it used to run for
+        // EVERY match before DISTINCT ON + LIMIT; a broad term did thousands
+        // of parses to return 20 rows. The separate COUNT query that re-ran
+        // the whole match is now only a fallback for a page past the end.
         let rows = sqlx::query_as::<_, SearchRow>(
             &format!(
                 r#"
@@ -395,97 +358,96 @@ impl PgSearchRepo {
                       AND ($10::text IS NULL OR owner_id = $10::text)
                 ),
                 candidates AS (
-                    -- Match from node title / body
-                    -- normalization=1: divide by log(unique words) to prevent long-body
-                    -- documents from unfairly outranking short, well-titled nodes.
-                    SELECT
-                        n.id,
-                        n.title,
-                        n.slug,
-                        ts_headline(
-                            'english',
-                            coalesce(n.body, ''),
-                            websearch_to_tsquery('english', $1),
-                            'StartSel=<mark>, StopSel=</mark>, MaxFragments=2, MaxWords=30, MinWords=10'
-                        ) AS snippet,
-                        ts_rank_cd(n.search_vec, websearch_to_tsquery('english', $1), 1) AS rank,
-                        n.node_type::text AS node_type,
-                        n.status::text AS status,
-                        'node'::text AS match_source,
-                        -- HighlightAll: the WHOLE title with matches marked. A
-                        -- fragment option set (MaxWords/MinWords) shortened
-                        -- titles ("Buy a gift for Sam" -> "Gift for Sam"),
-                        -- so one node showed under different names (#107).
-                        ts_headline(
-                            'english',
-                            n.title,
-                            websearch_to_tsquery('english', $1),
-                            'StartSel=<mark>, StopSel=</mark>, HighlightAll=true'
-                        ) AS highlighted_title
+                    -- normalization=1: divide by log(unique words) so long bodies
+                    -- don't unfairly outrank short, well-titled nodes.
+                    SELECT n.id,
+                           ts_rank_cd(n.search_vec, websearch_to_tsquery('english', $1), 1) AS rank,
+                           'node'::text AS match_source,
+                           NULL::uuid AS src_id
                     FROM nodes n
                     WHERE n.id IN (SELECT id FROM valid_nodes)
                       AND n.search_vec @@ websearch_to_tsquery('english', $1)
 
                     UNION ALL
 
-                    -- Match from an attached note body
-                    SELECT
-                        n.id,
-                        n.title,
-                        n.slug,
-                        ts_headline(
-                            'english',
-                            nn.body,
-                            websearch_to_tsquery('english', $1),
-                            'StartSel=<mark>, StopSel=</mark>, MaxFragments=2, MaxWords=30, MinWords=10'
-                        ) AS snippet,
-                        ts_rank_cd(nn.search_vec, websearch_to_tsquery('english', $1), 1) AS rank,
-                        n.node_type::text AS node_type,
-                        n.status::text AS status,
-                        'note'::text AS match_source,
-                        NULL::text AS highlighted_title
+                    SELECT nn.node_id,
+                           ts_rank_cd(nn.search_vec, websearch_to_tsquery('english', $1), 1),
+                           'note'::text,
+                           nn.id
                     FROM node_notes nn
-                    JOIN nodes n ON n.id = nn.node_id
-                    WHERE n.id IN (SELECT id FROM valid_nodes)
+                    WHERE nn.deleted_at IS NULL
+                      AND nn.node_id IN (SELECT id FROM valid_nodes)
                       AND nn.search_vec @@ websearch_to_tsquery('english', $1)
 
                     UNION ALL
 
-                    -- Match from an attached task title
-                    SELECT
-                        n.id,
-                        n.title,
-                        n.slug,
-                        substring(nt.title FROM 1 FOR 200) AS snippet,
-                        ts_rank_cd(
-                            to_tsvector('english', nt.title),
-                            websearch_to_tsquery('english', $1),
-                            1
-                        ) AS rank,
-                        n.node_type::text AS node_type,
-                        n.status::text AS status,
-                        'task'::text AS match_source,
-                        NULL::text AS highlighted_title
+                    SELECT nt.node_id,
+                           ts_rank_cd(
+                               to_tsvector('english', nt.title),
+                               websearch_to_tsquery('english', $1),
+                               1
+                           ),
+                           'task'::text,
+                           nt.id
                     FROM node_tasks nt
-                    JOIN nodes n ON n.id = nt.node_id
-                    WHERE n.id IN (SELECT id FROM valid_nodes)
+                    WHERE nt.deleted_at IS NULL
+                      AND nt.node_id IN (SELECT id FROM valid_nodes)
                       AND to_tsvector('english', nt.title) @@ websearch_to_tsquery('english', $1)
                 ),
                 best AS (
-                    SELECT DISTINCT ON (id)
-                        id, title, slug, snippet, rank, node_type, status, match_source,
-                        highlighted_title
+                    -- Highest-ranked source per node; match_source breaks ties
+                    -- deterministically.
+                    SELECT DISTINCT ON (id) id, rank, match_source, src_id
                     FROM candidates
-                    ORDER BY id, rank DESC
+                    ORDER BY id, rank DESC, match_source
+                ),
+                page AS (
+                    SELECT b.id, b.rank, b.match_source, b.src_id,
+                           n.title, n.updated_at,
+                           COUNT(*) OVER () AS total
+                    FROM best b
+                    JOIN nodes n ON n.id = b.id
+                    {order}
+                    LIMIT $8 OFFSET $9
                 )
                 SELECT
-                    b.id, b.title, b.slug, b.snippet, b.rank,
-                    b.node_type, b.status, b.match_source, b.highlighted_title,
-                    n.updated_at
-                FROM best b
-                JOIN nodes n ON n.id = b.id
+                    p.id,
+                    n.title,
+                    n.slug,
+                    CASE p.match_source
+                        WHEN 'node' THEN ts_headline(
+                            'english',
+                            coalesce(n.body, ''),
+                            websearch_to_tsquery('english', $1),
+                            'StartSel=<mark>, StopSel=</mark>, MaxFragments=2, MaxWords=30, MinWords=10'
+                        )
+                        WHEN 'note' THEN ts_headline(
+                            'english',
+                            nn.body,
+                            websearch_to_tsquery('english', $1),
+                            'StartSel=<mark>, StopSel=</mark>, MaxFragments=2, MaxWords=30, MinWords=10'
+                        )
+                        ELSE substring(nt.title FROM 1 FOR 200)
+                    END AS snippet,
+                    p.rank,
+                    n.node_type::text AS node_type,
+                    n.status::text AS status,
+                    p.match_source,
+                    -- HighlightAll: the WHOLE title with matches marked (a
+                    -- fragment option set shortened titles, #107).
+                    CASE WHEN p.match_source = 'node' THEN ts_headline(
+                        'english',
+                        n.title,
+                        websearch_to_tsquery('english', $1),
+                        'StartSel=<mark>, StopSel=</mark>, HighlightAll=true'
+                    ) END AS highlighted_title,
+                    n.updated_at,
+                    p.total
+                FROM page p
+                JOIN nodes n ON n.id = p.id
+                LEFT JOIN node_notes nn ON p.match_source = 'note' AND nn.id = p.src_id
+                LEFT JOIN node_tasks nt ON p.match_source = 'task' AND nt.id = p.src_id
                 {order}
-                LIMIT $8 OFFSET $9
                 "#,
                 order = sort_clause(sort, true),
             ),
@@ -504,9 +466,67 @@ impl PgSearchRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("fulltext search failed: {e}")))?;
 
+        // The window total rides on every returned row. Only a page past the
+        // end (no rows, offset > 0) needs the standalone count.
+        let total = match rows.first().and_then(|r| r.total) {
+            Some(t) => t as u64,
+            None if offset == 0 => 0,
+            None => {
+                let count_row = sqlx::query_as::<_, CountRow>(
+                        r#"
+                        WITH valid_nodes AS (
+                            SELECT id FROM nodes
+                            WHERE ($2::text IS NULL OR node_type = $2::node_type)
+                              AND ($3::text IS NULL OR status = $3::node_status)
+                              AND (
+                                array_length($4::uuid[], 1) IS NULL
+                                OR id IN (
+                                    SELECT node_id FROM node_tags
+                                    WHERE tag_id = ANY($4::uuid[])
+                                    GROUP BY node_id
+                                    HAVING (NOT $5) OR COUNT(DISTINCT tag_id) = array_length($4::uuid[], 1)
+                                )
+                              )
+                              AND ($6::timestamptz IS NULL OR updated_at >= $6)
+                              AND ($7::timestamptz IS NULL OR updated_at < $7)
+                              AND ($8::text IS NULL OR owner_id = $8::text)
+                        )
+                        SELECT COUNT(DISTINCT n.id)::bigint AS total
+                        FROM nodes n
+                        WHERE n.id IN (SELECT id FROM valid_nodes)
+                          AND (
+                            n.search_vec @@ websearch_to_tsquery('english', $1)
+                            OR EXISTS (
+                                SELECT 1 FROM node_notes nn
+                                WHERE nn.node_id = n.id AND nn.deleted_at IS NULL
+                                  AND nn.search_vec @@ websearch_to_tsquery('english', $1)
+                            )
+                            OR EXISTS (
+                                SELECT 1 FROM node_tasks nt
+                                WHERE nt.node_id = n.id AND nt.deleted_at IS NULL
+                                  AND to_tsvector('english', nt.title) @@ websearch_to_tsquery('english', $1)
+                            )
+                          )
+                        "#,
+                    )
+                    .bind(q)
+                    .bind(type_filter)
+                    .bind(status_filter)
+                    .bind(tag_ids)
+                    .bind(and_mode)
+                    .bind(updated_after)
+                    .bind(updated_before)
+                    .bind(subject)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| EmberTroveError::Internal(format!("search count failed: {e}")))?;
+                count_row.total as u64
+            }
+        };
+
         Ok(SearchResponse {
             results: rows.into_iter().map(SearchRow::into_result).collect(),
-            total: count_row.total as u64,
+            total,
             page,
             per_page,
         })
@@ -532,59 +552,11 @@ impl PgSearchRepo {
         offset: u32,
         subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
-        let type_filter = node_type.as_ref().map(node_type_to_str);
-        let status_filter = status.as_ref().map(node_status_to_str);
-        let like_pattern = format!("%{q}%");
-
-        let count_row = sqlx::query_as::<_, CountRow>(
-            r#"
-            WITH valid_nodes AS (
-                SELECT id FROM nodes
-                WHERE ($3::text IS NULL OR node_type = $3::node_type)
-                  AND ($4::text IS NULL OR status = $4::node_status)
-                  AND (
-                    array_length($5::uuid[], 1) IS NULL
-                    OR id IN (
-                        SELECT node_id FROM node_tags
-                        WHERE tag_id = ANY($5::uuid[])
-                        GROUP BY node_id
-                        HAVING (NOT $6) OR COUNT(DISTINCT tag_id) = array_length($5::uuid[], 1)
-                    )
-                  )
-                  AND ($7::timestamptz IS NULL OR updated_at >= $7)
-                  AND ($8::timestamptz IS NULL OR updated_at < $8)
-                  AND ($9::text IS NULL OR owner_id = $9::text)
-            )
-            SELECT COUNT(DISTINCT n.id)::bigint AS total
-            FROM nodes n
-            WHERE n.id IN (SELECT id FROM valid_nodes)
-              AND (
-                similarity(n.title, $1) > 0.1
-                OR n.body ILIKE $2
-                OR EXISTS (
-                    SELECT 1 FROM node_notes nn
-                    WHERE nn.node_id = n.id AND nn.body ILIKE $2
-                )
-                OR EXISTS (
-                    SELECT 1 FROM node_tasks nt
-                    WHERE nt.node_id = n.id
-                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2)
-                )
-              )
-            "#,
-        )
-        .bind(q)
-        .bind(&like_pattern)
-        .bind(type_filter)
-        .bind(status_filter)
-        .bind(tag_ids)
-        .bind(and_mode)
-        .bind(updated_after)
-        .bind(updated_before)
-        .bind(subject)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("fuzzy count failed: {e}")))?;
+        let type_filter = node_type.as_ref().map(|v| v.as_str());
+        let status_filter = status.as_ref().map(|v| v.as_str());
+        // Escape %, _ and \ so the query matches literally (a bare `%` used to
+        // match everything); every `ILIKE $2` carries `ESCAPE '\'`.
+        let like_pattern = format!("%{}%", super::escape_like(q));
 
         let rows = sqlx::query_as::<_, SearchRow>(&format!(
             r#"
@@ -611,13 +583,13 @@ impl PgSearchRepo {
                         n.id,
                         n.title,
                         n.slug,
-                        CASE WHEN n.body ILIKE $2
+                        CASE WHEN n.body ILIKE $2 ESCAPE '\'
                             THEN substring(n.body FROM 1 FOR 200)
                             ELSE NULL
                         END AS snippet,
                         GREATEST(
                             similarity(n.title, $1),
-                            CASE WHEN n.body ILIKE $2 THEN 0.05 ELSE 0.0 END
+                            CASE WHEN n.body ILIKE $2 ESCAPE '\' THEN 0.05 ELSE 0.0 END
                         ) AS rank,
                         n.node_type::text AS node_type,
                         n.status::text AS status,
@@ -625,7 +597,7 @@ impl PgSearchRepo {
                         NULL::text AS highlighted_title
                     FROM nodes n
                     WHERE n.id IN (SELECT id FROM valid_nodes)
-                      AND (similarity(n.title, $1) > 0.1 OR n.body ILIKE $2)
+                      AND (similarity(n.title, $1) > 0.1 OR n.body ILIKE $2 ESCAPE '\')
 
                     UNION ALL
 
@@ -641,9 +613,9 @@ impl PgSearchRepo {
                         'note'::text AS match_source,
                         NULL::text AS highlighted_title
                     FROM node_notes nn
-                    JOIN nodes n ON n.id = nn.node_id
+                    JOIN nodes n ON n.id = nn.node_id AND nn.deleted_at IS NULL
                     WHERE n.id IN (SELECT id FROM valid_nodes)
-                      AND nn.body ILIKE $2
+                      AND nn.body ILIKE $2 ESCAPE '\'
 
                     UNION ALL
 
@@ -659,21 +631,24 @@ impl PgSearchRepo {
                         'task'::text AS match_source,
                         NULL::text AS highlighted_title
                     FROM node_tasks nt
-                    JOIN nodes n ON n.id = nt.node_id
+                    JOIN nodes n ON n.id = nt.node_id AND nt.deleted_at IS NULL
                     WHERE n.id IN (SELECT id FROM valid_nodes)
-                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2)
+                      AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2 ESCAPE '\')
                 ),
                 best AS (
                     SELECT DISTINCT ON (id)
                         id, title, slug, snippet, rank, node_type, status, match_source,
                         highlighted_title
                     FROM candidates
-                    ORDER BY id, rank DESC
+                    ORDER BY id, rank DESC, match_source
                 )
                 SELECT
                     b.id, b.title, b.slug, b.snippet, b.rank,
                     b.node_type, b.status, b.match_source, b.highlighted_title,
-                    n.updated_at
+                    n.updated_at,
+                    -- The total rides on each row: the separate COUNT re-ran
+                    -- every similarity()/ILIKE scan (bodies twice).
+                    COUNT(*) OVER () AS total
                 FROM best b
                 JOIN nodes n ON n.id = b.id
                 {order}
@@ -696,29 +671,69 @@ impl PgSearchRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("fuzzy search failed: {e}")))?;
 
+        // Only a page past the end (no rows, offset > 0) needs the count.
+        let total = match rows.first().and_then(|r| r.total) {
+            Some(t) => t as u64,
+            None if offset == 0 => 0,
+            None => {
+                let count_row = sqlx::query_as::<_, CountRow>(
+                        r#"
+                        WITH valid_nodes AS (
+                            SELECT id FROM nodes
+                            WHERE ($3::text IS NULL OR node_type = $3::node_type)
+                              AND ($4::text IS NULL OR status = $4::node_status)
+                              AND (
+                                array_length($5::uuid[], 1) IS NULL
+                                OR id IN (
+                                    SELECT node_id FROM node_tags
+                                    WHERE tag_id = ANY($5::uuid[])
+                                    GROUP BY node_id
+                                    HAVING (NOT $6) OR COUNT(DISTINCT tag_id) = array_length($5::uuid[], 1)
+                                )
+                              )
+                              AND ($7::timestamptz IS NULL OR updated_at >= $7)
+                              AND ($8::timestamptz IS NULL OR updated_at < $8)
+                              AND ($9::text IS NULL OR owner_id = $9::text)
+                        )
+                        SELECT COUNT(DISTINCT n.id)::bigint AS total
+                        FROM nodes n
+                        WHERE n.id IN (SELECT id FROM valid_nodes)
+                          AND (
+                            similarity(n.title, $1) > 0.1
+                            OR n.body ILIKE $2 ESCAPE '\'
+                            OR EXISTS (
+                                SELECT 1 FROM node_notes nn
+                                WHERE nn.node_id = n.id AND nn.deleted_at IS NULL AND nn.body ILIKE $2 ESCAPE '\'
+                            )
+                            OR EXISTS (
+                                SELECT 1 FROM node_tasks nt
+                                WHERE nt.node_id = n.id AND nt.deleted_at IS NULL
+                                  AND (similarity(nt.title, $1) > 0.1 OR nt.title ILIKE $2 ESCAPE '\')
+                            )
+                          )
+                        "#,
+                    )
+                    .bind(q)
+                    .bind(&like_pattern)
+                    .bind(type_filter)
+                    .bind(status_filter)
+                    .bind(tag_ids)
+                    .bind(and_mode)
+                    .bind(updated_after)
+                    .bind(updated_before)
+                    .bind(subject)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(|e| EmberTroveError::Internal(format!("fuzzy count failed: {e}")))?;
+                count_row.total as u64
+            }
+        };
+
         Ok(SearchResponse {
             results: rows.into_iter().map(SearchRow::into_result).collect(),
-            total: count_row.total as u64,
+            total,
             page,
             per_page,
         })
-    }
-}
-
-fn node_type_to_str(t: &common::node::NodeType) -> &'static str {
-    match t {
-        common::node::NodeType::Article => "article",
-        common::node::NodeType::Project => "project",
-        common::node::NodeType::Area => "area",
-        common::node::NodeType::Resource => "resource",
-        common::node::NodeType::Reference => "reference",
-    }
-}
-
-fn node_status_to_str(s: &common::node::NodeStatus) -> &'static str {
-    match s {
-        common::node::NodeStatus::Draft => "draft",
-        common::node::NodeStatus::Published => "published",
-        common::node::NodeStatus::Archived => "archived",
     }
 }

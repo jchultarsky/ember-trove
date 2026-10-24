@@ -4,8 +4,10 @@ use common::{
     template::NodeTemplate,
 };
 use leptos::prelude::*;
+
 use wasm_bindgen_futures::spawn_local;
 
+use super::ModalShell;
 use crate::{
     api::create_node,
     components::toast::{ToastLevel, push_toast},
@@ -158,222 +160,200 @@ pub fn CreateNodeModal(
         });
     });
 
-    let panel_ref: NodeRef<leptos::html::Div> = NodeRef::new();
-    super::return_focus_on_close(show);
-
-    // Keyboard handler: Escape closes, Ctrl+Enter submits, Tab is trapped.
+    // Ctrl+Enter submits (Escape and the Tab trap are the shell's).
     let handle_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" {
-            on_close.run(());
-        } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+            ev.prevent_default();
             submit_pending.set(true);
-        } else if let Some(panel) = panel_ref.get_untracked() {
-            super::trap_focus(&ev, &panel);
         }
     };
 
     view! {
-        <Show when=move || show.get()>
-            // Backdrop
-            <div
-                class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-                on:click=move |_| on_close.run(())
-            />
-            // Modal panel
-            <div
-                class="fixed inset-0 z-50 flex items-center justify-center p-4"
-                on:keydown=handle_keydown
-            >
-                <div class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl
-                            border border-stone-200 dark:border-stone-700
-                            w-full max-w-lg flex flex-col gap-4 p-6"
-                    node_ref=panel_ref
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Create node"
-                    // Prevent backdrop click from closing when clicking inside
-                    on:click=|ev| ev.stop_propagation()
+        <ModalShell
+            show=show
+            on_close=on_close
+            label="Create node"
+            panel_class="w-full max-w-lg flex flex-col gap-4 p-6"
+            on_key=Callback::new(handle_keydown)
+        >
+            // Header
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
+                    "Quick Capture"
+                </h2>
+                <button
+                    class="w-7 h-7 flex items-center justify-center rounded-lg
+                           text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
+                           hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                    on:click=move |_| on_close.run(())
+                    title="Close (Esc)"
                 >
-                    // Header
-                    <div class="flex items-center justify-between">
-                        <h2 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
-                            "Quick Capture"
-                        </h2>
-                        <button
-                            class="w-7 h-7 flex items-center justify-center rounded-lg
-                                   text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                   hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-                            on:click=move |_| on_close.run(())
-                            title="Close (Esc)"
-                        >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
-                                "close"
-                            </span>
-                        </button>
-                    </div>
+                    <span class="material-symbols-outlined" style="font-size: 18px;">
+                        "close"
+                    </span>
+                </button>
+            </div>
 
-                    // Title input
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
-                            "Title"
-                            <span class="text-red-400 ml-0.5">"*"</span>
-                        </label>
-                        <input
-                            type="text"
-                            placeholder="Node title…"
-                            autofocus
-                            class="w-full px-3 py-2 rounded-lg text-sm
-                                   bg-stone-50 dark:bg-stone-800
-                                   border border-stone-200 dark:border-stone-700
-                                   text-stone-900 dark:text-stone-100
-                                   placeholder-stone-400 dark:placeholder-stone-500
-                                   focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
-                                   transition-colors"
-                            prop:value=move || title.get()
-                            on:input=move |ev| title.set(event_target_value(&ev))
-                        />
-                    </div>
+            // Title input
+            <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
+                    "Title"
+                    <span class="text-red-400 ml-0.5">"*"</span>
+                </label>
+                <input
+                    type="text"
+                    placeholder="Node title…"
+                    autofocus
+                    class="w-full px-3 py-2 rounded-lg text-sm
+                           bg-stone-50 dark:bg-stone-800
+                           border border-stone-200 dark:border-stone-700
+                           text-stone-900 dark:text-stone-100
+                           placeholder-stone-400 dark:placeholder-stone-500
+                           focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
+                           transition-colors"
+                    prop:value=move || title.get()
+                    on:input=move |ev| title.set(event_target_value(&ev))
+                />
+            </div>
 
-                    // Type + Template row
-                    <div class="flex gap-3">
-                        // Type select
-                        <div class="flex flex-col gap-1 w-36 shrink-0">
-                            <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
-                                "Type"
-                            </label>
-                            <select
-                                class="w-full px-3 py-2 rounded-lg text-sm
-                                       bg-stone-50 dark:bg-stone-800
-                                       border border-stone-200 dark:border-stone-700
-                                       text-stone-900 dark:text-stone-100
-                                       focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
-                                       transition-colors cursor-pointer"
-                                prop:value=move || node_type_str.get()
-                                on:change=move |ev| node_type_str.set(event_target_value(&ev))
-                            >
-                                <option value="article">"Article"</option>
-                                <option value="project">"Project"</option>
-                                <option value="area">"Area"</option>
-                                <option value="resource">"Resource"</option>
-                                <option value="reference">"Reference"</option>
-                            </select>
-                        </div>
+            // Type + Template row
+            <div class="flex gap-3">
+                // Type select
+                <div class="flex flex-col gap-1 w-36 shrink-0">
+                    <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
+                        "Type"
+                    </label>
+                    <select
+                        class="w-full px-3 py-2 rounded-lg text-sm
+                               bg-stone-50 dark:bg-stone-800
+                               border border-stone-200 dark:border-stone-700
+                               text-stone-900 dark:text-stone-100
+                               focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
+                               transition-colors cursor-pointer"
+                        prop:value=move || node_type_str.get()
+                        on:change=move |ev| node_type_str.set(event_target_value(&ev))
+                    >
+                        <option value="article">"Article"</option>
+                        <option value="project">"Project"</option>
+                        <option value="area">"Area"</option>
+                        <option value="resource">"Resource"</option>
+                        <option value="reference">"Reference"</option>
+                    </select>
+                </div>
 
-                        // Template picker
-                        <div class="flex flex-col gap-1 flex-1">
-                            <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
-                                "Template "
-                                <span class="normal-case font-normal text-stone-400 dark:text-stone-500">"(optional)"</span>
-                            </label>
-                            <select
-                                class="w-full px-3 py-2 rounded-lg text-sm
-                                       bg-stone-50 dark:bg-stone-800
-                                       border border-stone-200 dark:border-stone-700
-                                       text-stone-900 dark:text-stone-100
-                                       focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
-                                       transition-colors cursor-pointer"
-                                prop:value=move || selected_template_value.get()
-                                on:change=move |ev| {
-                                    let val = event_target_value(&ev);
-                                    selected_template_value.set(val.clone());
-                                    if val.is_empty() {
-                                        template_id_for_create.set(None);
-                                    } else if let Ok(tid) = val.parse::<TemplateId>() {
-                                        let templates = available_templates.get_untracked();
-                                        if let Some(t) = templates.into_iter().find(|t| t.id == tid) {
-                                            let type_str = match t.node_type {
-                                                NodeType::Project   => "project",
-                                                NodeType::Area      => "area",
-                                                NodeType::Resource  => "resource",
-                                                NodeType::Reference => "reference",
-                                                NodeType::Article   => "article",
-                                            };
-                                            body.set(t.body.clone());
-                                            node_type_str.set(type_str.to_string());
-                                            template_id_for_create.set(Some(tid));
-                                        }
-                                    }
+                // Template picker
+                <div class="flex flex-col gap-1 flex-1">
+                    <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
+                        "Template "
+                        <span class="normal-case font-normal text-stone-400 dark:text-stone-500">"(optional)"</span>
+                    </label>
+                    <select
+                        class="w-full px-3 py-2 rounded-lg text-sm
+                               bg-stone-50 dark:bg-stone-800
+                               border border-stone-200 dark:border-stone-700
+                               text-stone-900 dark:text-stone-100
+                               focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
+                               transition-colors cursor-pointer"
+                        prop:value=move || selected_template_value.get()
+                        on:change=move |ev| {
+                            let val = event_target_value(&ev);
+                            selected_template_value.set(val.clone());
+                            if val.is_empty() {
+                                template_id_for_create.set(None);
+                            } else if let Ok(tid) = val.parse::<TemplateId>() {
+                                let templates = available_templates.get_untracked();
+                                if let Some(t) = templates.into_iter().find(|t| t.id == tid) {
+                                    let type_str = match t.node_type {
+                                        NodeType::Project   => "project",
+                                        NodeType::Area      => "area",
+                                        NodeType::Resource  => "resource",
+                                        NodeType::Reference => "reference",
+                                        NodeType::Article   => "article",
+                                    };
+                                    body.set(t.body.clone());
+                                    node_type_str.set(type_str.to_string());
+                                    template_id_for_create.set(Some(tid));
                                 }
-                            >
-                                <option value="">"— No template —"</option>
-                                {move || available_templates.get().into_iter().map(|t| {
-                                    let name = t.name.clone();
-                                    let id = t.id.to_string();
-                                    view! { <option value=id>{name}</option> }
-                                }).collect_view()}
-                            </select>
-                        </div>
-                    </div>
-
-                    // Body textarea (optional)
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
-                            "Notes "
-                            <span class="normal-case font-normal text-stone-400 dark:text-stone-500">"(optional)"</span>
-                        </label>
-                        <textarea
-                            rows="4"
-                            placeholder="Start writing… (Markdown supported)"
-                            class="w-full px-3 py-2 rounded-lg text-sm resize-none
-                                   bg-stone-50 dark:bg-stone-800
-                                   border border-stone-200 dark:border-stone-700
-                                   text-stone-900 dark:text-stone-100
-                                   placeholder-stone-400 dark:placeholder-stone-500
-                                   focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
-                                   transition-colors font-mono"
-                            prop:value=move || body.get()
-                            on:input=move |ev| body.set(event_target_value(&ev))
-                        />
-                    </div>
-
-                    // Error banner
-                    {move || error.get().map(|msg| view! {
-                        <p class="text-sm text-red-500 dark:text-red-400">{msg}</p>
-                    })}
-
-                    // Actions
-                    <div class="flex items-center justify-between pt-1">
-                        <span class="text-xs text-stone-400 dark:text-stone-500">
-                            "Ctrl+Enter to save · Esc to cancel"
-                        </span>
-                        <div class="flex gap-2">
-                            <button
-                                class="px-4 py-2 text-sm rounded-lg
-                                       text-stone-600 dark:text-stone-400
-                                       hover:bg-stone-100 dark:hover:bg-stone-800
-                                       transition-colors"
-                                on:click=move |_| on_close.run(())
-                                disabled=move || loading.get()
-                            >
-                                "Cancel"
-                            </button>
-                            <button
-                                class="px-4 py-2 text-sm font-medium rounded-lg
-                                       bg-ember hover:bg-ember-strong
-                                       text-white
-                                       disabled:opacity-50 disabled:cursor-not-allowed
-                                       transition-colors flex items-center gap-1.5"
-                                on:click=move |_| submit_pending.set(true)
-                                disabled=move || loading.get()
-                            >
-                                {move || if loading.get() {
-                                    view! {
-                                        <span class="material-symbols-outlined animate-spin"
-                                              style="font-size: 16px;">"progress_activity"</span>
-                                        "Saving…"
-                                    }.into_any()
-                                } else {
-                                    view! {
-                                        <span class="material-symbols-outlined"
-                                              style="font-size: 16px;">"add"</span>
-                                        "Create"
-                                    }.into_any()
-                                }}
-                            </button>
-                        </div>
-                    </div>
+                            }
+                        }
+                    >
+                        <option value="">"— No template —"</option>
+                        {move || available_templates.get().into_iter().map(|t| {
+                            let name = t.name.clone();
+                            let id = t.id.to_string();
+                            view! { <option value=id>{name}</option> }
+                        }).collect_view()}
+                    </select>
                 </div>
             </div>
-        </Show>
+
+            // Body textarea (optional)
+            <div class="flex flex-col gap-1">
+                <label class="text-xs font-medium text-stone-500 dark:text-stone-400 uppercase tracking-wide">
+                    "Notes "
+                    <span class="normal-case font-normal text-stone-400 dark:text-stone-500">"(optional)"</span>
+                </label>
+                <textarea
+                    rows="4"
+                    placeholder="Start writing… (Markdown supported)"
+                    class="w-full px-3 py-2 rounded-lg text-sm resize-none
+                           bg-stone-50 dark:bg-stone-800
+                           border border-stone-200 dark:border-stone-700
+                           text-stone-900 dark:text-stone-100
+                           placeholder-stone-400 dark:placeholder-stone-500
+                           focus:outline-none focus:ring-2 focus:ring-amber-500 dark:focus:ring-amber-400
+                           transition-colors font-mono"
+                    prop:value=move || body.get()
+                    on:input=move |ev| body.set(event_target_value(&ev))
+                />
+            </div>
+
+            // Error banner
+            {move || error.get().map(|msg| view! {
+                <p class="text-sm text-red-500 dark:text-red-400">{msg}</p>
+            })}
+
+            // Actions
+            <div class="flex items-center justify-between pt-1">
+                <span class="text-xs text-stone-400 dark:text-stone-500">
+                    "Ctrl+Enter to save · Esc to cancel"
+                </span>
+                <div class="flex gap-2">
+                    <button
+                        class="px-4 py-2 text-sm rounded-lg
+                               text-stone-600 dark:text-stone-400
+                               hover:bg-stone-100 dark:hover:bg-stone-800
+                               transition-colors"
+                        on:click=move |_| on_close.run(())
+                        disabled=move || loading.get()
+                    >
+                        "Cancel"
+                    </button>
+                    <button
+                        class="px-4 py-2 text-sm font-medium rounded-lg
+                               bg-ember hover:bg-ember-strong
+                               text-white
+                               disabled:opacity-50 disabled:cursor-not-allowed
+                               transition-colors flex items-center gap-1.5"
+                        on:click=move |_| submit_pending.set(true)
+                        disabled=move || loading.get()
+                    >
+                        {move || if loading.get() {
+                            view! {
+                                <span class="material-symbols-outlined animate-spin"
+                                      style="font-size: 16px;">"progress_activity"</span>
+                                "Saving…"
+                            }.into_any()
+                        } else {
+                            view! {
+                                <span class="material-symbols-outlined"
+                                      style="font-size: 16px;">"add"</span>
+                                "Create"
+                            }.into_any()
+                        }}
+                    </button>
+                </div>
+            </div>
+        </ModalShell>
     }
 }

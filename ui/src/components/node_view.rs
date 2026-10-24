@@ -117,8 +117,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                 .map(|entries| build_title_map(&entries))
                                 .unwrap_or_default();
                             let body_html = render_markdown(n.body.as_deref().unwrap_or(""), &title_map);
-                            let node_type = format!("{:?}", n.node_type).to_lowercase();
-                            let status = format!("{:?}", n.status).to_lowercase();
+                            let node_type = n.node_type.as_str().to_string();
+                            let status = n.status.as_str().to_string();
                             let edit_id = n.id;
                             // Ownership check: node owner OR any admin user.
                             let is_owner = if let AuthStatus::Authenticated(ref user) =
@@ -404,19 +404,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
     let search_open = RwSignal::new(false);
     let search_input_ref = NodeRef::<Input>::new();
 
-    let picker_results: LocalResource<Vec<common::search::SearchResult>> =
-        LocalResource::new(move || {
-            let q = node_search_query.get();
-            async move {
-                if q.len() < 2 {
-                    return Vec::new();
-                }
-                crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6)
-                    .await
-                    .map(|r| r.results)
-                    .unwrap_or_default()
-            }
-        });
+    let picker_results = crate::components::node_picker::use_node_search(node_search_query);
 
     let edges: LocalResource<Result<Vec<EdgeWithTitles>, crate::error::UiError>> =
         LocalResource::new(move || {
@@ -445,14 +433,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
             }
         };
 
-        let edge_type = match et.as_str() {
-            "references" => EdgeType::References,
-            "contains" => EdgeType::Contains,
-            "related_to" => EdgeType::RelatedTo,
-            "depends_on" => EdgeType::DependsOn,
-            "derived_from" => EdgeType::DerivedFrom,
-            _ => EdgeType::References,
-        };
+        let edge_type = EdgeType::parse(&et).unwrap_or(EdgeType::References);
 
         let req = CreateEdgeRequest {
             source_id: node_id,
@@ -554,9 +535,8 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                 on:focus=move |_| search_open.set(true)
                                 on:blur=move |_| search_open.set(false)
                             />
-                            <Suspense fallback=|| ()>
                             {move || {
-                                let results = picker_results.get().unwrap_or_default();
+                                let results = picker_results.get();
                                 if !search_open.get() || results.is_empty() {
                                     return None;
                                 }
@@ -589,7 +569,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                     </div>
                                 })
                             }}
-                            </Suspense></div>
+                        </div>
                         <select
                             class="px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
                                 bg-stone-50 dark:bg-stone-800 text-stone-700 dark:text-stone-300
@@ -662,7 +642,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                             let other_id = if is_outgoing { edge.target_id } else { edge.source_id };
                                             let other_title = if is_outgoing { edge.target_title.clone() } else { edge.source_title.clone() };
                                             let direction = if is_outgoing { "\u{2192}" } else { "\u{2190}" };
-                                            let edge_type_label = format!("{:?}", edge.edge_type).to_lowercase().replace('_', " ");
+                                            let edge_type_label = edge.edge_type.label();
                                             let label = edge.label.clone().unwrap_or_default();
                                             view! {
                                                 <div class="flex items-center justify-between py-1.5 px-2 rounded
@@ -890,7 +870,7 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
                                             let nav = navigate.get_value();
                                             let node_id = node.id;
                                             let title = node.title.clone();
-                                            let node_type = format!("{:?}", node.node_type).to_lowercase();
+                                            let node_type = node.node_type.as_str().to_string();
                                             view! {
                                                 <button
                                                     class="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded

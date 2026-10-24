@@ -6,6 +6,106 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.32.1] - 2026-10-24
+
+### Security — handler-level authorization tests
+- Ten router tests drive the real `update_task`, nested revoke and
+  `/permissions/{id}` handlers against a fixed set of nodes, roles and grants:
+  re-parenting onto a node you can't edit, someone else's task, viewer vs
+  editor, the revoke IDOR, and the canonical-owner backstop. Until now only
+  the repo layer had tests for the v2.31.1 fixes. A repo write that the
+  handler should have refused panics in the stub, so a missing check can't
+  pass on a status code. Removing either v2.31.1 check turns them red.
+
+### Tooling — CI runs the UI crate's unit tests
+- `cargo test -p ui` (host) is now a gate in CI, `verify.sh`, the pre-push
+  hook and `make test`. The UI's 18 unit tests had never run in CI, and two
+  palette-ranking tests had been failing since #111: they picked a command by
+  table index, and the new "New <type>" commands shifted it. They now look
+  commands up by label.
+
+### Changed — one implementation per UI behaviour (refactor)
+- **Task edits:** every task PATCH in the UI (row editors, My Day drag and
+  `t`, Inbox attach, triage) goes through `task_actions::patch_task`, and the
+  four inline editors share `TaskEditDraft`. Fixes along the way: Cancel now
+  resets priority, due date and repeat as well as the title (abandoned edits
+  used to reappear on reopen); the node-page editor can set **Repeat**; one
+  set of repeat labels everywhere (Inbox said "Biweekly"); a resized task
+  editor keeps its new height on reopen.
+- **Node search:** one debounced `use_node_search` hook behind every picker
+  (task form, palette, Inbox and triage attach, Connections). Clearing the box
+  mid-search no longer brings stale results back, and the Connections picker
+  no longer searches on every keystroke.
+- **Modals:** a shared `ModalShell` (portal, backdrop, Escape, focus trap,
+  focus return) for all seven. Change password gains a dialog role, Escape,
+  a Tab trap and autofocus, and it clears typed passwords when closed. Add to
+  Favorites now closes on a backdrop click like the others.
+- **Shortcuts:** a handled global shortcut no longer also types. Quick
+  capture opened with `n` used to start with "n".
+- **e2e:** shared `fixtures.ts`; every spec now fails on an uncaught page
+  error or WASM panic (palette and triage had no guard). 61 tests.
+
+### Changed — one wire-string table per enum (refactor)
+- A `wire_enum!` macro in `common` generates `ALL`, `as_str` and `parse` for
+  `NodeType`, `NodeStatus`, `EdgeType`, `TaskStatus`, `TaskPriority`,
+  `RecurrenceRule` and `PermissionRole`. One test checks every variant against
+  serde, in both directions.
+- This replaces about 25 hand-written mappers in the API repos, backups and
+  UI, plus 14 `format!("{:?}").to_lowercase()` tricks that only worked while
+  every variant was a single word. The edge-label bug was one of those.
+  Database enum columns now parse through a shared `repo::parse_wire`, which
+  reports an unknown value as an internal error.
+- The five node-type icon maps had already drifted: Templates showed other
+  icons for Resource and Reference. They are now one map, `node_meta`.
+- Net −292 lines across 30 files.
+
+### Performance — search builds highlights only for the page it returns
+- Full-text search computed `ts_headline` (which re-parses the whole text)
+  for **every** matching node, note and task before de-duplicating and
+  paging. Candidates now carry only a rank; the query de-duplicates, orders
+  and pages first, then highlights just the returned rows. Measured on 3,000
+  matching nodes with long bodies: **1,367 ms → 61 ms** for a 20-row page,
+  same output.
+- The separate COUNT query, which re-ran the whole match (in fuzzy mode,
+  every `similarity()`/`ILIKE` body scan), is replaced by `COUNT(*) OVER ()`
+  on the paged rows. It survives only as a fallback for a page past the end.
+- De-duplication now breaks rank ties deterministically.
+
+### Fixed — bugs found in the code review
+- **Admin metrics (`/api/metrics`) failed on every call:** it counted tables
+  named `notes` / `tasks`, which don't exist.
+- **Invite emails linked to a 404** (`/node/{id}`; the route is `/nodes/{id}`).
+- **Changing your password stopped working about an hour after login:** token
+  refresh renewed the session cookie but not the Cognito access cookie that
+  change-password needs. All three auth cookies are now built by one helper
+  each (login, refresh and logout share them), with a test pinning HttpOnly,
+  SameSite=Strict and path scoping.
+- **Monthly and yearly recurrences drifted to the 28th.** After a short month
+  every later occurrence stayed on the 28th. They now clamp to the month's
+  last day (`RecurrenceRule::advance` in `common`, with tests).
+- **Search returned trashed notes and tasks** for the 30-day undo window,
+  including snippets of the deleted text. Fuzzy search also treated `%` and
+  `_` as wildcards, so a query of `%` matched everything. Both are covered by
+  Postgres tests. A huge `?page=` no longer overflows.
+- **Edge labels read "relatedto" / "dependson"** (`EdgeType::label`).
+- **Note timestamps showed UTC as if it were local time.**
+- **Undo after deleting a note could panic** if you had navigated away first.
+- **A fast double Enter in the add-task form created the task twice.**
+- **My Day's `t` key re-stamped a carried-over task** instead of removing it
+  from today.
+- **Backup restore lost note colours and edit times.**
+
+### Security — no more `eval` in the UI
+The remaining `js_sys::eval` call sites (date formatting, two copy-to-clipboard
+helpers) use `Date` locale methods and `navigator.clipboard` through
+`Reflect`. They failed silently under a CSP without `'unsafe-eval'`, and they
+were the only reason the production CSP keeps `'unsafe-eval'`. Dropping it is
+now possible as a separate, smoke-tested change.
+
+### Tooling
+- Release images build on `rust:1.97` (an `ARG RUST_VERSION`), matching
+  `rust-toolchain.toml`, instead of whatever `rust:latest` was.
+
 ## [2.32.0] - 2026-10-24
 
 ### Added — faster node creation with your default templates (#111)

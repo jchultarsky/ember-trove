@@ -16,7 +16,8 @@ use leptos::prelude::*;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
-use crate::components::task_actions::{TaskCtx, delete_with_undo};
+use crate::components::node_picker::use_node_search;
+use crate::components::task_actions::{PatchOpts, TaskCtx, delete_with_undo, patch_task};
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
 /// Which input the triage card is currently capturing.
@@ -43,11 +44,15 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     // Schedule input state.
     let date_input = RwSignal::new(String::new());
     let date_ref = NodeRef::<leptos::html::Input>::new();
-    // Attach picker state (debounced search, same pattern as the row picker).
+    // Attach picker state.
     let picker_query = RwSignal::new(String::new());
-    let picker_results: RwSignal<Vec<common::search::SearchResult>> = RwSignal::new(Vec::new());
+    let picker_results = use_node_search(picker_query);
     let picker_highlight = RwSignal::new(0usize);
-    let pick_ver = RwSignal::new(0u32);
+    // Fresh results: highlight the first again.
+    Effect::new(move |_| {
+        picker_results.track();
+        picker_highlight.set(0);
+    });
     let picker_ref = NodeRef::<leptos::html::Input>::new();
 
     // Snapshot the open inbox tasks once.
@@ -114,23 +119,23 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
 
     // Fire a PATCH for the current task, advance on success.
     let patch_current = move |req: UpdateTaskRequest, ok_msg: &'static str| {
-        if busy.get_untracked() {
-            return;
-        }
         let Some(task) = current() else { return };
-        busy.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::update_task(task.id, &req).await;
-            busy.set(false);
-            match result {
-                Ok(_) => {
+        // No list refresh: the triage stack advances itself (module docs).
+        patch_task(
+            task.id,
+            req,
+            PatchOpts {
+                busy: Some(busy),
+                ok_toast: Some(ok_msg),
+                ..Default::default()
+            },
+            move |ok| {
+                if ok {
                     acted.update(|n| *n += 1);
-                    push_toast(ToastLevel::Success, ok_msg);
                     remove_current();
                 }
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't update: {e}")),
-            }
-        });
+            },
+        );
     };
 
     let do_today = move || {
@@ -217,29 +222,6 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
         sub.set(SubMode::Attach);
         focus_after_render(SubMode::Attach);
     };
-
-    // Debounced node search for the attach picker.
-    Effect::new(move |_| {
-        let q = picker_query.get();
-        if q.trim().is_empty() {
-            picker_results.set(Vec::new());
-            return;
-        }
-        pick_ver.update(|v| *v += 1);
-        let ver = pick_ver.get_untracked();
-        wasm_bindgen_futures::spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(300).await;
-            if pick_ver.get_untracked() != ver {
-                return;
-            }
-            if let Ok(results) = crate::api::node_picker_search(&q).await
-                && pick_ver.get_untracked() == ver
-            {
-                picker_highlight.set(0);
-                picker_results.set(results);
-            }
-        });
-    });
 
     // Single-key actions. Submode inputs handle their own keys; this listener
     // only acts in Keys mode (plus Esc, which always backs out one level).

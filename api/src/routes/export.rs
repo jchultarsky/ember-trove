@@ -60,8 +60,8 @@ async fn export_all(
                         .join(", ")
                 )
             };
-            let node_type = format!("{:?}", node.node_type).to_lowercase();
-            let status = format!("{:?}", node.status).to_lowercase();
+            let node_type = node.node_type.as_str().to_string();
+            let status = node.status.as_str().to_string();
             let front_matter = format!(
                 "---\ntitle: \"{}\"\nid: {}\ntype: {}\nstatus: {}\nslug: {}\n\
                  tags: {}\ncreated_at: {}\nupdated_at: {}\n---\n\n",

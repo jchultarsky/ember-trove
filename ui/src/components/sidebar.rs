@@ -200,9 +200,10 @@ pub fn Sidebar(
         </div>
 
         // Change-password modal
-        {move || show_change_pw.get().then(|| view! {
-            <ChangePasswordModal on_close=Callback::new(move |_| show_change_pw.set(false)) />
-        })}
+        <ChangePasswordModal
+            show=show_change_pw
+            on_close=Callback::new(move |_| show_change_pw.set(false))
+        />
     }
 }
 

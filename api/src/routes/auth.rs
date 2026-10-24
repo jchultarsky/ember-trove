@@ -212,21 +212,9 @@ async fn try_callback(
 
     let secure = app_state.auth.cookie_secure;
 
-    let session_cookie = Cookie::build((SESSION_COOKIE, session_token))
-        .path("/")
-        .http_only(true)
-        .same_site(SameSite::Strict)
-        .secure(secure)
-        .build();
-
-    // Store the Cognito access token in a tightly-scoped cookie so the
-    // change-password endpoint can call the Cognito ChangePassword API.
-    let cognito_access_cookie = Cookie::build((ACCESS_COOKIE, cognito_access_token))
-        .path("/api/auth/change-password")
-        .http_only(true)
-        .same_site(SameSite::Strict)
-        .secure(secure)
-        .build();
+    let session_cookie = session_cookie(session_token, secure);
+    // The Cognito access token, so change-password can call ChangePassword.
+    let cognito_access_cookie = access_cookie(cognito_access_token, secure);
 
     // Clear the one-time OAuth state cookie now that it has served its purpose.
     let mut updated_jar = jar
@@ -239,13 +227,7 @@ async fn try_callback(
         .add(cognito_access_cookie);
 
     if let Some(refresh_token) = token_resp.refresh_token {
-        let refresh_cookie = Cookie::build((REFRESH_COOKIE, refresh_token))
-            .path("/api/auth/refresh")
-            .http_only(true)
-            .same_site(SameSite::Strict)
-            .secure(secure)
-            .build();
-        updated_jar = updated_jar.add(refresh_cookie);
+        updated_jar = updated_jar.add(refresh_cookie(refresh_token, secure));
     }
 
     // Issue a real HTTP 303 redirect into the SPA rather than an inline-script
@@ -261,6 +243,40 @@ async fn try_callback(
         [(header::CACHE_CONTROL, "no-store")],
         Redirect::to(&app_state.auth.frontend_url),
     ))
+}
+
+// ── Auth cookies ──────────────────────────────────────────────────────────────
+// Built in one place so login, refresh and logout can't drift (the refresh
+// path once forgot the access cookie). All HttpOnly + SameSite=Strict, each
+// scoped to the narrowest path that reads it.
+
+fn auth_cookie(
+    name: &'static str,
+    path: &'static str,
+    value: String,
+    secure: bool,
+) -> Cookie<'static> {
+    Cookie::build((name, value))
+        .path(path)
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .secure(secure)
+        .build()
+}
+
+/// The session (ID) token, read by the auth middleware on every request.
+fn session_cookie(token: String, secure: bool) -> Cookie<'static> {
+    auth_cookie(SESSION_COOKIE, "/", token, secure)
+}
+
+/// The Cognito access token, needed only by change-password.
+fn access_cookie(token: String, secure: bool) -> Cookie<'static> {
+    auth_cookie(ACCESS_COOKIE, "/api/auth/change-password", token, secure)
+}
+
+/// The refresh token, sent only to the refresh endpoint.
+fn refresh_cookie(token: String, secure: bool) -> Cookie<'static> {
+    auth_cookie(REFRESH_COOKIE, "/api/auth/refresh", token, secure)
 }
 
 async fn refresh(
@@ -279,27 +295,23 @@ async fn refresh(
 
     let token_resp = oidc.exchange_refresh_token(&refresh_token).await?;
 
-    let session_token = token_resp.id_token.unwrap_or(token_resp.access_token);
     let secure = state.auth.cookie_secure;
+    let cognito_access_token = token_resp.access_token;
+    let session_token = token_resp
+        .id_token
+        .unwrap_or_else(|| cognito_access_token.clone());
 
-    let access_cookie = Cookie::build((SESSION_COOKIE, session_token))
-        .path("/")
-        .http_only(true)
-        .same_site(SameSite::Strict)
-        .secure(secure)
-        .build();
-
-    let mut updated_jar = jar.add(access_cookie);
+    // Renew BOTH tokens. The refresh path used to renew only the session
+    // cookie, so change-password (which needs the Cognito access token)
+    // failed once the original access token expired, about an hour after
+    // login.
+    let mut updated_jar = jar
+        .add(session_cookie(session_token, secure))
+        .add(access_cookie(cognito_access_token, secure));
 
     // Cognito rotates the refresh token — update the cookie with the new one.
     if let Some(new_refresh) = token_resp.refresh_token {
-        let refresh_cookie = Cookie::build((REFRESH_COOKIE, new_refresh))
-            .path("/api/auth/refresh")
-            .http_only(true)
-            .same_site(SameSite::Strict)
-            .secure(secure)
-            .build();
-        updated_jar = updated_jar.add(refresh_cookie);
+        updated_jar = updated_jar.add(refresh_cookie(new_refresh, secure));
     }
 
     Ok((updated_jar, Json(serde_json::json!({"ok": true}))))
@@ -320,18 +332,12 @@ async fn logout(
         oidc.backchannel_logout(&refresh_token).await;
     }
 
+    // Removal matches by name + path, so reuse the same builders.
+    let secure = state.auth.cookie_secure;
     let updated_jar = jar
-        .remove(Cookie::build((SESSION_COOKIE, "")).path("/").build())
-        .remove(
-            Cookie::build((REFRESH_COOKIE, ""))
-                .path("/api/auth/refresh")
-                .build(),
-        )
-        .remove(
-            Cookie::build((ACCESS_COOKIE, ""))
-                .path("/api/auth/change-password")
-                .build(),
-        );
+        .remove(session_cookie(String::new(), secure))
+        .remove(refresh_cookie(String::new(), secure))
+        .remove(access_cookie(String::new(), secure));
 
     // Redirect through Cognito's end-session endpoint so the SSO session cookie
     // at the Cognito domain is cleared.  Without this the browser is silently
@@ -375,4 +381,24 @@ async fn change_password(
         .await?;
 
     Ok(Json(serde_json::json!({"ok": true})))
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::*;
+
+    #[test]
+    fn auth_cookies_are_httponly_strict_and_path_scoped() {
+        for (c, path) in [
+            (session_cookie("s".into(), true), "/"),
+            (access_cookie("a".into(), true), "/api/auth/change-password"),
+            (refresh_cookie("r".into(), true), "/api/auth/refresh"),
+        ] {
+            assert_eq!(c.path(), Some(path), "{}", c.name());
+            assert_eq!(c.http_only(), Some(true), "{}", c.name());
+            assert_eq!(c.same_site(), Some(SameSite::Strict), "{}", c.name());
+            assert_eq!(c.secure(), Some(true), "{}", c.name());
+        }
+        assert_eq!(session_cookie("s".into(), false).secure(), Some(false));
+    }
 }

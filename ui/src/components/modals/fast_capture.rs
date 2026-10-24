@@ -19,9 +19,9 @@
 
 use leptos::html;
 use leptos::prelude::*;
-use leptos::wasm_bindgen::{JsCast, closure::Closure};
 use wasm_bindgen_futures::spawn_local;
 
+use super::{ModalPlacement, ModalShell};
 use crate::{
     api::quick_capture,
     components::toast::{ToastLevel, push_toast},
@@ -48,27 +48,22 @@ pub fn FastCaptureModal(
     let loading = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
     let textarea_ref: NodeRef<html::Textarea> = NodeRef::new();
-    let panel_ref: NodeRef<html::Div> = NodeRef::new();
-    super::return_focus_on_close(show);
 
-    // Reset every time the modal opens, then focus the textarea on the next
-    // animation frame (we cannot focus an element that hasn't yet been
-    // attached to the DOM).
+    // Reset every time the modal opens.
     Effect::new(move |_| {
         if show.get() {
             text.set(String::new());
             error.set(None);
             loading.set(false);
-            // request_animation_frame is the standard wasm-bindgen approach
-            // for "wait one frame" — the textarea exists in the DOM by then.
-            if let Some(win) = web_sys::window() {
-                let cb = Closure::once_into_js(move || {
-                    if let Some(el) = textarea_ref.get_untracked() {
-                        let _ = el.focus();
-                    }
-                });
-                let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
-            }
+        }
+    });
+    // Focus the textarea once it is mounted: tracking the NodeRef re-runs
+    // this when the element attaches (no rAF; .claude/rules/leptos.md).
+    Effect::new(move |_| {
+        if show.get()
+            && let Some(el) = textarea_ref.get()
+        {
+            let _ = el.focus();
         }
     });
 
@@ -119,14 +114,9 @@ pub fn FastCaptureModal(
     });
 
     let handle_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Escape" {
-            ev.prevent_default();
-            on_close.run(());
-        } else if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
             ev.prevent_default();
             submit_pending.set(true);
-        } else if let Some(panel) = panel_ref.get_untracked() {
-            super::trap_focus(&ev, &panel);
         }
     };
 
@@ -136,111 +126,101 @@ pub fn FastCaptureModal(
     };
 
     view! {
-        <Show when=move || show.get()>
-            <div
-                class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-                on:click=move |_| on_close.run(())
-            />
-            <div class="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-8 pointer-events-none">
-                <div
-                    node_ref=panel_ref
-                    class="w-full max-w-xl bg-white dark:bg-stone-900 rounded-2xl shadow-2xl \
-                           border border-stone-200 dark:border-stone-700 pointer-events-auto \
-                           mt-8 sm:mt-16"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Quick capture"
-                    on:keydown=handle_keydown
-                >
-                    <div class="p-4 flex items-center justify-between border-b border-stone-200 \
-                                dark:border-stone-700">
-                        <div class="flex items-center gap-2 text-stone-700 dark:text-stone-200">
-                            <span class="material-symbols-outlined text-amber-600 dark:text-amber-500">"bolt"</span>
-                            <span class="font-medium">"Quick capture"</span>
-                        </div>
-                        <button
-                            type="button"
-                            class="text-stone-500 dark:text-stone-400 hover:text-stone-800 \
-                                   dark:hover:text-stone-100 text-sm"
-                            on:click=move |_| on_close.run(())
-                            aria-label="Close"
-                        >
-                            "Esc"
-                        </button>
-                    </div>
-                    <div class="p-4">
-                        <textarea
-                            node_ref=textarea_ref
-                            class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
-                                   placeholder-stone-400 dark:placeholder-stone-500 outline-none \
-                                   resize-none text-base leading-relaxed min-h-[6rem]"
-                            placeholder="What's on your mind? Try \u{201c}buy milk friday p1\u{201d} (Cmd/Ctrl+Enter to save)"
-                            rows="4"
-                            prop:value=move || text.get()
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                text.set(v);
-                            }
-                        ></textarea>
-                        // Parse preview — what the date/priority tokens will become.
-                        {move || {
-                            let p = parsed.get();
-                            (p.due_date.is_some() || p.priority.is_some()).then(|| view! {
-                                <div class="mt-2 flex items-center gap-2 flex-wrap" aria-live="polite">
-                                    {p.due_date.map(|d| view! {
-                                        <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
-                                                     bg-amber-50 dark:bg-amber-900/30
-                                                     text-amber-700 dark:text-amber-400">
-                                            <span class="material-symbols-outlined" style="font-size:12px;">"event"</span>
-                                            {format!("Due {}", d.format("%a, %b %-d"))}
-                                        </span>
-                                    })}
-                                    {p.priority.map(|pr| {
-                                        let label = match pr {
-                                            common::task::TaskPriority::High => "High priority",
-                                            common::task::TaskPriority::Medium => "Medium priority",
-                                            common::task::TaskPriority::Low => "Low priority",
-                                        };
-                                        view! {
-                                            <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
-                                                         bg-stone-100 dark:bg-stone-800
-                                                         text-stone-600 dark:text-stone-300">
-                                                <span class="material-symbols-outlined" style="font-size:12px;">"flag"</span>
-                                                {label}
-                                            </span>
-                                        }
-                                    })}
-                                </div>
-                            })
-                        }}
-                        <Show when=move || error.get().is_some()>
-                            <div class="mt-2 text-sm text-red-600 dark:text-red-400">
-                                {move || error.get().unwrap_or_default()}
-                            </div>
-                        </Show>
-                    </div>
-                    <div class="p-3 flex items-center justify-between border-t border-stone-200 \
-                                dark:border-stone-700">
-                        <button
-                            type="button"
-                            class="text-sm text-stone-500 dark:text-stone-400 hover:text-stone-800 \
-                                   dark:hover:text-stone-100"
-                            on:click=on_more
-                        >
-                            "More fields…"
-                        </button>
-                        <button
-                            type="button"
-                            class="px-4 py-1.5 rounded-lg bg-ember text-white text-sm \
-                                   hover:bg-ember-strong disabled:opacity-50"
-                            prop:disabled=move || loading.get()
-                            on:click=move |_| submit_pending.set(true)
-                        >
-                            {move || if loading.get() { "Saving…" } else { "Capture" }}
-                        </button>
-                    </div>
+        <ModalShell
+            show=show
+            on_close=on_close
+            label="Quick capture"
+            panel_class="w-full max-w-xl mt-8 sm:mt-16"
+            placement=ModalPlacement::Top
+            on_key=Callback::new(handle_keydown)
+        >
+            <div class="p-4 flex items-center justify-between border-b border-stone-200 \
+                        dark:border-stone-700">
+                <div class="flex items-center gap-2 text-stone-700 dark:text-stone-200">
+                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500">"bolt"</span>
+                    <span class="font-medium">"Quick capture"</span>
                 </div>
+                <button
+                    type="button"
+                    class="text-stone-500 dark:text-stone-400 hover:text-stone-800 \
+                           dark:hover:text-stone-100 text-sm"
+                    on:click=move |_| on_close.run(())
+                    aria-label="Close"
+                >
+                    "Esc"
+                </button>
             </div>
-        </Show>
+            <div class="p-4">
+                <textarea
+                    node_ref=textarea_ref
+                    class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
+                           placeholder-stone-400 dark:placeholder-stone-500 outline-none \
+                           resize-none text-base leading-relaxed min-h-[6rem]"
+                    placeholder="What's on your mind? Try \u{201c}buy milk friday p1\u{201d} (Cmd/Ctrl+Enter to save)"
+                    rows="4"
+                    prop:value=move || text.get()
+                    on:input=move |ev| {
+                        let v = event_target_value(&ev);
+                        text.set(v);
+                    }
+                ></textarea>
+                // Parse preview — what the date/priority tokens will become.
+                {move || {
+                    let p = parsed.get();
+                    (p.due_date.is_some() || p.priority.is_some()).then(|| view! {
+                        <div class="mt-2 flex items-center gap-2 flex-wrap" aria-live="polite">
+                            {p.due_date.map(|d| view! {
+                                <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
+                                             bg-amber-50 dark:bg-amber-900/30
+                                             text-amber-700 dark:text-amber-400">
+                                    <span class="material-symbols-outlined" style="font-size:12px;">"event"</span>
+                                    {format!("Due {}", d.format("%a, %b %-d"))}
+                                </span>
+                            })}
+                            {p.priority.map(|pr| {
+                                let label = match pr {
+                                    common::task::TaskPriority::High => "High priority",
+                                    common::task::TaskPriority::Medium => "Medium priority",
+                                    common::task::TaskPriority::Low => "Low priority",
+                                };
+                                view! {
+                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
+                                                 bg-stone-100 dark:bg-stone-800
+                                                 text-stone-600 dark:text-stone-300">
+                                        <span class="material-symbols-outlined" style="font-size:12px;">"flag"</span>
+                                        {label}
+                                    </span>
+                                }
+                            })}
+                        </div>
+                    })
+                }}
+                <Show when=move || error.get().is_some()>
+                    <div class="mt-2 text-sm text-red-600 dark:text-red-400">
+                        {move || error.get().unwrap_or_default()}
+                    </div>
+                </Show>
+            </div>
+            <div class="p-3 flex items-center justify-between border-t border-stone-200 \
+                        dark:border-stone-700">
+                <button
+                    type="button"
+                    class="text-sm text-stone-500 dark:text-stone-400 hover:text-stone-800 \
+                           dark:hover:text-stone-100"
+                    on:click=on_more
+                >
+                    "More fields…"
+                </button>
+                <button
+                    type="button"
+                    class="px-4 py-1.5 rounded-lg bg-ember text-white text-sm \
+                           hover:bg-ember-strong disabled:opacity-50"
+                    prop:disabled=move || loading.get()
+                    on:click=move |_| submit_pending.set(true)
+                >
+                    {move || if loading.get() { "Saving…" } else { "Capture" }}
+                </button>
+            </div>
+        </ModalShell>
     }
 }

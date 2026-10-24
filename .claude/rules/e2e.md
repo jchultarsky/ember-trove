@@ -80,9 +80,15 @@ CI job is too slow a feedback loop for selector work.
   data via the API **before AND after** each attempt (`wipePresets` in
   search.spec.ts; found via develop run 29662335087, green on PR CI, red only
   on the retry).
-- Collect `pageerror` events in any test that exercises keyboard listeners or
-  navigation — a WASM panic poisons event dispatch silently otherwise (the
-  v2.21.1 lesson; see `.claude/ERRORS.md`).
+- **Import `test`/`expect` from `./fixtures`, never `@playwright/test`**
+  (2026-10-24). Its auto fixture fails any test on a `pageerror` — a WASM
+  panic poisons event dispatch silently otherwise (the v2.21.1 lesson; see
+  `.claude/ERRORS.md`). Shared helpers (`createNode`, `localISO`) live there
+  too; add new cross-spec helpers there instead of copying them.
+- **Don't `goto` again before the app has rendered** (2026-10-24): it aborts
+  the WASM bundle download, which the guard reports as `TypeError: Failed to
+  fetch` (empty stack; the trace shows the `_bg.wasm` request `ERR_ABORTED`).
+  After a setup `goto`, `await expect(page.locator('main')).toBeVisible()`.
 - Single-key shortcuts need neutral focus first (`page.locator('main').click()`)
   — the global handler ignores keys from inputs/buttons.
 - Use `ControlOrMeta+Enter` for submit chords (portable across macOS/Linux).

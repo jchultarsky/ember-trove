@@ -311,6 +311,7 @@ make verify             # or ./scripts/verify.sh — runs the full suite below
 #   cargo fmt --all --check          (formatting is enforced; edition 2024)
 #   cargo clippy ... -- -D warnings  (api+common, and ui for wasm32)
 #   cargo test --workspace --exclude ui
+#   cargo test -p ui                 (the ui crate's unit tests, on the host)
 #   cargo check -p ui --target wasm32-unknown-unknown
 ```
 

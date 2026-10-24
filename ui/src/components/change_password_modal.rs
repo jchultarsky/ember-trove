@@ -1,15 +1,40 @@
 use leptos::prelude::*;
 
 use crate::api::change_password;
+use crate::components::modals::ModalShell;
 
 #[component]
-pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
+pub fn ChangePasswordModal(
+    #[prop(into)] show: Signal<bool>,
+    on_close: Callback<()>,
+) -> impl IntoView {
     let current = RwSignal::new(String::new());
     let proposed = RwSignal::new(String::new());
     let confirmed = RwSignal::new(String::new());
     let saving = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
     let success = RwSignal::new(false);
+    let current_ref: NodeRef<leptos::html::Input> = NodeRef::new();
+
+    // Start clean on every open, and drop typed passwords on close rather
+    // than keeping them in signals until the next open.
+    Effect::new(move |_| {
+        let _ = show.get();
+        current.set(String::new());
+        proposed.set(String::new());
+        confirmed.set(String::new());
+        error.set(None);
+        success.set(false);
+        saving.set(false);
+    });
+    // Focus "Current password" once mounted (the shell traps Tab inside).
+    Effect::new(move |_| {
+        if show.get()
+            && let Some(el) = current_ref.get()
+        {
+            let _ = el.focus();
+        }
+    });
 
     let do_submit = move || {
         let cur = current.get_untracked();
@@ -60,18 +85,11 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
     };
 
     view! {
-        // Backdrop
-        <div
-            class="fixed inset-0 z-50 flex items-center justify-center
-                   bg-black/50 backdrop-blur-sm"
-            on:click=move |_| on_close.run(())
-        >
-            // Modal card — stop propagation so clicking inside doesn't close
-            <div
-                class="relative w-full max-w-sm mx-4 bg-white dark:bg-stone-900
-                       rounded-2xl shadow-2xl border border-stone-200 dark:border-stone-700
-                       p-6 space-y-4"
-                on:click=|ev| ev.stop_propagation()
+    <ModalShell
+                show=show
+                on_close=on_close
+                label="Change password"
+                panel_class="relative w-full max-w-sm mx-4 p-6 space-y-4"
             >
                 // Header
                 <div class="flex items-center justify-between">
@@ -116,12 +134,13 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
                                 "Current password"
                             </label>
                             <input
+                                node_ref=current_ref
                                 type="password"
                                 autocomplete="current-password"
                                 class="w-full rounded-lg border border-stone-200 dark:border-stone-700
-                                       bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
-                                       text-stone-900 dark:text-stone-100 focus:outline-none
-                                       focus:ring-2 focus:ring-amber-400"
+                                   bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
+                                   text-stone-900 dark:text-stone-100 focus:outline-none
+                                   focus:ring-2 focus:ring-amber-400"
                                 prop:value=move || current.get()
                                 on:input=move |ev| current.set(event_target_value(&ev))
                             />
@@ -135,9 +154,9 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
                                 type="password"
                                 autocomplete="new-password"
                                 class="w-full rounded-lg border border-stone-200 dark:border-stone-700
-                                       bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
-                                       text-stone-900 dark:text-stone-100 focus:outline-none
-                                       focus:ring-2 focus:ring-amber-400"
+                                   bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
+                                   text-stone-900 dark:text-stone-100 focus:outline-none
+                                   focus:ring-2 focus:ring-amber-400"
                                 prop:value=move || proposed.get()
                                 on:input=move |ev| proposed.set(event_target_value(&ev))
                             />
@@ -151,9 +170,9 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
                                 type="password"
                                 autocomplete="new-password"
                                 class="w-full rounded-lg border border-stone-200 dark:border-stone-700
-                                       bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
-                                       text-stone-900 dark:text-stone-100 focus:outline-none
-                                       focus:ring-2 focus:ring-amber-400"
+                                   bg-stone-50 dark:bg-stone-800 px-3 py-2 text-sm
+                                   text-stone-900 dark:text-stone-100 focus:outline-none
+                                   focus:ring-2 focus:ring-amber-400"
                                 prop:value=move || confirmed.get()
                                 on:input=move |ev| confirmed.set(event_target_value(&ev))
                                 on:keydown=move |ev: leptos::ev::KeyboardEvent| {
@@ -177,8 +196,8 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
                             </button>
                             <button
                                 class="text-xs bg-ember hover:bg-ember-strong text-white
-                                       rounded px-4 py-1.5 transition-colors
-                                       disabled:opacity-50 disabled:cursor-not-allowed"
+                                   rounded px-4 py-1.5 transition-colors
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled=move || saving.get()
                                 on:click=move |_| do_submit()
                             >
@@ -187,7 +206,6 @@ pub fn ChangePasswordModal(on_close: Callback<()>) -> impl IntoView {
                         </div>
                     </div>
                 })}
-            </div>
-        </div>
-    }
+            </ModalShell>
+        }
 }

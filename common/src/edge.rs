@@ -16,6 +16,30 @@ pub enum EdgeType {
     WikiLink,
 }
 
+wire_enum!(EdgeType {
+    References => "references",
+    Contains => "contains",
+    RelatedTo => "related_to",
+    DependsOn => "depends_on",
+    DerivedFrom => "derived_from",
+    WikiLink => "wiki_link",
+});
+
+impl EdgeType {
+    /// Human label, e.g. "related to". The UI used to derive this from
+    /// `format!("{:?}")`, which yields "relatedto" (Debug has no underscores).
+    pub fn label(&self) -> &'static str {
+        match self {
+            EdgeType::References => "references",
+            EdgeType::Contains => "contains",
+            EdgeType::RelatedTo => "related to",
+            EdgeType::DependsOn => "depends on",
+            EdgeType::DerivedFrom => "derived from",
+            EdgeType::WikiLink => "wiki link",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Edge {
     pub id: EdgeId,
@@ -49,4 +73,17 @@ pub struct CreateEdgeRequest {
     pub edge_type: EdgeType,
     #[garde(inner(length(max = 200)))]
     pub label: Option<String>,
+}
+
+#[cfg(test)]
+mod edge_type_tests {
+    use super::*;
+
+    #[test]
+    fn as_str_matches_serde_and_labels_are_spaced() {
+        for t in EdgeType::ALL {
+            assert_eq!(t.label(), t.as_str().replace('_', " "));
+        }
+        assert_eq!(EdgeType::RelatedTo.label(), "related to");
+    }
 }

@@ -74,9 +74,10 @@ evaluated *first* on every change — above velocity and convenience. This is no
   `api/src/tests.rs`-style integration), implement the minimum to pass, then refactor.
 - New code lands **with** its tests in the same change. Bug fixes land with a
   regression test that fails before the fix.
-- `ui/` (WASM/CSR) is exercised by integration/browser testing, not host unit tests;
-  CI excludes it from `cargo test` (`--workspace --exclude ui`). Put testable logic in
-  `common/` so it *can* be unit-tested.
+- `ui/` (WASM/CSR) is exercised mainly by the e2e suite. Its pure-logic `#[cfg(test)]`
+  modules build and run on the host with `cargo test -p ui` (a separate gate, since the
+  crate's lints/check target wasm32). Logic shared with the API still belongs in
+  `common/`, where coverage counts it.
 
 ## 6. Definition of done — all gates green
 
@@ -87,6 +88,7 @@ cargo fmt --all --check                                   # formatting (enforced
 cargo clippy --workspace --exclude ui -- -D warnings      # api + common, warnings = errors
 cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace --exclude ui
+cargo test -p ui                                          # ui unit tests, on the host
 cargo check -p ui --target wasm32-unknown-unknown
 ```
 

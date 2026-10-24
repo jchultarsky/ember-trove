@@ -190,45 +190,11 @@ async fn fetch_tags_for_nodes(
 }
 
 fn parse_node_type(s: &str) -> Result<NodeType, EmberTroveError> {
-    match s {
-        "article" => Ok(NodeType::Article),
-        "project" => Ok(NodeType::Project),
-        "area" => Ok(NodeType::Area),
-        "resource" => Ok(NodeType::Resource),
-        "reference" => Ok(NodeType::Reference),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown node_type: {other}"
-        ))),
-    }
+    super::parse_wire(s, "node_type", NodeType::parse)
 }
 
 fn parse_node_status(s: &str) -> Result<NodeStatus, EmberTroveError> {
-    match s {
-        "draft" => Ok(NodeStatus::Draft),
-        "published" => Ok(NodeStatus::Published),
-        "archived" => Ok(NodeStatus::Archived),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown node_status: {other}"
-        ))),
-    }
-}
-
-fn node_type_to_str(t: &NodeType) -> &'static str {
-    match t {
-        NodeType::Article => "article",
-        NodeType::Project => "project",
-        NodeType::Area => "area",
-        NodeType::Resource => "resource",
-        NodeType::Reference => "reference",
-    }
-}
-
-fn node_status_to_str(s: &NodeStatus) -> &'static str {
-    match s {
-        NodeStatus::Draft => "draft",
-        NodeStatus::Published => "published",
-        NodeStatus::Archived => "archived",
-    }
+    super::parse_wire(s, "node_status", NodeStatus::parse)
 }
 
 #[async_trait]
@@ -239,8 +205,8 @@ impl NodeRepo for PgNodeRepo {
         req: CreateNodeRequest,
     ) -> Result<Node, EmberTroveError> {
         let slug = slugify(&req.title);
-        let node_type_str = node_type_to_str(&req.node_type);
-        let status_str = node_status_to_str(req.status.as_ref().unwrap_or(&NodeStatus::Draft));
+        let node_type_str = req.node_type.as_str();
+        let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
 
         let row = sqlx::query_as::<_, NodeRow>(
             r#"
@@ -317,7 +283,8 @@ impl NodeRepo for PgNodeRepo {
     async fn list(&self, params: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
         let page = params.page.unwrap_or(1).max(1);
         let per_page = params.per_page.unwrap_or(50).min(200);
-        let offset = (page - 1) * per_page;
+        // Saturating: an absurd ?page= must not overflow.
+        let offset = page.saturating_sub(1).saturating_mul(per_page);
 
         // Build dynamic count query with optional filters.
         let mut count_sql = String::from("SELECT COUNT(*) FROM nodes n");
@@ -387,10 +354,10 @@ impl NodeRepo for PgNodeRepo {
             count_query = count_query.bind(tag_id.0);
         }
         if let Some(ref node_type) = params.node_type {
-            count_query = count_query.bind(node_type_to_str(node_type));
+            count_query = count_query.bind(node_type.as_str());
         }
         if let Some(ref status) = params.status {
-            count_query = count_query.bind(node_status_to_str(status));
+            count_query = count_query.bind(status.as_str());
         }
         if let Some(ref owner_id) = params.owner_id {
             count_query = count_query.bind(owner_id.as_str());
@@ -416,10 +383,10 @@ impl NodeRepo for PgNodeRepo {
             query = query.bind(tag_id.0);
         }
         if let Some(ref node_type) = params.node_type {
-            query = query.bind(node_type_to_str(node_type));
+            query = query.bind(node_type.as_str());
         }
         if let Some(ref status) = params.status {
-            query = query.bind(node_status_to_str(status));
+            query = query.bind(status.as_str());
         }
         if let Some(ref owner_id) = params.owner_id {
             query = query.bind(owner_id.as_str());
@@ -451,7 +418,7 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn update(&self, id: NodeId, req: UpdateNodeRequest) -> Result<Node, EmberTroveError> {
-        let status_str = req.status.as_ref().map(node_status_to_str);
+        let status_str = req.status.as_ref().map(|v| v.as_str());
 
         let row = sqlx::query_as::<_, NodeRow>(
             r#"

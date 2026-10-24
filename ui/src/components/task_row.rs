@@ -42,14 +42,14 @@ use leptos_router::hooks::use_navigate;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
-use crate::components::task_actions::{RowSignals, TaskCtx, delete_with_undo, toggle_done};
-use crate::components::task_common::{
-    parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
+use crate::components::task_actions::{
+    PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
 };
+use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
-    TITLE_CLASS, TaskCheckbox, TaskRowBody, due_badge_view, priority_dot_view,
+    RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, due_badge_view, priority_dot_view,
 };
-use crate::components::toast::{ToastLevel, ToastState, push_toast};
+use crate::components::toast::ToastState;
 
 /// Which zone of the Kanban this row currently lives in.  Determines which
 /// zone-swap button (× Remove vs ☀ Add) is shown and the colour of the
@@ -85,6 +85,50 @@ pub struct EditingTaskId(pub RwSignal<Option<TaskId>>);
 /// previously-saved size.
 #[derive(Clone, Copy)]
 pub struct TaskEditorHeights(pub RwSignal<std::collections::HashMap<uuid::Uuid, i32>>);
+
+impl TaskEditorHeights {
+    /// Provide the map to this view's rows, filled from the saved editor
+    /// prefs. (My Day, Inbox and the node panel each had a copy.)
+    pub fn provide() {
+        let heights = RwSignal::new(std::collections::HashMap::new());
+        provide_context(TaskEditorHeights(heights));
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
+                heights.try_set(
+                    prefs
+                        .into_iter()
+                        .filter(|p| p.entity_kind == "task")
+                        .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
+                        .collect(),
+                );
+            }
+        });
+    }
+
+    /// The saved height for an editor that is opening now (untracked).
+    pub fn saved(task_id: TaskId) -> Option<i32> {
+        use_context::<TaskEditorHeights>()
+            .and_then(|c| c.0.get_untracked().get(&task_id.0).copied())
+    }
+
+    /// The editor's `on_resize`: remember the height here — reopening the
+    /// editor used to snap back to the height loaded at page start — and
+    /// persist it.
+    pub fn on_resize(task_id: TaskId) -> Callback<i32> {
+        let heights = use_context::<TaskEditorHeights>();
+        Callback::new(move |h: i32| {
+            if let Some(c) = heights {
+                c.0.update(|m| {
+                    m.insert(task_id.0, h);
+                });
+            }
+            wasm_bindgen_futures::spawn_local(async move {
+                // Best-effort: losing a height pref is cosmetic.
+                let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
+            });
+        })
+    }
+}
 
 #[component]
 pub fn KanbanTaskRow(
@@ -135,18 +179,9 @@ pub fn KanbanTaskRow(
 
     // Inline edit form state.  Mirrors the original MyDayTaskRow layout
     // minus the focus_date field (focus is binary, owned by zone-swap).
-    let edit_title = RwSignal::new(task.title.clone());
-    let edit_priority = RwSignal::new(priority_value(&priority).to_string());
-    let edit_due = RwSignal::new(
-        due.map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_default(),
-    );
-    let edit_recurrence = RwSignal::new(
-        task.recurrence
-            .as_ref()
-            .map(|r| recurrence_value(r).to_string())
-            .unwrap_or_default(),
-    );
+    let draft = TaskEditDraft::from_task(&task);
+    let (edit_title, edit_priority, edit_due, edit_recurrence) =
+        (draft.title, draft.priority, draft.due, draft.recurrence);
 
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
@@ -162,25 +197,20 @@ pub fn KanbanTaskRow(
     // ── Mutations ─────────────────────────────────────────────────────
 
     let patch_focus = move |new_focus: Option<NaiveDate>, success_msg: &'static str| {
-        if busy.get_untracked() {
-            return;
-        }
-        busy.set(true);
-        let req = UpdateTaskRequest {
-            focus_date: Some(new_focus),
-            ..Default::default()
-        };
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::update_task(task_id, &req).await;
-            busy.set(false);
-            match result {
-                Ok(_) => {
-                    push_toast(ToastLevel::Success, success_msg);
-                    refresh.update(|n| *n += 1);
-                }
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't update: {e}")),
-            }
-        });
+        patch_task(
+            task_id,
+            UpdateTaskRequest {
+                focus_date: Some(new_focus),
+                ..Default::default()
+            },
+            PatchOpts {
+                busy: Some(busy),
+                ok_toast: Some(success_msg),
+                refresh: Some(refresh),
+                ..Default::default()
+            },
+            |_| {},
+        );
     };
 
     let on_toggle_done = move |ev: web_sys::MouseEvent| {
@@ -217,38 +247,35 @@ pub fn KanbanTaskRow(
 
     let on_pencil = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        // Reset edit fields to the latest known values, then open.
-        edit_title.set(title_sig.get_untracked());
+        // Every field back to the last saved values (an abandoned edit of
+        // priority/due/recurrence used to survive), then open.
+        draft.reset();
         editing_id_sig.set(Some(task_id));
     };
 
     let do_save = move || {
-        let new_title = edit_title.get_untracked().trim().to_string();
-        if new_title.is_empty() {
+        let Some(req) = draft.take_request() else {
             return;
-        }
-        let new_priority = parse_priority(&edit_priority.get_untracked());
-        let new_recurrence = parse_recurrence_opt(&edit_recurrence.get_untracked());
-        let new_due: Option<Option<NaiveDate>> =
-            Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
-        let req = UpdateTaskRequest {
-            title: Some(new_title.clone()),
-            priority: Some(new_priority),
-            due_date: new_due,
-            recurrence: Some(new_recurrence),
-            ..Default::default()
         };
-        title_sig.set(new_title);
+        let prev_title = title_sig.get_untracked();
+        title_sig.set(req.title.clone().unwrap_or_default());
         editing_id_sig.set(None);
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => {
-                    push_toast(ToastLevel::Success, "Saved");
-                    refresh.update(|n| *n += 1);
+        patch_task(
+            task_id,
+            req,
+            PatchOpts {
+                busy: Some(busy),
+                ok_toast: Some("Saved"),
+                err_prefix: "Save failed",
+                refresh: Some(refresh),
+            },
+            // Roll back the optimistic title if the save failed.
+            move |ok| {
+                if !ok {
+                    title_sig.set(prev_title);
                 }
-                Err(e) => push_toast(ToastLevel::Error, format!("Save failed: {e}")),
-            }
-        });
+            },
+        );
     };
     // ── Row click → focus + navigate to parent (or Inbox) ────────────
     let on_row_click = move |_ev: web_sys::MouseEvent| {
@@ -326,8 +353,7 @@ pub fn KanbanTaskRow(
             <div class="flex-1 min-w-0">
                 {move || if is_editing() {
                     // ── Inline edit form ─────────────────────────────
-                    let saved_height = use_context::<TaskEditorHeights>()
-                        .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
+                    let saved_height = TaskEditorHeights::saved(task_id);
                     view! {
                         <div class="mt-1 space-y-2"
                              on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
@@ -337,12 +363,7 @@ pub fn KanbanTaskRow(
                                 initial_height=saved_height
                                 on_submit=Callback::new(move |()| do_save())
                                 on_escape=Callback::new(move |()| editing_id_sig.set(None))
-                                on_resize=Callback::new(move |h: i32| {
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        // Best-effort: losing a height pref is cosmetic.
-                                        let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
-                                    });
-                                })
+                                on_resize=TaskEditorHeights::on_resize(task_id)
                                 class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
                                        text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
                                        min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()
@@ -384,22 +405,7 @@ pub fn KanbanTaskRow(
                                     title="Recurrence"
                                     on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
                                 >
-                                    <option value="" selected=move || edit_recurrence.get().is_empty()>
-                                        "No repeat"
-                                    </option>
-                                    {[
-                                        ("daily",    "Daily"),
-                                        ("weekly",   "Weekly"),
-                                        ("biweekly", "Every 2 weeks"),
-                                        ("monthly",  "Monthly"),
-                                        ("yearly",   "Yearly"),
-                                    ].iter().map(|&(val, label)| {
-                                        view! {
-                                            <option value=val selected=move || edit_recurrence.get() == val>
-                                                {label}
-                                            </option>
-                                        }
-                                    }).collect_view()}
+                                    <RecurrenceOptions value=edit_recurrence />
                                 </select>
                                 <span class="flex-1"/>
                                 <IconButton

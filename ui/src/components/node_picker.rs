@@ -7,7 +7,43 @@
 use common::{id::NodeId, search::SearchResult};
 use leptos::prelude::*;
 
-use crate::components::task_common::node_type_icon;
+/// Debounce for type-ahead node search.
+const NODE_SEARCH_DEBOUNCE_MS: u32 = 300;
+
+/// Type-ahead node search behind every node picker (this component, the
+/// palette, Inbox attach, triage attach, the Links "add" picker): 300 ms
+/// debounce, and only the latest query's response lands. Returns the results
+/// signal; callers may clear it themselves.
+///
+/// The five hand-rolled copies drifted: three skipped the version bump on an
+/// empty query, so clearing the box while a search was in flight let the old
+/// results reappear, and the Links picker searched on every keystroke.
+pub fn use_node_search(query: RwSignal<String>) -> RwSignal<Vec<SearchResult>> {
+    let results = RwSignal::new(Vec::<SearchResult>::new());
+    let version = RwSignal::new(0u32);
+    Effect::new(move |_| {
+        let q = query.get();
+        version.update(|v| *v += 1);
+        let mine = version.get_untracked();
+        if q.trim().is_empty() {
+            results.set(Vec::new());
+            return;
+        }
+        wasm_bindgen_futures::spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(NODE_SEARCH_DEBOUNCE_MS).await;
+            // `try_`: the picker may have unmounted during the wait.
+            if version.try_get_untracked() != Some(mine) {
+                return;
+            }
+            if let Ok(r) = crate::api::node_picker_search(&q).await
+                && version.try_get_untracked() == Some(mine)
+            {
+                results.try_set(r);
+            }
+        });
+    });
+    results
+}
 
 #[component]
 pub fn NodePicker(
@@ -17,30 +53,7 @@ pub fn NodePicker(
 ) -> impl IntoView {
     let placeholder = placeholder.unwrap_or_else(|| "Link to a node (optional)…".to_string());
     let query = RwSignal::new(String::new());
-    let results = RwSignal::<Vec<SearchResult>>::new(vec![]);
-    let ver = RwSignal::new(0u32);
-
-    // Debounced search (300ms), version-guarded against out-of-order responses.
-    Effect::new(move |_| {
-        let q = query.get();
-        if q.trim().is_empty() {
-            results.set(vec![]);
-            return;
-        }
-        ver.update(|v| *v += 1);
-        let myver = ver.get_untracked();
-        wasm_bindgen_futures::spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(300).await;
-            if ver.get_untracked() != myver {
-                return;
-            }
-            if let Ok(r) = crate::api::node_picker_search(&q).await
-                && ver.get_untracked() == myver
-            {
-                results.set(r);
-            }
-        });
-    });
+    let results = use_node_search(query);
 
     view! {
         <div class="relative">
@@ -89,7 +102,7 @@ pub fn NodePicker(
                             let nid = res.node_id;
                             let title_sel = res.title.clone();
                             let title_disp = res.title.clone();
-                            let icon = node_type_icon(&res.node_type);
+                            let icon = crate::components::node_meta::type_icon(&res.node_type);
                             view! {
                                 <button
                                     class="w-full flex items-center gap-2 px-3 py-2 text-xs

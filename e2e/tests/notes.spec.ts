@@ -1,4 +1,4 @@
-import { test, expect, Page, APIRequestContext } from '@playwright/test';
+import { test, expect, createNode, type APIRequestContext } from './fixtures';
 
 /**
  * Notes on a node page. The node page's note panel had Edit but no Delete
@@ -6,22 +6,7 @@ import { test, expect, Page, APIRequestContext } from '@playwright/test';
  * `note_actions::delete_note_with_undo`: instant soft delete + Undo toast.
  */
 
-function collectPageErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on('pageerror', (err) => errors.push(String(err)));
-  return errors;
-}
-
-async function createNode(request: APIRequestContext, title: string) {
-  const resp = await request.post('/api/nodes', {
-    data: { title, node_type: 'article', body: 'notes spec node', metadata: {}, status: 'draft' },
-  });
-  expect(resp.ok()).toBeTruthy();
-  return resp.json();
-}
-
 test('deleting a note on its node page removes it, and Undo restores it', async ({ page, request }) => {
-  const errors = collectPageErrors(page);
   const stamp = Date.now(); // unique per attempt, so retries never collide
   const node = await createNode(request, `e2e notes node ${stamp}`);
   try {
@@ -42,8 +27,6 @@ test('deleting a note on its node page removes it, and Undo restores it', async 
     await expect(toast.getByText('Note deleted')).toBeVisible();
     await toast.getByRole('button', { name: 'Undo' }).click();
     await expect(card()).toBeVisible();
-
-    expect(errors).toEqual([]);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }
@@ -56,7 +39,6 @@ async function createNote(request: APIRequestContext, nodeId: string, body: stri
 }
 
 test('a collapsed note shows its cleaned-up first line and stays collapsed after reload', async ({ page, request }) => {
-  const errors = collectPageErrors(page);
   const stamp = Date.now();
   const node = await createNode(request, `e2e collapse node ${stamp}`);
   try {
@@ -78,15 +60,12 @@ test('a collapsed note shows its cleaned-up first line and stays collapsed after
 
     await card().getByRole('button', { name: 'Expand note' }).click();
     await expect(card().getByText(`hidden detail ${stamp}`)).toBeVisible();
-
-    expect(errors).toEqual([]);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
 
 test('Collapse all / Expand all toggles every note and persists', async ({ page, request }) => {
-  const errors = collectPageErrors(page);
   const stamp = Date.now();
   const node = await createNode(request, `e2e collapse-all node ${stamp}`);
   try {
@@ -110,8 +89,6 @@ test('Collapse all / Expand all toggles every note and persists', async ({ page,
     await expect(page.getByText(`body a ${stamp}`)).toBeVisible();
     await expect(page.getByText(`body b ${stamp}`)).toBeVisible();
     await expect(titleOf(a.id)).toHaveCount(0);
-
-    expect(errors).toEqual([]);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }

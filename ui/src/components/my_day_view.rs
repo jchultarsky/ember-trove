@@ -48,12 +48,14 @@ use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::{TaskCtx, delete_with_undo, toggle_done};
+use crate::components::task_actions::{
+    PatchOpts, TaskCtx, delete_with_undo, patch_task, toggle_done,
+};
 use crate::components::task_common::status_done;
 use crate::components::task_row::{
     EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
 };
-use crate::components::toast::{ToastLevel, ToastState, push_toast};
+use crate::components::toast::ToastState;
 
 #[component]
 pub fn MyDayView() -> impl IntoView {
@@ -81,22 +83,8 @@ pub fn MyDayView() -> impl IntoView {
     provide_context(FocusedTaskId(focused_id));
     provide_context(EditingTaskId(editing_id));
 
-    // Per-task saved inline-edit heights — fetched once, provided to all rows
-    // so each opens its editor at the previously-resized size.
-    let editor_heights =
-        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
-    provide_context(TaskEditorHeights(editor_heights));
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            editor_heights.set(
-                prefs
-                    .into_iter()
-                    .filter(|p| p.entity_kind == "task")
-                    .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
-                    .collect(),
-            );
-        }
-    });
+    // Saved inline-editor heights for the rows.
+    TaskEditorHeights::provide();
 
     // ── Flat task list in display order — fed to the keyboard handler.
     // Today zone first, backlog second.  Updated whenever either
@@ -221,7 +209,10 @@ pub fn MyDayView() -> impl IntoView {
                 };
                 ev.prevent_default();
                 let mdt = &flat[idx];
-                let in_today = mdt.task.focus_date == Some(today);
+                // Same rule as the Today zone (focus_date on or before today):
+                // `t` on a carried-over row used to re-stamp it instead of
+                // removing it, contradicting the row's × button.
+                let in_today = mdt.task.focus_date.is_some_and(|d| d <= today);
                 let new_focus = if in_today { None } else { Some(today) };
                 let msg = if in_today {
                     "Removed from today"
@@ -234,8 +225,12 @@ pub fn MyDayView() -> impl IntoView {
                         focus_date: Some(new_focus),
                         ..Default::default()
                     },
-                    msg,
-                    task_refresh,
+                    PatchOpts {
+                        ok_toast: Some(msg),
+                        refresh: Some(task_refresh),
+                        ..Default::default()
+                    },
+                    |_| {},
                 );
             }
             "e" => {
@@ -485,15 +480,17 @@ fn KanbanZoneRow(
             focus_date: Some(new_focus),
             ..Default::default()
         };
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => {
-                    push_toast(ToastLevel::Success, success_msg);
-                    refresh.update(|n| *n += 1);
-                }
-                Err(e) => push_toast(ToastLevel::Error, format!("Drop failed: {e}")),
-            }
-        });
+        patch_task(
+            task_id,
+            req,
+            PatchOpts {
+                ok_toast: Some(success_msg),
+                err_prefix: "Drop failed",
+                refresh: Some(refresh),
+                ..Default::default()
+            },
+            |_| {},
+        );
     };
 
     view! {
@@ -548,26 +545,6 @@ fn KanbanZoneRow(
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-
-/// Fire one PATCH and refresh on success.  Used by the keyboard
-/// shortcut handler — the row's own buttons go through their local
-/// handlers in `task_row.rs`.
-fn patch_task(
-    task_id: TaskId,
-    req: UpdateTaskRequest,
-    success_msg: &'static str,
-    refresh: RwSignal<u32>,
-) {
-    wasm_bindgen_futures::spawn_local(async move {
-        match crate::api::update_task(task_id, &req).await {
-            Ok(_) => {
-                push_toast(ToastLevel::Success, success_msg);
-                refresh.update(|n| *n += 1);
-            }
-            Err(e) => push_toast(ToastLevel::Error, format!("Update failed: {e}")),
-        }
-    });
-}
 
 /// Scroll the row matching `task_id` into view (no flash — the focus
 /// ring is the visual anchor).  Called after j/k navigation.

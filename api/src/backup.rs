@@ -313,8 +313,8 @@ pub async fn execute_restore(
 
     // Insert nodes.
     for node in &data.nodes {
-        let node_type_str = node_type_to_str(&node.node_type);
-        let status_str = node_status_to_str(&node.status);
+        let node_type_str = node.node_type.as_str();
+        let status_str = node.status.as_str();
         sqlx::query(
             r#"
             INSERT INTO nodes
@@ -359,7 +359,7 @@ pub async fn execute_restore(
 
     // Insert edges.
     for edge in &data.edges {
-        let edge_type_str = edge_type_to_str(&edge.edge_type);
+        let edge_type_str = edge.edge_type.as_str();
         sqlx::query(
             r#"
             INSERT INTO edges (id, source_id, target_id, edge_type, label, created_at)
@@ -382,16 +382,20 @@ pub async fn execute_restore(
     for note in &data.notes {
         sqlx::query(
             r#"
-            INSERT INTO node_notes (id, node_id, owner_id, body, created_at)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO node_notes (id, node_id, owner_id, body, color, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
+        // color + updated_at are restored too: they used to fall back to
+        // 'default' / NOW(), losing note colours and edit times.
         .bind(note.id.0)
         .bind(note.node_id.map(|n| n.0))
         .bind(&note.owner_id)
         .bind(&note.body)
+        .bind(&note.color)
         .bind(note.created_at)
+        .bind(note.updated_at)
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(format!("insert note failed: {e}")))?;
@@ -399,9 +403,9 @@ pub async fn execute_restore(
 
     // Insert tasks.
     for task in &data.tasks {
-        let status_str = task_status_to_str(&task.status);
-        let priority_str = task_priority_to_str(&task.priority);
-        let recurrence_str = task.recurrence.as_ref().map(recurrence_rule_to_str);
+        let status_str = task.status.as_str();
+        let priority_str = task.priority.as_str();
+        let recurrence_str = task.recurrence.as_ref().map(|v| v.as_str());
         sqlx::query(
             r#"
             INSERT INTO node_tasks
@@ -495,7 +499,7 @@ pub async fn execute_restore(
 
     // Insert permissions.
     for perm in &data.permissions {
-        let role_str = permission_role_to_str(&perm.role);
+        let role_str = perm.role.as_str();
         sqlx::query(
             r#"
             INSERT INTO permissions (id, node_id, subject_id, role, granted_by, created_at)
@@ -727,70 +731,6 @@ fn extract_full(
 }
 
 // ── Type-conversion helpers (duplicated from repo to avoid pub re-export) ──────
-
-fn node_type_to_str(t: &common::node::NodeType) -> &'static str {
-    match t {
-        common::node::NodeType::Article => "article",
-        common::node::NodeType::Project => "project",
-        common::node::NodeType::Area => "area",
-        common::node::NodeType::Resource => "resource",
-        common::node::NodeType::Reference => "reference",
-    }
-}
-
-fn node_status_to_str(s: &common::node::NodeStatus) -> &'static str {
-    match s {
-        common::node::NodeStatus::Draft => "draft",
-        common::node::NodeStatus::Published => "published",
-        common::node::NodeStatus::Archived => "archived",
-    }
-}
-
-fn edge_type_to_str(t: &common::edge::EdgeType) -> &'static str {
-    match t {
-        common::edge::EdgeType::References => "references",
-        common::edge::EdgeType::Contains => "contains",
-        common::edge::EdgeType::RelatedTo => "related_to",
-        common::edge::EdgeType::DependsOn => "depends_on",
-        common::edge::EdgeType::DerivedFrom => "derived_from",
-        common::edge::EdgeType::WikiLink => "wiki_link",
-    }
-}
-
-fn task_status_to_str(s: &common::task::TaskStatus) -> &'static str {
-    match s {
-        common::task::TaskStatus::Open => "open",
-        common::task::TaskStatus::InProgress => "in_progress",
-        common::task::TaskStatus::Done => "done",
-        common::task::TaskStatus::Cancelled => "cancelled",
-    }
-}
-
-fn task_priority_to_str(p: &common::task::TaskPriority) -> &'static str {
-    match p {
-        common::task::TaskPriority::Low => "low",
-        common::task::TaskPriority::Medium => "medium",
-        common::task::TaskPriority::High => "high",
-    }
-}
-
-fn permission_role_to_str(r: &common::permission::PermissionRole) -> &'static str {
-    match r {
-        common::permission::PermissionRole::Owner => "owner",
-        common::permission::PermissionRole::Editor => "editor",
-        common::permission::PermissionRole::Viewer => "viewer",
-    }
-}
-
-fn recurrence_rule_to_str(r: &common::task::RecurrenceRule) -> &'static str {
-    match r {
-        common::task::RecurrenceRule::Daily => "daily",
-        common::task::RecurrenceRule::Weekly => "weekly",
-        common::task::RecurrenceRule::Biweekly => "biweekly",
-        common::task::RecurrenceRule::Monthly => "monthly",
-        common::task::RecurrenceRule::Yearly => "yearly",
-    }
-}
 
 // Suppress unused import warning — NodeId is used in type annotation context via the trait.
 const _: fn() = || {

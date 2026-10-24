@@ -130,8 +130,10 @@ async fn get_metrics(
         count(&state.pool, "nodes"),
         count(&state.pool, "edges"),
         count(&state.pool, "tags"),
-        count(&state.pool, "notes"),
-        count(&state.pool, "tasks"),
+        // The tables are node_notes / node_tasks; "notes"/"tasks" don't exist,
+        // so this endpoint used to 500 on every call.
+        count(&state.pool, "node_notes"),
+        count(&state.pool, "node_tasks"),
         count(&state.pool, "attachments"),
         count(&state.pool, "user_favorites"),
     )?;

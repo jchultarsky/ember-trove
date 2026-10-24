@@ -202,6 +202,16 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   mount by tracking the `NodeRef` in an `Effect`, not via rAF. Specs assert
   `toBeFocused()` before relying on focus-dependent keys. — 2026-10-17
 
+### Shortcut key typed into the overlay it opened
+- **Symptom:** pressing `n` opens Quick capture with "n" already in the box.
+- **Cause:** autofocus moved from `requestAnimationFrame` to an `Effect` that
+  tracks the `NodeRef` (the leptos.md rule). The effect runs in a microtask,
+  before the keydown's default action, so the character lands in the newly
+  focused textarea. rAF had masked it by focusing after the key was done.
+- **Fix:** the dispatcher calls `prevent_default()` on every shortcut it
+  handles (`layout.rs`): a consumed key must not also type. e2e:
+  `modals.spec.ts`. — 2026-10-24
+
 ### Graph auto-arrange spinner hangs forever
 - **Symptom:** clicking auto-arrange in the graph spins indefinitely — no PUT fires, no error
   toast, spinner never clears.

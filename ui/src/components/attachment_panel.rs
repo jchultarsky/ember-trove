@@ -9,12 +9,7 @@ use leptos::{html::Input, prelude::*};
 use wasm_bindgen::JsCast;
 
 use crate::api;
-
-/// Copy `text` to the clipboard via the JS Clipboard API.
-fn copy_to_clipboard(text: &str) {
-    let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = js_sys::eval(&format!("navigator.clipboard.writeText('{escaped}')"));
-}
+use crate::components::format_helpers::copy_to_clipboard;
 
 /// Returns true for MIME types the browser can display inline.
 fn is_previewable(content_type: &str) -> bool {

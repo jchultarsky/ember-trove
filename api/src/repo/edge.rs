@@ -99,28 +99,7 @@ impl EdgeRow {
 }
 
 fn parse_edge_type(s: &str) -> Result<EdgeType, EmberTroveError> {
-    match s {
-        "references" => Ok(EdgeType::References),
-        "contains" => Ok(EdgeType::Contains),
-        "related_to" => Ok(EdgeType::RelatedTo),
-        "depends_on" => Ok(EdgeType::DependsOn),
-        "derived_from" => Ok(EdgeType::DerivedFrom),
-        "wiki_link" => Ok(EdgeType::WikiLink),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown edge_type: {other}"
-        ))),
-    }
-}
-
-fn edge_type_to_str(t: &EdgeType) -> &'static str {
-    match t {
-        EdgeType::References => "references",
-        EdgeType::Contains => "contains",
-        EdgeType::RelatedTo => "related_to",
-        EdgeType::DependsOn => "depends_on",
-        EdgeType::DerivedFrom => "derived_from",
-        EdgeType::WikiLink => "wiki_link",
-    }
+    super::parse_wire(s, "edge_type", EdgeType::parse)
 }
 
 #[async_trait]
@@ -149,7 +128,7 @@ impl EdgeRepo for PgEdgeRepo {
             ));
         }
 
-        let edge_type_str = edge_type_to_str(&req.edge_type);
+        let edge_type_str = req.edge_type.as_str();
 
         let row = sqlx::query_as::<_, EdgeRow>(
             r#"
