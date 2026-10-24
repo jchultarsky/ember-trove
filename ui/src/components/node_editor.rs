@@ -342,6 +342,51 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             selected_template_value.set(d.id.to_string());
         }
     });
+    // A type change in create mode (the type <select>, or a new `?type=` while
+    // the editor stays mounted): re-resolve the body for the new type — its
+    // default template, else the built-in scaffold — but only while the body
+    // is untouched (`may_replace_body`).
+    let apply_type_change = move |new_type: String| {
+        if node.is_none()
+            && last_system_body
+                .get_untracked()
+                .is_some_and(|last| may_replace_body(&body.get_untracked(), &last))
+        {
+            let ts = available_templates.get_untracked();
+            let default = NodeType::parse(&new_type).and_then(|t| default_for_type(&ts, &t));
+            let (new_body, source) =
+                resolve_create_body(None, None, default, template_for_type(&new_type));
+            body.set(new_body.clone());
+            last_system_body.set(Some(new_body));
+            match source {
+                CreateBodySource::Default(id) => {
+                    template_id_for_create.set(Some(id));
+                    selected_template_value.set(id.to_string());
+                }
+                _ => {
+                    template_id_for_create.set(None);
+                    selected_template_value.set(String::new());
+                }
+            }
+        }
+        node_type.set(new_type);
+    };
+    // `/nodes/new?type=a` → `?type=b` reuses the mounted editor (two sidebar
+    // "+" clicks in a row): follow the query like a type change.
+    if node.is_none() {
+        let query = leptos_router::hooks::use_query_map();
+        Effect::new(move |prev: Option<Option<String>>| {
+            let t = query
+                .with(|q| q.get("type"))
+                .filter(|t| NodeType::parse(t).is_some());
+            if let (Some(prev), Some(new)) = (prev, t.clone())
+                && prev.as_ref() != Some(&new)
+            {
+                apply_type_change(new);
+            }
+            t
+        });
+    }
     let status = RwSignal::new(initial_status);
     let saving = RwSignal::new(false);
     // True while the initial node fetch is in-flight (edit mode only).
@@ -882,40 +927,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         class="text-sm bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300
                             rounded-lg px-2 py-1.5 focus:outline-none"
                         prop:value=move || node_type.get()
-                        on:change=move |ev| {
-                            let new_type = event_target_value(&ev);
-                            // In create mode, re-resolve the body for the new type
-                            // (its default template, else the built-in scaffold) —
-                            // but only while the body is untouched.
-                            if node.is_none()
-                                && last_system_body
-                                    .get_untracked()
-                                    .is_some_and(|last| may_replace_body(&body.get_untracked(), &last))
-                            {
-                                let ts = available_templates.get_untracked();
-                                let default = NodeType::parse(&new_type)
-                                    .and_then(|t| default_for_type(&ts, &t));
-                                let (new_body, source) = resolve_create_body(
-                                    None,
-                                    None,
-                                    default,
-                                    template_for_type(&new_type),
-                                );
-                                body.set(new_body.clone());
-                                last_system_body.set(Some(new_body));
-                                match source {
-                                    CreateBodySource::Default(id) => {
-                                        template_id_for_create.set(Some(id));
-                                        selected_template_value.set(id.to_string());
-                                    }
-                                    _ => {
-                                        template_id_for_create.set(None);
-                                        selected_template_value.set(String::new());
-                                    }
-                                }
-                            }
-                            node_type.set(new_type);
-                        }
+                        on:change=move |ev| apply_type_change(event_target_value(&ev))
                     >
                         <option value="article">"Article"</option>
                         <option value="project">"Project"</option>

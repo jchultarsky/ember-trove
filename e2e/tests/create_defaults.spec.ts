@@ -129,6 +129,19 @@ test.describe('creating a node applies the type default', () => {
       .toBe(true);
   });
 
+  test('a second sidebar + while the editor is open switches the type', async ({ page, request }) => {
+    const body = `## Kickoff ${Date.now()}\n`;
+    await createTemplate(request, `${PREFIX} project kickoff`, 'project', body, true);
+    await page.goto('/tasks/my-day');
+    await page.getByTestId('new-project').click();
+    await expect(bodyEditor(page)).toHaveValue(body);
+    // Same route, new query: the mounted editor must follow (untouched body).
+    await page.getByTestId('new-area').click();
+    await expect(page).toHaveURL(/\/nodes\/new\?type=area/);
+    await expect(typeSelect(page)).toHaveValue('area');
+    await expect(bodyEditor(page)).not.toHaveValue(body);
+  });
+
   test('palette "New Area" opens the editor with the type preset', async ({ page }) => {
     await page.goto('/tasks/my-day');
     await expect(page.locator('main')).toBeVisible({ timeout: 15_000 });
