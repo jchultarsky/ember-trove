@@ -48,12 +48,12 @@ use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::{ToggleCtx, toggle_done};
-use crate::components::task_common::{status_done, undo_restore_task};
+use crate::components::task_actions::{TaskCtx, delete_with_undo, toggle_done};
+use crate::components::task_common::status_done;
 use crate::components::task_row::{
     EditingTaskId, FocusedTaskId, KanbanTaskRow, KanbanZone, TaskEditorHeights,
 };
-use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
 #[component]
 pub fn MyDayView() -> impl IntoView {
@@ -207,7 +207,7 @@ pub fn MyDayView() -> impl IntoView {
                     mdt.task.status.clone(),
                     mdt.task.focus_date,
                     None,
-                    ToggleCtx {
+                    TaskCtx {
                         today,
                         refresh: task_refresh,
                         toast_state,
@@ -250,19 +250,16 @@ pub fn MyDayView() -> impl IntoView {
                     return;
                 };
                 ev.prevent_default();
-                let id = flat[idx].task.id;
-                wasm_bindgen_futures::spawn_local(async move {
-                    match crate::api::delete_task(id).await {
-                        Ok(_) => {
-                            task_refresh.update(|n| *n += 1);
-                            push_undo_toast(
-                                "Task deleted",
-                                undo_restore_task(id, task_refresh, toast_state),
-                            );
-                        }
-                        Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
-                    }
-                });
+                delete_with_undo(
+                    flat[idx].task.id,
+                    None,
+                    TaskCtx {
+                        today,
+                        refresh: task_refresh,
+                        toast_state,
+                    },
+                    || {},
+                );
             }
             _ => {}
         }

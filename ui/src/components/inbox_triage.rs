@@ -10,14 +10,14 @@
 //! fingers. The global task refresh is bumped once on exit.
 
 use chrono::NaiveDate;
-use common::id::{NodeId, TaskId};
+use common::id::NodeId;
 use common::task::{Task, UpdateTaskRequest};
 use leptos::prelude::*;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
-use crate::components::task_common::undo_restore_task;
-use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
+use crate::components::task_actions::{TaskCtx, delete_with_undo};
+use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
 /// Which input the triage card is currently capturing.
 #[derive(Clone, Copy, PartialEq)]
@@ -142,27 +142,20 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     };
 
     let do_delete = move || {
-        if busy.get_untracked() {
-            return;
-        }
         let Some(task) = current() else { return };
-        let task_id: TaskId = task.id;
-        busy.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::delete_task(task_id).await;
-            busy.set(false);
-            match result {
-                Ok(_) => {
-                    acted.update(|n| *n += 1);
-                    push_undo_toast(
-                        "Task deleted",
-                        undo_restore_task(task_id, refresh, toast_state),
-                    );
-                    remove_current();
-                }
-                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
-            }
-        });
+        delete_with_undo(
+            task.id,
+            Some(busy),
+            TaskCtx {
+                today: local_today(),
+                refresh,
+                toast_state,
+            },
+            move || {
+                acted.update(|n| *n += 1);
+                remove_current();
+            },
+        );
     };
 
     let do_schedule = move || {

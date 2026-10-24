@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — one delete and one ☀ action for every task list (refactor)
+Completing tasks already went through `task_actions::toggle_done`; now
+deleting (`delete_with_undo`) and the row ☀ (`toggle_my_day` plus a shared
+`MyDayButton`) do too. That replaces five delete copies and two My Day toggle
+copies. Behaviour fixes that come with it:
+- **Deleting is guarded against double-clicks in every list.** Only the My
+  Day row and Inbox triage had the guard; a fast double-click in the node
+  panel or Inbox sent two deletes.
+- **The ☀ button looks and behaves the same everywhere:** filled amber when
+  the task is in My Day, with `aria-pressed` for screen readers. The node
+  panel used a different, unfilled style.
+- **The Inbox keeps ☀ visible while you edit a task,** as the node panel
+  always did. It applies immediately and doesn't wait for Save.
+
 ### Added — due dates read back in words, with a past-date warning
 Every task due-date input (row edit forms in My Day, a node's task panel and
 the Inbox, the add-task form, and Inbox triage) now spells out the chosen

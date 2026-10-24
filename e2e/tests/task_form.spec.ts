@@ -159,3 +159,37 @@ test('the add-task form echoes the due date and warns on a past one', async ({ p
   await expect(field.getByTestId('due-hint')).toBeEmpty();
   await expect(field.getByTestId('due-warning')).toBeEmpty();
 });
+
+// ── Row ☀ action (task_actions::toggle_my_day + MyDayButton) ────────────────
+
+test('inbox: ☀ stays available while editing a task and applies immediately', async ({
+  page,
+  request,
+}) => {
+  const title = `e2e row sun ${Date.now()}`;
+  const created = await request.post('/api/tasks', { data: { title } });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit"]').click();
+    // Edit hides Assign/Edit/Delete — but not ☀ (it isn't Save-gated).
+    await expect(row.locator('button[title="Edit"]')).toHaveCount(0);
+    const sun = row.getByRole('button', { name: 'Add to My Day' });
+    await expect(sun).toHaveAttribute('aria-pressed', 'false');
+    await sun.click();
+    await expect(row.getByRole('button', { name: 'Remove from My Day' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect
+      .poll(async () => {
+        const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
+        return inbox.find((t) => t.id === task.id)?.focus_date ?? null;
+      })
+      .toBe(localISO(0));
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+  }
+});

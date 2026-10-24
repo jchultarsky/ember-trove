@@ -20,15 +20,18 @@ use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
+use crate::components::task_actions::{
+    RowSignals, TaskCtx, delete_with_undo, toggle_done, toggle_my_day,
+};
 use crate::components::task_common::{
     is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, priority_value,
-    recurrence_label, recurrence_value, status_done, undo_restore_task,
+    recurrence_label, recurrence_value, status_done,
 };
 use crate::components::task_row_scaffold::{
-    TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view, priority_dot_view,
+    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view,
+    priority_dot_view,
 };
-use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use crate::focus_task::schedule_focus_task;
 
 // ── InboxView ─────────────────────────────────────────────────────────────────
@@ -331,6 +334,12 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         });
     };
 
+    let ctx = TaskCtx {
+        today,
+        refresh,
+        toast_state,
+    };
+
     let on_toggle = move |ev: web_sys::MouseEvent| {
         toggle_done(
             task_id,
@@ -340,53 +349,12 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                 status: status_sig,
                 busy,
             }),
-            ToggleCtx {
-                today,
-                refresh,
-                toast_state,
-            },
+            ctx,
             Some(&ev),
         );
     };
 
-    let on_toggle_my_day = move |_| {
-        let currently_in = in_my_day.get_untracked();
-        let new_focus = if currently_in {
-            Some(None)
-        } else {
-            Some(Some(today))
-        };
-        in_my_day.set(!currently_in);
-        let req = UpdateTaskRequest {
-            focus_date: new_focus,
-            ..Default::default()
-        };
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => refresh.update(|n| *n += 1),
-                Err(e) => {
-                    // Roll back the optimistic flip.
-                    in_my_day.set(currently_in);
-                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
-                }
-            }
-        });
-    };
-
-    let on_delete = move |_| {
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::delete_task(task_id).await {
-                Ok(_) => {
-                    refresh.update(|n| *n += 1);
-                    push_undo_toast(
-                        "Task deleted",
-                        undo_restore_task(task_id, refresh, toast_state),
-                    );
-                }
-                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
-            }
-        });
-    };
+    let on_delete = move |_| delete_with_undo(task_id, Some(busy), ctx, || {});
 
     view! {
         <div class="px-3 py-2" data-task-id=task_id.0.to_string()>
@@ -520,10 +488,11 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                         }}
                     </div>
 
-                    // Actions — right cluster, hidden while editing.
-                    // Order matches My Day: context actions, edit, delete.
-                    {move || (!editing.get()).then(|| view! {
-                        <div class="flex items-center gap-0.5 flex-shrink-0">
+                    // Actions — right cluster. Order matches My Day: context
+                    // actions, edit, delete. While editing only ☀ stays: it
+                    // applies immediately (same as the node panel's row).
+                    <div class="flex items-center gap-0.5 flex-shrink-0">
+                        {move || (!editing.get()).then(|| view! {
                             <button
                                 class=action_btn_class("hover:text-amber-600 dark:hover:text-amber-500")
                                 title="Assign to node"
@@ -533,29 +502,12 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                     "call_merge"
                                 </span>
                             </button>
-                            <button
-                                class=move || if in_my_day.get() {
-                                    "p-1.5 rounded text-amber-500 bg-amber-50 \
-                                     dark:text-amber-400 dark:bg-amber-900/30 \
-                                     hover:text-amber-600 dark:hover:text-amber-300 \
-                                     transition-colors cursor-pointer".to_string()
-                                } else {
-                                    action_btn_class("hover:text-amber-500 dark:hover:text-amber-400")
-                                }
-                                title=move || if in_my_day.get() { "Remove from My Day" } else { "Add to My Day" }
-                                on:click=on_toggle_my_day
-                            >
-                                <span
-                                    class="material-symbols-outlined"
-                                    style=move || if in_my_day.get() {
-                                        "font-size:16px; font-variation-settings: 'FILL' 1;"
-                                    } else {
-                                        "font-size:16px;"
-                                    }
-                                >
-                                    "wb_sunny"
-                                </span>
-                            </button>
+                        })}
+                        <MyDayButton
+                            active=in_my_day
+                            on_toggle=Callback::new(move |()| toggle_my_day(task_id, in_my_day, ctx))
+                        />
+                        {move || (!editing.get()).then(|| view! {
                             <button
                                 class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
                                 title="Edit"
@@ -574,8 +526,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                     "delete"
                                 </span>
                             </button>
-                        </div>
-                    })}
+                        })}
+                    </div>
             </div>
 
             // ── Node picker — full-width expansion below the row ──────────────
