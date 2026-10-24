@@ -29,9 +29,17 @@ pub trait NodeRepo: Send + Sync {
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError>;
 
-    async fn neighbors(&self, id: NodeId) -> Result<Vec<Node>, EmberTroveError>;
+    async fn neighbors(
+        &self,
+        id: NodeId,
+        subject: Option<&str>,
+    ) -> Result<Vec<Node>, EmberTroveError>;
 
-    async fn backlinks(&self, id: NodeId) -> Result<Vec<Node>, EmberTroveError>;
+    async fn backlinks(
+        &self,
+        id: NodeId,
+        subject: Option<&str>,
+    ) -> Result<Vec<Node>, EmberTroveError>;
 
     /// Return nodes as lightweight title entries, ordered by title.
     /// Used for wiki-link autocomplete and resolution.
@@ -44,16 +52,17 @@ pub trait NodeRepo: Send + Sync {
         subject: Option<&str>,
     ) -> Result<Vec<NodeTitleEntry>, EmberTroveError>;
 
-    /// Find a node's ID by exact title (case-insensitive). Returns `None` if no
-    /// node with that title exists.
-    async fn find_id_by_title(&self, title: &str) -> Result<Option<NodeId>, EmberTroveError>;
-
-    /// Resolve many already-lowercased titles in one query. Returns a map from
-    /// the lowercased title to its node ID; unmatched titles are absent.
-    /// Batches what would otherwise be one `find_id_by_title` round-trip per
-    /// wiki-link on every node save.
+    /// Resolve many already-lowercased wiki-link titles in one query, among
+    /// nodes owned by `owner_id` only. Returns a map from the lowercased title
+    /// to its node ID; unmatched titles are absent.
+    ///
+    /// SECURITY: resolution used to search every owner's titles, so writing
+    /// `[[Someone Else's Title]]` created an edge into another user's node and
+    /// `neighbors` then returned that node's body. Owner-scoped, it also uses
+    /// the `(owner_id, lower(title))` unique index.
     async fn find_ids_by_titles(
         &self,
+        owner_id: &str,
         lowered_titles: &[String],
     ) -> Result<HashMap<String, NodeId>, EmberTroveError>;
 
@@ -491,18 +500,28 @@ impl NodeRepo for PgNodeRepo {
         Ok(())
     }
 
-    async fn neighbors(&self, id: NodeId) -> Result<Vec<Node>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodeRow>(
+    async fn neighbors(
+        &self,
+        id: NodeId,
+        subject: Option<&str>,
+    ) -> Result<Vec<Node>, EmberTroveError> {
+        // SECURITY: the route checks access to node `id` only; every linked
+        // node must also be visible to the caller, or a link (e.g. a
+        // pre-hotfix cross-owner wiki link) would expose its full body.
+        let rows = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
             SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
                    n.metadata, n.status::text, n.pinned, n.created_at, n.updated_at
             FROM nodes n
             JOIN edges e ON e.target_id = n.id
             WHERE e.source_id = $1
+              AND {visible}
             ORDER BY n.title
             "#,
-        )
+            visible = super::visible_to("n", 2),
+        ))
         .bind(id.0)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("neighbors query failed: {e}")))?;
@@ -510,18 +529,28 @@ impl NodeRepo for PgNodeRepo {
         rows.into_iter().map(NodeRow::into_node).collect()
     }
 
-    async fn backlinks(&self, id: NodeId) -> Result<Vec<Node>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodeRow>(
+    async fn backlinks(
+        &self,
+        id: NodeId,
+        subject: Option<&str>,
+    ) -> Result<Vec<Node>, EmberTroveError> {
+        // SECURITY: the route checks access to node `id` only; every linked
+        // node must also be visible to the caller, or a link (e.g. a
+        // pre-hotfix cross-owner wiki link) would expose its full body.
+        let rows = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
             SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
                    n.metadata, n.status::text, n.pinned, n.created_at, n.updated_at
             FROM nodes n
             JOIN edges e ON e.source_id = n.id
             WHERE e.target_id = $1
+              AND {visible}
             ORDER BY n.title
             "#,
-        )
+            visible = super::visible_to("n", 2),
+        ))
         .bind(id.0)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("backlinks query failed: {e}")))?;
@@ -578,25 +607,9 @@ impl NodeRepo for PgNodeRepo {
             .collect())
     }
 
-    async fn find_id_by_title(&self, title: &str) -> Result<Option<NodeId>, EmberTroveError> {
-        #[derive(sqlx::FromRow)]
-        struct IdRow {
-            id: Uuid,
-        }
-
-        let row = sqlx::query_as::<_, IdRow>(
-            "SELECT id FROM nodes WHERE LOWER(title) = LOWER($1) LIMIT 1",
-        )
-        .bind(title)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("find_id_by_title failed: {e}")))?;
-
-        Ok(row.map(|r| NodeId(r.id)))
-    }
-
     async fn find_ids_by_titles(
         &self,
+        owner_id: &str,
         lowered_titles: &[String],
     ) -> Result<HashMap<String, NodeId>, EmberTroveError> {
         #[derive(sqlx::FromRow)]
@@ -605,14 +618,13 @@ impl NodeRepo for PgNodeRepo {
             lt: String,
         }
 
-        // DISTINCT ON + deterministic ORDER BY picks the lowest id per title,
-        // mirroring the single-match semantics of find_id_by_title.
+        // (owner_id, lower(title)) is unique, so at most one row per title.
         let rows = sqlx::query_as::<_, TitleIdRow>(
-            "SELECT DISTINCT ON (LOWER(title)) id, LOWER(title) AS lt
+            "SELECT id, LOWER(title) AS lt
              FROM nodes
-             WHERE LOWER(title) = ANY($1)
-             ORDER BY LOWER(title), id",
+             WHERE owner_id = $1 AND LOWER(title) = ANY($2)",
         )
+        .bind(owner_id)
         .bind(lowered_titles)
         .fetch_all(&self.pool)
         .await

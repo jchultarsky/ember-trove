@@ -12,7 +12,6 @@ pub trait GraphRepo: Send + Sync {
         &self,
         subject: Option<&str>,
     ) -> Result<Vec<NodePosition>, EmberTroveError>;
-    async fn upsert_position(&self, node_id: Uuid, x: f64, y: f64) -> Result<(), EmberTroveError>;
     /// Batch upsert positions. SECURITY: only positions for nodes owned by
     /// `subject` are written (`None` = admin, no filter); rows for nodes the
     /// caller doesn't own are silently dropped, preventing cross-user tampering.
@@ -66,23 +65,6 @@ impl GraphRepo for PgGraphRepo {
                 y: r.y,
             })
             .collect())
-    }
-
-    async fn upsert_position(&self, node_id: Uuid, x: f64, y: f64) -> Result<(), EmberTroveError> {
-        sqlx::query(
-            "INSERT INTO node_positions (node_id, x, y)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (node_id) DO UPDATE
-             SET x = EXCLUDED.x, y = EXCLUDED.y, updated_at = now()",
-        )
-        .bind(node_id)
-        .bind(x)
-        .bind(y)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("upsert_position failed: {e}")))?;
-
-        Ok(())
     }
 
     async fn save_positions(

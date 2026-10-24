@@ -20,3 +20,17 @@ pub mod tag;
 pub mod task;
 pub mod template;
 pub mod webhook;
+
+/// SQL predicate: the node aliased `alias` is visible to the subject bound at
+/// placeholder `$param` — owned by them, or shared with them through the
+/// `permissions` table. A NULL subject (admin) sees every node. The same rule
+/// as `NodeRepo::list_titles`.
+///
+/// SECURITY: `alias` and `param` must be compile-time literals (callers pass
+/// constants); the subject itself is always a bind parameter.
+pub(crate) fn visible_to(alias: &str, param: u8) -> String {
+    format!(
+        "(${param}::text IS NULL OR {alias}.owner_id = ${param}::text OR EXISTS ( \
+         SELECT 1 FROM permissions vp WHERE vp.node_id = {alias}.id AND vp.subject_id = ${param}::text))"
+    )
+}

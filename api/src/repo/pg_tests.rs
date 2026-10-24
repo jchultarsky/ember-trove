@@ -28,8 +28,11 @@ use common::{
 use sqlx::PgPool;
 
 use super::{
+    edge::{EdgeRepo, PgEdgeRepo},
     editor_pref::{EditorPrefRepo, PgEditorPrefRepo},
+    graph::{GraphRepo, PgGraphRepo},
     node::{NodeRepo, PgNodeRepo},
+    permission::{PermissionRepo, PgPermissionRepo},
     search::{PgSearchRepo, SearchRepo},
     share_token::{PgShareTokenRepo, ShareTokenRepo},
     task::{PgTaskRepo, TaskRepo},
@@ -176,6 +179,174 @@ async fn share_token_revoke_is_scoped_to_node(pool: PgPool) {
             .is_none(),
         "token must be gone after a legitimate revoke"
     );
+}
+
+// ── Cross-owner isolation (hotfix: wiki links, edges, permissions, graph) ────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn wikilink_titles_resolve_only_within_the_owner(pool: PgPool) {
+    let nodes = PgNodeRepo::new(pool.clone());
+    let mine = create_node(&pool, "owner-a", "Plan").await;
+    let theirs = create_node(&pool, "owner-b", "Journal").await;
+    // Same title under another owner must never win either.
+    create_node(&pool, "owner-b", "Plan").await;
+
+    let found = nodes
+        .find_ids_by_titles("owner-a", &["plan".to_string(), "journal".to_string()])
+        .await
+        .expect("resolve");
+    assert_eq!(found.get("plan"), Some(&mine.id));
+    // Regression: `[[Journal]]` used to resolve to another owner's node.
+    assert!(!found.contains_key("journal"), "resolved {:?}", theirs.id);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn neighbors_backlinks_and_edges_hide_nodes_the_caller_cannot_see(pool: PgPool) {
+    let nodes = PgNodeRepo::new(pool.clone());
+    let edges = PgEdgeRepo::new(pool.clone());
+    let a = create_node(&pool, "owner-a", "A source").await;
+    let a2 = create_node(&pool, "owner-a", "A own target").await;
+    let b = create_node(&pool, "owner-b", "B private").await;
+    // Simulate a pre-hotfix cross-owner link plus a legitimate own link.
+    edges
+        .sync_wikilinks(a.id, &[a2.id, b.id])
+        .await
+        .expect("edges");
+    edges
+        .sync_wikilinks(b.id, &[a.id])
+        .await
+        .expect("back edge");
+
+    let ids = |v: Vec<common::node::Node>| v.into_iter().map(|n| n.id).collect::<Vec<_>>();
+    let n = ids(nodes
+        .neighbors(a.id, Some("owner-a"))
+        .await
+        .expect("neighbors"));
+    assert_eq!(n, vec![a2.id], "B's node (and body) must not leak to A");
+    let bl = ids(nodes
+        .backlinks(a.id, Some("owner-a"))
+        .await
+        .expect("backlinks"));
+    assert!(bl.is_empty(), "B's linking node must not leak to A");
+    let e = edges
+        .list_for_node_with_titles(a.id, Some("owner-a"))
+        .await
+        .expect("edges with titles");
+    assert!(e.iter().all(|e| e.source_id != b.id && e.target_id != b.id));
+    assert_eq!(e.len(), 1);
+
+    // Sharing B with owner-a makes it visible; admins (None) see everything.
+    PgPermissionRepo::new(pool.clone())
+        .grant(
+            b.id,
+            "owner-b",
+            common::permission::GrantPermissionRequest {
+                subject_id: "owner-a".to_string(),
+                role: common::permission::PermissionRole::Viewer,
+            },
+        )
+        .await
+        .expect("share");
+    assert_eq!(
+        nodes
+            .neighbors(a.id, Some("owner-a"))
+            .await
+            .expect("n")
+            .len(),
+        2
+    );
+    assert_eq!(nodes.neighbors(a.id, None).await.expect("admin").len(), 2);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_033_drops_only_cross_owner_wikilinks(pool: PgPool) {
+    let edges = PgEdgeRepo::new(pool.clone());
+    let a = create_node(&pool, "owner-a", "A").await;
+    let a2 = create_node(&pool, "owner-a", "A2").await;
+    let b = create_node(&pool, "owner-b", "B").await;
+    edges
+        .sync_wikilinks(a.id, &[a2.id, b.id])
+        .await
+        .expect("wiki edges");
+    // An explicit (user-created) cross-owner edge is left to the read filter.
+    edges
+        .create(common::edge::CreateEdgeRequest {
+            source_id: a.id,
+            target_id: b.id,
+            edge_type: common::edge::EdgeType::References,
+            label: None,
+        })
+        .await
+        .expect("explicit edge");
+
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/033_drop_cross_owner_wikilinks.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("re-run cleanup");
+
+    let left: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT target_id, edge_type::text FROM edges WHERE source_id = $1 ORDER BY edge_type",
+    )
+    .bind(a.id.0)
+    .fetch_all(&pool)
+    .await
+    .expect("edges");
+    assert_eq!(
+        left,
+        vec![
+            (b.id.0, "references".to_string()),
+            (a2.id.0, "wiki_link".to_string())
+        ]
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn permission_revoke_is_scoped_to_its_node(pool: PgPool) {
+    let perms = PgPermissionRepo::new(pool.clone());
+    let x = create_node(&pool, "attacker", "X").await;
+    let y = create_node(&pool, "victim", "Y").await;
+    let victim_perm = perms
+        .grant(
+            y.id,
+            "victim",
+            common::permission::GrantPermissionRequest {
+                subject_id: "friend".to_string(),
+                role: common::permission::PermissionRole::Editor,
+            },
+        )
+        .await
+        .expect("grant on Y");
+
+    // Regression (IDOR): revoking Y's permission through node X's route.
+    assert!(matches!(
+        perms.revoke(victim_perm.id, x.id).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(perms.list(y.id).await.expect("list").len(), 1);
+    perms
+        .revoke(victim_perm.id, y.id)
+        .await
+        .expect("revoke on Y");
+    assert!(perms.list(y.id).await.expect("list").is_empty());
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn graph_position_writes_stay_owner_scoped(pool: PgPool) {
+    let graph = PgGraphRepo::new(pool.clone());
+    let b = create_node(&pool, "owner-b", "B node").await;
+    // A viewer/stranger writing B's position is dropped; the owner's lands.
+    graph
+        .save_positions(&[(b.id.0, 1.0, 2.0)], Some("owner-a"))
+        .await
+        .expect("foreign write");
+    assert!(graph.list_positions(None).await.expect("list").is_empty());
+    graph
+        .save_positions(&[(b.id.0, 3.0, 4.0)], Some("owner-b"))
+        .await
+        .expect("owner write");
+    assert_eq!(graph.list_positions(None).await.expect("list").len(), 1);
 }
 
 // ── Task soft-delete lifecycle ────────────────────────────────────────────────

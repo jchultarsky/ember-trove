@@ -26,7 +26,10 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_owner, require_viewer},
+    auth::permissions::{
+        guard_canonical_owner, is_admin, require_editor, require_owner, require_viewer,
+        subject_scope,
+    },
     error::ApiError,
     notify::maybe_notify_invite,
     state::AppState,
@@ -162,7 +165,13 @@ async fn create_node(
         .await
         .map_err(|e| ApiError::Internal(format!("auto-grant owner permission failed: {e}")))?;
 
-    sync_wikilinks(&state, node.id, node.body.as_deref().unwrap_or("")).await?;
+    sync_wikilinks(
+        &state,
+        node.id,
+        &node.owner_id,
+        node.body.as_deref().unwrap_or(""),
+    )
+    .await?;
     let (action, meta) = if let Some(tid) = template_id {
         (
             ActivityAction::CreatedFromTemplate,
@@ -241,7 +250,13 @@ async fn update_node(
         .map_err(|e| ApiError::Validation(e.to_string()))?;
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let node = state.nodes.update(NodeId(id), req).await?;
-    sync_wikilinks(&state, node.id, node.body.as_deref().unwrap_or("")).await?;
+    sync_wikilinks(
+        &state,
+        node.id,
+        &node.owner_id,
+        node.body.as_deref().unwrap_or(""),
+    )
+    .await?;
     // Record a body snapshot unless identical to the latest stored version
     // (autosave repeats and title/status-only saves). Awaited inline — the
     // previous fire-and-forget spawn could write snapshots out of order when
@@ -331,7 +346,10 @@ async fn neighbors(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<Node>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    let nodes = state.nodes.neighbors(NodeId(id)).await?;
+    let nodes = state
+        .nodes
+        .neighbors(NodeId(id), subject_scope(&claims))
+        .await?;
     Ok(Json(nodes))
 }
 
@@ -341,7 +359,10 @@ async fn backlinks(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<Node>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    let nodes = state.nodes.backlinks(NodeId(id)).await?;
+    let nodes = state
+        .nodes
+        .backlinks(NodeId(id), subject_scope(&claims))
+        .await?;
     Ok(Json(nodes))
 }
 
@@ -353,7 +374,10 @@ async fn list_edges_for_node(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<EdgeWithTitles>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    let edges = state.edges.list_for_node_with_titles(NodeId(id)).await?;
+    let edges = state
+        .edges
+        .list_for_node_with_titles(NodeId(id), subject_scope(&claims))
+        .await?;
     Ok(Json(edges))
 }
 
@@ -527,18 +551,9 @@ async fn grant_permission(
 
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
 
-    // SECURITY: a granted Owner must not be able to downgrade the canonical
-    // creator (nodes.owner_id) to a weaker role via grant-upsert. Only an
-    // admin may change the canonical owner's row, and only to Owner otherwise.
+    // SECURITY: a granted Owner must not downgrade the canonical creator.
     let node = state.nodes.get(NodeId(id)).await?;
-    if req.subject_id == node.owner_id
-        && !matches!(req.role, PermissionRole::Owner)
-        && !is_admin(&claims)
-    {
-        return Err(ApiError::Forbidden(
-            "cannot downgrade the node owner".to_string(),
-        ));
-    }
+    guard_canonical_owner(&claims, &node.owner_id, &req.subject_id, Some(&req.role))?;
 
     let perm = state
         .permissions
@@ -562,22 +577,22 @@ async fn revoke_permission(
 ) -> Result<StatusCode, ApiError> {
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
 
-    // SECURITY: the canonical creator's (nodes.owner_id) Owner row is the
-    // backstop that keeps them from being locked out (require_role consults
-    // only the permissions table, not nodes.owner_id). A second granted Owner
-    // must not be able to revoke it. Only an admin may.
+    // SECURITY: the permission must belong to THIS node (the route authorized
+    // the caller against it — an id from another node is a 404, not a revoke;
+    // the IDOR fixed for share tokens in v2.22.4), and a granted Owner must
+    // not revoke the canonical creator.
     let node = state.nodes.get(NodeId(id)).await?;
     let perms = state.permissions.list(NodeId(id)).await?;
-    if let Some(target) = perms.iter().find(|p| p.id == PermissionId(perm_id))
-        && target.subject_id == node.owner_id
-        && !is_admin(&claims)
-    {
-        return Err(ApiError::Forbidden(
-            "cannot revoke the node owner's permission".to_string(),
-        ));
-    }
+    let target = perms
+        .iter()
+        .find(|p| p.id == PermissionId(perm_id))
+        .ok_or_else(|| ApiError::NotFound(format!("permission {perm_id} not found")))?;
+    guard_canonical_owner(&claims, &node.owner_id, &target.subject_id, None)?;
 
-    state.permissions.revoke(PermissionId(perm_id)).await?;
+    state
+        .permissions
+        .revoke(PermissionId(perm_id), NodeId(id))
+        .await?;
     log_activity(
         &state,
         NodeId(id),
@@ -870,7 +885,7 @@ async fn restore_version(
         status: None,
     };
     let node = state.nodes.update(NodeId(id), req).await?;
-    sync_wikilinks(&state, node.id, &version.body).await?;
+    sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;
     // Snapshot the restored body.
     let sub = claims.sub.clone();
     let ver_repo = state.node_versions.clone();
@@ -895,7 +910,14 @@ async fn restore_version(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve wiki-link titles in `body` to node IDs and sync `wiki_link` edges.
-async fn sync_wikilinks(state: &AppState, source_id: NodeId, body: &str) -> Result<(), ApiError> {
+/// SECURITY: titles resolve only among `owner_id`'s nodes (the source node's
+/// owner), so a link can never point into another user's private node.
+async fn sync_wikilinks(
+    state: &AppState,
+    source_id: NodeId,
+    owner_id: &str,
+    body: &str,
+) -> Result<(), ApiError> {
     let titles = parse_wikilink_titles(body);
     // Resolve all wiki-link titles in a single batched query rather than one
     // round-trip per title on every node save.
@@ -903,7 +925,7 @@ async fn sync_wikilinks(state: &AppState, source_id: NodeId, body: &str) -> Resu
         Vec::new()
     } else {
         let lowered: Vec<String> = titles.iter().map(|t| t.to_lowercase()).collect();
-        let by_title = state.nodes.find_ids_by_titles(&lowered).await?;
+        let by_title = state.nodes.find_ids_by_titles(owner_id, &lowered).await?;
         lowered
             .iter()
             .filter_map(|lt| by_title.get(lt).copied())
@@ -959,7 +981,7 @@ async fn duplicate_node(
     }
 
     if let Some(ref body) = dup.body {
-        sync_wikilinks(&state, dup.id, body).await?;
+        sync_wikilinks(&state, dup.id, &dup.owner_id, body).await?;
     }
 
     log_activity(
