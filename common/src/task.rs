@@ -250,6 +250,65 @@ pub fn done_toggle(
     }
 }
 
+/// Readable echo for a due-date input: the date spelled out plus where it
+/// sits relative to today, so a mistyped segment (Oct → Jan) is obvious
+/// before Save. Native `<input type="date">` segments can't be annotated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DueHint {
+    /// e.g. `"Fri, Oct 30 · in 7 days"`; the year appears when it isn't
+    /// `today`'s year.
+    pub label: String,
+    /// `due` is before `today`.
+    pub past: bool,
+}
+
+/// Build the [`DueHint`] for `due`, relative to the viewer's local `today`.
+pub fn due_hint(due: NaiveDate, today: NaiveDate) -> DueHint {
+    use chrono::Datelike;
+
+    let date = if due.year() == today.year() {
+        due.format("%a, %b %-d").to_string()
+    } else {
+        due.format("%a, %b %-d, %Y").to_string()
+    };
+    let days = (due - today).num_days();
+    let n = days.unsigned_abs();
+    let span = |count: u64, unit: &str| {
+        let plural = if count == 1 { "" } else { "s" };
+        if days > 0 {
+            format!("in {count} {unit}{plural}")
+        } else {
+            format!("{count} {unit}{plural} ago")
+        }
+    };
+    let relative = match days {
+        0 => "today".to_string(),
+        1 => "tomorrow".to_string(),
+        -1 => "yesterday".to_string(),
+        _ if n <= 13 => span(n, "day"),
+        _ if n < 56 => span(n / 7, "week"),
+        // Rounded so 56 days reads "2 months", not "1 month".
+        _ if n < 365 => span((n + 15) / 30, "month"),
+        _ => span((n + 182) / 365, "year"),
+    };
+    DueHint {
+        label: format!("{date} · {relative}"),
+        past: days < 0,
+    }
+}
+
+/// Should a due-date field warn "this date is in the past"? Only when the
+/// date was changed (or newly set) to a day before `today`: editing just the
+/// title of an already-overdue task must not nag. A warning, never a block —
+/// back-dating is legitimate.
+pub fn warn_past_due(
+    new: Option<NaiveDate>,
+    original: Option<NaiveDate>,
+    today: NaiveDate,
+) -> bool {
+    new.is_some_and(|d| d < today && Some(d) != original)
+}
+
 /// One entry in a bulk sort-order update (drag-to-reorder in My Day).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTaskEntry {
@@ -325,6 +384,60 @@ mod tests {
             assert_eq!(t.request.status, Some(TaskStatus::Open));
             assert_eq!(t.request.focus_date, None);
         }
+    }
+
+    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn due_hint_relative_bands() {
+        let today = date(2026, 10, 23); // a Friday
+        let cases = [
+            (date(2026, 10, 23), "Fri, Oct 23 · today"),
+            (date(2026, 10, 24), "Sat, Oct 24 · tomorrow"),
+            (date(2026, 10, 22), "Thu, Oct 22 · yesterday"),
+            (date(2026, 10, 30), "Fri, Oct 30 · in 7 days"),
+            (date(2026, 11, 5), "Thu, Nov 5 · in 13 days"),
+            (date(2026, 11, 6), "Fri, Nov 6 · in 2 weeks"),
+            (date(2026, 10, 9), "Fri, Oct 9 · 2 weeks ago"),
+            (date(2026, 12, 18), "Fri, Dec 18 · in 2 months"),
+            (date(2027, 10, 23), "Sat, Oct 23, 2027 · in 1 year"),
+        ];
+        for (due, want) in cases {
+            assert_eq!(due_hint(due, today).label, want, "{due}");
+        }
+    }
+
+    #[test]
+    fn due_hint_makes_the_month_slip_obvious() {
+        // The reported accident: a stray "1" in the Month segment turned
+        // Oct 30 into Jan 30 — the echo must read as clearly wrong.
+        let hint = due_hint(date(2026, 1, 30), date(2026, 10, 23));
+        assert_eq!(hint.label, "Fri, Jan 30 · 9 months ago");
+        assert!(hint.past);
+        assert!(!due_hint(date(2026, 10, 23), date(2026, 10, 23)).past);
+    }
+
+    #[test]
+    fn due_hint_shows_year_outside_current_year() {
+        let hint = due_hint(date(2025, 12, 31), date(2026, 1, 2));
+        assert_eq!(hint.label, "Wed, Dec 31, 2025 · 2 days ago");
+    }
+
+    #[test]
+    fn past_due_warning_only_for_changed_past_dates() {
+        let today = date(2026, 10, 23);
+        let past = Some(date(2026, 10, 1));
+        // Changed to the past → warn (new task or edited date).
+        assert!(warn_past_due(past, None, today));
+        assert!(warn_past_due(past, Some(date(2026, 11, 1)), today));
+        // An already-overdue task whose date was left alone → no nagging.
+        assert!(!warn_past_due(past, past, today));
+        // Today, future, or cleared → fine.
+        assert!(!warn_past_due(Some(today), None, today));
+        assert!(!warn_past_due(Some(date(2026, 12, 1)), past, today));
+        assert!(!warn_past_due(None, past, today));
     }
 
     #[test]

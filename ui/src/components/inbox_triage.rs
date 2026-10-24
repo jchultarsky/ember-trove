@@ -14,6 +14,7 @@ use common::id::{NodeId, TaskId};
 use common::task::{Task, UpdateTaskRequest};
 use leptos::prelude::*;
 
+use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::task_common::undo_restore_task;
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
@@ -377,15 +378,13 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                                              do_schedule();
                                          }
                                      }>
-                                    <input
-                                        type="date"
+                                    <DueDateField
+                                        value=date_input
                                         node_ref=date_ref
-                                        class="text-sm rounded-lg border border-amber-400 px-2 py-1.5
-                                               bg-white dark:bg-stone-800
-                                               text-stone-800 dark:text-stone-200
+                                        input_class="text-sm rounded-lg border border-amber-400 px-2 py-1.5 \
+                                               bg-white dark:bg-stone-800 \
+                                               text-stone-800 dark:text-stone-200 \
                                                focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                        prop:value=move || date_input.get()
-                                        on:input=move |ev| date_input.set(event_target_value(&ev))
                                     />
                                     <button class=hint_btn on:click=move |_| do_schedule()>
                                         "Set due date"
