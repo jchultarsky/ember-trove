@@ -13,9 +13,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
   editor draft (`task_actions`), one node-search hook, `ModalShell` for
   every modal and one editor-height store. The e2e fixtures guard every
   spec against page errors. CI runs `cargo test -p ui`, and handler-level
-  authZ tests cover the v2.31.1 fixes. **Next candidates:** drop
-  `'unsafe-eval'` from the prod CSP (now possible, smoke-test first),
-  #101 tower-http (waiting on reqwest).
+  authZ tests cover the v2.31.1 fixes. `'unsafe-eval'` is gone
+  from the prod CSP (Unreleased; e2e fails on any CSP violation). **Next
+  candidates:** #101 tower-http (waiting on reqwest).
 
 - **v2.32.0 shipped: #111 + AWS SDK update (#114, #113).** Every create
   path resolves a new node's body by one rule

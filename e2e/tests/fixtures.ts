@@ -10,7 +10,7 @@ import { test as base, expect, type APIRequestContext } from '@playwright/test';
 export { expect };
 export type { APIRequestContext, Page } from '@playwright/test';
 
-export const test = base.extend<{ pageErrors: string[] }>({
+export const test = base.extend<{ pageErrors: string[]; cspViolations: string[] }>({
   /**
    * Fails the test on any uncaught exception or WASM panic. A panic poisons
    * event dispatch silently — later clicks just do nothing — so a spec can
@@ -25,6 +25,32 @@ export const test = base.extend<{ pageErrors: string[] }>({
       page.on('pageerror', (err) => errors.push(err.stack || String(err)));
       await use(errors);
       expect(errors, 'uncaught page errors').toEqual([]);
+    },
+    { auto: true },
+  ],
+  /**
+   * Fails the test on any Content-Security-Policy violation. A blocked
+   * `eval`, script, or fetch does not always throw — the old js_sys::eval
+   * date/clipboard helpers just failed silently — so `pageErrors` alone
+   * can't prove the app runs under the real policy (no 'unsafe-eval').
+   * Listens for the spec-defined `securitypolicyviolation` event; the init
+   * script itself is injected by Playwright and is not subject to the CSP.
+   */
+  cspViolations: [
+    async ({ page }, use) => {
+      const violations: string[] = [];
+      await page.exposeBinding('__e2eCspViolation', (_src, v: string) => {
+        violations.push(v);
+      });
+      await page.addInitScript(() => {
+        document.addEventListener('securitypolicyviolation', (e) => {
+          const report = (window as unknown as { __e2eCspViolation: (v: string) => void })
+            .__e2eCspViolation;
+          report(`${e.effectiveDirective} blocked ${e.blockedURI} at ${e.sourceFile}:${e.lineNumber}`);
+        });
+      });
+      await use(violations);
+      expect(violations, 'CSP violations').toEqual([]);
     },
     { auto: true },
   ],

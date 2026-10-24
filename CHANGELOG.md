@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — production CSP no longer allows `'unsafe-eval'`
+- The edge CSP's `script-src` (`deploy/nginx.prod.conf`) drops
+  `'unsafe-eval'` and keeps `'wasm-unsafe-eval'`, which lets WebAssembly
+  compile and instantiate without allowing JS string-eval (`eval`,
+  `new Function`, string timers). v2.32.1 removed the last `js_sys::eval`,
+  and the shipped Trunk/wasm-bindgen glue uses neither `eval` nor
+  `new Function`.
+- In practice prod already blocked eval: the UI container's own CSP
+  (`deploy/nginx.conf`, never with `'unsafe-eval'`) passes through the edge
+  proxy as a second header, and browsers enforce both. This change makes
+  the edge policy say what is actually enforced.
+- The e2e fixtures now fail any test on a `securitypolicyviolation` event,
+  and a smoke test asserts the served CSP is eval-free. A blocked `eval`
+  doesn't always throw (the old date and clipboard helpers failed silently),
+  so the page-error guard alone couldn't catch one.
+
 ## [2.32.1] - 2026-10-24
 
 ### Security — handler-level authorization tests
