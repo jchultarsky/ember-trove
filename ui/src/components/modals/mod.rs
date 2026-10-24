@@ -5,8 +5,106 @@ pub mod delete_confirm;
 pub mod fast_capture;
 pub mod help;
 
+use leptos::html;
+use leptos::portal::Portal;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
+
+/// Where a [`ModalShell`] panel sits.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum ModalPlacement {
+    /// Vertically centred (dialogs and confirmations).
+    #[default]
+    Center,
+    /// Near the top, like a launcher (palette, quick capture).
+    Top,
+}
+
+/// The chrome every modal shares: portal, blurred backdrop (click closes),
+/// a positioned `rounded-2xl` panel with `role` / `aria-modal` / `aria-label`,
+/// Escape-to-close, the Tab focus trap, and focus return on close.
+///
+/// Seven modals hand-rolled this and drifted: one had no backdrop close, one
+/// no portal, and the change-password dialog had no role, Escape, or trap.
+///
+/// `on_key` runs first for the modal's own keys (Ctrl+Enter submit, arrows);
+/// it claims a key with `prevent_default()`. Escape is handled in the panel
+/// and stopped there, so the window dispatcher never also acts on it
+/// (`common::keyboard::escape_target`).
+#[component]
+pub fn ModalShell(
+    #[prop(into)] show: Signal<bool>,
+    on_close: Callback<()>,
+    /// Accessible name (`aria-label`).
+    label: &'static str,
+    /// Size, padding and layout of the panel; surface classes are shared.
+    panel_class: &'static str,
+    #[prop(optional)] placement: ModalPlacement,
+    /// `role="alertdialog"`: a confirmation that interrupts.
+    #[prop(optional)]
+    alert: bool,
+    #[prop(optional)] on_key: Option<Callback<web_sys::KeyboardEvent>>,
+    children: ChildrenFn,
+) -> impl IntoView {
+    let panel_ref: NodeRef<html::Div> = NodeRef::new();
+    return_focus_on_close(show);
+
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if let Some(cb) = on_key {
+            cb.run(ev.clone());
+            if ev.default_prevented() {
+                return;
+            }
+        }
+        if ev.key() == "Escape" {
+            ev.prevent_default();
+            ev.stop_propagation();
+            on_close.run(());
+        } else if let Some(panel) = panel_ref.get_untracked() {
+            trap_focus(&ev, &panel);
+        }
+    };
+
+    // The wrapper ignores the pointer so clicks beside the panel reach the
+    // backdrop; the panel takes them back.
+    let wrapper = match placement {
+        ModalPlacement::Center => {
+            "fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none"
+        }
+        ModalPlacement::Top => {
+            "fixed inset-0 z-50 flex items-start justify-center p-4 pt-16 sm:pt-24 \
+             pointer-events-none"
+        }
+    };
+    let panel = StoredValue::new(format!(
+        "pointer-events-auto bg-white dark:bg-stone-900 rounded-2xl shadow-2xl \
+         border border-stone-200 dark:border-stone-700 {panel_class}"
+    ));
+    let children = StoredValue::new(children);
+
+    view! {
+        <Show when=move || show.get()>
+            <Portal>
+                <div
+                    class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+                    on:click=move |_| on_close.run(())
+                />
+                <div class=wrapper>
+                    <div
+                        node_ref=panel_ref
+                        class=panel.get_value()
+                        role=if alert { "alertdialog" } else { "dialog" }
+                        aria-modal="true"
+                        aria-label=label
+                        on:keydown=on_keydown
+                    >
+                        {children.with_value(|c| c())}
+                    </div>
+                </div>
+            </Portal>
+        </Show>
+    }
+}
 
 /// Selector for the elements a modal focus trap cycles through.
 const FOCUSABLE: &str = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";

@@ -24,6 +24,7 @@ use crate::components::task_actions::{
     toggle_my_day,
 };
 use crate::components::task_common::{is_in_my_day, parse_priority, recurrence_label, status_done};
+use crate::components::task_row::TaskEditorHeights;
 use crate::components::task_row_scaffold::{
     MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
     due_badge_view, priority_dot_view,
@@ -86,23 +87,8 @@ pub fn InboxView() -> impl IntoView {
         async move { crate::api::list_inbox().await }
     });
 
-    // Per-task saved inline-edit heights, provided to the InboxTaskRows.
-    let editor_heights =
-        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
-    provide_context(crate::components::task_row::TaskEditorHeights(
-        editor_heights,
-    ));
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            editor_heights.set(
-                prefs
-                    .into_iter()
-                    .filter(|p| p.entity_kind == "task")
-                    .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
-                    .collect(),
-            );
-        }
-    });
+    // Saved inline-editor heights for the rows.
+    TaskEditorHeights::provide();
 
     // Triage ("Process") mode — one task at a time, keyboard-driven.
     let triage = RwSignal::new(false);
@@ -329,8 +315,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                     <div class="flex-1 min-w-0">
                         {move || if editing.get() {
                             // ── Edit form ──────────────────────────────────────
-                            let saved_height = use_context::<crate::components::task_row::TaskEditorHeights>()
-                                .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
+                            let saved_height = TaskEditorHeights::saved(task_id);
                             view! {
                                 <div class="space-y-2">
                                     <crate::components::resizable_editor::ResizableEditor
@@ -342,12 +327,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                             editing.set(false);
                                             draft.reset();
                                         })
-                                        on_resize=Callback::new(move |h: i32| {
-                                            wasm_bindgen_futures::spawn_local(async move {
-                                                // Best-effort: losing a height pref is cosmetic.
-                                                let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
-                                            });
-                                        })
+                                        on_resize=TaskEditorHeights::on_resize(task_id)
                                         class="w-full text-sm rounded-lg border border-amber-400 \
                                             bg-white dark:bg-stone-800 px-3 py-2 resize-y min-h-[44px] \
                                             text-stone-900 dark:text-stone-100 \

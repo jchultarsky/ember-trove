@@ -83,22 +83,8 @@ pub fn MyDayView() -> impl IntoView {
     provide_context(FocusedTaskId(focused_id));
     provide_context(EditingTaskId(editing_id));
 
-    // Per-task saved inline-edit heights — fetched once, provided to all rows
-    // so each opens its editor at the previously-resized size.
-    let editor_heights =
-        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
-    provide_context(TaskEditorHeights(editor_heights));
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            editor_heights.set(
-                prefs
-                    .into_iter()
-                    .filter(|p| p.entity_kind == "task")
-                    .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
-                    .collect(),
-            );
-        }
-    });
+    // Saved inline-editor heights for the rows.
+    TaskEditorHeights::provide();
 
     // ── Flat task list in display order — fed to the keyboard handler.
     // Today zone first, backlog second.  Updated whenever either

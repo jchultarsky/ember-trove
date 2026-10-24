@@ -86,6 +86,50 @@ pub struct EditingTaskId(pub RwSignal<Option<TaskId>>);
 #[derive(Clone, Copy)]
 pub struct TaskEditorHeights(pub RwSignal<std::collections::HashMap<uuid::Uuid, i32>>);
 
+impl TaskEditorHeights {
+    /// Provide the map to this view's rows, filled from the saved editor
+    /// prefs. (My Day, Inbox and the node panel each had a copy.)
+    pub fn provide() {
+        let heights = RwSignal::new(std::collections::HashMap::new());
+        provide_context(TaskEditorHeights(heights));
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
+                heights.try_set(
+                    prefs
+                        .into_iter()
+                        .filter(|p| p.entity_kind == "task")
+                        .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
+                        .collect(),
+                );
+            }
+        });
+    }
+
+    /// The saved height for an editor that is opening now (untracked).
+    pub fn saved(task_id: TaskId) -> Option<i32> {
+        use_context::<TaskEditorHeights>()
+            .and_then(|c| c.0.get_untracked().get(&task_id.0).copied())
+    }
+
+    /// The editor's `on_resize`: remember the height here — reopening the
+    /// editor used to snap back to the height loaded at page start — and
+    /// persist it.
+    pub fn on_resize(task_id: TaskId) -> Callback<i32> {
+        let heights = use_context::<TaskEditorHeights>();
+        Callback::new(move |h: i32| {
+            if let Some(c) = heights {
+                c.0.update(|m| {
+                    m.insert(task_id.0, h);
+                });
+            }
+            wasm_bindgen_futures::spawn_local(async move {
+                // Best-effort: losing a height pref is cosmetic.
+                let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
+            });
+        })
+    }
+}
+
 #[component]
 pub fn KanbanTaskRow(
     task: Task,
@@ -309,8 +353,7 @@ pub fn KanbanTaskRow(
             <div class="flex-1 min-w-0">
                 {move || if is_editing() {
                     // ── Inline edit form ─────────────────────────────
-                    let saved_height = use_context::<TaskEditorHeights>()
-                        .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
+                    let saved_height = TaskEditorHeights::saved(task_id);
                     view! {
                         <div class="mt-1 space-y-2"
                              on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
@@ -320,12 +363,7 @@ pub fn KanbanTaskRow(
                                 initial_height=saved_height
                                 on_submit=Callback::new(move |()| do_save())
                                 on_escape=Callback::new(move |()| editing_id_sig.set(None))
-                                on_resize=Callback::new(move |h: i32| {
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        // Best-effort: losing a height pref is cosmetic.
-                                        let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
-                                    });
-                                })
+                                on_resize=TaskEditorHeights::on_resize(task_id)
                                 class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
                                        text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
                                        min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()

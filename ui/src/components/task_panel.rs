@@ -15,6 +15,7 @@ use crate::components::task_actions::{
 use crate::components::task_common::{
     is_in_my_day, sort_tasks_by_order, status_done, status_label,
 };
+use crate::components::task_row::TaskEditorHeights;
 use crate::components::task_row_scaffold::{
     MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
     due_badge_view, priority_dot_view,
@@ -34,23 +35,8 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
         async move { crate::api::fetch_tasks(node_id).await }
     });
 
-    // Per-task saved inline-edit heights, provided to the nested TaskRows.
-    let editor_heights =
-        RwSignal::<std::collections::HashMap<uuid::Uuid, i32>>::new(Default::default());
-    provide_context(crate::components::task_row::TaskEditorHeights(
-        editor_heights,
-    ));
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            editor_heights.set(
-                prefs
-                    .into_iter()
-                    .filter(|p| p.entity_kind == "task")
-                    .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
-                    .collect(),
-            );
-        }
-    });
+    // Saved inline-editor heights for the rows.
+    TaskEditorHeights::provide();
 
     // Filter: hide done/cancelled tasks by default; toggled by the user.
     let show_completed = RwSignal::new(false);
@@ -353,8 +339,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             <div class="flex-1 min-w-0">
                 // Title — display or inline edit form (title + priority + due + repeat)
                 {move || if editing_title.get() {
-                    let saved_height = use_context::<crate::components::task_row::TaskEditorHeights>()
-                        .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
+                    let saved_height = TaskEditorHeights::saved(task_id);
                     view! {
                         <div class="space-y-1.5 pb-1">
                             <crate::components::resizable_editor::ResizableEditor
@@ -366,12 +351,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                     editing_title.set(false);
                                     draft.reset();
                                 })
-                                on_resize=Callback::new(move |h: i32| {
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        // Best-effort: losing a height pref is cosmetic.
-                                        let _ = crate::api::set_editor_pref("task", task_id.0, h).await;
-                                    });
-                                })
+                                on_resize=TaskEditorHeights::on_resize(task_id)
                                 class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
                                     text-stone-900 dark:text-stone-100 rounded px-1.5 py-0.5 resize-y \
                                     min-h-[36px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()

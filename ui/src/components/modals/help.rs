@@ -15,7 +15,7 @@
 //! when a release changes a user-visible model or workflow, sync the
 //! corresponding tab content here.
 
-use leptos::portal::Portal;
+use super::ModalShell;
 use leptos::prelude::*;
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -302,8 +302,6 @@ const WORKFLOW_STEPS: &[WorkflowStep] = &[
 #[component]
 pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> impl IntoView {
     let active = RwSignal::new(HelpTab::Shortcuts);
-    let panel_ref: NodeRef<leptos::html::Div> = NodeRef::new();
-    super::return_focus_on_close(show);
 
     // Reset to the Shortcuts tab every time the modal opens — the
     // shortcut reference is the most-frequently-needed surface and a
@@ -315,105 +313,83 @@ pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> im
     });
 
     view! {
-        <Show when=move || show.get()>
-            <Portal>
-                // Backdrop
-                <div
-                    class="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+        <ModalShell
+            show=show
+            on_close=on_close
+            label="Help and shortcuts"
+            panel_class="w-full max-w-2xl flex flex-col max-h-[85vh] overflow-hidden"
+        >
+            // Header
+            <div class="flex items-center justify-between px-6 pt-5 pb-3 \
+                        border-b border-stone-100 dark:border-stone-800">
+                <div class="flex items-center gap-3">
+                    <div class="flex-shrink-0 w-9 h-9 rounded-full
+                                bg-amber-100 dark:bg-amber-900/30
+                                flex items-center justify-center">
+                        <span class="material-symbols-outlined text-amber-600 dark:text-amber-400"
+                              style="font-size: 18px;">"help"</span>
+                    </div>
+                    <h2 class="text-base font-semibold text-stone-900 dark:text-stone-100">
+                        "Help"
+                    </h2>
+                </div>
+                <button
+                    type="button"
+                    class="text-stone-400 hover:text-stone-600 \
+                           dark:hover:text-stone-200 transition-colors"
                     on:click=move |_| on_close.run(())
-                />
-                // Panel
-                <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <div
-                        node_ref=panel_ref
-                        class="bg-white dark:bg-stone-900 rounded-2xl shadow-2xl
-                               border border-stone-200 dark:border-stone-700
-                               w-full max-w-2xl flex flex-col
-                               max-h-[85vh] overflow-hidden"
-                        role="dialog"
-                        aria-modal="true"
-                        aria-label="Help and shortcuts"
-                        on:click=|ev| ev.stop_propagation()
-                        on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if let Some(panel) = panel_ref.get_untracked() {
-                                super::trap_focus(&ev, &panel);
-                            }
-                        }
-                    >
-                        // Header
-                        <div class="flex items-center justify-between px-6 pt-5 pb-3 \
-                                    border-b border-stone-100 dark:border-stone-800">
-                            <div class="flex items-center gap-3">
-                                <div class="flex-shrink-0 w-9 h-9 rounded-full
-                                            bg-amber-100 dark:bg-amber-900/30
-                                            flex items-center justify-center">
-                                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-400"
-                                          style="font-size: 18px;">"help"</span>
-                                </div>
-                                <h2 class="text-base font-semibold text-stone-900 dark:text-stone-100">
-                                    "Help"
-                                </h2>
-                            </div>
+                >
+                    <span class="material-symbols-outlined">"close"</span>
+                </button>
+            </div>
+
+            // Tab bar
+            <div class="flex items-center gap-1 px-4 pt-2 border-b \
+                        border-stone-100 dark:border-stone-800">
+                {[HelpTab::Shortcuts, HelpTab::Concepts, HelpTab::Workflow].iter()
+                    .map(|&tab| {
+                        let label = tab.label();
+                        let icon  = tab.icon();
+                        view! {
                             <button
                                 type="button"
-                                class="text-stone-400 hover:text-stone-600 \
-                                       dark:hover:text-stone-200 transition-colors"
-                                on:click=move |_| on_close.run(())
+                                class="px-3 py-2 text-sm flex items-center gap-1.5 \
+                                       transition-colors cursor-pointer \
+                                       border-b-2"
+                                style=move || if active.get() == tab {
+                                    "color:#b45309;border-color:#f59e0b;font-weight:600;"
+                                } else {
+                                    "color:#78716c;border-color:transparent;"
+                                }
+                                on:click=move |_| active.set(tab)
                             >
-                                <span class="material-symbols-outlined">"close"</span>
+                                <span class="material-symbols-outlined"
+                                      style="font-size:16px;">{icon}</span>
+                                {label}
                             </button>
-                        </div>
+                        }
+                    }).collect::<Vec<_>>()}
+            </div>
 
-                        // Tab bar
-                        <div class="flex items-center gap-1 px-4 pt-2 border-b \
-                                    border-stone-100 dark:border-stone-800">
-                            {[HelpTab::Shortcuts, HelpTab::Concepts, HelpTab::Workflow].iter()
-                                .map(|&tab| {
-                                    let label = tab.label();
-                                    let icon  = tab.icon();
-                                    view! {
-                                        <button
-                                            type="button"
-                                            class="px-3 py-2 text-sm flex items-center gap-1.5 \
-                                                   transition-colors cursor-pointer \
-                                                   border-b-2"
-                                            style=move || if active.get() == tab {
-                                                "color:#b45309;border-color:#f59e0b;font-weight:600;"
-                                            } else {
-                                                "color:#78716c;border-color:transparent;"
-                                            }
-                                            on:click=move |_| active.set(tab)
-                                        >
-                                            <span class="material-symbols-outlined"
-                                                  style="font-size:16px;">{icon}</span>
-                                            {label}
-                                        </button>
-                                    }
-                                }).collect::<Vec<_>>()}
-                        </div>
+            // Tab body — scrolls inside the panel
+            <div class="flex-1 overflow-auto px-6 py-4">
+                {move || match active.get() {
+                    HelpTab::Shortcuts => view! { <ShortcutsTab /> }.into_any(),
+                    HelpTab::Concepts  => view! { <ConceptsTab  /> }.into_any(),
+                    HelpTab::Workflow  => view! { <WorkflowTab  /> }.into_any(),
+                }}
+            </div>
 
-                        // Tab body — scrolls inside the panel
-                        <div class="flex-1 overflow-auto px-6 py-4">
-                            {move || match active.get() {
-                                HelpTab::Shortcuts => view! { <ShortcutsTab /> }.into_any(),
-                                HelpTab::Concepts  => view! { <ConceptsTab  /> }.into_any(),
-                                HelpTab::Workflow  => view! { <WorkflowTab  /> }.into_any(),
-                            }}
-                        </div>
-
-                        // Footer — version stamp.  Auto-fills from CARGO_PKG_VERSION
-                        // at compile time; the release checklist is responsible for
-                        // syncing the *content* above with whatever shipped.
-                        <div class="px-6 py-2 text-[10px] text-stone-400 \
-                                    dark:text-stone-500 border-t border-stone-100 \
-                                    dark:border-stone-800 flex items-center justify-between">
-                            <span>"Shortcuts disabled while typing in inputs."</span>
-                            <span class="font-mono">{concat!("Help for v", env!("CARGO_PKG_VERSION"))}</span>
-                        </div>
-                    </div>
-                </div>
-            </Portal>
-        </Show>
+            // Footer — version stamp.  Auto-fills from CARGO_PKG_VERSION
+            // at compile time; the release checklist is responsible for
+            // syncing the *content* above with whatever shipped.
+            <div class="px-6 py-2 text-[10px] text-stone-400 \
+                        dark:text-stone-500 border-t border-stone-100 \
+                        dark:border-stone-800 flex items-center justify-between">
+                <span>"Shortcuts disabled while typing in inputs."</span>
+                <span class="font-mono">{concat!("Help for v", env!("CARGO_PKG_VERSION"))}</span>
+            </div>
+        </ModalShell>
     }
 }
 

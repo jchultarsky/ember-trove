@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — one implementation per UI behaviour (refactor)
+- **Task edits:** every task PATCH in the UI (row editors, My Day drag and
+  `t`, Inbox attach, triage) goes through `task_actions::patch_task`, and the
+  four inline editors share `TaskEditDraft`. Fixes along the way: Cancel now
+  resets priority, due date and repeat as well as the title (abandoned edits
+  used to reappear on reopen); the node-page editor can set **Repeat**; one
+  set of repeat labels everywhere (Inbox said "Biweekly"); a resized task
+  editor keeps its new height on reopen.
+- **Node search:** one debounced `use_node_search` hook behind every picker
+  (task form, palette, Inbox and triage attach, Connections). Clearing the box
+  mid-search no longer brings stale results back, and the Connections picker
+  no longer searches on every keystroke.
+- **Modals:** a shared `ModalShell` (portal, backdrop, Escape, focus trap,
+  focus return) for all seven. Change password gains a dialog role, Escape,
+  a Tab trap and autofocus, and it clears typed passwords when closed. Add to
+  Favorites now closes on a backdrop click like the others.
+- **Shortcuts:** a handled global shortcut no longer also types. Quick
+  capture opened with `n` used to start with "n".
+- **e2e:** shared `fixtures.ts`; every spec now fails on an uncaught page
+  error or WASM panic (palette and triage had no guard). 61 tests.
+
 ### Changed — one wire-string table per enum (refactor)
 - A `wire_enum!` macro in `common` generates `ALL`, `as_str` and `parse` for
   `NodeType`, `NodeStatus`, `EdgeType`, `TaskStatus`, `TaskPriority`,

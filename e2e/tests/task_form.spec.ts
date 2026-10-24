@@ -278,3 +278,31 @@ test('inbox editor: opens on saved values and Cancel resets every field', async 
     await request.delete(`/api/tasks/${task.id}`);
   }
 });
+
+test('a resized task editor reopens at its new height (same session)', async ({
+  page,
+  request,
+}) => {
+  const title = `e2e editor height ${Date.now()}`;
+  const created = await request.post('/api/tasks', { data: { title } });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit"]').click();
+    const editor = row.locator('textarea');
+    // A drag of the native resize handle ends in a mouseup on the textarea.
+    await editor.evaluate((el) => {
+      (el as HTMLElement).style.height = '160px';
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    });
+    await row.getByRole('button', { name: 'Cancel' }).click();
+    // Regression: the height map was loaded once at page start, so the
+    // reopened editor snapped back to the old height.
+    await row.locator('button[title="Edit"]').click();
+    await expect.poll(() => editor.evaluate((el) => (el as HTMLElement).offsetHeight)).toBe(160);
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+  }
+});

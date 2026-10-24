@@ -163,9 +163,22 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         ev.prevent_default();
                         show_palette.set(true);
                     }
-                    ToggleHelp => show_shortcuts.update(|v| *v = !*v),
-                    QuickCapture => show_capture.set(true),
-                    GoGraph => navigate("/graph", Default::default()),
+                    // A consumed shortcut must not also type: an overlay that
+                    // focuses its input before the key's default action runs
+                    // would receive the character (quick capture opened by
+                    // `n` used to start with "n").
+                    ToggleHelp => {
+                        ev.prevent_default();
+                        show_shortcuts.update(|v| *v = !*v);
+                    }
+                    QuickCapture => {
+                        ev.prevent_default();
+                        show_capture.set(true);
+                    }
+                    GoGraph => {
+                        ev.prevent_default();
+                        navigate("/graph", Default::default());
+                    }
                     Escape => {
                         use common::keyboard::EscapeTarget;
                         match common::keyboard::escape_target(
