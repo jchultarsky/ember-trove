@@ -12,6 +12,11 @@
 //!   `500 Internal Server Error` ("OIDC not configured") for every protected
 //!   route, which is distinct from `404 Not Found`.  We exploit this to
 //!   verify that every route is **registered** without setting up real auth.
+//! * Handler-level authorization: `claims_app` mounts one router slice with
+//!   injected `AuthClaims`, so the real handlers run against the stub repos.
+//!   The "Authorization world" fixture (nodes, roles, permission rows, tasks)
+//!   backs the authZ tests; a write a handler should have refused panics in
+//!   the stub, so a missing check can't pass on status code alone.
 //! * Rate limiter — `SmartIpKeyExtractor` needs at least one of
 //!   `X-Real-IP`, `X-Forwarded-For`, or `ConnectInfo<SocketAddr>`.
 //!   All requests to rate-limited routes include `X-Forwarded-For: 127.0.0.1`.
@@ -77,8 +82,11 @@ use crate::{
 };
 
 // ── Stub repo implementations ─────────────────────────────────────────────────
-// All methods panic with `unimplemented!()` — they are never reached because
+// Most methods panic with `unimplemented!()`: they are never reached because
 // the auth middleware short-circuits every protected request when oidc = None.
+// Handler tests that inject claims (`claims_app`) get canned data instead —
+// the restore flow, share tokens, export, and the "Authorization world"
+// below that the authZ tests run against.
 
 struct StubNodeRepo;
 #[async_trait]
@@ -86,8 +94,18 @@ impl NodeRepo for StubNodeRepo {
     async fn create(&self, _: &str, _: CreateNodeRequest) -> Result<Node, EmberTroveError> {
         unimplemented!()
     }
-    async fn get(&self, _: NodeId) -> Result<Node, EmberTroveError> {
-        unimplemented!()
+    async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
+        // Canonical owners for the authz world: the creator of AZ_OWNED_NODE is
+        // "creator" (test-sub holds a *granted* Owner row there).
+        let owner = match id.0.as_u128() {
+            AZ_OWNED_NODE => "creator",
+            AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => "someone-else",
+            _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
+        };
+        Ok(Node {
+            id,
+            ..fake_node("authz-node", owner)
+        })
     }
     async fn get_by_slug(&self, _: &str) -> Result<Node, EmberTroveError> {
         unimplemented!()
@@ -204,6 +222,83 @@ impl TagRepo for StubTagRepo {
     }
 }
 
+// ── Authorization world ──────────────────────────────────────────────────────
+// A fixed set of nodes, permission rows and tasks for the handler-level
+// authorization tests: the caller (`fake_claims`, sub "test-sub") holds a
+// granted Owner row on AZ_OWNED_NODE (canonical owner "creator"), Editor on
+// AZ_EDIT_NODE, Viewer on AZ_VIEW_NODE and nothing on AZ_FOREIGN_NODE.
+// Repo writes the handler must refuse panic (see StubTaskRepo::update,
+// StubPermissionRepo::revoke), so a missing check fails the test even if the
+// response would otherwise look fine.
+
+const AZ_OWNED_NODE: u128 = 0xa2_0001;
+const AZ_EDIT_NODE: u128 = 0xa2_0002;
+const AZ_VIEW_NODE: u128 = 0xa2_0003;
+const AZ_FOREIGN_NODE: u128 = 0xa2_0004;
+
+/// Someone else's standalone task.
+const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
+/// Someone else's task on a node the caller can only view.
+const AZ_VIEW_TASK: u128 = 0xa2_0102;
+/// Someone else's task on a node the caller can edit.
+const AZ_EDIT_TASK: u128 = 0xa2_0103;
+
+const AZ_PERM_CREATOR: u128 = 0xa2_0201;
+const AZ_PERM_GUEST: u128 = 0xa2_0202;
+const AZ_PERM_FOREIGN: u128 = 0xa2_0203;
+
+fn az_node(n: u128) -> NodeId {
+    NodeId(Uuid::from_u128(n))
+}
+
+fn authz_permissions() -> Vec<Permission> {
+    let row = |id: u128, node: u128, subject: &str, role: PermissionRole| Permission {
+        id: PermissionId(Uuid::from_u128(id)),
+        node_id: az_node(node),
+        subject_id: subject.to_string(),
+        role,
+        granted_by: "creator".to_string(),
+        created_at: chrono::Utc::now(),
+    };
+    vec![
+        row(
+            AZ_PERM_CREATOR,
+            AZ_OWNED_NODE,
+            "creator",
+            PermissionRole::Owner,
+        ),
+        row(0xa2_0204, AZ_OWNED_NODE, "test-sub", PermissionRole::Owner),
+        row(
+            AZ_PERM_GUEST,
+            AZ_OWNED_NODE,
+            "guest",
+            PermissionRole::Viewer,
+        ),
+        row(0xa2_0205, AZ_EDIT_NODE, "test-sub", PermissionRole::Editor),
+        row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
+        row(
+            AZ_PERM_FOREIGN,
+            AZ_FOREIGN_NODE,
+            "guest",
+            PermissionRole::Viewer,
+        ),
+    ]
+}
+
+fn authz_task(id: TaskId) -> Task {
+    let (owner, node) = match id.0.as_u128() {
+        AZ_FOREIGN_TASK => ("someone-else", None),
+        AZ_VIEW_TASK => ("someone-else", Some(az_node(AZ_VIEW_NODE))),
+        AZ_EDIT_TASK => ("someone-else", Some(az_node(AZ_EDIT_NODE))),
+        _ => ("test-sub", None),
+    };
+    Task {
+        owner_id: owner.to_string(),
+        node_id: node,
+        ..stub_task(id)
+    }
+}
+
 /// Canned task for the restore-handler tests. Owned by [`fake_claims`]'s sub
 /// so the handler's owner check passes.
 fn stub_task(id: TaskId) -> Task {
@@ -248,11 +343,26 @@ impl TaskRepo for StubTaskRepo {
     async fn retract_occurrence(&self, _: TaskId, _: &str) -> Result<u64, EmberTroveError> {
         unimplemented!()
     }
-    async fn get(&self, _: TaskId) -> Result<Task, EmberTroveError> {
-        unimplemented!()
+    async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        Ok(authz_task(id))
     }
-    async fn update(&self, _: TaskId, _: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
-        unimplemented!()
+    async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
+        // A write the handler should have refused fails the test loudly
+        // instead of quietly returning 200 (see the authz world below).
+        let dest = req.node_id.flatten().map(|n| n.0.as_u128());
+        if matches!(id.0.as_u128(), AZ_FOREIGN_TASK | AZ_VIEW_TASK)
+            || matches!(dest, Some(AZ_VIEW_NODE | AZ_FOREIGN_NODE))
+        {
+            panic!("authorization bypass: update reached the repo for task {id}");
+        }
+        let mut task = authz_task(id);
+        if let Some(node) = req.node_id {
+            task.node_id = node;
+        }
+        if let Some(title) = req.title {
+            task.title = title;
+        }
+        Ok(task)
     }
     async fn delete(&self, _: TaskId) -> Result<(), EmberTroveError> {
         unimplemented!()
@@ -419,20 +529,28 @@ impl PermissionRepo for StubPermissionRepo {
     ) -> Result<Permission, EmberTroveError> {
         unimplemented!()
     }
-    async fn revoke(&self, _: PermissionId, _: NodeId) -> Result<(), EmberTroveError> {
-        unimplemented!()
+    async fn revoke(&self, id: PermissionId, node: NodeId) -> Result<(), EmberTroveError> {
+        match authz_permissions().into_iter().find(|p| p.id == id) {
+            Some(p) if p.node_id == node && p.subject_id != "creator" => Ok(()),
+            _ => panic!("authorization bypass: revoke reached the repo for {id}"),
+        }
     }
-    async fn list(&self, _: NodeId) -> Result<Vec<Permission>, EmberTroveError> {
-        unimplemented!()
+    async fn list(&self, node: NodeId) -> Result<Vec<Permission>, EmberTroveError> {
+        Ok(authz_permissions()
+            .into_iter()
+            .filter(|p| p.node_id == node)
+            .collect())
     }
-    async fn find(&self, _: NodeId, _: &str) -> Result<Option<Permission>, EmberTroveError> {
-        unimplemented!()
+    async fn find(&self, node: NodeId, sub: &str) -> Result<Option<Permission>, EmberTroveError> {
+        Ok(authz_permissions()
+            .into_iter()
+            .find(|p| p.node_id == node && p.subject_id == sub))
     }
     async fn list_all(&self, _: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> {
         unimplemented!()
     }
-    async fn find_by_id(&self, _: PermissionId) -> Result<Option<Permission>, EmberTroveError> {
-        unimplemented!()
+    async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError> {
+        Ok(authz_permissions().into_iter().find(|p| p.id == id))
     }
     async fn update(
         &self,
@@ -723,7 +841,8 @@ impl WebhookRepo for StubWebhookRepo {
         unimplemented!()
     }
     async fn list_active_for_event(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> {
-        unimplemented!()
+        // Handlers fire-and-forget webhook dispatch; nothing is subscribed.
+        Ok(vec![])
     }
     async fn create(&self, _: &str, _: CreateWebhookRequest) -> Result<Webhook, EmberTroveError> {
         unimplemented!()
@@ -1687,4 +1806,132 @@ async fn public_share_route_still_reachable_behind_governor() {
         String::from_utf8_lossy(&body).contains("share token"),
         "expected the share handler's JSON error body, not a bare route miss"
     );
+}
+
+// ── Handler-level authorization (v2.31.1 fixes) ──────────────────────────────
+// The repo-level fixes have Postgres tests; these prove the *handlers* make
+// the right decision before any write (see "Authorization world" above).
+
+fn patch_json(uri: &str, body: serde_json::Value) -> Request<Body> {
+    Request::patch(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn task_patch(task: u128, body: serde_json::Value) -> StatusCode {
+    claims_app("/tasks", crate::routes::tasks::task_router())
+        .oneshot(patch_json(
+            &format!("/tasks/{}", Uuid::from_u128(task)),
+            body,
+        ))
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn update_task_owner_can_edit_their_own_task() {
+    let status = task_patch(0xa2_0199, serde_json::json!({ "title": "renamed" })).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn update_task_cannot_move_a_task_onto_a_node_without_access() {
+    // Regression (v2.31.1): only the task's *current* node was checked, so
+    // an owner could re-parent their task onto any node id.
+    let dest = Uuid::from_u128(AZ_FOREIGN_NODE);
+    let status = task_patch(0xa2_0199, serde_json::json!({ "node_id": dest })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn update_task_cannot_move_a_task_onto_a_view_only_node() {
+    let dest = Uuid::from_u128(AZ_VIEW_NODE);
+    let status = task_patch(0xa2_0199, serde_json::json!({ "node_id": dest })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn update_task_can_move_a_task_onto_an_editable_node() {
+    let dest = Uuid::from_u128(AZ_EDIT_NODE);
+    let status = task_patch(0xa2_0199, serde_json::json!({ "node_id": dest })).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn update_task_refuses_someone_elses_standalone_task() {
+    let status = task_patch(AZ_FOREIGN_TASK, serde_json::json!({ "title": "x" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn update_task_on_a_shared_node_needs_editor_not_viewer() {
+    let viewer = task_patch(AZ_VIEW_TASK, serde_json::json!({ "title": "x" })).await;
+    assert_eq!(viewer, StatusCode::FORBIDDEN);
+    let editor = task_patch(AZ_EDIT_TASK, serde_json::json!({ "title": "x" })).await;
+    assert_eq!(editor, StatusCode::OK);
+}
+
+async fn nested_revoke(node: u128, perm: u128) -> StatusCode {
+    claims_app("/nodes", crate::routes::nodes::router())
+        .oneshot(
+            Request::delete(format!(
+                "/nodes/{}/permissions/{}",
+                Uuid::from_u128(node),
+                Uuid::from_u128(perm)
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn revoke_permission_removes_a_grant_on_the_callers_node() {
+    assert_eq!(
+        nested_revoke(AZ_OWNED_NODE, AZ_PERM_GUEST).await,
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
+async fn revoke_permission_is_scoped_to_the_path_node() {
+    // Regression (v2.31.1, permission revoke IDOR): an owner of one node could
+    // revoke a permission row of any other node by id.
+    assert_eq!(
+        nested_revoke(AZ_OWNED_NODE, AZ_PERM_FOREIGN).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn revoke_permission_cannot_remove_the_canonical_owner() {
+    // A *granted* Owner must not lock the node's creator out.
+    assert_eq!(
+        nested_revoke(AZ_OWNED_NODE, AZ_PERM_CREATOR).await,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn standalone_permission_delete_applies_the_same_checks() {
+    let delete = |perm: u128| async move {
+        claims_app("/permissions", crate::routes::permissions::router())
+            .oneshot(
+                Request::delete(format!("/permissions/{}", Uuid::from_u128(perm)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // Not an owner of the foreign node.
+    assert_eq!(delete(AZ_PERM_FOREIGN).await, StatusCode::FORBIDDEN);
+    // Canonical-owner backstop (the standalone route used to skip it).
+    assert_eq!(delete(AZ_PERM_CREATOR).await, StatusCode::FORBIDDEN);
+    assert_eq!(delete(AZ_PERM_GUEST).await, StatusCode::NO_CONTENT);
 }
