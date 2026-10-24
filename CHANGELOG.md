@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.32.0] - 2026-10-24
+
 ### Added — faster node creation with your default templates (#111)
 - **The full-page editor now applies your default template.** Opening
   `/nodes/new` from a type list used to seed only the built-in scaffold, so
