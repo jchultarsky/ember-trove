@@ -193,3 +193,20 @@ test('inbox: ☀ stays available while editing a task and applies immediately', 
     await request.delete(`/api/tasks/${task.id}`);
   }
 });
+
+test('a double Enter in the add-task form creates the task once', async ({ page, request }) => {
+  const title = `e2e form double ${Date.now()}`;
+  try {
+    await page.goto('/tasks/inbox');
+    const input = page.getByTestId('new-task-form').getByPlaceholder('Task title…');
+    await input.fill(title);
+    await input.press('Enter');
+    await input.press('Enter');
+    await expect(page.locator('[data-task-id]', { hasText: title })).toHaveCount(1);
+    const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
+    expect(inbox.filter((t) => t.title === title)).toHaveLength(1);
+  } finally {
+    const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
+    for (const t of inbox.filter((t) => t.title === title)) await request.delete(`/api/tasks/${t.id}`);
+  }
+});
