@@ -117,8 +117,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                 .map(|entries| build_title_map(&entries))
                                 .unwrap_or_default();
                             let body_html = render_markdown(n.body.as_deref().unwrap_or(""), &title_map);
-                            let node_type = format!("{:?}", n.node_type).to_lowercase();
-                            let status = format!("{:?}", n.status).to_lowercase();
+                            let node_type = n.node_type.as_str().to_string();
+                            let status = n.status.as_str().to_string();
                             let edit_id = n.id;
                             // Ownership check: node owner OR any admin user.
                             let is_owner = if let AuthStatus::Authenticated(ref user) =
@@ -890,7 +890,7 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
                                             let nav = navigate.get_value();
                                             let node_id = node.id;
                                             let title = node.title.clone();
-                                            let node_type = format!("{:?}", node.node_type).to_lowercase();
+                                            let node_type = node.node_type.as_str().to_string();
                                             view! {
                                                 <button
                                                     class="flex items-center gap-2 w-full text-left py-1.5 px-2 rounded

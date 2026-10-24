@@ -789,8 +789,8 @@ async fn export_node(
         }
         _ => {
             // Build YAML-style front-matter block then append body.
-            let node_type = format!("{:?}", node.node_type).to_lowercase();
-            let status = format!("{:?}", node.status).to_lowercase();
+            let node_type = node.node_type.as_str().to_string();
+            let status = node.status.as_str().to_string();
             let tag_names: Vec<String> = node.tags.iter().map(|t| t.name.clone()).collect();
             let tags_yaml = if tag_names.is_empty() {
                 "[]".to_string()

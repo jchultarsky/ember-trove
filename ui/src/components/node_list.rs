@@ -525,7 +525,7 @@ pub fn NodeList() -> impl IntoView {
                                     let filtered: Vec<Node> = if let Some(ref nt) = type_f {
                                         list.into_iter()
                                             .filter(|n| {
-                                                format!("{:?}", n.node_type).to_lowercase() == *nt
+                                                n.node_type.as_str() == nt.as_str()
                                             })
                                             .collect()
                                     } else {
@@ -623,8 +623,8 @@ fn NodeCards(
         <ul class="divide-y divide-stone-100 dark:divide-stone-800">
             {nodes.into_iter().map(|node| {
                 let id      = node.id;
-                let nt      = format!("{:?}", node.node_type).to_lowercase();
-                let st      = format!("{:?}", node.status).to_lowercase();
+                let nt      = node.node_type.as_str().to_string();
+                let st      = node.status.as_str().to_string();
                 let updated = node.updated_at.format("%b %d, %Y").to_string();
                 let tags    = node.tags.clone();
                 // Snapshot of currently-applied tags for this card (used in picker state).

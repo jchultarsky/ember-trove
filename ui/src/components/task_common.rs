@@ -57,20 +57,9 @@ pub fn status_label(s: &TaskStatus) -> &'static str {
 
 // ── Priority ────────────────────────────────────────────────────────────────
 
+/// Parse a priority from a form value; anything unknown is Medium.
 pub fn parse_priority(s: &str) -> TaskPriority {
-    match s {
-        "high" => TaskPriority::High,
-        "low" => TaskPriority::Low,
-        _ => TaskPriority::Medium,
-    }
-}
-
-pub fn priority_value(p: &TaskPriority) -> &'static str {
-    match p {
-        TaskPriority::High => "high",
-        TaskPriority::Medium => "medium",
-        TaskPriority::Low => "low",
-    }
+    TaskPriority::parse(s).unwrap_or(TaskPriority::Medium)
 }
 
 /// Raw hex colour string for a priority level (e.g. `"#dc2626"`).
@@ -84,27 +73,6 @@ pub fn priority_color_hex(p: &TaskPriority) -> &'static str {
 
 // ── Recurrence ──────────────────────────────────────────────────────────────
 
-pub fn parse_recurrence_opt(s: &str) -> Option<RecurrenceRule> {
-    match s {
-        "daily" => Some(RecurrenceRule::Daily),
-        "weekly" => Some(RecurrenceRule::Weekly),
-        "biweekly" => Some(RecurrenceRule::Biweekly),
-        "monthly" => Some(RecurrenceRule::Monthly),
-        "yearly" => Some(RecurrenceRule::Yearly),
-        _ => None,
-    }
-}
-
-pub fn recurrence_value(r: &RecurrenceRule) -> &'static str {
-    match r {
-        RecurrenceRule::Daily => "daily",
-        RecurrenceRule::Weekly => "weekly",
-        RecurrenceRule::Biweekly => "biweekly",
-        RecurrenceRule::Monthly => "monthly",
-        RecurrenceRule::Yearly => "yearly",
-    }
-}
-
 pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
     match r {
         RecurrenceRule::Daily => "Daily",
@@ -116,19 +84,6 @@ pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
 }
 
 // ── Node type ───────────────────────────────────────────────────────────────
-
-/// Material Symbols icon name for a node type string (used in the inbox
-/// node-picker and elsewhere).
-pub fn node_type_icon(node_type: &str) -> &'static str {
-    match node_type {
-        "article" => "description",
-        "project" => "rocket_launch",
-        "area" => "category",
-        "resource" => "bookmarks",
-        "reference" => "menu_book",
-        _ => "article",
-    }
-}
 
 // ── My Day predicate ────────────────────────────────────────────────────────
 

@@ -13,6 +13,12 @@ pub enum PermissionRole {
     Viewer,
 }
 
+wire_enum!(PermissionRole {
+    Owner => "owner",
+    Editor => "editor",
+    Viewer => "viewer",
+});
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Permission {
     pub id: PermissionId,

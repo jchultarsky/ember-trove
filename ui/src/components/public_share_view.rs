@@ -33,7 +33,7 @@ pub fn PublicShareView(token: Uuid) -> impl IntoView {
                     {move || node.get().map(|result| match result {
                         Ok(n) => {
                             let body_html = render_markdown_plain(n.body.as_deref().unwrap_or(""));
-                            let node_type = format!("{:?}", n.node_type).to_lowercase();
+                            let node_type = n.node_type.as_str().to_string();
                             view! {
                                 <article>
                                     <h1 class="text-2xl font-bold text-stone-900 dark:text-stone-100 mb-2">

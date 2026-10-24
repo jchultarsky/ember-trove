@@ -27,14 +27,6 @@ fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
     entries.iter().map(|e| (e.title.clone(), e.id)).collect()
 }
 
-fn parse_status(s: &str) -> NodeStatus {
-    match s {
-        "published" => NodeStatus::Published,
-        "archived" => NodeStatus::Archived,
-        _ => NodeStatus::Draft,
-    }
-}
-
 /// Idle time after the last edit before an autosave PATCH (edit mode) or a
 /// localStorage draft write (create mode) fires. Long enough not to interrupt
 /// a wiki-link autocomplete interaction mid-typing; short enough to keep the
@@ -551,11 +543,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     let snap: Snapshot = (
                         n.title.clone(),
                         n.body.clone().unwrap_or_default(),
-                        format!("{:?}", n.status).to_lowercase(),
+                        n.status.as_str().to_string(),
                     );
                     title.set(snap.0.clone());
                     body.set(snap.1.clone());
-                    node_type.set(format!("{:?}", n.node_type).to_lowercase());
+                    node_type.set(n.node_type.as_str().to_string());
                     status.set(snap.2.clone());
                     baseline.set(Some(snap));
                     fetching.set(false);
@@ -652,7 +644,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 title: Some(snap.0.clone()),
                 body: Some(snap.1.clone()),
                 metadata: None,
-                status: Some(parse_status(&snap.2)),
+                status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
             };
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
@@ -713,7 +705,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 title: Some(snap.0),
                 body: Some(snap.1),
                 metadata: None,
-                status: Some(parse_status(&snap.2)),
+                status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
             };
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
@@ -793,7 +785,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     title: Some(snap.0.clone()),
                     body: Some(snap.1.clone()),
                     metadata: None,
-                    status: Some(parse_status(&snap.2)),
+                    status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
                 };
                 crate::api::update_node(id, &req).await
             } else {
@@ -809,7 +801,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     node_type: nt,
                     body: Some(snap.1.clone()),
                     metadata: serde_json::Value::Object(serde_json::Map::new()),
-                    status: Some(parse_status(&snap.2)),
+                    status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
                     template_id: template_id_for_create.get_untracked(),
                 };
                 crate::api::create_node(&req).await

@@ -151,12 +151,9 @@ impl PgTaskRepo {
     ) -> Result<Task, EmberTroveError> {
         // node_id from path param takes precedence; fall back to body field.
         let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
-        let status = req.status.as_ref().map_or("open", |s| status_str(s));
-        let priority = req.priority.as_ref().map_or("medium", |p| priority_str(p));
-        let recurrence = req
-            .recurrence
-            .as_ref()
-            .map(|r| recurrence_str(r).to_string());
+        let status = req.status.as_ref().map_or("open", |s| s.as_str());
+        let priority = req.priority.as_ref().map_or("medium", |p| p.as_str());
+        let recurrence = req.recurrence.as_ref().map(|r| r.as_str().to_string());
 
         let row = sqlx::query_as::<_, TaskRow>(&format!(
             r#"
@@ -201,66 +198,15 @@ struct TaskRow {
 }
 
 fn parse_status(s: &str) -> Result<TaskStatus, EmberTroveError> {
-    match s {
-        "open" => Ok(TaskStatus::Open),
-        "in_progress" => Ok(TaskStatus::InProgress),
-        "done" => Ok(TaskStatus::Done),
-        "cancelled" => Ok(TaskStatus::Cancelled),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown task_status: {other}"
-        ))),
-    }
+    super::parse_wire(s, "task_status", TaskStatus::parse)
 }
 
 fn parse_priority(s: &str) -> Result<TaskPriority, EmberTroveError> {
-    match s {
-        "low" => Ok(TaskPriority::Low),
-        "medium" => Ok(TaskPriority::Medium),
-        "high" => Ok(TaskPriority::High),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown task_priority: {other}"
-        ))),
-    }
+    super::parse_wire(s, "task_priority", TaskPriority::parse)
 }
 
 pub fn parse_recurrence(s: &str) -> Result<RecurrenceRule, EmberTroveError> {
-    match s {
-        "daily" => Ok(RecurrenceRule::Daily),
-        "weekly" => Ok(RecurrenceRule::Weekly),
-        "biweekly" => Ok(RecurrenceRule::Biweekly),
-        "monthly" => Ok(RecurrenceRule::Monthly),
-        "yearly" => Ok(RecurrenceRule::Yearly),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown recurrence: {other}"
-        ))),
-    }
-}
-
-fn status_str(s: &TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Open => "open",
-        TaskStatus::InProgress => "in_progress",
-        TaskStatus::Done => "done",
-        TaskStatus::Cancelled => "cancelled",
-    }
-}
-
-fn priority_str(p: &TaskPriority) -> &'static str {
-    match p {
-        TaskPriority::Low => "low",
-        TaskPriority::Medium => "medium",
-        TaskPriority::High => "high",
-    }
-}
-
-pub fn recurrence_str(r: &RecurrenceRule) -> &'static str {
-    match r {
-        RecurrenceRule::Daily => "daily",
-        RecurrenceRule::Weekly => "weekly",
-        RecurrenceRule::Biweekly => "biweekly",
-        RecurrenceRule::Monthly => "monthly",
-        RecurrenceRule::Yearly => "yearly",
-    }
+    super::parse_wire(s, "recurrence", RecurrenceRule::parse)
 }
 
 impl TaskRow {
@@ -411,13 +357,13 @@ impl TaskRepo for PgTaskRepo {
     }
 
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
-        let status_s = req.status.as_ref().map(|s| status_str(s).to_string());
-        let priority_s = req.priority.as_ref().map(|p| priority_str(p).to_string());
+        let status_s = req.status.as_ref().map(|s| s.as_str().to_string());
+        let priority_s = req.priority.as_ref().map(|p| p.as_str().to_string());
         let recurrence_update = req.recurrence.is_some();
         let recurrence_val = req
             .recurrence
             .and_then(|r| r)
-            .map(|r| recurrence_str(&r).to_string());
+            .map(|r| r.as_str().to_string());
         let node_id_update = req.node_id.is_some();
         let node_id_val = req.node_id.and_then(|n| n).map(|n| n.0);
 

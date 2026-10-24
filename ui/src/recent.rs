@@ -45,7 +45,7 @@ pub fn push_recent(id: Uuid, title: String, node_type: &str) {
         return;
     };
 
-    let icon = type_to_icon(node_type).to_string();
+    let icon = crate::components::node_meta::type_icon(node_type).to_string();
     let entry = RecentEntry { id, title, icon };
 
     let mut entries = read_recent();
@@ -55,16 +55,5 @@ pub fn push_recent(id: Uuid, title: String, node_type: &str) {
 
     if let Ok(json) = serde_json::to_string(&entries) {
         let _ = storage.set_item(LS_KEY, &json);
-    }
-}
-
-fn type_to_icon(node_type: &str) -> &'static str {
-    match node_type {
-        "article" => "description",
-        "project" => "rocket_launch",
-        "area" => "category",
-        "resource" => "bookmarks",
-        "reference" => "menu_book",
-        _ => "note",
     }
 }

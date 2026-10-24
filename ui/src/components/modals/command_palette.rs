@@ -323,7 +323,7 @@ fn ranked_actions(
     let open = |r: &SearchResult| PaletteAction::OpenNode {
         id: r.node_id.0,
         title: r.title.clone(),
-        icon: type_to_icon(&r.node_type),
+        icon: crate::components::node_meta::type_icon(&r.node_type).to_string(),
     };
     let (title_hits, body_hits): (Vec<&SearchResult>, Vec<&SearchResult>) = results
         .iter()
@@ -784,20 +784,4 @@ pub fn CommandPalette(
             </Portal>
         </Show>
     }
-}
-
-/// Map a node type string to a Material Symbols icon name.  Keeps the
-/// palette and the recent-list visually consistent (the recent helper
-/// stores the icon name directly so we don't have to do this mapping
-/// twice for that section).
-fn type_to_icon(node_type: &str) -> String {
-    match node_type {
-        "article" => "description",
-        "project" => "rocket_launch",
-        "area" => "category",
-        "resource" => "bookmarks",
-        "reference" => "menu_book",
-        _ => "note",
-    }
-    .to_string()
 }

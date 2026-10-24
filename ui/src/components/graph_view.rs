@@ -1204,8 +1204,8 @@ pub fn GraphView() -> impl IntoView {
                         // Data for the hover summary card.
                         let hover_info = NodeHoverInfo {
                             title: node.title.clone(),
-                            node_type: format!("{:?}", node.node_type).to_lowercase(),
-                            status: format!("{:?}", node.status).to_lowercase(),
+                            node_type: node.node_type.as_str().to_string(),
+                            status: node.status.as_str().to_string(),
                             body_preview: node.body.as_deref().and_then(node_body_preview),
                             node_id: node.id.0,
                         };
@@ -1216,7 +1216,7 @@ pub fn GraphView() -> impl IntoView {
                         let is_pinned = node.pinned;
                         // Material Symbols ligature for the node-type icon.
                         let icon_glyph: &'static str =
-                            type_icon(&format!("{:?}", node_type).to_lowercase());
+                            type_icon(node_type.as_str());
                         // Collect (TagId, colour) pairs (up to 5) for the dot overlay.
                         let tag_colors: Vec<(TagId, String)> = node
                             .tags

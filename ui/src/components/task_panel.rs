@@ -13,7 +13,7 @@ use crate::components::task_actions::{
     RowSignals, TaskCtx, delete_with_undo, toggle_done, toggle_my_day,
 };
 use crate::components::task_common::{
-    is_in_my_day, parse_priority, priority_value, sort_tasks_by_order, status_done, status_label,
+    is_in_my_day, parse_priority, sort_tasks_by_order, status_done, status_label,
 };
 use crate::components::task_row_scaffold::{
     MyDayButton, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view,
@@ -292,7 +292,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let editing_title = RwSignal::new(false);
     let edit_title = RwSignal::new(task.title.clone());
     let orig_title = RwSignal::new(task.title.clone());
-    let edit_priority = RwSignal::new(priority_value(&priority).to_string());
+    let edit_priority = RwSignal::new(priority.as_str().to_string());
     let edit_due = RwSignal::new(
         due.map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default(),

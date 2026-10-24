@@ -12,36 +12,6 @@ use crate::{
 };
 use leptos_router::hooks::use_navigate;
 
-fn node_type_label(nt: &NodeType) -> &'static str {
-    match nt {
-        NodeType::Article => "Article",
-        NodeType::Project => "Project",
-        NodeType::Area => "Area",
-        NodeType::Resource => "Resource",
-        NodeType::Reference => "Reference",
-    }
-}
-
-fn node_type_str(nt: &NodeType) -> &'static str {
-    match nt {
-        NodeType::Article => "article",
-        NodeType::Project => "project",
-        NodeType::Area => "area",
-        NodeType::Resource => "resource",
-        NodeType::Reference => "reference",
-    }
-}
-
-fn node_type_icon(nt: &NodeType) -> &'static str {
-    match nt {
-        NodeType::Article => "article",
-        NodeType::Project => "rocket_launch",
-        NodeType::Area => "category",
-        NodeType::Resource => "inventory_2",
-        NodeType::Reference => "link",
-    }
-}
-
 fn node_type_color(nt: &NodeType) -> &'static str {
     match nt {
         NodeType::Article => "text-amber-600 dark:text-amber-400",
@@ -49,16 +19,6 @@ fn node_type_color(nt: &NodeType) -> &'static str {
         NodeType::Area => "text-green-600 dark:text-green-400",
         NodeType::Resource => "text-purple-600 dark:text-purple-400",
         NodeType::Reference => "text-red-600 dark:text-red-400",
-    }
-}
-
-fn parse_node_type(s: &str) -> NodeType {
-    match s {
-        "project" => NodeType::Project,
-        "area" => NodeType::Area,
-        "resource" => NodeType::Resource,
-        "reference" => NodeType::Reference,
-        _ => NodeType::Article,
     }
 }
 
@@ -141,7 +101,7 @@ pub fn TemplatesView() -> impl IntoView {
     let start_edit = move |t: NodeTemplate| {
         form_name.set(t.name.clone());
         form_desc.set(t.description.clone().unwrap_or_default());
-        form_type.set(node_type_str(&t.node_type).to_string());
+        form_type.set(t.node_type.as_str().to_string());
         form_body.set(t.body.clone());
         editing_id.set(Some(t.id.0.to_string()));
     };
@@ -160,7 +120,7 @@ pub fn TemplatesView() -> impl IntoView {
             let d = form_desc.get_untracked();
             if d.is_empty() { None } else { Some(d) }
         };
-        let nt = parse_node_type(&form_type.get_untracked());
+        let nt = NodeType::parse(&form_type.get_untracked()).unwrap_or(NodeType::Article);
         let body = form_body.get_untracked();
         let id_str = editing_id.get_untracked().unwrap_or_default();
 
@@ -212,7 +172,7 @@ pub fn TemplatesView() -> impl IntoView {
     };
 
     let on_use = move |t: NodeTemplate| {
-        let type_str = node_type_str(&t.node_type).to_string();
+        let type_str = t.node_type.as_str().to_string();
         let body = t.body.clone();
         let tid = t.id;
         prefill.set(Some(TemplatePrefill {
@@ -257,8 +217,8 @@ pub fn TemplatesView() -> impl IntoView {
                 </button>
                 {ALL_TYPES.iter().map(|nt| {
                     let nt = nt.clone();
-                    let label = node_type_label(&nt);
-                    let icon = node_type_icon(&nt);
+                    let label = crate::components::node_meta::type_label(nt.as_str());
+                    let icon = crate::components::node_meta::type_icon(nt.as_str());
                     let nt_click = nt.clone();
                     let nt_cmp = nt.clone();
                     view! {
@@ -409,8 +369,8 @@ pub fn TemplatesView() -> impl IntoView {
                                 let t_use       = t.clone();
                                 let is_default  = t.is_default;
                                 let tid         = t.id.0;
-                                let type_label  = node_type_label(&t.node_type);
-                                let icon        = node_type_icon(&t.node_type);
+                                let type_label  = crate::components::node_meta::type_label(t.node_type.as_str());
+                                let icon        = crate::components::node_meta::type_icon(t.node_type.as_str());
                                 let icon_color  = node_type_color(&t.node_type);
                                 let name        = t.name.clone();
                                 let desc        = t.description.clone();

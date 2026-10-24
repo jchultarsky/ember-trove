@@ -43,9 +43,7 @@ use leptos_router::hooks::use_navigate;
 use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_actions::{RowSignals, TaskCtx, delete_with_undo, toggle_done};
-use crate::components::task_common::{
-    parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
-};
+use crate::components::task_common::{parse_priority, status_done};
 use crate::components::task_row_scaffold::{
     TITLE_CLASS, TaskCheckbox, TaskRowBody, due_badge_view, priority_dot_view,
 };
@@ -136,7 +134,7 @@ pub fn KanbanTaskRow(
     // Inline edit form state.  Mirrors the original MyDayTaskRow layout
     // minus the focus_date field (focus is binary, owned by zone-swap).
     let edit_title = RwSignal::new(task.title.clone());
-    let edit_priority = RwSignal::new(priority_value(&priority).to_string());
+    let edit_priority = RwSignal::new(priority.as_str().to_string());
     let edit_due = RwSignal::new(
         due.map(|d| d.format("%Y-%m-%d").to_string())
             .unwrap_or_default(),
@@ -144,7 +142,7 @@ pub fn KanbanTaskRow(
     let edit_recurrence = RwSignal::new(
         task.recurrence
             .as_ref()
-            .map(|r| recurrence_value(r).to_string())
+            .map(|r| r.as_str().to_string())
             .unwrap_or_default(),
     );
 
@@ -228,7 +226,7 @@ pub fn KanbanTaskRow(
             return;
         }
         let new_priority = parse_priority(&edit_priority.get_untracked());
-        let new_recurrence = parse_recurrence_opt(&edit_recurrence.get_untracked());
+        let new_recurrence = common::task::RecurrenceRule::parse(&edit_recurrence.get_untracked());
         let new_due: Option<Option<NaiveDate>> =
             Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         let req = UpdateTaskRequest {
