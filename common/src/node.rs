@@ -16,6 +16,35 @@ pub enum NodeType {
     Reference,
 }
 
+impl NodeType {
+    /// Every type, in display order.
+    pub const ALL: [NodeType; 5] = [
+        NodeType::Article,
+        NodeType::Project,
+        NodeType::Area,
+        NodeType::Resource,
+        NodeType::Reference,
+    ];
+
+    /// The canonical wire string — identical to serde's `snake_case` form
+    /// (pinned by a test), e.g. `"project"`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NodeType::Article => "article",
+            NodeType::Project => "project",
+            NodeType::Area => "area",
+            NodeType::Resource => "resource",
+            NodeType::Reference => "reference",
+        }
+    }
+
+    /// Parse the wire string; `None` for anything unknown (callers choose
+    /// their own fallback instead of silently becoming an Article).
+    pub fn parse(s: &str) -> Option<NodeType> {
+        NodeType::ALL.into_iter().find(|t| t.as_str() == s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeStatus {
@@ -114,4 +143,18 @@ pub struct NodeListResponse {
     pub page: u32,
     pub per_page: u32,
     pub has_more: bool,
+}
+
+#[cfg(test)]
+mod node_type_tests {
+    use super::*;
+
+    #[test]
+    fn as_str_matches_serde_and_round_trips() {
+        for t in NodeType::ALL {
+            assert_eq!(serde_json::to_value(&t).unwrap(), t.as_str());
+            assert_eq!(NodeType::parse(t.as_str()), Some(t.clone()));
+        }
+        assert_eq!(NodeType::parse("note"), None);
+    }
 }

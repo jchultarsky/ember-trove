@@ -118,10 +118,22 @@ pub fn TemplatesView() -> impl IntoView {
     let form_type = RwSignal::new("article".to_string());
     let form_body = RwSignal::new(String::new());
 
+    // A new template's type comes from context (#111): the gallery's type
+    // filter, else the app's node-list type filter, else Article.
+    let list_type_filter = use_context::<RwSignal<Option<String>>>();
     let start_create = move |_| {
         form_name.set(String::new());
         form_desc.set(String::new());
-        form_type.set("article".to_string());
+        let context_type = type_filter
+            .get_untracked()
+            .map(|t| t.as_str().to_string())
+            .or_else(|| {
+                list_type_filter
+                    .and_then(|f| f.get_untracked())
+                    .filter(|t| NodeType::parse(t).is_some())
+            })
+            .unwrap_or_else(|| "article".to_string());
+        form_type.set(context_type);
         form_body.set(String::new());
         editing_id.set(Some("new".to_string()));
     };
