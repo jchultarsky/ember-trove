@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Performance — search builds highlights only for the page it returns
+- Full-text search computed `ts_headline` (which re-parses the whole text)
+  for **every** matching node, note and task before de-duplicating and
+  paging. Candidates now carry only a rank; the query de-duplicates, orders
+  and pages first, then highlights just the returned rows. Measured on 3,000
+  matching nodes with long bodies: **1,367 ms → 61 ms** for a 20-row page,
+  same output.
+- The separate COUNT query, which re-ran the whole match (in fuzzy mode,
+  every `similarity()`/`ILIKE` body scan), is replaced by `COUNT(*) OVER ()`
+  on the paged rows. It survives only as a fallback for a page past the end.
+- De-duplication now breaks rank ties deterministically.
+
 ### Fixed — bugs found in the code review
 - **Admin metrics (`/api/metrics`) failed on every call:** it counted tables
   named `notes` / `tasks`, which don't exist.
