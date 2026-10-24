@@ -3,7 +3,22 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-23)
+## Current state (2026-10-24)
+
+- **v2.31.0 shipped: #98 complete + search results (#105, #106, #109,
+  #110).** Due dates read back in words with a past-date warning (one
+  `DueDateField` for all five inputs). Export names `{slug}-{updated_at}`.
+  The header search clears off /search. "Saved · <time>" (formatted without
+  `eval`). Built-in templates carry no prose. Deletes and the row ☀ go
+  through `task_actions` (`delete_with_undo`, `toggle_my_day`,
+  `MyDayButton`). Search (#107, #108 from jchultarsky101): full titles via
+  `HighlightAll` + the `title_highlight_is_full` guard, `<mark>` highlights
+  finally render (the sanitizer used to allow only `<b>`), no slug, a
+  type/updated/"matched in" meta line, client-side marks for fuzzy and
+  note/task results, match-less snippets hidden, a "Recently updated"
+  browse label. **Follow-ups:** `format_timestamp` still formats via
+  `js_sys::eval` (fine under prod CSP, ISO fallback locally); Dependabot
+  #100 (AWS schema skew) and #101 (tower-http dup) are still deferred.
 
 - **v2.30.0 shipped: #98 UI feedback, items 2 + 7 (PRs #103, #104).**
   Completing a task offers Undo everywhere. Carried-over tasks stay in My

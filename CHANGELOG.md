@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.31.0] - 2026-10-24
+
 ### Fixed — search results show full titles (#107)
 - **Result headings are always the node's full title.** The title highlight
   came from `ts_headline` with fragment limits, so "Buy a gift for Sam"
