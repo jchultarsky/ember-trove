@@ -42,15 +42,14 @@ use leptos_router::hooks::use_navigate;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
-use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
+use crate::components::task_actions::{RowSignals, TaskCtx, delete_with_undo, toggle_done};
 use crate::components::task_common::{
     parse_priority, parse_recurrence_opt, priority_value, recurrence_value, status_done,
-    undo_restore_task,
 };
 use crate::components::task_row_scaffold::{
     TITLE_CLASS, TaskCheckbox, TaskRowBody, due_badge_view, priority_dot_view,
 };
-use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
 /// Which zone of the Kanban this row currently lives in.  Determines which
 /// zone-swap button (× Remove vs ☀ Add) is shown and the colour of the
@@ -193,7 +192,7 @@ pub fn KanbanTaskRow(
                 status: status_sig,
                 busy,
             }),
-            ToggleCtx {
+            TaskCtx {
                 today,
                 refresh,
                 toast_state,
@@ -204,24 +203,16 @@ pub fn KanbanTaskRow(
 
     let on_delete = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        if busy.get_untracked() {
-            return;
-        }
-        busy.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::delete_task(task_id).await;
-            busy.set(false);
-            match result {
-                Ok(_) => {
-                    refresh.update(|n| *n += 1);
-                    push_undo_toast(
-                        "Task deleted",
-                        undo_restore_task(task_id, refresh, toast_state),
-                    );
-                }
-                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
-            }
-        });
+        delete_with_undo(
+            task_id,
+            Some(busy),
+            TaskCtx {
+                today,
+                refresh,
+                toast_state,
+            },
+            || {},
+        );
     };
 
     let on_pencil = move |ev: web_sys::MouseEvent| {

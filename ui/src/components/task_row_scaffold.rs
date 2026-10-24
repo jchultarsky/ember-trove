@@ -55,6 +55,51 @@ pub fn TaskCheckbox(
     }
 }
 
+/// The row ☀ action (Add to / Remove from My Day): filled amber when the task
+/// is in My Day. Wire `on_toggle` to
+/// [`crate::components::task_actions::toggle_my_day`].
+#[component]
+pub fn MyDayButton(
+    #[prop(into)] active: Signal<bool>,
+    #[prop(into)] on_toggle: Callback<()>,
+) -> impl IntoView {
+    let label = move || {
+        if active.get() {
+            "Remove from My Day"
+        } else {
+            "Add to My Day"
+        }
+    };
+    view! {
+        <button
+            type="button"
+            class=move || if active.get() {
+                "p-1.5 rounded text-amber-500 bg-amber-50 dark:text-amber-400 \
+                 dark:bg-amber-900/30 hover:text-amber-600 dark:hover:text-amber-300 \
+                 transition-colors cursor-pointer".to_string()
+            } else {
+                action_btn_class("hover:text-amber-500 dark:hover:text-amber-400")
+            }
+            title=label
+            aria-label=label
+            aria-pressed=move || if active.get() { "true" } else { "false" }
+            on:click=move |ev: web_sys::MouseEvent| {
+                ev.stop_propagation();
+                on_toggle.run(());
+            }
+        >
+            <span
+                class="material-symbols-outlined"
+                style=move || if active.get() {
+                    "font-size:16px; font-variation-settings: 'FILL' 1;"
+                } else {
+                    "font-size:16px;"
+                }
+            >"wb_sunny"</span>
+        </button>
+    }
+}
+
 /// Title classes: wraps below `sm` (phone real estate), truncates at sm+
 /// (list density).
 pub const TITLE_CLASS: &str =
