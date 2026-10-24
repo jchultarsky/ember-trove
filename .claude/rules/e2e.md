@@ -85,6 +85,11 @@ CI job is too slow a feedback loop for selector work.
   panic poisons event dispatch silently otherwise (the v2.21.1 lesson; see
   `.claude/ERRORS.md`). Shared helpers (`createNode`, `localISO`) live there
   too; add new cross-spec helpers there instead of copying them.
+- **The fixtures also fail any test on a CSP violation** (2026-10-24,
+  `cspViolations`; the stack's CSP has no `'unsafe-eval'`). To probe the
+  guard, use a string `setTimeout` inside `page.evaluate`. A bare `eval()`
+  there, or in a `<script>` it injects, runs with DevTools privileges and
+  is NOT blocked, so it proves nothing.
 - **Don't `goto` again before the app has rendered** (2026-10-24): it aborts
   the WASM bundle download, which the guard reports as `TypeError: Failed to
   fetch` (empty stack; the trace shows the `_bg.wasm` request `ERR_ABORTED`).
