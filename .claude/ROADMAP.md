@@ -14,10 +14,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
   through `task_actions::toggle_done`. New-task form has an Add to My Day
   toggle. ctutils RUSTSEC-2026-0385 fixed (0.4.5). utoipa 6 (#102).
   Deferred: the AWS SDK group bump (#100, upstream schema skew + days-old
-  crypto) and tower-http 0.7 (#101). **#98 next:** item 1 is on
-  `feature/jc/due-date-echo` (`DueDateField`); then item 4 (clear header search when leaving /search),
-  item 3 (slug+timestamp export name), item 6 (saved-at time), item 5
-  (built-in template prose → empty structure). **Follow-up refactor:** move
+  crypto) and tower-http 0.7 (#101). **#98:** item 1 (`DueDateField`) and items 3/4/5/6
+  (export name, header search clear, saved-at time, template prose) are in
+  PRs #105 and the ui-polish PR. **Follow-up refactor:** move
   delete-with-undo (4 copies) and the My Day toggle (2 copies) into
   `task_actions`.
 

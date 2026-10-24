@@ -17,6 +17,21 @@ pub fn local_today() -> chrono::NaiveDate {
     .unwrap_or_else(|| chrono::Utc::now().date_naive())
 }
 
+/// The current local time as a short clock label ("4:02 PM" / "16:02",
+/// per the browser locale) via `Intl.DateTimeFormat`.
+///
+/// Uses `Date.prototype.toLocaleTimeString` through `js_sys` — no `eval`, so
+/// it works under a CSP without `'unsafe-eval'` (the e2e/local nginx CSP;
+/// an `eval` here silently returned nothing and rendered "Saved ·").
+pub fn local_time_now() -> String {
+    let opts = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&opts, &"hour".into(), &"numeric".into());
+    let _ = js_sys::Reflect::set(&opts, &"minute".into(), &"2-digit".into());
+    js_sys::Date::new_0()
+        .to_locale_time_string_with_options("default", &opts)
+        .into()
+}
+
 /// Format a UTC timestamp as a concise local date-time string using JS's
 /// `Intl.DateTimeFormat` (avoids a full `chrono-tz` / `time` WASM dependency).
 ///
