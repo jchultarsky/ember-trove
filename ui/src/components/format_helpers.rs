@@ -17,6 +17,17 @@ pub fn local_today() -> chrono::NaiveDate {
     .unwrap_or_else(|| chrono::Utc::now().date_naive())
 }
 
+/// The current local time as a short clock label ("4:02 PM" / "16:02",
+/// per the browser locale) via `Intl.DateTimeFormat`.
+pub fn local_time_now() -> String {
+    js_sys::eval(
+        "new Intl.DateTimeFormat(undefined, {hour:'numeric',minute:'2-digit'}).format(new Date())",
+    )
+    .ok()
+    .and_then(|v| v.as_string())
+    .unwrap_or_default()
+}
+
 /// Format a UTC timestamp as a concise local date-time string using JS's
 /// `Intl.DateTimeFormat` (avoids a full `chrono-tz` / `time` WASM dependency).
 ///

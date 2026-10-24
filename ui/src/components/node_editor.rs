@@ -55,16 +55,24 @@ enum SaveState {
 
 impl SaveState {
     /// Indicator label. Create-mode wording must not imply the node exists
-    /// on the server — only a local draft does.
-    fn label(self, edit_mode: bool) -> &'static str {
-        match self {
-            SaveState::Idle => "",
-            SaveState::Dirty => "Unsaved changes\u{2026}",
-            SaveState::Saving => "Saving\u{2026}",
-            SaveState::Saved if edit_mode => "Saved",
-            SaveState::Saved => "Draft kept locally",
-            SaveState::Failed => "Couldn\u{2019}t save \u{2014} edits kept here",
+    /// on the server — only a local draft does. `saved_at` (local time of the
+    /// last server save) turns "Saved" into "Saved · 4:02 PM", so a glance
+    /// answers "did my last keystrokes land?" (#98 item 6).
+    fn label(self, edit_mode: bool, saved_at: Option<&str>) -> String {
+        match (self, saved_at) {
+            (SaveState::Idle, _) => String::new(),
+            (SaveState::Dirty, _) => "Unsaved changes\u{2026}".into(),
+            (SaveState::Saving, _) => "Saving\u{2026}".into(),
+            (SaveState::Saved, Some(at)) if edit_mode => format!("Saved \u{b7} {at}"),
+            (SaveState::Saved, None) if edit_mode => "Saved".into(),
+            (SaveState::Saved, _) => "Draft kept locally".into(),
+            (SaveState::Failed, _) => "Couldn\u{2019}t save \u{2014} edits kept here".into(),
         }
+    }
+
+    /// Pending states read a shade stronger than the settled "Saved".
+    fn is_pending(self) -> bool {
+        matches!(self, SaveState::Dirty | SaveState::Saving)
     }
 }
 
@@ -180,9 +188,26 @@ mod tests {
     fn save_state_saved_label_distinguishes_modes() {
         // Create mode persists only a local draft — the label must not claim
         // the node was saved to the server.
-        assert_eq!(SaveState::Saved.label(true), "Saved");
-        assert_eq!(SaveState::Saved.label(false), "Draft kept locally");
-        assert_eq!(SaveState::Idle.label(true), "");
+        assert_eq!(SaveState::Saved.label(true, None), "Saved");
+        assert_eq!(SaveState::Saved.label(false, None), "Draft kept locally");
+        assert_eq!(SaveState::Idle.label(true, None), "");
+    }
+
+    #[test]
+    fn save_state_saved_label_carries_the_save_time() {
+        assert_eq!(
+            SaveState::Saved.label(true, Some("4:02 PM")),
+            "Saved \u{b7} 4:02 PM"
+        );
+        // A local draft never claims a server save time.
+        assert_eq!(
+            SaveState::Saved.label(false, Some("4:02 PM")),
+            "Draft kept locally"
+        );
+        assert_eq!(
+            SaveState::Dirty.label(true, Some("4:02 PM")),
+            "Unsaved changes\u{2026}"
+        );
     }
 }
 
@@ -280,6 +305,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // where changes go to a localStorage draft instead.
     let baseline = RwSignal::new(Option::<Snapshot>::None);
     let save_state = RwSignal::new(SaveState::Idle);
+    // Local time of the last successful server save (edit mode).
+    let saved_at: RwSignal<Option<String>> = RwSignal::new(None);
     // Debounce version counter (see .claude/patterns/reactive-effect-debounce.rs).
     let autosave_v = RwSignal::new(0u32);
     // Submit trigger (see .claude/patterns/submit-trigger.rs): the debounce
@@ -519,6 +546,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
                     baseline.set(Some(snap));
+                    saved_at.set(Some(crate::components::format_helpers::local_time_now()));
                     save_state.set(SaveState::Saved);
                 }
                 Err(_) => {
@@ -685,6 +713,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     // Mark the saved snapshot as the baseline so the unmount
                     // flush (triggered by the navigation below) is a no-op.
                     baseline.set(Some(snap));
+                    saved_at.set(Some(crate::components::format_helpers::local_time_now()));
                     save_state.set(SaveState::Saved);
                     refresh.update(|n| *n += 1);
                     nav(&format!("/nodes/{}", saved_node.id), Default::default());
@@ -854,13 +883,15 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                             let base = "text-xs whitespace-nowrap";
                             if save_state.get() == SaveState::Failed {
                                 format!("{base} text-red-600 dark:text-red-400")
+                            } else if save_state.get().is_pending() {
+                                format!("{base} text-stone-500 dark:text-stone-400")
                             } else {
                                 format!("{base} text-stone-400 dark:text-stone-500")
                             }
                         }
                         aria-live="polite"
                     >
-                        {move || save_state.get().label(node.is_some())}
+                        {move || save_state.get().label(node.is_some(), saved_at.get().as_deref())}
                     </span>
                     // Preview toggle button
                     <button
