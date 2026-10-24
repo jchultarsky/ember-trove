@@ -546,7 +546,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
                     baseline.set(Some(snap));
-                    saved_at.set(Some(crate::components::format_helpers::local_time_now()));
+                    saved_at.set(
+                        Some(crate::components::format_helpers::local_time_now())
+                            .filter(|t| !t.is_empty()),
+                    );
                     save_state.set(SaveState::Saved);
                 }
                 Err(_) => {
@@ -713,7 +716,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     // Mark the saved snapshot as the baseline so the unmount
                     // flush (triggered by the navigation below) is a no-op.
                     baseline.set(Some(snap));
-                    saved_at.set(Some(crate::components::format_helpers::local_time_now()));
+                    saved_at.set(
+                        Some(crate::components::format_helpers::local_time_now())
+                            .filter(|t| !t.is_empty()),
+                    );
                     save_state.set(SaveState::Saved);
                     refresh.update(|n| *n += 1);
                     nav(&format!("/nodes/{}", saved_node.id), Default::default());

@@ -19,13 +19,17 @@ pub fn local_today() -> chrono::NaiveDate {
 
 /// The current local time as a short clock label ("4:02 PM" / "16:02",
 /// per the browser locale) via `Intl.DateTimeFormat`.
+///
+/// Uses `Date.prototype.toLocaleTimeString` through `js_sys` — no `eval`, so
+/// it works under a CSP without `'unsafe-eval'` (the e2e/local nginx CSP;
+/// an `eval` here silently returned nothing and rendered "Saved ·").
 pub fn local_time_now() -> String {
-    js_sys::eval(
-        "new Intl.DateTimeFormat(undefined, {hour:'numeric',minute:'2-digit'}).format(new Date())",
-    )
-    .ok()
-    .and_then(|v| v.as_string())
-    .unwrap_or_default()
+    let opts = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&opts, &"hour".into(), &"numeric".into());
+    let _ = js_sys::Reflect::set(&opts, &"minute".into(), &"2-digit".into());
+    js_sys::Date::new_0()
+        .to_locale_time_string_with_options("default", &opts)
+        .into()
 }
 
 /// Format a UTC timestamp as a concise local date-time string using JS's
