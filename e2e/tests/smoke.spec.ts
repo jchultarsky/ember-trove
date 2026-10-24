@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, type Page } from './fixtures';
 
 /**
  * Smoke suite — the flows that host-side tests structurally cannot cover
@@ -10,13 +10,6 @@ import { test, expect, Page } from '@playwright/test';
  * the database starts empty and is ephemeral.
  */
 
-/** Collect WASM panics / JS exceptions for the whole test. */
-function collectPageErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on('pageerror', (err) => errors.push(String(err)));
-  return errors;
-}
-
 /** Focus the page body so single-key shortcuts aren't swallowed by inputs. */
 async function focusNeutral(page: Page) {
   await page.locator('main').click({ position: { x: 5, y: 5 } });
@@ -24,11 +17,9 @@ async function focusNeutral(page: Page) {
 
 test.describe('app shell', () => {
   test('loads My Day with route title', async ({ page }) => {
-    const errors = collectPageErrors(page);
     await page.goto('/tasks/my-day');
     await expect(page).toHaveTitle('My Day — Ember Trove');
     await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible();
-    expect(errors).toEqual([]);
   });
 });
 
@@ -92,12 +83,10 @@ test.describe('soft delete with undo', () => {
 });
 
 test.describe('keyboard listener lifecycle', () => {
-  test('no WASM panic on keypress after leaving My Day', async ({ page }) => {
+  test('no WASM panic on keypress after leaving My Day', async ({ page, pageErrors }) => {
     // v2.21.1 regression: MyDayView leaked its window keydown listener on
     // unmount; the zombie closure read disposed signals on the next keypress,
     // panicked, and poisoned all event dispatch.
-    const errors = collectPageErrors(page);
-
     await page.goto('/tasks/my-day');
     await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible();
     await page.getByRole('tab', { name: 'Inbox' }).click();
@@ -110,8 +99,8 @@ test.describe('keyboard listener lifecycle', () => {
     await page.keyboard.press('n');
     await expect(page.getByPlaceholder(/What's on your mind/)).toBeVisible();
     await page.keyboard.press('Escape');
-
-    expect(errors).toEqual([]);
+    // (The fixture also fails any test on a page error; explicit here.)
+    expect(pageErrors).toEqual([]);
   });
 });
 

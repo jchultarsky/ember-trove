@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, createNode, localISO } from './fixtures';
 
 /**
  * The shared add-task form (`NewTaskForm`): the ☀ toggle commits the new task
@@ -6,27 +6,11 @@ import { test, expect, type APIRequestContext } from '@playwright/test';
  * Titles are unique per attempt, so a crashed retry's leftovers never match.
  */
 
-function localISO(offsetDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
-}
-
 type Task = { id: string; title: string; focus_date: string | null };
-
-async function createNode(request: APIRequestContext, title: string) {
-  const resp = await request.post('/api/nodes', {
-    data: { title, node_type: 'project', body: '', metadata: {}, status: 'draft' },
-  });
-  expect(resp.ok()).toBeTruthy();
-  return resp.json();
-}
 
 test('node page: adding a task with ☀ on puts it in My Day', async ({ page, request }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e form node ${stamp}`);
+  const node = await createNode(request, `e2e form node ${stamp}`, { node_type: 'project' });
   const title = `e2e form my-day ${stamp}`;
   try {
     await page.goto(`/nodes/${node.id}`);
@@ -96,7 +80,7 @@ test('editing a due date echoes it and warns before saving a past date', async (
   request,
 }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e due node ${stamp}`);
+  const node = await createNode(request, `e2e due node ${stamp}`, { node_type: 'project' });
   const title = `e2e due edit ${stamp}`;
   try {
     const created = await request.post(`/api/nodes/${node.id}/tasks`, {
@@ -224,7 +208,7 @@ test('node panel editor: opens on saved values, Cancel resets all, saves recurre
   request,
 }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e editor node ${stamp}`);
+  const node = await createNode(request, `e2e editor node ${stamp}`, { node_type: 'project' });
   try {
     const created = await request.post(`/api/nodes/${node.id}/tasks`, {
       data: { title: `e2e editor ${stamp}`, priority: 'high', recurrence: 'weekly' },

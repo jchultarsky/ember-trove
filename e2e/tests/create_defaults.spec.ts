@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type Page } from './fixtures';
 
 /**
  * New-node creation (#111): every create path applies the type's default
@@ -53,6 +53,8 @@ test.describe('creating a node applies the type default', () => {
   test.beforeEach(async ({ page, request }) => {
     await wipeTemplates(request);
     await page.goto('/tasks/my-day');
+    // Let the WASM bundle finish loading: the test's own goto would abort it.
+    await expect(page.locator('main')).toBeVisible();
     await clearDraft(page);
   });
   test.afterEach(async ({ page, request }) => {
