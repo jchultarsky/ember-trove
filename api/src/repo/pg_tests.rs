@@ -491,6 +491,107 @@ fn search_query(q: &str, fuzzy: bool) -> common::search::SearchQuery {
 }
 
 #[sqlx::test(migrations = "../migrations")]
+async fn search_pagination_totals_and_per_source_snippets(pool: PgPool) {
+    let search = PgSearchRepo::new(pool.clone());
+    let nodes = PgNodeRepo::new(pool.clone());
+    for i in 0..25 {
+        nodes
+            .create(
+                "owner-a",
+                CreateNodeRequest {
+                    body: Some(format!("the nebulaorbit report number {i}")),
+                    ..node_req(&format!("Report {i:02}"))
+                },
+            )
+            .await
+            .expect("node");
+    }
+    let mut q = search_query("nebulaorbit", false);
+    q.per_page = Some(10);
+    let mut seen = std::collections::HashSet::new();
+    for (page, want) in [(1u32, 10usize), (2, 10), (3, 5)] {
+        q.page = Some(page);
+        let r = search.search(&q, Some("owner-a")).await.expect("page");
+        assert_eq!(r.total, 25, "total on page {page}");
+        assert_eq!(r.results.len(), want, "rows on page {page}");
+        for hit in &r.results {
+            assert!(seen.insert(hit.node_id), "duplicate across pages");
+            let snip = hit.snippet.as_deref().unwrap_or_default();
+            assert!(
+                snip.contains("<mark>"),
+                "body snippet marks the match: {snip}"
+            );
+        }
+    }
+    // Past the end: no rows, but the total still comes back (fallback count).
+    q.page = Some(4);
+    let r = search.search(&q, Some("owner-a")).await.expect("past end");
+    assert!(r.results.is_empty());
+    assert_eq!(r.total, 25);
+
+    // Note and task matches get their own snippets after the paging rewrite.
+    let host = create_node(&pool, "owner-a", "Snippet host").await;
+    PgNoteRepo::new(pool.clone())
+        .create(
+            Some(host.id),
+            "owner-a",
+            common::note::CreateNoteRequest {
+                body: "a heliotrope remark".to_string(),
+                color: "default".to_string(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("note");
+    PgTaskRepo::new(pool.clone())
+        .create(
+            Some(host.id),
+            "owner-a",
+            CreateTaskRequest {
+                node_id: Some(host.id),
+                ..task_req("buy saxifrage seeds")
+            },
+        )
+        .await
+        .expect("task");
+    let note_hit = &search
+        .search(&search_query("heliotrope", false), Some("owner-a"))
+        .await
+        .expect("n")
+        .results;
+    assert_eq!(note_hit.len(), 1);
+    assert_eq!(note_hit[0].match_source.as_deref(), Some("note"));
+    assert!(
+        note_hit[0]
+            .snippet
+            .as_deref()
+            .unwrap_or_default()
+            .contains("<mark>heliotrope</mark>")
+    );
+    assert!(note_hit[0].highlighted_title.is_none());
+    let task_hit = &search
+        .search(&search_query("saxifrage", false), Some("owner-a"))
+        .await
+        .expect("t")
+        .results;
+    assert_eq!(task_hit[0].match_source.as_deref(), Some("task"));
+    assert_eq!(task_hit[0].snippet.as_deref(), Some("buy saxifrage seeds"));
+
+    // Fuzzy mode: same window total and fallback.
+    let mut fq = search_query("nebulaorbit", true);
+    fq.per_page = Some(10);
+    fq.page = Some(3);
+    let r = search.search(&fq, Some("owner-a")).await.expect("fuzzy");
+    assert_eq!((r.total, r.results.len()), (25, 5));
+    fq.page = Some(9);
+    let r = search
+        .search(&fq, Some("owner-a"))
+        .await
+        .expect("fuzzy past end");
+    assert_eq!((r.total, r.results.len()), (25, 0));
+}
+
+#[sqlx::test(migrations = "../migrations")]
 async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
     let search = PgSearchRepo::new(pool.clone());
     let notes = PgNoteRepo::new(pool.clone());
