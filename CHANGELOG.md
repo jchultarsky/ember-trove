@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — due dates read back in words, with a past-date warning
+Every task due-date input (row edit forms in My Day, a node's task panel and
+the Inbox, the add-task form, and Inbox triage) now spells out the chosen
+date next to the field, e.g. "Fri, Oct 30 · in 7 days" (#98, item 1). A
+stray keypress in a date segment, such as Oct turning into Jan, now reads as
+"Fri, Jan 30 · 9 months ago" before you save. Changing a due date to a day
+in the past also shows "This date is in the past". It is a warning, not a
+block: back-dating is legitimate, and editing an already-overdue task
+without touching its date does not warn. Screen readers get both through
+`aria-describedby`, since the browser's date segments can't be annotated.
+The five inputs now share one `DueDateField`; the logic is
+`common::task::{due_hint, warn_past_due}` (unit tested).
+
 ## [2.30.0] - 2026-10-23
 
 ### Dependencies

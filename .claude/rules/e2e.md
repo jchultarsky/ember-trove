@@ -52,6 +52,14 @@ CI job is too slow a feedback loop for selector work.
   the title as well as the carry-over badge (strict-mode violation). Locate
   badges by `data-testid` (`carryover-prompt`), not by their text.
 
+- **Fill date inputs, never type into them** (2026-10-24): set a native
+  `<input type="date">` with `locator.fill('YYYY-MM-DD')`. Typing into its
+  Month/Day/Year segments is fragile, and a stray digit silently changes the
+  date (the #98 item 1 bug). Task due-date fields are
+  `getByTestId('due-date-field')`, with `due-hint` and `due-warning` inside;
+  the warning span is always rendered (an aria-live region), so assert
+  `toBeEmpty()` / `toHaveText()`, not visibility.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —
