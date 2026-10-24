@@ -78,7 +78,9 @@ test('header search keeps the query on /search and clears it on leaving', async 
     await expect(searchBox).toHaveValue(token); // kept for the results page
 
     // Open the result → the header no longer carries the term.
-    await page.getByText(`e2e header ${token}`).first().click();
+    // Result titles go through the search headline (which may trim words),
+    // so locate the result by the unique token, inside the results pane.
+    await page.locator('main').getByText(token).first().click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
     await expect(searchBox).toHaveValue('');
   } finally {
