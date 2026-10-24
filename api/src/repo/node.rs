@@ -53,13 +53,15 @@ pub trait NodeRepo: Send + Sync {
     ) -> Result<Vec<NodeTitleEntry>, EmberTroveError>;
 
     /// Resolve many already-lowercased wiki-link titles in one query, among
-    /// nodes owned by `owner_id` only. Returns a map from the lowercased title
-    /// to its node ID; unmatched titles are absent.
+    /// nodes **visible to `owner_id`** (the source node's owner): their own
+    /// nodes, plus nodes shared with them. Their own node wins a title
+    /// collision. Returns a map from the lowercased title to its node ID;
+    /// unmatched titles are absent.
     ///
     /// SECURITY: resolution used to search every owner's titles, so writing
-    /// `[[Someone Else's Title]]` created an edge into another user's node and
-    /// `neighbors` then returned that node's body. Owner-scoped, it also uses
-    /// the `(owner_id, lower(title))` unique index.
+    /// `[[Someone Else's Title]]` created an edge into another user's private
+    /// node and `neighbors` then returned that node's body. Links into nodes
+    /// deliberately shared with the owner keep working.
     async fn find_ids_by_titles(
         &self,
         owner_id: &str,
@@ -618,12 +620,16 @@ impl NodeRepo for PgNodeRepo {
             lt: String,
         }
 
-        // (owner_id, lower(title)) is unique, so at most one row per title.
-        let rows = sqlx::query_as::<_, TitleIdRow>(
-            "SELECT id, LOWER(title) AS lt
-             FROM nodes
-             WHERE owner_id = $1 AND LOWER(title) = ANY($2)",
-        )
+        // One winner per title: the owner's own node first ((owner_id,
+        // lower(title)) is unique), else the lowest-id shared node.
+        let rows = sqlx::query_as::<_, TitleIdRow>(&format!(
+            "SELECT DISTINCT ON (LOWER(n.title)) n.id, LOWER(n.title) AS lt
+             FROM nodes n
+             WHERE LOWER(n.title) = ANY($2)
+               AND {visible}
+             ORDER BY LOWER(n.title), (n.owner_id = $1) DESC, n.id",
+            visible = super::visible_to("n", 1),
+        ))
         .bind(owner_id)
         .bind(lowered_titles)
         .fetch_all(&self.pool)

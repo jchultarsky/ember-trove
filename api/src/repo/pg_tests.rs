@@ -184,20 +184,37 @@ async fn share_token_revoke_is_scoped_to_node(pool: PgPool) {
 // ── Cross-owner isolation (hotfix: wiki links, edges, permissions, graph) ────
 
 #[sqlx::test(migrations = "../migrations")]
-async fn wikilink_titles_resolve_only_within_the_owner(pool: PgPool) {
+async fn wikilink_titles_resolve_only_to_nodes_the_owner_can_see(pool: PgPool) {
     let nodes = PgNodeRepo::new(pool.clone());
     let mine = create_node(&pool, "owner-a", "Plan").await;
     let theirs = create_node(&pool, "owner-b", "Journal").await;
     // Same title under another owner must never win either.
     create_node(&pool, "owner-b", "Plan").await;
 
+    let shared = create_node(&pool, "owner-b", "Shared Spec").await;
+    PgPermissionRepo::new(pool.clone())
+        .grant(
+            shared.id,
+            "owner-b",
+            common::permission::GrantPermissionRequest {
+                subject_id: "owner-a".to_string(),
+                role: common::permission::PermissionRole::Viewer,
+            },
+        )
+        .await
+        .expect("share");
+
+    let titles = ["plan", "journal", "shared spec"].map(String::from);
     let found = nodes
-        .find_ids_by_titles("owner-a", &["plan".to_string(), "journal".to_string()])
+        .find_ids_by_titles("owner-a", &titles)
         .await
         .expect("resolve");
+    // Own node wins over another owner's same-titled node.
     assert_eq!(found.get("plan"), Some(&mine.id));
-    // Regression: `[[Journal]]` used to resolve to another owner's node.
+    // Regression: `[[Journal]]` used to resolve to another owner's PRIVATE node.
     assert!(!found.contains_key("journal"), "resolved {:?}", theirs.id);
+    // No regression: links into nodes deliberately shared with A still resolve.
+    assert_eq!(found.get("shared spec"), Some(&shared.id));
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -259,13 +276,25 @@ async fn neighbors_backlinks_and_edges_hide_nodes_the_caller_cannot_see(pool: Pg
 }
 
 #[sqlx::test(migrations = "../migrations")]
-async fn migration_033_drops_only_cross_owner_wikilinks(pool: PgPool) {
+async fn migration_033_drops_only_wikilinks_into_unshared_nodes(pool: PgPool) {
     let edges = PgEdgeRepo::new(pool.clone());
     let a = create_node(&pool, "owner-a", "A").await;
     let a2 = create_node(&pool, "owner-a", "A2").await;
     let b = create_node(&pool, "owner-b", "B").await;
+    let shared = create_node(&pool, "owner-b", "B shared").await;
+    PgPermissionRepo::new(pool.clone())
+        .grant(
+            shared.id,
+            "owner-b",
+            common::permission::GrantPermissionRequest {
+                subject_id: "owner-a".to_string(),
+                role: common::permission::PermissionRole::Editor,
+            },
+        )
+        .await
+        .expect("share");
     edges
-        .sync_wikilinks(a.id, &[a2.id, b.id])
+        .sync_wikilinks(a.id, &[a2.id, b.id, shared.id])
         .await
         .expect("wiki edges");
     // An explicit (user-created) cross-owner edge is left to the read filter.
@@ -286,20 +315,49 @@ async fn migration_033_drops_only_cross_owner_wikilinks(pool: PgPool) {
     .await
     .expect("re-run cleanup");
 
-    let left: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+    let mut left: Vec<(uuid::Uuid, String)> = sqlx::query_as(
         "SELECT target_id, edge_type::text FROM edges WHERE source_id = $1 ORDER BY edge_type",
     )
     .bind(a.id.0)
     .fetch_all(&pool)
     .await
     .expect("edges");
-    assert_eq!(
-        left,
-        vec![
-            (b.id.0, "references".to_string()),
-            (a2.id.0, "wiki_link".to_string())
-        ]
-    );
+    // Kept: the explicit edge, the own-node link, and the link into a node
+    // shared with A (user data). Dropped: only the link into B's private node.
+    let mut expected = vec![
+        (b.id.0, "references".to_string()),
+        (a2.id.0, "wiki_link".to_string()),
+        (shared.id.0, "wiki_link".to_string()),
+    ];
+    left.sort();
+    expected.sort();
+    assert_eq!(left, expected);
+
+    // Reversible: exactly the removed row is archived, and the documented
+    // undo statement restores it.
+    let archived: Vec<(uuid::Uuid,)> =
+        sqlx::query_as("SELECT target_id FROM edges_removed_033 WHERE source_id = $1")
+            .bind(a.id.0)
+            .fetch_all(&pool)
+            .await
+            .expect("archive");
+    assert_eq!(archived, vec![(b.id.0,)]);
+    sqlx::query(
+        "INSERT INTO edges (id, source_id, target_id, edge_type, label, created_at)
+         SELECT id, source_id, target_id, edge_type, label, created_at
+         FROM edges_removed_033 ON CONFLICT (id) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .expect("undo");
+    let (n,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM edges WHERE source_id = $1 AND edge_type = 'wiki_link'",
+    )
+    .bind(a.id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(n, 3, "undo restores the archived wiki link");
 }
 
 #[sqlx::test(migrations = "../migrations")]
