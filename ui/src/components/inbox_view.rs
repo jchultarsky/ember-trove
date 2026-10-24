@@ -6,7 +6,6 @@
 //! Layout is mobile-first: each task renders as a self-contained card with
 //! an always-visible action bar so controls are reachable without hover.
 
-use chrono::NaiveDate;
 use common::{
     id::NodeId,
     search::SearchResult,
@@ -21,12 +20,13 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
-    RowSignals, TaskCtx, delete_with_undo, toggle_done, toggle_my_day,
+    PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
+    toggle_my_day,
 };
 use crate::components::task_common::{is_in_my_day, parse_priority, recurrence_label, status_done};
 use crate::components::task_row_scaffold::{
-    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view,
-    priority_dot_view,
+    MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
+    due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use crate::focus_task::schedule_focus_task;
@@ -227,19 +227,9 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     // Inline-edit state
     let editing = RwSignal::new(false);
     let orig_title = RwSignal::new(task.title.clone());
-    let edit_title = RwSignal::new(task.title.clone());
-    let edit_priority = RwSignal::new(task.priority.as_str().to_string());
-    let edit_due = RwSignal::new(
-        task.due_date
-            .map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_default(),
-    );
-    let edit_recurrence = RwSignal::new(
-        task.recurrence
-            .as_ref()
-            .map(|r| r.as_str().to_string())
-            .unwrap_or_default(),
-    );
+    let draft = TaskEditDraft::from_task(&task);
+    let (edit_title, edit_priority, edit_due, edit_recurrence) =
+        (draft.title, draft.priority, draft.due, draft.recurrence);
 
     // My Day toggle — mirrors server carry-forward so tasks set on a
     // previous day but still open still read as "in My Day" today.
@@ -277,16 +267,19 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         assigning.set(false);
         picker_query.set(String::new());
         picker_results.set(vec![]);
-        let req = UpdateTaskRequest {
-            node_id: Some(Some(node_id)),
-            ..Default::default()
-        };
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => refresh.update(|n| *n += 1),
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't attach to node: {e}")),
-            }
-        });
+        patch_task(
+            task_id,
+            UpdateTaskRequest {
+                node_id: Some(Some(node_id)),
+                ..Default::default()
+            },
+            PatchOpts {
+                err_prefix: "Couldn't attach to node",
+                refresh: Some(refresh),
+                ..Default::default()
+            },
+            |_| {},
+        );
     };
 
     let has_recurrence = task.recurrence.is_some();
@@ -298,37 +291,30 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let due = task.due_date;
 
     let do_save = move || {
-        let new_title = edit_title.get_untracked().trim().to_string();
-        if new_title.is_empty() {
+        let Some(req) = draft.take_request() else {
             return;
-        }
-        let new_priority = parse_priority(&edit_priority.get_untracked());
-        let new_recurrence = common::task::RecurrenceRule::parse(&edit_recurrence.get_untracked());
-        let new_due: Option<Option<NaiveDate>> =
-            Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
+        };
         editing.set(false);
         let prev_title = orig_title.get_untracked();
         let prev_priority = priority_val.get_untracked();
-        orig_title.set(new_title.clone());
-        priority_val.set(new_priority.as_str().to_string());
-        let req = UpdateTaskRequest {
-            title: Some(new_title),
-            priority: Some(new_priority),
-            due_date: new_due,
-            recurrence: Some(new_recurrence),
-            ..Default::default()
-        };
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => refresh.update(|n| *n += 1),
-                Err(e) => {
-                    // Roll back the optimistic title/priority display.
+        orig_title.set(draft.title.get_untracked().trim().to_string());
+        priority_val.set(draft.priority.get_untracked());
+        patch_task(
+            task_id,
+            req,
+            PatchOpts {
+                err_prefix: "Save failed",
+                refresh: Some(refresh),
+                ..Default::default()
+            },
+            // Roll back the optimistic title/priority display.
+            move |ok| {
+                if !ok {
                     orig_title.set(prev_title);
                     priority_val.set(prev_priority);
-                    push_toast(ToastLevel::Error, format!("Save failed: {e}"));
                 }
-            }
-        });
+            },
+        );
     };
 
     let ctx = TaskCtx {
@@ -377,7 +363,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                         on_submit=Callback::new(move |()| do_save())
                                         on_escape=Callback::new(move |()| {
                                             editing.set(false);
-                                            edit_title.set(orig_title.get_untracked());
+                                            draft.reset();
                                         })
                                         on_resize=Callback::new(move |h: i32| {
                                             wasm_bindgen_futures::spawn_local(async move {
@@ -398,7 +384,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                                 dark:bg-stone-800 px-2 py-1.5 text-xs
                                                 text-stone-700 dark:text-stone-300
                                                 focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                            prop:value=move || edit_priority.get()
+                                            title="Priority"
+                                    prop:value=move || edit_priority.get()
                                             on:change=move |ev| edit_priority.set(event_target_value(&ev))
                                         >
                                             <option value="high">"High"</option>
@@ -422,15 +409,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                                 dark:bg-stone-800 px-2 py-1.5 text-xs
                                                 text-stone-700 dark:text-stone-300
                                                 focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                            prop:value=move || edit_recurrence.get()
+                                            title="Recurrence"
                                             on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
                                         >
-                                            <option value="">"No repeat"</option>
-                                            <option value="daily">"Daily"</option>
-                                            <option value="weekly">"Weekly"</option>
-                                            <option value="biweekly">"Biweekly"</option>
-                                            <option value="monthly">"Monthly"</option>
-                                            <option value="yearly">"Yearly"</option>
+                                            <RecurrenceOptions value=edit_recurrence />
                                         </select>
                                     </div>
                                     // Save / cancel
@@ -446,7 +428,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                             label="Cancel"
                                             on_click=Callback::new(move |()| {
                                                 editing.set(false);
-                                                edit_title.set(orig_title.get_untracked());
+                                                draft.reset();
                                             })
                                         />
                                     </div>

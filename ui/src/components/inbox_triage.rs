@@ -16,7 +16,7 @@ use leptos::prelude::*;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
-use crate::components::task_actions::{TaskCtx, delete_with_undo};
+use crate::components::task_actions::{PatchOpts, TaskCtx, delete_with_undo, patch_task};
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
 /// Which input the triage card is currently capturing.
@@ -114,23 +114,23 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
 
     // Fire a PATCH for the current task, advance on success.
     let patch_current = move |req: UpdateTaskRequest, ok_msg: &'static str| {
-        if busy.get_untracked() {
-            return;
-        }
         let Some(task) = current() else { return };
-        busy.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::update_task(task.id, &req).await;
-            busy.set(false);
-            match result {
-                Ok(_) => {
+        // No list refresh: the triage stack advances itself (module docs).
+        patch_task(
+            task.id,
+            req,
+            PatchOpts {
+                busy: Some(busy),
+                ok_toast: Some(ok_msg),
+                ..Default::default()
+            },
+            move |ok| {
+                if ok {
                     acted.update(|n| *n += 1);
-                    push_toast(ToastLevel::Success, ok_msg);
                     remove_current();
                 }
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't update: {e}")),
-            }
-        });
+            },
+        );
     };
 
     let do_today = move || {

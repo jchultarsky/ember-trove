@@ -210,3 +210,87 @@ test('a double Enter in the add-task form creates the task once', async ({ page,
     for (const t of inbox.filter((t) => t.title === title)) await request.delete(`/api/tasks/${t.id}`);
   }
 });
+
+// ── Inline task editor (shared TaskEditDraft) ─────────────────────────────────
+//
+// Every list's editor opens on the task's saved values, Cancel discards ALL
+// field edits (it used to reset only the title), and the node panel can edit
+// recurrence like the other lists.
+
+type FullTask = Task & { priority: string; recurrence: string | null };
+
+test('node panel editor: opens on saved values, Cancel resets all, saves recurrence', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e editor node ${stamp}`);
+  try {
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+      data: { title: `e2e editor ${stamp}`, priority: 'high', recurrence: 'weekly' },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+
+    await page.goto(`/nodes/${node.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit task"]').click();
+    const priority = row.locator('select[title="Priority"]');
+    const repeat = row.locator('select[title="Recurrence"]');
+    await expect(priority).toHaveValue('high');
+    await expect(repeat).toHaveValue('weekly');
+
+    // Abandon edits to every field: reopening shows the saved values.
+    await priority.selectOption('low');
+    await repeat.selectOption('daily');
+    await row.getByRole('button', { name: 'Cancel' }).click();
+    await row.locator('button[title="Edit task"]').click();
+    await expect(priority).toHaveValue('high');
+    await expect(repeat).toHaveValue('weekly');
+
+    await repeat.selectOption('monthly');
+    await row.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(async () => {
+        const tasks: FullTask[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+        return tasks.find((t) => t.id === task.id)?.recurrence;
+      })
+      .toBe('monthly');
+  } finally {
+    const tasks: Task[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+    for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('inbox editor: opens on saved values and Cancel resets every field', async ({
+  page,
+  request,
+}) => {
+  const title = `e2e inbox editor ${Date.now()}`;
+  const created = await request.post('/api/tasks', {
+    data: { title, priority: 'low', recurrence: 'yearly' },
+  });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit"]').click();
+    const priority = row.locator('select[title="Priority"]');
+    const repeat = row.locator('select[title="Recurrence"]');
+    await expect(priority).toHaveValue('low');
+    await expect(repeat).toHaveValue('yearly');
+    // One label per rule everywhere (this list used to say "Biweekly").
+    await expect(repeat.locator('option[value="biweekly"]')).toHaveText('Every 2 weeks');
+
+    await priority.selectOption('high');
+    await repeat.selectOption('');
+    await row.getByRole('button', { name: 'Cancel' }).click();
+    await row.locator('button[title="Edit"]').click();
+    await expect(priority).toHaveValue('low');
+    await expect(repeat).toHaveValue('yearly');
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+  }
+});

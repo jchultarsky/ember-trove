@@ -1,7 +1,6 @@
-use chrono::NaiveDate;
 use common::{
     id::{NodeId, TaskId},
-    task::{Task, TaskStatus, UpdateTaskRequest},
+    task::{Task, TaskStatus},
 };
 use leptos::prelude::*;
 
@@ -10,14 +9,15 @@ use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_actions::{
-    RowSignals, TaskCtx, delete_with_undo, toggle_done, toggle_my_day,
+    PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
+    toggle_my_day,
 };
 use crate::components::task_common::{
-    is_in_my_day, parse_priority, sort_tasks_by_order, status_done, status_label,
+    is_in_my_day, sort_tasks_by_order, status_done, status_label,
 };
 use crate::components::task_row_scaffold::{
-    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view,
-    priority_dot_view,
+    MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
+    due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -276,7 +276,6 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     // Captured at setup for the undo closure, which outlives this row.
     let toast_state = use_context::<ToastState>();
     let is_done = status_done(&task.status);
-    let priority = task.priority.clone();
     let prio = task.priority.clone();
     let due = task.due_date;
 
@@ -288,38 +287,28 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let busy = RwSignal::new(false);
     let focus_date = task.focus_date;
 
-    // Inline editing — title, priority, due date.
+    // Inline editing — title, priority, due date, recurrence.
     let editing_title = RwSignal::new(false);
-    let edit_title = RwSignal::new(task.title.clone());
-    let orig_title = RwSignal::new(task.title.clone());
-    let edit_priority = RwSignal::new(priority.as_str().to_string());
-    let edit_due = RwSignal::new(
-        due.map(|d| d.format("%Y-%m-%d").to_string())
-            .unwrap_or_default(),
-    );
+    let draft = TaskEditDraft::from_task(&task);
+    let (edit_title, edit_priority, edit_due, edit_recurrence) =
+        (draft.title, draft.priority, draft.due, draft.recurrence);
 
     // Save all editable fields at once.
     let do_save_edit = move || {
-        let new_title = edit_title.get_untracked().trim().to_string();
-        if new_title.is_empty() {
+        let Some(req) = draft.take_request() else {
             return;
-        }
-        editing_title.set(false);
-        let new_priority = Some(parse_priority(&edit_priority.get_untracked()));
-        let new_due: Option<Option<NaiveDate>> =
-            Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
-        let req = UpdateTaskRequest {
-            title: Some(new_title),
-            priority: new_priority,
-            due_date: new_due,
-            ..Default::default()
         };
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => task_refresh.update(|n| *n += 1),
-                Err(e) => push_toast(ToastLevel::Error, format!("Save failed: {e}")),
-            }
-        });
+        editing_title.set(false);
+        patch_task(
+            task_id,
+            req,
+            PatchOpts {
+                err_prefix: "Save failed",
+                refresh: Some(task_refresh),
+                ..Default::default()
+            },
+            |_| {},
+        );
     };
 
     let ctx = TaskCtx {
@@ -362,7 +351,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
 
             // Title + meta
             <div class="flex-1 min-w-0">
-                // Title — display or inline edit form (title + priority + due date)
+                // Title — display or inline edit form (title + priority + due + repeat)
                 {move || if editing_title.get() {
                     let saved_height = use_context::<crate::components::task_row::TaskEditorHeights>()
                         .and_then(|c| c.0.get_untracked().get(&task_id.0).copied());
@@ -375,7 +364,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                 on_submit=Callback::new(move |()| do_save_edit())
                                 on_escape=Callback::new(move |()| {
                                     editing_title.set(false);
-                                    edit_title.set(orig_title.get_untracked());
+                                    draft.reset();
                                 })
                                 on_resize=Callback::new(move |h: i32| {
                                     wasm_bindgen_futures::spawn_local(async move {
@@ -392,6 +381,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                     class="text-xs bg-stone-100 dark:bg-stone-700
                                         text-stone-700 dark:text-stone-300
                                         rounded-lg px-2 py-0.5 focus:outline-none"
+                                    title="Priority"
                                     prop:value=move || edit_priority.get()
                                     on:change=move |ev| edit_priority.set(event_target_value(&ev))
                                 >
@@ -400,6 +390,15 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                     <option value="low">"Low"</option>
                                 </select>
                                 <DueDateField value=edit_due original=due />
+                                <select
+                                    class="text-xs bg-stone-100 dark:bg-stone-700
+                                        text-stone-700 dark:text-stone-300
+                                        rounded-lg px-2 py-0.5 focus:outline-none"
+                                    title="Recurrence"
+                                    on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
+                                >
+                                    <RecurrenceOptions value=edit_recurrence />
+                                </select>
                                 <span class="flex-1"/>
                                 <IconButton
                                     icon="check"
@@ -412,7 +411,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                     label="Cancel"
                                     on_click=Callback::new(move |()| {
                                         editing_title.set(false);
-                                        edit_title.set(orig_title.get_untracked());
+                                        draft.reset();
                                     })
                                 />
                             </div>
