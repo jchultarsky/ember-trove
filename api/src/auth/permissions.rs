@@ -29,6 +29,40 @@ pub fn is_admin(claims: &AuthClaims) -> bool {
     claims.roles.contains(&"admin".to_string())
 }
 
+/// The owner scope for listing/visibility queries: `None` for an admin (every
+/// owner), otherwise the caller's subject. Repo methods treat `None` as
+/// "no owner filter".
+pub fn subject_scope(claims: &AuthClaims) -> Option<&str> {
+    if is_admin(claims) {
+        None
+    } else {
+        Some(claims.sub.as_str())
+    }
+}
+
+/// SECURITY: protect the canonical creator's (`nodes.owner_id`) Owner row.
+///
+/// `require_role` consults only the permissions table, so that row is the
+/// backstop that keeps a creator from being locked out of their own node. A
+/// granted (non-canonical) Owner must not revoke it (`new_role = None`) or
+/// downgrade it (`Some(role)` weaker than Owner); only an admin may. Every
+/// grant/update/revoke path calls this — the standalone `/permissions/{id}`
+/// routes used to skip it.
+pub fn guard_canonical_owner(
+    claims: &AuthClaims,
+    node_owner_id: &str,
+    subject_id: &str,
+    new_role: Option<&PermissionRole>,
+) -> Result<(), ApiError> {
+    let weakens = !matches!(new_role, Some(PermissionRole::Owner));
+    if subject_id == node_owner_id && weakens && !is_admin(claims) {
+        return Err(ApiError::Forbidden(
+            "cannot revoke or downgrade the node owner's permission".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Assert that the caller holds the `admin` role.
 ///
 /// Returns `Err(ApiError::Forbidden)` when the caller is not an admin.
@@ -178,5 +212,63 @@ mod tests {
             exp: i64::MAX,
         };
         assert!(!is_admin(&no_roles));
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    fn claims(sub: &str, admin: bool) -> AuthClaims {
+        AuthClaims {
+            sub: sub.to_string(),
+            email: None,
+            name: None,
+            roles: if admin {
+                vec!["admin".to_string()]
+            } else {
+                vec![]
+            },
+            exp: 0,
+        }
+    }
+
+    #[test]
+    fn granted_owner_cannot_revoke_or_downgrade_the_creator() {
+        let co_owner = claims("co-owner", false);
+        assert!(guard_canonical_owner(&co_owner, "creator", "creator", None).is_err());
+        assert!(
+            guard_canonical_owner(
+                &co_owner,
+                "creator",
+                "creator",
+                Some(&PermissionRole::Viewer)
+            )
+            .is_err()
+        );
+        // Re-affirming Owner is harmless.
+        assert!(
+            guard_canonical_owner(
+                &co_owner,
+                "creator",
+                "creator",
+                Some(&PermissionRole::Owner)
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn other_subjects_and_admins_are_unaffected() {
+        let co_owner = claims("co-owner", false);
+        assert!(guard_canonical_owner(&co_owner, "creator", "friend", None).is_ok());
+        let admin = claims("root", true);
+        assert!(guard_canonical_owner(&admin, "creator", "creator", None).is_ok());
+    }
+
+    #[test]
+    fn subject_scope_is_none_only_for_admins() {
+        assert_eq!(subject_scope(&claims("u1", false)), Some("u1"));
+        assert_eq!(subject_scope(&claims("root", true)), None);
     }
 }

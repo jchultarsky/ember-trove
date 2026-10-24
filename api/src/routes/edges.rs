@@ -13,7 +13,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor},
+    auth::permissions::{is_admin, require_editor, require_viewer},
     error::ApiError,
     state::AppState,
 };
@@ -47,8 +47,11 @@ async fn create_edge(
 ) -> Result<(StatusCode, Json<Edge>), ApiError> {
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
-    // Caller must have editor access on the source node.
+    // Caller must have editor access on the source node AND be able to see
+    // the target — otherwise an edge (and `neighbors`) would reach into a
+    // node they have no access to.
     require_editor(state.permissions.as_ref(), &claims, req.source_id).await?;
+    require_viewer(state.permissions.as_ref(), &claims, req.target_id).await?;
     let edge = state.edges.create(req).await?;
     Ok((StatusCode::CREATED, Json(edge)))
 }
