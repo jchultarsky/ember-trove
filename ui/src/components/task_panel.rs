@@ -6,6 +6,7 @@ use common::{
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
+use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
@@ -429,15 +430,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                     <option value="medium">"Medium"</option>
                                     <option value="low">"Low"</option>
                                 </select>
-                                <input
-                                    type="date"
-                                    class="text-xs bg-stone-100 dark:bg-stone-700
-                                        text-stone-700 dark:text-stone-300
-                                        rounded-lg px-2 py-0.5 focus:outline-none"
-                                    title="Due date (optional)"
-                                    prop:value=move || edit_due.get()
-                                    on:input=move |ev| edit_due.set(event_target_value(&ev))
-                                />
+                                <DueDateField value=edit_due original=due />
                                 <span class="flex-1"/>
                                 <IconButton
                                     icon="check"

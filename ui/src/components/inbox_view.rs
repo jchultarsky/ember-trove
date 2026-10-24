@@ -15,6 +15,7 @@ use common::{
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
+use crate::components::due_date_field::DueDateField;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
@@ -439,16 +440,16 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                             <option value="medium">"Medium"</option>
                                             <option value="low">"Low"</option>
                                         </select>
-                                        <input
-                                            type="date"
-                                            class="flex-1 min-w-0 rounded-lg border
-                                                border-stone-200 dark:border-stone-700
-                                                bg-stone-50 dark:bg-stone-800
-                                                px-2 py-1.5 text-xs
-                                                text-stone-700 dark:text-stone-300
+                                        <DueDateField
+                                            value=edit_due
+                                            original=due
+                                            wrapper_class="flex-1 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0.5"
+                                            input_class="min-w-0 rounded-lg border \
+                                                border-stone-200 dark:border-stone-700 \
+                                                bg-stone-50 dark:bg-stone-800 \
+                                                px-2 py-1.5 text-xs \
+                                                text-stone-700 dark:text-stone-300 \
                                                 focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                            prop:value=move || edit_due.get()
-                                            on:input=move |ev| edit_due.set(event_target_value(&ev))
                                         />
                                         <select
                                             class="rounded-lg border border-stone-200
