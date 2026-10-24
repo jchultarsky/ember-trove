@@ -84,26 +84,7 @@ impl TemplateRow {
 }
 
 fn parse_node_type(s: &str) -> Result<NodeType, EmberTroveError> {
-    match s {
-        "article" => Ok(NodeType::Article),
-        "project" => Ok(NodeType::Project),
-        "area" => Ok(NodeType::Area),
-        "resource" => Ok(NodeType::Resource),
-        "reference" => Ok(NodeType::Reference),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown node_type in template: {other}"
-        ))),
-    }
-}
-
-fn node_type_str(nt: &NodeType) -> &'static str {
-    match nt {
-        NodeType::Article => "article",
-        NodeType::Project => "project",
-        NodeType::Area => "area",
-        NodeType::Resource => "resource",
-        NodeType::Reference => "reference",
-    }
+    super::parse_wire(s, "node_type", NodeType::parse)
 }
 
 // ── Postgres implementation ───────────────────────────────────────────────────
@@ -162,7 +143,7 @@ impl TemplateRepo for PgTemplateRepo {
         ))
         .bind(&req.name)
         .bind(req.description.as_deref())
-        .bind(node_type_str(&req.node_type))
+        .bind(req.node_type.as_str())
         .bind(&req.body)
         .bind(created_by)
         .fetch_one(&self.pool)
@@ -185,7 +166,7 @@ impl TemplateRepo for PgTemplateRepo {
         ))
         .bind(&req.name)
         .bind(req.description.as_deref())
-        .bind(node_type_str(&req.node_type))
+        .bind(req.node_type.as_str())
         .bind(&req.body)
         .bind(id.0)
         .fetch_optional(&self.pool)

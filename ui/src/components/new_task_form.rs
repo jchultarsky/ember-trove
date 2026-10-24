@@ -22,7 +22,7 @@ use leptos::prelude::*;
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::node_picker::NodePicker;
-use crate::components::task_common::{parse_priority, parse_recurrence_opt};
+use crate::components::task_common::parse_priority;
 
 /// Reusable "new task" form.
 ///
@@ -64,7 +64,7 @@ pub fn NewTaskForm(
         }
         let priority = parse_priority(&new_priority.get_untracked());
         let due_date = new_due.get_untracked().trim().parse::<NaiveDate>().ok();
-        let recurrence = parse_recurrence_opt(&new_recurrence.get_untracked());
+        let recurrence = common::task::RecurrenceRule::parse(&new_recurrence.get_untracked());
         let focus_date = new_my_day.get_untracked().then(local_today);
         // Fixed prop node wins; otherwise use the optionally-picked node.
         let chosen_node = node_id.or_else(|| selected_node.get_untracked().map(|(id, _)| id));

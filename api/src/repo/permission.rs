@@ -67,22 +67,7 @@ struct PermissionRow {
 }
 
 pub(crate) fn parse_role(s: &str) -> Result<PermissionRole, EmberTroveError> {
-    match s {
-        "owner" => Ok(PermissionRole::Owner),
-        "editor" => Ok(PermissionRole::Editor),
-        "viewer" => Ok(PermissionRole::Viewer),
-        other => Err(EmberTroveError::Internal(format!(
-            "unknown permission_role: {other}"
-        ))),
-    }
-}
-
-pub(crate) fn role_to_str(role: &PermissionRole) -> &'static str {
-    match role {
-        PermissionRole::Owner => "owner",
-        PermissionRole::Editor => "editor",
-        PermissionRole::Viewer => "viewer",
-    }
+    super::parse_wire(s, "permission_role", PermissionRole::parse)
 }
 
 impl PermissionRow {
@@ -106,7 +91,7 @@ impl PermissionRepo for PgPermissionRepo {
         granted_by: &str,
         req: GrantPermissionRequest,
     ) -> Result<Permission, EmberTroveError> {
-        let role_str = role_to_str(&req.role);
+        let role_str = req.role.as_str();
         let row = sqlx::query_as::<_, PermissionRow>(
             r#"
             INSERT INTO permissions (node_id, subject_id, role, granted_by)
@@ -220,7 +205,7 @@ impl PermissionRepo for PgPermissionRepo {
         role: PermissionRole,
         updated_by: &str,
     ) -> Result<Permission, EmberTroveError> {
-        let role_str = role_to_str(&role);
+        let role_str = role.as_str();
         let row = sqlx::query_as::<_, PermissionRow>(
             r#"
             UPDATE permissions
@@ -268,7 +253,7 @@ mod tests {
             PermissionRole::Editor,
             PermissionRole::Viewer,
         ] {
-            let s = role_to_str(&role);
+            let s = role.as_str();
             let back = parse_role(s).expect("round-trip should succeed");
             assert_eq!(back, role);
         }
@@ -276,8 +261,8 @@ mod tests {
 
     #[test]
     fn role_to_str_produces_lowercase() {
-        assert_eq!(role_to_str(&PermissionRole::Owner), "owner");
-        assert_eq!(role_to_str(&PermissionRole::Editor), "editor");
-        assert_eq!(role_to_str(&PermissionRole::Viewer), "viewer");
+        assert_eq!(PermissionRole::Owner.as_str(), "owner");
+        assert_eq!(PermissionRole::Editor.as_str(), "editor");
+        assert_eq!(PermissionRole::Viewer.as_str(), "viewer");
     }
 }

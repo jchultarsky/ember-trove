@@ -7,8 +7,6 @@
 use common::{id::NodeId, search::SearchResult};
 use leptos::prelude::*;
 
-use crate::components::task_common::node_type_icon;
-
 #[component]
 pub fn NodePicker(
     /// The chosen node `(id, title)`, or `None`. Owned by the caller.
@@ -89,7 +87,7 @@ pub fn NodePicker(
                             let nid = res.node_id;
                             let title_sel = res.title.clone();
                             let title_disp = res.title.clone();
-                            let icon = node_type_icon(&res.node_type);
+                            let icon = crate::components::node_meta::type_icon(&res.node_type);
                             view! {
                                 <button
                                     class="w-full flex items-center gap-2 px-3 py-2 text-xs

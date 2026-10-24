@@ -23,10 +23,7 @@ use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
     RowSignals, TaskCtx, delete_with_undo, toggle_done, toggle_my_day,
 };
-use crate::components::task_common::{
-    is_in_my_day, node_type_icon, parse_priority, parse_recurrence_opt, priority_value,
-    recurrence_label, recurrence_value, status_done,
-};
+use crate::components::task_common::{is_in_my_day, parse_priority, recurrence_label, status_done};
 use crate::components::task_row_scaffold::{
     MyDayButton, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view,
     priority_dot_view,
@@ -225,13 +222,13 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let status_sig = RwSignal::new(task.status.clone());
     let busy = RwSignal::new(false);
     let focus_date = task.focus_date;
-    let priority_val = RwSignal::new(priority_value(&task.priority).to_string());
+    let priority_val = RwSignal::new(task.priority.as_str().to_string());
 
     // Inline-edit state
     let editing = RwSignal::new(false);
     let orig_title = RwSignal::new(task.title.clone());
     let edit_title = RwSignal::new(task.title.clone());
-    let edit_priority = RwSignal::new(priority_value(&task.priority).to_string());
+    let edit_priority = RwSignal::new(task.priority.as_str().to_string());
     let edit_due = RwSignal::new(
         task.due_date
             .map(|d| d.format("%Y-%m-%d").to_string())
@@ -240,7 +237,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let edit_recurrence = RwSignal::new(
         task.recurrence
             .as_ref()
-            .map(|r| recurrence_value(r).to_string())
+            .map(|r| r.as_str().to_string())
             .unwrap_or_default(),
     );
 
@@ -306,14 +303,14 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             return;
         }
         let new_priority = parse_priority(&edit_priority.get_untracked());
-        let new_recurrence = parse_recurrence_opt(&edit_recurrence.get_untracked());
+        let new_recurrence = common::task::RecurrenceRule::parse(&edit_recurrence.get_untracked());
         let new_due: Option<Option<NaiveDate>> =
             Some(edit_due.get_untracked().trim().parse::<NaiveDate>().ok());
         editing.set(false);
         let prev_title = orig_title.get_untracked();
         let prev_priority = priority_val.get_untracked();
         orig_title.set(new_title.clone());
-        priority_val.set(priority_value(&new_priority).to_string());
+        priority_val.set(new_priority.as_str().to_string());
         let req = UpdateTaskRequest {
             title: Some(new_title),
             priority: Some(new_priority),
@@ -582,7 +579,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 {results.into_iter().map(|r| {
                                     let node_id = r.node_id;
                                     let title   = r.title.clone();
-                                    let icon    = node_type_icon(&r.node_type);
+                                    let icon    = crate::components::node_meta::type_icon(&r.node_type);
                                     view! {
                                         <button
                                             class="w-full flex items-center gap-2.5 px-3 py-2.5

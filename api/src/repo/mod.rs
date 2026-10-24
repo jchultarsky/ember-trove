@@ -1,3 +1,5 @@
+use common::EmberTroveError;
+
 pub mod activity;
 pub mod attachment;
 pub mod backup;
@@ -42,4 +44,15 @@ pub(crate) fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
+}
+
+/// Parse a Postgres enum column through its `common` wire table
+/// (`wire_enum!`). An unknown value means the schema and the code disagree —
+/// a server-side invariant break, reported as Internal, never client input.
+pub(crate) fn parse_wire<T>(
+    s: &str,
+    kind: &str,
+    parse: fn(&str) -> Option<T>,
+) -> Result<T, EmberTroveError> {
+    parse(s).ok_or_else(|| EmberTroveError::Internal(format!("unknown {kind}: {s}")))
 }

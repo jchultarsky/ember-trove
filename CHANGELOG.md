@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — one wire-string table per enum (refactor)
+- A `wire_enum!` macro in `common` generates `ALL`, `as_str` and `parse` for
+  `NodeType`, `NodeStatus`, `EdgeType`, `TaskStatus`, `TaskPriority`,
+  `RecurrenceRule` and `PermissionRole`. One test checks every variant against
+  serde, in both directions.
+- This replaces about 25 hand-written mappers in the API repos, backups and
+  UI, plus 14 `format!("{:?}").to_lowercase()` tricks that only worked while
+  every variant was a single word. The edge-label bug was one of those.
+  Database enum columns now parse through a shared `repo::parse_wire`, which
+  reports an unknown value as an internal error.
+- The five node-type icon maps had already drifted: Templates showed other
+  icons for Resource and Reference. They are now one map, `node_meta`.
+- Net −292 lines across 30 files.
+
 ### Performance — search builds highlights only for the page it returns
 - Full-text search computed `ts_headline` (which re-parses the whole text)
   for **every** matching node, note and task before de-duplicating and

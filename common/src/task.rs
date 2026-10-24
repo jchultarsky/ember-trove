@@ -14,6 +14,13 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+wire_enum!(TaskStatus {
+    Open => "open",
+    InProgress => "in_progress",
+    Done => "done",
+    Cancelled => "cancelled",
+});
+
 impl TaskStatus {
     /// `true` for terminal statuses (Done, Cancelled) — the ones a task
     /// checkbox renders as ticked.
@@ -41,6 +48,12 @@ pub enum TaskPriority {
     High,
 }
 
+wire_enum!(TaskPriority {
+    Low => "low",
+    Medium => "medium",
+    High => "high",
+});
+
 /// How often a recurring task should repeat after being marked Done.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -51,6 +64,14 @@ pub enum RecurrenceRule {
     Monthly,
     Yearly,
 }
+
+wire_enum!(RecurrenceRule {
+    Daily => "daily",
+    Weekly => "weekly",
+    Biweekly => "biweekly",
+    Monthly => "monthly",
+    Yearly => "yearly",
+});
 
 impl RecurrenceRule {
     /// The next occurrence after `d`. Months and years clamp to the target

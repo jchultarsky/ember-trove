@@ -214,8 +214,8 @@ impl PgSearchRepo {
         offset: u32,
         subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
-        let type_filter = node_type.as_ref().map(node_type_to_str);
-        let status_filter = status.as_ref().map(node_status_to_str);
+        let type_filter = node_type.as_ref().map(|v| v.as_str());
+        let status_filter = status.as_ref().map(|v| v.as_str());
 
         let count_row = sqlx::query_as::<_, CountRow>(
             r#"
@@ -328,8 +328,8 @@ impl PgSearchRepo {
         offset: u32,
         subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
-        let type_filter = node_type.as_ref().map(node_type_to_str);
-        let status_filter = status.as_ref().map(node_status_to_str);
+        let type_filter = node_type.as_ref().map(|v| v.as_str());
+        let status_filter = status.as_ref().map(|v| v.as_str());
 
         // Rank-only candidates → one best source per node → order + page
         // (COUNT(*) OVER for the total) → ts_headline for the returned page
@@ -552,8 +552,8 @@ impl PgSearchRepo {
         offset: u32,
         subject: Option<&str>,
     ) -> Result<SearchResponse, EmberTroveError> {
-        let type_filter = node_type.as_ref().map(node_type_to_str);
-        let status_filter = status.as_ref().map(node_status_to_str);
+        let type_filter = node_type.as_ref().map(|v| v.as_str());
+        let status_filter = status.as_ref().map(|v| v.as_str());
         // Escape %, _ and \ so the query matches literally (a bare `%` used to
         // match everything); every `ILIKE $2` carries `ESCAPE '\'`.
         let like_pattern = format!("%{}%", super::escape_like(q));
@@ -735,23 +735,5 @@ impl PgSearchRepo {
             page,
             per_page,
         })
-    }
-}
-
-fn node_type_to_str(t: &common::node::NodeType) -> &'static str {
-    match t {
-        common::node::NodeType::Article => "article",
-        common::node::NodeType::Project => "project",
-        common::node::NodeType::Area => "area",
-        common::node::NodeType::Resource => "resource",
-        common::node::NodeType::Reference => "reference",
-    }
-}
-
-fn node_status_to_str(s: &common::node::NodeStatus) -> &'static str {
-    match s {
-        common::node::NodeStatus::Draft => "draft",
-        common::node::NodeStatus::Published => "published",
-        common::node::NodeStatus::Archived => "archived",
     }
 }

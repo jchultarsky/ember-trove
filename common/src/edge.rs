@@ -16,29 +16,16 @@ pub enum EdgeType {
     WikiLink,
 }
 
+wire_enum!(EdgeType {
+    References => "references",
+    Contains => "contains",
+    RelatedTo => "related_to",
+    DependsOn => "depends_on",
+    DerivedFrom => "derived_from",
+    WikiLink => "wiki_link",
+});
+
 impl EdgeType {
-    /// Every edge type, in display order.
-    pub const ALL: [EdgeType; 6] = [
-        EdgeType::References,
-        EdgeType::Contains,
-        EdgeType::RelatedTo,
-        EdgeType::DependsOn,
-        EdgeType::DerivedFrom,
-        EdgeType::WikiLink,
-    ];
-
-    /// The canonical wire string — identical to serde's `snake_case` form.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EdgeType::References => "references",
-            EdgeType::Contains => "contains",
-            EdgeType::RelatedTo => "related_to",
-            EdgeType::DependsOn => "depends_on",
-            EdgeType::DerivedFrom => "derived_from",
-            EdgeType::WikiLink => "wiki_link",
-        }
-    }
-
     /// Human label, e.g. "related to". The UI used to derive this from
     /// `format!("{:?}")`, which yields "relatedto" (Debug has no underscores).
     pub fn label(&self) -> &'static str {
@@ -95,7 +82,6 @@ mod edge_type_tests {
     #[test]
     fn as_str_matches_serde_and_labels_are_spaced() {
         for t in EdgeType::ALL {
-            assert_eq!(serde_json::to_value(&t).unwrap(), t.as_str());
             assert_eq!(t.label(), t.as_str().replace('_', " "));
         }
         assert_eq!(EdgeType::RelatedTo.label(), "related to");

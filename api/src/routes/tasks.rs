@@ -426,7 +426,7 @@ async fn project_dashboard(
     let mut entries: Vec<ProjectDashboardEntry> = projects
         .into_iter()
         .map(|n| {
-            let node_status = format!("{:?}", n.status).to_lowercase();
+            let node_status = n.status.as_str().to_string();
             let task_counts = counts_map
                 .get(&n.id)
                 .cloned()
