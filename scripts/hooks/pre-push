@@ -16,6 +16,8 @@ fi
 
 echo "pre-push: cargo test --workspace --exclude ui"
 cargo test --workspace --exclude ui
+echo "pre-push: cargo test -p ui (host unit tests)"
+cargo test -p ui
 
 # Only lint the UI for wasm32 if the target is installed; otherwise warn, don't block.
 if rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then

@@ -358,6 +358,16 @@ mod tests {
         }
     }
 
+    /// A command by its label: indexing `GLOBAL_COMMANDS` broke silently when
+    /// #111 inserted the "New <type>" commands (index 11 became Go to Graph),
+    /// unnoticed because CI didn't run the ui crate's tests.
+    fn command(label: &str) -> &'static CommandSpec {
+        GLOBAL_COMMANDS
+            .iter()
+            .find(|c| c.label == label)
+            .expect("command exists")
+    }
+
     fn labels(actions: &[PaletteAction]) -> Vec<String> {
         actions.iter().map(|a| a.primary().to_string()).collect()
     }
@@ -367,7 +377,7 @@ mod tests {
         // "theme" matched two nodes via body text only — the command must
         // come first (the v2.21.3 hijack).
         let results = vec![result("Dartmouth Seminar"), result("Product Definition")];
-        let cmds = vec![&GLOBAL_COMMANDS[11]]; // Toggle dark mode
+        let cmds = vec![command("Toggle dark mode")];
         let out = ranked_actions(&results, cmds, "theme");
         assert_eq!(
             labels(&out),
@@ -385,7 +395,7 @@ mod tests {
         // Quick-switcher behavior: typing a node's title puts it first even
         // when a command also matches.
         let results = vec![result("Dark Patterns Research"), result("Unrelated")];
-        let cmds = vec![&GLOBAL_COMMANDS[11]];
+        let cmds = vec![command("Toggle dark mode")];
         let out = ranked_actions(&results, cmds, "dark");
         assert_eq!(
             labels(&out),

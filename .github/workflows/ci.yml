@@ -70,6 +70,12 @@ jobs:
       - name: cargo test (api + common)
         run: cargo test --workspace --exclude ui
 
+      # The ui crate's pure-logic unit tests (palette ranking, draft, auth
+      # retry…) build and run on the host. They weren't run anywhere, and two
+      # palette tests sat broken after #111 until 2026-10-24.
+      - name: cargo test (ui, host unit tests)
+        run: cargo test -p ui
+
   check-wasm:
     name: check (wasm32-unknown-unknown)
     runs-on: ubuntu-latest
