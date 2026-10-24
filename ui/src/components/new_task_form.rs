@@ -23,6 +23,7 @@ use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::node_picker::NodePicker;
 use crate::components::task_common::parse_priority;
+use crate::components::task_row_scaffold::RecurrenceOptions;
 
 /// Reusable "new task" form.
 ///
@@ -141,12 +142,7 @@ pub fn NewTaskForm(
                     prop:value=move || new_recurrence.get()
                     on:change=move |ev| new_recurrence.set(event_target_value(&ev))
                 >
-                    <option value="">"No repeat"</option>
-                    <option value="daily">"Daily"</option>
-                    <option value="weekly">"Weekly"</option>
-                    <option value="biweekly">"Every 2 weeks"</option>
-                    <option value="monthly">"Monthly"</option>
-                    <option value="yearly">"Yearly"</option>
+                    <RecurrenceOptions value=new_recurrence />
                 </select>
                 // My Day — same glyph as the row action; filled when on.
                 <button

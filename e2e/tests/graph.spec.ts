@@ -1,4 +1,4 @@
-import { test, expect, Page, APIRequestContext } from '@playwright/test';
+import { test, expect, createNode, type Page } from './fixtures';
 
 /**
  * Graph view — the largest UI surface (ui/src/components/graph_view.rs) and,
@@ -13,21 +13,6 @@ import { test, expect, Page, APIRequestContext } from '@playwright/test';
  * Suite is sequential and shares one DB: every test creates uniquely-titled
  * nodes and deletes them (and their edges) in `finally`.
  */
-
-/** Collect WASM panics / JS exceptions for the whole test. */
-function collectPageErrors(page: Page): string[] {
-  const errors: string[] = [];
-  page.on('pageerror', (err) => errors.push(String(err)));
-  return errors;
-}
-
-async function createNode(request: APIRequestContext, title: string) {
-  const resp = await request.post('/api/nodes', {
-    data: { title, node_type: 'article', body: 'graph spec node', metadata: {}, status: 'draft' },
-  });
-  expect(resp.ok()).toBeTruthy();
-  return resp.json();
-}
 
 /** The SVG group for one node on the canvas. */
 const nodeG = (page: Page, id: string) => page.locator(`g[data-node-id="${id}"]`);
@@ -51,7 +36,6 @@ async function gotoGraph(page: Page) {
 
 test.describe('graph view', () => {
   test('renders created nodes on the canvas', async ({ page, request }) => {
-    const errors = collectPageErrors(page);
     const stamp = Date.now();
     const a = await createNode(request, `e2e graph a ${stamp}`);
     const b = await createNode(request, `e2e graph b ${stamp}`);
@@ -59,7 +43,6 @@ test.describe('graph view', () => {
       await gotoGraph(page);
       await expect(nodeG(page, a.id)).toBeVisible();
       await expect(nodeG(page, b.id)).toBeVisible();
-      expect(errors).toEqual([]);
     } finally {
       await request.delete(`/api/nodes/${a.id}`);
       await request.delete(`/api/nodes/${b.id}`);
@@ -69,7 +52,6 @@ test.describe('graph view', () => {
   test('a node is keyboard-focusable, labelled, and Enter opens it', async ({ page, request }) => {
     // Keyboard/a11y baseline (keyboard phase 3): nodes are focusable buttons
     // with an accessible name, show a focus ring, and activate on Enter.
-    const errors = collectPageErrors(page);
     const title = `e2e graph kbd ${Date.now()}`;
     const node = await createNode(request, title);
     try {
@@ -87,7 +69,6 @@ test.describe('graph view', () => {
       // Enter activates → opens the node page.
       await page.keyboard.press('Enter');
       await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
-      expect(errors).toEqual([]);
     } finally {
       await request.delete(`/api/nodes/${node.id}`);
     }
@@ -97,7 +78,6 @@ test.describe('graph view', () => {
     // Regression for the BFS-row layout: arranging a hub with satellites must
     // produce a ring (spread in BOTH axes), keep satellites within spring
     // range of the hub, and persist the result via the batch positions API.
-    const errors = collectPageErrors(page);
     const stamp = Date.now();
     const hub = await createNode(request, `e2e cluster hub ${stamp}`);
     const sats = [];
@@ -154,7 +134,6 @@ test.describe('graph view', () => {
       for (let a = 0; a < all.length; a++)
         for (let b = a + 1; b < all.length; b++)
           expect(Math.hypot(all[a].x - all[b].x, all[a].y - all[b].y)).toBeGreaterThan(60);
-      expect(errors).toEqual([]);
     } finally {
       for (const id of edgeIds) await request.delete(`/api/edges/${id}`);
       await request.delete(`/api/nodes/${hub.id}`);
@@ -165,7 +144,6 @@ test.describe('graph view', () => {
   test('Fit brings far-away content into the viewport', async ({ page, request }) => {
     // Regression: Fit used to hard-reset to 100%/origin, which could leave a
     // clustered layout entirely off-screen. It must now frame the content.
-    const errors = collectPageErrors(page);
     const stamp = Date.now();
     const a = await createNode(request, `e2e frame far-a ${stamp}`);
     const b = await createNode(request, `e2e frame far-b ${stamp}`);
@@ -197,7 +175,6 @@ test.describe('graph view', () => {
         expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
         expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
       }
-      expect(errors).toEqual([]);
     } finally {
       await request.delete(`/api/nodes/${a.id}`);
       await request.delete(`/api/nodes/${b.id}`);
@@ -210,7 +187,6 @@ test.describe('graph view', () => {
     // completely inert on touch devices (pan/zoom only). Touch events are
     // constructed in-page — Playwright's dispatchEvent JSON can't express
     // Touch objects.
-    const errors = collectPageErrors(page);
     const stamp = Date.now();
     const dragee = await createNode(request, `e2e touch drag ${stamp}`);
     const tappee = await createNode(request, `e2e touch tap ${stamp}`);
@@ -256,7 +232,6 @@ test.describe('graph view', () => {
       // Tap (no movement) opens the node page.
       await page.evaluate(fireTouch, [tappee.id, []] as [string, [number, number][]]);
       await expect(page).toHaveURL(new RegExp(`/nodes/${tappee.id}`));
-      expect(errors).toEqual([]);
     } finally {
       await request.delete(`/api/nodes/${dragee.id}`);
       await request.delete(`/api/nodes/${tappee.id}`);
@@ -264,7 +239,6 @@ test.describe('graph view', () => {
   });
 
   test('double-click on a node opens its page', async ({ page, request }) => {
-    const errors = collectPageErrors(page);
     const title = `e2e graph nav ${Date.now()}`;
     const node = await createNode(request, title);
     try {
@@ -272,14 +246,12 @@ test.describe('graph view', () => {
       await dispatchOnNode(page, node.id, 'dblclick');
       await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
       await expect(page.getByText(title).first()).toBeVisible();
-      expect(errors).toEqual([]);
     } finally {
       await request.delete(`/api/nodes/${node.id}`);
     }
   });
 
   test('creates an edge through Add Edge mode', async ({ page, request }) => {
-    const errors = collectPageErrors(page);
     const stamp = Date.now();
     const src = await createNode(request, `e2e edge src ${stamp}`);
     const tgt = await createNode(request, `e2e edge tgt ${stamp}`);
@@ -307,7 +279,6 @@ test.describe('graph view', () => {
       expect(created).toBeTruthy();
       expect(created.edge_type).toBe('references');
       edgeId = created.id;
-      expect(errors).toEqual([]);
     } finally {
       if (edgeId) await request.delete(`/api/edges/${edgeId}`);
       await request.delete(`/api/nodes/${src.id}`);
@@ -316,7 +287,6 @@ test.describe('graph view', () => {
   });
 
   test('orphans-only lens hides linked nodes', async ({ page, request }) => {
-    const errors = collectPageErrors(page);
     const stamp = Date.now();
     const a = await createNode(request, `e2e lens linked-a ${stamp}`);
     const b = await createNode(request, `e2e lens linked-b ${stamp}`);
@@ -341,7 +311,6 @@ test.describe('graph view', () => {
       // Toggle back (button text now carries the checkmark).
       await page.getByRole('button', { name: /Orphans only/ }).click();
       await expect(nodeG(page, a.id)).toBeVisible();
-      expect(errors).toEqual([]);
     } finally {
       if (edgeId) await request.delete(`/api/edges/${edgeId}`);
       await request.delete(`/api/nodes/${a.id}`);

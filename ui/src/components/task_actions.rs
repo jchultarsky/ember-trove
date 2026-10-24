@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{TaskStatus, UpdateTaskRequest, done_toggle};
+use common::task::{Task, TaskStatus, UpdateTaskRequest, done_toggle, task_edit_request};
 use leptos::prelude::*;
 
 use crate::components::task_common::undo_restore_task;
@@ -164,13 +164,138 @@ pub fn toggle_my_day(task_id: TaskId, in_my_day: RwSignal<bool>, ctx: TaskCtx) {
         focus_date: Some((!currently).then_some(ctx.today)),
         ..Default::default()
     };
-    wasm_bindgen_futures::spawn_local(async move {
-        match crate::api::update_task(task_id, &req).await {
-            Ok(_) => ctx.refresh.update(|n| *n += 1),
-            Err(e) => {
+    patch_task(
+        task_id,
+        req,
+        PatchOpts {
+            refresh: Some(ctx.refresh),
+            ..Default::default()
+        },
+        move |ok| {
+            if !ok {
                 in_my_day.set(currently);
-                push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
+            }
+        },
+    );
+}
+
+/// How a task PATCH reports back (see [`patch_task`]).
+#[derive(Clone, Copy, Default)]
+pub struct PatchOpts {
+    /// The row's in-flight guard, if it has one: a second action while a
+    /// PATCH is in flight is ignored.
+    pub busy: Option<RwSignal<bool>>,
+    /// Success toast; `None` = silent (the refetched list is the feedback).
+    pub ok_toast: Option<&'static str>,
+    /// Error toast prefix ("Save failed", "Couldn't attach to node");
+    /// empty = "Couldn't update".
+    pub err_prefix: &'static str,
+    /// List to refetch on success; `None` when the caller manages its own
+    /// view (Inbox triage advances its card stack instead).
+    pub refresh: Option<RwSignal<u32>>,
+}
+
+/// One task PATCH with the shared guard / toast / refetch behaviour. Every
+/// list's ad-hoc copy (eight of them) differed: only two had a busy guard,
+/// and the error wording varied. `on_done(ok)` runs after the response, for
+/// rollback (`false`) or caller bookkeeping (`true`).
+pub fn patch_task(
+    task_id: TaskId,
+    req: UpdateTaskRequest,
+    opts: PatchOpts,
+    on_done: impl FnOnce(bool) + 'static,
+) {
+    if opts.busy.is_some_and(|b| b.get_untracked()) {
+        return;
+    }
+    if let Some(b) = opts.busy {
+        b.set(true);
+    }
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = crate::api::update_task(task_id, &req).await;
+        if let Some(b) = opts.busy {
+            b.set(false);
+        }
+        match result {
+            Ok(_) => {
+                if let Some(msg) = opts.ok_toast {
+                    push_toast(ToastLevel::Success, msg);
+                }
+                if let Some(r) = opts.refresh {
+                    r.update(|n| *n += 1);
+                }
+                on_done(true);
+            }
+            Err(e) => {
+                let prefix = if opts.err_prefix.is_empty() {
+                    "Couldn't update"
+                } else {
+                    opts.err_prefix
+                };
+                push_toast(ToastLevel::Error, format!("{prefix}: {e}"));
+                on_done(false);
             }
         }
     });
+}
+
+/// An inline task editor's form state (title / priority / due / recurrence),
+/// shared by every task list. Each list keeps its own markup (task-row
+/// contract); this owns the values: seeding from the task, `reset` on Cancel
+/// (it used to reset only the title, so abandoned priority/due/recurrence
+/// edits came back on reopen) and building the PATCH
+/// (`common::task::task_edit_request`).
+#[derive(Clone, Copy)]
+pub struct TaskEditDraft {
+    pub title: RwSignal<String>,
+    pub priority: RwSignal<String>,
+    pub due: RwSignal<String>,
+    pub recurrence: RwSignal<String>,
+    saved: StoredValue<[String; 4]>,
+}
+
+impl TaskEditDraft {
+    pub fn from_task(task: &Task) -> Self {
+        let saved = [
+            task.title.clone(),
+            task.priority.as_str().to_string(),
+            task.due_date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+            task.recurrence
+                .as_ref()
+                .map(|r| r.as_str().to_string())
+                .unwrap_or_default(),
+        ];
+        Self {
+            title: RwSignal::new(saved[0].clone()),
+            priority: RwSignal::new(saved[1].clone()),
+            due: RwSignal::new(saved[2].clone()),
+            recurrence: RwSignal::new(saved[3].clone()),
+            saved: StoredValue::new(saved),
+        }
+    }
+
+    /// Discard edits: every field back to the last saved values.
+    pub fn reset(&self) {
+        let [t, p, d, r] = self.saved.get_value();
+        self.title.set(t);
+        self.priority.set(p);
+        self.due.set(d);
+        self.recurrence.set(r);
+    }
+
+    /// The PATCH for the current values (`None` = blank title, don't save),
+    /// and remember them as saved so a later Cancel keeps them.
+    pub fn take_request(&self) -> Option<UpdateTaskRequest> {
+        let vals = [
+            self.title.get_untracked(),
+            self.priority.get_untracked(),
+            self.due.get_untracked(),
+            self.recurrence.get_untracked(),
+        ];
+        let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3])?;
+        self.saved.set_value(vals);
+        Some(req)
+    }
 }

@@ -347,6 +347,29 @@ pub fn warn_past_due(
     new.is_some_and(|d| d < today && Some(d) != original)
 }
 
+/// The PATCH for an inline task edit, from its form values (the strings the
+/// edit form's inputs hold). `None` when the title is blank. An empty due date
+/// or recurrence clears it; an unknown priority is Medium. Shared by every
+/// task list's inline editor (`task_actions::TaskEditDraft`).
+pub fn task_edit_request(
+    title: &str,
+    priority: &str,
+    due: &str,
+    recurrence: &str,
+) -> Option<UpdateTaskRequest> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some(UpdateTaskRequest {
+        title: Some(title.to_string()),
+        priority: Some(TaskPriority::parse(priority).unwrap_or(TaskPriority::Medium)),
+        due_date: Some(due.trim().parse::<NaiveDate>().ok()),
+        recurrence: Some(RecurrenceRule::parse(recurrence)),
+        ..Default::default()
+    })
+}
+
 /// One entry in a bulk sort-order update (drag-to-reorder in My Day).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTaskEntry {
@@ -509,6 +532,22 @@ mod tests {
             RecurrenceRule::Biweekly.advance(d(2026, 12, 25)),
             d(2027, 1, 8)
         );
+    }
+
+    #[test]
+    fn task_edit_request_maps_form_values() {
+        let r = task_edit_request("  Ship it  ", "high", "2026-11-03", "weekly").unwrap();
+        assert_eq!(r.title.as_deref(), Some("Ship it"));
+        assert_eq!(r.priority, Some(TaskPriority::High));
+        assert_eq!(r.due_date, Some(NaiveDate::from_ymd_opt(2026, 11, 3)));
+        assert_eq!(r.recurrence, Some(Some(RecurrenceRule::Weekly)));
+        // Empty due / recurrence clear (Some(None)); unknown priority = Medium.
+        let r = task_edit_request("x", "bogus", "", "").unwrap();
+        assert_eq!(r.priority, Some(TaskPriority::Medium));
+        assert_eq!(r.due_date, Some(None));
+        assert_eq!(r.recurrence, Some(None));
+        // Blank title: no request at all.
+        assert!(task_edit_request("   ", "high", "", "").is_none());
     }
 
     #[test]

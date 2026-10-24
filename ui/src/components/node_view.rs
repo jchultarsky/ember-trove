@@ -404,19 +404,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
     let search_open = RwSignal::new(false);
     let search_input_ref = NodeRef::<Input>::new();
 
-    let picker_results: LocalResource<Vec<common::search::SearchResult>> =
-        LocalResource::new(move || {
-            let q = node_search_query.get();
-            async move {
-                if q.len() < 2 {
-                    return Vec::new();
-                }
-                crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6)
-                    .await
-                    .map(|r| r.results)
-                    .unwrap_or_default()
-            }
-        });
+    let picker_results = crate::components::node_picker::use_node_search(node_search_query);
 
     let edges: LocalResource<Result<Vec<EdgeWithTitles>, crate::error::UiError>> =
         LocalResource::new(move || {
@@ -445,14 +433,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
             }
         };
 
-        let edge_type = match et.as_str() {
-            "references" => EdgeType::References,
-            "contains" => EdgeType::Contains,
-            "related_to" => EdgeType::RelatedTo,
-            "depends_on" => EdgeType::DependsOn,
-            "derived_from" => EdgeType::DerivedFrom,
-            _ => EdgeType::References,
-        };
+        let edge_type = EdgeType::parse(&et).unwrap_or(EdgeType::References);
 
         let req = CreateEdgeRequest {
             source_id: node_id,
@@ -554,9 +535,8 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                 on:focus=move |_| search_open.set(true)
                                 on:blur=move |_| search_open.set(false)
                             />
-                            <Suspense fallback=|| ()>
                             {move || {
-                                let results = picker_results.get().unwrap_or_default();
+                                let results = picker_results.get();
                                 if !search_open.get() || results.is_empty() {
                                     return None;
                                 }
@@ -589,7 +569,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                     </div>
                                 })
                             }}
-                            </Suspense></div>
+                        </div>
                         <select
                             class="px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
                                 bg-stone-50 dark:bg-stone-800 text-stone-700 dark:text-stone-300

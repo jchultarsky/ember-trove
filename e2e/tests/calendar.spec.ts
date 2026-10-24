@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './fixtures';
 
 /** Calendar quick-add: clicking a day cell composes a task due that day. */
 

@@ -1,4 +1,4 @@
-import { test, expect, APIRequestContext } from '@playwright/test';
+import { test, expect, type APIRequestContext } from './fixtures';
 
 /**
  * Saved search presets: save the current filters under a name, reload-persist,

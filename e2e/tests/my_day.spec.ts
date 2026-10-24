@@ -1,14 +1,6 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, localISO, type APIRequestContext } from './fixtures';
 
 /** My Day: carryover "still today?" prompt and the foldable overdue section. */
-
-function localISO(offsetDays: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
-}
 
 test('carried-over task prompts "still today?" — Yes re-stamps to today', async ({
   page,

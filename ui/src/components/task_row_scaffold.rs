@@ -100,6 +100,29 @@ pub fn MyDayButton(
     }
 }
 
+/// The `<option>`s of every recurrence `<select>`: "No repeat" plus each rule
+/// with its one label (`task_common::recurrence_label`). The copies used to
+/// disagree ("Biweekly" vs "Every 2 weeks"). Each option carries its own
+/// `selected` binding: a `prop:value` on the `<select>` can be applied before
+/// its options exist, which leaves a freshly opened editor on "No repeat".
+#[component]
+pub fn RecurrenceOptions(value: RwSignal<String>) -> impl IntoView {
+    view! {
+        <option value="" selected=move || value.get().is_empty()>"No repeat"</option>
+        {common::task::RecurrenceRule::ALL
+            .iter()
+            .map(|r| {
+                let v = r.as_str();
+                view! {
+                    <option value=v selected=move || value.get() == v>
+                        {crate::components::task_common::recurrence_label(r)}
+                    </option>
+                }
+            })
+            .collect_view()}
+    }
+}
+
 /// Title classes: wraps below `sm` (phone real estate), truncates at sm+
 /// (list density).
 pub const TITLE_CLASS: &str =
