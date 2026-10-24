@@ -63,6 +63,21 @@ pub fn SearchBar() -> impl IntoView {
         });
     };
 
+    // The query is global (shared with SearchView), so on any navigation that
+    // doesn't land on /search, clear it — a stale term left in the header
+    // reads as if it filters the node being viewed (#98 item 4). Navigating
+    // *to* /search (Enter, "View all") keeps it for the results page.
+    let pathname = location.pathname;
+    Effect::new(move |prev: Option<String>| {
+        let path = pathname.get();
+        if prev.is_some_and(|p| p != path) && path != "/search" {
+            search_query.set(String::new());
+            results.set(vec![]);
+            show_dropdown.set(false);
+        }
+        path
+    });
+
     let on_input = move |ev: web_sys::Event| {
         search_query.set(event_target_value(&ev));
         trigger_search();

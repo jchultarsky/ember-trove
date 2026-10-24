@@ -56,3 +56,34 @@ test('save, reload, load, and delete a search preset', async ({ page, request })
     await wipePresets(request);
   }
 });
+
+test('header search keeps the query on /search and clears it on leaving', async ({
+  page,
+  request,
+}) => {
+  // #98 item 4: a stale term left in the header read as if it filtered the
+  // node being viewed. Unique per attempt, so retries never collide.
+  const token = `zq${Date.now()}`;
+  const resp = await request.post('/api/nodes', {
+    data: { title: `e2e header ${token}`, node_type: 'article', body: '', metadata: {}, status: 'draft' },
+  });
+  expect(resp.ok()).toBeTruthy();
+  const node = await resp.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const searchBox = page.getByPlaceholder('Search… (Enter)');
+    await searchBox.fill(token);
+    await searchBox.press('Enter');
+    await expect(page).toHaveURL(/\/search$/);
+    await expect(searchBox).toHaveValue(token); // kept for the results page
+
+    // Open the result → the header no longer carries the term.
+    // Result titles go through the search headline (which may trim words),
+    // so locate the result by the unique token, inside the results pane.
+    await page.locator('main').getByText(token).first().click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
+    await expect(searchBox).toHaveValue('');
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});

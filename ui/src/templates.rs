@@ -1,6 +1,9 @@
 // Node-type Markdown templates.
 //
 // Applied once when a new node is created; the user owns the body afterwards.
+// Structure only — headings and empty bullets, never instructional prose:
+// prose placeholders get saved as real body text and later read (and export)
+// as content nobody wrote (#98 item 5).
 // Templates omit a To-Do section — structured tasks are managed in the task
 // panel on the node view, not in free-form Markdown.
 
@@ -33,7 +36,7 @@ const PROJECT: &str = "\
 const AREA: &str = "\
 ## Purpose
 
-Describe the scope and purpose of this area.
+-
 
 ## Resources
 
@@ -43,7 +46,7 @@ Describe the scope and purpose of this area.
 const RESOURCE: &str = "\
 ## Summary
 
-Brief description of this resource.
+-
 
 ## Links
 

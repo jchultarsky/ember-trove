@@ -33,6 +33,24 @@ without touching its date does not warn. Screen readers get both through
 The five inputs now share one `DueDateField`; the logic is
 `common::task::{due_hint, warn_past_due}` (unit tested).
 
+### Changed — export names, header search, save time, templates (#98)
+- **Single-node export filenames** are now `{slug}-{YYYYMMDDTHHMM}.md` (or
+  `.json`), stamped with the node's last update. Repeated exports of an
+  edited node used to pile up as `Project (1).md`, `Project (2).md`, …, and
+  each file had to be opened to tell which version it was. The slug matches
+  the bulk ZIP's entry names (item 3).
+- **The header search clears when you leave for any page but Search.** A
+  term typed earlier stayed in the header on every node visited afterwards,
+  which read as if it filtered the page. Pressing Enter or "View all" still
+  carries it to the results page (item 4).
+- **The editor's save indicator shows the time:** "Saved · 4:02 PM" (in the
+  browser's locale), so a glance tells you your last edits landed. "Unsaved
+  changes…" and "Saving…" read a shade stronger (item 6).
+- **The built-in Area and Resource templates** start with empty bullets
+  instead of instructional prose, which used to be saved as real body text.
+  Templates you saved in Templates are your content and are not changed
+  (item 5).
+
 ## [2.30.0] - 2026-10-23
 
 ### Dependencies
