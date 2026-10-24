@@ -14,12 +14,17 @@ All of these came out of a code review; each one now has a regression test.
   resolved against every owner's titles. So linking to a title you guessed
   created an edge into someone else's node, and `GET /nodes/{id}/neighbors`
   then returned that node with its full body. Titles now resolve only among
-  the source node's owner's nodes. `neighbors`, `backlinks` and
-  `GET /nodes/{id}/edges` also return only nodes the caller can see (owned or
-  shared), so links created before the fix can't leak either. Migration `033`
-  deletes existing cross-owner `wiki_link` edges; they are re-derived,
-  correctly scoped, on the next save. `POST /edges` now also requires access
-  to the target node.
+  nodes the source node's owner can see: their own, plus nodes shared with
+  them, with their own winning a title clash. Links into nodes deliberately
+  shared with you keep working. `neighbors`, `backlinks` and
+  `GET /nodes/{id}/edges` also return only nodes the *caller* can see.
+  `POST /edges` now requires access to the target node.
+- **Migration `033` removes only links that could never have been
+  legitimate,** and it can be reversed. It deletes machine-made `wiki_link`
+  edges whose target is neither owned by nor shared with the source's owner.
+  Links into shared nodes and explicit edges are untouched, and every removed
+  row is first copied to `edges_removed_033`; the undo statement is in the
+  migration's comments.
 - **Revoking a permission could delete permissions on other nodes.** The
   nested revoke checked ownership of the node in the URL, then deleted the
   permission by id alone. Revoke is now node-scoped. This is the same bug
@@ -33,8 +38,9 @@ All of these came out of a code review; each one now has a regression test.
   destination, as creating a task already did.
 - **The webhook SSRF guard missed IPv4 addresses in IPv6 form.**
   `::ffff:127.0.0.1`, `::ffff:169.254.169.254` and NAT64
-  (`64:ff9b::/96`) forms are now judged as IPv4. CGNAT (`100.64.0.0/10`),
-  broadcast and multicast are blocked too.
+  (`64:ff9b::/96`) forms are now judged as IPv4. Broadcast and multicast are
+  blocked too. CGNAT (`100.64.0.0/10`) deliberately stays reachable, so
+  existing webhooks on Tailscale-style addresses keep working.
 - **A viewer could rewrite the owner's graph layout** through
   `PUT /graph/positions/{id}`, unlike the batch route. It now uses the same
   owner-scoped write.
