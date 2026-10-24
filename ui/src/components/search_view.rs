@@ -1,22 +1,58 @@
 use common::{
-    search::{CreateSearchPresetRequest, SearchPreset, SearchResponse},
+    search::{
+        CreateSearchPresetRequest, SearchPreset, SearchResponse, has_mark, highlight_segments,
+        title_highlight_is_full,
+    },
     tag::Tag,
 };
 use leptos::prelude::*;
 
 use crate::app::{storage_get, storage_set};
 use crate::components::empty_state::EmptyState;
+use crate::components::format_helpers::format_relative_short;
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
 use leptos_router::hooks::use_navigate;
 
-/// Sanitize `ts_headline` output to allow only `<b>` tags (search highlights).
+/// Sanitize `ts_headline` output to allow only `<mark>` (search highlights).
 /// Prevents XSS from user-controlled node titles/bodies injected via `inner_html`.
+///
+/// This used to allow only `<b>` while the SQL emits `<mark>`, so every
+/// highlight was silently stripped (found with #107).
 fn sanitize_highlight(html: &str) -> String {
     let mut tags = std::collections::HashSet::new();
-    tags.insert("b");
+    tags.insert("mark");
     ammonia::Builder::new().tags(tags).clean(html).to_string()
+}
+
+/// Escaped text with client-side `<mark>`s for the query's words — never
+/// `inner_html`. Used where the server sent no highlight (fuzzy mode,
+/// note/task matches) so annotation doesn't depend on the search mode.
+fn marked_text(text: &str, query: &str) -> AnyView {
+    highlight_segments(text, query)
+        .into_iter()
+        .map(|(seg, hit)| {
+            if hit {
+                view! { <mark>{seg}</mark> }.into_any()
+            } else {
+                view! { {seg} }.into_any()
+            }
+        })
+        .collect_view()
+        .into_any()
+}
+
+/// The result heading: always the node's full title (#107). The server's
+/// highlight is used only when it is exactly the title plus `<mark>`s;
+/// otherwise the plain title gets client-side term marks.
+fn result_title(title: &str, highlighted: Option<&str>, query: &str) -> AnyView {
+    match highlighted {
+        Some(h) if title_highlight_is_full(h, title) => {
+            view! { <span inner_html=sanitize_highlight(h) /> }.into_any()
+        }
+        _ => marked_text(title, query),
+    }
 }
 
 // ── Search history (localStorage) ────────────────────────────────────────────
@@ -590,9 +626,19 @@ pub fn SearchView() -> impl IntoView {
                         let per_page = resp.per_page;
                         let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
 
+                        // Captured with the results it produced; drives client-side marks.
+                        let query_text = search_query.get_untracked().trim().to_string();
+                        let browsing = query_text.is_empty();
+
                         view! {
                             <div class="mb-3 text-sm text-stone-500 dark:text-stone-400">
-                                {format!("{total} result{}", if total == 1 { "" } else { "s" })}
+                                // No query = a browse list, sorted by recency by
+                                // default — say so instead of "N results" (#108).
+                                {if browsing {
+                                    format!("Recently updated \u{00b7} {total} node{}", if total == 1 { "" } else { "s" })
+                                } else {
+                                    format!("{total} result{}", if total == 1 { "" } else { "s" })
+                                }}
                                 {if total_pages > 1 {
                                     format!(" \u{00b7} page {current_page} of {total_pages}")
                                 } else {
@@ -627,9 +673,31 @@ pub fn SearchView() -> impl IntoView {
                                             let s_label = status_label(&st);
                                             let s_color = status_color(&st);
                                             let match_src = result.match_source.clone();
-                                            let snippet = result.snippet.as_deref().map(sanitize_highlight);
-                                            let plain_title = result.title.clone();
-                                            let hl_title = result.highlighted_title.as_deref().map(sanitize_highlight);
+                                            let is_node_match = match_src.as_deref() == Some("node");
+                                            // Server-marked (full-text node match) vs not
+                                            // (fuzzy, note/task, browse).
+                                            let server_hl = result.highlighted_title.clone();
+                                            let title_view = result_title(&result.title, server_hl.as_deref(), &query_text);
+                                            // "in title" / "in text" for full-text node matches.
+                                            let node_match_where = (is_node_match && server_hl.is_some())
+                                                .then(|| if server_hl.as_deref().is_some_and(has_mark) { "in title" } else { "in text" });
+                                            // Body snippet: shown only when it carries a match
+                                            // (a title-only hit's body headline is just the
+                                            // leading words — noise, #108). Fuzzy snippets are
+                                            // plain text, marked client-side.
+                                            let snippet_view = result.snippet.clone().and_then(|s| {
+                                                if server_hl.is_some() || !is_node_match {
+                                                    (!is_node_match || has_mark(&s)).then(|| {
+                                                        view! { <span inner_html=sanitize_highlight(&s) /> }.into_any()
+                                                    })
+                                                } else {
+                                                    highlight_segments(&s, &query_text)
+                                                        .iter()
+                                                        .any(|(_, hit)| *hit)
+                                                        .then(|| marked_text(&s, &query_text))
+                                                }
+                                            });
+                                            let updated = result.updated_at.as_ref().map(format_relative_short);
 
                                             view! {
                                                 <button
@@ -651,12 +719,7 @@ pub fn SearchView() -> impl IntoView {
                                                             {t_icon}
                                                         </span>
                                                         <h3 class="text-sm font-medium text-stone-900 dark:text-stone-100 truncate flex-1">
-                                                            {match hl_title {
-                                                                Some(ht) => view! {
-                                                                    <span inner_html=ht />
-                                                                }.into_any(),
-                                                                None => view! { {plain_title} }.into_any(),
-                                                            }}
+                                                            {title_view}
                                                         </h3>
                                                         <span
                                                             class="material-symbols-outlined flex-shrink-0"
@@ -682,42 +745,44 @@ pub fn SearchView() -> impl IntoView {
                                                                 style="height: 12px;" />
                                                         </div>
                                                     </div>
-                                                    // Row 2: slug
-                                                    <p class="text-xs text-stone-500 dark:text-stone-400 mb-1 font-mono">
-                                                        {result.slug}
-                                                    </p>
-                                                    // Row 2.5: match source badge (notes / tasks only)
-                                                    {match match_src.as_deref() {
-                                                        Some("note") => Some(view! {
-                                                            <span class="inline-flex items-center gap-1 mb-1 px-1.5 py-0.5
-                                                                text-xs rounded
-                                                                bg-stone-100 dark:bg-stone-800
-                                                                text-stone-600 dark:text-stone-300
-                                                                border border-stone-200 dark:border-stone-700">
-                                                                <span class="material-symbols-outlined"
-                                                                    style="font-size: 11px;">"sticky_note_2"</span>
-                                                                "matched in note"
+                                                    // Row 2: recognizable metadata — type, recency,
+                                                    // where it matched. (The slug used to sit here:
+                                                    // an opaque id that read as debug output, #107.)
+                                                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1 text-xs text-stone-500 dark:text-stone-400"
+                                                        data-testid="result-meta">
+                                                        <span>{t_label}</span>
+                                                        {updated.map(|u| view! { <span>{format!("\u{00b7} Updated {u}")}</span> })}
+                                                        {node_match_where.map(|w| view! {
+                                                            <span class="px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700">
+                                                                {format!("matched {w}")}
                                                             </span>
-                                                        }.into_any()),
-                                                        Some("task") => Some(view! {
-                                                            <span class="inline-flex items-center gap-1 mb-1 px-1.5 py-0.5
-                                                                text-xs rounded
-                                                                bg-stone-100 dark:bg-stone-800
-                                                                text-stone-600 dark:text-stone-300
-                                                                border border-stone-200 dark:border-stone-700">
-                                                                <span class="material-symbols-outlined"
-                                                                    style="font-size: 11px;">"task_alt"</span>
-                                                                "matched in task"
-                                                            </span>
-                                                        }.into_any()),
-                                                        _ => None,
-                                                    }}
+                                                        })}
+                                                        {match match_src.as_deref() {
+                                                            Some("note") => Some(view! {
+                                                                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+                                                                    bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300
+                                                                    border border-stone-200 dark:border-stone-700">
+                                                                    <span class="material-symbols-outlined" style="font-size: 11px;">"sticky_note_2"</span>
+                                                                    "matched in note"
+                                                                </span>
+                                                            }.into_any()),
+                                                            Some("task") => Some(view! {
+                                                                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+                                                                    bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300
+                                                                    border border-stone-200 dark:border-stone-700">
+                                                                    <span class="material-symbols-outlined" style="font-size: 11px;">"task_alt"</span>
+                                                                    "matched in task"
+                                                                </span>
+                                                            }.into_any()),
+                                                            _ => None,
+                                                        }}
+                                                    </div>
                                                     // Row 3: snippet (optional)
-                                                    {snippet.map(|s| view! {
-                                                        <p
-                                                            class="text-xs text-stone-600 dark:text-stone-400 line-clamp-2"
-                                                            inner_html=s
-                                                        />
+                                                    {snippet_view.map(|v| view! {
+                                                        <p class="text-xs text-stone-600 dark:text-stone-400 line-clamp-2"
+                                                            data-testid="result-snippet">
+                                                            {v}
+                                                        </p>
                                                     })}
                                                 </button>
                                             }

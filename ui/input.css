@@ -67,6 +67,19 @@
   font-variation-settings: 'SOFT' 60;
 }
 
+/* Search highlights (<mark> from ts_headline and client-side term matching).
+   Informational, so stone — warm colour is reserved for urgency (heat tokens). */
+mark {
+  background-color: rgb(231 229 228); /* stone-200 */
+  color: inherit;
+  font-weight: 600;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.dark mark {
+  background-color: rgb(68 64 60); /* stone-700 */
+}
+
 @layer base {
   body {
     font-family: 'Inter', system-ui, sans-serif;

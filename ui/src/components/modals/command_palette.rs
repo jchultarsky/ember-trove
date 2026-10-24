@@ -317,6 +317,7 @@ mod tests {
             status: "draft".to_string(),
             match_source: Some("node".to_string()),
             highlighted_title: None,
+            updated_at: None,
         }
     }
 

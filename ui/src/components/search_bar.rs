@@ -162,7 +162,14 @@ pub fn SearchBar() -> impl IntoView {
                                     <div class="font-medium text-stone-900 dark:text-stone-100 truncate">
                                         {r.title}
                                     </div>
-                                    <div class="text-xs text-stone-400 truncate">{r.slug}</div>
+                                    // Type + recency, not the slug (an opaque id; #107).
+                                    <div class="text-xs text-stone-400 truncate">
+                                        {crate::components::node_meta::type_label(&r.node_type)}
+                                        {r.updated_at.as_ref().map(|u| format!(
+                                            " \u{00b7} Updated {}",
+                                            crate::components::format_helpers::format_relative_short(u)
+                                        ))}
+                                    </div>
                                 </button>
                             }
                         }).collect::<Vec<_>>()}

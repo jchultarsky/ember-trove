@@ -6,6 +6,35 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — search results show full titles (#107)
+- **Result headings are always the node's full title.** The title highlight
+  came from `ts_headline` with fragment limits, so "Buy a gift for Sam"
+  appeared as "Gift for Sam", and a body-only match on "Master Bath Remodel"
+  appeared as just "Master". The same node showed under different names
+  depending on how you reached it. The server now uses `HighlightAll`, and
+  the UI uses a server highlight only when it equals the title plus `<mark>`s
+  (`common::search::title_highlight_is_full`).
+- **Search highlights actually show.** The sanitizer allowed only `<b>`
+  while the SQL emits `<mark>`, so every highlight was silently stripped.
+  It now allows `<mark>` (still ammonia, no attributes). Highlights are
+  styled in stone, not amber, since warm colours are reserved for urgency.
+- **The slug is gone from result cards and the header dropdown.** It was an
+  opaque id that read as debug output.
+
+### Added — clearer search results (#108)
+- Each result card has a metadata line: the type as text, "Updated 3d ago"
+  (`SearchResult` now carries `updated_at`), and for full-text node matches
+  "matched in title" / "matched in text", next to the existing note and task
+  badges.
+- Highlighting no longer depends on the mode: results without a server
+  highlight (fuzzy mode, note and task matches) get the query's words marked
+  in the browser (`common::search::highlight_segments`). These are rendered
+  as escaped text, never HTML.
+- A body snippet with no match (a title-only hit's leading words) is hidden.
+- An empty query is labelled "Recently updated · N nodes" rather than
+  "N results". Defaulting Search to the last preset was declined: silently
+  re-applying old filters would surprise more than it helps.
+
 ### Added — due dates read back in words, with a past-date warning
 Every task due-date input (row edit forms in My Day, a node's task panel and
 the Inbox, the add-task form, and Inbox triage) now spells out the chosen

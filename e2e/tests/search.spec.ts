@@ -87,3 +87,57 @@ test('header search keeps the query on /search and clears it on leaving', async 
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+// ── Result cards: full titles, metadata line, match badges (#107, #108) ─────
+
+test('result headings are full titles, with type/updated meta and no slug', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const titleWord = `sam${stamp}`;
+  const bodyWord = `tile${stamp}`;
+  const mk = async (title: string, body: string) => {
+    const r = await request.post('/api/nodes', {
+      data: { title, node_type: 'project', body, metadata: {}, status: 'draft' },
+    });
+    expect(r.ok()).toBeTruthy();
+    return r.json();
+  };
+  const gift = await mk(`Buy a gift for ${titleWord}`, 'wrapping paper and a card');
+  const bath = await mk('Master Bath Remodel', `pick the ${bodyWord} and the grout`);
+  try {
+    const searchBox = page.getByPlaceholder('Search… (Enter)');
+    const main = page.locator('main');
+
+    // Title match: the whole title, the matched word marked, "matched in title".
+    await page.goto('/search');
+    await searchBox.fill(titleWord);
+    await searchBox.press('Enter');
+    const giftCard = main.getByRole('button').filter({ hasText: titleWord });
+    await expect(giftCard.getByRole('heading')).toHaveText(`Buy a gift for ${titleWord}`);
+    await expect(giftCard.getByRole('heading').locator('mark')).toHaveText(titleWord);
+    const meta = giftCard.getByTestId('result-meta');
+    await expect(meta).toContainText('Project');
+    await expect(meta).toContainText('Updated');
+    await expect(meta).toContainText('matched in title');
+    // The slug (an opaque id) is gone from the card.
+    await expect(giftCard).not.toContainText(gift.slug);
+
+    // Body-only match: still the full title (was "Master"), "matched in text".
+    await searchBox.fill(bodyWord);
+    await searchBox.press('Enter');
+    const bathCard = main.getByRole('button').filter({ hasText: 'Master Bath Remodel' });
+    await expect(bathCard.getByRole('heading')).toHaveText('Master Bath Remodel');
+    await expect(bathCard.getByTestId('result-meta')).toContainText('matched in text');
+    await expect(bathCard.getByTestId('result-snippet').locator('mark')).toHaveText(bodyWord);
+  } finally {
+    await request.delete(`/api/nodes/${gift.id}`);
+    await request.delete(`/api/nodes/${bath.id}`);
+  }
+});
+
+test('an empty query is framed as "Recently updated"', async ({ page }) => {
+  await page.goto('/search');
+  await expect(page.locator('main').getByText(/^Recently updated · \d+ nodes?/)).toBeVisible();
+});
