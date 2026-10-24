@@ -110,6 +110,8 @@ enum Command {
     GoWebhooks,
     NewTask,
     NewNode,
+    /// Full-page editor with the type preset (`/nodes/new?type=…`), #111.
+    NewNodeOfType(&'static str),
     ToggleDark,
     OpenHelp,
     EditCurrentNode,
@@ -139,6 +141,41 @@ const GLOBAL_COMMANDS: &[CommandSpec] = &[
         label: "New node…",
         icon: "add_circle",
         keywords: "add create article project area note",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::NewNodeOfType("project"),
+        label: "New Project",
+        icon: "rocket_launch",
+        keywords: "add create node type",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::NewNodeOfType("article"),
+        label: "New Article",
+        icon: "description",
+        keywords: "add create node type note",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::NewNodeOfType("area"),
+        label: "New Area",
+        icon: "category",
+        keywords: "add create node type",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::NewNodeOfType("resource"),
+        label: "New Resource",
+        icon: "bookmarks",
+        keywords: "add create node type",
+        hint: "",
+    },
+    CommandSpec {
+        cmd: Command::NewNodeOfType("reference"),
+        label: "New Reference",
+        icon: "menu_book",
+        keywords: "add create node type citation",
         hint: "",
     },
     CommandSpec {
@@ -541,6 +578,9 @@ pub fn CommandPalette(
                         }
                     }
                     Command::NewNode => on_create.run(String::new()),
+                    Command::NewNodeOfType(t) => {
+                        nav(&format!("/nodes/new?type={t}"), Default::default())
+                    }
                     Command::ToggleDark => {
                         if let Some(t) = theme {
                             t.update(|v| {
