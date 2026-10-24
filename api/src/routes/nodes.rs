@@ -769,7 +769,7 @@ async fn export_node(
         "json" => {
             let json = serde_json::to_string_pretty(&node)
                 .map_err(|e| ApiError::Internal(format!("JSON serialise failed: {e}")))?;
-            let name = sanitize_filename(&format!("{}.json", node.title));
+            let name = export_filename(&node.slug, node.updated_at, "json");
             (json, "application/json; charset=utf-8", name)
         }
         _ => {
@@ -796,7 +796,7 @@ async fn export_node(
                 node.updated_at.format("%Y-%m-%dT%H:%M:%SZ"),
             );
             let md = format!("{}{}", front_matter, node.body.as_deref().unwrap_or(""));
-            let name = sanitize_filename(&format!("{}.md", node.title));
+            let name = export_filename(&node.slug, node.updated_at, "md");
             (md, "text/markdown; charset=utf-8", name)
         }
     };
@@ -974,6 +974,21 @@ async fn duplicate_node(
     Ok((StatusCode::CREATED, Json(dup)))
 }
 
+/// Download name for a single-node export: `{slug}-{updated_at}.{ext}`,
+/// e.g. `project-plan-20261023T1937.md`. The slug (not the title) matches the
+/// bulk ZIP's per-entry names and is already URL-safe; the `updated_at` stamp
+/// keeps successive exports of an edited node from colliding as
+/// `Project (1).md`, `Project (2).md`, … and says which version each file is.
+fn export_filename(slug: &str, updated_at: chrono::DateTime<chrono::Utc>, ext: &str) -> String {
+    let stem: String = sanitize_filename(slug).chars().take(120).collect();
+    let stem = if stem == "upload" {
+        "node".to_string()
+    } else {
+        stem
+    };
+    format!("{stem}-{}.{ext}", updated_at.format("%Y%m%dT%H%M"))
+}
+
 fn sanitize_filename(raw: &str) -> String {
     let clean: String = raw
         .chars()
@@ -1002,6 +1017,32 @@ mod tests {
             metadata: json!({}),
             created_at: Utc::now() - TimeDelta::minutes(age_minutes),
         }
+    }
+
+    #[test]
+    fn export_filename_uses_slug_and_updated_stamp() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-23T19:37:12Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            export_filename("project-plan", at, "md"),
+            "project-plan-20261023T1937.md"
+        );
+        assert_eq!(
+            export_filename("project-plan", at, "json"),
+            "project-plan-20261023T1937.json"
+        );
+    }
+
+    #[test]
+    fn export_filename_strips_header_breaking_chars_and_falls_back() {
+        let at = Utc::now();
+        // Defense in depth: slugs are already URL-safe, but nothing that can
+        // break Content-Disposition (quotes, CR/LF) may reach the header.
+        let name = export_filename("a\"b\r\nc", at, "md");
+        assert!(name.starts_with("abc-"), "{name}");
+        assert!(!name.contains(['"', '\r', '\n']));
+        assert!(export_filename("", at, "md").starts_with("node-"));
     }
 
     #[test]
