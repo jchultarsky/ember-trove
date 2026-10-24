@@ -16,18 +16,36 @@ use std::net::{IpAddr, SocketAddr};
 pub fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let o = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_unspecified()
-                || v4.octets()[0] == 0
-                || (v4.octets()[0] == 169 && v4.octets()[1] == 254)
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 169 && o[1] == 254)
+                || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT)
         }
         IpAddr::V6(v6) => {
+            // An IPv4 address in IPv6 form must be judged as IPv4:
+            // `::ffff:127.0.0.1` / `::ffff:169.254.169.254` reach the IPv4
+            // loopback / IMDS on a dual-stack host, and the NAT64 well-known
+            // prefix 64:ff9b::/96 maps onto IPv4 through a translator.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(IpAddr::V4(v4));
+            }
+            let seg = v6.segments();
+            if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                let [a, b] = seg[6].to_be_bytes();
+                let [c, d] = seg[7].to_be_bytes();
+                return is_blocked_ip(IpAddr::V4(std::net::Ipv4Addr::new(a, b, c, d)));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7 (ULA)
-                || (v6.segments()[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
+                || v6.is_multicast()
+                || (seg[0] & 0xfe00) == 0xfc00 // fc00::/7 (ULA)
+                || (seg[0] & 0xffc0) == 0xfe80 // fe80::/10 (link-local)
         }
     }
 }
@@ -107,6 +125,48 @@ mod tests {
                 "{ip} should be allowed"
             );
         }
+    }
+
+    #[test]
+    fn is_blocked_ip_judges_ipv4_in_ipv6_form_as_ipv4() {
+        // Regression: these passed both create-time and dispatch-time vetting.
+        for ip in [
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:10.0.0.5",
+            "64:ff9b::a9fe:a9fe", // NAT64 of 169.254.169.254
+            "64:ff9b::7f00:1",    // NAT64 of 127.0.0.1
+        ] {
+            assert!(
+                is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
+                "{ip} should be blocked"
+            );
+        }
+        // Public IPv4 behind the same forms stays allowed.
+        for ip in ["::ffff:8.8.8.8", "64:ff9b::808:808", "2606:4700:4700::1111"] {
+            assert!(
+                !is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
+                "{ip} should be allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn is_blocked_ip_flags_cgnat_broadcast_and_multicast() {
+        for ip in [
+            "100.64.0.1",
+            "100.127.255.254",
+            "255.255.255.255",
+            "224.0.0.1",
+            "ff02::1",
+        ] {
+            assert!(
+                is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
+                "{ip} should be blocked"
+            );
+        }
+        // Just outside 100.64/10.
+        assert!(!is_blocked_ip("100.128.0.1".parse::<IpAddr>().unwrap()));
     }
 
     #[tokio::test]
