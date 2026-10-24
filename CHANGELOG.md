@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — handler-level authorization tests
+- Ten router tests drive the real `update_task`, nested revoke and
+  `/permissions/{id}` handlers against a fixed set of nodes, roles and grants:
+  re-parenting onto a node you can't edit, someone else's task, viewer vs
+  editor, the revoke IDOR, and the canonical-owner backstop. Until now only
+  the repo layer had tests for the v2.31.1 fixes. A repo write that the
+  handler should have refused panics in the stub, so a missing check can't
+  pass on a status code. Removing either v2.31.1 check turns them red.
+
+### Tooling — CI runs the UI crate's unit tests
+- `cargo test -p ui` (host) is now a gate in CI, `verify.sh`, the pre-push
+  hook and `make test`. The UI's 18 unit tests had never run in CI, and two
+  palette-ranking tests had been failing since #111: they picked a command by
+  table index, and the new "New <type>" commands shifted it. They now look
+  commands up by label.
+
 ### Changed — one implementation per UI behaviour (refactor)
 - **Task edits:** every task PATCH in the UI (row editors, My Day drag and
   `t`, Inbox attach, triage) goes through `task_actions::patch_task`, and the
