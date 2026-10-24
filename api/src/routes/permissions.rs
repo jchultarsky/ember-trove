@@ -17,7 +17,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_owner},
+    auth::permissions::{guard_canonical_owner, is_admin, require_owner},
     error::ApiError,
     state::AppState,
 };
@@ -83,6 +83,9 @@ async fn update_permission(
 
     // Require owner on the associated node
     require_owner(state.permissions.as_ref(), &claims, perm.node_id).await?;
+    // SECURITY: same canonical-owner backstop as the nested grant route.
+    let node = state.nodes.get(perm.node_id).await?;
+    guard_canonical_owner(&claims, &node.owner_id, &perm.subject_id, Some(&req.role))?;
 
     let perm = state
         .permissions
@@ -110,7 +113,13 @@ async fn delete_permission(
 
     // Require owner on the associated node
     require_owner(state.permissions.as_ref(), &claims, perm.node_id).await?;
+    // SECURITY: same canonical-owner backstop as the nested revoke route.
+    let node = state.nodes.get(perm.node_id).await?;
+    guard_canonical_owner(&claims, &node.owner_id, &perm.subject_id, None)?;
 
-    state.permissions.revoke(PermissionId(id)).await?;
+    state
+        .permissions
+        .revoke(PermissionId(id), perm.node_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

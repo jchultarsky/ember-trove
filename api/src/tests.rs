@@ -101,20 +101,18 @@ impl NodeRepo for StubNodeRepo {
     async fn delete(&self, _: NodeId) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
-    async fn neighbors(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> {
+    async fn neighbors(&self, _: NodeId, _: Option<&str>) -> Result<Vec<Node>, EmberTroveError> {
         unimplemented!()
     }
-    async fn backlinks(&self, _: NodeId) -> Result<Vec<Node>, EmberTroveError> {
+    async fn backlinks(&self, _: NodeId, _: Option<&str>) -> Result<Vec<Node>, EmberTroveError> {
         unimplemented!()
     }
     async fn list_titles(&self, _: Option<&str>) -> Result<Vec<NodeTitleEntry>, EmberTroveError> {
         unimplemented!()
     }
-    async fn find_id_by_title(&self, _: &str) -> Result<Option<NodeId>, EmberTroveError> {
-        unimplemented!()
-    }
     async fn find_ids_by_titles(
         &self,
+        _: &str,
         _: &[String],
     ) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> {
         unimplemented!()
@@ -159,6 +157,7 @@ impl EdgeRepo for StubEdgeRepo {
     async fn list_for_node_with_titles(
         &self,
         _: NodeId,
+        _: Option<&str>,
     ) -> Result<Vec<EdgeWithTitles>, EmberTroveError> {
         unimplemented!()
     }
@@ -420,7 +419,7 @@ impl PermissionRepo for StubPermissionRepo {
     ) -> Result<Permission, EmberTroveError> {
         unimplemented!()
     }
-    async fn revoke(&self, _: PermissionId) -> Result<(), EmberTroveError> {
+    async fn revoke(&self, _: PermissionId, _: NodeId) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
     async fn list(&self, _: NodeId) -> Result<Vec<Permission>, EmberTroveError> {
@@ -461,9 +460,6 @@ struct StubGraphRepo;
 #[async_trait]
 impl GraphRepo for StubGraphRepo {
     async fn list_positions(&self, _: Option<&str>) -> Result<Vec<NodePosition>, EmberTroveError> {
-        unimplemented!()
-    }
-    async fn upsert_position(&self, _: Uuid, _: f64, _: f64) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
     async fn save_positions(

@@ -12,7 +12,7 @@ use common::{
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_viewer},
+    auth::permissions::{is_admin, require_viewer, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -76,6 +76,12 @@ async fn upsert_position(
     Json(req): Json<SavePositionRequest>,
 ) -> Result<StatusCode, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
-    state.graph.upsert_position(node_id, req.x, req.y).await?;
+    // SECURITY: node_positions is one shared layout per node, so a viewer must
+    // not move the owner's nodes. Route through the owner-scoped batch write
+    // (same rule as PUT /graph/positions): a non-owner's write is dropped.
+    state
+        .graph
+        .save_positions(&[(node_id, req.x, req.y)], subject_scope(&claims))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

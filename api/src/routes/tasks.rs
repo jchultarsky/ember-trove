@@ -238,6 +238,13 @@ async fn update_task(
         }
     }
 
+    // SECURITY: moving a task onto a node (node_id: Some(Some(_))) requires
+    // editor access to the DESTINATION — the check above only covers the
+    // task's current node. Mirrors create_standalone_task.
+    if let Some(Some(dest)) = req.node_id {
+        require_editor(state.permissions.as_ref(), &claims, dest).await?;
+    }
+
     let effect = series_effect(
         &existing,
         req.status.as_ref(),

@@ -110,11 +110,13 @@ pub fn dispatch(
                 req = req.header("X-Webhook-Signature", format!("sha256={sig}"));
             }
 
-            let url = hook.url.clone();
             let wid = hook.id;
             tokio::spawn(async move {
                 if let Err(e) = req.body(body).send().await {
-                    warn!("webhook POST to {url} (id={wid}) failed: {e}");
+                    // SECURITY: never log the URL — Slack/Discord-style
+                    // webhook URLs carry their secret in the path, and
+                    // reqwest's error Display repeats it (`without_url`).
+                    warn!("webhook POST (id={wid}) failed: {}", e.without_url());
                 }
             });
         }

@@ -17,7 +17,10 @@ pub trait PermissionRepo: Send + Sync {
         req: GrantPermissionRequest,
     ) -> Result<Permission, EmberTroveError>;
 
-    async fn revoke(&self, id: PermissionId) -> Result<(), EmberTroveError>;
+    /// Revoke permission `id` on `node_id`. SECURITY: node-scoped — the route
+    /// authorizes the caller against `node_id`, so an id belonging to another
+    /// node must not match (the IDOR fixed for share tokens in v2.22.4).
+    async fn revoke(&self, id: PermissionId, node_id: NodeId) -> Result<(), EmberTroveError>;
 
     async fn list(&self, node_id: NodeId) -> Result<Vec<Permission>, EmberTroveError>;
 
@@ -124,9 +127,10 @@ impl PermissionRepo for PgPermissionRepo {
         row.into_permission()
     }
 
-    async fn revoke(&self, id: PermissionId) -> Result<(), EmberTroveError> {
-        let result = sqlx::query("DELETE FROM permissions WHERE id = $1")
+    async fn revoke(&self, id: PermissionId, node_id: NodeId) -> Result<(), EmberTroveError> {
+        let result = sqlx::query("DELETE FROM permissions WHERE id = $1 AND node_id = $2")
             .bind(id.inner())
+            .bind(node_id.inner())
             .execute(&self.pool)
             .await
             .map_err(|e| EmberTroveError::Internal(format!("revoke permission failed: {e}")))?;

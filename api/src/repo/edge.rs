@@ -15,9 +15,13 @@ pub trait EdgeRepo: Send + Sync {
     async fn get(&self, id: EdgeId) -> Result<Edge, EmberTroveError>;
     async fn delete(&self, id: EdgeId) -> Result<(), EmberTroveError>;
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Edge>, EmberTroveError>;
+    /// Edges touching `node_id`, with both endpoint titles. SECURITY: only
+    /// edges whose endpoints are both visible to `subject` (`None` = admin) —
+    /// the route checks access to `node_id` alone.
     async fn list_for_node_with_titles(
         &self,
         node_id: NodeId,
+        subject: Option<&str>,
     ) -> Result<Vec<EdgeWithTitles>, EmberTroveError>;
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError>;
     /// Edges visible to `subject`: both endpoints owned by them (`Some(sub)`),
@@ -210,8 +214,9 @@ impl EdgeRepo for PgEdgeRepo {
     async fn list_for_node_with_titles(
         &self,
         node_id: NodeId,
+        subject: Option<&str>,
     ) -> Result<Vec<EdgeWithTitles>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, EdgeWithTitlesRow>(
+        let rows = sqlx::query_as::<_, EdgeWithTitlesRow>(&format!(
             r#"
             SELECT
                 e.id,
@@ -225,11 +230,16 @@ impl EdgeRepo for PgEdgeRepo {
             FROM edges e
             JOIN nodes sn ON sn.id = e.source_id
             JOIN nodes tn ON tn.id = e.target_id
-            WHERE e.source_id = $1 OR e.target_id = $1
+            WHERE (e.source_id = $1 OR e.target_id = $1)
+              AND {sn_visible}
+              AND {tn_visible}
             ORDER BY e.created_at DESC
             "#,
-        )
+            sn_visible = super::visible_to("sn", 2),
+            tn_visible = super::visible_to("tn", 2),
+        ))
         .bind(node_id.0)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list edges with titles failed: {e}")))?;
