@@ -662,7 +662,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                             let other_id = if is_outgoing { edge.target_id } else { edge.source_id };
                                             let other_title = if is_outgoing { edge.target_title.clone() } else { edge.source_title.clone() };
                                             let direction = if is_outgoing { "\u{2192}" } else { "\u{2190}" };
-                                            let edge_type_label = format!("{:?}", edge.edge_type).to_lowercase().replace('_', " ");
+                                            let edge_type_label = edge.edge_type.label();
                                             let label = edge.label.clone().unwrap_or_default();
                                             view! {
                                                 <div class="flex items-center justify-between py-1.5 px-2 rounded

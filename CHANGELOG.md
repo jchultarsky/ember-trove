@@ -6,6 +6,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — bugs found in the code review
+- **Admin metrics (`/api/metrics`) failed on every call:** it counted tables
+  named `notes` / `tasks`, which don't exist.
+- **Invite emails linked to a 404** (`/node/{id}`; the route is `/nodes/{id}`).
+- **Changing your password stopped working about an hour after login:** token
+  refresh renewed the session cookie but not the Cognito access cookie that
+  change-password needs. All three auth cookies are now built by one helper
+  each (login, refresh and logout share them), with a test pinning HttpOnly,
+  SameSite=Strict and path scoping.
+- **Monthly and yearly recurrences drifted to the 28th.** After a short month
+  every later occurrence stayed on the 28th. They now clamp to the month's
+  last day (`RecurrenceRule::advance` in `common`, with tests).
+- **Search returned trashed notes and tasks** for the 30-day undo window,
+  including snippets of the deleted text. Fuzzy search also treated `%` and
+  `_` as wildcards, so a query of `%` matched everything. Both are covered by
+  Postgres tests. A huge `?page=` no longer overflows.
+- **Edge labels read "relatedto" / "dependson"** (`EdgeType::label`).
+- **Note timestamps showed UTC as if it were local time.**
+- **Undo after deleting a note could panic** if you had navigated away first.
+- **A fast double Enter in the add-task form created the task twice.**
+- **My Day's `t` key re-stamped a carried-over task** instead of removing it
+  from today.
+- **Backup restore lost note colours and edit times.**
+
+### Security — no more `eval` in the UI
+The remaining `js_sys::eval` call sites (date formatting, two copy-to-clipboard
+helpers) use `Date` locale methods and `navigator.clipboard` through
+`Reflect`. They failed silently under a CSP without `'unsafe-eval'`, and they
+were the only reason the production CSP keeps `'unsafe-eval'`. Dropping it is
+now possible as a separate, smoke-tested change.
+
+### Tooling
+- Release images build on `rust:1.97` (an `ARG RUST_VERSION`), matching
+  `rust-toolchain.toml`, instead of whatever `rust:latest` was.
+
 ## [2.32.0] - 2026-10-24
 
 ### Added — faster node creation with your default templates (#111)

@@ -34,3 +34,12 @@ pub(crate) fn visible_to(alias: &str, param: u8) -> String {
          SELECT 1 FROM permissions vp WHERE vp.node_id = {alias}.id AND vp.subject_id = ${param}::text))"
     )
 }
+
+/// Escape SQL `LIKE`/`ILIKE` metacharacters (`\`, `%`, `_`) so a user-supplied
+/// substring is matched literally. Pair with `ESCAPE '\'` in the query.
+/// Shared by the notes feed and fuzzy search.
+pub(crate) fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}

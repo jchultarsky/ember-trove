@@ -4,6 +4,7 @@ use common::share_token::CreateShareTokenRequest;
 use leptos::prelude::*;
 
 use crate::api;
+use crate::components::format_helpers::copy_to_clipboard;
 
 /// Derives the public share URL from the current window origin + the token UUID.
 fn share_url(token: &uuid::Uuid) -> String {
@@ -11,13 +12,6 @@ fn share_url(token: &uuid::Uuid) -> String {
         .and_then(|w| w.location().origin().ok())
         .unwrap_or_else(|| "https://trove.chultarsky.me".to_string());
     format!("{origin}/share/{token}")
-}
-
-/// Copy `text` to the clipboard via the JS Clipboard API.
-/// Uses `js_sys::eval` to avoid depending on additional web-sys features.
-fn copy_to_clipboard(text: String) {
-    let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
-    let _ = js_sys::eval(&format!("navigator.clipboard.writeText('{escaped}')"));
 }
 
 #[component]
@@ -165,7 +159,7 @@ pub fn SharePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                     }
                                                     title="Copy link"
                                                     on:click=move |_| {
-                                                        copy_to_clipboard(url_copy.clone());
+                                                        copy_to_clipboard(&url_copy);
                                                         copied_id.set(Some(token_id));
                                                         // Clear the "copied" indicator after 2 s.
                                                         wasm_bindgen_futures::spawn_local(async move {

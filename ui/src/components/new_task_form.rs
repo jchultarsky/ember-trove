@@ -52,6 +52,11 @@ pub fn NewTaskForm(
     let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
 
     let do_add = move || {
+        // Enter bypassed the button's `disabled`: a fast double Enter created
+        // the task twice.
+        if adding.get_untracked() {
+            return;
+        }
         let title = new_title.get_untracked().trim().to_string();
         if title.is_empty() {
             add_error.set(Some("Title is required.".to_string()));

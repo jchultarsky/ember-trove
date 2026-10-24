@@ -28,13 +28,7 @@ pub struct NoteFeedFilter {
     pub offset: i64,
 }
 
-/// Escape SQL `LIKE`/`ILIKE` metacharacters (`\`, `%`, `_`) so a user-supplied
-/// substring is matched literally. Pair with `ESCAPE '\'` in the query.
-fn escape_like(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
+use super::escape_like;
 
 // ── Trait ──────────────────────────────────────────────────────────────────────
 

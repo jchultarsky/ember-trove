@@ -1,5 +1,8 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
-FROM rust:latest AS builder
+# Pinned to rust-toolchain.toml's channel: images used to build with whatever
+# `rust:latest` was, not the toolchain CI tests. Bump BOTH together.
+ARG RUST_VERSION=1.97
+FROM rust:${RUST_VERSION} AS builder
 
 # Extra cargo features, e.g. "e2e-bypass" for the Playwright stack
 # (deploy/docker-compose.e2e.yml). Empty for production builds — the
