@@ -60,6 +60,12 @@ CI job is too slow a feedback loop for selector work.
   the warning span is always rendered (an aria-live region), so assert
   `toBeEmpty()` / `toHaveText()`, not visibility.
 
+- **Sidebar "+" buttons share names with palette commands** (2026-10-24,
+  #111): each type row has a "+" named "New Project" / "New Area" /…, and so do
+  the palette commands. Scope palette lookups to the dialog —
+  `page.getByRole('dialog').getByRole('button', { name })` — and address the
+  sidebar buttons by `data-testid="new-<type>"`.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —

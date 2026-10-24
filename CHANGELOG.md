@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — faster node creation with your default templates (#111)
+- **The full-page editor now applies your default template.** Opening
+  `/nodes/new` from a type list used to seed only the built-in scaffold, so
+  your default template had to be picked by hand every time. Both create
+  paths (the editor and the create dialog) now follow one rule,
+  `common::template::resolve_create_body`: an explicit template prefill,
+  then a rescued draft, then the type's default template, then the built-in
+  scaffold. Changing the type re-applies the rule only while the body is
+  still exactly what the app put there, never over your own typing. An
+  untouched default is no longer saved as a "draft".
+- **One-click creation:** each type in the sidebar (Articles, Projects,
+  Areas, Resources, References) has a "+" that opens the editor with that
+  type preset (`/nodes/new?type=…`), the default applied and the title
+  focused. The command palette gains "New Project", "New Article", "New
+  Area", "New Resource" and "New Reference".
+- **Set the default at the moment of intent:** when you pick a template that
+  isn't its type's default, a "★ Use as default for <type>" button sets it.
+  The template picker lists the current type's templates first, default
+  starred, then other types. A new template in Templates takes its type from
+  the current filter.
+
 ## [2.31.1] - 2026-10-24
 
 ### Security — authorization hotfix
