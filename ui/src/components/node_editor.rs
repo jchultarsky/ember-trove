@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use common::{
     id::{NodeId, TemplateId},
     node::{CreateNodeRequest, NodeStatus, NodeTitleEntry, NodeType, UpdateNodeRequest},
-    template::NodeTemplate,
+    template::{
+        CreateBodySource, NodeTemplate, default_for_type, may_replace_body, picker_order,
+        resolve_create_body,
+    },
 };
 use gloo_timers::callback::Timeout;
 use leptos::ev;
@@ -15,6 +18,10 @@ use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use crate::markdown::render_markdown;
 use crate::templates::template_for_type;
 use leptos_router::hooks::use_navigate;
+
+fn node_type_label(nt: &NodeType) -> &'static str {
+    crate::components::node_meta::type_label(nt.as_str())
+}
 
 fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
     entries.iter().map(|e| (e.title.clone(), e.id)).collect()
@@ -233,11 +240,19 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // In edit mode the spawn_local block below will override this immediately.
     let node_type_filter = use_context::<RwSignal<Option<String>>>();
     let prefill_signal = use_context::<RwSignal<Option<TemplatePrefill>>>();
+    // `/nodes/new?type=project` (sidebar "+", palette "New Project") presets
+    // the type explicitly; it wins over the list filter. Unknown values are
+    // ignored.
+    let query_type: Option<String> = leptos_router::hooks::use_query_map()
+        .with_untracked(|q| q.get("type"))
+        .filter(|t| NodeType::parse(t).is_some());
 
-    // Create-mode initial state, in priority order: a TemplatePrefill context
-    // (consumed/cleared immediately), a locally persisted draft (work rescued
-    // from an abandoned /nodes/new — see crate::draft), or the static scaffold
-    // for the active type filter.
+    // Create-mode initial state follows `common::template::resolve_create_body`
+    // (#111): a TemplatePrefill context (consumed/cleared immediately), a
+    // locally persisted draft (work rescued from an abandoned /nodes/new — see
+    // crate::draft), the type's default template, or the built-in scaffold.
+    // Templates load asynchronously, so the default is applied by an Effect
+    // below once they arrive — while the body is still the scaffold.
     let (default_type, initial_body, initial_template_id, initial_title, initial_status) =
         if node.is_none() {
             if let Some(sig) = prefill_signal
@@ -256,8 +271,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             {
                 (d.node_type, d.body, None, d.title, d.status)
             } else {
-                let nt = node_type_filter
-                    .and_then(|f| f.get_untracked())
+                let nt = query_type
+                    .clone()
+                    .or_else(|| node_type_filter.and_then(|f| f.get_untracked()))
                     .unwrap_or_else(|| "article".to_string());
                 let body = template_for_type(&nt).to_string();
                 (nt, body, None, String::new(), "draft".to_string())
@@ -272,6 +288,15 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             )
         };
 
+    // The body the system last put in the editor (scaffold, default template,
+    // prefill, or a picked template). The system may replace the body only
+    // while it still equals this (`may_replace_body`); `None` for a rescued
+    // draft or edit mode — never overwritten.
+    let rescued_draft = node.is_none()
+        && initial_template_id.is_none()
+        && initial_body != template_for_type(&default_type);
+    let last_system_body: RwSignal<Option<String>> =
+        RwSignal::new((node.is_none() && !rescued_draft).then(|| initial_body.clone()));
     let title = RwSignal::new(initial_title);
     let node_type = RwSignal::new(default_type);
     // In create mode, pre-populate the body from template or static scaffold.
@@ -280,7 +305,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Template ID used when creating a node from a template (for activity log).
     let template_id_for_create = RwSignal::new(initial_template_id);
     // Selected template value string (drives the <select> prop:value binding).
-    let selected_template_value = RwSignal::new(String::new());
+    let selected_template_value = RwSignal::new(
+        initial_template_id
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+    );
 
     // Fetch templates for the create-mode picker (no-op overhead in edit mode
     // since the picker is hidden; the resource is lazily evaluated).
@@ -291,6 +320,73 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             available_templates.set(ts);
         }
     });
+    // Apply the type's default template once templates arrive — the same
+    // rule as the create modal — but only on top of the untouched built-in
+    // scaffold (never over a prefill, a draft, or anything typed).
+    Effect::new(move |_| {
+        let ts = available_templates.get();
+        if node.is_some() || template_id_for_create.get_untracked().is_some() {
+            return;
+        }
+        let nt = node_type.get_untracked();
+        let Some(last) = last_system_body.get_untracked() else {
+            return;
+        };
+        if last != template_for_type(&nt) || !may_replace_body(&body.get_untracked(), &last) {
+            return;
+        }
+        if let Some(d) = NodeType::parse(&nt).and_then(|t| default_for_type(&ts, &t)) {
+            body.set(d.body.clone());
+            last_system_body.set(Some(d.body.clone()));
+            template_id_for_create.set(Some(d.id));
+            selected_template_value.set(d.id.to_string());
+        }
+    });
+    // A type change in create mode (the type <select>, or a new `?type=` while
+    // the editor stays mounted): re-resolve the body for the new type — its
+    // default template, else the built-in scaffold — but only while the body
+    // is untouched (`may_replace_body`).
+    let apply_type_change = move |new_type: String| {
+        if node.is_none()
+            && last_system_body
+                .get_untracked()
+                .is_some_and(|last| may_replace_body(&body.get_untracked(), &last))
+        {
+            let ts = available_templates.get_untracked();
+            let default = NodeType::parse(&new_type).and_then(|t| default_for_type(&ts, &t));
+            let (new_body, source) =
+                resolve_create_body(None, None, default, template_for_type(&new_type));
+            body.set(new_body.clone());
+            last_system_body.set(Some(new_body));
+            match source {
+                CreateBodySource::Default(id) => {
+                    template_id_for_create.set(Some(id));
+                    selected_template_value.set(id.to_string());
+                }
+                _ => {
+                    template_id_for_create.set(None);
+                    selected_template_value.set(String::new());
+                }
+            }
+        }
+        node_type.set(new_type);
+    };
+    // `/nodes/new?type=a` → `?type=b` reuses the mounted editor (two sidebar
+    // "+" clicks in a row): follow the query like a type change.
+    if node.is_none() {
+        let query = leptos_router::hooks::use_query_map();
+        Effect::new(move |prev: Option<Option<String>>| {
+            let t = query
+                .with(|q| q.get("type"))
+                .filter(|t| NodeType::parse(t).is_some());
+            if let (Some(prev), Some(new)) = (prev, t.clone())
+                && prev.as_ref() != Some(&new)
+            {
+                apply_type_change(new);
+            }
+            t
+        });
+    }
     let status = RwSignal::new(initial_status);
     let saving = RwSignal::new(false);
     // True while the initial node fetch is in-flight (edit mode only).
@@ -337,6 +433,16 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Wiki-link autocomplete state.
     let wikilink_query = RwSignal::new(Option::<String>::None);
     let textarea_ref = NodeRef::<leptos::html::Textarea>::new();
+    // Create mode lands on the title: "one click, then typing" (#111). Tracking
+    // the NodeRef in an Effect (not requestAnimationFrame) per leptos.md.
+    let title_ref = NodeRef::<leptos::html::Input>::new();
+    Effect::new(move |_| {
+        if node.is_none()
+            && let Some(el) = title_ref.get()
+        {
+            let _ = el.focus();
+        }
+    });
 
     // Helper: upload one image File and insert Markdown at the current cursor position.
     // `node` is captured by value (Copy); all signals are Copy too.
@@ -505,7 +611,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 if autosave_v.get_untracked() != v {
                     return;
                 }
-                if d.is_meaningful(template_for_type(&d.node_type)) {
+                // Untouched system body (scaffold OR the applied default
+                // template) is not worth rescuing as a draft.
+                let pristine_body = last_system_body
+                    .get_untracked()
+                    .unwrap_or_else(|| template_for_type(&d.node_type).to_string());
+                if d.is_meaningful(&pristine_body) {
                     crate::draft::write_draft(&d);
                     save_state.set(SaveState::Saved);
                 } else {
@@ -802,6 +913,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     </button>
                     <input
                         type="text"
+                        node_ref=title_ref
                         class="flex-1 min-w-0 text-lg font-semibold bg-transparent
                                text-stone-900 dark:text-stone-100
                                focus:outline-none placeholder-stone-400"
@@ -815,20 +927,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         class="text-sm bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300
                             rounded-lg px-2 py-1.5 focus:outline-none"
                         prop:value=move || node_type.get()
-                        on:change=move |ev| {
-                            let new_type = event_target_value(&ev);
-                            // In create mode, swap the body template when the type
-                            // changes — but only if the user hasn't modified it yet
-                            // (body still equals the previous type's template).
-                            if node.is_none() {
-                                let current_body = body.get_untracked();
-                                let old_tmpl = template_for_type(&node_type.get_untracked());
-                                if current_body == old_tmpl {
-                                    body.set(template_for_type(&new_type).to_string());
-                                }
-                            }
-                            node_type.set(new_type);
-                        }
+                        on:change=move |ev| apply_type_change(event_target_value(&ev))
                     >
                         <option value="article">"Article"</option>
                         <option value="project">"Project"</option>
@@ -851,28 +950,93 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                                 } else if let Ok(tid) = val.parse::<TemplateId>() {
                                     let templates = available_templates.get_untracked();
                                     if let Some(t) = templates.into_iter().find(|t| t.id == tid) {
-                                        let type_str = match t.node_type {
-                                            NodeType::Project   => "project",
-                                            NodeType::Area      => "area",
-                                            NodeType::Resource  => "resource",
-                                            NodeType::Reference => "reference",
-                                            NodeType::Article   => "article",
-                                        };
                                         body.set(t.body.clone());
-                                        node_type.set(type_str.to_string());
+                                        last_system_body.set(Some(t.body.clone()));
+                                        node_type.set(t.node_type.as_str().to_string());
                                         template_id_for_create.set(Some(tid));
                                     }
                                 }
                             }
                         >
                             <option value="">"— Template —"</option>
-                            {move || available_templates.get().into_iter().map(|t| {
-                                let name = t.name.clone();
-                                let id = t.id.to_string();
-                                view! { <option value=id>{name}</option> }
-                            }).collect_view()}
+                            // This type's templates first (default starred), then
+                            // the rest (#111).
+                            {move || {
+                                let ts = available_templates.get();
+                                let nt = NodeType::parse(&node_type.get()).unwrap_or(NodeType::Article);
+                                let (own, other) = picker_order(&ts, &nt);
+                                let opt = |t: &NodeTemplate| {
+                                    let label = if t.is_default {
+                                        format!("\u{2605} {}", t.name)
+                                    } else {
+                                        t.name.clone()
+                                    };
+                                    view! { <option value=t.id.to_string()>{label}</option> }
+                                };
+                                let own_label = format!("{} templates", node_type_label(&nt));
+                                view! {
+                                    {(!own.is_empty()).then(|| view! {
+                                        <optgroup label=own_label>
+                                            {own.iter().map(|t| opt(t)).collect_view()}
+                                        </optgroup>
+                                    })}
+                                    {(!other.is_empty()).then(|| view! {
+                                        <optgroup label="Other types">
+                                            {other.iter().map(|t| opt(t)).collect_view()}
+                                        </optgroup>
+                                    })}
+                                }
+                            }}
                         </select>
                     })}
+                    // Set the default at the moment of intent: a picked template
+                    // that isn't its type's default yet (#111).
+                    {move || {
+                        if node.is_some() {
+                            return None;
+                        }
+                        let id = template_id_for_create.get()?;
+                        let t = available_templates.get().into_iter().find(|t| t.id == id)?;
+                        (!t.is_default).then(|| {
+                            let label = format!("Use as default for {}", node_type_label(&t.node_type));
+                            view! {
+                                <button
+                                    type="button"
+                                    class="text-xs px-2 py-1 rounded-lg text-stone-600 dark:text-stone-300
+                                        bg-stone-100 dark:bg-stone-800 hover:text-amber-600
+                                        dark:hover:text-amber-400 transition-colors whitespace-nowrap"
+                                    data-testid="use-as-default"
+                                    title="Apply this template automatically to new nodes of this type"
+                                    on:click=move |_| {
+                                        wasm_bindgen_futures::spawn_local(async move {
+                                            match crate::api::set_template_default(id.0).await {
+                                                Ok(updated) => {
+                                                    // Mirror the server: one default per type.
+                                                    available_templates.update(|ts| {
+                                                        for t in ts.iter_mut() {
+                                                            if t.node_type == updated.node_type {
+                                                                t.is_default = t.id == updated.id && updated.is_default;
+                                                            }
+                                                        }
+                                                    });
+                                                    crate::components::toast::push_toast(
+                                                        crate::components::toast::ToastLevel::Success,
+                                                        format!("Default template for {} set", node_type_label(&updated.node_type)),
+                                                    );
+                                                }
+                                                Err(e) => crate::components::toast::push_toast(
+                                                    crate::components::toast::ToastLevel::Error,
+                                                    format!("Couldn't set default: {e}"),
+                                                ),
+                                            }
+                                        });
+                                    }
+                                >
+                                    {format!("\u{2605} {label}")}
+                                </button>
+                            }
+                        })
+                    }}
                     <select
                         class="text-sm bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300
                             rounded-lg px-2 py-1.5 focus:outline-none"

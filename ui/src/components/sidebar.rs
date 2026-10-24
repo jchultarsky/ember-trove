@@ -289,31 +289,52 @@ fn TypeFilterLink(
     on_nav: Callback<()>,
 ) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
+    // One click to a new node of this type (#111): the editor applies the
+    // type's default template and focuses the title. Always visible but muted
+    // (Tailwind `group-hover` is unreliable here — leptos.md).
+    let new_label = format!("New {}", crate::components::node_meta::type_label(value));
     view! {
-        <button
-            class=move || {
-                let active = node_type_filter.get().as_deref() == Some(value);
-                let base = "flex items-center w-full gap-2 px-2 py-1.5 rounded-lg text-xs \
-                            font-medium transition-colors cursor-pointer";
-                if active {
-                    format!("{base} bg-amber-50 dark:bg-amber-900/20 \
-                             text-amber-700 dark:text-amber-400")
-                } else {
-                    format!("{base} text-stone-600 dark:text-stone-400 \
-                             hover:bg-stone-100 dark:hover:bg-stone-800 \
-                             hover:text-stone-800 dark:hover:text-stone-200")
+        <div class="flex items-center gap-0.5">
+            <button
+                class=move || {
+                    let active = node_type_filter.get().as_deref() == Some(value);
+                    let base = "flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs \
+                                font-medium transition-colors cursor-pointer";
+                    if active {
+                        format!("{base} bg-amber-50 dark:bg-amber-900/20 \
+                                 text-amber-700 dark:text-amber-400")
+                    } else {
+                        format!("{base} text-stone-600 dark:text-stone-400 \
+                                 hover:bg-stone-100 dark:hover:bg-stone-800 \
+                                 hover:text-stone-800 dark:hover:text-stone-200")
+                    }
                 }
-            }
-            on:click=move |_| {
-                node_type_filter.set(Some(value.to_string()));
-                navigate.get_value()("/nodes", Default::default());
-                on_nav.run(());
-            }
-            title=label
-        >
-            <span class="material-symbols-outlined" style="font-size: 14px;">{icon}</span>
-            {label}
-        </button>
+                on:click=move |_| {
+                    node_type_filter.set(Some(value.to_string()));
+                    navigate.get_value()("/nodes", Default::default());
+                    on_nav.run(());
+                }
+                title=label
+            >
+                <span class="material-symbols-outlined" style="font-size: 14px;">{icon}</span>
+                {label}
+            </button>
+            <button
+                type="button"
+                class="flex-shrink-0 p-1 rounded-md text-stone-300 dark:text-stone-600 \
+                       hover:text-amber-600 dark:hover:text-amber-400 \
+                       hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                title=new_label.clone()
+                aria-label=new_label
+                data-testid=format!("new-{value}")
+                on:click=move |_| {
+                    navigate.get_value()(&format!("/nodes/new?type={value}"), Default::default());
+                    on_nav.run(());
+                }
+            >
+                <span class="material-symbols-outlined" style="font-size: 14px;">"add"</span>
+            </button>
+        </div>
     }
 }
 
