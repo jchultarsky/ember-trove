@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — the loading screen names its version (#120)
+- The splash shown while the WASM bundle loads now has a muted `v2.32.1`
+  line under "Loading…". It is the **bundle's own** version, stamped at
+  build time by a Trunk `post_build` hook
+  (`ui/scripts/stamp-splash-version.sh`, reading `api/Cargo.toml`), so it
+  needs no release step. The build fails on a missing or malformed version.
+- If `/api/health` reports a different version, the line reads
+  `v2.32.1 · server v2.33.0`. The service worker serves the app shell
+  cache-first, so that is the signature of a stale cached bundle, the
+  usual cause of a stuck load. A failed check leaves the line unchanged.
+
 ### Security — production CSP no longer allows `'unsafe-eval'`
 - The edge CSP's `script-src` (`deploy/nginx.prod.conf`) drops
   `'unsafe-eval'` and keeps `'wasm-unsafe-eval'`, which lets WebAssembly

@@ -9,3 +9,9 @@ backend = "http://localhost:3003/api/"
 
 [tools]
 tailwindcss = "4.2.1"
+
+# Stamp the release version into the loading screen (#120).
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["scripts/stamp-splash-version.sh"]

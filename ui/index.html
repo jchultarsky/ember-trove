@@ -41,6 +41,7 @@
         animation: etl-spin 0.75s linear infinite;
       }
       .etl-hint { font-size: 12px; color: #a8a29e; /* stone-400 */ }
+      .etl-meta { display: flex; flex-direction: column; align-items: center; gap: 4px; }
       @keyframes etl-spin { to { transform: rotate(360deg); } }
       @media (prefers-color-scheme: dark) {
         .etl-root    { background: #0c0a09; } /* stone-950 */
@@ -82,7 +83,32 @@
         <span class="etl-title">Ember Trove</span>
       </div>
       <div class="etl-spinner"></div>
-      <span class="etl-hint">Loading…</span>
+      <div class="etl-meta">
+        <span class="etl-hint">Loading…</span>
+        <!-- The bundle's own version, stamped at build time by
+             ui/scripts/stamp-splash-version.sh (Trunk post_build hook). -->
+        <span class="etl-hint" id="etl-version" data-version="%%APP_VERSION%%">v%%APP_VERSION%%</span>
+      </div>
     </div>
+    <script>
+      // #120: when a load is slow or stuck, say which version this is. The
+      // stamped version is this bundle's; if the server reports another one,
+      // a stale cached app shell is the likely cause, so name both. Any
+      // failure leaves the line as stamped — no error text on the splash.
+      (function () {
+        var el = document.getElementById("etl-version");
+        if (!el || !window.fetch) return;
+        var mine = el.getAttribute("data-version");
+        fetch("/api/health", { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (h) {
+            var theirs = h && typeof h.version === "string" ? h.version : "";
+            if (theirs && theirs !== mine) {
+              el.textContent = "v" + mine + " · server v" + theirs;
+            }
+          })
+          .catch(function () {});
+      })();
+    </script>
   </body>
 </html>
