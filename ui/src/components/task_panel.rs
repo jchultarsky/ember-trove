@@ -9,13 +9,15 @@ use crate::app::TaskRefresh;
 use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
-use crate::components::task_actions::{RowSignals, ToggleCtx, toggle_done};
+use crate::components::task_actions::{
+    RowSignals, TaskCtx, delete_with_undo, toggle_done, toggle_my_day,
+};
 use crate::components::task_common::{
     is_in_my_day, parse_priority, priority_value, sort_tasks_by_order, status_done, status_label,
-    undo_restore_task,
 };
 use crate::components::task_row_scaffold::{
-    TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view, priority_dot_view,
+    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class, due_badge_view,
+    priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -320,6 +322,12 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
         });
     };
 
+    let ctx = TaskCtx {
+        today,
+        refresh: task_refresh,
+        toast_state,
+    };
+
     // Toggle done ↔ open on checkbox click
     let on_toggle = move |ev: web_sys::MouseEvent| {
         toggle_done(
@@ -330,51 +338,12 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                 status: status_sig,
                 busy,
             }),
-            ToggleCtx {
-                today,
-                refresh: task_refresh,
-                toast_state,
-            },
+            ctx,
             Some(&ev),
         );
     };
 
-    // Toggle My Day
-    let on_toggle_focus = move |_| {
-        let currently = in_my_day.get_untracked();
-        let new_focus = if currently { None } else { Some(today) };
-        in_my_day.set(!currently); // optimistic UI update
-        let req = UpdateTaskRequest {
-            focus_date: Some(new_focus),
-            ..Default::default()
-        };
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_task(task_id, &req).await {
-                Ok(_) => task_refresh.update(|n| *n += 1),
-                Err(e) => {
-                    // Roll back the optimistic flip.
-                    in_my_day.set(currently);
-                    push_toast(ToastLevel::Error, format!("Couldn't update: {e}"));
-                }
-            }
-        });
-    };
-
-    // Delete
-    let on_delete = move |_| {
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::delete_task(task_id).await {
-                Ok(_) => {
-                    task_refresh.update(|n| *n += 1);
-                    push_undo_toast(
-                        "Task deleted",
-                        undo_restore_task(task_id, task_refresh, toast_state),
-                    );
-                }
-                Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
-            }
-        });
-    };
+    let on_delete = move |_| delete_with_undo(task_id, Some(busy), ctx, || {});
 
     let title_display = task.title.clone();
     let has_recurrence = task.recurrence.is_some();
@@ -488,14 +457,10 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
 
             // Actions — right cluster; unified order (context, edit, delete)
             <div class="flex items-center gap-0.5 flex-shrink-0">
-                <button
-                    class=action_btn_class("hover:text-amber-500 dark:hover:text-amber-400")
-                    style=move || if in_my_day.get() { "color: #d97706;" } else { "" }
-                    title=move || if in_my_day.get() { "Remove from My Day" } else { "Add to My Day" }
-                    on:click=on_toggle_focus
-                >
-                    <span class="material-symbols-outlined" style="font-size:16px;">{"wb_sunny"}</span>
-                </button>
+                <MyDayButton
+                    active=in_my_day
+                    on_toggle=Callback::new(move |()| toggle_my_day(task_id, in_my_day, ctx))
+                />
                 <button
                     class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
                     title="Edit task"
