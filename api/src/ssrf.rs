@@ -25,7 +25,9 @@ pub fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v4.is_multicast()
                 || o[0] == 0
                 || (o[0] == 169 && o[1] == 254)
-                || (o[0] == 100 && (o[1] & 0xc0) == 64) // 100.64.0.0/10 (CGNAT)
+            // 100.64.0.0/10 (CGNAT) is deliberately NOT blocked: Tailscale
+            // and similar overlays use it, and self-hosters may point
+            // webhooks there — blocking it would silently break existing hooks.
         }
         IpAddr::V6(v6) => {
             // An IPv4 address in IPv6 form must be judged as IPv4:
@@ -152,21 +154,19 @@ mod tests {
     }
 
     #[test]
-    fn is_blocked_ip_flags_cgnat_broadcast_and_multicast() {
-        for ip in [
-            "100.64.0.1",
-            "100.127.255.254",
-            "255.255.255.255",
-            "224.0.0.1",
-            "ff02::1",
-        ] {
+    fn is_blocked_ip_flags_broadcast_and_multicast() {
+        for ip in ["255.255.255.255", "224.0.0.1", "ff02::1"] {
             assert!(
                 is_blocked_ip(ip.parse::<IpAddr>().unwrap()),
                 "{ip} should be blocked"
             );
         }
-        // Just outside 100.64/10.
-        assert!(!is_blocked_ip("100.128.0.1".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn is_blocked_ip_keeps_cgnat_reachable_for_existing_hooks() {
+        // No regression for webhooks on Tailscale-style 100.64/10 addresses.
+        assert!(!is_blocked_ip("100.101.102.103".parse::<IpAddr>().unwrap()));
     }
 
     #[tokio::test]
