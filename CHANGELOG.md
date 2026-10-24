@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.32.1] - 2026-10-24
+
 ### Security — handler-level authorization tests
 - Ten router tests drive the real `update_task`, nested revoke and
   `/permissions/{id}` handlers against a fixed set of nodes, roles and grants:
