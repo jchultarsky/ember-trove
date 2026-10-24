@@ -1,6 +1,6 @@
 [package]
 name       = "api"
-version = "2.31.0"
+version = "2.31.1"
 edition    = "2024"
 repository = "https://github.com/jchultarsky/ember-trove"
 license    = "MIT"
@@ -63,10 +63,16 @@ base64             = { workspace = true }
 # re-enable the remaining defaults and keep `default-https-client`, which uses
 # the modern rustls 0.23 + aws-lc-rs stack (already in the tree via reqwest).
 # aws-config's own default already selects the modern client, so it is left as-is.
+#
+# `sigv4a` (a default we used to re-enable) is NOT enabled: SigV4a is only for
+# S3 Multi-Region Access Points, which we don't use. It was the sole path to
+# the p256 / elliptic-curve / crypto-bigint 0.5 stack (RUSTSEC-2026-0387,
+# 2026-10-24) — dropping it removes those crates outright instead of pulling a
+# days-old RustCrypto major into SigV4 (see the deferred AWS group bump).
 aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-cognitoidentityprovider = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-sesv2 = { version = "1", default-features = false, features = ["sigv4a", "default-https-client", "rt-tokio"] }
+aws-sdk-sesv2 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 # Backup archive (tar + gzip) and ZIP export
 tar    = "0.4"
