@@ -86,16 +86,10 @@ pub fn CreateNodeModal(
     Effect::new(move |_| {
         let nt = node_type_str.get();
         let templates = available_templates.get();
-        if let Some(t) = templates.iter().find(|t| {
-            t.is_default
-                && match &t.node_type {
-                    common::node::NodeType::Article => nt == "article",
-                    common::node::NodeType::Project => nt == "project",
-                    common::node::NodeType::Area => nt == "area",
-                    common::node::NodeType::Resource => nt == "resource",
-                    common::node::NodeType::Reference => nt == "reference",
-                }
-        }) {
+        // Same rule as the full-page editor (common::template, #111).
+        if let Some(t) = common::node::NodeType::parse(&nt)
+            .and_then(|nt| common::template::default_for_type(&templates, &nt))
+        {
             let tid = t.id;
             // If the body was pre-filled (e.g. fast-capture handoff or
             // user-typed content), don't overwrite with the default

@@ -6,6 +6,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.32.0] - 2026-10-24
+
+### Added — faster node creation with your default templates (#111)
+- **The full-page editor now applies your default template.** Opening
+  `/nodes/new` from a type list used to seed only the built-in scaffold, so
+  your default template had to be picked by hand every time. Both create
+  paths (the editor and the create dialog) now follow one rule,
+  `common::template::resolve_create_body`: an explicit template prefill,
+  then a rescued draft, then the type's default template, then the built-in
+  scaffold. Changing the type re-applies the rule only while the body is
+  still exactly what the app put there, never over your own typing. An
+  untouched default is no longer saved as a "draft".
+- **One-click creation:** each type in the sidebar (Articles, Projects,
+  Areas, Resources, References) has a "+" that opens the editor with that
+  type preset (`/nodes/new?type=…`), the default applied and the title
+  focused. The command palette gains "New Project", "New Article", "New
+  Area", "New Resource" and "New Reference".
+- **Set the default at the moment of intent:** when you pick a template that
+  isn't its type's default, a "★ Use as default for <type>" button sets it.
+  The template picker lists the current type's templates first, default
+  starred, then other types. A new template in Templates takes its type from
+  the current filter.
+
+### Dependencies — AWS SDK update (supersedes #100)
+- `aws-config` 1.9 → 1.13, `aws-sdk-s3` 1.152 → 1.155, `aws-sdk-sesv2` 1.125
+  → 1.143, `aws-sdk-cognitoidentityprovider` 1.125 → 1.142, `aws-sigv4`
+  1.6.0 → 1.6.3, plus the matching smithy crates (lockfile only).
+  Dependabot's group bump didn't compile: `aws-types` 1.7 moved to
+  `aws-smithy-schema` 1.x while `aws-config` 1.12 was still on 0.2. Updating
+  the whole `aws-*` family together leaves one `aws-smithy-schema` (1.1.0).
+- This was deferred on 2026-10-23 because the version set that compiles also
+  pulled a days-old RustCrypto rewrite (`p256` 0.14 / `ecdsa` 0.17) into
+  request signing. That came only through the `sigv4a` feature, which 2.31.1
+  removed, so none of those crates are in the tree.
+- `zip` 9.0.4 → 9.0.5, not the 9.1.0 published the same day.
+
 ## [2.31.1] - 2026-10-24
 
 ### Security — authorization hotfix
