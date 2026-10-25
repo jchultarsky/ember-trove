@@ -106,6 +106,9 @@ pub fn NodeList() -> impl IntoView {
         use_context::<RwSignal<Option<String>>>().unwrap_or_else(|| RwSignal::new(None));
 
     let status_filter: RwSignal<Option<String>> = RwSignal::new(None);
+    // Project status (#143): only on the Projects page.
+    let project_status_filter: RwSignal<Option<String>> = RwSignal::new(None);
+    let on_projects = move || node_type_filter.get().as_deref() == Some("project");
     let show_archived = RwSignal::new(false);
     let sort_key = RwSignal::new(SortKey::ModifiedDesc);
     let show_sort_menu = RwSignal::new(false);
@@ -119,11 +122,13 @@ pub fn NodeList() -> impl IntoView {
     let nodes = LocalResource::new(move || {
         let _ = refresh.get();
         let status = status_filter.get();
+        let project_status = project_status_filter.get().filter(|_| on_projects());
         let tag = tag_filter.get();
         let include_archived = show_archived.get();
         async move {
             crate::api::fetch_nodes_filtered(
                 status.as_deref(),
+                project_status.as_deref(),
                 tag.map(|t| t.id.0),
                 include_archived,
             )
@@ -263,6 +268,11 @@ pub fn NodeList() -> impl IntoView {
                         </button>
                     }
                 }).collect::<Vec<_>>()}
+
+                // Project status filter (#143), Projects page only.
+                {move || on_projects().then(|| view! {
+                    <ProjectStatusFilter selected=project_status_filter />
+                })}
 
                 // Spacer pushes the archived toggle to the right
                 <span class="flex-1" />
@@ -630,6 +640,8 @@ fn NodeCards(
                 // Snapshot of currently-applied tags for this card (used in picker state).
                 let node_tags_stored = StoredValue::new(node.tags.clone());
                 let pinned  = node.pinned;
+                let project_status = node.project_status.clone()
+                    .filter(|_| node.node_type == common::node::NodeType::Project);
 
                 // Per-card picker visibility signal.
                 let show_picker = RwSignal::new(false);
@@ -702,6 +714,11 @@ fn NodeCards(
                                     >
                                         {s_icon}
                                     </span>
+
+                                    // Project status (#143)
+                                    {project_status.map(|s| view! {
+                                        <crate::components::project_status::ProjectStatusBadge status=s />
+                                    })}
 
                                     // Pin indicator
                                     {pinned.then(|| view! {
@@ -883,5 +900,84 @@ fn NodeCards(
                 }
             }).collect::<Vec<_>>()}
         </ul>
+    }
+}
+
+// ── Project status filter (#143) ───────────────────────────────────────────────
+
+/// "Status: Any ▾" menu on the Projects page: the statuses the caller uses,
+/// most used first, with their counts.
+#[component]
+fn ProjectStatusFilter(selected: RwSignal<Option<String>>) -> impl IntoView {
+    let open = RwSignal::new(false);
+    let statuses = LocalResource::new(crate::api::fetch_project_statuses);
+    let item_class = |active: bool| {
+        let base = "w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors";
+        if active {
+            format!(
+                "{base} bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 font-medium"
+            )
+        } else {
+            format!(
+                "{base} text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-800"
+            )
+        }
+    };
+    view! {
+        <div class="relative ml-2" data-testid="project-status-filter">
+            <button
+                type="button"
+                class=move || {
+                    let base = "flex items-center gap-1 px-2.5 py-0.5 text-xs rounded-full font-medium transition-colors";
+                    if selected.get().is_some() {
+                        format!("{base} bg-ember text-white")
+                    } else {
+                        format!("{base} bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-700")
+                    }
+                }
+                aria-haspopup="menu"
+                aria-expanded=move || if open.get() { "true" } else { "false" }
+                on:click=move |_| open.update(|v| *v = !*v)
+            >
+                {move || format!("Project status: {}", selected.get().unwrap_or_else(|| "Any".into()))}
+                <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"expand_more"</span>
+            </button>
+            {move || open.get().then(|| view! {
+                <div class="fixed inset-0 z-10" on:click=move |_| open.set(false) />
+                <div
+                    class="absolute left-0 top-full mt-1 z-20 w-52 max-h-72 overflow-y-auto
+                        bg-white dark:bg-stone-900 rounded-xl shadow-xl
+                        border border-stone-200 dark:border-stone-700"
+                    role="menu"
+                    aria-label="Project status"
+                >
+                    <button
+                        type="button"
+                        role="menuitem"
+                        class=move || item_class(selected.get().is_none())
+                        on:click=move |_| { selected.set(None); open.set(false); }
+                    >
+                        "Any"
+                    </button>
+                    {move || statuses.get().and_then(Result::ok).unwrap_or_default().into_iter().map(|c| {
+                        let value = c.status.clone();
+                        let key = common::project_status::key(&c.status);
+                        view! {
+                            <button
+                                type="button"
+                                role="menuitem"
+                                class=move || item_class(
+                                    selected.get().is_some_and(|s| common::project_status::key(&s) == key)
+                                )
+                                on:click=move |_| { selected.set(Some(value.clone())); open.set(false); }
+                            >
+                                <span class="truncate flex-1">{c.status}</span>
+                                <span class="text-stone-400">{c.count}</span>
+                            </button>
+                        }
+                    }).collect_view()}
+                </div>
+            })}
+        </div>
     }
 }

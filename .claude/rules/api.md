@@ -22,6 +22,15 @@ cargo check && cargo clippy -- -D warnings
   startup via `sqlx::migrate!()`. Add a new numbered file; never edit an applied migration.
 - CI validates migrations against `postgres:16` with `sqlx-cli` **pinned to 0.8.6** to
   match the `sqlx` dependency.
+- **Data backfills that need Rust logic** (#143): put them in `api/src/backfill.rs`,
+  not SQL regex. Each one claims a `data_backfills` row in its own transaction
+  (`INSERT … ON CONFLICT DO NOTHING`; claimed = `rows_affected() == 1`), so it runs
+  once even with two instances starting. It reuses the tested `common` parser, and
+  failures roll back and retry on the next start.
+  - A rewrite of user content snapshots the old body into `node_versions` first.
+  - It sets `SET LOCAL ember.keep_updated_at = 'on'`, so the
+    `touch_updated_at` trigger leaves `updated_at` alone.
+  - Test it in `pg_tests` with nodes inserted by raw SQL.
 
 ## Admin permission model
 

@@ -194,6 +194,14 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             >
                                                 {status_icon(&status)}
                                             </span>
+                                            // Project status (#143): the chip, editable by editors.
+                                            {(n.node_type == common::node::NodeType::Project).then(|| view! {
+                                                <crate::components::project_status::ProjectStatusChip
+                                                    node_id=id
+                                                    initial=n.project_status.clone()
+                                                    editable=is_owner
+                                                />
+                                            })}
                                         </div>
                                         {
                                             // Overflow dropdown state — scoped to this rendered
@@ -759,6 +767,7 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
                             body: Some(new_body),
                             metadata: None,
                             status: None,
+                            project_status: None,
                         };
                         crate::api::update_node(mention_id, &req).await.map(Some)
                     }

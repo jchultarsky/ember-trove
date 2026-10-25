@@ -48,6 +48,11 @@ pub struct Node {
     pub body: Option<String>,
     pub metadata: serde_json::Value,
     pub status: NodeStatus,
+    /// A project's status token ("Active", "On hold"; #143), or `None`.
+    /// Not the lifecycle `status` above. Kept across type changes; the UI
+    /// edits it on projects. Validated by `crate::project_status::normalize`.
+    #[serde(default)]
+    pub project_status: Option<String>,
     pub tags: Vec<Tag>,
     pub pinned: bool,
     pub created_at: DateTime<Utc>,
@@ -68,6 +73,11 @@ pub struct CreateNodeRequest {
     pub metadata: serde_json::Value,
     #[garde(skip)]
     pub status: Option<NodeStatus>,
+    /// Project status token (#143). For a project, absent means: take it
+    /// from a `## Status` section in `body`, else "Active".
+    #[garde(skip)]
+    #[serde(default)]
+    pub project_status: Option<String>,
     /// If the node was created from a template, record the template ID here
     /// for attribution in the activity log.
     #[garde(skip)]
@@ -92,12 +102,24 @@ pub struct UpdateNodeRequest {
     pub metadata: Option<serde_json::Value>,
     #[garde(skip)]
     pub status: Option<NodeStatus>,
+    /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(s))` = set
+    /// (validated by `crate::project_status::normalize`; blank clears).
+    #[garde(skip)]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::task::deser_double_opt"
+    )]
+    pub project_status: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NodeListParams {
     pub node_type: Option<NodeType>,
     pub status: Option<NodeStatus>,
+    /// Project status filter (#143), matched case-insensitively.
+    #[serde(default)]
+    pub project_status: Option<String>,
     pub tag_id: Option<TagId>,
     pub owner_id: Option<String>,
     /// When set, restricts results to nodes the subject owns or has an explicit
@@ -131,6 +153,15 @@ pub struct NodeLookupParams {
     pub q: String,
     /// Default 8, at most 20.
     pub limit: Option<u32>,
+}
+
+/// One suggestion for the project status picker (#143): a status the caller
+/// already uses on their own nodes, with how many. Variants that differ
+/// only in case are one entry, spelled the most-used way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ProjectStatusCount {
+    pub status: String,
+    pub count: u32,
 }
 
 /// Lightweight title entry used for wiki-link autocomplete and resolution.

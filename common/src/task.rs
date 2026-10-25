@@ -158,8 +158,12 @@ pub struct ProjectDashboardEntry {
     pub title: String,
     pub node_status: String,
     pub task_counts: TaskCounts,
-    /// Rendered markdown from the `## Status` heading section, if present.
+    /// The `## Status` section's markdown, if the body still has one: the
+    /// narrative. The status token itself is `project_status` (#143).
     pub status_section: Option<String>,
+    /// The project's status token (#143).
+    #[serde(default)]
+    pub project_status: Option<String>,
     /// Up to 10 open/in-progress tasks, ordered by priority then due date.
     pub open_tasks: Vec<TaskSummary>,
     /// `true` when more open tasks exist beyond the returned slice.
