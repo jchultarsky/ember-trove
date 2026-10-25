@@ -67,6 +67,12 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   zone names, empty states ONLY; interface text stays Inter. Completing a
   task must call `crate::spark::strike_spark(&ev)` on the →done transition
   (already wired in all three row components).
+- **Node-page sections are a primitive too** (#131): every collapsible
+  section under a node body is a `SectionShell` (`node_section.rs`) with a
+  `NodeSection` variant. That gives one heading style, a region, the toggle,
+  a count badge and an actions slot, and it answers the outline's jumps. A
+  new section adds a variant and wraps its body; it never hand-rolls a
+  chevron header.
 - **Page headers & empty states are primitives, not markup.** Top-level views
   use `PageHeader` (`ui/src/components/page_header.rs`) and `EmptyState`
   (`empty_state.rs`) — never a hand-rolled `<h1>` bar or centered-icon block.
