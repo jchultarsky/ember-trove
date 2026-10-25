@@ -1,3 +1,7 @@
+//! Wiki-link (`[[title]]`) parsing, shared by the API (edge sync, title
+//! resolution) and the UI (rendering) so both read links the same way
+//! (#134; it used to live in the API only).
+
 /// Extract all wiki-link target titles from a markdown body.
 ///
 /// Handles both `[[title]]` and `[[title|display text]]` — only the target
@@ -97,5 +101,30 @@ mod tests {
     #[test]
     fn test_no_wikilinks() {
         assert!(parse_wikilink_titles("No links here.").is_empty());
+    }
+}
+
+/// The distinct, lowercased titles a body links to — the form the server
+/// resolves (wiki-link matching is case-insensitive). Order of first use.
+pub fn linked_titles_lowered(content: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    parse_wikilink_titles(content)
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .filter(|t| seen.insert(t.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod lowered_tests {
+    use super::linked_titles_lowered;
+
+    #[test]
+    fn lowered_titles_are_distinct_and_case_folded() {
+        assert_eq!(
+            linked_titles_lowered("[[Rust]] and [[rust|r]] and [[ Go ]] and [[Rust Language]]"),
+            vec!["rust", "go", "rust language"]
+        );
+        assert!(linked_titles_lowered("no links").is_empty());
     }
 }

@@ -19,6 +19,14 @@ pub fn use_node_search(query: RwSignal<String>) -> RwSignal<Vec<SearchResult>> {
     .0
 }
 
+/// Title suggestions for TEXT completion: the editor's `[[` autocomplete,
+/// which inserts a title into Markdown rather than choosing a node value.
+/// Fields that choose a node use [`NodePicker`] (#130). Same lookup, same
+/// debounce, so suggestions match the pickers'.
+pub fn use_title_suggestions(query: RwSignal<String>) -> RwSignal<Vec<NodeLookupHit>> {
+    use_node_lookup_answering(query).0
+}
+
 /// Title lookup behind [`NodePicker`] — the only node picker (#130): every
 /// field that chooses a node uses the component, never this hook directly.
 /// Pickers used the full-text search, which matched bodies and whole words

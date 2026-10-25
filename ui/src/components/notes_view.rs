@@ -63,11 +63,6 @@ pub fn NotesView() -> impl IntoView {
     // counter, never inside the closure).
     let reload = RwSignal::new(0u32);
 
-    // Node list for the compose picker AND the filter dropdown.
-    let node_titles = LocalResource::new(move || async move {
-        crate::api::fetch_node_titles().await.unwrap_or_default()
-    });
-
     // ── Compose box state ──────────────────────────────────────────────────
     let body = RwSignal::new(String::new());
     let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
@@ -86,8 +81,23 @@ pub fn NotesView() -> impl IntoView {
 
     // ── Filter / sort state ─────────────────────────────────────────────────
     let sort = RwSignal::new(NoteSort::Newest);
-    // Node filter select value: "" = all, "inbox" = standalone, else a node UUID.
+    // Node filter: "" = all, "inbox" = standalone, else a node UUID. Chosen
+    // as a scope ("all" / "inbox" / "node") plus, for "node", the shared
+    // NodePicker — the dropdown used to list every node title (#134).
     let node_filter = RwSignal::new(String::new());
+    let filter_mode = RwSignal::new("all");
+    let filter_node = RwSignal::new(None::<(NodeId, String)>);
+    Effect::new(move |_| {
+        let value = match filter_mode.get() {
+            "inbox" => "inbox".to_string(),
+            "node" => filter_node
+                .get()
+                .map(|(id, _)| id.0.to_string())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        node_filter.set(value);
+    });
     let from_date = RwSignal::new(String::new());
     let to_date = RwSignal::new(String::new());
     // Text filter: `text_input` is bound to the box; `text_q` is the debounced
@@ -116,6 +126,8 @@ pub fn NotesView() -> impl IntoView {
     };
     let reset_filters = move || {
         sort.set(NoteSort::Newest);
+        filter_mode.set("all");
+        filter_node.set(None);
         node_filter.set(String::new());
         from_date.set(String::new());
         to_date.set(String::new());
@@ -290,21 +302,32 @@ pub fn NotesView() -> impl IntoView {
                     <option value="oldest">"Oldest first"</option>
                     <option value="updated">"Recently updated"</option>
                 </select>
-                // Node filter
+                // Node filter: a scope, plus the shared picker for one node.
                 <select
-                    class=format!("{INPUT_CLASS} max-w-[16rem]")
+                    class=INPUT_CLASS
                     title="Filter by node"
-                    prop:value=move || node_filter.get()
-                    on:change=move |ev| node_filter.set(event_target_value(&ev))
+                    on:change=move |ev| {
+                        let mode = match event_target_value(&ev).as_str() {
+                            "inbox" => "inbox",
+                            "node" => "node",
+                            _ => "all",
+                        };
+                        filter_mode.set(mode);
+                    }
                 >
-                    <option value="">"All notes"</option>
-                    <option value="inbox">"Uncategorized (inbox)"</option>
-                    {move || node_titles.get().map(|list| {
-                        list.into_iter().map(|e| view! {
-                            <option value=e.id.0.to_string()>{e.title}</option>
-                        }).collect_view()
-                    })}
+                    <option value="all" selected=move || filter_mode.get() == "all">"All notes"</option>
+                    <option value="inbox" selected=move || filter_mode.get() == "inbox">"Uncategorized (inbox)"</option>
+                    <option value="node" selected=move || filter_mode.get() == "node">"A node\u{2026}"</option>
                 </select>
+                {move || (filter_mode.get() == "node").then(|| view! {
+                    <div class="min-w-[12rem] max-w-[16rem]" data-testid="notes-node-filter">
+                        <NodePicker
+                            selected=filter_node
+                            placeholder="Filter by node\u{2026}"
+                            autofocus=true
+                        />
+                    </div>
+                })}
                 // Date range
                 <input
                     type="date" class=INPUT_CLASS title="From date (inclusive)"

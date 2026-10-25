@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — wiki links resolve on demand; no more downloading every title (#134)
+- **Node pages** used to download *every* node title the caller could see
+  on each view, just to render the few `[[links]]` in the body. Now a page
+  asks for only the titles its body links, via the new
+  `GET /api/nodes/resolve-titles`. That endpoint resolves among nodes the
+  caller can see (own first, then shared, never another owner's private
+  node) and takes at most 100 titles per request. It's a GET because reads
+  aren't write-rate-limited. The lookup is cached and debounced, and only
+  the body re-renders when links resolve.
+- **Links match case-insensitively**, like the server's edge sync:
+  `[[rust]]` used to render unresolved while still creating a "Linked Here"
+  edge.
+- **Editor:** the `[[` suggestions use the title lookup, and the preview
+  uses the same on-demand resolution.
+- **Notes feed:** the node filter is "All / Uncategorized / A node…", using
+  the shared picker instead of a dropdown of every title.
+- **Shared parser:** `parse_wikilink_titles` moves to `common::wikilink`,
+  so the API and the UI read links the same way.
+- The admin bulk-permissions table is now the only full title list, and it
+  is a genuine enumeration.
+
 ### Changed — every node-choosing field is the same picker (#130)
 - **Add to Favorites:** it downloaded every node title and filtered them in
   the browser, with its own list and no keyboard contract. Now it uses the

@@ -59,6 +59,7 @@ pub mod task;
 pub mod template;
 pub mod version;
 pub mod webhook;
+pub mod wikilink;
 
 pub use error::EmberTroveError;
 
