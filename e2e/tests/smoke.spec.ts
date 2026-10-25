@@ -21,6 +21,16 @@ test.describe('app shell', () => {
     await expect(page).toHaveTitle('My Day — Ember Trove');
     await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible();
   });
+
+  // The suite must run under an eval-free CSP, or the `cspViolations`
+  // fixture proves nothing. WebAssembly needs only 'wasm-unsafe-eval'.
+  test('is served with an eval-free CSP', async ({ page }) => {
+    const resp = await page.goto('/tasks/my-day');
+    const csp = resp?.headers()['content-security-policy'] ?? '';
+    expect(csp).toContain("'wasm-unsafe-eval'");
+    expect(csp).not.toContain("'unsafe-eval'");
+    await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible();
+  });
 });
 
 test.describe('quick capture with natural-language tokens', () => {

@@ -66,6 +66,12 @@ CI job is too slow a feedback loop for selector work.
   `page.getByRole('dialog').getByRole('button', { name })` — and address the
   sidebar buttons by `data-testid="new-<type>"`.
 
+- **A `title` is not the accessible name of a button with text** (2026-10-25,
+  #123): the Notes toggle has `title="Collapse notes"` but its name is its
+  content ("sticky_note_2 Notes …"), so `getByRole('button', { name:
+  'Collapse notes' })` waits forever. Use `button[title="…"]`, or give the
+  control an `aria-label`.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —
@@ -85,6 +91,11 @@ CI job is too slow a feedback loop for selector work.
   panic poisons event dispatch silently otherwise (the v2.21.1 lesson; see
   `.claude/ERRORS.md`). Shared helpers (`createNode`, `localISO`) live there
   too; add new cross-spec helpers there instead of copying them.
+- **The fixtures also fail any test on a CSP violation** (2026-10-24,
+  `cspViolations`; the stack's CSP has no `'unsafe-eval'`). To probe the
+  guard, use a string `setTimeout` inside `page.evaluate`. A bare `eval()`
+  there, or in a `<script>` it injects, runs with DevTools privileges and
+  is NOT blocked, so it proves nothing.
 - **Don't `goto` again before the app has rendered** (2026-10-24): it aborts
   the WASM bundle download, which the guard reports as `TypeError: Failed to
   fetch` (empty stack; the trace shows the `_bg.wasm` request `ERR_ABORTED`).

@@ -6,6 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.33.0] - 2026-10-24
+
+### Fixed — node page friction (#123)
+- **Adding a task or note no longer jumps to the top of a long node.** The
+  whole page sat under one `<Suspense>`, which unmounted everything for a
+  frame whenever any panel reloaded, and the scroll position was lost with
+  it. It is now a `<Transition>`: the skeleton shows on first load only.
+- **Escape in a task or note editor no longer leaves the node.** The
+  editor's Escape also reached the window shortcut handler, which read it as
+  "back to /nodes" once the editor had closed. The editor now stops it.
+- **Escape no longer silently discards an edit.** With unsaved changes it
+  shows "Edit discarded · Undo", and Undo reopens the editor with the text
+  restored. This applies to every task editor (node page, Inbox, My Day) and
+  the note editor. Escape with no changes, and the Cancel button, stay
+  silent.
+
+### Added — jump to a node's tasks and notes (#123)
+- **Jump to tasks** and **Jump to notes** in the node header (and its mobile
+  menu) scroll to and focus this node's sections, expanding a collapsed
+  Notes section. The sidebar's Tasks and Notes stay the global views.
+
+### Added — the loading screen names its version (#120)
+- The splash shown while the WASM bundle loads now has a muted `v2.32.1`
+  line under "Loading…". It is the **bundle's own** version, stamped at
+  build time by a Trunk `post_build` hook
+  (`ui/scripts/stamp-splash-version.sh`, reading `api/Cargo.toml`), so it
+  needs no release step. The build fails on a missing or malformed version.
+- If `/api/health` reports a different version, the line reads
+  `v2.32.1 · server v2.33.0`. The service worker serves the app shell
+  cache-first, so that is the signature of a stale cached bundle, the
+  usual cause of a stuck load. A failed check leaves the line unchanged.
+
+### Security — production CSP no longer allows `'unsafe-eval'`
+- The edge CSP's `script-src` (`deploy/nginx.prod.conf`) drops
+  `'unsafe-eval'` and keeps `'wasm-unsafe-eval'`, which lets WebAssembly
+  compile and instantiate without allowing JS string-eval (`eval`,
+  `new Function`, string timers). v2.32.1 removed the last `js_sys::eval`,
+  and the shipped Trunk/wasm-bindgen glue uses neither `eval` nor
+  `new Function`.
+- In practice prod already blocked eval: the UI container's own CSP
+  (`deploy/nginx.conf`, never with `'unsafe-eval'`) passes through the edge
+  proxy as a second header, and browsers enforce both. This change makes
+  the edge policy say what is actually enforced.
+- The e2e fixtures now fail any test on a `securitypolicyviolation` event,
+  and a smoke test asserts the served CSP is eval-free. A blocked `eval`
+  doesn't always throw (the old date and clipboard helpers failed silently),
+  so the page-error guard alone couldn't catch one.
+
 ## [2.32.1] - 2026-10-24
 
 ### Security — handler-level authorization tests

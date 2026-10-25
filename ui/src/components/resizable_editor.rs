@@ -94,6 +94,13 @@ pub fn ResizableEditor(
                         && ev.key() == "Escape"
                     {
                         ev.prevent_default();
+                        // The editor owns this Escape. Without the stop it
+                        // reached the window dispatcher after `cb` had closed
+                        // the editor (focus back on <body>, so not "editing"),
+                        // which on a node page means "back to /nodes" — a
+                        // stray Escape discarded the edit AND left the node
+                        // (#123; .claude/rules/leptos.md, overlay close keys).
+                        ev.stop_propagation();
                         cb.run(());
                     }
                 }

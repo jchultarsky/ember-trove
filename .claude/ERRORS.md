@@ -202,6 +202,25 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   mount by tracking the `NodeRef` in an `Effect`, not via rAF. Specs assert
   `toBeFocused()` before relying on focus-dependent keys. — 2026-10-17
 
+### Page jumps to the top when a panel refreshes
+- **Symptom:** adding a task or note on a long node page scrolls back to the
+  top. A DOM trace shows the scroll container at `scrollHeight 0` for a frame.
+- **Cause:** one `<Suspense>` wrapped the whole node page. A Suspense falls
+  back whenever *any* resource read inside it reloads, so a panel's refetch
+  unmounted the page and the browser reset `scrollTop`.
+- **Fix:** page-level boundaries are `<Transition>`, which shows the fallback
+  on first load only (`node_view.rs`). Regression test: `node_page.spec.ts`
+  tags the scroll container and checks it survives the add. — 2026-10-25
+
+### Escape in an inline editor navigates away
+- **Symptom:** Escape in a node page's task or note editor closes it and also
+  goes back to `/nodes`.
+- **Cause:** the editor's `on:keydown` handled Escape without
+  `stop_propagation()`. By the time the window dispatcher ran, the editor had
+  unmounted, focus was on `<body>`, and Escape on a node page meant "back".
+- **Fix:** `ResizableEditor` stops the Escape it handles. Every in-panel
+  Escape handler must do this (leptos.md). — 2026-10-25
+
 ### Shortcut key typed into the overlay it opened
 - **Symptom:** pressing `n` opens Quick capture with "n" already in the box.
 - **Cause:** autofocus moved from `requestAnimationFrame` to an `Effect` that

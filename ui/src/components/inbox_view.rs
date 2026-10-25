@@ -325,7 +325,9 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                         on_submit=Callback::new(move |()| do_save())
                                         on_escape=Callback::new(move |()| {
                                             editing.set(false);
-                                            draft.reset();
+                                            draft.discard_with_undo(move || {
+                                                editing.try_set(true);
+                                            });
                                         })
                                         on_resize=TaskEditorHeights::on_resize(task_id)
                                         class="w-full text-sm rounded-lg border border-amber-400 \
