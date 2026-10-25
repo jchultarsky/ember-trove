@@ -57,6 +57,7 @@ pub mod slug;
 pub mod tag;
 pub mod task;
 pub mod template;
+pub mod version;
 pub mod webhook;
 
 pub use error::EmberTroveError;

@@ -528,11 +528,31 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
             }
         });
 
+    // The committed target is already linked with the selected type (#129):
+    // say so and keep ✓ disabled, instead of letting the server answer 409.
+    let already_linked = Signal::derive(move || {
+        let (target, _) = edge_target.get()?;
+        let et = edge_type_input.get();
+        edges.with(|r| {
+            r.as_ref()?
+                .as_ref()
+                .ok()?
+                .iter()
+                .find(|e| {
+                    e.source_id == node_id && e.target_id == target && e.edge_type.as_str() == et
+                })
+                .map(|e| e.edge_type.label())
+        })
+    });
+
     let on_add_edge = move |_| {
         // ✓ is disabled until a node is committed; this is the backstop.
         let Some((target_id, _)) = edge_target.get_untracked() else {
             return;
         };
+        if already_linked.get_untracked().is_some() {
+            return;
+        }
         let et = edge_type_input.get_untracked();
         let label = label_input.get_untracked().trim().to_string();
         error_msg.set(None);
@@ -553,6 +573,15 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                     edge_target.set(None);
                     label_input.set(String::new());
                     refresh_edges.update(|n| *n += 1);
+                }
+                // A 409 ("already linked as …", e.g. another tab got there
+                // first) reads as the message itself, not "server error 409".
+                Err(crate::error::UiError::Api { message, .. }) => {
+                    let mut msg = message;
+                    if let Some(first) = msg.get(..1) {
+                        msg.replace_range(..1, &first.to_uppercase());
+                    }
+                    error_msg.set(Some(msg));
                 }
                 Err(e) => error_msg.set(Some(format!("{e}"))),
             }
@@ -660,13 +689,20 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                 dark:hover:bg-stone-800 transition-colors
                                 disabled:opacity-40 disabled:cursor-not-allowed"
                             on:click=on_add_edge
-                            disabled=move || edge_target.with(|t| t.is_none())
+                            disabled=move || {
+                                edge_target.with(|t| t.is_none()) || already_linked.get().is_some()
+                            }
                             title="Add edge"
                             aria-label="Add edge"
                         >
                             <span class="material-symbols-outlined" style="font-size: 16px;">"check"</span>
                         </button>
                     </div>
+                    {move || already_linked.get().map(|label| view! {
+                        <div class="text-xs text-amber-700 dark:text-amber-400" data-testid="edge-already-linked">
+                            {format!("Already linked as {label}")}
+                        </div>
+                    })}
                     {move || error_msg.get().map(|msg| view! {
                         <div class="text-xs text-red-500">{msg}</div>
                     })}

@@ -82,6 +82,14 @@ CI job is too slow a feedback loop for selector work.
   test same-titled search results, intercept `/api/search` with
   `page.route` (`node_picker.spec.ts`).
 
+- **Service workers can't be exercised here** (2026-10-25, #129). The e2e
+  origin (`http://host.docker.internal`) isn't a secure context. Mapping
+  `localhost` to it (`--host-resolver-rules`) gives a secure context, but
+  Playwright-in-Docker then aborts the worker's install fetches, for the
+  v2.34.0 worker too. `--unsafely-treat-insecure-origin-as-secure` has no
+  effect in headless Chromium. Test `sw.js` with `node --test
+  ui/public/sw.test.mjs` instead (fakes for `self`/`caches`/`fetch`).
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —
