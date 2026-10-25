@@ -34,14 +34,15 @@ use crate::{
     notify::maybe_notify_invite,
     state::AppState,
     webhook_dispatch::dispatch,
-    wikilink::parse_wikilink_titles,
 };
+use common::wikilink::parse_wikilink_titles;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_nodes).post(create_node))
         .route("/titles", get(list_titles))
         .route("/lookup", get(lookup_titles))
+        .route("/resolve-titles", get(resolve_titles))
         .route("/slug/{slug}", get(get_node_by_slug))
         .route("/{id}", get(get_node).put(update_node).delete(delete_node))
         .route("/{id}/neighbors", get(neighbors))
@@ -169,6 +170,61 @@ async fn lookup_titles(
         .lookup_titles(subject_scope(&claims), q, i64::from(limit))
         .await?;
     Ok(Json(hits))
+}
+
+// ── Wiki-link resolution (render-time) ──────────────────────────────────────
+
+/// At most this many titles per request; a body rarely links more, and the
+/// UI batches beyond it.
+const RESOLVE_MAX_TITLES: usize = 100;
+const RESOLVE_MAX_TITLE_CHARS: usize = 300;
+
+#[derive(Debug, serde::Deserialize)]
+struct ResolveTitlesParams {
+    /// A JSON array of titles. A GET (reads aren't write-rate-limited) with
+    /// one parameter avoids splitting titles that contain commas.
+    titles: String,
+}
+
+/// `GET /nodes/resolve-titles?titles=["A","b"]` → `{ "a": id, "b": id }`
+/// (keys lowercased; unmatched titles absent). Lets a node page resolve
+/// just the `[[links]]` its body contains instead of downloading every
+/// title (#134).
+///
+/// SECURITY: resolves among nodes visible to the CALLER only (their own
+/// first, then ones shared with them) via `find_ids_by_titles`, the same
+/// rule as wiki-link edge sync since v2.31.1 — never another owner's
+/// private node. Bounded: ≤100 titles of ≤300 chars.
+async fn resolve_titles(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(params): Query<ResolveTitlesParams>,
+) -> Result<Json<std::collections::HashMap<String, NodeId>>, ApiError> {
+    let titles: Vec<String> = serde_json::from_str(&params.titles)
+        .map_err(|_| ApiError::Validation("titles must be a JSON array of strings".to_string()))?;
+    if titles.len() > RESOLVE_MAX_TITLES {
+        return Err(ApiError::Validation(format!(
+            "at most {RESOLVE_MAX_TITLES} titles per request"
+        )));
+    }
+    let mut lowered: Vec<String> = Vec::with_capacity(titles.len());
+    for t in titles {
+        let t = t.trim().to_lowercase();
+        if t.chars().count() > RESOLVE_MAX_TITLE_CHARS {
+            return Err(ApiError::Validation("title too long".to_string()));
+        }
+        if !t.is_empty() && !lowered.contains(&t) {
+            lowered.push(t);
+        }
+    }
+    if lowered.is_empty() {
+        return Ok(Json(std::collections::HashMap::new()));
+    }
+    let map = state
+        .nodes
+        .find_ids_by_titles(&claims.sub, &lowered)
+        .await?;
+    Ok(Json(map))
 }
 
 // ── Node CRUD ────────────────────────────────────────────────────────────────

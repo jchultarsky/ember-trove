@@ -130,10 +130,20 @@ impl NodeRepo for StubNodeRepo {
     }
     async fn find_ids_by_titles(
         &self,
-        _: &str,
-        _: &[String],
+        owner: &str,
+        titles: &[String],
     ) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> {
-        unimplemented!()
+        // SECURITY (#134): resolution must run as the caller, never another
+        // subject — a different owner here is a bypass, so fail loudly.
+        assert_eq!(
+            owner, "test-sub",
+            "titles resolved on someone else's behalf"
+        );
+        Ok(titles
+            .iter()
+            .filter(|t| t.as_str() != "not visible")
+            .map(|t| (t.clone(), NodeId(Uuid::from_u128(t.len() as u128))))
+            .collect())
     }
     async fn lookup_titles(
         &self,
@@ -2065,4 +2075,57 @@ async fn e2e_subject_header_is_ignored_without_the_bypass_feature() {
     // detail "OIDC not configured" is logged, never sent).
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body_json(resp).await["error"], "internal error");
+}
+
+// ── GET /nodes/resolve-titles (#134) ─────────────────────────────────────────
+
+async fn resolve(query: &str) -> (StatusCode, serde_json::Value) {
+    let resp = claims_app("/nodes", crate::routes::nodes::router())
+        .oneshot(
+            Request::get(format!("/nodes/resolve-titles?titles={query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+fn enc(json: &str) -> String {
+    json.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn resolve_titles_lowercases_dedupes_and_omits_the_unmatched() {
+    let (status, json) = resolve(&enc(r#"["Plan","plan","  ","Not Visible"]"#)).await;
+    assert_eq!(status, StatusCode::OK);
+    let obj = json.as_object().expect("a map");
+    assert_eq!(obj.len(), 1, "{json}");
+    assert!(obj.contains_key("plan"));
+}
+
+#[tokio::test]
+async fn resolve_titles_validates_its_input() {
+    let (status, _) = resolve(&enc("not json")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let many = format!(
+        "[{}]",
+        (0..101)
+            .map(|i| format!("\"t{i}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let (status, _) = resolve(&enc(&many)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let long = format!("[\"{}\"]", "a".repeat(301));
+    let (status, _) = resolve(&enc(&long)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, json) = resolve(&enc("[]")).await;
+    assert_eq!((status, json), (StatusCode::OK, serde_json::json!({})));
 }

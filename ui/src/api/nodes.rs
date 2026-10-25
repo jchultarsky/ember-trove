@@ -105,6 +105,48 @@ pub async fn duplicate_node(id: NodeId) -> Result<Node, UiError> {
     post_action_json(&format!("/nodes/{id}/duplicate")).await
 }
 
+/// EVERY title visible to the caller. Only for genuine full enumerations
+/// (the admin bulk-permissions table); pickers use `NodePicker` and
+/// rendering uses [`resolve_titles`] (#134).
 pub async fn fetch_node_titles() -> Result<Vec<NodeTitleEntry>, UiError> {
     get_json("/nodes/titles").await
+}
+
+/// Resolve wiki-link titles (already lowercased) to node ids, among nodes
+/// the caller can see: `{ "title": id }`, unmatched titles absent. Sent in
+/// batches that stay well under the server's 100-title cap and nginx's
+/// request-line limit (`GET`, so a node view never spends write budget).
+pub async fn resolve_titles(
+    lowered: &[String],
+) -> Result<std::collections::HashMap<String, NodeId>, UiError> {
+    const MAX_TITLES: usize = 50;
+    const MAX_ENCODED: usize = 3_000;
+    let mut out = std::collections::HashMap::new();
+    let mut batch: Vec<&String> = Vec::new();
+    let mut encoded_len = 0;
+    let flush = |batch: &mut Vec<&String>| -> Option<String> {
+        if batch.is_empty() {
+            return None;
+        }
+        let json = serde_json::to_string(batch).ok()?;
+        batch.clear();
+        Some(js_sys::encode_uri_component(&json).into())
+    };
+    let mut queries: Vec<String> = Vec::new();
+    for t in lowered {
+        let len = String::from(js_sys::encode_uri_component(t)).len() + 8;
+        if !batch.is_empty() && (batch.len() >= MAX_TITLES || encoded_len + len > MAX_ENCODED) {
+            queries.extend(flush(&mut batch));
+            encoded_len = 0;
+        }
+        batch.push(t);
+        encoded_len += len;
+    }
+    queries.extend(flush(&mut batch));
+    for q in queries {
+        let part: std::collections::HashMap<String, NodeId> =
+            get_json(&format!("/nodes/resolve-titles?titles={q}")).await?;
+        out.extend(part);
+    }
+    Ok(out)
 }

@@ -363,6 +363,7 @@ All routes are nested under `/api`.
 | POST | `/api/nodes` | Create node (auto-grants Owner permission to creator) |
 | GET | `/api/nodes/{id}` | Get node by UUID |
 | GET | `/api/nodes/slug/{slug}` | Get node by slug |
+| GET | `/api/nodes/resolve-titles?titles=[…]` | Resolve wiki-link titles (a JSON array, ≤100) to node ids among nodes the caller can see; keys lowercased |
 | GET | `/api/nodes/lookup?q=&limit=` | Title lookup for the node pickers: titles containing `q`, exact > prefix > other; own + shared nodes (admins: all); `limit` 1–20, default 8 |
 | PUT | `/api/nodes/{id}` | Update node (snapshots version on save) |
 | DELETE | `/api/nodes/{id}` | Delete node (cascading) |

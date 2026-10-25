@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
 use common::{
     id::{NodeId, TemplateId},
-    node::{CreateNodeRequest, NodeStatus, NodeTitleEntry, NodeType, UpdateNodeRequest},
+    node::{CreateNodeRequest, NodeStatus, NodeType, UpdateNodeRequest},
     template::{
         CreateBodySource, NodeTemplate, default_for_type, may_replace_body, picker_order,
         resolve_create_body,
@@ -21,10 +19,6 @@ use leptos_router::hooks::use_navigate;
 
 fn node_type_label(nt: &NodeType) -> &'static str {
     crate::components::node_meta::type_label(nt.as_str())
-}
-
-fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
-    entries.iter().map(|e| (e.title.clone(), e.id)).collect()
 }
 
 /// Idle time after the last edit before an autosave PATCH (edit mode) or a
@@ -530,9 +524,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         });
     };
 
-    // Fetch all node titles for wiki-link autocomplete and preview.
-    let titles_resource =
-        LocalResource::new(|| async move { crate::api::fetch_node_titles().await });
+    // Wiki links: the preview resolves just the titles the body links, and
+    // `[[` suggestions come from the title lookup — no full title list (#134).
+    let wikilink_map = crate::wikilink::use_wikilink_map(body.into());
+    let suggest_q = RwSignal::new(String::new());
+    Effect::new(move |_| suggest_q.set(wikilink_query.get().unwrap_or_default()));
+    let suggestions = crate::components::node_picker::use_title_suggestions(suggest_q);
 
     // If editing, fetch existing node data.
     if let Some(id) = node {
@@ -880,11 +877,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     };
 
     let preview_html = move || {
-        let title_map = titles_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|entries| build_title_map(&entries))
-            .unwrap_or_default();
+        let title_map = wikilink_map.get();
         render_markdown(&body.get(), &title_map)
     };
 
@@ -1144,14 +1137,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     // Wiki-link autocomplete dropdown
                     {move || {
                         let query = wikilink_query.get()?;
-                        let entries = titles_resource.get().and_then(|r| r.ok()).unwrap_or_default();
-                        let q_lower = query.to_lowercase();
-                        let matches: Vec<String> = entries
-                            .iter()
-                            .filter(|e| e.title.to_lowercase().contains(&q_lower))
-                            .take(8)
-                            .map(|e| e.title.clone())
-                            .collect();
+                        let matches: Vec<String> = suggestions.with(|hits| {
+                            hits.iter().take(8).map(|h| h.title.clone()).collect()
+                        });
                         if matches.is_empty() {
                             return None;
                         }

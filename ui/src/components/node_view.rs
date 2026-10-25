@@ -1,8 +1,5 @@
-use std::collections::HashMap;
-
 use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
-use common::node::NodeTitleEntry;
 use leptos::prelude::*;
 
 use crate::auth::{AuthStatus, use_auth_state};
@@ -24,10 +21,6 @@ use crate::focus_task::schedule_focus_task;
 use crate::markdown::render_markdown;
 use leptos_router::hooks::use_navigate;
 
-fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
-    entries.iter().map(|e| (e.title.clone(), e.id)).collect()
-}
-
 #[component]
 pub fn NodeView(id: NodeId) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
@@ -38,8 +31,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
         async move { crate::api::fetch_node(id).await }
     });
 
-    // Fetch all node titles for wiki-link resolution.
-    let titles = LocalResource::new(|| async move { crate::api::fetch_node_titles().await });
+    // Resolve just the titles this body links (#134) — it used to download
+    // every visible node title on each node page view.
+    let body = Signal::derive(move || {
+        node.get()
+            .and_then(|r| r.ok())
+            .and_then(|n| n.body)
+            .unwrap_or_default()
+    });
+    let title_map = crate::wikilink::use_wikilink_map(body);
 
     let auth_state = use_auth_state();
     let deleting = RwSignal::new(false);
@@ -114,15 +114,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                 node.get().map(|result| {
                     match result {
                         Ok(n) => {
-                            // Build title → NodeId map from fetched titles (empty map if not
-                            // yet loaded — wiki-links will render as unresolved on first paint
-                            // and resolve on the next reactive tick).
-                            let title_map = titles
-                                .get()
-                                .and_then(|r| r.ok())
-                                .map(|entries| build_title_map(&entries))
-                                .unwrap_or_default();
-                            let body_html = render_markdown(n.body.as_deref().unwrap_or(""), &title_map);
+                            // Links render unresolved for a moment, then resolve. Only
+                            // the body re-renders when they do: reading the map here, in
+                            // the page closure, would rebuild every section (#134).
+                            let body_src = n.body.clone().unwrap_or_default();
+                            let body_html = move || render_markdown(&body_src, &title_map.get());
                             let node_type = n.node_type.as_str().to_string();
                             let status = n.status.as_str().to_string();
                             let edit_id = n.id;
