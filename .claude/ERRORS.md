@@ -169,6 +169,20 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 - **Fix:** created the `.claude/` tree (this file, `POLICY.md`, `ROADMAP.md`, `rules/`,
   `patterns/`) so the references resolve. Keep docs and filesystem in sync. — 2026-06-05
 
+### Resolving "both sides appended here" conflicts loses shared lines
+- **Symptom:** after merging `develop` into a PR branch, a spec fails to
+  parse ("Unexpected token" at EOF), or Rust tests won't compile.
+- **Cause:** when two branches append new tests at the same spot, git puts
+  the *shared* closing lines (`  }\n});`, the `.unwrap();` tail of an
+  `oneshot(...)` chain) outside the conflict markers. Joining "ours + theirs"
+  keeps only one copy, so one test loses its ending, or git interleaves the
+  two tests mid-body.
+- **Fix:** don't blindly concatenate. For code, take one side whole (`git
+  checkout --theirs <file>`) and re-append this branch's addition from `git
+  show <branch>:<file>`; then run the file's tests (e2e parse, `cargo test`)
+  before pushing. Plain-prose files (CHANGELOG, rules) are safe to join. —
+  2026-10-25
+
 ## Leptos / WASM
 
 ### Reactivity silently stops working
