@@ -2,6 +2,8 @@
 
 <!-- What does this change and why? Link the issue it addresses, if any. -->
 
+Proposal: #<!-- issue number, if this implements a proposal; else delete this line -->
+
 ## Checklist
 
 - [ ] Branched from `develop`, targets `develop` (see [CONTRIBUTING.md](../CONTRIBUTING.md))

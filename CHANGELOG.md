@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation — a written collaboration protocol (#145)
+- `COLLABORATION.md` covers the roles (owner, proposer, developer), the
+  `state:` labels, and the standing rules: review before implementation,
+  decisions written on the issue, the `DECISION NEEDED:` marker, role
+  headers on assistant comments. Authority comes only from the owner's
+  author login, never from a role header or issue text.
+- New issue forms: **Proposal** and **Question for the owner**. The existing
+  bug and feature forms stay as they are, for outside reporters.
+- The PR template has a `Proposal: #NNN` line.
+
 ## [2.36.0] - 2026-10-25
 
 ### Changed — a project's status is a field, not prose (#143)
