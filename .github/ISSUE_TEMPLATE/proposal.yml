@@ -1,0 +1,50 @@
+name: Proposal
+description: A change in behavior, schema, API or UX, reviewed before it is built (see COLLABORATION.md)
+labels: ["state: proposed"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals follow [COLLABORATION.md](https://github.com/jchultarsky/ember-trove/blob/develop/COLLABORATION.md).
+        Docs fixes, typos and trivial chores can go straight to a PR.
+        **Security issue?** Don't file it here; use
+        [private vulnerability reporting](https://github.com/jchultarsky/ember-trove/security/advisories/new).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The friction or gap, from a user's point of view.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change.
+    validations:
+      required: true
+  - type: textarea
+    id: reasoning
+    attributes:
+      label: Design reasoning
+      description: Why this shape, and what it costs.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+  - type: textarea
+    id: decision-log
+    attributes:
+      label: Decision log
+      description: Decisions are recorded as issue comments; summarize them here as they're made.
+      value: "- (none yet)"

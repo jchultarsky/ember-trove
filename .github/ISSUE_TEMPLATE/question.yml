@@ -1,0 +1,35 @@
+name: Question for the owner
+description: One decision the owner needs to make (see COLLABORATION.md)
+title: "DECISION NEEDED: "
+labels: ["state: decision-needed"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: What's going on, with links to the issue or PR it blocks.
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: One question that the owner can answer.
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options with trade-offs
+      description: Each option, what it costs, and which one you recommend.
+      placeholder: |
+        A. … (pro / con)
+        B. … (pro / con)
+        Recommendation: …
+    validations:
+      required: true
+  - type: input
+    id: needed-by
+    attributes:
+      label: Needed by
+      description: What is paused until this is answered, or a date.
