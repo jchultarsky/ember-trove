@@ -623,7 +623,7 @@ pub fn GraphView() -> impl IntoView {
                         }
                     }
                 >
-                    <span class="material-symbols-outlined" style="font-size: 14px;">"add_link"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">"add_link"</span>
                     {move || if edge_create_mode.get() { "Cancel" } else { "Add Edge" }}
                 </button>
                 // Fit button
@@ -694,7 +694,7 @@ pub fn GraphView() -> impl IntoView {
                             zoom_input.set(format!("{:.0}", zoom.get_untracked() * 100.0));
                         }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">"remove"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">"remove"</span>
                     </button>
                     // Manual zoom input — type a percentage and press Enter.
                     <input
@@ -746,7 +746,7 @@ pub fn GraphView() -> impl IntoView {
                             zoom_input.set(format!("{:.0}", zoom.get_untracked() * 100.0));
                         }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">"add"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">"add"</span>
                     </button>
                     <span class="px-1.5 text-[10px] font-medium text-stone-400 dark:text-stone-500
                                select-none">"%"</span>
@@ -781,11 +781,7 @@ pub fn GraphView() -> impl IntoView {
                                     prop:value=move || new_edge_type.get()
                                     on:change=move |ev| new_edge_type.set(event_target_value(&ev))
                                 >
-                                    <option value="references">"References"</option>
-                                    <option value="contains">"Contains"</option>
-                                    <option value="related_to">"Related to"</option>
-                                    <option value="depends_on">"Depends on"</option>
-                                    <option value="derived_from">"Derived from"</option>
+                                    <crate::components::node_meta::EdgeTypeOptions value=new_edge_type />
                                 </select>
                             </div>
                             // Optional label
@@ -830,13 +826,8 @@ pub fn GraphView() -> impl IntoView {
                                     disabled=move || edge_saving.get()
                                     on:click=move |_| {
                                         let Some((src, tgt)) = edge_pair.get_untracked() else { return };
-                                        let et = match new_edge_type.get_untracked().as_str() {
-                                            "contains"     => EdgeType::Contains,
-                                            "related_to"   => EdgeType::RelatedTo,
-                                            "depends_on"   => EdgeType::DependsOn,
-                                            "derived_from" => EdgeType::DerivedFrom,
-                                            _              => EdgeType::References,
-                                        };
+                                        let et = EdgeType::parse(&new_edge_type.get_untracked())
+                                            .unwrap_or(EdgeType::References);
                                         let lbl = {
                                             let s = new_edge_label.get_untracked();
                                             if s.trim().is_empty() { None } else { Some(s) }
@@ -910,7 +901,7 @@ pub fn GraphView() -> impl IntoView {
                     title="Show only nodes with no links (good for cleanup)"
                     on:click=move |_| show_orphans_only.update(|v| *v = !*v)
                 >
-                    <span class="material-symbols-outlined" style="font-size:12px;">"link_off"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:12px;">"link_off"</span>
                     {move || if show_orphans_only.get() { "Orphans only ✓" } else { "Orphans only" }}
                 </button>
                 // Tag filter active indicator — shown when a tag dot has been clicked.

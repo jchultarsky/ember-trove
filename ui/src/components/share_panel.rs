@@ -59,7 +59,7 @@ pub fn SharePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         disabled=move || creating.get()
                         title=move || if creating.get() { "Creating\u{2026}" } else { "New public link" }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             {move || if creating.get() { "hourglass_empty" } else { "add_link" }}
                         </span>
                     </button>
@@ -139,7 +139,7 @@ pub fn SharePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                             });
                                                         }
                                                     >
-                                                        <span class="material-symbols-outlined" style="font-size: 14px;">
+                                                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">
                                                             {move || if copied_id.get() == Some(token_id) { "check" } else { "content_copy" }}
                                                         </span>
                                                     </button>

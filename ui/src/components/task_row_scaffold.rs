@@ -49,7 +49,7 @@ pub fn TaskCheckbox(
             aria-pressed=move || if done.get() { "true" } else { "false" }
         >
             {move || done.get().then(|| view! {
-                <span class="material-symbols-outlined text-white" style="font-size:13px;">"check"</span>
+                <span aria-hidden="true" class="material-symbols-outlined text-white" style="font-size:13px;">"check"</span>
             })}
         </button>
     }

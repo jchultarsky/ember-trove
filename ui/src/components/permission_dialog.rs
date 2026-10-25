@@ -92,7 +92,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         on:click=move |_| show_invite.update(|v| *v = !*v)
                         title=move || if show_invite.get() { "Cancel" } else { "Invite someone" }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             {move || if show_invite.get() { "close" } else { "person_add" }}
                         </span>
                     </button>
@@ -137,7 +137,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                             disabled=move || saving.get()
                             title=move || if saving.get() { "Sending\u{2026}" } else { "Send invite" }
                         >
-                            <span class="material-symbols-outlined" style="font-size: 16px;">
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                                 {move || if saving.get() { "hourglass_empty" } else { "send" }}
                             </span>
                         </button>

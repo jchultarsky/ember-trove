@@ -379,7 +379,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                     disabled=move || body.get().trim().is_empty()
                                     on:click=on_add
                                 >
-                                    <span class="material-symbols-outlined">"check"</span>
+                                    <span aria-hidden="true" class="material-symbols-outlined">"check"</span>
                                 </button>
                             </div>
                         </div>
@@ -564,7 +564,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                                                     title="Edit note"
                                                                                                     on:click=move |_| editing.set(true)
                                                                                                 >
-                                                                                                    <span class="material-symbols-outlined"
+                                                                                                    <span aria-hidden="true" class="material-symbols-outlined"
                                                                                                         style="font-size: 14px;">{"edit"}</span>
                                                                                                 </button>
                                                                                                 // Delete: instant, with an Undo toast (soft delete).
