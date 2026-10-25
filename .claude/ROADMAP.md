@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-24)
 
+- **v2.34.0 shipped: node pickers fixed (#127, #128; issue #126).** Every
+  picker that commits a node is one APG combobox (`NodePicker`): text
+  filters, only Enter on the active option or a press commits, a chip,
+  arrows, scoped Escape, blur, ARIA. Same-titled results need an explicit
+  choice, and Enter before results arrive resolves only a unique exact
+  title. Connections uses it (no more "Invalid target node UUID"). Pickers
+  search **titles** via `GET /api/nodes/lookup` (exact > prefix > other);
+  full-text search had matched bodies and whole words only, so "Physna"
+  showed body mentions and "Phy" nothing. The palette keeps full-text.
+
 - **v2.33.0 shipped: strict CSP + #120 + #123 (#121, #122, #124).** The
   prod CSP has no `'unsafe-eval'` (only `'wasm-unsafe-eval'`), and e2e fails
   on any CSP violation. The loading screen shows its build-stamped bundle

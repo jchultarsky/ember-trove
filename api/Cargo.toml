@@ -1,6 +1,6 @@
 [package]
 name       = "api"
-version = "2.33.0"
+version = "2.34.0"
 edition    = "2024"
 repository = "https://github.com/jchultarsky/ember-trove"
 license    = "MIT"
