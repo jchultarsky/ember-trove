@@ -17,7 +17,6 @@ use crate::components::due_date_field::DueDateField;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
-use crate::components::node_picker::use_node_lookup;
 use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
@@ -221,15 +220,14 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     // previous day but still open still read as "in My Day" today.
     let in_my_day = RwSignal::new(is_in_my_day(&task, today));
 
-    // Node-picker state
+    // Attach picker: the shared NodePicker (#130); committing a node IS the
+    // attach.
     let assigning = RwSignal::new(false);
-    let picker_query = RwSignal::new(String::new());
-    let picker_results = use_node_lookup(picker_query);
+    let attach_target = RwSignal::new(None::<(NodeId, String)>);
 
     let do_assign = move |node_id: NodeId| {
         assigning.set(false);
-        picker_query.set(String::new());
-        picker_results.set(vec![]);
+        attach_target.set(None);
         patch_task(
             task_id,
             UpdateTaskRequest {
@@ -472,76 +470,44 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             {move || assigning.get().then(|| view! {
                 <div class="mt-2 rounded-lg px-3 py-3 space-y-2
                     bg-stone-50 dark:bg-stone-800/50">
-                    // Search input row
-                    <div class="flex items-center gap-2">
-                        <span class="material-symbols-outlined text-stone-400 flex-shrink-0"
-                            style="font-size: 16px;">"link"</span>
-                        <input
-                            type="text"
-                            placeholder="Search nodes…"
-                            autofocus=true
-                            class="flex-1 min-w-0 text-sm rounded-lg border border-amber-400
-                                bg-white dark:bg-stone-900 px-3 py-2
-                                text-stone-900 dark:text-stone-100
-                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                            prop:value=move || picker_query.get()
-                            on:input=move |ev| picker_query.set(event_target_value(&ev))
-                            on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                if ev.key() == "Escape" {
-                                    assigning.set(false);
-                                    picker_query.set(String::new());
-                                    picker_results.set(vec![]);
-                                }
+                    // Escape the picker didn't use (empty, closed) closes the panel.
+                    <div
+                        class="flex items-start gap-2"
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if ev.key() == "Escape" {
+                                assigning.set(false);
+                                attach_target.set(None);
                             }
-                        />
+                        }
+                    >
+                        <div class="flex-1 min-w-0">
+                            <crate::components::node_picker::NodePicker
+                                selected=attach_target
+                                placeholder="Search nodes…"
+                                autofocus=true
+                                on_commit=Callback::new(move |()| {
+                                    if let Some((id, _)) = attach_target.get_untracked() {
+                                        do_assign(id);
+                                    }
+                                })
+                            />
+                        </div>
                         <button
-                            class="p-2 rounded-lg text-stone-400 hover:text-stone-600
+                            class="p-1 rounded-lg text-stone-400 hover:text-stone-600
                                 dark:hover:text-stone-300 flex-shrink-0
                                 transition-colors cursor-pointer"
                             title="Cancel"
+                            aria-label="Cancel attach"
                             on:click=move |_| {
                                 assigning.set(false);
-                                picker_query.set(String::new());
-                                picker_results.set(vec![]);
+                                attach_target.set(None);
                             }
                         >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
+                            <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
                                 "close"
                             </span>
                         </button>
                     </div>
-                    // Results list
-                    {move || {
-                        let results = picker_results.get();
-                        (!results.is_empty()).then(|| view! {
-                            <div class="bg-white dark:bg-stone-900
-                                border border-stone-200 dark:border-stone-700
-                                rounded-xl shadow-md overflow-hidden">
-                                {results.into_iter().map(|r| {
-                                    let node_id = r.id;
-                                    let title   = r.title.clone();
-                                    let icon    = crate::components::node_meta::type_icon(r.node_type.as_str());
-                                    view! {
-                                        <button
-                                            class="w-full flex items-center gap-2.5 px-3 py-2.5
-                                                text-sm text-stone-700 dark:text-stone-300
-                                                hover:bg-amber-50 dark:hover:bg-stone-800
-                                                active:bg-amber-100 dark:active:bg-stone-700
-                                                border-b border-stone-50 dark:border-stone-800
-                                                last:border-b-0 transition-colors cursor-pointer"
-                                            on:click=move |_| do_assign(node_id)
-                                        >
-                                            <span class="material-symbols-outlined text-stone-400
-                                                flex-shrink-0" style="font-size: 16px;">
-                                                {icon}
-                                            </span>
-                                            <span class="truncate text-left">{title}</span>
-                                        </button>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        })
-                    }}
                 </div>
             })}
         </div>
