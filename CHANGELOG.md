@@ -24,6 +24,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **The coverage floor rises from 24% to 41%**, against a measured
   43.33%-of-lines baseline.
 
+### Changed — every node-choosing field is the same picker (#130)
+- **Add to Favorites:** it downloaded every node title and filtered them in
+  the browser, with its own list and no keyboard contract. Now it uses the
+  shared `NodePicker`, and Add stays disabled until a node is chosen.
+- **Inbox "Assign to node" and triage attach:** both drew their own result
+  lists (triage even had its own highlight and arrow keys). Both now use
+  `NodePicker`, where committing a node *is* the attach.
+- **Same behaviour everywhere:** the title lookup, arrow keys, Enter to
+  commit, and screen-reader support. Escape closes the list, then clears the
+  text, and only an unused Escape reaches the surrounding modal or triage.
+  `NodePicker` gains an `autofocus` prop, and its lookup hook is now
+  private to it.
+
 ### Security — cached personal data no longer outlives the session (#129)
 - The service worker caches API reads for offline use: node bodies, notes,
   tasks, and `/api/auth/me`. Nothing cleared them on logout, so on a shared
