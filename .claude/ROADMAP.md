@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-25)
 
+- **v2.36.0 shipped: a project's status is a field (#143, PR #144).**
+  - **The field:** `nodes.project_status`, an open-valued token of at most
+    40 characters. It's named that way because `status` is the lifecycle.
+  - **Where it shows:** a header chip with a picker that suggests your own
+    values and folds case variants together, a Projects-list badge and
+    filter, and dashboard badges.
+  - **Moving old data:** migration 035 adds the column and a
+    `data_backfills` marker. A one-time Rust backfill (`api/src/backfill.rs`)
+    moves `## Status` tokens out of project bodies. It snapshots the old body
+    as a version first and doesn't bump `updated_at`.
+  - **Architecture decision:** this is section promotion again, not a
+    property framework. Generalize only once a second real field appears.
+
 - **v2.35.0 shipped: the v2.34.0 code-survey issues (#129–#135; PRs
   #136–#142).**
   - **Deploys reach open tabs.** The service worker serves navigations

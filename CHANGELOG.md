@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.36.0] - 2026-10-25
+
 ### Changed — a project's status is a field, not prose (#143)
 - **Structured value:** projects get a `project_status`, a short token such
   as "Active" or "On hold". It's shown as a chip in the project's header,
