@@ -16,7 +16,6 @@ use leptos::prelude::*;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
-use crate::components::node_picker::use_node_lookup;
 use crate::components::task_actions::{PatchOpts, TaskCtx, delete_with_undo, patch_task};
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
@@ -44,16 +43,9 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     // Schedule input state.
     let date_input = RwSignal::new(String::new());
     let date_ref = NodeRef::<leptos::html::Input>::new();
-    // Attach picker state.
-    let picker_query = RwSignal::new(String::new());
-    let picker_results = use_node_lookup(picker_query);
-    let picker_highlight = RwSignal::new(0usize);
-    // Fresh results: highlight the first again.
-    Effect::new(move |_| {
-        picker_results.track();
-        picker_highlight.set(0);
-    });
-    let picker_ref = NodeRef::<leptos::html::Input>::new();
+    // Attach picker: the shared NodePicker (#130), which owns the arrows,
+    // Enter and the highlight that used to be hand-rolled here.
+    let attach_target = RwSignal::new(None::<(NodeId, String)>);
 
     // Snapshot the open inbox tasks once.
     wasm_bindgen_futures::spawn_local(async move {
@@ -193,12 +185,8 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                         let _ = el.focus();
                     }
                 }
-                SubMode::Attach => {
-                    if let Some(el) = picker_ref.get_untracked() {
-                        let _ = el.focus();
-                    }
-                }
-                SubMode::Keys => {}
+                // NodePicker focuses itself (`autofocus`).
+                SubMode::Attach | SubMode::Keys => {}
             });
             use leptos::wasm_bindgen::JsCast;
             let _ = win.request_animation_frame(cb.as_ref().unchecked_ref());
@@ -216,9 +204,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     };
 
     let enter_attach = move || {
-        picker_query.set(String::new());
-        picker_results.set(Vec::new());
-        picker_highlight.set(0);
+        attach_target.set(None);
         sub.set(SubMode::Attach);
         focus_after_render(SubMode::Attach);
     };
@@ -367,69 +353,18 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                                 </div>
                             }.into_any(),
                             SubMode::Attach => view! {
-                                <div class="space-y-1"
-                                     on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                         match ev.key().as_str() {
-                                             "ArrowDown" => {
-                                                 ev.prevent_default();
-                                                 picker_highlight.update(|h| {
-                                                     *h = (*h + 1).min(picker_results.with(|r| r.len().saturating_sub(1)));
-                                                 });
-                                             }
-                                             "ArrowUp" => {
-                                                 ev.prevent_default();
-                                                 picker_highlight.update(|h| *h = h.saturating_sub(1));
-                                             }
-                                             "Enter" => {
-                                                 ev.prevent_default();
-                                                 let pick = picker_results.with(|r| {
-                                                     r.get(picker_highlight.get_untracked()).map(|p| p.id)
-                                                 });
-                                                 if let Some(id) = pick {
-                                                     do_attach(id);
-                                                 }
-                                             }
-                                             _ => {}
-                                         }
-                                     }>
-                                    <input
-                                        type="text"
-                                        node_ref=picker_ref
+                                <div class="space-y-1">
+                                    <crate::components::node_picker::NodePicker
+                                        selected=attach_target
                                         placeholder="Attach to node…"
-                                        class="w-full text-sm rounded-lg border border-amber-400 px-2 py-1.5
-                                               bg-white dark:bg-stone-800
-                                               text-stone-800 dark:text-stone-200
-                                               focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                        prop:value=move || picker_query.get()
-                                        on:input=move |ev| picker_query.set(event_target_value(&ev))
-                                    />
-                                    {move || {
-                                        let results = picker_results.get();
-                                        (!results.is_empty()).then(|| view! {
-                                            <div class="rounded-lg border border-stone-200 dark:border-stone-700
-                                                        divide-y divide-stone-100 dark:divide-stone-800 overflow-hidden">
-                                                {results.into_iter().enumerate().map(|(i, r)| {
-                                                    let rid = r.id;
-                                                    view! {
-                                                        <button
-                                                            class=move || {
-                                                                let base = "w-full text-left px-3 py-1.5 text-sm \
-                                                                            text-stone-700 dark:text-stone-300";
-                                                                if picker_highlight.get() == i {
-                                                                    format!("{base} bg-amber-50 dark:bg-amber-900/30")
-                                                                } else {
-                                                                    base.to_string()
-                                                                }
-                                                            }
-                                                            on:click=move |_| do_attach(rid)
-                                                        >
-                                                            {r.title.clone()}
-                                                        </button>
-                                                    }
-                                                }).collect_view()}
-                                            </div>
+                                        autofocus=true
+                                        on_commit=Callback::new(move |()| {
+                                            if let Some((id, _)) = attach_target.get_untracked() {
+                                                attach_target.set(None);
+                                                do_attach(id);
+                                            }
                                         })
-                                    }}
+                                    />
                                 </div>
                             }.into_any(),
                             SubMode::Keys => ().into_any(),

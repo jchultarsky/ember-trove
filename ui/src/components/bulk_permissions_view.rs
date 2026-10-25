@@ -75,6 +75,9 @@ pub fn BulkPermissionsView() -> impl IntoView {
         async move { crate::api::list_all_permissions().await.unwrap_or_default() }
     });
 
+    // The full title list is intended here (#134): this admin table names
+    // the node of EVERY permission row, so it is a genuine enumeration, not
+    // a lookup. Everywhere else resolves titles on demand.
     let titles_resource =
         LocalResource::new(
             || async move { crate::api::fetch_node_titles().await.unwrap_or_default() },
@@ -384,7 +387,7 @@ fn PermRow(
                         title="Revoke"
                         on:click=on_revoke
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">"person_remove"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">"person_remove"</span>
                     </button>
                 }.into_any()
             }}

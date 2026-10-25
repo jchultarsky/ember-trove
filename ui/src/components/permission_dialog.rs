@@ -39,10 +39,10 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
             api::list_permissions(node_id).await
         }
     });
-    let on_toggle_open = move |_| {
-        let opening = !open.get_untracked();
-        open.update(|v| *v = !*v);
-        if opening && admin_users.get_untracked().is_none() {
+    // Load the user list the first time the section opens (SectionShell
+    // owns the toggle, #131; this used to live in the click handler).
+    Effect::new(move |_| {
+        if open.get() && admin_users.get_untracked().is_none() {
             wasm_bindgen_futures::spawn_local(async move {
                 match api::list_admin_users().await {
                     Ok(users) => admin_users.set(Some(users)),
@@ -50,7 +50,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                 }
             });
         }
-    };
+    });
 
     let on_invite = move |_| {
         let email = email_input.get_untracked().trim().to_string();
@@ -80,44 +80,11 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         });
     };
 
-    view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
-            <div class="flex items-center justify-between">
-                <button
-                    class="flex items-center gap-1 text-left cursor-pointer"
-                    on:click=on_toggle_open
-                >
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 16px;"
-                    >
-                        {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                    </span>
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 15px;"
-                    >
-                        "group"
-                    </span>
-                    <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                        "Sharing"
-                    </h2>
-                    <Suspense fallback=|| ()>
-                    {move || {
-                        permissions.with(|r| r.as_ref().and_then(|res| match res {
-                            Ok(v) if !v.is_empty() => Some(view! {
-                                <span class="ml-1 text-xs bg-stone-200 dark:bg-stone-700
-                                            text-stone-600 dark:text-stone-300
-                                            rounded-full px-1.5 py-0.5">
-                                    {v.len()}
-                                </span>
-                            }),
-                            _ => None,
-                        }))
-                    }}
-                    </Suspense>
-                </button>
-                {move || (open.get() && is_owner).then(|| view! {
+    let section_count =
+        Signal::derive(move || permissions.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
+    let section_actions: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            {move || (open.get() && is_owner).then(|| view! {
                     <button
                         class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                             dark:hover:text-stone-300 hover:bg-stone-100
@@ -125,15 +92,17 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         on:click=move |_| show_invite.update(|v| *v = !*v)
                         title=move || if show_invite.get() { "Cancel" } else { "Invite someone" }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             {move || if show_invite.get() { "close" } else { "person_add" }}
                         </span>
                     </button>
                 })}
-            </div>
+        }
+        .into_any()
+    });
+    view! {
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::Sharing open=open count=section_count actions=section_actions>
 
-            {move || open.get().then(|| view! {
-            <div class="mt-4">
             // Invite form
             {move || show_invite.get().then(|| view! {
                 <div class="mb-4 p-3 bg-stone-50 dark:bg-stone-900 rounded-lg space-y-2">
@@ -168,7 +137,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                             disabled=move || saving.get()
                             title=move || if saving.get() { "Sending\u{2026}" } else { "Send invite" }
                         >
-                            <span class="material-symbols-outlined" style="font-size: 16px;">
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                                 {move || if saving.get() { "hourglass_empty" } else { "send" }}
                             </span>
                         </button>
@@ -329,8 +298,6 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                     })
                 }}
             </Suspense>
-            </div>
-            })}
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }

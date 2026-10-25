@@ -20,7 +20,7 @@ fmt-check: ## Check formatting (CI gate)
 	cargo fmt --all --check
 
 lint: ## Clippy on api + common, warnings = errors
-	cargo clippy --workspace --exclude ui -- -D warnings
+	cargo clippy --workspace --exclude ui --all-targets -- -D warnings
 
 lint-ui: ## Clippy on ui for the wasm32 target
 	cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings

@@ -104,7 +104,7 @@ pub fn TagBar(node_id: NodeId) -> impl IntoView {
                                                         navigate.get_value()("/nodes", Default::default());
                                                     }
                                                 >
-                                                    <span class="material-symbols-outlined" style="font-size:11px;">"filter_list"</span>
+                                                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:11px;">"filter_list"</span>
                                                 </button>
                                                 {tag.name.clone()}
                                                 // Detach button
@@ -146,7 +146,7 @@ pub fn TagBar(node_id: NodeId) -> impl IntoView {
                             class="w-24 px-2 py-0.5 text-xs rounded-full border border-stone-300 dark:border-stone-600
                                 bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none
                                 focus:ring-1 focus:ring-amber-500"
-                            placeholder="Tag name..."
+                            placeholder="Tag name\u{2026}"
                             prop:value=move || input_value.get()
                             on:input=move |ev| input_value.set(event_target_value(&ev))
                             on:keydown=on_keydown

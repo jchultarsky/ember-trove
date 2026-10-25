@@ -13,11 +13,8 @@ use common::{
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
-use crate::components::due_date_field::DueDateField;
 use crate::components::empty_state::EmptyState;
-use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
-use crate::components::node_picker::use_node_lookup;
 use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
@@ -26,8 +23,8 @@ use crate::components::task_actions::{
 use crate::components::task_common::{is_in_my_day, parse_priority, recurrence_label, status_done};
 use crate::components::task_row::TaskEditorHeights;
 use crate::components::task_row_scaffold::{
-    MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
-    due_badge_view, priority_dot_view,
+    EditorDensity, MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody,
+    action_btn_class, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use crate::focus_task::schedule_focus_task;
@@ -214,22 +211,19 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     let editing = RwSignal::new(false);
     let orig_title = RwSignal::new(task.title.clone());
     let draft = TaskEditDraft::from_task(&task);
-    let (edit_title, edit_priority, edit_due, edit_recurrence) =
-        (draft.title, draft.priority, draft.due, draft.recurrence);
 
     // My Day toggle — mirrors server carry-forward so tasks set on a
     // previous day but still open still read as "in My Day" today.
     let in_my_day = RwSignal::new(is_in_my_day(&task, today));
 
-    // Node-picker state
+    // Attach picker: the shared NodePicker (#130); committing a node IS the
+    // attach.
     let assigning = RwSignal::new(false);
-    let picker_query = RwSignal::new(String::new());
-    let picker_results = use_node_lookup(picker_query);
+    let attach_target = RwSignal::new(None::<(NodeId, String)>);
 
     let do_assign = move |node_id: NodeId| {
         assigning.set(false);
-        picker_query.set(String::new());
-        picker_results.set(vec![]);
+        attach_target.set(None);
         patch_task(
             task_id,
             UpdateTaskRequest {
@@ -253,11 +247,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
         .unwrap_or(false);
     let due = task.due_date;
 
-    let do_save = move || {
-        let Some(req) = draft.take_request() else {
-            return;
-        };
-        editing.set(false);
+    let on_save = move |req: UpdateTaskRequest| {
         let prev_title = orig_title.get_untracked();
         let prev_priority = priority_val.get_untracked();
         orig_title.set(draft.title.get_untracked().trim().to_string());
@@ -314,84 +304,19 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                     // Title area
                     <div class="flex-1 min-w-0">
                         {move || if editing.get() {
-                            // ── Edit form ──────────────────────────────────────
-                            let saved_height = TaskEditorHeights::saved(task_id);
+                            // ── Edit form (shared TaskEditor, #132) ───────────
                             view! {
-                                <div class="space-y-2">
-                                    <crate::components::resizable_editor::ResizableEditor
-                                        value=edit_title
-                                        placeholder="Task title…"
-                                        initial_height=saved_height
-                                        on_submit=Callback::new(move |()| do_save())
-                                        on_escape=Callback::new(move |()| {
-                                            editing.set(false);
-                                            draft.discard_with_undo(move || {
-                                                editing.try_set(true);
-                                            });
-                                        })
-                                        on_resize=TaskEditorHeights::on_resize(task_id)
-                                        class="w-full text-sm rounded-lg border border-amber-400 \
-                                            bg-white dark:bg-stone-800 px-3 py-2 resize-y min-h-[44px] \
-                                            text-stone-900 dark:text-stone-100 \
-                                            focus:outline-none focus:ring-1 focus:ring-amber-400".to_string()
-                                    />
-                                    // Edit controls — wrap on mobile
-                                    <div class="flex items-center gap-2 flex-wrap">
-                                        <select
-                                            class="rounded-lg border border-stone-200
-                                                dark:border-stone-700 bg-stone-50
-                                                dark:bg-stone-800 px-2 py-1.5 text-xs
-                                                text-stone-700 dark:text-stone-300
-                                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                            title="Priority"
-                                    prop:value=move || edit_priority.get()
-                                            on:change=move |ev| edit_priority.set(event_target_value(&ev))
-                                        >
-                                            <option value="high">"High"</option>
-                                            <option value="medium">"Medium"</option>
-                                            <option value="low">"Low"</option>
-                                        </select>
-                                        <DueDateField
-                                            value=edit_due
-                                            original=due
-                                            wrapper_class="flex-1 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0.5"
-                                            input_class="min-w-0 rounded-lg border \
-                                                border-stone-200 dark:border-stone-700 \
-                                                bg-stone-50 dark:bg-stone-800 \
-                                                px-2 py-1.5 text-xs \
-                                                text-stone-700 dark:text-stone-300 \
-                                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                        />
-                                        <select
-                                            class="rounded-lg border border-stone-200
-                                                dark:border-stone-700 bg-stone-50
-                                                dark:bg-stone-800 px-2 py-1.5 text-xs
-                                                text-stone-700 dark:text-stone-300
-                                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                                            title="Recurrence"
-                                            on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
-                                        >
-                                            <RecurrenceOptions value=edit_recurrence />
-                                        </select>
-                                    </div>
-                                    // Save / cancel
-                                    <div class="flex items-center gap-1">
-                                        <IconButton
-                                            icon="check"
-                                            label="Save"
-                                            variant=IconButtonVariant::Save
-                                            on_click=Callback::new(move |()| do_save())
-                                        />
-                                        <IconButton
-                                            icon="close"
-                                            label="Cancel"
-                                            on_click=Callback::new(move |()| {
-                                                editing.set(false);
-                                                draft.reset();
-                                            })
-                                        />
-                                    </div>
-                                </div>
+                                <TaskEditor
+                                    draft=draft
+                                    task_id=task_id
+                                    due=due
+                                    on_save=on_save
+                                    close=Callback::new(move |()| editing.set(false))
+                                    reopen=std::sync::Arc::new(move || {
+                                        editing.try_set(true);
+                                    })
+                                    density=EditorDensity::Comfortable
+                                />
                             }.into_any()
                         } else {
                             // ── Read mode: shared scaffold (title, then meta).
@@ -436,7 +361,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 title="Assign to node"
                                 on:click=move |_| assigning.set(true)
                             >
-                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
                                     "call_merge"
                                 </span>
                             </button>
@@ -448,10 +373,10 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                         {move || (!editing.get()).then(|| view! {
                             <button
                                 class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
-                                title="Edit"
+                                title="Edit task"
                                 on:click=move |_| editing.set(true)
                             >
-                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
                                     "edit"
                                 </span>
                             </button>
@@ -460,7 +385,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 title="Delete"
                                 on:click=on_delete
                             >
-                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
                                     "delete"
                                 </span>
                             </button>
@@ -472,76 +397,44 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
             {move || assigning.get().then(|| view! {
                 <div class="mt-2 rounded-lg px-3 py-3 space-y-2
                     bg-stone-50 dark:bg-stone-800/50">
-                    // Search input row
-                    <div class="flex items-center gap-2">
-                        <span class="material-symbols-outlined text-stone-400 flex-shrink-0"
-                            style="font-size: 16px;">"link"</span>
-                        <input
-                            type="text"
-                            placeholder="Search nodes…"
-                            autofocus=true
-                            class="flex-1 min-w-0 text-sm rounded-lg border border-amber-400
-                                bg-white dark:bg-stone-900 px-3 py-2
-                                text-stone-900 dark:text-stone-100
-                                focus:outline-none focus:ring-1 focus:ring-amber-400"
-                            prop:value=move || picker_query.get()
-                            on:input=move |ev| picker_query.set(event_target_value(&ev))
-                            on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                if ev.key() == "Escape" {
-                                    assigning.set(false);
-                                    picker_query.set(String::new());
-                                    picker_results.set(vec![]);
-                                }
+                    // Escape the picker didn't use (empty, closed) closes the panel.
+                    <div
+                        class="flex items-start gap-2"
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if ev.key() == "Escape" {
+                                assigning.set(false);
+                                attach_target.set(None);
                             }
-                        />
+                        }
+                    >
+                        <div class="flex-1 min-w-0">
+                            <crate::components::node_picker::NodePicker
+                                selected=attach_target
+                                placeholder="Search nodes…"
+                                autofocus=true
+                                on_commit=Callback::new(move |()| {
+                                    if let Some((id, _)) = attach_target.get_untracked() {
+                                        do_assign(id);
+                                    }
+                                })
+                            />
+                        </div>
                         <button
-                            class="p-2 rounded-lg text-stone-400 hover:text-stone-600
+                            class="p-1 rounded-lg text-stone-400 hover:text-stone-600
                                 dark:hover:text-stone-300 flex-shrink-0
                                 transition-colors cursor-pointer"
                             title="Cancel"
+                            aria-label="Cancel attach"
                             on:click=move |_| {
                                 assigning.set(false);
-                                picker_query.set(String::new());
-                                picker_results.set(vec![]);
+                                attach_target.set(None);
                             }
                         >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
+                            <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
                                 "close"
                             </span>
                         </button>
                     </div>
-                    // Results list
-                    {move || {
-                        let results = picker_results.get();
-                        (!results.is_empty()).then(|| view! {
-                            <div class="bg-white dark:bg-stone-900
-                                border border-stone-200 dark:border-stone-700
-                                rounded-xl shadow-md overflow-hidden">
-                                {results.into_iter().map(|r| {
-                                    let node_id = r.id;
-                                    let title   = r.title.clone();
-                                    let icon    = crate::components::node_meta::type_icon(r.node_type.as_str());
-                                    view! {
-                                        <button
-                                            class="w-full flex items-center gap-2.5 px-3 py-2.5
-                                                text-sm text-stone-700 dark:text-stone-300
-                                                hover:bg-amber-50 dark:hover:bg-stone-800
-                                                active:bg-amber-100 dark:active:bg-stone-700
-                                                border-b border-stone-50 dark:border-stone-800
-                                                last:border-b-0 transition-colors cursor-pointer"
-                                            on:click=move |_| do_assign(node_id)
-                                        >
-                                            <span class="material-symbols-outlined text-stone-400
-                                                flex-shrink-0" style="font-size: 16px;">
-                                                {icon}
-                                            </span>
-                                            <span class="truncate text-left">{title}</span>
-                                        </button>
-                                    }
-                                }).collect_view()}
-                            </div>
-                        })
-                    }}
                 </div>
             })}
         </div>

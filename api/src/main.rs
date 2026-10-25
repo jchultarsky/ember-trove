@@ -10,7 +10,6 @@ mod routes;
 mod ssrf;
 mod state;
 mod webhook_dispatch;
-mod wikilink;
 
 #[cfg(test)]
 mod tests;

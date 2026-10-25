@@ -99,45 +99,11 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
         });
     };
 
-    view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
-            // ── Section header ────────────────────────────────────────────────
-            <div class="flex items-center justify-between">
-                <button
-                    class="flex items-center gap-1 text-left cursor-pointer"
-                    on:click=move |_| open.update(|o| *o = !*o)
-                >
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 16px;"
-                    >
-                        {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                    </span>
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 15px;"
-                    >
-                        "open_in_new"
-                    </span>
-                    <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                        "External Links"
-                    </h2>
-                    <Suspense fallback=|| ()>
-                    {move || {
-                        links_res.with(|r| r.as_ref().and_then(|res| match res {
-                            Ok(v) if !v.is_empty() => Some(view! {
-                                <span class="ml-1 text-xs bg-stone-200 dark:bg-stone-700
-                                            text-stone-600 dark:text-stone-300
-                                            rounded-full px-1.5 py-0.5">
-                                    {v.len()}
-                                </span>
-                            }),
-                            _ => None,
-                        }))
-                    }}
-                    </Suspense>
-                </button>
-                {move || (open.get() && is_editor).then(|| view! {
+    let section_count =
+        Signal::derive(move || links_res.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
+    let section_actions: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            {move || (open.get() && is_editor).then(|| view! {
                     <button
                         class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                             dark:hover:text-stone-300 hover:bg-stone-100
@@ -148,16 +114,17 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                         }
                         title=move || if show_add.get() { "Cancel" } else { "Add link" }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             {move || if show_add.get() { "close" } else { "add_link" }}
                         </span>
                     </button>
                 })}
-            </div>
+        }
+        .into_any()
+    });
+    view! {
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::Links open=open count=section_count actions=section_actions>
 
-            // ── Collapsible body ──────────────────────────────────────────────
-            {move || open.get().then(|| view! {
-                <div class="mt-4">
                     <Suspense fallback=move || view! {
                         <p class="text-xs text-stone-400 py-2">"Loading…"</p>
                     }>
@@ -267,7 +234,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                     show_add.set(false);
                                                                                 }
                                                                             >
-                                                                                <span class="material-symbols-outlined"
+                                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                                       style="font-size:14px;">"edit"</span>
                                                                             </button>
                                                                             <button
@@ -288,7 +255,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                     });
                                                                                 }
                                                                             >
-                                                                                <span class="material-symbols-outlined"
+                                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                                       style="font-size:14px;">"delete"</span>
                                                                             </button>
                                                                         </div>
@@ -337,7 +304,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                             title="Add link"
                                                             on:click=move |_| do_add()
                                                         >
-                                                            <span class="material-symbols-outlined">"check"</span>
+                                                            <span aria-hidden="true" class="material-symbols-outlined">"check"</span>
                                                         </button>
                                                         <button
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
@@ -350,7 +317,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                 add_error.set(None);
                                                             }
                                                         >
-                                                            <span class="material-symbols-outlined">"close"</span>
+                                                            <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
                                                         </button>
                                                     </div>
                                                 </div>
@@ -361,8 +328,6 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                             }
                         }))}
                     </Suspense>
-                </div>
-            })}
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }

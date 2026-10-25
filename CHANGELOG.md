@@ -6,6 +6,144 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-10-25
+
+### Changed — wiki links resolve on demand; no more downloading every title (#134)
+- **Node pages** used to download *every* node title the caller could see
+  on each view, just to render the few `[[links]]` in the body. Now a page
+  asks for only the titles its body links, via the new
+  `GET /api/nodes/resolve-titles`. That endpoint resolves among nodes the
+  caller can see (own first, then shared, never another owner's private
+  node) and takes at most 100 titles per request. It's a GET because reads
+  aren't write-rate-limited. The lookup is cached and debounced, and only
+  the body re-renders when links resolve.
+- **Links match case-insensitively**, like the server's edge sync:
+  `[[rust]]` used to render unresolved while still creating a "Linked Here"
+  edge.
+- **Editor:** the `[[` suggestions use the title lookup, and the preview
+  uses the same on-demand resolution.
+- **Notes feed:** the node filter is "All / Uncategorized / A node…", using
+  the shared picker instead of a dropdown of every title.
+- **Shared parser:** `parse_wikilink_titles` moves to `common::wikilink`,
+  so the API and the UI read links the same way.
+- The admin bulk-permissions table is now the only full title list, and it
+  is a genuine enumeration.
+
+### Changed — one task editor everywhere (#132)
+- **`TaskEditor`** (`ui/src/components/task_row_scaffold.rs`) is now the
+  inline editor in My Day, the Inbox and the node panel. It has the same
+  controls and keys in all three: title, priority, due date, repeat, Save
+  and Cancel. Before, each list had its own form, and they looked and
+  behaved differently.
+- **One priority control:** `PriorityPicker`, a labelled segmented radio
+  group (Low / Medium / High), replaces My Day's unlabelled-state pills and
+  the `<select>`s in the Inbox, the node panel and the add-task form.
+  - Assistive tech now hears which option is selected (`aria-checked`).
+  - Arrow keys move the selection, and the group is a single tab stop.
+  - The options come from one list, `TaskPriority::ALL` plus `label()`. It
+    used to be written out four times.
+- **Escape and Ctrl/⌘+Enter work from any editor control.** Before, they
+  only worked in the title box. From the priority or repeat control,
+  Escape did nothing.
+- The pencil is named "Edit task" in every list. It was "Edit this task in
+  place", "Edit" and "Edit task".
+
+### Changed — node page sections share one look, and an outline reaches them all (#131)
+- **One primitive:** `SectionShell` (`ui/src/components/node_section.rs`)
+  now renders all 11 sections under a node's body. They had three
+  hand-rolled header styles: uppercase headings for Tasks and Notes,
+  title-case ones for most, and boxed buttons for Versions and Activity.
+  Each section is now a labelled region with an `aria-expanded` toggle, an
+  icon, one `h2` style, a count badge and its own header actions.
+- **A "Sections" outline** in the node header lists every section with its
+  count and jumps there, opening a collapsed section and moving focus into
+  it. It replaces #123's separate "Jump to tasks" / "Jump to notes"
+  buttons, and it's available on phones too.
+- Tasks can now be collapsed like the other sections.
+
+### Fixed — every button has a real name; one connection-type list (#133)
+- **Icon-only buttons** were announced by their glyph name ("edit",
+  "more_vert", "call_merge") or had no name at all. In 75 buttons across 27
+  files the glyph is now `aria-hidden`, so the button's title names it. The
+  11 that had no title (back arrows, close buttons, toast dismiss, the
+  delete-confirm ✓ on Admin and Backups) gain a title and an
+  `aria-label`. Wiki-link autocomplete items no longer read "link …".
+  - A new e2e guard scans the accessibility tree of Inbox, My Day and a full
+    node page, and fails on any unnamed or glyph-named button. It fails on
+    the old UI, so it catches what it targets.
+- **Connection types:** the Connections form and the graph's New Edge
+  dialog had hand-written type lists that already disagreed ("Related To"
+  vs "Related to"). Both now use one list, `EdgeTypeOptions` (built on
+  `EdgeType::USER_SELECTABLE` and `option_label`), and the graph parses
+  types with `EdgeType::parse`.
+- **Placeholders** use the ellipsis character ("Node title…",
+  "Label (optional)…", "Tag name…").
+
+### Tooling — tests that look like real use (#135)
+- **A second e2e identity.** Under the `e2e-bypass` build only, and only
+  when armed, an `x-e2e-subject: other` header selects a fixed second test
+  user. Specs can now test sharing, same-titled nodes across owners and
+  permission boundaries for real; the duplicate-title picker test no longer
+  fakes its search response.
+  - **Security:** the header picks one of two fixed identities, is never
+    used as a subject id, and any other value is refused (401). A test
+    proves a release build ignores it.
+- **A realistic seed** (`e2e/tests/seed.ts`): bodies that mention titles,
+  prefix-sharing titles, wiki links, a task and a note. Empty-body fixtures
+  hid the v2.33.0 picker bug.
+- **Clippy lints test code** (`--all-targets`) in CI, the pre-commit hook,
+  `verify.sh` and `make lint`. The two lints it surfaced are now
+  compile-time `const` assertions.
+- **The coverage floor rises from 24% to 41%**, against a measured
+  43.33%-of-lines baseline.
+
+### Changed — every node-choosing field is the same picker (#130)
+- **Add to Favorites:** it downloaded every node title and filtered them in
+  the browser, with its own list and no keyboard contract. Now it uses the
+  shared `NodePicker`, and Add stays disabled until a node is chosen.
+- **Inbox "Assign to node" and triage attach:** both drew their own result
+  lists (triage even had its own highlight and arrow keys). Both now use
+  `NodePicker`, where committing a node *is* the attach.
+- **Same behaviour everywhere:** the title lookup, arrow keys, Enter to
+  commit, and screen-reader support. Escape closes the list, then clears the
+  text, and only an unused Escape reaches the surrounding modal or triage.
+  `NodePicker` gains an `autofocus` prop, and its lookup hook is now
+  private to it.
+
+### Security — cached personal data no longer outlives the session (#129)
+- The service worker caches API reads for offline use: node bodies, notes,
+  tasks, and `/api/auth/me`. Nothing cleared them on logout, so on a shared
+  computer the previous user's data stayed in the browser and was served
+  back while offline. Now `/api/auth/*` is never cached, and logging out (or
+  any 401) purges every cached API response.
+
+### Fixed — no more duplicate connections (#129)
+- Submitting the same connection twice (same source, target and type)
+  created an identical second edge. **Migration 034** keeps one edge per
+  *(source, target, type)* and then enforces it with a unique index:
+  - the oldest edge of each duplicate set is kept;
+  - if the kept edge has no label, it takes the oldest non-empty label from
+    its duplicates;
+  - every removed row is archived in `edges_removed_034`.
+
+  A different relationship type between the same nodes stays allowed.
+- The API answers a duplicate with **409 "already linked as …"**. The
+  Connections form says "Already linked as references" and disables ✓ before
+  you submit. The graph's New Edge dialog now reports a failed create
+  instead of closing as if it had worked.
+
+### Fixed — a deploy now reaches open tabs and revisited pages (#129)
+- The service worker served **page loads cache-first** per URL. A revisited
+  page, or a reload, could keep running an old release across deploys, so a
+  shipped fix looked like it didn't work. Page loads are now network-first
+  (the cached shell is used only offline), and the cache version is bumped
+  so every installed worker refreshes.
+- A **"A new version of Ember Trove (vX) is available · Reload"** prompt
+  appears when the server runs a different release than the tab. It checks
+  at startup, every 10 minutes, and when the window regains focus.
+- The service worker has unit tests (`node --test ui/public/sw.test.mjs`)
+  in CI and `verify.sh`.
+
 ## [2.34.0] - 2026-10-24
 
 ### Fixed — node pickers find nodes by title, as you type

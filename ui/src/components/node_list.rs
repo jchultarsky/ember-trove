@@ -223,7 +223,7 @@ pub fn NodeList() -> impl IntoView {
                         on:click=move |_| navigate("/nodes/new", Default::default())
                         title="New node"
                     >
-                        <span class="material-symbols-outlined">"add"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"add"</span>
                     </button>
                 </div>
             </PageHeader>
@@ -287,7 +287,7 @@ pub fn NodeList() -> impl IntoView {
                     }
                     title="Toggle visibility of archived nodes"
                 >
-                    <span class="material-symbols-outlined" style="font-size:11px;">"inventory_2"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:11px;">"inventory_2"</span>
                     {move || if show_archived.get() { "Hide archived" } else { "Show archived" }}
                 </button>
             </div>
@@ -754,7 +754,7 @@ fn NodeCards(
                                                 show_picker.update(|v| *v = !*v);
                                             }
                                         >
-                                            <span class="material-symbols-outlined" style="font-size: 14px;">
+                                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">
                                                 "label"
                                             </span>
                                         </button>

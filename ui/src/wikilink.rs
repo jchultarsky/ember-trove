@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use common::id::NodeId;
 
 /// Preprocess markdown content, converting `[[title]]` and `[[title|display]]`
+/// (`title_map` keys are lowercased titles: see [`use_wikilink_map`])
 /// wiki-links into HTML that the Leptos click handler can intercept.
 ///
 /// - **Resolved** links → `<a class="wikilink" data-node-id="<uuid>">display</a>`
@@ -28,7 +29,10 @@ pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) 
                 (t, t)
             };
 
-            if let Some(node_id) = title_map.get(target) {
+            // Keys are lowercased: wiki links match case-insensitively, as
+            // the server's edge sync does (#134 — `[[rust]]` used to render
+            // unresolved while still creating a Linked Here edge).
+            if let Some(node_id) = title_map.get(&target.to_lowercase()) {
                 result.push_str(&format!(
                     r#"<a class="wikilink" data-node-id="{}">{}</a>"#,
                     node_id.0,
@@ -58,4 +62,63 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// The lowercased-title → node map for the `[[links]]` in `body`, fetched
+/// on demand (#134): only the titles the body actually links, resolved by
+/// the server among nodes the caller can see. Debounced (the editor's
+/// preview changes per keystroke) and cached, so a title is asked for once.
+/// Node pages used to download every visible title just to render links.
+pub fn use_wikilink_map(
+    body: leptos::prelude::Signal<String>,
+) -> leptos::prelude::Signal<HashMap<String, NodeId>> {
+    use leptos::prelude::*;
+    // title -> Some(id) resolved, None = asked, no visible match.
+    let known: RwSignal<HashMap<String, Option<NodeId>>> = RwSignal::new(HashMap::new());
+    let version = RwSignal::new(0u32);
+    Effect::new(move |_| {
+        let titles = common::wikilink::linked_titles_lowered(&body.get());
+        let missing: Vec<String> =
+            known.with_untracked(|k| titles.into_iter().filter(|t| !k.contains_key(t)).collect());
+        if missing.is_empty() {
+            return;
+        }
+        version.update(|v| *v += 1);
+        let mine = version.get_untracked();
+        wasm_bindgen_futures::spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(300).await;
+            if version.try_get_untracked() != Some(mine) {
+                return;
+            }
+            if let Ok(found) = crate::api::resolve_titles(&missing).await {
+                known.try_update(|k| {
+                    for t in missing {
+                        let id = found.get(&t).copied();
+                        k.insert(t, id);
+                    }
+                });
+            }
+        });
+    });
+    Signal::derive(move || {
+        known.with(|k| {
+            k.iter()
+                .filter_map(|(t, id)| id.map(|id| (t.clone(), id)))
+                .collect()
+        })
+    })
+}
+
+#[cfg(test)]
+mod case_tests {
+    use super::*;
+
+    #[test]
+    fn links_resolve_case_insensitively() {
+        let id = NodeId(uuid::Uuid::from_u128(7));
+        let map: HashMap<String, NodeId> = [("rust language".to_string(), id)].into();
+        let html = preprocess_wikilinks("See [[Rust Language]] and [[rust language|it]].", &map);
+        assert_eq!(html.matches("class=\"wikilink\"").count(), 2, "{html}");
+        assert!(!html.contains("wikilink-unresolved"));
+    }
 }

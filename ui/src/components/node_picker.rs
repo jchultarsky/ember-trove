@@ -11,7 +11,7 @@ const NODE_SEARCH_DEBOUNCE_MS: u32 = 300;
 
 /// Full-text node search for the command palette: 300 ms debounce, and only
 /// the latest query's response lands. Pickers that choose a node use
-/// [`use_node_lookup`] instead (titles only).
+/// [`NodePicker`] instead (titles only).
 pub fn use_node_search(query: RwSignal<String>) -> RwSignal<Vec<SearchResult>> {
     use_debounced(query, |q: String| async move {
         crate::api::node_picker_search(&q).await
@@ -19,15 +19,19 @@ pub fn use_node_search(query: RwSignal<String>) -> RwSignal<Vec<SearchResult>> {
     .0
 }
 
-/// Title lookup for every picker that commits a node (NodePicker, Inbox and
-/// triage attach). They used the full-text search, which matched bodies and
-/// whole words only: "Physna" listed the alphabetically-first nodes that
-/// *mention* Physna (the node titled "Physna" fell off the page), and "Phy"
-/// matched nothing (#126 follow-up).
-pub fn use_node_lookup(query: RwSignal<String>) -> RwSignal<Vec<NodeLookupHit>> {
+/// Title suggestions for TEXT completion: the editor's `[[` autocomplete,
+/// which inserts a title into Markdown rather than choosing a node value.
+/// Fields that choose a node use [`NodePicker`] (#130). Same lookup, same
+/// debounce, so suggestions match the pickers'.
+pub fn use_title_suggestions(query: RwSignal<String>) -> RwSignal<Vec<NodeLookupHit>> {
     use_node_lookup_answering(query).0
 }
 
+/// Title lookup behind [`NodePicker`] — the only node picker (#130): every
+/// field that chooses a node uses the component, never this hook directly.
+/// Pickers used the full-text search, which matched bodies and whole words
+/// only: "Physna" listed the alphabetically-first nodes that *mention*
+/// Physna, and "Phy" matched nothing (#126 follow-up).
 fn use_node_lookup_answering(
     query: RwSignal<String>,
 ) -> (RwSignal<Vec<NodeLookupHit>>, RwSignal<String>) {
@@ -106,6 +110,10 @@ pub fn NodePicker(
     /// Runs after a commit (e.g. move focus to the form's confirm button).
     #[prop(optional)]
     on_commit: Option<Callback<()>>,
+    /// Focus the search input as soon as it mounts (panels that open
+    /// straight into a search: Inbox and triage attach, Add to Favorites).
+    #[prop(optional)]
+    autofocus: bool,
 ) -> impl IntoView {
     let placeholder = placeholder.unwrap_or_else(|| "Link to a node (optional)…".to_string());
     let base = format!(
@@ -132,7 +140,7 @@ pub fn NodePicker(
     let pending_enter = RwSignal::new(false);
     let picked_type = RwSignal::new(None::<String>);
     let input_ref: NodeRef<leptos::html::Input> = NodeRef::new();
-    let refocus = RwSignal::new(false);
+    let refocus = RwSignal::new(autofocus);
 
     let commit = move |i: usize| {
         let Some(r) = options.with_untracked(|o| o.get(i).cloned()) else {

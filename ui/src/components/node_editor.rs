@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
 use common::{
     id::{NodeId, TemplateId},
-    node::{CreateNodeRequest, NodeStatus, NodeTitleEntry, NodeType, UpdateNodeRequest},
+    node::{CreateNodeRequest, NodeStatus, NodeType, UpdateNodeRequest},
     template::{
         CreateBodySource, NodeTemplate, default_for_type, may_replace_body, picker_order,
         resolve_create_body,
@@ -21,10 +19,6 @@ use leptos_router::hooks::use_navigate;
 
 fn node_type_label(nt: &NodeType) -> &'static str {
     crate::components::node_meta::type_label(nt.as_str())
-}
-
-fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
-    entries.iter().map(|e| (e.title.clone(), e.id)).collect()
 }
 
 /// Idle time after the last edit before an autosave PATCH (edit mode) or a
@@ -530,9 +524,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         });
     };
 
-    // Fetch all node titles for wiki-link autocomplete and preview.
-    let titles_resource =
-        LocalResource::new(|| async move { crate::api::fetch_node_titles().await });
+    // Wiki links: the preview resolves just the titles the body links, and
+    // `[[` suggestions come from the title lookup — no full title list (#134).
+    let wikilink_map = crate::wikilink::use_wikilink_map(body.into());
+    let suggest_q = RwSignal::new(String::new());
+    Effect::new(move |_| suggest_q.set(wikilink_query.get().unwrap_or_default()));
+    let suggestions = crate::components::node_picker::use_title_suggestions(suggest_q);
 
     // If editing, fetch existing node data.
     if let Some(id) = node {
@@ -880,11 +877,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     };
 
     let preview_html = move || {
-        let title_map = titles_resource
-            .get()
-            .and_then(|r| r.ok())
-            .map(|entries| build_title_map(&entries))
-            .unwrap_or_default();
+        let title_map = wikilink_map.get();
         render_markdown(&body.get(), &title_map)
     };
 
@@ -898,10 +891,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         border-b border-stone-200 dark:border-stone-800">
                 <div class="flex items-center gap-3 flex-1 min-w-0">
                     <button
+                        title="Back to nodes"
+                        aria-label="Back to nodes"
                         class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 flex-shrink-0"
                         on:click=move |_| nav_back1("/nodes", Default::default())
                     >
-                        <span class="material-symbols-outlined">"arrow_back"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"arrow_back"</span>
                     </button>
                     <input
                         type="text"
@@ -909,7 +904,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         class="flex-1 min-w-0 text-lg font-semibold bg-transparent
                                text-stone-900 dark:text-stone-100
                                focus:outline-none placeholder-stone-400"
-                        placeholder="Node title..."
+                        placeholder="Node title\u{2026}"
                         prop:value=move || title.get()
                         on:input=move |ev| title.set(event_target_value(&ev))
                     />
@@ -1068,7 +1063,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         title=move || if show_preview.get() { "Hide preview" } else { "Show preview" }
                         on:click=move |_| show_preview.update(|v| *v = !*v)
                     >
-                        <span class="material-symbols-outlined">
+                        <span aria-hidden="true" class="material-symbols-outlined">
                             {move || if show_preview.get() { "visibility" } else { "visibility_off" }}
                         </span>
                     </button>
@@ -1079,7 +1074,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         disabled=move || saving.get() || fetching.get()
                         title=move || if saving.get() { "Saving\u{2026}" } else if fetching.get() { "Loading\u{2026}" } else { "Save" }
                     >
-                        <span class="material-symbols-outlined">
+                        <span aria-hidden="true" class="material-symbols-outlined">
                             {move || if saving.get() { "hourglass_empty" } else if fetching.get() { "hourglass_top" } else { "check" }}
                         </span>
                     </button>
@@ -1089,7 +1084,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         on:click=move |_| navigate("/nodes", Default::default())
                         title="Cancel"
                     >
-                        <span class="material-symbols-outlined">"close"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
                     </button>
                 </div>
             </div>
@@ -1142,14 +1137,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     // Wiki-link autocomplete dropdown
                     {move || {
                         let query = wikilink_query.get()?;
-                        let entries = titles_resource.get().and_then(|r| r.ok()).unwrap_or_default();
-                        let q_lower = query.to_lowercase();
-                        let matches: Vec<String> = entries
-                            .iter()
-                            .filter(|e| e.title.to_lowercase().contains(&q_lower))
-                            .take(8)
-                            .map(|e| e.title.clone())
-                            .collect();
+                        let matches: Vec<String> = suggestions.with(|hits| {
+                            hits.iter().take(8).map(|h| h.title.clone()).collect()
+                        });
                         if matches.is_empty() {
                             return None;
                         }
@@ -1178,7 +1168,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                                                 select(t_clone.clone());
                                             }
                                         >
-                                            <span class="material-symbols-outlined text-xs mr-1 align-middle">"link"</span>
+                                            <span class="material-symbols-outlined text-xs mr-1 align-middle" aria-hidden="true">"link"</span>
                                             {t.clone()}
                                         </button>
                                     }

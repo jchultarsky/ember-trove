@@ -296,9 +296,11 @@ mod tests {
     }
 
     /// The e2e budget must actually be looser, or the flake it fixes returns.
-    #[test]
-    fn e2e_budget_is_looser_than_production() {
+    /// Checked at compile time: a constant comparison can't fail at runtime,
+    /// so a runtime `assert!` here was only ever a lint
+    /// (`clippy::assertions_on_constants`).
+    const _: () = {
         assert!(E2E_RATE_LIMIT.burst > PROD_RATE_LIMIT.burst);
         assert!(E2E_RATE_LIMIT.replenish_ms < PROD_RATE_LIMIT.replenish_ms);
-    }
+    };
 }

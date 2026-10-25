@@ -130,10 +130,20 @@ impl NodeRepo for StubNodeRepo {
     }
     async fn find_ids_by_titles(
         &self,
-        _: &str,
-        _: &[String],
+        owner: &str,
+        titles: &[String],
     ) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> {
-        unimplemented!()
+        // SECURITY (#134): resolution must run as the caller, never another
+        // subject — a different owner here is a bypass, so fail loudly.
+        assert_eq!(
+            owner, "test-sub",
+            "titles resolved on someone else's behalf"
+        );
+        Ok(titles
+            .iter()
+            .filter(|t| t.as_str() != "not visible")
+            .map(|t| (t.clone(), NodeId(Uuid::from_u128(t.len() as u128))))
+            .collect())
     }
     async fn lookup_titles(
         &self,
@@ -174,8 +184,22 @@ impl NodeRepo for StubNodeRepo {
 struct StubEdgeRepo;
 #[async_trait]
 impl EdgeRepo for StubEdgeRepo {
-    async fn create(&self, _: CreateEdgeRequest) -> Result<Edge, EmberTroveError> {
-        unimplemented!()
+    async fn create(&self, req: CreateEdgeRequest) -> Result<Edge, EmberTroveError> {
+        // The authz world's AZ_VIEW_NODE is "already linked" (the DB's unique
+        // index answers this in production — migration 034, #129).
+        if req.target_id == az_node(AZ_VIEW_NODE) {
+            return Err(EmberTroveError::AlreadyExists(
+                "already linked as references".to_string(),
+            ));
+        }
+        Ok(Edge {
+            id: EdgeId(Uuid::new_v4()),
+            source_id: req.source_id,
+            target_id: req.target_id,
+            edge_type: req.edge_type,
+            label: req.label,
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn get(&self, _: EdgeId) -> Result<Edge, EmberTroveError> {
         unimplemented!()
@@ -1991,4 +2015,117 @@ async fn node_lookup_rejects_an_oversized_query() {
     let long = "a".repeat(201);
     let (status, _) = lookup(fake_claims(), &format!("q={long}")).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ── POST /edges duplicate (#129) ─────────────────────────────────────────────
+
+async fn post_edge(target: u128) -> (StatusCode, serde_json::Value) {
+    let resp = claims_app("/edges", crate::routes::edges::router())
+        .oneshot(
+            Request::post("/edges")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "source_id": Uuid::from_u128(AZ_EDIT_NODE),
+                        "target_id": Uuid::from_u128(target),
+                        "edge_type": "references",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn create_edge_reports_a_duplicate_as_409() {
+    let (status, _) = post_edge(AZ_OWNED_NODE).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = post_edge(AZ_VIEW_NODE).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "already linked as references");
+}
+
+// ── e2e test-identity header is inert outside e2e builds (#135) ──────────────
+
+/// SECURITY: in a build without the `e2e-bypass` feature (every release
+/// image) the `x-e2e-subject` header must not authenticate anyone: the
+/// request still meets the real auth path (here: no OIDC configured → 500).
+#[cfg(not(feature = "e2e-bypass"))]
+#[tokio::test]
+async fn e2e_subject_header_is_ignored_without_the_bypass_feature() {
+    let resp = test_app()
+        .oneshot(
+            Request::get("/nodes")
+                .header("x-e2e-subject", "other")
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Not authenticated: the same answer as with no header at all (the
+    // detail "OIDC not configured" is logged, never sent).
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body_json(resp).await["error"], "internal error");
+}
+
+// ── GET /nodes/resolve-titles (#134) ─────────────────────────────────────────
+
+async fn resolve(query: &str) -> (StatusCode, serde_json::Value) {
+    let resp = claims_app("/nodes", crate::routes::nodes::router())
+        .oneshot(
+            Request::get(format!("/nodes/resolve-titles?titles={query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+fn enc(json: &str) -> String {
+    json.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn resolve_titles_lowercases_dedupes_and_omits_the_unmatched() {
+    let (status, json) = resolve(&enc(r#"["Plan","plan","  ","Not Visible"]"#)).await;
+    assert_eq!(status, StatusCode::OK);
+    let obj = json.as_object().expect("a map");
+    assert_eq!(obj.len(), 1, "{json}");
+    assert!(obj.contains_key("plan"));
+}
+
+#[tokio::test]
+async fn resolve_titles_validates_its_input() {
+    let (status, _) = resolve(&enc("not json")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let many = format!(
+        "[{}]",
+        (0..101)
+            .map(|i| format!("\"t{i}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let (status, _) = resolve(&enc(&many)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let long = format!("[\"{}\"]", "a".repeat(301));
+    let (status, _) = resolve(&enc(&long)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, json) = resolve(&enc("[]")).await;
+    assert_eq!((status, json), (StatusCode::OK, serde_json::json!({})));
 }

@@ -40,14 +40,12 @@ use common::task::{Task, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
-use crate::components::due_date_field::DueDateField;
-use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
 };
 use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
-    RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, due_badge_view, priority_dot_view,
+    TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::ToastState;
 
@@ -180,8 +178,6 @@ pub fn KanbanTaskRow(
     // Inline edit form state.  Mirrors the original MyDayTaskRow layout
     // minus the focus_date field (focus is binary, owned by zone-swap).
     let draft = TaskEditDraft::from_task(&task);
-    let (edit_title, edit_priority, edit_due, edit_recurrence) =
-        (draft.title, draft.priority, draft.due, draft.recurrence);
 
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
@@ -253,13 +249,9 @@ pub fn KanbanTaskRow(
         editing_id_sig.set(Some(task_id));
     };
 
-    let do_save = move || {
-        let Some(req) = draft.take_request() else {
-            return;
-        };
+    let on_save = move |req: UpdateTaskRequest| {
         let prev_title = title_sig.get_untracked();
         title_sig.set(req.title.clone().unwrap_or_default());
-        editing_id_sig.set(None);
         patch_task(
             task_id,
             req,
@@ -352,82 +344,19 @@ pub fn KanbanTaskRow(
             // Body — title first, supporting meta below, OR inline edit form
             <div class="flex-1 min-w-0">
                 {move || if is_editing() {
-                    // ── Inline edit form ─────────────────────────────
-                    let saved_height = TaskEditorHeights::saved(task_id);
+                    // ── Inline edit form (shared TaskEditor, #132) ───
                     view! {
-                        <div class="mt-1 space-y-2"
-                             on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
-                            <crate::components::resizable_editor::ResizableEditor
-                                value=edit_title
-                                placeholder="Task title…"
-                                initial_height=saved_height
-                                on_submit=Callback::new(move |()| do_save())
-                                on_escape=Callback::new(move |()| {
-                                    editing_id_sig.set(None);
-                                    // Reopen without on_pencil's reset.
-                                    draft.discard_with_undo(move || {
-                                        editing_id_sig.try_set(Some(task_id));
-                                    });
+                        <div class="mt-1">
+                            <TaskEditor
+                                draft=draft
+                                task_id=task_id
+                                due=due
+                                on_save=on_save
+                                close=Callback::new(move |()| editing_id_sig.set(None))
+                                reopen=std::sync::Arc::new(move || {
+                                    editing_id_sig.try_set(Some(task_id));
                                 })
-                                on_resize=TaskEditorHeights::on_resize(task_id)
-                                class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
-                                       text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
-                                       min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()
                             />
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <span class="text-xs text-stone-400 dark:text-stone-500">"Priority"</span>
-                                {["low", "medium", "high"].iter().map(|&p| {
-                                    let (label, sel_style) = match p {
-                                        "high"   => ("High",   "color:#ef4444;border-color:#ef4444;"),
-                                        "medium" => ("Medium", "color:#f59e0b;border-color:#f59e0b;"),
-                                        _        => ("Low",    "color:#9ca3af;border-color:#9ca3af;"),
-                                    };
-                                    view! {
-                                        <button
-                                            type="button"
-                                            class="text-xs px-2 py-0.5 rounded border transition-colors cursor-pointer"
-                                            style=move || if edit_priority.get() == p {
-                                                format!("{sel_style}font-weight:600;")
-                                            } else {
-                                                "color:#9ca3af;border-color:#d1d5db;".to_string()
-                                            }
-                                            on:click=move |ev: web_sys::MouseEvent| {
-                                                ev.stop_propagation();
-                                                edit_priority.set(p.to_string());
-                                            }
-                                        >
-                                            {label}
-                                        </button>
-                                    }
-                                }).collect_view()}
-                            </div>
-                            <div class="flex items-center gap-2 flex-wrap">
-                                <DueDateField value=edit_due original=due />
-                                <select
-                                    class="text-xs bg-stone-100 dark:bg-stone-700 \
-                                           text-stone-700 dark:text-stone-300 \
-                                           rounded-lg px-2 py-0.5 focus:outline-none \
-                                           focus:ring-1 focus:ring-amber-500"
-                                    title="Recurrence"
-                                    on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
-                                >
-                                    <RecurrenceOptions value=edit_recurrence />
-                                </select>
-                                <span class="flex-1"/>
-                                <IconButton
-                                    icon="check"
-                                    label="Save"
-                                    variant=IconButtonVariant::Save
-                                    stop_propagation=true
-                                    on_click=Callback::new(move |()| do_save())
-                                />
-                                <IconButton
-                                    icon="close"
-                                    label="Cancel"
-                                    stop_propagation=true
-                                    on_click=Callback::new(move |()| editing_id_sig.set(None))
-                                />
-                            </div>
                         </div>
                     }.into_any()
                 } else {
@@ -518,7 +447,7 @@ pub fn KanbanTaskRow(
                             }
                             title="Remove from today (back to backlog)"
                         >
-                            <span class="material-symbols-outlined" style="font-size:16px;">"close"</span>
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"close"</span>
                         </button>
                     }.into_any(),
                     KanbanZone::Backlog => view! {
@@ -534,7 +463,7 @@ pub fn KanbanTaskRow(
                             }
                             title="Add to today"
                         >
-                            <span class="material-symbols-outlined" style="font-size:16px;">"wb_sunny"</span>
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"wb_sunny"</span>
                         </button>
                     }.into_any(),
                 }}
@@ -544,9 +473,9 @@ pub fn KanbanTaskRow(
                            hover:text-stone-700 dark:hover:text-stone-200 \
                            transition-colors cursor-pointer"
                     on:click=on_pencil
-                    title="Edit this task in place"
+                    title="Edit task"
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">"edit"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"edit"</span>
                 </button>
                 <button
                     type="button"
@@ -557,7 +486,7 @@ pub fn KanbanTaskRow(
                     on:click=on_delete
                     title="Delete task"
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">"delete"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"delete"</span>
                 </button>
             </div>
         </div>

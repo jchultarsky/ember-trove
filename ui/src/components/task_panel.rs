@@ -1,13 +1,12 @@
 use common::{
     id::{NodeId, TaskId},
-    task::{Task, TaskStatus},
+    task::{Task, TaskStatus, UpdateTaskRequest},
 };
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
-use crate::components::due_date_field::DueDateField;
-use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
+use crate::components::node_section::{NodeSection, SectionShell};
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
     toggle_my_day,
@@ -17,7 +16,7 @@ use crate::components::task_common::{
 };
 use crate::components::task_row::TaskEditorHeights;
 use crate::components::task_row_scaffold::{
-    MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
+    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, action_btn_class,
     due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
@@ -64,41 +63,30 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     // Add-task form: collapsed behind the header toggle below.
     let show_form = RwSignal::new(false);
 
-    // The header's "Jump to tasks" lands here (#123).
-    let root: NodeRef<leptos::html::Div> = NodeRef::new();
-    crate::components::node_view::on_section_jump(
-        crate::components::node_view::NodeSection::Tasks,
-        root,
-        || {},
-    );
+    // One section primitive for the node page (#131): open by default.
+    let open = RwSignal::new(true);
+    let count = Signal::derive(move || Some(open_tasks.with(Vec::len)));
+    let add_button: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            <button
+                class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
+                    hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                title=move || if show_form.get() { "Cancel" } else { "Add task" }
+                on:click=move |_| {
+                    open.set(true);
+                    show_form.update(|v| *v = !*v);
+                }
+            >
+                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                    {move || if show_form.get() { "close" } else { "add" }}
+                </span>
+            </button>
+        }
+        .into_any()
+    });
 
     view! {
-        <div
-            node_ref=root
-            class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6 focus:outline-none"
-            role="region"
-            aria-labelledby="node-tasks-heading"
-            tabindex="-1"
-            data-testid="node-tasks"
-        >
-            // Section header
-            <div class="flex items-center justify-between mb-4">
-                <h3 id="node-tasks-heading" class="text-sm font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base">{"check_box"}</span>
-                    "Tasks"
-                </h3>
-                <button
-                    class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                        hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                    title=move || if show_form.get() { "Cancel" } else { "Add task" }
-                    on:click=move |_| show_form.update(|v| *v = !*v)
-                >
-                    <span class="material-symbols-outlined" style="font-size: 18px;">
-                        {move || if show_form.get() { "close" } else { "add" }}
-                    </span>
-                </button>
-            </div>
-
+        <SectionShell section=NodeSection::Tasks open=open count=count actions=add_button>
             // Add-task form — shared with the Inbox capture surface.
             {move || show_form.get().then(|| view! {
                 <div class="mb-4">
@@ -265,7 +253,7 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                     </div>
                 }.into_any()
             }}
-        </div>
+        </SectionShell>
     }
 }
 
@@ -291,15 +279,10 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     // Inline editing — title, priority, due date, recurrence.
     let editing_title = RwSignal::new(false);
     let draft = TaskEditDraft::from_task(&task);
-    let (edit_title, edit_priority, edit_due, edit_recurrence) =
-        (draft.title, draft.priority, draft.due, draft.recurrence);
 
-    // Save all editable fields at once.
-    let do_save_edit = move || {
-        let Some(req) = draft.take_request() else {
-            return;
-        };
-        editing_title.set(false);
+    // Save all editable fields at once (the panel refetches; no optimistic
+    // display to roll back).
+    let on_save = move |req: UpdateTaskRequest| {
         patch_task(
             task_id,
             req,
@@ -354,64 +337,18 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             <div class="flex-1 min-w-0">
                 // Title — display or inline edit form (title + priority + due + repeat)
                 {move || if editing_title.get() {
-                    let saved_height = TaskEditorHeights::saved(task_id);
                     view! {
-                        <div class="space-y-1.5 pb-1">
-                            <crate::components::resizable_editor::ResizableEditor
-                                value=edit_title
-                                placeholder="Task title…"
-                                initial_height=saved_height
-                                on_submit=Callback::new(move |()| do_save_edit())
-                                on_escape=Callback::new(move |()| {
-                                    editing_title.set(false);
-                                    draft.discard_with_undo(move || {
-                                        editing_title.try_set(true);
-                                    });
+                        <div class="pb-1">
+                            <TaskEditor
+                                draft=draft
+                                task_id=task_id
+                                due=due
+                                on_save=on_save
+                                close=Callback::new(move |()| editing_title.set(false))
+                                reopen=std::sync::Arc::new(move || {
+                                    editing_title.try_set(true);
                                 })
-                                on_resize=TaskEditorHeights::on_resize(task_id)
-                                class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
-                                    text-stone-900 dark:text-stone-100 rounded px-1.5 py-0.5 resize-y \
-                                    min-h-[36px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()
                             />
-                            <div class="flex items-center gap-2">
-                                <select
-                                    class="text-xs bg-stone-100 dark:bg-stone-700
-                                        text-stone-700 dark:text-stone-300
-                                        rounded-lg px-2 py-0.5 focus:outline-none"
-                                    title="Priority"
-                                    prop:value=move || edit_priority.get()
-                                    on:change=move |ev| edit_priority.set(event_target_value(&ev))
-                                >
-                                    <option value="high">"High"</option>
-                                    <option value="medium">"Medium"</option>
-                                    <option value="low">"Low"</option>
-                                </select>
-                                <DueDateField value=edit_due original=due />
-                                <select
-                                    class="text-xs bg-stone-100 dark:bg-stone-700
-                                        text-stone-700 dark:text-stone-300
-                                        rounded-lg px-2 py-0.5 focus:outline-none"
-                                    title="Recurrence"
-                                    on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
-                                >
-                                    <RecurrenceOptions value=edit_recurrence />
-                                </select>
-                                <span class="flex-1"/>
-                                <IconButton
-                                    icon="check"
-                                    label="Save"
-                                    variant=IconButtonVariant::Save
-                                    on_click=Callback::new(move |()| do_save_edit())
-                                />
-                                <IconButton
-                                    icon="close"
-                                    label="Cancel"
-                                    on_click=Callback::new(move |()| {
-                                        editing_title.set(false);
-                                        draft.reset();
-                                    })
-                                />
-                            </div>
                         </div>
                     }.into_any()
                 } else {
@@ -462,14 +399,14 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                     title="Edit task"
                     on:click=move |_| editing_title.set(true)
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
                 </button>
                 <button
                     class=action_btn_class("hover:text-red-500 dark:hover:text-red-400")
                     title="Delete task"
                     on:click=on_delete
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">{"delete"}</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">{"delete"}</span>
                 </button>
             </div>
         </div>

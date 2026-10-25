@@ -45,7 +45,7 @@ This file is the lean, always-loaded summary; depth lives in `.claude/`.
 
 ```
 cargo fmt --all --check
-cargo clippy --workspace --exclude ui -- -D warnings        # api + common
+cargo clippy --workspace --exclude ui --all-targets -- -D warnings  # api + common + tests
 cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace --exclude ui
 cargo test -p ui                                             # ui unit tests (host)

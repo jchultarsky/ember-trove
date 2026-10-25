@@ -196,7 +196,7 @@ pub fn TemplatesView() -> impl IntoView {
                     title="New Template"
                     on:click=start_create
                 >
-                    <span class="material-symbols-outlined" style="font-size: 18px;">"add"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">"add"</span>
                 </button>
             </div>
 
@@ -448,7 +448,7 @@ pub fn TemplatesView() -> impl IntoView {
                                                         });
                                                     }
                                                 >
-                                                    <span class="material-symbols-outlined"
+                                                    <span aria-hidden="true" class="material-symbols-outlined"
                                                           style="font-size: 16px;">{star_icon}</span>
                                                 </button>
                                                 <button
@@ -459,7 +459,7 @@ pub fn TemplatesView() -> impl IntoView {
                                                     title="Edit"
                                                     on:click=move |_| start_edit(t_edit.clone())
                                                 >
-                                                    <span class="material-symbols-outlined"
+                                                    <span aria-hidden="true" class="material-symbols-outlined"
                                                           style="font-size: 16px;">"edit"</span>
                                                 </button>
                                                 <button
@@ -470,7 +470,7 @@ pub fn TemplatesView() -> impl IntoView {
                                                     title="Delete"
                                                     on:click=move |_| on_delete(t_del.clone())
                                                 >
-                                                    <span class="material-symbols-outlined"
+                                                    <span aria-hidden="true" class="material-symbols-outlined"
                                                           style="font-size: 16px;">"delete"</span>
                                                 </button>
                                             </div>
