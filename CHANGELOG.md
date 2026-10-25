@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.34.0] - 2026-10-24
+
 ### Fixed — node pickers find nodes by title, as you type
 - Every picker that chooses a node (Connections, the add-task form, the
   Notes composer, Inbox and triage attach) used the full-text search. That
