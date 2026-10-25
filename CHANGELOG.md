@@ -6,6 +6,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.34.0] - 2026-10-24
+
+### Fixed — node pickers find nodes by title, as you type
+- Every picker that chooses a node (Connections, the add-task form, the
+  Notes composer, Inbox and triage attach) used the full-text search. That
+  search matches node **bodies** and **whole words only**, sorted by title
+  and capped at 8. Typing "Physna" listed the 8 alphabetically-first nodes
+  that *mention* Physna, and the node titled "Physna" never appeared;
+  typing "Phy" matched nothing. Typing seemed to do nothing, and the wanted
+  node couldn't be picked. Reported on v2.33.0.
+- New `GET /api/nodes/lookup?q=` matches **titles** by substring,
+  case-insensitively, ranked exact > prefix > other. It has the same
+  visibility as `/api/nodes/titles` (own + shared; admins all), is fully
+  parameterized with `LIKE` wildcards escaped, and caps the query length and
+  the limit. The command palette keeps full-text search, because its ranking
+  includes body matches by design.
+
+### Fixed — picking a node can no longer lose your input (#126)
+- **Connections "add edge":** typing a node's exact title and pressing ✓
+  used to fail with "Invalid target node UUID", because the typed text
+  doubled as the target id. The form now uses the shared node picker. The
+  target is always a committed node, ✓ stays disabled until there is one,
+  and the error path is gone.
+
+### Changed — the node picker is a proper combobox (#126)
+- One behaviour for every picker that commits a node (Connections, the
+  add-task form, the Notes composer). Typing filters and highlights the best
+  match (exact title > prefix > substring), but only Enter on the active
+  option, or pressing one, commits. The committed node shows as a chip with
+  its type icon.
+- ↑/↓ move through the list. Escape closes the list, then clears the text,
+  and never reaches the surrounding form or the page. The list closes on
+  blur. Proper ARIA wiring: `combobox`, `listbox`, `option`,
+  `aria-activedescendant`.
+- Enter typed faster than the search is remembered, but it only resolves a
+  **unique** exact title. Same-titled nodes (possible through sharing) are
+  never chosen on a guess: you pick one first.
+- In Connections, the first Enter commits the node and moves focus to ✓, so
+  a second Enter creates the edge. Edge type and label can still be set in
+  between.
+
 ## [2.33.0] - 2026-10-24
 
 ### Fixed — node page friction (#123)

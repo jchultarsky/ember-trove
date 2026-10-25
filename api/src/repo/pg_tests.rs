@@ -219,6 +219,105 @@ async fn wikilink_titles_resolve_only_to_nodes_the_owner_can_see(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
+async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) {
+    let nodes = PgNodeRepo::new(pool.clone());
+    // A body mention is not a title match (the picker bug: full-text search
+    // listed every node *mentioning* the word, alphabetically).
+    nodes
+        .create(
+            "owner-a",
+            CreateNodeRequest {
+                body: Some("Talked with Physna today.".to_string()),
+                ..node_req("Acme meeting")
+            },
+        )
+        .await
+        .expect("create");
+    create_node(&pool, "owner-a", "About Physna").await;
+    create_node(&pool, "owner-a", "Physna roadmap").await;
+    create_node(&pool, "owner-a", "Physna").await;
+    create_node(&pool, "owner-a", "100% done_list").await;
+    create_node(&pool, "owner-b", "Physna secret").await;
+    let shared = create_node(&pool, "owner-b", "Physna shared").await;
+    PgPermissionRepo::new(pool.clone())
+        .grant(
+            shared.id,
+            "owner-b",
+            common::permission::GrantPermissionRequest {
+                subject_id: "owner-a".to_string(),
+                role: common::permission::PermissionRole::Viewer,
+            },
+        )
+        .await
+        .expect("share");
+
+    let titles = |hits: Vec<common::node::NodeLookupHit>| -> Vec<String> {
+        hits.into_iter().map(|h| h.title).collect()
+    };
+    // Exact first, then prefix, then any other title match; never a body
+    // match, never another owner's unshared node.
+    let hits = nodes
+        .lookup_titles(Some("owner-a"), "physna", 8)
+        .await
+        .expect("lookup");
+    assert_eq!(
+        titles(hits),
+        ["Physna", "Physna roadmap", "Physna shared", "About Physna"]
+    );
+    // Partial words match (full-text search returned nothing for these).
+    let hits = nodes
+        .lookup_titles(Some("owner-a"), " Phy ", 8)
+        .await
+        .expect("lookup");
+    assert_eq!(
+        titles(hits),
+        ["Physna", "Physna roadmap", "Physna shared", "About Physna"]
+    );
+    assert_eq!(
+        nodes
+            .lookup_titles(Some("owner-a"), "physna", 2)
+            .await
+            .expect("lookup")
+            .len(),
+        2
+    );
+    // LIKE metacharacters are literal.
+    assert_eq!(
+        titles(
+            nodes
+                .lookup_titles(Some("owner-a"), "%", 8)
+                .await
+                .expect("lookup")
+        ),
+        ["100% done_list"]
+    );
+    assert_eq!(
+        titles(
+            nodes
+                .lookup_titles(Some("owner-a"), "e_l", 8)
+                .await
+                .expect("lookup")
+        ),
+        ["100% done_list"]
+    );
+    assert!(
+        nodes
+            .lookup_titles(Some("owner-a"), "   ", 8)
+            .await
+            .expect("lookup")
+            .is_empty()
+    );
+    // Admin (no subject) sees every owner's titles.
+    let all = titles(
+        nodes
+            .lookup_titles(None, "physna", 8)
+            .await
+            .expect("lookup"),
+    );
+    assert!(all.contains(&"Physna secret".to_string()));
+}
+
+#[sqlx::test(migrations = "../migrations")]
 async fn neighbors_backlinks_and_edges_hide_nodes_the_caller_cannot_see(pool: PgPool) {
     let nodes = PgNodeRepo::new(pool.clone());
     let edges = PgEdgeRepo::new(pool.clone());

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
 use common::node::NodeTitleEntry;
-use leptos::{html::Input, prelude::*};
+use leptos::prelude::*;
 
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::activity_panel::ActivityPanel;
@@ -489,15 +489,31 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
     let open = RwSignal::new(false);
     let refresh_edges = RwSignal::new(0u32);
     let show_add = RwSignal::new(false);
-    let target_id_input = RwSignal::new(String::new());
+    // The edge target is a committed node, never typed text (#126): the
+    // old text field doubled as the UUID slot, so typing a title and
+    // pressing ✓ failed with "Invalid target node UUID".
+    let edge_target = RwSignal::new(None::<(NodeId, String)>);
+    let confirm_ref = NodeRef::<leptos::html::Button>::new();
+    // After a commit, focus ✓ so Enter creates the edge. Deferred: when the
+    // picker commits, ✓ is still disabled until this tick renders, and a
+    // disabled button refuses focus.
+    let focus_confirm = RwSignal::new(false);
+    Effect::new(move |_| {
+        if focus_confirm.get() && edge_target.with(|t| t.is_some()) {
+            focus_confirm.set(false);
+            if let Some(el) = confirm_ref.get_untracked() {
+                set_timeout(
+                    move || {
+                        let _ = el.focus();
+                    },
+                    std::time::Duration::ZERO,
+                );
+            }
+        }
+    });
     let edge_type_input = RwSignal::new("references".to_string());
     let label_input = RwSignal::new(String::new());
     let error_msg = RwSignal::new(Option::<String>::None);
-    let node_search_query = RwSignal::new(String::new());
-    let search_open = RwSignal::new(false);
-    let search_input_ref = NodeRef::<Input>::new();
-
-    let picker_results = crate::components::node_picker::use_node_search(node_search_query);
 
     let edges: LocalResource<Result<Vec<EdgeWithTitles>, crate::error::UiError>> =
         LocalResource::new(move || {
@@ -513,24 +529,19 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
         });
 
     let on_add_edge = move |_| {
-        let target_str = target_id_input.get_untracked().trim().to_string();
+        // ✓ is disabled until a node is committed; this is the backstop.
+        let Some((target_id, _)) = edge_target.get_untracked() else {
+            return;
+        };
         let et = edge_type_input.get_untracked();
         let label = label_input.get_untracked().trim().to_string();
         error_msg.set(None);
-
-        let target_uuid = match uuid::Uuid::parse_str(&target_str) {
-            Ok(u) => u,
-            Err(_) => {
-                error_msg.set(Some("Invalid target node UUID".to_string()));
-                return;
-            }
-        };
 
         let edge_type = EdgeType::parse(&et).unwrap_or(EdgeType::References);
 
         let req = CreateEdgeRequest {
             source_id: node_id,
-            target_id: common::id::NodeId(target_uuid),
+            target_id,
             edge_type,
             label: if label.is_empty() { None } else { Some(label) },
         };
@@ -539,11 +550,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
             match crate::api::create_edge(&req).await {
                 Ok(_) => {
                     show_add.set(false);
-                    target_id_input.set(String::new());
-                    node_search_query.set(String::new());
-                    if let Some(el) = search_input_ref.get_untracked() {
-                        el.set_value("");
-                    }
+                    edge_target.set(None);
                     label_input.set(String::new());
                     refresh_edges.update(|n| *n += 1);
                 }
@@ -611,57 +618,16 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
             {move || show_add.get().then(|| view! {
                 <div class="mb-4 p-3 bg-stone-50 dark:bg-stone-900 rounded-lg space-y-2">
                     <div class="flex gap-2">
-                        <div class="relative flex-1">
-                            <input
-                                type="text"
-                                node_ref=search_input_ref
-                                class="w-full px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
-                                    bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none
-                                    focus:ring-1 focus:ring-amber-500"
+                        <div class="flex-1 min-w-0">
+                            <crate::components::node_picker::NodePicker
+                                selected=edge_target
                                 placeholder="Search for a node…"
-                                on:input=move |ev| {
-                                    let v = event_target_value(&ev);
-                                    node_search_query.set(v.clone());
-                                    target_id_input.set(v);
-                                    search_open.set(true);
-                                }
-                                on:focus=move |_| search_open.set(true)
-                                on:blur=move |_| search_open.set(false)
+                                exclude=node_id
+                                // Committed: Enter again (or a click) on ✓
+                                // creates the edge; type and label can
+                                // still be set first.
+                                on_commit=Callback::new(move |()| focus_confirm.set(true))
                             />
-                            {move || {
-                                let results = picker_results.get();
-                                if !search_open.get() || results.is_empty() {
-                                    return None;
-                                }
-                                Some(view! {
-                                    <div class="absolute z-30 top-full left-0 right-0 mt-0.5
-                                        bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700
-                                        rounded-lg shadow-lg overflow-hidden">
-                                        {results.into_iter().map(|r| {
-                                            let id_str = r.node_id.to_string();
-                                            let title = r.title;
-                                            let title2 = title.clone();
-                                            view! {
-                                                <button
-                                                    class="w-full text-left px-3 py-1.5 text-xs
-                                                        hover:bg-stone-100 dark:hover:bg-stone-800
-                                                        text-stone-700 dark:text-stone-300"
-                                                    on:mousedown=move |_| {
-                                                        target_id_input.set(id_str.clone());
-                                                        node_search_query.set(title.clone());
-                                                        if let Some(el) = search_input_ref.get_untracked() {
-                                                            el.set_value(&title);
-                                                        }
-                                                        search_open.set(false);
-                                                    }
-                                                >
-                                                    {title2}
-                                                </button>
-                                            }
-                                        }).collect::<Vec<_>>()}
-                                    </div>
-                                })
-                            }}
                         </div>
                         <select
                             class="px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
@@ -688,11 +654,15 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                             on:input=move |ev| label_input.set(event_target_value(&ev))
                         />
                         <button
+                            node_ref=confirm_ref
                             class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                                 dark:hover:text-stone-300 hover:bg-stone-100
-                                dark:hover:bg-stone-800 transition-colors"
+                                dark:hover:bg-stone-800 transition-colors
+                                disabled:opacity-40 disabled:cursor-not-allowed"
                             on:click=on_add_edge
+                            disabled=move || edge_target.with(|t| t.is_none())
                             title="Add edge"
+                            aria-label="Add edge"
                         >
                             <span class="material-symbols-outlined" style="font-size: 16px;">"check"</span>
                         </button>
