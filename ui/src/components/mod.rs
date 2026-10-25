@@ -47,5 +47,6 @@ pub mod task_row_scaffold;
 pub mod tasks_view;
 pub mod templates_view;
 pub mod toast;
+pub mod update_banner;
 pub mod version_panel;
 pub mod webhooks_view;
