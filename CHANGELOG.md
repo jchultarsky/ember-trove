@@ -19,6 +19,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   buttons, and it's available on phones too.
 - Tasks can now be collapsed like the other sections.
 
+### Tooling — tests that look like real use (#135)
+- **A second e2e identity.** Under the `e2e-bypass` build only, and only
+  when armed, an `x-e2e-subject: other` header selects a fixed second test
+  user. Specs can now test sharing, same-titled nodes across owners and
+  permission boundaries for real; the duplicate-title picker test no longer
+  fakes its search response.
+  - **Security:** the header picks one of two fixed identities, is never
+    used as a subject id, and any other value is refused (401). A test
+    proves a release build ignores it.
+- **A realistic seed** (`e2e/tests/seed.ts`): bodies that mention titles,
+  prefix-sharing titles, wiki links, a task and a note. Empty-body fixtures
+  hid the v2.33.0 picker bug.
+- **Clippy lints test code** (`--all-targets`) in CI, the pre-commit hook,
+  `verify.sh` and `make lint`. The two lints it surfaced are now
+  compile-time `const` assertions.
+- **The coverage floor rises from 24% to 41%**, against a measured
+  43.33%-of-lines baseline.
+
+### Changed — every node-choosing field is the same picker (#130)
+- **Add to Favorites:** it downloaded every node title and filtered them in
+  the browser, with its own list and no keyboard contract. Now it uses the
+  shared `NodePicker`, and Add stays disabled until a node is chosen.
+- **Inbox "Assign to node" and triage attach:** both drew their own result
+  lists (triage even had its own highlight and arrow keys). Both now use
+  `NodePicker`, where committing a node *is* the attach.
+- **Same behaviour everywhere:** the title lookup, arrow keys, Enter to
+  commit, and screen-reader support. Escape closes the list, then clears the
+  text, and only an unused Escape reaches the surrounding modal or triage.
+  `NodePicker` gains an `autofocus` prop, and its lookup hook is now
+  private to it.
+
 ### Security — cached personal data no longer outlives the session (#129)
 - The service worker caches API reads for offline use: node bodies, notes,
   tasks, and `/api/auth/me`. Nothing cleared them on logout, so on a shared

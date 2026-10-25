@@ -1,4 +1,13 @@
-import { test, expect, createNode, type Page, type APIRequestContext } from './fixtures';
+import {
+  test,
+  expect,
+  createNode,
+  shareNode,
+  E2E_SUBJECT,
+  type Page,
+  type APIRequestContext,
+} from './fixtures';
+import { seedTrove } from './seed';
 
 /**
  * The shared node picker as a combobox (#126): text filters, only an option
@@ -36,33 +45,27 @@ test('the picker matches titles as you type, never body mentions', async ({ page
   // "Physna" listed the alphabetically-first nodes that MENTION it (the node
   // titled "Physna" fell off the 8-row page), and "Phy" listed nothing — so
   // typing seemed to do nothing and the wanted node couldn't be picked.
+  // The realistic seed (#135) has exactly that shape.
   const stamp = Date.now();
-  const word = `Zorbix${stamp}`;
+  const trove = await seedTrove(request, stamp);
   const source = await createNode(request, `e2e mention source ${stamp}`);
-  const mentions = [];
-  for (let i = 0; i < 9; i++) {
-    mentions.push(
-      await createNode(request, `aa mention ${i} ${stamp}`, { body: `Met with ${word} today.` }),
-    );
-  }
-  const exact = await createNode(request, word);
-  const prefixed = await createNode(request, `${word} roadmap`);
   try {
     const { combo, listbox, chip } = await openAddEdge(page, source.id);
     // A partial word, typed key by key like a person.
-    await combo.pressSequentially(word.slice(0, 9), { delay: 40 });
+    await combo.pressSequentially(trove.word.slice(0, 9), { delay: 40 });
     const options = listbox.getByRole('option');
     await expect(options).toHaveCount(2);
-    await expect(listbox.getByRole('option', { name: /aa mention/ })).toHaveCount(0);
+    await expect(listbox.getByRole('option', { name: /aa meeting/ })).toHaveCount(0);
     // The full title: the exact match is first and highlighted.
-    await combo.pressSequentially(word.slice(9), { delay: 20 });
-    await expect(options.first()).toContainText(word);
+    await combo.pressSequentially(trove.word.slice(9), { delay: 20 });
+    await expect(options.first()).toContainText(trove.word);
     await expect(options.first()).toHaveAttribute('aria-selected', 'true');
     await expect(options.first()).not.toContainText('roadmap');
     await options.nth(1).click();
-    await expect(chip).toContainText(`${word} roadmap`);
+    await expect(chip).toContainText(trove.prefixed.title);
   } finally {
-    for (const n of [source, exact, prefixed, ...mentions]) await request.delete(`/api/nodes/${n.id}`);
+    await request.delete(`/api/nodes/${source.id}`);
+    await trove.cleanup();
   }
 });
 
@@ -133,25 +136,17 @@ test('arrows move the active option and Enter commits it; a press does the same'
 test('same-titled nodes are both listed and never committed on a guess', async ({
   page,
   request,
+  otherRequest,
 }) => {
-  // The API refuses two nodes with one title for the same owner, so
-  // same-titled results only arise from nodes shared by other users. Serve
-  // that case from the lookup endpoint: it's exactly what the picker sees.
+  // One owner can't have two nodes with the same title (409), so the real
+  // case is SHARING: another user shares a node whose title matches one of
+  // ours. Two real identities (#135) — no routed fake.
   const stamp = Date.now();
-  const source = await createNode(request, `e2e dup source ${stamp}`);
   const title = `e2e dup ${stamp}`;
-  const fake = (id: string, node_type: string) => ({ id, title, node_type });
-  await page.route(/\/api\/nodes\/lookup\?/, async (route) => {
-    if (!new URL(route.request().url()).searchParams.get('q')?.includes(`${stamp}`)) {
-      return route.continue();
-    }
-    await route.fulfill({
-      json: [
-        fake('00000000-0000-4000-8000-00000000000a', 'article'),
-        fake('00000000-0000-4000-8000-00000000000b', 'project'),
-      ],
-    });
-  });
+  const source = await createNode(request, `e2e dup source ${stamp}`);
+  const mine = await createNode(request, title);
+  const theirs = await createNode(otherRequest, title, { node_type: 'project' });
+  await shareNode(otherRequest, theirs.id, E2E_SUBJECT);
   try {
     const { combo, listbox, chip, confirm } = await openAddEdge(page, source.id);
     await combo.fill(title);
@@ -168,6 +163,34 @@ test('same-titled nodes are both listed and never committed on a guess', async (
     await expect(confirm).toBeEnabled();
   } finally {
     await request.delete(`/api/nodes/${source.id}`);
+    await request.delete(`/api/nodes/${mine.id}`);
+    await otherRequest.delete(`/api/nodes/${theirs.id}`);
+  }
+});
+
+test("another user's node is offered only once it is shared", async ({
+  page,
+  request,
+  otherRequest,
+}) => {
+  // The permission boundary, end to end through the UI (#135).
+  const stamp = Date.now();
+  const source = await createNode(request, `e2e boundary source ${stamp}`);
+  const theirs = await createNode(otherRequest, `e2e boundary private ${stamp}`);
+  try {
+    const { combo, listbox } = await openAddEdge(page, source.id);
+    await combo.fill(`e2e boundary private ${stamp}`);
+    // Give the debounced lookup time to answer, then expect nothing.
+    await page.waitForResponse((r) => r.url().includes('/api/nodes/lookup'));
+    await expect(listbox.getByRole('option')).toHaveCount(0);
+
+    await shareNode(otherRequest, theirs.id, E2E_SUBJECT);
+    await combo.fill('');
+    await combo.fill(`e2e boundary private ${stamp}`);
+    await expect(listbox.getByRole('option')).toHaveCount(1);
+  } finally {
+    await request.delete(`/api/nodes/${source.id}`);
+    await otherRequest.delete(`/api/nodes/${theirs.id}`);
   }
 });
 
@@ -266,5 +289,71 @@ test('an existing connection is flagged before submit; the API refuses a duplica
   } finally {
     await request.delete(`/api/nodes/${source.id}`);
     await request.delete(`/api/nodes/${target.id}`);
+  }
+});
+
+// ── Every node-choosing field is NodePicker (#130) ───────────────────────────
+
+test('Add to Favorites picks a node with the shared picker', async ({ page, request }) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e fav node ${stamp}`);
+  try {
+    await page.goto('/tasks/my-day');
+    await page.locator('button[title="Add favorite"]').click();
+    const dialog = page.getByRole('dialog', { name: 'Add to favorites' });
+    const combo = dialog.getByRole('combobox', { name: 'Search nodes…' });
+    await expect(combo).toBeFocused();
+    const add = dialog.getByRole('button', { name: 'Add', exact: true });
+    await expect(add).toBeDisabled();
+    await combo.pressSequentially(`fav node ${stamp}`, { delay: 20 });
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    // Escape with the list open closes only the list, not the modal.
+    await combo.press('Escape');
+    await expect(dialog.getByRole('listbox')).toBeHidden();
+    await expect(dialog).toBeVisible();
+    await combo.press('ArrowDown');
+    await combo.press('Enter');
+    await expect(dialog.getByTestId('node-picker-chip')).toContainText(`e2e fav node ${stamp}`);
+    await add.click();
+    await expect
+      .poll(async () => {
+        const favs: { node_id: string | null }[] = await (await request.get('/api/favorites')).json();
+        return favs.some((f) => f.node_id === node.id);
+      })
+      .toBe(true);
+  } finally {
+    const favs: { id: string; node_id: string | null }[] = await (
+      await request.get('/api/favorites')
+    ).json();
+    for (const f of favs.filter((f) => f.node_id === node.id)) {
+      await request.delete(`/api/favorites/${f.id}`);
+    }
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('Inbox "Assign to node" commits with the shared picker', async ({ page, request }) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e assign node ${stamp}`);
+  const created = await request.post('/api/tasks', { data: { title: `e2e assign task ${stamp}` } });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Assign to node"]').click();
+    const combo = row.getByRole('combobox', { name: 'Search nodes…' });
+    await expect(combo).toBeFocused();
+    await combo.fill(`e2e assign node ${stamp}`);
+    await combo.press('Enter');
+    await expect
+      .poll(async () => {
+        const tasks: { id: string }[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+        return tasks.some((t) => t.id === task.id);
+      })
+      .toBe(true);
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+    await request.delete(`/api/nodes/${node.id}`);
   }
 });

@@ -7,7 +7,7 @@
 - [ ] Branched from `develop`, targets `develop` (see [CONTRIBUTING.md](../CONTRIBUTING.md))
 - [ ] Conventional commit messages (`feat|fix|refactor|test|docs|chore|ci(scope): …`)
 - [ ] Tests pass locally (`cargo test --workspace --exclude ui`)
-- [ ] Clippy clean, both targets (`cargo clippy --workspace --exclude ui -- -D warnings`
+- [ ] Clippy clean, both targets (`cargo clippy --workspace --exclude ui --all-targets -- -D warnings`
       and `cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings`)
 - [ ] Formatted (`cargo fmt --all --check`)
 - [ ] New code lands with tests; bug fixes include a regression test

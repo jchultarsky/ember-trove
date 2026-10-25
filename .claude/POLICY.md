@@ -85,7 +85,7 @@ A change is **not done** until, locally and in CI, all of these are green:
 
 ```
 cargo fmt --all --check                                   # formatting (enforced; see §12)
-cargo clippy --workspace --exclude ui -- -D warnings      # api + common, warnings = errors
+cargo clippy --workspace --exclude ui --all-targets -- -D warnings  # api + common, tests included
 cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 cargo test --workspace --exclude ui
 cargo test -p ui                                          # ui unit tests, on the host
@@ -176,8 +176,8 @@ Every change updates, as applicable:
 ## 13. Coverage
 
 - CI enforces line coverage via `cargo llvm-cov` over `--workspace --exclude ui`:
-  a **hard gate** with the floor set ~2 points under the measured baseline (24%
-  floor / 25.96% baseline as of v2.23.0) so it never blocks the existing suite but
+  a **hard gate** with the floor set ~2 points under the measured baseline (41%
+  floor / 43.33% baseline on 2026-10-25; it was 24% / 25.96% at v2.23.0) so it never blocks the existing suite but
   catches a real regression. New code should ship with tests that hold or raise
   coverage; raise the floor deliberately as the suite grows (one line in `ci.yml`).
   UI is WASM and excluded — testable logic belongs in `common/` to be counted.
