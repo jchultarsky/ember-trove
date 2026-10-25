@@ -46,6 +46,7 @@ fn node_req(title: &str) -> CreateNodeRequest {
         body: Some("pg test body".to_string()),
         metadata: serde_json::json!({}),
         status: None,
+        project_status: None,
         template_id: None,
     }
 }
@@ -1157,4 +1158,199 @@ async fn editor_pref_bulk_collapse_and_expand(pool: PgPool) {
 
     // Owner scoping: Bob's row is untouched by Alice's expand.
     assert_eq!(note_pref(&repo, "bob", a).await, Some((None, true)));
+}
+
+// ── Project status (#143) ─────────────────────────────────────────────────────
+
+/// Insert a node straight into the table (bypassing the create path, which
+/// would itself move a status token) with a fixed old `updated_at`.
+async fn insert_raw_node(
+    pool: &PgPool,
+    owner: &str,
+    node_type: &str,
+    title: &str,
+    body: &str,
+) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status, updated_at) \
+         VALUES ($1, $2::node_type, $3, $4, $5, '{}', 'draft', '2020-01-01T00:00:00Z') RETURNING id",
+    )
+    .bind(owner)
+    .bind(node_type)
+    .bind(title)
+    .bind(common::slug::slugify(title))
+    .bind(body)
+    .fetch_one(pool)
+    .await
+    .expect("raw node")
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn backfill_035_moves_tokens_keeps_history_and_runs_once(pool: PgPool) {
+    let scaffold = insert_raw_node(
+        &pool,
+        "a",
+        "project",
+        "Scaffolded",
+        "## Status\n\n- Active\n\n## Goals\n\n-\n",
+    )
+    .await;
+    let bold = insert_raw_node(
+        &pool,
+        "a",
+        "project",
+        "Bold",
+        "## Status\n\n**ON HOLD**\n\nWaiting on legal.\n",
+    )
+    .await;
+    let prose = insert_raw_node(
+        &pool,
+        "a",
+        "project",
+        "Prose",
+        "## Status\n\nThings are going\nwell.\n",
+    )
+    .await;
+    let article = insert_raw_node(&pool, "a", "article", "Article", "## Status\n\nActive\n").await;
+
+    assert_eq!(
+        crate::backfill::project_status_035(&pool)
+            .await
+            .expect("backfill"),
+        2
+    );
+
+    let repo = PgNodeRepo::new(pool.clone());
+    let get = |id| {
+        let repo = &repo;
+        async move { repo.get(common::id::NodeId(id)).await.expect("get") }
+    };
+    let n = get(scaffold).await;
+    assert_eq!(n.project_status.as_deref(), Some("Active"));
+    assert_eq!(n.body.as_deref(), Some("## Goals\n\n-\n"));
+    // A system change, not an edit: updated_at is untouched.
+    assert_eq!(n.updated_at.to_rfc3339(), "2020-01-01T00:00:00+00:00");
+    let n = get(bold).await;
+    assert_eq!(n.project_status.as_deref(), Some("ON HOLD"));
+    assert_eq!(n.body.as_deref(), Some("## Status\n\nWaiting on legal.\n"));
+    // Not a token, not a project: left exactly as they were.
+    let n = get(prose).await;
+    assert_eq!(
+        (n.project_status, n.body.as_deref()),
+        (None, Some("## Status\n\nThings are going\nwell.\n"))
+    );
+    assert_eq!(get(article).await.project_status, None);
+
+    // The old body is restorable: snapshots are old then new.
+    let bodies: Vec<String> =
+        sqlx::query_scalar("SELECT body FROM node_versions WHERE node_id = $1 ORDER BY created_at")
+            .bind(scaffold)
+            .fetch_all(&pool)
+            .await
+            .expect("versions");
+    assert_eq!(
+        bodies,
+        [
+            "## Status\n\n- Active\n\n## Goals\n\n-\n",
+            "## Goals\n\n-\n"
+        ]
+    );
+
+    // Once only: a second start changes nothing, even with a fresh candidate.
+    insert_raw_node(&pool, "a", "project", "Later", "## Status\n\nDone\n").await;
+    assert_eq!(
+        crate::backfill::project_status_035(&pool)
+            .await
+            .expect("rerun"),
+        0
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let make =
+        |owner: &'static str, title: &'static str, node_type: NodeType, status: &'static str| {
+            let repo = &repo;
+            async move {
+                repo.create(
+                    owner,
+                    CreateNodeRequest {
+                        node_type,
+                        project_status: Some(status.to_string()),
+                        ..node_req(title)
+                    },
+                )
+                .await
+                .expect("create")
+            }
+        };
+    let p1 = make("a", "P1", NodeType::Project, "Active").await;
+    make("a", "P2", NodeType::Project, "Active").await;
+    make("a", "P3", NodeType::Project, "ACTIVE").await;
+    make("a", "P4", NodeType::Project, "On hold").await;
+    // Not counted: someone else's project, and a non-project's value.
+    make("b", "Theirs", NodeType::Project, "Secret plan").await;
+    make("a", "Note", NodeType::Article, "Active").await;
+
+    let counts = repo.project_status_counts("a").await.expect("counts");
+    assert_eq!(
+        counts,
+        vec![
+            common::node::ProjectStatusCount {
+                status: "Active".into(),
+                count: 3
+            },
+            common::node::ProjectStatusCount {
+                status: "On hold".into(),
+                count: 1
+            },
+        ]
+    );
+
+    // The list filter is case-insensitive.
+    let (hits, total) = repo
+        .list(common::node::NodeListParams {
+            node_type: Some(NodeType::Project),
+            status: None,
+            project_status: Some("active".into()),
+            tag_id: None,
+            owner_id: Some("a".into()),
+            subject_id: None,
+            page: None,
+            per_page: None,
+            include_archived: false,
+        })
+        .await
+        .expect("list");
+    assert_eq!(total, 3);
+    assert!(hits.iter().all(|n| {
+        n.project_status
+            .as_deref()
+            .map(str::to_lowercase)
+            .as_deref()
+            == Some("active")
+    }));
+
+    // Update: absent leaves it, a value sets it, null clears it.
+    let upd = |ps: Option<Option<String>>| common::node::UpdateNodeRequest {
+        title: None,
+        body: None,
+        metadata: None,
+        status: None,
+        project_status: ps,
+    };
+    let n = repo.update(p1.id, upd(None)).await.expect("noop");
+    assert_eq!(n.project_status.as_deref(), Some("Active"));
+    let n = repo
+        .update(p1.id, upd(Some(Some("Done".into()))))
+        .await
+        .expect("set");
+    assert_eq!(n.project_status.as_deref(), Some("Done"));
+    let n = repo.update(p1.id, upd(Some(None))).await.expect("clear");
+    assert_eq!(n.project_status, None);
+
+    // The database refuses what normalize would (defence in depth).
+    let too_long = repo.update(p1.id, upd(Some(Some("x".repeat(41))))).await;
+    assert!(too_long.is_err());
 }

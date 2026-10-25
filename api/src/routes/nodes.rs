@@ -14,10 +14,11 @@ use common::{
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
         CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeLookupHit, NodeLookupParams,
-        NodeTitleEntry, UpdateNodeRequest,
+        NodeTitleEntry, NodeType, ProjectStatusCount, UpdateNodeRequest,
     },
     node_version::NodeVersion,
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
+    project_status,
     tag::Tag,
     webhook::{EVENT_NODE_CREATED, EVENT_NODE_DELETED, EVENT_NODE_UPDATED},
 };
@@ -43,6 +44,7 @@ pub fn router() -> Router<AppState> {
         .route("/titles", get(list_titles))
         .route("/lookup", get(lookup_titles))
         .route("/resolve-titles", get(resolve_titles))
+        .route("/project-statuses", get(project_statuses))
         .route("/slug/{slug}", get(get_node_by_slug))
         .route("/{id}", get(get_node).put(update_node).delete(delete_node))
         .route("/{id}/neighbors", get(neighbors))
@@ -227,15 +229,62 @@ async fn resolve_titles(
     Ok(Json(map))
 }
 
+// ── Project status (#143) ────────────────────────────────────────────────────
+
+/// `GET /nodes/project-statuses` — the statuses the caller already uses on
+/// their projects, most-used first: the status picker's suggestions.
+///
+/// SECURITY: the caller's OWN nodes only — not nodes shared with them, and
+/// not everyone's for the admin. A status is free text ("Acquisition:
+/// Physna") and mustn't leak across owners.
+async fn project_statuses(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<Vec<ProjectStatusCount>>, ApiError> {
+    Ok(Json(state.nodes.project_status_counts(&claims.sub).await?))
+}
+
+fn status_error(e: project_status::StatusError) -> ApiError {
+    ApiError::Validation(e.to_string())
+}
+
+/// A new node's project status. A given one is validated (blank = none).
+/// Otherwise a project takes the status token from its starting body (a
+/// template's `## Status` section, moved out so there's one copy), or
+/// starts as "Active", which is what the old scaffold said. Other types
+/// get none.
+fn initial_project_status(req: &mut CreateNodeRequest) -> Result<(), ApiError> {
+    if let Some(given) = req.project_status.take() {
+        req.project_status = project_status::normalize(&given).map_err(status_error)?;
+        return Ok(());
+    }
+    if req.node_type != NodeType::Project {
+        return Ok(());
+    }
+    match req
+        .body
+        .as_deref()
+        .and_then(project_status::split_from_body)
+    {
+        Some(split) => {
+            req.body = Some(split.body);
+            req.project_status = Some(split.status);
+        }
+        None => req.project_status = Some(project_status::DEFAULT.to_string()),
+    }
+    Ok(())
+}
+
 // ── Node CRUD ────────────────────────────────────────────────────────────────
 
 async fn create_node(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Json(req): Json<CreateNodeRequest>,
+    Json(mut req): Json<CreateNodeRequest>,
 ) -> Result<(StatusCode, Json<Node>), ApiError> {
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
+    initial_project_status(&mut req)?;
 
     let template_id = req.template_id;
     let node = state.nodes.create(&claims.sub, req).await?;
@@ -331,10 +380,14 @@ async fn update_node(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
-    Json(req): Json<UpdateNodeRequest>,
+    Json(mut req): Json<UpdateNodeRequest>,
 ) -> Result<Json<Node>, ApiError> {
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
+    // A set project status is validated; blank means clear (#143).
+    if let Some(Some(raw)) = &req.project_status {
+        req.project_status = Some(project_status::normalize(raw).map_err(status_error)?);
+    }
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let node = state.nodes.update(NodeId(id), req).await?;
     sync_wikilinks(
@@ -970,6 +1023,7 @@ async fn restore_version(
         body: Some(version.body.clone()),
         metadata: None,
         status: None,
+        project_status: None,
     };
     let node = state.nodes.update(NodeId(id), req).await?;
     sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;
@@ -1042,6 +1096,7 @@ async fn duplicate_node(
         node_type: src.node_type.clone(),
         status: Some(common::node::NodeStatus::Draft),
         metadata: src.metadata.clone(),
+        project_status: src.project_status.clone(),
         template_id: None,
     };
     let dup = state.nodes.create(&claims.sub, req).await?;
@@ -1116,6 +1171,58 @@ mod tests {
     use super::*;
     use chrono::{TimeDelta, Utc};
     use common::id::ActivityId;
+
+    fn create(node_type: NodeType, body: &str, given: Option<&str>) -> CreateNodeRequest {
+        CreateNodeRequest {
+            title: "t".into(),
+            node_type,
+            body: Some(body.into()),
+            metadata: json!({}),
+            status: None,
+            project_status: given.map(str::to_string),
+            template_id: None,
+        }
+    }
+
+    #[test]
+    fn a_new_project_takes_its_templates_status_token_and_drops_the_copy() {
+        let mut req = create(
+            NodeType::Project,
+            "## Status\n\n- On hold\n\n## Goals\n",
+            None,
+        );
+        initial_project_status(&mut req).unwrap();
+        assert_eq!(req.project_status.as_deref(), Some("On hold"));
+        assert_eq!(req.body.as_deref(), Some("## Goals\n"));
+    }
+
+    #[test]
+    fn a_new_project_without_a_token_starts_active() {
+        let mut req = create(NodeType::Project, "## Goals\n", None);
+        initial_project_status(&mut req).unwrap();
+        assert_eq!(req.project_status.as_deref(), Some(project_status::DEFAULT));
+        assert_eq!(req.body.as_deref(), Some("## Goals\n"));
+    }
+
+    #[test]
+    fn a_given_status_wins_is_normalized_and_leaves_the_body_alone() {
+        let body = "## Status\n\n- Active\n";
+        let mut req = create(NodeType::Project, body, Some("  Blocked  "));
+        initial_project_status(&mut req).unwrap();
+        assert_eq!(req.project_status.as_deref(), Some("Blocked"));
+        assert_eq!(req.body.as_deref(), Some(body));
+        let mut bad = create(NodeType::Project, "", Some(&"x".repeat(41)));
+        assert!(initial_project_status(&mut bad).is_err());
+    }
+
+    #[test]
+    fn other_types_get_no_status_and_keep_their_body() {
+        let body = "## Status\n\nActive\n";
+        let mut req = create(NodeType::Article, body, None);
+        initial_project_status(&mut req).unwrap();
+        assert_eq!(req.project_status, None);
+        assert_eq!(req.body.as_deref(), Some(body));
+    }
 
     fn entry(action: ActivityAction, subject: &str, age_minutes: i64) -> ActivityEntry {
         ActivityEntry {

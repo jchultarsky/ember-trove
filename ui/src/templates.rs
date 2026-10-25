@@ -17,11 +17,9 @@ pub fn template_for_type(node_type: &str) -> &'static str {
     }
 }
 
+// No `## Status` section: a project's status is a field on the node
+// (#143), shown as the chip in its header. New projects start "Active".
 const PROJECT: &str = "\
-## Status
-
-- Active
-
 ## Goals
 
 -

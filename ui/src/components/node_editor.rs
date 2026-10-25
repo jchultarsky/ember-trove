@@ -642,6 +642,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 body: Some(snap.1.clone()),
                 metadata: None,
                 status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
+                project_status: None,
             };
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
@@ -703,6 +704,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 body: Some(snap.1),
                 metadata: None,
                 status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
+                project_status: None,
             };
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
@@ -783,6 +785,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     body: Some(snap.1.clone()),
                     metadata: None,
                     status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
+                    project_status: None,
                 };
                 crate::api::update_node(id, &req).await
             } else {
@@ -800,6 +803,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     metadata: serde_json::Value::Object(serde_json::Map::new()),
                     status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
                     template_id: template_id_for_create.get_untracked(),
+                    project_status: None,
                 };
                 crate::api::create_node(&req).await
             };

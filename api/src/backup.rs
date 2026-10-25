@@ -20,6 +20,24 @@ use crate::{error::ApiError, state::AppState};
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
+/// A node's body and project status as restored (#143). A backup from
+/// before v2.36.0 has a project's status as prose in its body; its token
+/// moves into the field, as the 035 backfill did on live data, or it would
+/// come back as prose. An invalid stored status is dropped rather than
+/// failing the whole restore on the column's CHECK.
+fn restored_project_status(node: &common::node::Node) -> (Option<String>, Option<String>) {
+    use common::project_status::{normalize, split_from_body};
+    if let Some(ps) = &node.project_status {
+        return (node.body.clone(), normalize(ps).ok().flatten());
+    }
+    if node.node_type == common::node::NodeType::Project
+        && let Some(split) = node.body.as_deref().and_then(split_from_body)
+    {
+        return (Some(split.body), Some(split.status));
+    }
+    (node.body.clone(), None)
+}
+
 fn add_bytes_to_archive<W: Write>(
     builder: &mut Builder<W>,
     path: &str,
@@ -315,18 +333,21 @@ pub async fn execute_restore(
     for node in &data.nodes {
         let node_type_str = node.node_type.as_str();
         let status_str = node.status.as_str();
+        let (body, project_status) = restored_project_status(node);
         sqlx::query(
             r#"
             INSERT INTO nodes
-                (id, owner_id, node_type, title, slug, body, metadata, status, pinned, created_at, updated_at)
-            VALUES ($1, $2, $3::node_type, $4, $5, $6, $7, $8::node_status, $9, $10, $11)
+                (id, owner_id, node_type, title, slug, body, metadata, status, pinned, created_at,
+                 updated_at, project_status)
+            VALUES ($1, $2, $3::node_type, $4, $5, $6, $7, $8::node_status, $9, $10, $11, $12)
             ON CONFLICT (id) DO UPDATE
                 SET title = EXCLUDED.title,
                     body  = EXCLUDED.body,
                     slug  = EXCLUDED.slug,
                     metadata = EXCLUDED.metadata,
                     status = EXCLUDED.status,
-                    pinned = EXCLUDED.pinned
+                    pinned = EXCLUDED.pinned,
+                    project_status = EXCLUDED.project_status
             "#,
         )
         .bind(node.id.0)
@@ -334,12 +355,13 @@ pub async fn execute_restore(
         .bind(node_type_str)
         .bind(&node.title)
         .bind(&node.slug)
-        .bind(&node.body)
+        .bind(&body)
         .bind(&node.metadata)
         .bind(status_str)
         .bind(node.pinned)
         .bind(node.created_at)
         .bind(node.updated_at)
+        .bind(&project_status)
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node failed: {e}")))?;
@@ -736,3 +758,62 @@ fn extract_full(
 const _: fn() = || {
     let _: NodeId = NodeId(Uuid::nil());
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::node::{Node, NodeStatus, NodeType};
+
+    fn node(node_type: NodeType, body: &str, project_status: Option<&str>) -> Node {
+        Node {
+            id: NodeId(Uuid::new_v4()),
+            owner_id: "o".into(),
+            node_type,
+            title: "t".into(),
+            slug: "t".into(),
+            body: Some(body.into()),
+            metadata: serde_json::json!({}),
+            status: NodeStatus::Draft,
+            project_status: project_status.map(str::to_string),
+            tags: vec![],
+            pinned: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            edge_count: 0,
+        }
+    }
+
+    #[test]
+    fn an_old_backups_project_status_moves_out_of_the_body() {
+        let n = node(
+            NodeType::Project,
+            "## Status\n\n- Active\n\n## Goals\n",
+            None,
+        );
+        assert_eq!(
+            restored_project_status(&n),
+            (Some("## Goals\n".into()), Some("Active".into()))
+        );
+    }
+
+    #[test]
+    fn a_new_backups_status_is_kept_and_an_invalid_one_dropped() {
+        let body = "## Status\n\n- Active\n";
+        let n = node(NodeType::Project, body, Some("Done"));
+        assert_eq!(
+            restored_project_status(&n),
+            (Some(body.into()), Some("Done".into()))
+        );
+        let bad = node(NodeType::Project, body, Some(&"x".repeat(41)));
+        assert_eq!(restored_project_status(&bad), (Some(body.into()), None));
+    }
+
+    #[test]
+    fn other_types_are_restored_as_they_were() {
+        let n = node(NodeType::Article, "## Status\n\nActive\n", None);
+        assert_eq!(
+            restored_project_status(&n),
+            (Some("## Status\n\nActive\n".into()), None)
+        );
+    }
+}

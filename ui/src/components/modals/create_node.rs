@@ -139,6 +139,7 @@ pub fn CreateNodeModal(
             metadata: serde_json::Value::Object(serde_json::Map::new()),
             status: None,
             template_id: template_id_for_create.get_untracked(),
+            project_status: None,
         };
         loading.set(true);
         error.set(None);

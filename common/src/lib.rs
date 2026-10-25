@@ -50,6 +50,7 @@ pub mod node_version;
 pub mod note;
 pub mod permission;
 pub mod picker;
+pub mod project_status;
 pub mod quickadd;
 pub mod search;
 pub mod share_token;

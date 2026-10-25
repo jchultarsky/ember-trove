@@ -170,6 +170,16 @@ impl NodeRepo for StubNodeRepo {
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
         unimplemented!()
     }
+    async fn project_status_counts(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<common::node::ProjectStatusCount>, EmberTroveError> {
+        // Echo the owner so tests can prove the route asks for the CALLER's.
+        Ok(vec![common::node::ProjectStatusCount {
+            status: format!("of {owner_id}"),
+            count: 1,
+        }])
+    }
     async fn set_pinned(&self, _: NodeId, _: bool) -> Result<Node, EmberTroveError> {
         unimplemented!()
     }
@@ -690,6 +700,7 @@ fn fake_node(slug: &str, owner: &str) -> Node {
         body: Some("body text".to_string()),
         metadata: serde_json::json!({}),
         status: NodeStatus::Published,
+        project_status: None,
         tags: vec![],
         pinned: false,
         created_at: chrono::Utc::now(),
@@ -1144,6 +1155,7 @@ async fn protected_route_without_oidc_returns_500_with_error_field() {
 #[tokio::test]
 async fn nodes_list_route_registered() {
     assert_route_registered("GET", "/nodes").await;
+    assert_route_registered("GET", "/nodes/project-statuses").await;
 }
 #[tokio::test]
 async fn node_create_route_registered() {
@@ -2128,4 +2140,63 @@ async fn resolve_titles_validates_its_input() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     let (status, json) = resolve(&enc("[]")).await;
     assert_eq!((status, json), (StatusCode::OK, serde_json::json!({})));
+}
+
+// ── Project status (#143) ─────────────────────────────────────────────────────
+
+async fn node_put(node: u128, body: serde_json::Value) -> StatusCode {
+    claims_app("/nodes", crate::routes::nodes::router())
+        .oneshot(
+            Request::put(format!("/nodes/{}", Uuid::from_u128(node)))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn a_viewer_cannot_set_a_project_status() {
+    let status = node_put(
+        AZ_VIEW_NODE,
+        serde_json::json!({ "project_status": "Done" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn an_invalid_project_status_is_rejected_before_any_write() {
+    // The stub's `update` is unimplemented: reaching it would panic, so a
+    // 422 proves validation runs first.
+    for bad in ["x".repeat(41), "two\nlines".to_string()] {
+        let status = node_put(AZ_EDIT_NODE, serde_json::json!({ "project_status": bad })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+#[tokio::test]
+async fn project_status_suggestions_are_the_callers_own() {
+    let resp = claims_app("/nodes", crate::routes::nodes::router())
+        .oneshot(
+            Request::get("/nodes/project-statuses")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    // The stub echoes the owner it was asked for: the caller.
+    assert_eq!(
+        body,
+        serde_json::json!([{ "status": "of test-sub", "count": 1 }])
+    );
 }

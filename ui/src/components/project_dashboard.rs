@@ -353,6 +353,9 @@ fn ProjectCard(
                         group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">
                         {entry.title.clone()}
                     </span>
+                    {entry.project_status.clone().map(|s| view! {
+                        <crate::components::project_status::ProjectStatusBadge status=s />
+                    })}
                 </div>
 
                 <div class="flex items-center flex-wrap gap-x-3 gap-y-2 sm:gap-4 sm:flex-nowrap">

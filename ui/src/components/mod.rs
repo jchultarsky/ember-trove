@@ -31,6 +31,7 @@ pub mod notes_view;
 pub mod page_header;
 pub mod permission_dialog;
 pub mod project_dashboard;
+pub mod project_status;
 pub mod public_share_view;
 pub mod resizable_editor;
 pub mod search_bar;

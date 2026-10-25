@@ -1,6 +1,9 @@
 use common::{
     id::NodeId,
-    node::{CreateNodeRequest, Node, NodeListResponse, NodeTitleEntry, UpdateNodeRequest},
+    node::{
+        CreateNodeRequest, Node, NodeListResponse, NodeTitleEntry, ProjectStatusCount,
+        UpdateNodeRequest,
+    },
 };
 use gloo_net::http::Request;
 
@@ -42,14 +45,22 @@ pub async fn fetch_nodes() -> Result<Vec<Node>, UiError> {
 /// `tag_id`: UUID string of a tag to filter by, or None for all.
 /// `include_archived`: when false (default for the node list), archived nodes are excluded
 ///   unless `status` is explicitly set to "archived" on the server side.
+/// `project_status`: a project status (#143) to match, case-insensitively.
 pub async fn fetch_nodes_filtered(
     status: Option<&str>,
+    project_status: Option<&str>,
     tag_id: Option<uuid::Uuid>,
     include_archived: bool,
 ) -> Result<Vec<Node>, UiError> {
     let mut params: Vec<String> = Vec::new();
     if let Some(s) = status {
         params.push(format!("status={}", js_sys::encode_uri_component(s)));
+    }
+    if let Some(ps) = project_status {
+        params.push(format!(
+            "project_status={}",
+            js_sys::encode_uri_component(ps)
+        ));
     }
     if let Some(tid) = tag_id {
         params.push(format!("tag_id={tid}"));
@@ -68,6 +79,12 @@ pub async fn fetch_nodes_filtered(
         .map_err(|e| UiError::Network(e.to_string()))?;
     let list: NodeListResponse = parse_json(resp).await?;
     Ok(list.nodes)
+}
+
+/// `GET /api/nodes/project-statuses`: the caller's own statuses, most used
+/// first (the status picker's suggestions, the list filter's choices).
+pub async fn fetch_project_statuses() -> Result<Vec<ProjectStatusCount>, UiError> {
+    get_json("/nodes/project-statuses").await
 }
 
 pub async fn fetch_node(id: NodeId) -> Result<Node, UiError> {
