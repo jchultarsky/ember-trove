@@ -93,8 +93,9 @@ test('s schedules a due date; a attaches to a node', async ({ page, request }) =
     const picker = page.getByPlaceholder('Attach to node…');
     await expect(picker).toBeVisible();
     await picker.fill(nodeTitle);
-    // Debounced search → first (highlighted) result picked with Enter.
-    await expect(page.getByRole('button', { name: nodeTitle })).toBeVisible();
+    // Debounced search → the highlighted (exact) option is committed by Enter.
+    // The picker is the shared NodePicker (#130): options, not buttons.
+    await expect(page.getByRole('option', { name: new RegExp(nodeTitle) })).toBeVisible();
     await picker.press('Enter');
     await expect(page.locator('[role="status"]').getByText('Attached to node')).toBeVisible();
     await expect(page.locator('[role="status"]').getByText(/Inbox processed/)).toBeVisible();
@@ -138,5 +139,45 @@ test('j skips (wrapping) and Esc exits without changes', async ({ page, request 
   } finally {
     await deleteTask(request, idA);
     await deleteTask(request, idB);
+  }
+});
+
+test('Escape in the attach picker closes the list, then clears, then leaves attach', async ({
+  page,
+  request,
+}) => {
+  // The shared picker claims the Escapes it uses (#130); only an unused one
+  // reaches triage, which then backs out one level — never all the way.
+  const stamp = Date.now();
+  const title = `e2e triage-esc ${stamp}`;
+  const id = await createTask(request, title);
+  const node = await request.post('/api/nodes', {
+    data: { title: `e2e triage-esc node ${stamp}`, node_type: 'project', body: '', metadata: {}, status: 'draft' },
+  });
+  expect(node.ok()).toBeTruthy();
+  const nodeId = (await node.json()).id;
+  try {
+    await page.goto('/tasks/inbox');
+    await page.getByRole('button', { name: /Process/ }).click();
+    await expect(page.getByTestId('triage-card').getByText(title)).toBeVisible();
+    await page.keyboard.press('a');
+    const picker = page.getByPlaceholder('Attach to node…');
+    await expect(picker).toBeFocused();
+    await picker.fill(`e2e triage-esc node ${stamp}`);
+    const listbox = page.getByRole('listbox');
+    await expect(listbox).toBeVisible();
+
+    await picker.press('Escape');
+    await expect(listbox).toBeHidden();
+    await expect(picker).toHaveValue(`e2e triage-esc node ${stamp}`);
+    await picker.press('Escape');
+    await expect(picker).toHaveValue('');
+    await picker.press('Escape');
+    // Back to single-key mode, still in triage on the same task.
+    await expect(picker).toHaveCount(0);
+    await expect(page.getByTestId('triage-card').getByText(title)).toBeVisible();
+  } finally {
+    await deleteTask(request, id);
+    await request.delete(`/api/nodes/${nodeId}`);
   }
 });

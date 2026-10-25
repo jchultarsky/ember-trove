@@ -383,6 +383,8 @@ fn UserRow(
                                 <div class="flex items-center gap-1">
                                     <span class="text-xs text-red-500 whitespace-nowrap">"Delete?"</span>
                                     <button
+                                        title="Confirm delete"
+                                        aria-label="Confirm delete"
                                         class="p-1.5 rounded-lg text-white bg-red-500 hover:bg-red-600 transition-colors disabled:opacity-40"
                                         on:click=move |_| {
                                             deleting.set(true);
@@ -400,7 +402,7 @@ fn UserRow(
                                         }
                                         disabled=move || deleting.get()
                                     >
-                                        <span class="material-symbols-outlined" style="font-size: 14px;">"check"</span>
+                                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">"check"</span>
                                     </button>
                                     <button
                                         title="Cancel delete"

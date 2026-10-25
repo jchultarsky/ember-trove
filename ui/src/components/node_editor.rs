@@ -1180,7 +1180,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                                                 select(t_clone.clone());
                                             }
                                         >
-                                            <span class="material-symbols-outlined text-xs mr-1 align-middle">"link"</span>
+                                            <span class="material-symbols-outlined text-xs mr-1 align-middle" aria-hidden="true">"link"</span>
                                             {t.clone()}
                                         </button>
                                     }

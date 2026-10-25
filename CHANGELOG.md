@@ -10,8 +10,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **Icon-only buttons** were announced by their glyph name ("edit",
   "more_vert", "call_merge") or had no name at all. In 75 buttons across 27
   files the glyph is now `aria-hidden`, so the button's title names it. The
-  9 that had no title (back arrows, close buttons, toast dismiss) gain a
-  title and an `aria-label`.
+  11 that had no title (back arrows, close buttons, toast dismiss, the
+  delete-confirm ✓ on Admin and Backups) gain a title and an
+  `aria-label`. Wiki-link autocomplete items no longer read "link …".
   - A new e2e guard scans the accessibility tree of Inbox, My Day and a full
     node page, and fails on any unnamed or glyph-named button. It fails on
     the old UI, so it catches what it targets.
@@ -22,6 +23,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   types with `EdgeType::parse`.
 - **Placeholders** use the ellipsis character ("Node title…",
   "Label (optional)…", "Tag name…").
+
+### Changed — every node-choosing field is the same picker (#130)
+- **Add to Favorites:** it downloaded every node title and filtered them in
+  the browser, with its own list and no keyboard contract. Now it uses the
+  shared `NodePicker`, and Add stays disabled until a node is chosen.
+- **Inbox "Assign to node" and triage attach:** both drew their own result
+  lists (triage even had its own highlight and arrow keys). Both now use
+  `NodePicker`, where committing a node *is* the attach.
+- **Same behaviour everywhere:** the title lookup, arrow keys, Enter to
+  commit, and screen-reader support. Escape closes the list, then clears the
+  text, and only an unused Escape reaches the surrounding modal or triage.
+  `NodePicker` gains an `autofocus` prop, and its lookup hook is now
+  private to it.
 
 ### Security — cached personal data no longer outlives the session (#129)
 - The service worker caches API reads for offline use: node bodies, notes,

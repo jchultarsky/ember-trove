@@ -1,11 +1,11 @@
-use common::{favorite::CreateFavoriteRequest, node::NodeTitleEntry};
+use common::{favorite::CreateFavoriteRequest, id::NodeId};
 use leptos::prelude::*;
 
 use wasm_bindgen_futures::spawn_local;
 
 use super::ModalShell;
 use crate::{
-    api::{create_favorite, fetch_node_titles},
+    api::create_favorite,
     components::toast::{ToastLevel, push_toast},
 };
 
@@ -19,64 +19,39 @@ pub fn AddFavoriteModal(
 ) -> impl IntoView {
     // "node" | "url"
     let mode = RwSignal::new("node".to_string());
-    // Node mode
-    let node_search = RwSignal::new(String::new());
-    let node_results: RwSignal<Vec<NodeTitleEntry>> = RwSignal::new(vec![]);
-    let selected_node: RwSignal<Option<NodeTitleEntry>> = RwSignal::new(None);
+    // Node mode: the shared picker (#130) — it used to download every title
+    // and filter them here, with its own list and keyboard behaviour.
+    let selected_node: RwSignal<Option<(NodeId, String)>> = RwSignal::new(None);
     // URL mode
     let url_input = RwSignal::new(String::new());
     let label_input = RwSignal::new(String::new());
     // State
     let loading = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
-    let all_nodes: RwSignal<Vec<NodeTitleEntry>> = RwSignal::new(vec![]);
 
-    // Reset fields on open and pre-load node titles.
+    // Reset fields on open.
     Effect::new(move |_| {
         if show.get() {
             mode.set("node".to_string());
-            node_search.set(String::new());
-            node_results.set(vec![]);
             selected_node.set(None);
             url_input.set(String::new());
             label_input.set(String::new());
             loading.set(false);
             error.set(None);
-            spawn_local(async move {
-                if let Ok(titles) = fetch_node_titles().await {
-                    all_nodes.set(titles);
-                }
-            });
-        }
-    });
-
-    // Filter node list reactively as the user types.
-    Effect::new(move |_| {
-        let q = node_search.get().to_lowercase();
-        if q.is_empty() {
-            node_results.set(all_nodes.get_untracked());
-        } else {
-            let filtered = all_nodes
-                .get_untracked()
-                .into_iter()
-                .filter(|n| n.title.to_lowercase().contains(&q))
-                .take(10)
-                .collect();
-            node_results.set(filtered);
         }
     });
 
     let handle_submit = move || {
         let m = mode.get_untracked();
         let req = if m == "node" {
-            let Some(node) = selected_node.get_untracked() else {
+            let Some((node_id, title)) = selected_node.get_untracked() else {
                 error.set(Some("Select a node first.".to_string()));
                 return;
             };
             CreateFavoriteRequest {
-                node_id: Some(node.id.0),
+                node_id: Some(node_id.0),
                 url: None,
-                label: node.title.clone(),
+                label: title,
             }
         } else {
             let u = url_input.get_untracked();
@@ -159,7 +134,7 @@ pub fn AddFavoriteModal(
                             format!("{base} text-stone-500 dark:text-stone-400 hover:text-stone-700 dark:hover:text-stone-300")
                         }
                     }
-                    on:click=move |_| { mode.set("node".to_string()); selected_node.set(None); node_search.set(String::new()); }
+                    on:click=move |_| { mode.set("node".to_string()); selected_node.set(None); }
                 >
                     "Internal Node"
                 </button>
@@ -184,67 +159,11 @@ pub fn AddFavoriteModal(
                 if mode.get() != "node" { return view! { <div /> }.into_any(); }
                 view! {
                     <div class="space-y-3">
-                        {move || selected_node.get().map(|n| {
-                            let title = n.title.clone();
-                            view! {
-                                <div class="flex items-center gap-2 p-2 bg-amber-50 dark:bg-amber-900/20
-                                            border border-amber-200 dark:border-amber-700 rounded-lg">
-                                    <span class="material-symbols-outlined text-amber-500" style="font-size:16px">"star"</span>
-                                    <span class="text-sm text-stone-700 dark:text-stone-300 flex-1 truncate">{title}</span>
-                                    <button
-                                        class="text-stone-400 hover:text-stone-600 cursor-pointer"
-                                        on:click=move |_| selected_node.set(None)
-                                    >
-                                        <span class="material-symbols-outlined" style="font-size:16px">"close"</span>
-                                    </button>
-                                </div>
-                            }.into_any()
-                        })}
-                        {move || {
-                            if selected_node.get().is_some() { return view! { <div /> }.into_any(); }
-                            view! {
-                                <div class="relative">
-                                    <input
-                                        type="text"
-                                        class="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600
-                                               rounded-lg bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-100
-                                               placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                        placeholder="Search nodes…"
-                                        prop:value=move || node_search.get()
-                                        on:input=move |ev| node_search.set(event_target_value(&ev))
-                                    />
-                                    <ul class="mt-1 max-h-48 overflow-y-auto border border-stone-200
-                                               dark:border-stone-700 rounded-lg bg-white dark:bg-stone-900">
-                                        {move || {
-                                            let results = node_results.get();
-                                            if results.is_empty() {
-                                                return view! {
-                                                    <li class="px-3 py-2 text-sm text-stone-400 dark:text-stone-500">"No nodes found"</li>
-                                                }.into_any();
-                                            }
-                                            results.into_iter().map(|n| {
-                                                let title = n.title.clone();
-                                                let n2 = n.clone();
-                                                view! {
-                                                    <li>
-                                                        <button
-                                                            class="w-full text-left px-3 py-2 text-sm text-stone-700
-                                                                   dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
-                                                                   truncate cursor-pointer"
-                                                            on:click=move |_| {
-                                                                selected_node.set(Some(n2.clone()));
-                                                            }
-                                                        >
-                                                            {title}
-                                                        </button>
-                                                    </li>
-                                                }
-                                            }).collect_view().into_any()
-                                        }}
-                                    </ul>
-                                </div>
-                            }.into_any()
-                        }}
+                        <crate::components::node_picker::NodePicker
+                            selected=selected_node
+                            placeholder="Search nodes…"
+                            autofocus=true
+                        />
                     </div>
                 }.into_any()
             }}
@@ -303,7 +222,10 @@ pub fn AddFavoriteModal(
                 <button
                     class="px-4 py-2 text-sm font-medium bg-ember hover:bg-ember-strong
                            text-white rounded-lg disabled:opacity-50 cursor-pointer"
-                    disabled=move || loading.get()
+                    disabled=move || {
+                        loading.get()
+                            || (mode.get() == "node" && selected_node.with(|n| n.is_none()))
+                    }
                     on:click=move |_| handle_submit()
                 >
                     {move || if loading.get() { "Adding…" } else { "Add" }}
