@@ -24,6 +24,7 @@ pub mod node_editor;
 pub mod node_list;
 pub mod node_meta;
 pub mod node_picker;
+pub mod node_section;
 pub mod node_view;
 pub mod note_panel;
 pub mod notes_view;

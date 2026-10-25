@@ -4,6 +4,8 @@ use common::{
 };
 use leptos::prelude::*;
 
+use crate::components::node_section::{NodeSection, SectionShell};
+
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::resizable_editor::ResizableEditor;
 use crate::markdown::render_markdown_plain;
@@ -127,14 +129,15 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     let body = RwSignal::new(String::new());
     let new_color = RwSignal::new("default".to_string());
     let show_all = RwSignal::new(false);
-    let collapsed = RwSignal::new(false);
+    // Section open state (#131: SectionShell owns the toggle).
+    let open = RwSignal::new(true);
 
     // Arrived via a `/nodes/:id?note=<id>` deep-link from the Notes feed —
     // expand the panel and reveal all notes so the focused one is in the DOM
     // for `focus_note` to scroll to (it may be beyond the first 5).
     if crate::focus_note::pending_focus_note().is_some() {
         show_all.set(true);
-        collapsed.set(false);
+        open.set(true);
     }
 
     let notes_resource = LocalResource::new(move || {
@@ -287,78 +290,47 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     let toast_state = use_context::<crate::components::toast::ToastState>();
 
     let on_add = move |_| do_add();
-    // The header's "Jump to notes" lands here (#123), expanded.
-    let root: NodeRef<leptos::html::Div> = NodeRef::new();
-    crate::components::node_view::on_section_jump(
-        crate::components::node_view::NodeSection::Notes,
-        root,
-        move || collapsed.set(false),
-    );
+    // Collapsing the section closes the add form.
+    Effect::new(move |_| {
+        if !open.get() {
+            show_form.set(false);
+        }
+    });
+    let count = Signal::derive(move || Some(note_ids().len()));
+    let header_actions: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            <div class="flex items-center gap-1">
+                // Collapse all / Expand all — any viewer (state is per account).
+                {move || (open.get() && !note_ids().is_empty()).then(|| view! {
+                    <button
+                        class="px-2 py-1 rounded-lg text-xs text-stone-400 hover:text-stone-600
+                            dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
+                            transition-colors cursor-pointer"
+                        on:click=move |_| set_all(!all_collapsed())
+                    >
+                        {move || if all_collapsed() { "Expand all" } else { "Collapse all" }}
+                    </button>
+                })}
+                {move || (is_owner && open.get()).then(|| view! {
+                    <button
+                        class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
+                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                        title=move || if show_form.get() { "Cancel" } else { "Add note" }
+                        on:click=move |_| show_form.update(|v| *v = !*v)
+                    >
+                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                            {move || if show_form.get() { "close" } else { "add" }}
+                        </span>
+                    </button>
+                })}
+            </div>
+        }
+        .into_any()
+    });
 
     view! {
-        <div
-            node_ref=root
-            class="border-t border-stone-200 dark:border-stone-800 pt-6 focus:outline-none"
-            role="region"
-            aria-labelledby="node-notes-heading"
-            tabindex="-1"
-            data-testid="node-notes"
-        >
-            // ── Section header ────────────────────────────────────────────
-            <div class="flex items-center justify-between mb-3">
-                <button
-                    class="flex items-center gap-2 group"
-                    title=move || if collapsed.get() { "Expand notes" } else { "Collapse notes" }
-                    on:click=move |_| {
-                        collapsed.update(|v| *v = !*v);
-                        if collapsed.get_untracked() { show_form.set(false); }
-                    }
-                >
-                    <span class="material-symbols-outlined text-stone-400 dark:text-stone-500
-                        group-hover:text-amber-500 transition-colors"
-                        style="font-size: 18px;">{"sticky_note_2"}</span>
-                    <h3 id="node-notes-heading" class="text-sm font-semibold text-stone-700 dark:text-stone-300
-                        uppercase tracking-wider group-hover:text-stone-900
-                        dark:group-hover:text-stone-100 transition-colors">
-                        "Notes"
-                    </h3>
-                    <span class="material-symbols-outlined text-stone-300 dark:text-stone-600
-                        group-hover:text-stone-500 transition-colors"
-                        style="font-size: 16px;">
-                        {move || if collapsed.get() { "expand_more" } else { "expand_less" }}
-                    </span>
-                </button>
-
-                <div class="flex items-center gap-1">
-                    // Collapse all / Expand all — any viewer (state is per account).
-                    {move || (!collapsed.get() && !note_ids().is_empty()).then(|| view! {
-                        <button
-                            class="px-2 py-1 rounded-lg text-xs text-stone-400 hover:text-stone-600
-                                dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
-                                transition-colors cursor-pointer"
-                            on:click=move |_| set_all(!all_collapsed())
-                        >
-                            {move || if all_collapsed() { "Expand all" } else { "Collapse all" }}
-                        </button>
-                    })}
-                    {move || (is_owner && !collapsed.get()).then(|| view! {
-                        <button
-                            class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                            title=move || if show_form.get() { "Cancel" } else { "Add note" }
-                            on:click=move |_| show_form.update(|v| *v = !*v)
-                        >
-                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">
-                                {move || if show_form.get() { "close" } else { "add" }}
-                            </span>
-                        </button>
-                    })}
-                </div>
-            </div>
-
-            // ── Collapsible body ──────────────────────────────────────────
-            {move || (!collapsed.get()).then(|| view! {
-                <div>
+        <SectionShell section=NodeSection::Notes open=open count=count actions=header_actions>
+            // ── Body (rendered only while the section is open) ───────────
                     // Add note form (owner only, toggled)
                     {move || (is_owner && show_form.get()).then(|| view! {
                         <div class="mb-4 rounded-lg bg-stone-50 dark:bg-stone-900/50
@@ -686,8 +658,6 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                             }.into_any()
                         }}
                     </Suspense>
-                </div>
-            })}
-        </div>
+        </SectionShell>
     }
 }

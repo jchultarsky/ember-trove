@@ -49,25 +49,8 @@ pub fn VersionPanel(
     };
 
     view! {
-        <div class="mt-4 border-t border-stone-200 dark:border-stone-700 pt-6">
-        <div class="border border-stone-200 dark:border-stone-700 rounded-lg overflow-hidden">
-            // ── Header / toggle ────────────────────────────────────────────
-            <button
-                class="w-full flex items-center justify-between px-4 py-3 bg-stone-50 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-750 text-sm font-medium text-stone-700 dark:text-stone-300 transition-colors"
-                on:click=move |_| open.update(|v| *v = !*v)
-            >
-                <span class="flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base">"history_edu"</span>
-                    "Version History"
-                </span>
-                <span class="material-symbols-outlined text-base">
-                    {move || if open.get() { "expand_less" } else { "expand_more" }}
-                </span>
-            </button>
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::Versions open=open>
 
-            // ── Body ───────────────────────────────────────────────────────
-            {move || open.get().then(|| view! {
-                <div class="px-4 py-3">
                     <Suspense fallback=|| view! {
                         <p class="text-xs text-stone-400 dark:text-stone-500 animate-pulse py-2">"Loading versions…"</p>
                     }>
@@ -122,9 +105,6 @@ pub fn VersionPanel(
                             }.into_any(),
                         })}
                     </Suspense>
-                </div>
-            })}
-        </div>
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }

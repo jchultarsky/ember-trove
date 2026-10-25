@@ -17,26 +17,53 @@ async function gotoNode(page: Page, id: string) {
   await expect(page.getByTestId('node-tasks')).toBeVisible({ timeout: 15_000 });
 }
 
-test('Jump to tasks / notes reveal and focus this node’s sections', async ({ page, request }) => {
+/** Open the header's section outline and jump to `name`. */
+async function jumpTo(page: Page, name: string) {
+  await page.getByRole('button', { name: 'Sections', exact: true }).click();
+  await page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem', { name: new RegExp(name) }).click();
+}
+
+test('the section outline reveals and focuses this node’s sections', async ({ page, request }) => {
   const node = await createNode(request, `e2e jump node ${Date.now()}`, { body: LONG_BODY });
   try {
     await gotoNode(page, node.id);
     const tasks = page.getByTestId('node-tasks');
     await expect(tasks).not.toBeInViewport();
-    await page.getByRole('button', { name: 'Jump to tasks', exact: true }).click();
+    await jumpTo(page, 'Tasks');
     await expect(tasks).toBeFocused();
     await expect(tasks).toBeInViewport();
 
-    // A collapsed Notes section is expanded by the jump. (The toggle's
-    // accessible name is its content, glyphs included — use the title.)
+    // A collapsed Notes section is expanded by the jump.
     await page.locator('button[title="Collapse notes"]').click();
     await expect(page.locator('button[title="Expand notes"]')).toBeVisible();
     await scroller(page).evaluate((el) => (el.scrollTop = 0));
-    await page.getByRole('button', { name: 'Jump to notes', exact: true }).click();
+    await jumpTo(page, 'Notes');
     const notes = page.getByTestId('node-notes');
     await expect(notes).toBeFocused();
     await expect(notes).toBeInViewport();
     await expect(page.locator('button[title="Collapse notes"]')).toBeVisible();
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('every section is in the outline and one shared look (#131)', async ({ page, request }) => {
+  const node = await createNode(request, `e2e outline node ${Date.now()}`, { body: LONG_BODY });
+  try {
+    await gotoNode(page, node.id);
+    await page.getByRole('button', { name: 'Sections', exact: true }).click();
+    const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
+    await expect(items).toHaveText([
+      /Tasks/, /Notes/, /External Links/, /Connections/, /Local Graph/, /Linked Here/,
+      /Attachments/, /Sharing/, /Public Links/, /Version History/, /Activity/,
+    ]);
+    // Jumping to a collapsed section opens and focuses it.
+    await items.filter({ hasText: 'Version History' }).click();
+    const versions = page.getByTestId('node-versions');
+    await expect(versions).toBeFocused();
+    await expect(versions.getByRole('button', { name: /Version History/ })).toHaveAttribute('aria-expanded', 'true');
+    // One heading style: every section heading is an h2, named like the outline.
+    await expect(page.locator('[data-testid^="node-"] h2')).toHaveCount(11);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }
@@ -47,7 +74,7 @@ test('adding a task or a note keeps the scroll position', async ({ page, request
   const node = await createNode(request, `e2e scroll node ${stamp}`, { body: LONG_BODY });
   try {
     await gotoNode(page, node.id);
-    await page.getByRole('button', { name: 'Jump to tasks', exact: true }).click();
+    await jumpTo(page, 'Tasks');
     const box = scroller(page);
     // Regression: the whole page unmounted for a frame (one Suspense around
     // every panel), so the container — and its scrollTop — was replaced.

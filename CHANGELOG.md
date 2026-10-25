@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — node page sections share one look, and an outline reaches them all (#131)
+- **One primitive:** `SectionShell` (`ui/src/components/node_section.rs`)
+  now renders all 11 sections under a node's body. They had three
+  hand-rolled header styles: uppercase headings for Tasks and Notes,
+  title-case ones for most, and boxed buttons for Versions and Activity.
+  Each section is now a labelled region with an `aria-expanded` toggle, an
+  icon, one `h2` style, a count badge and its own header actions.
+- **A "Sections" outline** in the node header lists every section with its
+  count and jumps there, opening a collapsed section and moving focus into
+  it. It replaces #123's separate "Jump to tasks" / "Jump to notes"
+  buttons, and it's available on phones too.
+- Tasks can now be collapsed like the other sections.
+
 ### Fixed — every button has a real name; one connection-type list (#133)
 - **Icon-only buttons** were announced by their glyph name ("edit",
   "more_vert", "call_merge") or had no name at all. In 75 buttons across 27
