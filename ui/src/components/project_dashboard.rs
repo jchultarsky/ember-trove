@@ -343,7 +343,7 @@ fn ProjectCard(
                         }
                         on:click=on_pin_click
                     >
-                        <span class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;font-variation-settings:'FILL' 1;">
                             {move || if pinned_sig.get() { "star" } else { "star_outline" }}
                         </span>
                     </button>

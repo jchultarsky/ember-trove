@@ -518,7 +518,7 @@ pub fn KanbanTaskRow(
                             }
                             title="Remove from today (back to backlog)"
                         >
-                            <span class="material-symbols-outlined" style="font-size:16px;">"close"</span>
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"close"</span>
                         </button>
                     }.into_any(),
                     KanbanZone::Backlog => view! {
@@ -534,7 +534,7 @@ pub fn KanbanTaskRow(
                             }
                             title="Add to today"
                         >
-                            <span class="material-symbols-outlined" style="font-size:16px;">"wb_sunny"</span>
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"wb_sunny"</span>
                         </button>
                     }.into_any(),
                 }}
@@ -546,7 +546,7 @@ pub fn KanbanTaskRow(
                     on:click=on_pencil
                     title="Edit this task in place"
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">"edit"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"edit"</span>
                 </button>
                 <button
                     type="button"
@@ -557,7 +557,7 @@ pub fn KanbanTaskRow(
                     on:click=on_delete
                     title="Delete task"
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">"delete"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"delete"</span>
                 </button>
             </div>
         </div>

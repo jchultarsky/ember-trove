@@ -178,7 +178,7 @@ pub fn NewTaskForm(
                     on:click=move |_| do_add()
                     disabled=move || adding.get()
                 >
-                    <span class="material-symbols-outlined">
+                    <span aria-hidden="true" class="material-symbols-outlined">
                         {move || if adding.get() { "hourglass_empty" } else { "add" }}
                     </span>
                 </button>

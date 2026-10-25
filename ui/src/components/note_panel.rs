@@ -348,7 +348,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                             title=move || if show_form.get() { "Cancel" } else { "Add note" }
                             on:click=move |_| show_form.update(|v| *v = !*v)
                         >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">
                                 {move || if show_form.get() { "close" } else { "add" }}
                             </span>
                         </button>
@@ -407,7 +407,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                     disabled=move || body.get().trim().is_empty()
                                     on:click=on_add
                                 >
-                                    <span class="material-symbols-outlined">"check"</span>
+                                    <span aria-hidden="true" class="material-symbols-outlined">"check"</span>
                                 </button>
                             </div>
                         </div>
@@ -592,7 +592,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                                                     title="Edit note"
                                                                                                     on:click=move |_| editing.set(true)
                                                                                                 >
-                                                                                                    <span class="material-symbols-outlined"
+                                                                                                    <span aria-hidden="true" class="material-symbols-outlined"
                                                                                                         style="font-size: 14px;">{"edit"}</span>
                                                                                                 </button>
                                                                                                 // Delete: instant, with an Undo toast (soft delete).

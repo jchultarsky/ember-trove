@@ -293,7 +293,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                                dark:hover:bg-stone-800 dark:text-stone-400 cursor-pointer"
                         title="Toggle menu"
                     >
-                        <span class="material-symbols-outlined" style="font-size: 22px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 22px;">
                             {move || if mobile_open.get() { "close" } else { "menu" }}
                         </span>
                     </button>
@@ -340,7 +340,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                             hover:shadow-md transition-all cursor-pointer"
                         title=move || if collapsed_state.get() { "Expand sidebar" } else { "Collapse sidebar" }
                     >
-                        <span
+                        <span aria-hidden="true"
                             class="material-symbols-outlined"
                             style="font-size: 14px; line-height: 1;"
                         >
@@ -503,7 +503,7 @@ fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
                             title="Help (?)"
                             on:click=move |_| h.0.update(|v| *v = !*v)
                         >
-                            <span class="material-symbols-outlined" style="font-size:18px;">
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size:18px;">
                                 "help_outline"
                             </span>
                         </button>
