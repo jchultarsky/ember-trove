@@ -2053,6 +2053,30 @@ async fn create_edge_reports_a_duplicate_as_409() {
     assert_eq!(body["error"], "already linked as references");
 }
 
+// ── e2e test-identity header is inert outside e2e builds (#135) ──────────────
+
+/// SECURITY: in a build without the `e2e-bypass` feature (every release
+/// image) the `x-e2e-subject` header must not authenticate anyone: the
+/// request still meets the real auth path (here: no OIDC configured → 500).
+#[cfg(not(feature = "e2e-bypass"))]
+#[tokio::test]
+async fn e2e_subject_header_is_ignored_without_the_bypass_feature() {
+    let resp = test_app()
+        .oneshot(
+            Request::get("/nodes")
+                .header("x-e2e-subject", "other")
+                .header("x-forwarded-for", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Not authenticated: the same answer as with no header at all (the
+    // detail "OIDC not configured" is logged, never sent).
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body_json(resp).await["error"], "internal error");
+}
+
 // ── GET /nodes/resolve-titles (#134) ─────────────────────────────────────────
 
 async fn resolve(query: &str) -> (StatusCode, serde_json::Value) {
