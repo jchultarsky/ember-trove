@@ -266,6 +266,8 @@ test('an existing connection is flagged before submit; the API refuses a duplica
   } finally {
     await request.delete(`/api/nodes/${source.id}`);
     await request.delete(`/api/nodes/${target.id}`);
+  }
+});
 
 // ── Every node-choosing field is NodePicker (#130) ───────────────────────────
 
