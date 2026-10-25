@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling — tests that look like real use (#135)
+- **A second e2e identity.** Under the `e2e-bypass` build only, and only
+  when armed, an `x-e2e-subject: other` header selects a fixed second test
+  user. Specs can now test sharing, same-titled nodes across owners and
+  permission boundaries for real; the duplicate-title picker test no longer
+  fakes its search response.
+  - **Security:** the header picks one of two fixed identities, is never
+    used as a subject id, and any other value is refused (401). A test
+    proves a release build ignores it.
+- **A realistic seed** (`e2e/tests/seed.ts`): bodies that mention titles,
+  prefix-sharing titles, wiki links, a task and a note. Empty-body fixtures
+  hid the v2.33.0 picker bug.
+- **Clippy lints test code** (`--all-targets`) in CI, the pre-commit hook,
+  `verify.sh` and `make lint`. The two lints it surfaced are now
+  compile-time `const` assertions.
+- **The coverage floor rises from 24% to 41%**, against a measured
+  43.33%-of-lines baseline.
+
 ## [2.34.0] - 2026-10-24
 
 ### Fixed — node pickers find nodes by title, as you type

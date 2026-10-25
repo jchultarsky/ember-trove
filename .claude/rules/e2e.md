@@ -82,6 +82,18 @@ CI job is too slow a feedback loop for selector work.
   test same-titled search results, intercept `/api/search` with
   `page.route` (`node_picker.spec.ts`).
 
+- **Two test identities** (2026-10-25, #135): `request` is `e2e-test-user`.
+  The `otherRequest` fixture is `e2e-other-user`, selected by the bypass-only
+  `x-e2e-subject: other` header; any other header value gets 401. Share with
+  `shareNode(otherRequest, id, E2E_SUBJECT)`. Use them for sharing,
+  same-titled nodes across owners and permission boundaries instead of
+  routing fake responses, and clean up `otherRequest`'s nodes with
+  `otherRequest`.
+- **Realistic data for content-dependent features** (2026-10-25, #135): use
+  `seedTrove(request, stamp)` from `seed.ts`. It creates nodes whose bodies
+  mention a title, titles that share a prefix, wiki links, a task and a
+  note. Empty-body fixtures hid the v2.33.0 picker bug.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —

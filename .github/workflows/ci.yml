@@ -65,7 +65,9 @@ jobs:
         run: cargo check --workspace --exclude ui
 
       - name: cargo clippy (api + common)
-        run: cargo clippy --workspace --exclude ui -- -D warnings
+        # --all-targets: test code is linted too (it wasn't, and two lints
+        # sat in routes/mod.rs's tests until 2026-10-25, #135).
+        run: cargo clippy --workspace --exclude ui --all-targets -- -D warnings
 
       - name: cargo test (api + common)
         run: cargo test --workspace --exclude ui
@@ -108,9 +110,9 @@ jobs:
     name: coverage (api + common)
     runs-on: ubuntu-latest
     # Now a hard gate: fails if api+common line coverage drops below the floor
-    # below. The floor (24%) sits ~2 points under the measured baseline
-    # (25.96% lines on 2026-07-17, after the v2.23.0 "trust the suite" work;
-    # previously 17% under an 18.7% baseline, 2026-06-05) so it never blocks
+    # below. The floor (41%) sits ~2 points under the measured baseline
+    # (43.33% lines on 2026-10-25, v2.34.0 + #129/#130/#135; previously 24%
+    # under a 25.96% baseline at v2.23.0, 17% under 18.7% on 2026-06-05) so it never blocks
     # the existing suite, but it does block a real regression. Raise it
     # deliberately as the suite grows (ui is WASM and excluded, so its logic
     # should live in `common/` to be counted; the pg-tests job is feature-
@@ -141,7 +143,7 @@ jobs:
           tool: cargo-llvm-cov
 
       - name: Coverage summary + floor (api + common; ui is WASM, excluded)
-        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 24
+        run: cargo llvm-cov --workspace --exclude ui --summary-only --fail-under-lines 41
 
   audit:
     name: cargo audit (security)
