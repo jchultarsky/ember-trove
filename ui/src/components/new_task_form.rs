@@ -23,7 +23,7 @@ use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::node_picker::NodePicker;
 use crate::components::task_common::parse_priority;
-use crate::components::task_row_scaffold::RecurrenceOptions;
+use crate::components::task_row_scaffold::{PriorityPicker, RecurrenceOptions};
 
 /// Reusable "new task" form.
 ///
@@ -123,17 +123,8 @@ pub fn NewTaskForm(
                     if ev.key() == "Enter" { do_add(); }
                 }
             />
-            <div class="flex items-center gap-2">
-                <select
-                    class="text-xs bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-300
-                        rounded-lg px-2 py-1 focus:outline-none"
-                    prop:value=move || new_priority.get()
-                    on:change=move |ev| new_priority.set(event_target_value(&ev))
-                >
-                    <option value="high">"High"</option>
-                    <option value="medium">"Medium"</option>
-                    <option value="low">"Low"</option>
-                </select>
+            <div class="flex items-center gap-2 flex-wrap">
+                <PriorityPicker value=new_priority />
                 <DueDateField value=new_due />
                 <select
                     class="text-xs bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-300

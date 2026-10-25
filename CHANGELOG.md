@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — one task editor everywhere (#132)
+- **`TaskEditor`** (`ui/src/components/task_row_scaffold.rs`) is now the
+  inline editor in My Day, the Inbox and the node panel. It has the same
+  controls and keys in all three: title, priority, due date, repeat, Save
+  and Cancel. Before, each list had its own form, and they looked and
+  behaved differently.
+- **One priority control:** `PriorityPicker`, a labelled segmented radio
+  group (Low / Medium / High), replaces My Day's unlabelled-state pills and
+  the `<select>`s in the Inbox, the node panel and the add-task form.
+  - Assistive tech now hears which option is selected (`aria-checked`).
+  - Arrow keys move the selection, and the group is a single tab stop.
+  - The options come from one list, `TaskPriority::ALL` plus `label()`. It
+    used to be written out four times.
+- **Escape and Ctrl/⌘+Enter work from any editor control.** Before, they
+  only worked in the title box. From the priority or repeat control,
+  Escape did nothing.
+- The pencil is named "Edit task" in every list. It was "Edit this task in
+  place", "Edit" and "Edit task".
+
 ### Changed — node page sections share one look, and an outline reaches them all (#131)
 - **One primitive:** `SectionShell` (`ui/src/components/node_section.rs`)
   now renders all 11 sections under a node's body. They had three
