@@ -1,12 +1,10 @@
 use common::{
     id::{NodeId, TaskId},
-    task::{Task, TaskStatus},
+    task::{Task, TaskStatus, UpdateTaskRequest},
 };
 use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
-use crate::components::due_date_field::DueDateField;
-use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::node_section::{NodeSection, SectionShell};
 use crate::components::task_actions::{
@@ -18,7 +16,7 @@ use crate::components::task_common::{
 };
 use crate::components::task_row::TaskEditorHeights;
 use crate::components::task_row_scaffold::{
-    MyDayButton, RecurrenceOptions, TITLE_CLASS, TaskCheckbox, TaskRowBody, action_btn_class,
+    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, action_btn_class,
     due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
@@ -281,15 +279,10 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     // Inline editing — title, priority, due date, recurrence.
     let editing_title = RwSignal::new(false);
     let draft = TaskEditDraft::from_task(&task);
-    let (edit_title, edit_priority, edit_due, edit_recurrence) =
-        (draft.title, draft.priority, draft.due, draft.recurrence);
 
-    // Save all editable fields at once.
-    let do_save_edit = move || {
-        let Some(req) = draft.take_request() else {
-            return;
-        };
-        editing_title.set(false);
+    // Save all editable fields at once (the panel refetches; no optimistic
+    // display to roll back).
+    let on_save = move |req: UpdateTaskRequest| {
         patch_task(
             task_id,
             req,
@@ -344,64 +337,18 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             <div class="flex-1 min-w-0">
                 // Title — display or inline edit form (title + priority + due + repeat)
                 {move || if editing_title.get() {
-                    let saved_height = TaskEditorHeights::saved(task_id);
                     view! {
-                        <div class="space-y-1.5 pb-1">
-                            <crate::components::resizable_editor::ResizableEditor
-                                value=edit_title
-                                placeholder="Task title…"
-                                initial_height=saved_height
-                                on_submit=Callback::new(move |()| do_save_edit())
-                                on_escape=Callback::new(move |()| {
-                                    editing_title.set(false);
-                                    draft.discard_with_undo(move || {
-                                        editing_title.try_set(true);
-                                    });
+                        <div class="pb-1">
+                            <TaskEditor
+                                draft=draft
+                                task_id=task_id
+                                due=due
+                                on_save=on_save
+                                close=Callback::new(move |()| editing_title.set(false))
+                                reopen=std::sync::Arc::new(move || {
+                                    editing_title.try_set(true);
                                 })
-                                on_resize=TaskEditorHeights::on_resize(task_id)
-                                class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
-                                    text-stone-900 dark:text-stone-100 rounded px-1.5 py-0.5 resize-y \
-                                    min-h-[36px] focus:outline-none focus:ring-1 focus:ring-amber-500".to_string()
                             />
-                            <div class="flex items-center gap-2">
-                                <select
-                                    class="text-xs bg-stone-100 dark:bg-stone-700
-                                        text-stone-700 dark:text-stone-300
-                                        rounded-lg px-2 py-0.5 focus:outline-none"
-                                    title="Priority"
-                                    prop:value=move || edit_priority.get()
-                                    on:change=move |ev| edit_priority.set(event_target_value(&ev))
-                                >
-                                    <option value="high">"High"</option>
-                                    <option value="medium">"Medium"</option>
-                                    <option value="low">"Low"</option>
-                                </select>
-                                <DueDateField value=edit_due original=due />
-                                <select
-                                    class="text-xs bg-stone-100 dark:bg-stone-700
-                                        text-stone-700 dark:text-stone-300
-                                        rounded-lg px-2 py-0.5 focus:outline-none"
-                                    title="Recurrence"
-                                    on:change=move |ev| edit_recurrence.set(event_target_value(&ev))
-                                >
-                                    <RecurrenceOptions value=edit_recurrence />
-                                </select>
-                                <span class="flex-1"/>
-                                <IconButton
-                                    icon="check"
-                                    label="Save"
-                                    variant=IconButtonVariant::Save
-                                    on_click=Callback::new(move |()| do_save_edit())
-                                />
-                                <IconButton
-                                    icon="close"
-                                    label="Cancel"
-                                    on_click=Callback::new(move |()| {
-                                        editing_title.set(false);
-                                        draft.reset();
-                                    })
-                                />
-                            </div>
                         </div>
                     }.into_any()
                 } else {

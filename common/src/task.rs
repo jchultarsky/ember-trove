@@ -54,6 +54,19 @@ wire_enum!(TaskPriority {
     High => "high",
 });
 
+impl TaskPriority {
+    /// The user-facing name. `ALL` + `label` is the single option list that
+    /// every priority control renders (#132; it used to be written out in
+    /// each editor and the add-task form).
+    pub fn label(&self) -> &'static str {
+        match self {
+            TaskPriority::Low => "Low",
+            TaskPriority::Medium => "Medium",
+            TaskPriority::High => "High",
+        }
+    }
+}
+
 /// How often a recurring task should repeat after being marked Done.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -386,6 +399,16 @@ pub struct ReorderTasksRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn priority_labels_cover_every_variant_once_in_ascending_order() {
+        // `ALL` is the one option list every priority control renders (#132).
+        let labels: Vec<_> = TaskPriority::ALL.iter().map(TaskPriority::label).collect();
+        assert_eq!(labels, ["Low", "Medium", "High"]);
+        for p in TaskPriority::ALL {
+            assert_eq!(TaskPriority::parse(p.as_str()).as_ref(), Some(p));
+        }
+    }
 
     #[test]
     fn terminal_statuses_are_done_and_cancelled() {
