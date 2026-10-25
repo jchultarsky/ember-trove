@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-10-25
+
 ### Changed — wiki links resolve on demand; no more downloading every title (#134)
 - **Node pages** used to download *every* node title the caller could see
   on each view, just to render the few `[[links]]` in the body. Now a page

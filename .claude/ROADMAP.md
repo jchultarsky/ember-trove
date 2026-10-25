@@ -3,7 +3,30 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-24)
+## Current state (2026-10-25)
+
+- **v2.35.0 shipped: the v2.34.0 code-survey issues (#129–#135; PRs
+  #136–#142).**
+  - **Deploys reach open tabs.** The service worker serves navigations
+    network-first and hashed assets cache-first, and a floating banner
+    offers Reload when the bundle is stale. Cached personal data is purged
+    on logout and on a 401.
+  - **No duplicate connections.** Migration 034 archives existing
+    duplicates and adds a unique index; a repeated link now gets a 409 and
+    an "already linked" hint.
+  - **One component per job.** Every node-choosing field is `NodePicker`.
+    Every node-page section is a `SectionShell`, reachable from a
+    "Sections" outline. Every task list uses `TaskEditor` and
+    `PriorityPicker`, a labelled radio group (not colour-only dots).
+  - **Named buttons.** Icon-only buttons now have real accessible names,
+    there is one connection-type list, and an e2e test scans for unnamed
+    buttons.
+  - **Wiki links resolve on demand** through the caller-scoped
+    `GET /api/nodes/resolve-titles`; the client no longer downloads every
+    title.
+  - **More realistic e2e.** A second test identity and a `seedTrove`
+    fixture; clippy now runs with `--all-targets`; the coverage floor is
+    41%.
 
 - **v2.34.0 shipped: node pickers fixed (#127, #128; issue #126).** Every
   picker that commits a node is one APG combobox (`NodePicker`): text
