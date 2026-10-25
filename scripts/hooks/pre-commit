@@ -40,7 +40,7 @@ fi
 echo "pre-commit: cargo fmt --all --check"
 cargo fmt --all --check
 
-echo "pre-commit: cargo clippy --workspace --exclude ui -- -D warnings"
-cargo clippy --workspace --exclude ui -- -D warnings
+echo "pre-commit: cargo clippy --workspace --exclude ui --all-targets -- -D warnings"
+cargo clippy --workspace --exclude ui --all-targets -- -D warnings
 
 echo "pre-commit: OK"

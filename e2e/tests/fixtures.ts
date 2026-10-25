@@ -10,7 +10,25 @@ import { test as base, expect, type APIRequestContext } from '@playwright/test';
 export { expect };
 export type { APIRequestContext, Page } from '@playwright/test';
 
-export const test = base.extend<{ pageErrors: string[]; cspViolations: string[] }>({
+export const test = base.extend<{
+  pageErrors: string[];
+  cspViolations: string[];
+  otherRequest: APIRequestContext;
+}>({
+  /**
+   * API calls as the SECOND e2e identity (#135), for sharing and permission
+   * tests. The stack's auth bypass maps `x-e2e-subject: other` to a fixed
+   * test subject (`e2e-other-user`); the default identity is
+   * `e2e-test-user`. Only e2e-bypass builds honour the header.
+   */
+  otherRequest: async ({ playwright, baseURL }, use) => {
+    const ctx = await playwright.request.newContext({
+      baseURL,
+      extraHTTPHeaders: { 'x-e2e-subject': 'other' },
+    });
+    await use(ctx);
+    await ctx.dispose();
+  },
   /**
    * Fails the test on any uncaught exception or WASM panic. A panic poisons
    * event dispatch silently — later clicks just do nothing — so a spec can
@@ -89,4 +107,20 @@ export async function createNote(request: APIRequestContext, nodeId: string, bod
   const resp = await request.post(`/api/nodes/${nodeId}/notes`, { data: { body, color: 'default' } });
   expect(resp.ok()).toBeTruthy();
   return resp.json();
+}
+
+/** The default e2e identity's subject (what the second identity shares with). */
+export const E2E_SUBJECT = 'e2e-test-user';
+
+/** Share `nodeId` (owned by the caller of `request`) with `subject`. */
+export async function shareNode(
+  request: APIRequestContext,
+  nodeId: string,
+  subject: string,
+  role: 'viewer' | 'editor' | 'owner' = 'viewer',
+) {
+  const resp = await request.post(`/api/nodes/${nodeId}/permissions`, {
+    data: { subject_id: subject, role },
+  });
+  expect(resp.ok()).toBeTruthy();
 }
