@@ -59,7 +59,7 @@ pub fn extract_section(body: &str, heading: &str) -> Option<String> {
 
 /// Returns the ATX heading level (1–6) if `line` starts with 1–6 `#` chars
 /// followed by a space or end-of-line.  Returns `None` otherwise.
-fn atx_heading_level(line: &str) -> Option<usize> {
+pub(crate) fn atx_heading_level(line: &str) -> Option<usize> {
     let hashes = line.bytes().take_while(|&b| b == b'#').count();
     if hashes == 0 || hashes > 6 {
         return None;

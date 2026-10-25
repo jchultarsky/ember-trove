@@ -6,6 +6,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — a project's status is a field, not prose (#143)
+- **Structured value:** projects get a `project_status`, a short token such
+  as "Active" or "On hold". It's shown as a chip in the project's header,
+  as a badge in the Projects list and on dashboard cards, and the Projects
+  list can filter by it.
+  - It's named `project_status` because `status` is already the Draft /
+    Published / Archived lifecycle.
+- **Open values:** the chip opens a picker that suggests the statuses you
+  already use, most used first, and accepts new ones. Typing another case
+  of an existing value ("active") offers your existing "Active", so one
+  status doesn't end up spelled several ways.
+- **One copy:**
+  - Migration 035 adds the column. A one-time startup backfill moves each
+    project's `## Status` token (`**ACTIVE**`, `- Active` or a bare short
+    line) into the field and keeps any narrative under the heading.
+    Anything that isn't clearly a token is left alone.
+  - The old body is saved as a version first, so the Versions panel can
+    restore it, and `updated_at` isn't bumped.
+  - The project scaffold no longer has a Status section; new projects start
+    as "Active". A template's `## Status` token becomes the field when a
+    project is created from it, and so does an old backup's on restore.
+
+### Security
+- `GET /api/nodes/project-statuses` returns only the caller's own values,
+  never values from nodes shared with them (and not everyone's for the
+  admin), because a status is free text. Setting a status needs editor
+  rights, like any other node edit. Values are capped at 40 characters by
+  both `common::project_status::normalize` and a database CHECK, and render
+  as plain text.
+
+
 ## [2.35.0] - 2026-10-25
 
 ### Changed — wiki links resolve on demand; no more downloading every title (#134)

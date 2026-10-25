@@ -1,5 +1,6 @@
 mod admin;
 mod auth;
+mod backfill;
 mod backup;
 mod config;
 mod error;
@@ -59,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("database migration failed: {e}"))?;
     tracing::info!("database migrations complete");
+    backfill::run_all(&pool).await;
 
     // OIDC discovery — fetch endpoints and JWKS from Cognito (optional for local dev).
     let oidc = if let (Some(issuer), Some(client_id), Some(client_secret)) = (

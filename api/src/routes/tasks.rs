@@ -369,7 +369,8 @@ async fn calendar_handler(
 const DASHBOARD_TASK_LIMIT: i64 = 10;
 
 /// GET /dashboard/projects — all project nodes with aggregated task counts,
-/// a rendered status section from the node body, and top open tasks.
+/// its project status (#143) plus any status narrative left in the body,
+/// and top open tasks.
 async fn project_dashboard(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -378,6 +379,7 @@ async fn project_dashboard(
     let params = NodeListParams {
         node_type: Some(NodeType::Project),
         status: None,
+        project_status: None,
         tag_id: None,
         owner_id: Some(claims.sub.clone()),
         subject_id: None,
@@ -447,6 +449,7 @@ async fn project_dashboard(
                 node_status,
                 task_counts,
                 status_section,
+                project_status: n.project_status,
                 open_tasks,
                 has_more_tasks,
                 last_activity_at,

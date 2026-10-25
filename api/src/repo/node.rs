@@ -101,6 +101,17 @@ pub trait NodeRepo: Send + Sync {
     /// Toggle the `pinned` flag on a single node.  Used by the
     /// dashboard pin/unpin button (v2.9.0).
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError>;
+
+    /// The project statuses `owner_id` uses on their own project nodes, for
+    /// the status picker's suggestions (#143). Case variants are one entry,
+    /// spelled the most-used way; most-used first, at most 50.
+    ///
+    /// SECURITY: owner-only — never values from nodes shared with the
+    /// caller or (for the admin) anyone else's. A status is free text.
+    async fn project_status_counts(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<common::node::ProjectStatusCount>, EmberTroveError>;
 }
 
 pub struct PgNodeRepo {
@@ -125,6 +136,7 @@ struct NodeRow {
     body: Option<String>,
     metadata: serde_json::Value,
     status: String,
+    project_status: Option<String>,
     pinned: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -144,6 +156,7 @@ impl NodeRow {
             body: self.body,
             metadata: self.metadata,
             status: parse_node_status(&self.status)?,
+            project_status: self.project_status,
             tags: vec![], // populated separately if needed
             pinned: self.pinned,
             created_at: self.created_at,
@@ -221,10 +234,11 @@ impl NodeRepo for PgNodeRepo {
 
         let row = sqlx::query_as::<_, NodeRow>(
             r#"
-            INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status)
-            VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status)
+            INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status,
+                               project_status)
+            VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8)
             RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, pinned, created_at, updated_at
+                      status::text, project_status, pinned, created_at, updated_at
             "#,
         )
         .bind(owner_id)
@@ -234,6 +248,7 @@ impl NodeRepo for PgNodeRepo {
         .bind(&req.body)
         .bind(&req.metadata)
         .bind(status_str)
+        .bind(&req.project_status)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| match &e {
@@ -258,7 +273,7 @@ impl NodeRepo for PgNodeRepo {
         let row = sqlx::query_as::<_, NodeRow>(
             r#"
             SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, pinned, created_at, updated_at
+                   status::text, project_status, pinned, created_at, updated_at
             FROM nodes WHERE id = $1
             "#,
         )
@@ -278,7 +293,7 @@ impl NodeRepo for PgNodeRepo {
         let row = sqlx::query_as::<_, NodeRow>(
             r#"
             SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, pinned, created_at, updated_at
+                   status::text, project_status, pinned, created_at, updated_at
             FROM nodes WHERE slug = $1
             "#,
         )
@@ -301,7 +316,7 @@ impl NodeRepo for PgNodeRepo {
         let mut count_sql = String::from("SELECT COUNT(*) FROM nodes n");
         let mut data_sql = String::from(
             "SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body, \
-             n.metadata, n.status::text, n.pinned, n.created_at, n.updated_at, \
+             n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at, \
              COALESCE(ec.edge_count, 0)::bigint AS edge_count \
              FROM nodes n \
              LEFT JOIN ( \
@@ -334,6 +349,11 @@ impl NodeRepo for PgNodeRepo {
         } else if !params.include_archived {
             // Default: hide archived nodes unless the caller explicitly opts in.
             conditions.push("n.status <> 'archived'::node_status".to_owned());
+        }
+
+        if params.project_status.is_some() {
+            conditions.push(format!("lower(n.project_status) = lower(${param_idx})"));
+            param_idx += 1;
         }
 
         if params.owner_id.is_some() {
@@ -370,6 +390,9 @@ impl NodeRepo for PgNodeRepo {
         if let Some(ref status) = params.status {
             count_query = count_query.bind(status.as_str());
         }
+        if let Some(ref ps) = params.project_status {
+            count_query = count_query.bind(ps.as_str());
+        }
         if let Some(ref owner_id) = params.owner_id {
             count_query = count_query.bind(owner_id.as_str());
         }
@@ -398,6 +421,9 @@ impl NodeRepo for PgNodeRepo {
         }
         if let Some(ref status) = params.status {
             query = query.bind(status.as_str());
+        }
+        if let Some(ref ps) = params.project_status {
+            query = query.bind(ps.as_str());
         }
         if let Some(ref owner_id) = params.owner_id {
             query = query.bind(owner_id.as_str());
@@ -437,10 +463,13 @@ impl NodeRepo for PgNodeRepo {
                 title    = COALESCE($2, title),
                 body     = COALESCE($3, body),
                 metadata = COALESCE($4, metadata),
-                status   = COALESCE($5::node_status, status)
+                status   = COALESCE($5::node_status, status),
+                -- Three states (#143): $6 false = leave it; true = set to $7,
+                -- where NULL clears.
+                project_status = CASE WHEN $6 THEN $7 ELSE project_status END
             WHERE id = $1
             RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, pinned, created_at, updated_at
+                      status::text, project_status, pinned, created_at, updated_at
             "#,
         )
         .bind(id.0)
@@ -448,6 +477,8 @@ impl NodeRepo for PgNodeRepo {
         .bind(&req.body)
         .bind(&req.metadata)
         .bind(status_str)
+        .bind(req.project_status.is_some())
+        .bind(req.project_status.clone().flatten())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| match &e {
@@ -491,7 +522,7 @@ impl NodeRepo for PgNodeRepo {
         let rows = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
             SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
-                   n.metadata, n.status::text, n.pinned, n.created_at, n.updated_at
+                   n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at
             FROM nodes n
             JOIN edges e ON e.target_id = n.id
             WHERE e.source_id = $1
@@ -520,7 +551,7 @@ impl NodeRepo for PgNodeRepo {
         let rows = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
             SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
-                   n.metadata, n.status::text, n.pinned, n.created_at, n.updated_at
+                   n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at
             FROM nodes n
             JOIN edges e ON e.source_id = n.id
             WHERE e.target_id = $1
@@ -673,7 +704,7 @@ impl NodeRepo for PgNodeRepo {
         let rows = sqlx::query_as::<_, NodeRow>(
             r#"
             SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, pinned, created_at, updated_at
+                   status::text, project_status, pinned, created_at, updated_at
             FROM nodes
             WHERE owner_id = $1
             ORDER BY created_at ASC
@@ -702,7 +733,7 @@ impl NodeRepo for PgNodeRepo {
         let rows = sqlx::query_as::<_, NodeRow>(
             r#"
             SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, pinned, created_at, updated_at
+                   status::text, project_status, pinned, created_at, updated_at
             FROM nodes
             ORDER BY created_at ASC
             "#,
@@ -733,7 +764,7 @@ impl NodeRepo for PgNodeRepo {
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, pinned, created_at, updated_at
+                      status::text, project_status, pinned, created_at, updated_at
             "#,
         )
         .bind(id.0)
@@ -747,6 +778,45 @@ impl NodeRepo for PgNodeRepo {
         let mut tag_map = fetch_tags_for_nodes(&self.pool, &[node.id.0]).await?;
         node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
         Ok(node)
+    }
+
+    async fn project_status_counts(
+        &self,
+        owner_id: &str,
+    ) -> Result<Vec<common::node::ProjectStatusCount>, EmberTroveError> {
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            status: String,
+            count: i64,
+        }
+        let rows = sqlx::query_as::<_, Row>(
+            r#"
+            SELECT (array_agg(project_status ORDER BY c DESC, project_status))[1] AS status,
+                   SUM(c)::bigint AS count
+            FROM (
+                SELECT project_status, COUNT(*) AS c
+                FROM nodes
+                WHERE owner_id = $1
+                  AND node_type = 'project'::node_type
+                  AND project_status IS NOT NULL
+                GROUP BY project_status
+            ) spelled
+            GROUP BY lower(project_status)
+            ORDER BY count DESC, status
+            LIMIT 50
+            "#,
+        )
+        .bind(owner_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("project status counts failed: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|r| common::node::ProjectStatusCount {
+                status: r.status,
+                count: u32::try_from(r.count).unwrap_or(u32::MAX),
+            })
+            .collect())
     }
 
     async fn area_for_nodes(
