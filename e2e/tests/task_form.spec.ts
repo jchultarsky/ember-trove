@@ -1,4 +1,4 @@
-import { test, expect, createNode, localISO } from './fixtures';
+import { test, expect, createNode, localISO, type Locator } from './fixtures';
 
 /**
  * The shared add-task form (`NewTaskForm`): the ☀ toggle commits the new task
@@ -157,9 +157,9 @@ test('inbox: ☀ stays available while editing a task and applies immediately', 
   try {
     await page.goto('/tasks/inbox');
     const row = page.locator(`[data-task-id="${task.id}"]`);
-    await row.locator('button[title="Edit"]').click();
+    await row.locator('button[title="Edit task"]').click();
     // Edit hides Assign/Edit/Delete — but not ☀ (it isn't Save-gated).
-    await expect(row.locator('button[title="Edit"]')).toHaveCount(0);
+    await expect(row.locator('button[title="Edit task"]')).toHaveCount(0);
     const sun = row.getByRole('button', { name: 'Add to My Day' });
     await expect(sun).toHaveAttribute('aria-pressed', 'false');
     await sun.click();
@@ -203,6 +203,11 @@ test('a double Enter in the add-task form creates the task once', async ({ page,
 
 type FullTask = Task & { priority: string; recurrence: string | null };
 
+/** The editor's priority radio group (`PriorityPicker`, #132). */
+const priorityOf = (scope: Locator) => scope.getByRole('radiogroup', { name: 'Priority' });
+const expectPriority = (scope: Locator, label: 'Low' | 'Medium' | 'High') =>
+  expect(priorityOf(scope).getByRole('radio', { name: label })).toHaveAttribute('aria-checked', 'true');
+
 test('node panel editor: opens on saved values, Cancel resets all, saves recurrence', async ({
   page,
   request,
@@ -219,17 +224,17 @@ test('node panel editor: opens on saved values, Cancel resets all, saves recurre
     await page.goto(`/nodes/${node.id}`);
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.locator('button[title="Edit task"]').click();
-    const priority = row.locator('select[title="Priority"]');
     const repeat = row.locator('select[title="Recurrence"]');
-    await expect(priority).toHaveValue('high');
+    await expectPriority(row, 'High');
     await expect(repeat).toHaveValue('weekly');
 
     // Abandon edits to every field: reopening shows the saved values.
-    await priority.selectOption('low');
+    await priorityOf(row).getByRole('radio', { name: 'Low' }).click();
+    await expectPriority(row, 'Low');
     await repeat.selectOption('daily');
     await row.getByRole('button', { name: 'Cancel' }).click();
     await row.locator('button[title="Edit task"]').click();
-    await expect(priority).toHaveValue('high');
+    await expectPriority(row, 'High');
     await expect(repeat).toHaveValue('weekly');
 
     await repeat.selectOption('monthly');
@@ -260,19 +265,18 @@ test('inbox editor: opens on saved values and Cancel resets every field', async 
   try {
     await page.goto('/tasks/inbox');
     const row = page.locator(`[data-task-id="${task.id}"]`);
-    await row.locator('button[title="Edit"]').click();
-    const priority = row.locator('select[title="Priority"]');
+    await row.locator('button[title="Edit task"]').click();
     const repeat = row.locator('select[title="Recurrence"]');
-    await expect(priority).toHaveValue('low');
+    await expectPriority(row, 'Low');
     await expect(repeat).toHaveValue('yearly');
     // One label per rule everywhere (this list used to say "Biweekly").
     await expect(repeat.locator('option[value="biweekly"]')).toHaveText('Every 2 weeks');
 
-    await priority.selectOption('high');
+    await priorityOf(row).getByRole('radio', { name: 'High' }).click();
     await repeat.selectOption('');
     await row.getByRole('button', { name: 'Cancel' }).click();
-    await row.locator('button[title="Edit"]').click();
-    await expect(priority).toHaveValue('low');
+    await row.locator('button[title="Edit task"]').click();
+    await expectPriority(row, 'Low');
     await expect(repeat).toHaveValue('yearly');
   } finally {
     await request.delete(`/api/tasks/${task.id}`);
@@ -290,7 +294,7 @@ test('a resized task editor reopens at its new height (same session)', async ({
   try {
     await page.goto('/tasks/inbox');
     const row = page.locator(`[data-task-id="${task.id}"]`);
-    await row.locator('button[title="Edit"]').click();
+    await row.locator('button[title="Edit task"]').click();
     const editor = row.locator('textarea');
     // A drag of the native resize handle ends in a mouseup on the textarea.
     await editor.evaluate((el) => {
@@ -300,9 +304,76 @@ test('a resized task editor reopens at its new height (same session)', async ({
     await row.getByRole('button', { name: 'Cancel' }).click();
     // Regression: the height map was loaded once at page start, so the
     // reopened editor snapped back to the old height.
-    await row.locator('button[title="Edit"]').click();
+    await row.locator('button[title="Edit task"]').click();
     await expect.poll(() => editor.evaluate((el) => (el as HTMLElement).offsetHeight)).toBe(160);
   } finally {
     await request.delete(`/api/tasks/${task.id}`);
+  }
+});
+
+// ── One editor everywhere (TaskEditor, #132) ──────────────────────────────────
+//
+// My Day, the Inbox and the node panel render the same editor: the same
+// controls, arrow keys move the priority, and Escape / Ctrl+Enter work from
+// any control (they used to work only inside the title box).
+
+test('My Day, Inbox and the node panel share one task editor', async ({ page, request }) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e one editor node ${stamp}`, { node_type: 'project' });
+  const mk = async (url: string, data: Record<string, unknown>) => {
+    const r = await request.post(url, { data: { priority: 'medium', ...data } });
+    expect(r.ok()).toBeTruthy();
+    return (await r.json()) as FullTask;
+  };
+  const surfaces = [
+    { name: 'My Day', url: '/tasks/my-day', task: await mk('/api/tasks', { title: `e2e one editor myday ${stamp}`, focus_date: localISO(0) }) },
+    { name: 'Inbox', url: '/tasks/inbox', task: await mk('/api/tasks', { title: `e2e one editor inbox ${stamp}` }) },
+    { name: 'node panel', url: `/nodes/${node.id}`, task: await mk(`/api/nodes/${node.id}/tasks`, { title: `e2e one editor panel ${stamp}` }) },
+  ];
+  const priorityOnServer = async (id: string) => {
+    const all: FullTask[] = await (await request.get('/api/tasks/all')).json();
+    return all.find((t) => t.id === id)?.priority;
+  };
+  try {
+    for (const s of surfaces) {
+      await test.step(s.name, async () => {
+        await page.goto(s.url);
+        const row = page.locator(`[data-task-id="${s.task.id}"]`);
+        await row.getByRole('button', { name: 'Edit task' }).click();
+        const editor = row.getByTestId('task-editor');
+        // The same controls in every list.
+        await expect(editor.locator('textarea')).toBeVisible();
+        await expect(priorityOf(editor).getByRole('radio')).toHaveText(['Low', 'Medium', 'High']);
+        await expect(editor.getByTestId('due-date-field')).toBeVisible();
+        await expect(editor.locator('select[title="Recurrence"]')).toBeVisible();
+        await expect(editor.getByRole('button', { name: 'Save' })).toBeVisible();
+        await expect(editor.getByRole('button', { name: 'Cancel' })).toBeVisible();
+
+        // Roving tab stop: arrows move the selection and the focus.
+        const medium = priorityOf(editor).getByRole('radio', { name: 'Medium' });
+        await expect(medium).toHaveAttribute('tabindex', '0');
+        await medium.focus();
+        await page.keyboard.press('ArrowRight');
+        await expectPriority(editor, 'High');
+        await expect(priorityOf(editor).getByRole('radio', { name: 'High' })).toBeFocused();
+
+        // Escape from a non-title control discards, with Undo.
+        await page.keyboard.press('Escape');
+        await expect(editor).toHaveCount(0);
+        // …and stays on the page (the window dispatcher's Escape = "back").
+        expect(new URL(page.url()).pathname).toBe(s.url);
+        await page.getByRole('button', { name: 'Undo' }).click();
+        await expectPriority(row.getByTestId('task-editor'), 'High');
+
+        // Ctrl/⌘+Enter from a non-title control saves.
+        await priorityOf(row.getByTestId('task-editor')).getByRole('radio', { name: 'High' }).focus();
+        await page.keyboard.press('ControlOrMeta+Enter');
+        await expect(row.getByTestId('task-editor')).toHaveCount(0);
+        await expect.poll(() => priorityOnServer(s.task.id)).toBe('high');
+      });
+    }
+  } finally {
+    for (const s of surfaces) await request.delete(`/api/tasks/${s.task.id}`);
+    await request.delete(`/api/nodes/${node.id}`);
   }
 });
