@@ -202,6 +202,16 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   mount by tracking the `NodeRef` in an `Effect`, not via rAF. Specs assert
   `toBeFocused()` before relying on focus-dependent keys. — 2026-10-17
 
+### Focusing a button right after the change that enables it does nothing
+- **Symptom:** after the picker commits, `confirm.focus()` silently doesn't
+  move focus; e2e `toBeFocused()` fails with "inactive".
+- **Cause:** the commit sets the signal that drives `disabled`, but the DOM
+  updates later in the tick. At `focus()` time the button is still
+  disabled, and a disabled button refuses focus.
+- **Fix:** set a flag, and focus from an `Effect` that sees the enabled
+  state, via `set_timeout(…, 0)` after the render (`EdgePanel`,
+  `focus_confirm`). — 2026-10-25
+
 ### Page jumps to the top when a panel refreshes
 - **Symptom:** adding a task or note on a long node page scrolls back to the
   top. A DOM trace shows the scroll container at `scrollHeight 0` for a frame.

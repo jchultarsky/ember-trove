@@ -72,6 +72,16 @@ CI job is too slow a feedback loop for selector work.
   'Collapse notes' })` waits forever. Use `button[title="…"]`, or give the
   control an `aria-label`.
 
+- **A `<select>` is a combobox too** (2026-10-25, #126): `getByRole('combobox')`
+  matches the node picker *and* every select on the form. Use the name:
+  `getByRole('combobox', { name: 'Search for a node…' })` (the picker's
+  `aria-label` is its placeholder). Open picker lists are absolutely
+  positioned and cover the fields below them, so a click on such a field
+  waits forever. Click something beside the picker instead.
+- **Duplicate titles can't be made with one user** (the API returns 409). To
+  test same-titled search results, intercept `/api/search` with
+  `page.route` (`node_picker.spec.ts`).
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —
