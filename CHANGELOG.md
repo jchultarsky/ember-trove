@@ -14,7 +14,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - decisions written on the issue;
   - the `DECISION NEEDED:` marker;
   - role headers on assistant comments;
-  - only the two owner accounts are trusted, and the proposer's proposals
+  - only the two owner accounts are trusted, and issues from either one
     count as pre-approved.
 - New issue forms: **Proposal** and **Question for the owner**. The existing
   bug and feature forms stay as they are, for outside reporters.
