@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-24)
 
+- **v2.33.0 shipped: strict CSP + #120 + #123 (#121, #122, #124).** The
+  prod CSP has no `'unsafe-eval'` (only `'wasm-unsafe-eval'`), and e2e fails
+  on any CSP violation. The loading screen shows its build-stamped bundle
+  version, plus the server's when they differ (a stale-cache signal). On the
+  node page: Jump to tasks/notes; the page boundary is a `<Transition>`, so
+  adds no longer reset scroll; editor Escape stops propagating (it used to
+  navigate to /nodes) and offers Undo for unsaved edits. Issue reviews are
+  now posted on the issue ("Review before implementing"). **Next
+  candidates:** #101 tower-http (waiting on reqwest).
+
 - **v2.32.1 shipped: the code-review backlog is closed (#115–#119).**
   Review bugfixes (metrics, invite links, refresh renewing the access
   cookie, month-end recurrence, trashed rows in search, no `js_sys::eval`).
@@ -13,9 +23,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
   editor draft (`task_actions`), one node-search hook, `ModalShell` for
   every modal and one editor-height store. The e2e fixtures guard every
   spec against page errors. CI runs `cargo test -p ui`, and handler-level
-  authZ tests cover the v2.31.1 fixes. `'unsafe-eval'` is gone
-  from the prod CSP (Unreleased; e2e fails on any CSP violation). **Next
-  candidates:** #101 tower-http (waiting on reqwest).
+  authZ tests cover the v2.31.1 fixes.
 
 - **v2.32.0 shipped: #111 + AWS SDK update (#114, #113).** Every create
   path resolves a new node's body by one rule
