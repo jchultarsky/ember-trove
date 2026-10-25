@@ -148,7 +148,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                         }
                         title=move || if show_add.get() { "Cancel" } else { "Add link" }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             {move || if show_add.get() { "close" } else { "add_link" }}
                         </span>
                     </button>
@@ -267,7 +267,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                     show_add.set(false);
                                                                                 }
                                                                             >
-                                                                                <span class="material-symbols-outlined"
+                                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                                       style="font-size:14px;">"edit"</span>
                                                                             </button>
                                                                             <button
@@ -288,7 +288,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                     });
                                                                                 }
                                                                             >
-                                                                                <span class="material-symbols-outlined"
+                                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                                       style="font-size:14px;">"delete"</span>
                                                                             </button>
                                                                         </div>
@@ -337,7 +337,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                             title="Add link"
                                                             on:click=move |_| do_add()
                                                         >
-                                                            <span class="material-symbols-outlined">"check"</span>
+                                                            <span aria-hidden="true" class="material-symbols-outlined">"check"</span>
                                                         </button>
                                                         <button
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
@@ -350,7 +350,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                 add_error.set(None);
                                                             }
                                                         >
-                                                            <span class="material-symbols-outlined">"close"</span>
+                                                            <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
                                                         </button>
                                                     </div>
                                                 </div>

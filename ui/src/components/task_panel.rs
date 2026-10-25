@@ -93,7 +93,7 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                     title=move || if show_form.get() { "Cancel" } else { "Add task" }
                     on:click=move |_| show_form.update(|v| *v = !*v)
                 >
-                    <span class="material-symbols-outlined" style="font-size: 18px;">
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">
                         {move || if show_form.get() { "close" } else { "add" }}
                     </span>
                 </button>
@@ -462,14 +462,14 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                     title="Edit task"
                     on:click=move |_| editing_title.set(true)
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
                 </button>
                 <button
                     class=action_btn_class("hover:text-red-500 dark:hover:text-red-400")
                     title="Delete task"
                     on:click=on_delete
                 >
-                    <span class="material-symbols-outlined" style="font-size:16px;">{"delete"}</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">{"delete"}</span>
                 </button>
             </div>
         </div>

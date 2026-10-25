@@ -405,7 +405,7 @@ pub fn SearchView() -> impl IntoView {
                                                                     });
                                                                 }
                                                             >
-                                                                <span class="material-symbols-outlined"
+                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                     style="font-size: 13px;">"close"</span>
                                                             </button>
                                                         </div>
@@ -482,6 +482,8 @@ pub fn SearchView() -> impl IntoView {
                                                         "Save"
                                                     </button>
                                                     <button
+                                                        title="Cancel saving the preset"
+                                                        aria-label="Cancel saving the preset"
                                                         class="text-stone-400 hover:text-stone-600
                                                             dark:hover:text-stone-300 transition-colors"
                                                         on:click=move |_| {
@@ -489,7 +491,7 @@ pub fn SearchView() -> impl IntoView {
                                                             preset_name.set(String::new());
                                                         }
                                                     >
-                                                        <span class="material-symbols-outlined"
+                                                        <span aria-hidden="true" class="material-symbols-outlined"
                                                             style="font-size: 14px;">"close"</span>
                                                     </button>
                                                 </div>
@@ -863,7 +865,7 @@ pub fn SearchView() -> impl IntoView {
                                                     history.set(load_history());
                                                 }
                                             >
-                                                <span class="material-symbols-outlined"
+                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                       style="font-size: 14px;">"close"</span>
                                             </button>
                                         </div>

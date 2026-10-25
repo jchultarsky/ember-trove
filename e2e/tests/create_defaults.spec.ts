@@ -76,7 +76,7 @@ test.describe('creating a node applies the type default', () => {
     // Regression (#111): the editor used to ignore the default template.
     await expect(bodyEditor(page)).toHaveValue(body);
     await expect(templatePicker(page)).toHaveValue(tpl.id);
-    await expect(page.getByPlaceholder('Node title...')).toBeFocused();
+    await expect(page.getByPlaceholder('Node title…')).toBeFocused();
     // Grouped picker: this type's templates first, default starred.
     await expect(
       templatePicker(page).locator('optgroup[label="Project templates"] option', {

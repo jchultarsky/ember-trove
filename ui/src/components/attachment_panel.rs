@@ -291,7 +291,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                     on:click=on_clear
                                     title="Clear selection"
                                 >
-                                    <span class="material-symbols-outlined" style="font-size: 15px;">
+                                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 15px;">
                                         "close"
                                     </span>
                                 </button>
@@ -387,7 +387,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                                 title=move || if preview_open.get() { "Hide preview" } else { "Show preview" }
                                                                 on:click=move |_| preview_open.update(|v| *v = !*v)
                                                             >
-                                                                <span class="material-symbols-outlined"
+                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                       style="font-size: 16px;">
                                                                     {move || if preview_open.get() { "visibility_off" } else { "visibility" }}
                                                                 </span>
@@ -414,7 +414,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                                 });
                                                             }
                                                         >
-                                                            <span class="material-symbols-outlined"
+                                                            <span aria-hidden="true" class="material-symbols-outlined"
                                                                   style="font-size: 16px;">
                                                                 {move || if copied_att.get() == Some(att_id) {
                                                                     "check"
@@ -448,7 +448,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                                 });
                                                             }
                                                         >
-                                                            <span class="material-symbols-outlined"
+                                                            <span aria-hidden="true" class="material-symbols-outlined"
                                                                   style="font-size: 16px;">
                                                                 "delete"
                                                             </span>

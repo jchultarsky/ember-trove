@@ -100,11 +100,13 @@ pub fn ChangePasswordModal(
                         "Change Password"
                     </h2>
                     <button
+                        title="Close"
+                        aria-label="Close"
                         class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
                                cursor-pointer p-1 rounded"
                         on:click=move |_| on_close.run(())
                     >
-                        <span class="material-symbols-outlined" style="font-size: 18px;">"close"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">"close"</span>
                     </button>
                 </div>
 

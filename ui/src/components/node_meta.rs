@@ -62,3 +62,22 @@ pub fn status_color(status: &str) -> &'static str {
         _ => "color: #a8a29e;",
     }
 }
+
+/// The `<option>`s of a connection-type `<select>`: the user-selectable
+/// types with one label each (`EdgeType::USER_SELECTABLE`,
+/// `option_label`). The Connections form and the graph's New Edge dialog
+/// had hand-written lists that already disagreed (#133). Each option binds
+/// its own `selected`, like `RecurrenceOptions`.
+#[leptos::component]
+pub fn EdgeTypeOptions(value: leptos::prelude::RwSignal<String>) -> impl leptos::IntoView {
+    use leptos::prelude::*;
+    common::edge::EdgeType::USER_SELECTABLE
+        .iter()
+        .map(|t| {
+            let v = t.as_str();
+            view! {
+                <option value=v selected=move || value.get() == v>{t.option_label()}</option>
+            }
+        })
+        .collect_view()
+}

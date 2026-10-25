@@ -208,10 +208,12 @@ pub fn ToastOverlay() -> impl IntoView {
                                 }
                             })}
                             <button
+                                title="Dismiss notification"
+                                aria-label="Dismiss notification"
                                 class="ml-1 opacity-60 hover:opacity-100 transition-opacity flex-shrink-0"
                                 on:click=move |_| state.dismiss(id)
                             >
-                                <span class="material-symbols-outlined"
+                                <span aria-hidden="true" class="material-symbols-outlined"
                                       style="font-size: 14px;">"close"</span>
                             </button>
                         </div>
