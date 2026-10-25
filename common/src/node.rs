@@ -112,6 +112,27 @@ pub struct NodeListParams {
     pub include_archived: bool,
 }
 
+/// One node-picker match from `GET /nodes/lookup`: a node whose **title**
+/// contains the query, ranked exact > prefix > other (see `NodeRepo::
+/// lookup_titles`). Node pickers used the full-text search, which matched
+/// bodies and whole words only — "Physna" listed every node *mentioning*
+/// Physna alphabetically (the node titled "Physna" fell off the 8-result
+/// page) and "Phy" matched nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct NodeLookupHit {
+    pub id: NodeId,
+    pub title: String,
+    pub node_type: NodeType,
+}
+
+/// Query for `GET /nodes/lookup`.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct NodeLookupParams {
+    pub q: String,
+    /// Default 8, at most 20.
+    pub limit: Option<u32>,
+}
+
 /// Lightweight title entry used for wiki-link autocomplete and resolution.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NodeTitleEntry {

@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — node pickers find nodes by title, as you type
+- Every picker that chooses a node (Connections, the add-task form, the
+  Notes composer, Inbox and triage attach) used the full-text search. That
+  search matches node **bodies** and **whole words only**, sorted by title
+  and capped at 8. Typing "Physna" listed the 8 alphabetically-first nodes
+  that *mention* Physna, and the node titled "Physna" never appeared;
+  typing "Phy" matched nothing. Typing seemed to do nothing, and the wanted
+  node couldn't be picked. Reported on v2.33.0.
+- New `GET /api/nodes/lookup?q=` matches **titles** by substring,
+  case-insensitively, ranked exact > prefix > other. It has the same
+  visibility as `/api/nodes/titles` (own + shared; admins all), is fully
+  parameterized with `LIKE` wildcards escaped, and caps the query length and
+  the limit. The command palette keeps full-text search, because its ranking
+  includes body matches by design.
+
 ### Fixed — picking a node can no longer lose your input (#126)
 - **Connections "add edge":** typing a node's exact title and pressing ✓
   used to fail with "Invalid target node UUID", because the typed text

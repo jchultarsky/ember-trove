@@ -202,6 +202,22 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   mount by tracking the `NodeRef` in an `Effect`, not via rAF. Specs assert
   `toBeFocused()` before relying on focus-dependent keys. — 2026-10-17
 
+### Picker "doesn't filter" and can't select (green tests, broken on real data)
+- **Symptom:** in production, typing "Physna" in the Connections picker
+  left an unchanging list of unrelated nodes, and the node titled "Physna"
+  couldn't be picked. Locally and in e2e, everything passed.
+- **Cause:** pickers used the full-text search (body + whole words, sorted
+  by title, 8 rows). The fixtures had empty bodies and unique words, so the
+  full-text results looked like title matches. Real nodes mention each
+  other's names, so the 8 rows were all body mentions, and partial words
+  ("Phy") return nothing from full-text search.
+- **Fix:** `GET /nodes/lookup` matches titles (substring, exact > prefix).
+  The regression test seeds nodes whose **bodies** mention the word and
+  types a partial word key by key (`node_picker.spec.ts`).
+- **Lesson:** fixtures must look like real data where the feature depends on
+  it. A search test needs body text that competes with the title. —
+  2026-10-25
+
 ### Focusing a button right after the change that enables it does nothing
 - **Symptom:** after the picker commits, `confirm.focus()` silently doesn't
   move focus; e2e `toBeFocused()` fails with "inactive".

@@ -135,6 +135,20 @@ impl NodeRepo for StubNodeRepo {
     ) -> Result<std::collections::HashMap<String, NodeId>, EmberTroveError> {
         unimplemented!()
     }
+    async fn lookup_titles(
+        &self,
+        subject: Option<&str>,
+        q: &str,
+        limit: i64,
+    ) -> Result<Vec<common::node::NodeLookupHit>, EmberTroveError> {
+        // Echo the scope and limit back so the handler test can see what it
+        // passed (the SQL itself is covered in repo::pg_tests).
+        Ok(vec![common::node::NodeLookupHit {
+            id: NodeId(Uuid::nil()),
+            title: format!("{}|{q}|{limit}", subject.unwrap_or("<admin>")),
+            node_type: NodeType::Article,
+        }])
+    }
     async fn list_all_for_owner(&self, owner: &str) -> Result<Vec<Node>, EmberTroveError> {
         // One node owned by the caller — lets the export test prove
         // owner-scoping against `list_all` (which returns two).
@@ -1934,4 +1948,47 @@ async fn standalone_permission_delete_applies_the_same_checks() {
     // Canonical-owner backstop (the standalone route used to skip it).
     assert_eq!(delete(AZ_PERM_CREATOR).await, StatusCode::FORBIDDEN);
     assert_eq!(delete(AZ_PERM_GUEST).await, StatusCode::NO_CONTENT);
+}
+
+// ── GET /nodes/lookup (node pickers, #126 follow-up) ─────────────────────────
+
+async fn lookup(claims: common::auth::AuthClaims, query: &str) -> (StatusCode, serde_json::Value) {
+    let resp = Router::new()
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(
+            Request::get(format!("/nodes/lookup?{query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn node_lookup_scopes_to_the_caller_and_clamps_the_limit() {
+    let (status, json) = lookup(fake_claims(), "q=Phy").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json[0]["title"], "test-sub|Phy|8",
+        "caller's scope, default 8"
+    );
+    let (_, json) = lookup(fake_claims(), "q=Phy&limit=500").await;
+    assert_eq!(json[0]["title"], "test-sub|Phy|20", "limit clamped");
+    let (_, json) = lookup(admin_claims(), "q=Phy").await;
+    assert_eq!(json[0]["title"], "<admin>|Phy|8", "admin: every node");
+}
+
+#[tokio::test]
+async fn node_lookup_rejects_an_oversized_query() {
+    let long = "a".repeat(201);
+    let (status, _) = lookup(fake_claims(), &format!("q={long}")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }

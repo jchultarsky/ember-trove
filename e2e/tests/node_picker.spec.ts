@@ -30,6 +30,42 @@ async function edgeTargets(request: APIRequestContext, nodeId: string): Promise<
   return edges.map((e) => e.target_id);
 }
 
+test('the picker matches titles as you type, never body mentions', async ({ page, request }) => {
+  // Regression (#126 follow-up, reproduced on v2.33.0 data): the pickers
+  // used the full-text search, which matches bodies and whole words only.
+  // "Physna" listed the alphabetically-first nodes that MENTION it (the node
+  // titled "Physna" fell off the 8-row page), and "Phy" listed nothing — so
+  // typing seemed to do nothing and the wanted node couldn't be picked.
+  const stamp = Date.now();
+  const word = `Zorbix${stamp}`;
+  const source = await createNode(request, `e2e mention source ${stamp}`);
+  const mentions = [];
+  for (let i = 0; i < 9; i++) {
+    mentions.push(
+      await createNode(request, `aa mention ${i} ${stamp}`, { body: `Met with ${word} today.` }),
+    );
+  }
+  const exact = await createNode(request, word);
+  const prefixed = await createNode(request, `${word} roadmap`);
+  try {
+    const { combo, listbox, chip } = await openAddEdge(page, source.id);
+    // A partial word, typed key by key like a person.
+    await combo.pressSequentially(word.slice(0, 9), { delay: 40 });
+    const options = listbox.getByRole('option');
+    await expect(options).toHaveCount(2);
+    await expect(listbox.getByRole('option', { name: /aa mention/ })).toHaveCount(0);
+    // The full title: the exact match is first and highlighted.
+    await combo.pressSequentially(word.slice(9), { delay: 20 });
+    await expect(options.first()).toContainText(word);
+    await expect(options.first()).toHaveAttribute('aria-selected', 'true');
+    await expect(options.first()).not.toContainText('roadmap');
+    await options.nth(1).click();
+    await expect(chip).toContainText(`${word} roadmap`);
+  } finally {
+    for (const n of [source, exact, prefixed, ...mentions]) await request.delete(`/api/nodes/${n.id}`);
+  }
+});
+
 test('an exact title + Enter commits; Enter again creates the edge', async ({ page, request }) => {
   const stamp = Date.now();
   const source = await createNode(request, `e2e pick source ${stamp}`);
@@ -100,26 +136,20 @@ test('same-titled nodes are both listed and never committed on a guess', async (
 }) => {
   // The API refuses two nodes with one title for the same owner, so
   // same-titled results only arise from nodes shared by other users. Serve
-  // that case from the search endpoint: it's exactly what the picker sees.
+  // that case from the lookup endpoint: it's exactly what the picker sees.
   const stamp = Date.now();
   const source = await createNode(request, `e2e dup source ${stamp}`);
   const title = `e2e dup ${stamp}`;
-  const fake = (id: string, node_type: string) => ({
-    node_id: id, title, slug: `dup-${id}`, snippet: null, rank: 1, node_type,
-    status: 'published', match_source: 'node', highlighted_title: null, updated_at: null,
-  });
-  await page.route(/\/api\/search\?/, async (route) => {
+  const fake = (id: string, node_type: string) => ({ id, title, node_type });
+  await page.route(/\/api\/nodes\/lookup\?/, async (route) => {
     if (!new URL(route.request().url()).searchParams.get('q')?.includes(`${stamp}`)) {
       return route.continue();
     }
     await route.fulfill({
-      json: {
-        results: [
-          fake('00000000-0000-4000-8000-00000000000a', 'article'),
-          fake('00000000-0000-4000-8000-00000000000b', 'project'),
-        ],
-        total: 2, page: 1, per_page: 8,
-      },
+      json: [
+        fake('00000000-0000-4000-8000-00000000000a', 'article'),
+        fake('00000000-0000-4000-8000-00000000000b', 'project'),
+      ],
     });
   });
   try {
