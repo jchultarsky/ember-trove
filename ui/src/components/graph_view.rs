@@ -849,8 +849,18 @@ pub fn GraphView() -> impl IntoView {
                                         };
                                         edge_saving.set(true);
                                         spawn_local(async move {
-                                            if let Ok(new_edge) = create_edge(&req).await {
-                                                edges_sig.update(|v| v.push(new_edge));
+                                            match create_edge(&req).await {
+                                                Ok(new_edge) => edges_sig.update(|v| v.push(new_edge)),
+                                                // Was silently dropped: a duplicate (409, #129)
+                                                // closed the dialog as if the edge was made.
+                                                Err(crate::error::UiError::Api { message, .. }) => crate::components::toast::push_toast(
+                                                    crate::components::toast::ToastLevel::Error,
+                                                    format!("Couldn't create the connection: {message}"),
+                                                ),
+                                                Err(e) => crate::components::toast::push_toast(
+                                                    crate::components::toast::ToastLevel::Error,
+                                                    format!("Couldn't create the connection: {e}"),
+                                                ),
                                             }
                                             edge_saving.set(false);
                                             edge_pair.set(None);

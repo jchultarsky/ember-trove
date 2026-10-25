@@ -147,6 +147,12 @@ impl EdgeRepo for PgEdgeRepo {
             sqlx::Error::Database(db_err) => {
                 if db_err.constraint() == Some("edges_no_self_loop") {
                     EmberTroveError::Validation("self-loops are not allowed".to_string())
+                } else if db_err.constraint() == Some("edges_unique_source_target_type") {
+                    // One edge per (source, target, type) — migration 034 (#129).
+                    EmberTroveError::AlreadyExists(format!(
+                        "already linked as {}",
+                        req.edge_type.label()
+                    ))
                 } else if db_err.is_foreign_key_violation() {
                     EmberTroveError::NotFound("source or target node not found".to_string())
                 } else {
@@ -296,6 +302,7 @@ impl EdgeRepo for PgEdgeRepo {
                 r#"
                 INSERT INTO edges (source_id, target_id, edge_type, label)
                 VALUES ($1, $2, 'wiki_link'::edge_type, NULL)
+                ON CONFLICT (source_id, target_id, edge_type) DO NOTHING
                 "#,
             )
             .bind(source_id.0)

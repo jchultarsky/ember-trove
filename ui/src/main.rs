@@ -12,6 +12,7 @@ mod note_actions;
 mod recent;
 mod spark;
 mod templates;
+mod version;
 mod wikilink;
 
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -37,6 +38,8 @@ fn init_tracing() {
 
 fn main() {
     init_tracing();
+    // Before the loading screen (which carries the stamp) is removed.
+    version::capture();
     leptos::mount::mount_to_body(App);
     // Remove the static HTML loading screen now that the Leptos tree is in the
     // DOM. Done after mount so there is no flash of empty content between the

@@ -1,8 +1,18 @@
 // Ember Trove — Service Worker (read-only offline access)
 // Strategy:
-//   App shell (HTML, WASM, JS, CSS, fonts, icons) → cache-first, updated on install
-//   API GET requests → network-first, cached fallback for offline reads
-//   API mutations (POST/PUT/PATCH/DELETE) → network-only (no offline writes)
+//   Page navigations (the HTML shell) → network-first; the cached shell only
+//     when offline. It used to be cache-first, which pinned a client to the
+//     release it first saw on every URL it had visited, across deploys
+//     (#129: "the fix doesn't work" — an old cached bundle was running).
+//   Hashed assets (Trunk's name-<16 hex> WASM/JS/CSS/SVG) → cache-first:
+//     immutable by name, so a new release simply has new names.
+//   Other static files (fonts, manifest, sw-agnostic icons) → stale-while-
+//     revalidate: instant from cache, refreshed in the background.
+//   API GET requests → network-first, cached fallback for offline reads.
+//   API mutations (POST/PUT/PATCH/DELETE) → network-only (no offline writes).
+//   /api/auth/* → never cached. Logging out, or any 401 from the API, purges
+//     every cached API response: they hold the signed-in user's personal
+//     data and must not outlive the session on a shared device (#129).
 
 // Bump this cache name whenever a critical UI fix ships that must evict
 // stale bundles from already-installed clients. The activate handler deletes
@@ -15,7 +25,12 @@
 //   v6: self-hosted fonts — evict cached index.html that still references
 //       Google Fonts (cross-origin fonts were never SW-cached, so icons
 //       were missing offline before this).
-const CACHE_NAME = "ember-trove-v6";
+//   v7: network-first navigations + auth/API purge (#129) — also evicts the
+//       stale cached HTML every v6 client is still serving.
+const CACHE_NAME = "ember-trove-v7";
+
+// Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
+const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
 
 // App shell resources cached on install.
 // Trunk hashes WASM/JS/CSS filenames, so we cache "/" (index.html) and let
@@ -63,6 +78,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Logout: let it through, then drop every cached API response.
+  if (url.pathname === "/api/auth/logout") {
+    event.respondWith(logoutAndPurge(request));
+    return;
+  }
+
+  // Auth endpoints (session checks, callbacks) — never cached.
+  if (url.pathname.startsWith("/api/auth/")) return;
+
   // API mutations — network only, never cache.
   if (url.pathname.startsWith("/api/") && request.method !== "GET") return;
 
@@ -72,9 +96,69 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets & app shell — cache-first, fall back to network.
-  event.respondWith(cacheFirstThenNetwork(request));
+  // Page loads — always ask the server first, so a deploy is picked up.
+  if (request.mode === "navigate") {
+    event.respondWith(networkFirstNavigation(request));
+    return;
+  }
+
+  if (HASHED_ASSET.test(url.pathname)) {
+    event.respondWith(cacheFirstThenNetwork(request));
+  } else {
+    event.respondWith(staleWhileRevalidate(request));
+  }
 });
+
+// ── Navigations: network-first ───────────────────────────────────────────────
+// Every route serves the same index.html; keep the latest copy under "/" for
+// offline use only.
+async function networkFirstNavigation(request) {
+  try {
+    const response = await fetch(request);
+    if (response.ok && response.type === "basic") {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put("/", response.clone());
+    }
+    return response;
+  } catch {
+    const shell = await caches.match("/");
+    if (shell) return shell;
+    return new Response("Offline", { status: 503, statusText: "Service Unavailable" });
+  }
+}
+
+// ── Unhashed static files: stale-while-revalidate ────────────────────────────
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+  const refresh = fetch(request)
+    .then((response) => {
+      if (response.ok && response.type === "basic") cache.put(request, response.clone());
+      return response;
+    })
+    .catch(() => cached || new Response("Offline", { status: 503 }));
+  return cached || refresh;
+}
+
+// ── Session end: purge cached personal data ──────────────────────────────────
+async function purgeApiCache() {
+  const cache = await caches.open(CACHE_NAME);
+  const keys = await cache.keys();
+  await Promise.all(
+    keys
+      .filter((req) => new URL(req.url).pathname.startsWith("/api/"))
+      .map((req) => cache.delete(req)),
+  );
+}
+
+async function logoutAndPurge(request) {
+  try {
+    return await fetch(request);
+  } finally {
+    // Purge even if the request failed: the user asked to leave.
+    await purgeApiCache();
+  }
+}
 
 // ── Web Share Target handler ─────────────────────────────────────────────────
 // The Share Sheet posts a multipart form with the field names declared in
@@ -140,6 +224,11 @@ async function cacheFirstThenNetwork(request) {
 async function networkFirstThenCache(request) {
   try {
     const response = await fetch(request);
+    if (response.status === 401) {
+      // The session is gone: nothing cached for it may be served again.
+      await purgeApiCache();
+      return response;
+    }
     if (response.ok) {
       const cache = await caches.open(CACHE_NAME);
       cache.put(request, response.clone());
