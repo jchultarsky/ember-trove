@@ -78,6 +78,11 @@ jobs:
       - name: cargo test (ui, host unit tests)
         run: cargo test -p ui
 
+      # The service worker's routing (navigation freshness, logout purge)
+      # can't run in the e2e harness (#129); it is plain JS, unit-tested here.
+      - name: service worker unit tests
+        run: node --test ui/public/sw.test.mjs
+
   check-wasm:
     name: check (wasm32-unknown-unknown)
     runs-on: ubuntu-latest

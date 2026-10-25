@@ -76,3 +76,34 @@ test('a failed health check leaves the stamped version alone', async ({ page }) 
   release();
   await expect(page.locator('main')).toBeVisible();
 });
+
+// ── "A new version is available" (#129) ──────────────────────────────────────
+
+test('a newer server version offers a reload; Reload reloads', async ({ page }) => {
+  const version = await serverVersion(page);
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: { status: 'ok', service: 'ember-trove-api', database: 'ok', version: '99.0.0' },
+    }),
+  );
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  const banner = page.getByTestId('update-banner');
+  await expect(banner).toContainText('A new version of Ember Trove (v99.0.0) is available.');
+  // The bundle itself is still the stamped release.
+  expect(version).not.toBe('99.0.0');
+  const reloaded = page.waitForEvent('load');
+  await banner.getByRole('button', { name: 'Reload' }).click();
+  await reloaded;
+  await expect(page.locator('main')).toBeVisible();
+});
+
+test('no banner while the server runs this bundle', async ({ page }) => {
+  // Wait for the banner's own check (the splash and the sidebar ask too).
+  const checks = page.waitForResponse('**/api/health');
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  await checks;
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId('update-banner')).toHaveCount(0);
+});

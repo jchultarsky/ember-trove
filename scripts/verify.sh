@@ -42,6 +42,9 @@ run_step "cargo check (wasm32)"   "cargo check -p ui --target wasm32-unknown-unk
 run_step "cargo clippy (wasm32)"  "cargo clippy --quiet -p ui --target wasm32-unknown-unknown -- -D warnings"
 run_step "cargo test"             "cargo test --workspace --exclude ui --quiet"
 run_step "cargo test (ui, host)"  "cargo test -p ui --quiet"
+if command -v node >/dev/null 2>&1; then
+  run_step "sw.js unit tests"     "node --test ui/public/sw.test.mjs"
+fi
 run_step "git status clean"       "[ -z \"\$(git status --porcelain)\" ]"
 
 echo ""

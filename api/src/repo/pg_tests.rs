@@ -461,6 +461,131 @@ async fn migration_033_drops_only_wikilinks_into_unshared_nodes(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
+async fn edge_create_rejects_a_duplicate_source_target_type(pool: PgPool) {
+    use common::edge::{CreateEdgeRequest, EdgeType};
+    let edges = PgEdgeRepo::new(pool.clone());
+    let a = create_node(&pool, "owner-a", "A").await;
+    let b = create_node(&pool, "owner-a", "B").await;
+    let req = |edge_type, label: Option<&str>| CreateEdgeRequest {
+        source_id: a.id,
+        target_id: b.id,
+        edge_type,
+        label: label.map(str::to_string),
+    };
+    edges
+        .create(req(EdgeType::References, None))
+        .await
+        .expect("first");
+    // Regression (#129): the same relationship again — even with another
+    // label — is a duplicate, not a second row.
+    let dup = edges.create(req(EdgeType::References, Some("again"))).await;
+    assert!(
+        matches!(&dup, Err(EmberTroveError::AlreadyExists(m)) if m == "already linked as references"),
+        "{dup:?}"
+    );
+    // A different relationship between the same nodes is fine, and wiki
+    // links (their own type) never collide with explicit edges.
+    edges
+        .create(req(EdgeType::DependsOn, None))
+        .await
+        .expect("other type");
+    edges
+        .sync_wikilinks(a.id, &[b.id])
+        .await
+        .expect("wiki link");
+    edges.sync_wikilinks(a.id, &[b.id]).await.expect("re-sync");
+    assert_eq!(edges.list_for_node(a.id).await.expect("list").len(), 3);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_034_dedupes_edges_keeping_the_oldest_and_its_label(pool: PgPool) {
+    let a = create_node(&pool, "owner-a", "A").await;
+    let b = create_node(&pool, "owner-a", "B").await;
+    // Recreate the pre-034 state: no unique index, duplicates present.
+    sqlx::query("DROP INDEX edges_unique_source_target_type")
+        .execute(&pool)
+        .await
+        .expect("drop index");
+    let insert = |label: Option<&'static str>, age_hours: i32, edge_type: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let (id,): (uuid::Uuid,) = sqlx::query_as(
+                "INSERT INTO edges (source_id, target_id, edge_type, label, created_at)
+                 VALUES ($1, $2, $3::edge_type, $4, now() - make_interval(hours => $5))
+                 RETURNING id",
+            )
+            .bind(a.id.0)
+            .bind(b.id.0)
+            .bind(edge_type)
+            .bind(label)
+            .bind(age_hours)
+            .fetch_one(&pool)
+            .await
+            .expect("insert");
+            id
+        }
+    };
+    let oldest = insert(None, 30, "references").await;
+    insert(Some("first label"), 20, "references").await;
+    insert(Some("second label"), 10, "references").await;
+    let other_type = insert(Some("keep me"), 5, "depends_on").await;
+
+    sqlx::raw_sql(include_str!("../../../migrations/034_unique_edges.sql"))
+        .execute(&pool)
+        .await
+        .expect("re-run migration 034");
+
+    let left: Vec<(uuid::Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, edge_type::text, label FROM edges WHERE source_id = $1 ORDER BY edge_type::text",
+    )
+    .bind(a.id.0)
+    .fetch_all(&pool)
+    .await
+    .expect("edges");
+    // The oldest edge survives and inherits the oldest non-empty label; the
+    // other relationship type is untouched.
+    assert_eq!(
+        left,
+        vec![
+            (
+                other_type,
+                "depends_on".to_string(),
+                Some("keep me".to_string())
+            ),
+            (
+                oldest,
+                "references".to_string(),
+                Some("first label".to_string())
+            ),
+        ]
+    );
+    // Nothing is lost: both removed rows are archived, labels included.
+    let mut archived: Vec<(Option<String>,)> =
+        sqlx::query_as("SELECT label FROM edges_removed_034 WHERE source_id = $1")
+            .bind(a.id.0)
+            .fetch_all(&pool)
+            .await
+            .expect("archive");
+    archived.sort();
+    assert_eq!(
+        archived,
+        vec![
+            (Some("first label".to_string()),),
+            (Some("second label".to_string()),)
+        ]
+    );
+    // And the constraint is back.
+    let dup = sqlx::query(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, 'references')",
+    )
+    .bind(a.id.0)
+    .bind(b.id.0)
+    .execute(&pool)
+    .await;
+    assert!(dup.is_err(), "unique index restored");
+}
+
+#[sqlx::test(migrations = "../migrations")]
 async fn permission_revoke_is_scoped_to_its_node(pool: PgPool) {
     let perms = PgPermissionRepo::new(pool.clone());
     let x = create_node(&pool, "attacker", "X").await;

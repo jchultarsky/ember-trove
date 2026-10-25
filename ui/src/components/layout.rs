@@ -259,6 +259,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
 
     view! {
         <AuthGate auth_state=auth_state>
+            <crate::components::update_banner::UpdateBanner />
             <div class="flex flex-col md:flex-row h-screen overflow-hidden bg-stone-50 dark:bg-stone-950">
 
                 // ── Mobile top bar ──────────────────────────────────────────────────────

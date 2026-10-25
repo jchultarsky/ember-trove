@@ -93,6 +93,13 @@ CI job is too slow a feedback loop for selector work.
   `seedTrove(request, stamp)` from `seed.ts`. It creates nodes whose bodies
   mention a title, titles that share a prefix, wiki links, a task and a
   note. Empty-body fixtures hid the v2.33.0 picker bug.
+- **Service workers can't be exercised here** (2026-10-25, #129). The e2e
+  origin (`http://host.docker.internal`) isn't a secure context. Mapping
+  `localhost` to it (`--host-resolver-rules`) gives a secure context, but
+  Playwright-in-Docker then aborts the worker's install fetches, for the
+  v2.34.0 worker too. `--unsafely-treat-insecure-origin-as-secure` has no
+  effect in headless Chromium. Test `sw.js` with `node --test
+  ui/public/sw.test.mjs` instead (fakes for `self`/`caches`/`fetch`).
 
 ## Writing new specs
 

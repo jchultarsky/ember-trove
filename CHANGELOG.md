@@ -24,6 +24,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **The coverage floor rises from 24% to 41%**, against a measured
   43.33%-of-lines baseline.
 
+### Security — cached personal data no longer outlives the session (#129)
+- The service worker caches API reads for offline use: node bodies, notes,
+  tasks, and `/api/auth/me`. Nothing cleared them on logout, so on a shared
+  computer the previous user's data stayed in the browser and was served
+  back while offline. Now `/api/auth/*` is never cached, and logging out (or
+  any 401) purges every cached API response.
+
+### Fixed — no more duplicate connections (#129)
+- Submitting the same connection twice (same source, target and type)
+  created an identical second edge. **Migration 034** keeps one edge per
+  *(source, target, type)* and then enforces it with a unique index:
+  - the oldest edge of each duplicate set is kept;
+  - if the kept edge has no label, it takes the oldest non-empty label from
+    its duplicates;
+  - every removed row is archived in `edges_removed_034`.
+
+  A different relationship type between the same nodes stays allowed.
+- The API answers a duplicate with **409 "already linked as …"**. The
+  Connections form says "Already linked as references" and disables ✓ before
+  you submit. The graph's New Edge dialog now reports a failed create
+  instead of closing as if it had worked.
+
+### Fixed — a deploy now reaches open tabs and revisited pages (#129)
+- The service worker served **page loads cache-first** per URL. A revisited
+  page, or a reload, could keep running an old release across deploys, so a
+  shipped fix looked like it didn't work. Page loads are now network-first
+  (the cached shell is used only offline), and the cache version is bumped
+  so every installed worker refreshes.
+- A **"A new version of Ember Trove (vX) is available · Reload"** prompt
+  appears when the server runs a different release than the tab. It checks
+  at startup, every 10 minutes, and when the window regains focus.
+- The service worker has unit tests (`node --test ui/public/sw.test.mjs`)
+  in CI and `verify.sh`.
+
 ## [2.34.0] - 2026-10-24
 
 ### Fixed — node pickers find nodes by title, as you type

@@ -253,3 +253,41 @@ test('the Inbox add-task picker attaches by the same rules', async ({ page, requ
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+test('an existing connection is flagged before submit; the API refuses a duplicate', async ({
+  page,
+  request,
+}) => {
+  // Regression (#129): the same (source, target, type) could be submitted
+  // again, silently creating an identical second edge.
+  const stamp = Date.now();
+  const source = await createNode(request, `e2e dupedge source ${stamp}`);
+  const target = await createNode(request, `e2e dupedge target ${stamp}`);
+  try {
+    const first = await request.post('/api/edges', {
+      data: { source_id: source.id, target_id: target.id, edge_type: 'references' },
+    });
+    expect(first.ok()).toBeTruthy();
+    const again = await request.post('/api/edges', {
+      data: { source_id: source.id, target_id: target.id, edge_type: 'references', label: 'x' },
+    });
+    expect(again.status()).toBe(409);
+
+    const { combo, chip, confirm } = await openAddEdge(page, source.id);
+    await combo.fill(`e2e dupedge target ${stamp}`);
+    await combo.press('Enter');
+    await expect(chip).toContainText(`e2e dupedge target ${stamp}`);
+    const hint = page.getByTestId('edge-already-linked');
+    await expect(hint).toHaveText('Already linked as references');
+    await expect(confirm).toBeDisabled();
+    // Another relationship type between the same nodes is fine.
+    await page.locator('select:has(option[value="references"])').selectOption('depends_on');
+    await expect(hint).toHaveCount(0);
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+    await expect.poll(async () => (await edgeTargets(request, source.id)).length).toBe(2);
+  } finally {
+    await request.delete(`/api/nodes/${source.id}`);
+    await request.delete(`/api/nodes/${target.id}`);
+  }
+});

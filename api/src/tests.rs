@@ -174,8 +174,22 @@ impl NodeRepo for StubNodeRepo {
 struct StubEdgeRepo;
 #[async_trait]
 impl EdgeRepo for StubEdgeRepo {
-    async fn create(&self, _: CreateEdgeRequest) -> Result<Edge, EmberTroveError> {
-        unimplemented!()
+    async fn create(&self, req: CreateEdgeRequest) -> Result<Edge, EmberTroveError> {
+        // The authz world's AZ_VIEW_NODE is "already linked" (the DB's unique
+        // index answers this in production — migration 034, #129).
+        if req.target_id == az_node(AZ_VIEW_NODE) {
+            return Err(EmberTroveError::AlreadyExists(
+                "already linked as references".to_string(),
+            ));
+        }
+        Ok(Edge {
+            id: EdgeId(Uuid::new_v4()),
+            source_id: req.source_id,
+            target_id: req.target_id,
+            edge_type: req.edge_type,
+            label: req.label,
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn get(&self, _: EdgeId) -> Result<Edge, EmberTroveError> {
         unimplemented!()
@@ -1991,6 +2005,42 @@ async fn node_lookup_rejects_an_oversized_query() {
     let long = "a".repeat(201);
     let (status, _) = lookup(fake_claims(), &format!("q={long}")).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ── POST /edges duplicate (#129) ─────────────────────────────────────────────
+
+async fn post_edge(target: u128) -> (StatusCode, serde_json::Value) {
+    let resp = claims_app("/edges", crate::routes::edges::router())
+        .oneshot(
+            Request::post("/edges")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "source_id": Uuid::from_u128(AZ_EDIT_NODE),
+                        "target_id": Uuid::from_u128(target),
+                        "edge_type": "references",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn create_edge_reports_a_duplicate_as_409() {
+    let (status, _) = post_edge(AZ_OWNED_NODE).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = post_edge(AZ_VIEW_NODE).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "already linked as references");
 }
 
 // ── e2e test-identity header is inert outside e2e builds (#135) ──────────────
