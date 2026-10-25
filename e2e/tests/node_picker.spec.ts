@@ -268,3 +268,69 @@ test('an existing connection is flagged before submit; the API refuses a duplica
     await request.delete(`/api/nodes/${target.id}`);
   }
 });
+
+// ── Every node-choosing field is NodePicker (#130) ───────────────────────────
+
+test('Add to Favorites picks a node with the shared picker', async ({ page, request }) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e fav node ${stamp}`);
+  try {
+    await page.goto('/tasks/my-day');
+    await page.locator('button[title="Add favorite"]').click();
+    const dialog = page.getByRole('dialog', { name: 'Add to favorites' });
+    const combo = dialog.getByRole('combobox', { name: 'Search nodes…' });
+    await expect(combo).toBeFocused();
+    const add = dialog.getByRole('button', { name: 'Add', exact: true });
+    await expect(add).toBeDisabled();
+    await combo.pressSequentially(`fav node ${stamp}`, { delay: 20 });
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    // Escape with the list open closes only the list, not the modal.
+    await combo.press('Escape');
+    await expect(dialog.getByRole('listbox')).toBeHidden();
+    await expect(dialog).toBeVisible();
+    await combo.press('ArrowDown');
+    await combo.press('Enter');
+    await expect(dialog.getByTestId('node-picker-chip')).toContainText(`e2e fav node ${stamp}`);
+    await add.click();
+    await expect
+      .poll(async () => {
+        const favs: { node_id: string | null }[] = await (await request.get('/api/favorites')).json();
+        return favs.some((f) => f.node_id === node.id);
+      })
+      .toBe(true);
+  } finally {
+    const favs: { id: string; node_id: string | null }[] = await (
+      await request.get('/api/favorites')
+    ).json();
+    for (const f of favs.filter((f) => f.node_id === node.id)) {
+      await request.delete(`/api/favorites/${f.id}`);
+    }
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('Inbox "Assign to node" commits with the shared picker', async ({ page, request }) => {
+  const stamp = Date.now();
+  const node = await createNode(request, `e2e assign node ${stamp}`);
+  const created = await request.post('/api/tasks', { data: { title: `e2e assign task ${stamp}` } });
+  expect(created.ok()).toBeTruthy();
+  const task = await created.json();
+  try {
+    await page.goto('/tasks/inbox');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Assign to node"]').click();
+    const combo = row.getByRole('combobox', { name: 'Search nodes…' });
+    await expect(combo).toBeFocused();
+    await combo.fill(`e2e assign node ${stamp}`);
+    await combo.press('Enter');
+    await expect
+      .poll(async () => {
+        const tasks: { id: string }[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+        return tasks.some((t) => t.id === task.id);
+      })
+      .toBe(true);
+  } finally {
+    await request.delete(`/api/tasks/${task.id}`);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
