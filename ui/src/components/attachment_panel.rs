@@ -141,47 +141,11 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
         });
     };
 
+    let section_count =
+        Signal::derive(move || attachments.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
     view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
-            <div class="flex items-center justify-between">
-                <button
-                    class="flex items-center gap-1 text-left cursor-pointer"
-                    on:click=move |_| open.update(|v| *v = !*v)
-                >
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 16px;"
-                    >
-                        {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                    </span>
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 15px;"
-                    >
-                        "attach_file"
-                    </span>
-                    <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                        "Attachments"
-                    </h2>
-                    <Suspense fallback=|| ()>
-                    {move || {
-                        attachments.with(|r| r.as_ref().and_then(|res| match res {
-                            Ok(v) if !v.is_empty() => Some(view! {
-                                <span class="ml-1 text-xs bg-stone-200 dark:bg-stone-700
-                                            text-stone-600 dark:text-stone-300
-                                            rounded-full px-1.5 py-0.5">
-                                    {v.len()}
-                                </span>
-                            }),
-                            _ => None,
-                        }))
-                    }}
-                    </Suspense>
-                </button>
-            </div>
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::Attachments open=open count=section_count>
 
-            {move || open.get().then(|| view! {
-                <div class="mt-4">
 
                 // ── Hidden multi-file input ───────────────────────────────────
                 <input
@@ -496,8 +460,6 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                         })
                     }}
                 </Suspense>
-                </div>  // close mt-4
-            })}         // close open.then
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }

@@ -96,23 +96,8 @@ pub fn LocalGraphPanel(node_id: NodeId, title: String) -> impl IntoView {
     });
 
     view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
-            <button
-                class="flex items-center gap-1 text-left cursor-pointer"
-                on:click=move |_| open.update(|v| *v = !*v)
-            >
-                <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                      style="font-size: 16px;">
-                    {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                </span>
-                <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                      style="font-size: 15px;">"hub"</span>
-                <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                    "Local Graph"
-                </h2>
-            </button>
-            {move || open.get().then(|| view! {
-                <div class="mt-4">
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::LocalGraph open=open>
+
                 <Suspense fallback=|| view! {
                     <div class="text-xs text-stone-400">"Loading…"</div>
                 }>
@@ -207,8 +192,6 @@ pub fn LocalGraphPanel(node_id: NodeId, title: String) -> impl IntoView {
                         })
                     }}
                 </Suspense>
-                </div>
-            })}
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }

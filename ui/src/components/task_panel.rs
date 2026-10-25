@@ -8,6 +8,7 @@ use crate::app::TaskRefresh;
 use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
+use crate::components::node_section::{NodeSection, SectionShell};
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
     toggle_my_day,
@@ -64,41 +65,30 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     // Add-task form: collapsed behind the header toggle below.
     let show_form = RwSignal::new(false);
 
-    // The header's "Jump to tasks" lands here (#123).
-    let root: NodeRef<leptos::html::Div> = NodeRef::new();
-    crate::components::node_view::on_section_jump(
-        crate::components::node_view::NodeSection::Tasks,
-        root,
-        || {},
-    );
+    // One section primitive for the node page (#131): open by default.
+    let open = RwSignal::new(true);
+    let count = Signal::derive(move || Some(open_tasks.with(Vec::len)));
+    let add_button: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            <button
+                class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
+                    hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                title=move || if show_form.get() { "Cancel" } else { "Add task" }
+                on:click=move |_| {
+                    open.set(true);
+                    show_form.update(|v| *v = !*v);
+                }
+            >
+                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                    {move || if show_form.get() { "close" } else { "add" }}
+                </span>
+            </button>
+        }
+        .into_any()
+    });
 
     view! {
-        <div
-            node_ref=root
-            class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6 focus:outline-none"
-            role="region"
-            aria-labelledby="node-tasks-heading"
-            tabindex="-1"
-            data-testid="node-tasks"
-        >
-            // Section header
-            <div class="flex items-center justify-between mb-4">
-                <h3 id="node-tasks-heading" class="text-sm font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider flex items-center gap-2">
-                    <span class="material-symbols-outlined text-base">{"check_box"}</span>
-                    "Tasks"
-                </h3>
-                <button
-                    class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                        hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
-                    title=move || if show_form.get() { "Cancel" } else { "Add task" }
-                    on:click=move |_| show_form.update(|v| *v = !*v)
-                >
-                    <span class="material-symbols-outlined" style="font-size: 18px;">
-                        {move || if show_form.get() { "close" } else { "add" }}
-                    </span>
-                </button>
-            </div>
-
+        <SectionShell section=NodeSection::Tasks open=open count=count actions=add_button>
             // Add-task form — shared with the Inbox capture surface.
             {move || show_form.get().then(|| view! {
                 <div class="mb-4">
@@ -265,7 +255,7 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                     </div>
                 }.into_any()
             }}
-        </div>
+        </SectionShell>
     }
 }
 

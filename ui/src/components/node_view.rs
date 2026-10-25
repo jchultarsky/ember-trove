@@ -28,43 +28,6 @@ fn build_title_map(entries: &[NodeTitleEntry]) -> HashMap<String, NodeId> {
     entries.iter().map(|e| (e.title.clone(), e.id)).collect()
 }
 
-/// A node-page section the header's "Jump to …" actions can reveal (#123).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum NodeSection {
-    Tasks,
-    Notes,
-}
-
-/// The pending "Jump to …" request, provided by `NodeView`. Each section
-/// handles its own (`on_section_jump`), so the scroll and focus logic lives
-/// with the section — Notes, for one, has to expand itself first.
-#[derive(Clone, Copy)]
-pub struct SectionJump(pub RwSignal<Option<NodeSection>>);
-
-/// Reveal `root` when the header asks for `section`: run `before` (e.g.
-/// expand), focus the section (a `tabindex="-1"` region, so keyboard and
-/// screen-reader users land there too) and align it to the top.
-pub fn on_section_jump(
-    section: NodeSection,
-    root: NodeRef<leptos::html::Div>,
-    before: impl Fn() + 'static,
-) {
-    let Some(SectionJump(jump)) = use_context::<SectionJump>() else {
-        return;
-    };
-    Effect::new(move |_| {
-        if jump.get() != Some(section) {
-            return;
-        }
-        before();
-        if let Some(el) = root.get_untracked() {
-            let _ = el.focus();
-            el.scroll_into_view_with_bool(true);
-        }
-        jump.set(None);
-    });
-}
-
 #[component]
 pub fn NodeView(id: NodeId) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
@@ -80,8 +43,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
 
     let auth_state = use_auth_state();
     let deleting = RwSignal::new(false);
-    let section_jump = RwSignal::new(None::<NodeSection>);
-    provide_context(SectionJump(section_jump));
+    // Section jumps and counts for the outline (#131).
+    crate::components::node_section::NodeSections::provide();
     let show_delete_confirm = RwSignal::new(false);
 
     // v2.6.2: when navigation arrived via the Kanban row click
@@ -240,30 +203,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             let menu_open = RwSignal::new(false);
                                             view! {
                                                 <div class="flex items-center gap-1">
+                                                    // Section outline — every size (#131; it replaces
+                                                    // #123's Jump to tasks / notes buttons).
+                                                    <crate::components::node_section::SectionOutline />
                                                     // Desktop cluster — all four actions visible
                                                     <div class="hidden md:flex items-center gap-1">
-                                                        // Node-scoped jumps (#123). The sidebar's Tasks / Notes
-                                                        // are the global views; these reveal this node's own.
-                                                        <button
-                                                            class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
-                                                                dark:hover:text-stone-300 hover:bg-stone-100
-                                                                dark:hover:bg-stone-800 transition-colors"
-                                                            on:click=move |_| section_jump.set(Some(NodeSection::Tasks))
-                                                            title="Jump to tasks"
-                                                            aria-label="Jump to tasks"
-                                                        >
-                                                            <span class="material-symbols-outlined" aria-hidden="true">"check_box"</span>
-                                                        </button>
-                                                        <button
-                                                            class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
-                                                                dark:hover:text-stone-300 hover:bg-stone-100
-                                                                dark:hover:bg-stone-800 transition-colors"
-                                                            on:click=move |_| section_jump.set(Some(NodeSection::Notes))
-                                                            title="Jump to notes"
-                                                            aria-label="Jump to notes"
-                                                        >
-                                                            <span class="material-symbols-outlined" aria-hidden="true">"sticky_note_2"</span>
-                                                        </button>
                                                         <a
                                                             href=format!("/api/nodes/{id}/export")
                                                             download=true
@@ -340,34 +284,6 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                     overflow-hidden z-30"
                                                                 role="menu"
                                                             >
-                                                                <button
-                                                                    type="button"
-                                                                    class="flex items-center gap-2 w-full text-left px-3 py-2 text-sm
-                                                                        text-stone-700 dark:text-stone-200
-                                                                        hover:bg-stone-100 dark:hover:bg-stone-800"
-                                                                    role="menuitem"
-                                                                    on:click=move |_| {
-                                                                        menu_open.set(false);
-                                                                        section_jump.set(Some(NodeSection::Tasks));
-                                                                    }
-                                                                >
-                                                                    <span class="material-symbols-outlined" style="font-size:18px;">"check_box"</span>
-                                                                    "Jump to tasks"
-                                                                </button>
-                                                                <button
-                                                                    type="button"
-                                                                    class="flex items-center gap-2 w-full text-left px-3 py-2 text-sm
-                                                                        text-stone-700 dark:text-stone-200
-                                                                        hover:bg-stone-100 dark:hover:bg-stone-800"
-                                                                    role="menuitem"
-                                                                    on:click=move |_| {
-                                                                        menu_open.set(false);
-                                                                        section_jump.set(Some(NodeSection::Notes));
-                                                                    }
-                                                                >
-                                                                    <span class="material-symbols-outlined" style="font-size:18px;">"sticky_note_2"</span>
-                                                                    "Jump to notes"
-                                                                </button>
                                                                 <a
                                                                     href=format!("/api/nodes/{id}/export")
                                                                     download=true
@@ -588,44 +504,11 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
         });
     };
 
-    view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
-            <div class="flex items-center justify-between">
-                <button
-                    class="flex items-center gap-1 text-left cursor-pointer"
-                    on:click=move |_| open.update(|v| *v = !*v)
-                >
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 16px;"
-                    >
-                        {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                    </span>
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 15px;"
-                    >
-                        "hub"
-                    </span>
-                    <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                        "Connections"
-                    </h2>
-                    <Suspense fallback=|| ()>
-                    {move || {
-                        edges.with(|r| r.as_ref().and_then(|res| match res {
-                            Ok(v) if !v.is_empty() => Some(view! {
-                                <span class="ml-1 text-xs bg-stone-200 dark:bg-stone-700
-                                            text-stone-600 dark:text-stone-300
-                                            rounded-full px-1.5 py-0.5">
-                                    {v.len()}
-                                </span>
-                            }),
-                            _ => None,
-                        }))
-                    }}
-                    </Suspense>
-                </button>
-                {move || open.get().then(|| view! {
+    let section_count =
+        Signal::derive(move || edges.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
+    let section_actions: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            {move || open.get().then(|| view! {
                     <button
                         class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                             dark:hover:text-stone-300 hover:bg-stone-100
@@ -638,11 +521,12 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                         </span>
                     </button>
                 })}
-            </div>
+        }
+        .into_any()
+    });
+    view! {
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::Connections open=open count=section_count actions=section_actions>
 
-            // Add edge form + edge list (only when expanded)
-            {move || open.get().then(|| view! {
-            <div class="mt-4">
             // Add edge form
             {move || show_add.get().then(|| view! {
                 <div class="mb-4 p-3 bg-stone-50 dark:bg-stone-900 rounded-lg space-y-2">
@@ -788,9 +672,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                     })
                 }}
             </Suspense>
-            </div>  // close mt-4
-            })}  // close open.then
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }
 
@@ -906,44 +788,11 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
         });
     };
 
+    let section_count =
+        Signal::derive(move || backlinks.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
     view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
-            <button
-                class="flex items-center gap-1 text-left cursor-pointer"
-                on:click=move |_| open.update(|v| *v = !*v)
-            >
-                <span
-                    class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                    style="font-size: 16px;"
-                >
-                    {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                </span>
-                <span
-                    class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                    style="font-size: 15px;"
-                >
-                    "link"
-                </span>
-                <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                    "Linked Here"
-                </h2>
-                <Suspense fallback=|| ()>
-                {move || {
-                    backlinks.with(|r| r.as_ref().and_then(|res| match res {
-                        Ok(v) if !v.is_empty() => Some(view! {
-                            <span class="ml-1 text-xs bg-stone-200 dark:bg-stone-700
-                                        text-stone-600 dark:text-stone-300
-                                        rounded-full px-1.5 py-0.5">
-                                {v.len()}
-                            </span>
-                        }),
-                        _ => None,
-                    }))
-                }}
-                </Suspense>
-            </button>
-            {move || open.get().then(|| view! {
-                <div class="mt-4">
+        <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::LinkedHere open=open count=section_count>
+
                 <Suspense fallback=|| view! {
                     <div class="text-xs text-stone-400">"Loading backlinks..."</div>
                 }>
@@ -1047,8 +896,6 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
                         })
                     }}
                 </Suspense>
-                </div>
-            })}
-        </div>
+        </crate::components::node_section::SectionShell>
     }
 }

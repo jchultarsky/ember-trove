@@ -46,44 +46,11 @@ pub fn SharePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
         });
     };
 
-    view! {
-        <div class="mt-4 border-t border-stone-200 dark:border-stone-700 pt-6">
-            <div class="flex items-center justify-between">
-                <button
-                    class="flex items-center gap-1 text-left cursor-pointer"
-                    on:click=move |_| open.update(|v| *v = !*v)
-                >
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 16px;"
-                    >
-                        {move || if open.get() { "expand_more" } else { "chevron_right" }}
-                    </span>
-                    <span
-                        class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                        style="font-size: 15px;"
-                    >
-                        "public"
-                    </span>
-                    <h2 class="text-sm font-semibold text-stone-700 dark:text-stone-300">
-                        "Public Links"
-                    </h2>
-                    <Suspense fallback=|| ()>
-                    {move || {
-                        tokens.with(|r| r.as_ref().and_then(|res| match res {
-                            Ok(v) if !v.is_empty() => Some(view! {
-                                <span class="ml-1 text-xs bg-stone-200 dark:bg-stone-700
-                                            text-stone-600 dark:text-stone-300
-                                            rounded-full px-1.5 py-0.5">
-                                    {v.len()}
-                                </span>
-                            }),
-                            _ => None,
-                        }))
-                    }}
-                    </Suspense>
-                </button>
-                {move || (open.get() && is_owner).then(|| view! {
+    let section_count =
+        Signal::derive(move || tokens.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
+    let section_actions: ChildrenFn = std::sync::Arc::new(move || {
+        view! {
+            {move || (open.get() && is_owner).then(|| view! {
                     <button
                         class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                             dark:hover:text-stone-300 hover:bg-stone-100
@@ -97,112 +64,113 @@ pub fn SharePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         </span>
                     </button>
                 })}
-            </div>
-
-            {move || open.get().then(|| view! {
-                <div class="mt-3 space-y-1">
-                    {move || error_msg.get().map(|msg| view! {
-                        <div class="text-xs text-red-500 mb-2">{msg}</div>
-                    })}
-                    <Suspense fallback=|| view! {
-                        <div class="text-xs text-stone-400">"Loading\u{2026}"</div>
-                    }>
-                        {move || tokens.get().map(|result| match result {
-                            Ok(list) if list.is_empty() => view! {
-                                <div class="flex flex-col items-center gap-2 py-4">
-                                    <span
-                                        class="material-symbols-outlined text-stone-300 dark:text-stone-700"
-                                        style="font-size: 28px;"
-                                    >
-                                        "link_off"
-                                    </span>
-                                    <p class="text-xs text-stone-400 dark:text-stone-600">
-                                        "No public links yet."
-                                    </p>
-                                </div>
-                            }.into_any(),
-                            Ok(list) => view! {
-                                <div class="space-y-1.5">
-                                    {list.into_iter().map(|st| {
-                                        let token_id = st.id;
-                                        let url = share_url(&st.token);
-                                        let url_display = {
-                                            let u = url.clone();
-                                            // Show only the path + token for brevity.
-                                            u.splitn(3, '/').last()
-                                                .map(|s| format!("\u{2026}/{s}"))
-                                                .unwrap_or(u)
-                                        };
-                                        let url_copy = url.clone();
-                                        view! {
-                                            <div class="flex items-center gap-2 py-1.5 px-2 rounded
-                                                hover:bg-stone-50 dark:hover:bg-stone-800/50 group">
-                                                <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
-                                                    style="font-size: 14px; flex-shrink: 0;">
-                                                    "link"
-                                                </span>
-                                                <span class="text-[11px] text-stone-500 dark:text-stone-400
-                                                    font-mono truncate flex-1 select-all"
-                                                    title=url.clone()>
-                                                    {url_display}
-                                                </span>
-                                                // Copy button
-                                                <button
-                                                    class=move || {
-                                                        let active = copied_id.get() == Some(token_id);
-                                                        if active {
-                                                            "text-green-500 shrink-0 transition-colors"
-                                                        } else {
-                                                            "text-stone-300 hover:text-amber-500 dark:text-stone-600 \
-                                                             dark:hover:text-amber-400 shrink-0 transition-colors"
-                                                        }
-                                                    }
-                                                    title="Copy link"
-                                                    on:click=move |_| {
-                                                        copy_to_clipboard(&url_copy);
-                                                        copied_id.set(Some(token_id));
-                                                        // Clear the "copied" indicator after 2 s.
-                                                        wasm_bindgen_futures::spawn_local(async move {
-                                                            gloo_timers::future::TimeoutFuture::new(2000).await;
-                                                            if copied_id.get_untracked() == Some(token_id) {
-                                                                copied_id.set(None);
-                                                            }
-                                                        });
-                                                    }
-                                                >
-                                                    <span class="material-symbols-outlined" style="font-size: 14px;">
-                                                        {move || if copied_id.get() == Some(token_id) { "check" } else { "content_copy" }}
+        }
+        .into_any()
+    });
+    view! {
+            <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::PublicLinks open=open count=section_count actions=section_actions>
+    <div class="space-y-1">
+                        {move || error_msg.get().map(|msg| view! {
+                            <div class="text-xs text-red-500 mb-2">{msg}</div>
+                        })}
+                        <Suspense fallback=|| view! {
+                            <div class="text-xs text-stone-400">"Loading\u{2026}"</div>
+                        }>
+                            {move || tokens.get().map(|result| match result {
+                                Ok(list) if list.is_empty() => view! {
+                                    <div class="flex flex-col items-center gap-2 py-4">
+                                        <span
+                                            class="material-symbols-outlined text-stone-300 dark:text-stone-700"
+                                            style="font-size: 28px;"
+                                        >
+                                            "link_off"
+                                        </span>
+                                        <p class="text-xs text-stone-400 dark:text-stone-600">
+                                            "No public links yet."
+                                        </p>
+                                    </div>
+                                }.into_any(),
+                                Ok(list) => view! {
+                                    <div class="space-y-1.5">
+                                        {list.into_iter().map(|st| {
+                                            let token_id = st.id;
+                                            let url = share_url(&st.token);
+                                            let url_display = {
+                                                let u = url.clone();
+                                                // Show only the path + token for brevity.
+                                                u.splitn(3, '/').last()
+                                                    .map(|s| format!("\u{2026}/{s}"))
+                                                    .unwrap_or(u)
+                                            };
+                                            let url_copy = url.clone();
+                                            view! {
+                                                <div class="flex items-center gap-2 py-1.5 px-2 rounded
+                                                    hover:bg-stone-50 dark:hover:bg-stone-800/50 group">
+                                                    <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
+                                                        style="font-size: 14px; flex-shrink: 0;">
+                                                        "link"
                                                     </span>
-                                                </button>
-                                                // Revoke button (owner only)
-                                                {is_owner.then(|| view! {
+                                                    <span class="text-[11px] text-stone-500 dark:text-stone-400
+                                                        font-mono truncate flex-1 select-all"
+                                                        title=url.clone()>
+                                                        {url_display}
+                                                    </span>
+                                                    // Copy button
                                                     <button
-                                                        class="text-stone-300 hover:text-red-500
-                                                            dark:text-stone-600 dark:hover:text-red-400
-                                                            shrink-0 transition-colors text-xs px-0.5"
-                                                        title="Revoke link"
+                                                        class=move || {
+                                                            let active = copied_id.get() == Some(token_id);
+                                                            if active {
+                                                                "text-green-500 shrink-0 transition-colors"
+                                                            } else {
+                                                                "text-stone-300 hover:text-amber-500 dark:text-stone-600 \
+                                                                 dark:hover:text-amber-400 shrink-0 transition-colors"
+                                                            }
+                                                        }
+                                                        title="Copy link"
                                                         on:click=move |_| {
+                                                            copy_to_clipboard(&url_copy);
+                                                            copied_id.set(Some(token_id));
+                                                            // Clear the "copied" indicator after 2 s.
                                                             wasm_bindgen_futures::spawn_local(async move {
-                                                                let _ = api::revoke_share_token(node_id, token_id).await;
-                                                                refresh.update(|n| *n += 1);
+                                                                gloo_timers::future::TimeoutFuture::new(2000).await;
+                                                                if copied_id.get_untracked() == Some(token_id) {
+                                                                    copied_id.set(None);
+                                                                }
                                                             });
                                                         }
                                                     >
-                                                        "\u{00d7}"
+                                                        <span class="material-symbols-outlined" style="font-size: 14px;">
+                                                            {move || if copied_id.get() == Some(token_id) { "check" } else { "content_copy" }}
+                                                        </span>
                                                     </button>
-                                                })}
-                                            </div>
-                                        }
-                                    }).collect::<Vec<_>>()}
-                                </div>
-                            }.into_any(),
-                            Err(e) => view! {
-                                <div class="text-xs text-red-500">{format!("Error: {e}")}</div>
-                            }.into_any(),
-                        })}
-                    </Suspense>
-                </div>
-            })}
-        </div>
-    }
+                                                    // Revoke button (owner only)
+                                                    {is_owner.then(|| view! {
+                                                        <button
+                                                            class="text-stone-300 hover:text-red-500
+                                                            dark:text-stone-600 dark:hover:text-red-400
+                                                            shrink-0 transition-colors text-xs px-0.5"
+                                                            title="Revoke link"
+                                                            on:click=move |_| {
+                                                                wasm_bindgen_futures::spawn_local(async move {
+                                                                    let _ = api::revoke_share_token(node_id, token_id).await;
+                                                                    refresh.update(|n| *n += 1);
+                                                                });
+                                                            }
+                                                        >
+                                                            "\u{00d7}"
+                                                        </button>
+                                                    })}
+                                                </div>
+                                            }
+                                        }).collect::<Vec<_>>()}
+                                    </div>
+                                }.into_any(),
+                                Err(e) => view! {
+                                    <div class="text-xs text-red-500">{format!("Error: {e}")}</div>
+                                }.into_any(),
+                            })}
+                        </Suspense>
+                    </div>
+            </crate::components::node_section::SectionShell>
+        }
 }
