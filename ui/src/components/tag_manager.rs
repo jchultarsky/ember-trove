@@ -187,7 +187,7 @@ pub fn TagManager() -> impl IntoView {
                     title=move || if show_create.get() { "Cancel" } else { "New Tag" }
                     on:click=move |_| show_create.update(|v| *v = !*v)
                 >
-                    <span class="material-symbols-outlined" style="font-size: 18px;">
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">
                         {move || if show_create.get() { "close" } else { "add" }}
                     </span>
                 </button>
@@ -226,7 +226,7 @@ pub fn TagManager() -> impl IntoView {
                             title="Create tag"
                             on:click=move |_| do_create()
                         >
-                            <span class="material-symbols-outlined">"check"</span>
+                            <span aria-hidden="true" class="material-symbols-outlined">"check"</span>
                         </button>
                     </div>
                     // Colour picker (palette + native escape hatch)
@@ -439,7 +439,7 @@ pub fn TagManager() -> impl IntoView {
                                                                                     edit_color.set(edit_color_val.clone());
                                                                                 }
                                                                             >
-                                                                                <span class="material-symbols-outlined"
+                                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                                       style="font-size: 15px;">"edit"</span>
                                                                             </button>
                                                                             <button
@@ -455,7 +455,7 @@ pub fn TagManager() -> impl IntoView {
                                                                                     delete_confirm_name.set(del_name.clone());
                                                                                 }
                                                                             >
-                                                                                <span class="material-symbols-outlined"
+                                                                                <span aria-hidden="true" class="material-symbols-outlined"
                                                                                       style="font-size: 15px;">"delete"</span>
                                                                             </button>
                                                                         </div>

@@ -151,7 +151,7 @@ pub fn Sidebar(
                                     title=format!("{name} — Change password")
                                     on:click=move |_| show_change_pw.set(true)
                                 >
-                                    <span class="material-symbols-outlined">"lock_reset"</span>
+                                    <span aria-hidden="true" class="material-symbols-outlined">"lock_reset"</span>
                                 </button>
                                 <button
                                     on:click=on_logout
@@ -160,7 +160,7 @@ pub fn Sidebar(
                                         dark:text-stone-400 cursor-pointer"
                                     title=format!("{name} — Logout")
                                 >
-                                    <span class="material-symbols-outlined">"logout"</span>
+                                    <span aria-hidden="true" class="material-symbols-outlined">"logout"</span>
                                 </button>
                             </div>
                         }.into_any())

@@ -898,10 +898,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         border-b border-stone-200 dark:border-stone-800">
                 <div class="flex items-center gap-3 flex-1 min-w-0">
                     <button
+                        title="Back to nodes"
+                        aria-label="Back to nodes"
                         class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 flex-shrink-0"
                         on:click=move |_| nav_back1("/nodes", Default::default())
                     >
-                        <span class="material-symbols-outlined">"arrow_back"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"arrow_back"</span>
                     </button>
                     <input
                         type="text"
@@ -909,7 +911,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         class="flex-1 min-w-0 text-lg font-semibold bg-transparent
                                text-stone-900 dark:text-stone-100
                                focus:outline-none placeholder-stone-400"
-                        placeholder="Node title..."
+                        placeholder="Node title\u{2026}"
                         prop:value=move || title.get()
                         on:input=move |ev| title.set(event_target_value(&ev))
                     />
@@ -1068,7 +1070,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         title=move || if show_preview.get() { "Hide preview" } else { "Show preview" }
                         on:click=move |_| show_preview.update(|v| *v = !*v)
                     >
-                        <span class="material-symbols-outlined">
+                        <span aria-hidden="true" class="material-symbols-outlined">
                             {move || if show_preview.get() { "visibility" } else { "visibility_off" }}
                         </span>
                     </button>
@@ -1079,7 +1081,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         disabled=move || saving.get() || fetching.get()
                         title=move || if saving.get() { "Saving\u{2026}" } else if fetching.get() { "Loading\u{2026}" } else { "Save" }
                     >
-                        <span class="material-symbols-outlined">
+                        <span aria-hidden="true" class="material-symbols-outlined">
                             {move || if saving.get() { "hourglass_empty" } else if fetching.get() { "hourglass_top" } else { "check" }}
                         </span>
                     </button>
@@ -1089,7 +1091,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         on:click=move |_| navigate("/nodes", Default::default())
                         title="Cancel"
                     >
-                        <span class="material-symbols-outlined">"close"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
                     </button>
                 </div>
             </div>

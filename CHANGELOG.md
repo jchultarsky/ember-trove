@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — every button has a real name; one connection-type list (#133)
+- **Icon-only buttons** were announced by their glyph name ("edit",
+  "more_vert", "call_merge") or had no name at all. In 75 buttons across 27
+  files the glyph is now `aria-hidden`, so the button's title names it. The
+  9 that had no title (back arrows, close buttons, toast dismiss) gain a
+  title and an `aria-label`.
+  - A new e2e guard scans the accessibility tree of Inbox, My Day and a full
+    node page, and fails on any unnamed or glyph-named button. It fails on
+    the old UI, so it catches what it targets.
+- **Connection types:** the Connections form and the graph's New Edge
+  dialog had hand-written type lists that already disagreed ("Related To"
+  vs "Related to"). Both now use one list, `EdgeTypeOptions` (built on
+  `EdgeType::USER_SELECTABLE` and `option_label`), and the graph parses
+  types with `EdgeType::parse`.
+- **Placeholders** use the ellipsis character ("Node title…",
+  "Label (optional)…", "Tag name…").
+
 ### Security — cached personal data no longer outlives the session (#129)
 - The service worker caches API reads for offline use: node bodies, notes,
   tasks, and `/api/auth/me`. Nothing cleared them on logout, so on a shared

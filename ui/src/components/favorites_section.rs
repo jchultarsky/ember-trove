@@ -125,7 +125,7 @@ pub fn FavoritesSection(collapsed: SidebarCollapsed, on_nav: Callback<()>) -> im
                         title="Favorites"
                         on:click=move |_| show_modal.set(true)
                     >
-                        <span class="material-symbols-outlined text-stone-500 dark:text-stone-400">"star"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined text-stone-500 dark:text-stone-400">"star"</span>
                     </button>
                 }.into_any();
             }
@@ -145,7 +145,7 @@ pub fn FavoritesSection(collapsed: SidebarCollapsed, on_nav: Callback<()>) -> im
                             title="Add favorite"
                             on:click=move |_| show_modal.set(true)
                         >
-                            <span class="material-symbols-outlined" style="font-size: 18px">"add"</span>
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px">"add"</span>
                         </button>
                     </div>
 
@@ -373,7 +373,7 @@ fn FavoriteRow(
                     disabled=is_first
                     on:click=move |_| on_move_up.run(fav_id)
                 >
-                    <span class="material-symbols-outlined" style="font-size: 14px">
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px">
                         "keyboard_arrow_up"
                     </span>
                 </button>
@@ -384,7 +384,7 @@ fn FavoriteRow(
                     disabled=is_last
                     on:click=move |_| on_move_down.run(fav_id)
                 >
-                    <span class="material-symbols-outlined" style="font-size: 14px">
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px">
                         "keyboard_arrow_down"
                     </span>
                 </button>
@@ -393,7 +393,7 @@ fn FavoriteRow(
                     title="Remove from Favorites"
                     on:click=move |_| on_delete.run(fav_id)
                 >
-                    <span class="material-symbols-outlined" style="font-size: 14px">"delete"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px">"delete"</span>
                 </button>
             </div>
         </div>

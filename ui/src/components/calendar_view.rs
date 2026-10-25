@@ -318,7 +318,7 @@ pub fn CalendarView() -> impl IntoView {
                             month_sig.set(m);
                         }
                     >
-                        <span class="material-symbols-outlined">"chevron_left"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"chevron_left"</span>
                     </button>
                     <span class="text-sm font-semibold text-stone-700 dark:text-stone-300 min-w-[200px] text-center">
                         {move || two_month_label(year_sig.get(), month_sig.get(), year2.get(), month2.get())}
@@ -333,7 +333,7 @@ pub fn CalendarView() -> impl IntoView {
                             month_sig.set(m);
                         }
                     >
-                        <span class="material-symbols-outlined">"chevron_right"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined">"chevron_right"</span>
                     </button>
                     <button
                         class="ml-2 px-3 py-1 text-xs rounded-lg bg-stone-100 dark:bg-stone-800 \

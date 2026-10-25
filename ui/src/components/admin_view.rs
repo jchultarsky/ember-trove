@@ -370,7 +370,7 @@ fn UserRow(
                             show_roles.update(|v| *v = !*v);
                         }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             "manage_accounts"
                         </span>
                     </button>
@@ -403,11 +403,13 @@ fn UserRow(
                                         <span class="material-symbols-outlined" style="font-size: 14px;">"check"</span>
                                     </button>
                                     <button
+                                        title="Cancel delete"
+                                        aria-label="Cancel delete"
                                         class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
                                             hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
                                         on:click=move |_| confirm_delete.set(false)
                                     >
-                                        <span class="material-symbols-outlined" style="font-size: 14px;">"close"</span>
+                                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">"close"</span>
                                     </button>
                                 </div>
                             }.into_any()
@@ -420,7 +422,7 @@ fn UserRow(
                                     title="Delete user"
                                     on:click=move |_| confirm_delete.set(true)
                                 >
-                                    <span class="material-symbols-outlined" style="font-size: 16px;">"delete"</span>
+                                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">"delete"</span>
                                 </button>
                             }.into_any()
                         }

@@ -436,7 +436,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 title="Assign to node"
                                 on:click=move |_| assigning.set(true)
                             >
-                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
                                     "call_merge"
                                 </span>
                             </button>
@@ -451,7 +451,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 title="Edit"
                                 on:click=move |_| editing.set(true)
                             >
-                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
                                     "edit"
                                 </span>
                             </button>
@@ -460,7 +460,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 title="Delete"
                                 on:click=on_delete
                             >
-                                <span class="material-symbols-outlined" style="font-size:16px;">
+                                <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
                                     "delete"
                                 </span>
                             </button>
@@ -505,7 +505,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 picker_results.set(vec![]);
                             }
                         >
-                            <span class="material-symbols-outlined" style="font-size: 18px;">
+                            <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">
                                 "close"
                             </span>
                         </button>

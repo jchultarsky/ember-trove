@@ -384,7 +384,7 @@ fn PermRow(
                         title="Revoke"
                         on:click=on_revoke
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">"person_remove"</span>
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">"person_remove"</span>
                     </button>
                 }.into_any()
             }}

@@ -138,10 +138,12 @@ pub fn AddFavoriteModal(
                     "Add to Favorites"
                 </h2>
                 <button
+                    title="Close"
+                    aria-label="Close"
                     class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300 cursor-pointer"
                     on:click=move |_| on_close.run(())
                 >
-                    <span class="material-symbols-outlined">"close"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
                 </button>
             </div>
 

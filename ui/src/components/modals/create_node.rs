@@ -188,7 +188,7 @@ pub fn CreateNodeModal(
                     on:click=move |_| on_close.run(())
                     title="Close (Esc)"
                 >
-                    <span class="material-symbols-outlined" style="font-size: 18px;">
+                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">
                         "close"
                     </span>
                 </button>

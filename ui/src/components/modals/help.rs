@@ -334,12 +334,14 @@ pub fn HelpModal(#[prop(into)] show: Signal<bool>, on_close: Callback<()>) -> im
                     </h2>
                 </div>
                 <button
+                    title="Close help"
+                    aria-label="Close help"
                     type="button"
                     class="text-stone-400 hover:text-stone-600 \
                            dark:hover:text-stone-200 transition-colors"
                     on:click=move |_| on_close.run(())
                 >
-                    <span class="material-symbols-outlined">"close"</span>
+                    <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
                 </button>
             </div>
 

@@ -208,10 +208,12 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                     <div class="flex items-center justify-between px-6 py-4 border-b border-stone-200 dark:border-stone-800">
                                         <div class="flex items-center gap-3">
                                             <button
+                                                title="Back to nodes"
+                                                aria-label="Back to nodes"
                                                 class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-300"
                                                 on:click=move |_| nav_back("/nodes", Default::default())
                                             >
-                                                <span class="material-symbols-outlined">"arrow_back"</span>
+                                                <span aria-hidden="true" class="material-symbols-outlined">"arrow_back"</span>
                                             </button>
                                             <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
                                                 {n.title.clone()}
@@ -281,7 +283,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                             on:click=move |_| nav_edit(&format!("/nodes/{edit_id}/edit"), Default::default())
                                                             title="Edit"
                                                         >
-                                                            <span class="material-symbols-outlined">"edit"</span>
+                                                            <span aria-hidden="true" class="material-symbols-outlined">"edit"</span>
                                                         </button>
                                                         <button
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-amber-600
@@ -292,7 +294,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                             disabled=move || duplicating.get()
                                                             title=move || if duplicating.get() { "Duplicating…" } else { "Duplicate" }
                                                         >
-                                                            <span class="material-symbols-outlined">
+                                                            <span aria-hidden="true" class="material-symbols-outlined">
                                                                 {move || if duplicating.get() { "hourglass_empty" } else { "content_copy" }}
                                                             </span>
                                                         </button>
@@ -305,7 +307,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                             disabled=move || deleting.get()
                                                             title=move || if deleting.get() { "Deleting…" } else { "Delete" }
                                                         >
-                                                            <span class="material-symbols-outlined">
+                                                            <span aria-hidden="true" class="material-symbols-outlined">
                                                                 {move || if deleting.get() { "hourglass_empty" } else { "delete" }}
                                                             </span>
                                                         </button>
@@ -324,7 +326,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                             title="Actions"
                                                             on:click=move |_| menu_open.update(|v| *v = !*v)
                                                         >
-                                                            <span class="material-symbols-outlined">"more_vert"</span>
+                                                            <span aria-hidden="true" class="material-symbols-outlined">"more_vert"</span>
                                                         </button>
                                                         {move || menu_open.get().then(|| view! {
                                                             <>
@@ -633,7 +635,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                         on:click=move |_| show_add.update(|v| *v = !*v)
                         title=move || if show_add.get() { "Cancel" } else { "Add Edge" }
                     >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">
                             {move || if show_add.get() { "close" } else { "add_link" }}
                         </span>
                     </button>
@@ -665,11 +667,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                             prop:value=move || edge_type_input.get()
                             on:change=move |ev| edge_type_input.set(event_target_value(&ev))
                         >
-                            <option value="references">"References"</option>
-                            <option value="contains">"Contains"</option>
-                            <option value="related_to">"Related To"</option>
-                            <option value="depends_on">"Depends On"</option>
-                            <option value="derived_from">"Derived From"</option>
+                            <crate::components::node_meta::EdgeTypeOptions value=edge_type_input />
                         </select>
                     </div>
                     <div class="flex gap-2">
@@ -678,7 +676,7 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                             class="flex-1 px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
                                 bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none
                                 focus:ring-1 focus:ring-amber-500"
-                            placeholder="Label (optional)..."
+                            placeholder="Label (optional)\u{2026}"
                             prop:value=move || label_input.get()
                             on:input=move |ev| label_input.set(event_target_value(&ev))
                         />
