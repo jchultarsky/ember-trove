@@ -66,6 +66,12 @@ CI job is too slow a feedback loop for selector work.
   `page.getByRole('dialog').getByRole('button', { name })` — and address the
   sidebar buttons by `data-testid="new-<type>"`.
 
+- **A `title` is not the accessible name of a button with text** (2026-10-25,
+  #123): the Notes toggle has `title="Collapse notes"` but its name is its
+  content ("sticky_note_2 Notes …"), so `getByRole('button', { name:
+  'Collapse notes' })` waits forever. Use `button[title="…"]`, or give the
+  control an `aria-label`.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —

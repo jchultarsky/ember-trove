@@ -39,6 +39,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   in-panel handler may also handle it but must `stop_propagation()`. Autofocus by
   tracking the `NodeRef` in an `Effect`, not `requestAnimationFrame` (ERRORS.md,
   2026-10-17 palette flake).
+- **Page-level data boundaries are `<Transition>`, not `<Suspense>`.** A Suspense
+  falls back whenever any resource inside it reloads, which unmounts the page
+  and resets scroll (#123, ERRORS.md). Keep `<Suspense>` for small leaf
+  sections. Any component that handles Escape itself (editors, pickers) must
+  `stop_propagation()`, or the window dispatcher acts on it too.
 - **No `use_context` after an `.await`** in `wasm_bindgen_futures::spawn_local`
   — there is no reactive owner there; capture context values before spawning
   (toast.rs has a global fallback for this reason).

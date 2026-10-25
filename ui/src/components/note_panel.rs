@@ -287,8 +287,23 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     let toast_state = use_context::<crate::components::toast::ToastState>();
 
     let on_add = move |_| do_add();
+    // The header's "Jump to notes" lands here (#123), expanded.
+    let root: NodeRef<leptos::html::Div> = NodeRef::new();
+    crate::components::node_view::on_section_jump(
+        crate::components::node_view::NodeSection::Notes,
+        root,
+        move || collapsed.set(false),
+    );
+
     view! {
-        <div class="border-t border-stone-200 dark:border-stone-800 pt-6">
+        <div
+            node_ref=root
+            class="border-t border-stone-200 dark:border-stone-800 pt-6 focus:outline-none"
+            role="region"
+            aria-labelledby="node-notes-heading"
+            tabindex="-1"
+            data-testid="node-notes"
+        >
             // ── Section header ────────────────────────────────────────────
             <div class="flex items-center justify-between mb-3">
                 <button
@@ -302,7 +317,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                     <span class="material-symbols-outlined text-stone-400 dark:text-stone-500
                         group-hover:text-amber-500 transition-colors"
                         style="font-size: 18px;">{"sticky_note_2"}</span>
-                    <h3 class="text-sm font-semibold text-stone-700 dark:text-stone-300
+                    <h3 id="node-notes-heading" class="text-sm font-semibold text-stone-700 dark:text-stone-300
                         uppercase tracking-wider group-hover:text-stone-900
                         dark:group-hover:text-stone-100 transition-colors">
                         "Notes"
@@ -477,6 +492,25 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                     edit_body.set(orig_body.get_untracked());
                                                     edit_color.set(orig_color.get_untracked());
                                                 });
+                                                // Escape: cancel, but offer Undo if anything was
+                                                // changed — a stray Escape used to discard a
+                                                // note edit silently (#123).
+                                                let do_escape = Callback::new(move |()| {
+                                                    let typed = (edit_body.get_untracked(), edit_color.get_untracked());
+                                                    let dirty = typed.0 != orig_body.get_untracked()
+                                                        || typed.1 != orig_color.get_untracked();
+                                                    do_cancel.run(());
+                                                    if dirty {
+                                                        crate::components::toast::push_undo_toast(
+                                                            "Edit discarded",
+                                                            std::sync::Arc::new(move || {
+                                                                edit_body.try_set(typed.0.clone());
+                                                                edit_color.try_set(typed.1.clone());
+                                                                editing.try_set(true);
+                                                            }),
+                                                        );
+                                                    }
+                                                });
 
                                                 // Pre-render Markdown (computed once per note in this iteration)
                                                 let body_html  = render_markdown_plain(&note.body);
@@ -600,7 +634,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                     });
                                                                 })
                                                                 on_submit=do_save
-                                                                on_escape=do_cancel
+                                                                on_escape=do_escape
                                                                 class="w-full bg-transparent text-sm text-stone-800 dark:text-stone-200 \
                                                                     resize-y min-h-[80px] focus:outline-none".to_string()
                                                             />

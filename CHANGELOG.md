@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — node page friction (#123)
+- **Adding a task or note no longer jumps to the top of a long node.** The
+  whole page sat under one `<Suspense>`, which unmounted everything for a
+  frame whenever any panel reloaded, and the scroll position was lost with
+  it. It is now a `<Transition>`: the skeleton shows on first load only.
+- **Escape in a task or note editor no longer leaves the node.** The
+  editor's Escape also reached the window shortcut handler, which read it as
+  "back to /nodes" once the editor had closed. The editor now stops it.
+- **Escape no longer silently discards an edit.** With unsaved changes it
+  shows "Edit discarded · Undo", and Undo reopens the editor with the text
+  restored. This applies to every task editor (node page, Inbox, My Day) and
+  the note editor. Escape with no changes, and the Cancel button, stay
+  silent.
+
+### Added — jump to a node's tasks and notes (#123)
+- **Jump to tasks** and **Jump to notes** in the node header (and its mobile
+  menu) scroll to and focus this node's sections, expanding a collapsed
+  Notes section. The sidebar's Tasks and Notes stay the global views.
+
 ### Added — the loading screen names its version (#120)
 - The splash shown while the WASM bundle loads now has a muted `v2.32.1`
   line under "Loading…". It is the **bundle's own** version, stamped at
