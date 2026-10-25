@@ -64,11 +64,26 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     // Add-task form: collapsed behind the header toggle below.
     let show_form = RwSignal::new(false);
 
+    // The header's "Jump to tasks" lands here (#123).
+    let root: NodeRef<leptos::html::Div> = NodeRef::new();
+    crate::components::node_view::on_section_jump(
+        crate::components::node_view::NodeSection::Tasks,
+        root,
+        || {},
+    );
+
     view! {
-        <div class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6">
+        <div
+            node_ref=root
+            class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6 focus:outline-none"
+            role="region"
+            aria-labelledby="node-tasks-heading"
+            tabindex="-1"
+            data-testid="node-tasks"
+        >
             // Section header
             <div class="flex items-center justify-between mb-4">
-                <h3 class="text-sm font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider flex items-center gap-2">
+                <h3 id="node-tasks-heading" class="text-sm font-semibold text-stone-500 dark:text-stone-400 uppercase tracking-wider flex items-center gap-2">
                     <span class="material-symbols-outlined text-base">{"check_box"}</span>
                     "Tasks"
                 </h3>
@@ -349,7 +364,9 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                 on_submit=Callback::new(move |()| do_save_edit())
                                 on_escape=Callback::new(move |()| {
                                     editing_title.set(false);
-                                    draft.reset();
+                                    draft.discard_with_undo(move || {
+                                        editing_title.try_set(true);
+                                    });
                                 })
                                 on_resize=TaskEditorHeights::on_resize(task_id)
                                 class="w-full bg-stone-100 dark:bg-stone-800 text-sm \

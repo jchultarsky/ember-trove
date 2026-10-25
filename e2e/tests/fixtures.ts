@@ -83,3 +83,10 @@ export async function createNode(
   expect(resp.ok()).toBeTruthy();
   return resp.json();
 }
+
+/** Add a note to a node via the API. */
+export async function createNote(request: APIRequestContext, nodeId: string, body: string) {
+  const resp = await request.post(`/api/nodes/${nodeId}/notes`, { data: { body, color: 'default' } });
+  expect(resp.ok()).toBeTruthy();
+  return resp.json();
+}

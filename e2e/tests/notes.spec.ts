@@ -1,4 +1,4 @@
-import { test, expect, createNode, type APIRequestContext } from './fixtures';
+import { test, expect, createNode, createNote } from './fixtures';
 
 /**
  * Notes on a node page. The node page's note panel had Edit but no Delete
@@ -31,12 +31,6 @@ test('deleting a note on its node page removes it, and Undo restores it', async 
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
-
-async function createNote(request: APIRequestContext, nodeId: string, body: string) {
-  const resp = await request.post(`/api/nodes/${nodeId}/notes`, { data: { body, color: 'default' } });
-  expect(resp.ok()).toBeTruthy();
-  return resp.json();
-}
 
 test('a collapsed note shows its cleaned-up first line and stays collapsed after reload', async ({ page, request }) => {
   const stamp = Date.now();

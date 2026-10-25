@@ -362,7 +362,13 @@ pub fn KanbanTaskRow(
                                 placeholder="Task title…"
                                 initial_height=saved_height
                                 on_submit=Callback::new(move |()| do_save())
-                                on_escape=Callback::new(move |()| editing_id_sig.set(None))
+                                on_escape=Callback::new(move |()| {
+                                    editing_id_sig.set(None);
+                                    // Reopen without on_pencil's reset.
+                                    draft.discard_with_undo(move || {
+                                        editing_id_sig.try_set(Some(task_id));
+                                    });
+                                })
                                 on_resize=TaskEditorHeights::on_resize(task_id)
                                 class="w-full bg-stone-100 dark:bg-stone-800 text-sm \
                                        text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \

@@ -285,6 +285,36 @@ impl TaskEditDraft {
         self.recurrence.set(r);
     }
 
+    /// Escape: discard like Cancel, but if anything was changed offer
+    /// "Edit discarded · Undo", which puts the typed values back and calls
+    /// `reopen` to show the editor again (#123: a stray Escape used to throw
+    /// the edit away silently). The explicit Cancel button stays `reset`.
+    pub fn discard_with_undo(self, reopen: impl Fn() + Send + Sync + 'static) {
+        let typed = [
+            self.title.get_untracked(),
+            self.priority.get_untracked(),
+            self.due.get_untracked(),
+            self.recurrence.get_untracked(),
+        ];
+        let dirty = typed != self.saved.get_value();
+        self.reset();
+        if !dirty {
+            return;
+        }
+        push_undo_toast(
+            "Edit discarded",
+            Arc::new(move || {
+                let [t, p, d, r] = typed.clone();
+                // `try_`: the row may have been refetched away meanwhile.
+                self.title.try_set(t);
+                self.priority.try_set(p);
+                self.due.try_set(d);
+                self.recurrence.try_set(r);
+                reopen();
+            }),
+        );
+    }
+
     /// The PATCH for the current values (`None` = blank title, don't save),
     /// and remember them as saved so a later Cancel keeps them.
     pub fn take_request(&self) -> Option<UpdateTaskRequest> {
