@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.33.0] - 2026-10-24
+
 ### Fixed — node page friction (#123)
 - **Adding a task or note no longer jumps to the top of a long node.** The
   whole page sat under one `<Suspense>`, which unmounted everything for a
