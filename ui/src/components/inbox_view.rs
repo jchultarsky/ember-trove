@@ -17,7 +17,7 @@ use crate::components::due_date_field::DueDateField;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::new_task_form::NewTaskForm;
-use crate::components::node_picker::use_node_search;
+use crate::components::node_picker::use_node_lookup;
 use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
@@ -224,7 +224,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
     // Node-picker state
     let assigning = RwSignal::new(false);
     let picker_query = RwSignal::new(String::new());
-    let picker_results = use_node_search(picker_query);
+    let picker_results = use_node_lookup(picker_query);
 
     let do_assign = move |node_id: NodeId| {
         assigning.set(false);
@@ -518,9 +518,9 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                                 border border-stone-200 dark:border-stone-700
                                 rounded-xl shadow-md overflow-hidden">
                                 {results.into_iter().map(|r| {
-                                    let node_id = r.node_id;
+                                    let node_id = r.id;
                                     let title   = r.title.clone();
-                                    let icon    = crate::components::node_meta::type_icon(&r.node_type);
+                                    let icon    = crate::components::node_meta::type_icon(r.node_type.as_str());
                                     view! {
                                         <button
                                             class="w-full flex items-center gap-2.5 px-3 py-2.5

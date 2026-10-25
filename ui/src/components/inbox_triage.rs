@@ -16,7 +16,7 @@ use leptos::prelude::*;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
-use crate::components::node_picker::use_node_search;
+use crate::components::node_picker::use_node_lookup;
 use crate::components::task_actions::{PatchOpts, TaskCtx, delete_with_undo, patch_task};
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 
@@ -46,7 +46,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
     let date_ref = NodeRef::<leptos::html::Input>::new();
     // Attach picker state.
     let picker_query = RwSignal::new(String::new());
-    let picker_results = use_node_search(picker_query);
+    let picker_results = use_node_lookup(picker_query);
     let picker_highlight = RwSignal::new(0usize);
     // Fresh results: highlight the first again.
     Effect::new(move |_| {
@@ -383,7 +383,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                                              "Enter" => {
                                                  ev.prevent_default();
                                                  let pick = picker_results.with(|r| {
-                                                     r.get(picker_highlight.get_untracked()).map(|p| p.node_id)
+                                                     r.get(picker_highlight.get_untracked()).map(|p| p.id)
                                                  });
                                                  if let Some(id) = pick {
                                                      do_attach(id);
@@ -409,7 +409,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                                             <div class="rounded-lg border border-stone-200 dark:border-stone-700
                                                         divide-y divide-stone-100 dark:divide-stone-800 overflow-hidden">
                                                 {results.into_iter().enumerate().map(|(i, r)| {
-                                                    let rid = r.node_id;
+                                                    let rid = r.id;
                                                     view! {
                                                         <button
                                                             class=move || {

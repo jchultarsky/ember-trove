@@ -104,3 +104,15 @@ pub async fn create_search_preset(
 pub async fn delete_search_preset(id: SearchPresetId) -> Result<(), UiError> {
     delete_empty(&format!("/search-presets/{id}")).await
 }
+
+/// Title lookup for the node pickers (`GET /nodes/lookup`): nodes whose
+/// title contains `q`, exact > prefix > other. Unlike [`node_picker_search`]
+/// (full-text, kept for the command palette) it matches partial words and
+/// never body text.
+pub async fn lookup_nodes(q: &str) -> Result<Vec<common::node::NodeLookupHit>, UiError> {
+    if q.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let encoded: String = js_sys::encode_uri_component(q).into();
+    get_json(&format!("/nodes/lookup?q={encoded}&limit=8")).await
+}

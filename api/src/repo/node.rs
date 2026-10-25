@@ -52,6 +52,17 @@ pub trait NodeRepo: Send + Sync {
         subject: Option<&str>,
     ) -> Result<Vec<NodeTitleEntry>, EmberTroveError>;
 
+    /// Node-picker lookup: nodes visible to `subject` (admin: `None`, every
+    /// node) whose title contains `q`, case-insensitively and literally
+    /// (LIKE wildcards escaped). Ranked exact title, then prefix, then any
+    /// other match, alphabetical within each; at most `limit` rows.
+    async fn lookup_titles(
+        &self,
+        subject: Option<&str>,
+        q: &str,
+        limit: i64,
+    ) -> Result<Vec<common::node::NodeLookupHit>, EmberTroveError>;
+
     /// Resolve many already-lowercased wiki-link titles in one query, among
     /// nodes **visible to `owner_id`** (the source node's owner): their own
     /// nodes, plus nodes shared with them. Their own node wins a title
@@ -525,6 +536,58 @@ impl NodeRepo for PgNodeRepo {
         .map_err(|e| EmberTroveError::Internal(format!("backlinks query failed: {e}")))?;
 
         rows.into_iter().map(NodeRow::into_node).collect()
+    }
+
+    async fn lookup_titles(
+        &self,
+        subject: Option<&str>,
+        q: &str,
+        limit: i64,
+    ) -> Result<Vec<common::node::NodeLookupHit>, EmberTroveError> {
+        #[derive(sqlx::FromRow)]
+        struct HitRow {
+            id: Uuid,
+            title: String,
+            node_type: String,
+        }
+
+        let q = q.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = super::escape_like(&q.to_lowercase());
+        // SECURITY: every value is a bind parameter; `visible_to` only
+        // splices compile-time literals.
+        let sql = format!(
+            r#"
+            SELECT n.id, n.title, n.node_type::text AS node_type
+            FROM nodes n
+            WHERE {visible}
+              AND lower(n.title) LIKE ('%' || $2 || '%') ESCAPE '\'
+            ORDER BY (lower(n.title) = lower($3)) DESC,
+                     (lower(n.title) LIKE ($2 || '%') ESCAPE '\') DESC,
+                     lower(n.title), n.id
+            LIMIT $4
+            "#,
+            visible = super::visible_to("n", 1),
+        );
+        let rows = sqlx::query_as::<_, HitRow>(&sql)
+            .bind(subject)
+            .bind(&pattern)
+            .bind(q)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("lookup_titles failed: {e}")))?;
+        rows.into_iter()
+            .map(|r| {
+                Ok(common::node::NodeLookupHit {
+                    id: NodeId(r.id),
+                    title: r.title,
+                    node_type: parse_node_type(&r.node_type)?,
+                })
+            })
+            .collect()
     }
 
     async fn list_titles(

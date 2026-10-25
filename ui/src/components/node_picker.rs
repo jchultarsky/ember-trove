@@ -3,32 +3,57 @@
 //! shows a removable chip once picked. Used by the new-task form, the Notes
 //! compose box and the Connections "add edge" form.
 
-use common::{id::NodeId, search::SearchResult};
+use common::{id::NodeId, node::NodeLookupHit, search::SearchResult};
 use leptos::prelude::*;
 
 /// Debounce for type-ahead node search.
 const NODE_SEARCH_DEBOUNCE_MS: u32 = 300;
 
-/// Type-ahead node search behind every node picker (this component, the
-/// palette, Inbox attach, triage attach): 300 ms debounce, and only the
-/// latest query's response lands. Returns the results signal; callers may
-/// clear it themselves.
-///
-/// The five hand-rolled copies drifted: three skipped the version bump on an
-/// empty query, so clearing the box while a search was in flight let the old
-/// results reappear, and the Links picker searched on every keystroke.
+/// Full-text node search for the command palette: 300 ms debounce, and only
+/// the latest query's response lands. Pickers that choose a node use
+/// [`use_node_lookup`] instead (titles only).
 pub fn use_node_search(query: RwSignal<String>) -> RwSignal<Vec<SearchResult>> {
-    use_node_search_answering(query).0
+    use_debounced(query, |q: String| async move {
+        crate::api::node_picker_search(&q).await
+    })
+    .0
 }
 
-/// [`use_node_search`] plus the query the current results answer. During
-/// the debounce the list still shows an *earlier* query's results; a picker
-/// must not commit from those (Enter after fast typing would pick a match
-/// for "Pro" while the user typed "Project X").
-fn use_node_search_answering(
+/// Title lookup for every picker that commits a node (NodePicker, Inbox and
+/// triage attach). They used the full-text search, which matched bodies and
+/// whole words only: "Physna" listed the alphabetically-first nodes that
+/// *mention* Physna (the node titled "Physna" fell off the page), and "Phy"
+/// matched nothing (#126 follow-up).
+pub fn use_node_lookup(query: RwSignal<String>) -> RwSignal<Vec<NodeLookupHit>> {
+    use_node_lookup_answering(query).0
+}
+
+fn use_node_lookup_answering(
     query: RwSignal<String>,
-) -> (RwSignal<Vec<SearchResult>>, RwSignal<String>) {
-    let results = RwSignal::new(Vec::<SearchResult>::new());
+) -> (RwSignal<Vec<NodeLookupHit>>, RwSignal<String>) {
+    use_debounced(query, |q: String| async move {
+        crate::api::lookup_nodes(&q).await
+    })
+}
+
+/// The one debounced, latest-wins search: results plus the query they
+/// answer. During the debounce the list still shows an *earlier* query's
+/// results; a picker must not commit from those (Enter after fast typing
+/// would pick a match for "Pro" while the user typed "Project X").
+///
+/// The five hand-rolled copies this replaced drifted: three skipped the
+/// version bump on an empty query, so clearing the box while a search was in
+/// flight let the old results reappear.
+fn use_debounced<T, F, Fut>(
+    query: RwSignal<String>,
+    fetch: F,
+) -> (RwSignal<Vec<T>>, RwSignal<String>)
+where
+    T: Send + Sync + 'static,
+    F: Fn(String) -> Fut + Copy + 'static,
+    Fut: std::future::Future<Output = Result<Vec<T>, crate::error::UiError>> + 'static,
+{
+    let results = RwSignal::new(Vec::<T>::new());
     let answers = RwSignal::new(String::new());
     let version = RwSignal::new(0u32);
     Effect::new(move |_| {
@@ -46,7 +71,7 @@ fn use_node_search_answering(
             if version.try_get_untracked() != Some(mine) {
                 return;
             }
-            if let Ok(r) = crate::api::node_picker_search(&q).await
+            if let Ok(r) = fetch(q.clone()).await
                 && version.try_get_untracked() == Some(mine)
             {
                 results.try_set(r);
@@ -91,13 +116,13 @@ pub fn NodePicker(
     let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
 
     let query = RwSignal::new(String::new());
-    let (results, answers) = use_node_search_answering(query);
+    let (results, answers) = use_node_lookup_answering(query);
     let options = Signal::derive(move || {
         results
             .get()
             .into_iter()
-            .filter(|r| Some(r.node_id) != exclude)
-            .collect::<Vec<SearchResult>>()
+            .filter(|r| Some(r.id) != exclude)
+            .collect::<Vec<NodeLookupHit>>()
     });
     let fresh = move || answers.get_untracked() == query.get_untracked();
     let open = RwSignal::new(false);
@@ -113,8 +138,8 @@ pub fn NodePicker(
         let Some(r) = options.with_untracked(|o| o.get(i).cloned()) else {
             return;
         };
-        selected.set(Some((r.node_id, r.title)));
-        picked_type.set(Some(r.node_type));
+        selected.set(Some((r.id, r.title)));
+        picked_type.set(Some(r.node_type.as_str().to_string()));
         query.set(String::new());
         open.set(false);
         active.set(None);
@@ -293,8 +318,8 @@ pub fn NodePicker(
                             overflow-hidden max-h-56 overflow-y-auto"
                     >
                         {opts.into_iter().enumerate().map(|(i, res)| {
-                            let icon = crate::components::node_meta::type_icon(&res.node_type);
-                            let type_label = crate::components::node_meta::type_label(&res.node_type);
+                            let icon = crate::components::node_meta::type_icon(res.node_type.as_str());
+                            let type_label = crate::components::node_meta::type_label(res.node_type.as_str());
                             view! {
                                 <div
                                     id=opt_id.get_value()(i)

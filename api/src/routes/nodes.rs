@@ -13,8 +13,8 @@ use common::{
     edge::EdgeWithTitles,
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
-        CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeTitleEntry,
-        UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeLookupHit, NodeLookupParams,
+        NodeTitleEntry, UpdateNodeRequest,
     },
     node_version::NodeVersion,
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_nodes).post(create_node))
         .route("/titles", get(list_titles))
+        .route("/lookup", get(lookup_titles))
         .route("/slug/{slug}", get(get_node_by_slug))
         .route("/{id}", get(get_node).put(update_node).delete(delete_node))
         .route("/{id}/neighbors", get(neighbors))
@@ -138,6 +139,36 @@ async fn list_titles(
     };
     let titles = state.nodes.list_titles(subject).await?;
     Ok(Json(titles))
+}
+
+// ── Title lookup (node pickers) ──────────────────────────────────────────────
+
+/// Upper bounds for `GET /nodes/lookup`: a picker shows a handful of rows,
+/// and the query is a title fragment, not a document.
+const LOOKUP_DEFAULT_LIMIT: u32 = 8;
+const LOOKUP_MAX_LIMIT: u32 = 20;
+const LOOKUP_MAX_QUERY_CHARS: usize = 200;
+
+/// `GET /nodes/lookup?q=&limit=` — title matches for the node pickers.
+/// Same visibility as `/nodes/titles` (own + shared; admins everything).
+async fn lookup_titles(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(params): Query<NodeLookupParams>,
+) -> Result<Json<Vec<NodeLookupHit>>, ApiError> {
+    let q = params.q.trim();
+    if q.chars().count() > LOOKUP_MAX_QUERY_CHARS {
+        return Err(ApiError::Validation("query too long".to_string()));
+    }
+    let limit = params
+        .limit
+        .unwrap_or(LOOKUP_DEFAULT_LIMIT)
+        .clamp(1, LOOKUP_MAX_LIMIT);
+    let hits = state
+        .nodes
+        .lookup_titles(subject_scope(&claims), q, i64::from(limit))
+        .await?;
+    Ok(Json(hits))
 }
 
 // ── Node CRUD ────────────────────────────────────────────────────────────────
