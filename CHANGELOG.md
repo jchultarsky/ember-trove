@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **People: creating a person from the registry stays on the registry**
+  (#154). Save returns to `/people` instead of opening the new person's
+  page: the list refetches (clearing a search that would hide the new
+  row), the new row is highlighted for a moment and scrolled into view,
+  and a "Person added." toast confirms. Adding several people in a row no
+  longer costs a Back each. A person's page opens from a row click,
+  search or Cmd-K as before. The list is now a `<Transition>`, so a
+  refetch keeps it on screen instead of flashing "Loading…".
+
 ## [2.38.0] - 2026-10-26
 
 ### Changed — one button language across the UI
