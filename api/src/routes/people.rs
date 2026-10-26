@@ -69,7 +69,7 @@ struct ListParams {
 
 #[derive(Debug, serde::Deserialize)]
 struct CreateParams {
-    /// Create even though an email matches someone already in the registry.
+    /// Save even though an email matches someone already in the registry.
     #[serde(default)]
     confirm: bool,
 }
@@ -129,19 +129,32 @@ async fn get_person(
     Ok(Json(state.people.get(&claims.sub, PersonId(id)).await?))
 }
 
+/// Replace a person's fields. Emails get the same duplicate warning as on
+/// create, ignoring the person being edited: that's where the UI adds them,
+/// since the create form only asks for a name.
 async fn update_person(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
+    Query(params): Query<CreateParams>,
     Json(input): Json<PersonInput>,
-) -> Result<Json<Person>, ApiError> {
+) -> Result<Response, ApiError> {
+    let id = PersonId(id);
     let input = normalize(input).map_err(invalid)?;
-    Ok(Json(
-        state
+    if !params.confirm {
+        let matches: Vec<_> = state
             .people
-            .update(&claims.sub, PersonId(id), &input)
-            .await?,
-    ))
+            .find_by_emails(&claims.sub, &email_keys(&input))
+            .await?
+            .into_iter()
+            .filter(|m| m.id != id)
+            .collect();
+        if !matches.is_empty() {
+            return Ok((StatusCode::CONFLICT, Json(DuplicateWarning { matches })).into_response());
+        }
+    }
+    let person = state.people.update(&claims.sub, id, &input).await?;
+    Ok(Json(person).into_response())
 }
 
 /// Deletes the person and, by cascade, their memberships.

@@ -2321,6 +2321,19 @@ async fn a_matching_email_is_a_duplicate_warning_not_a_silent_create() {
 }
 
 #[tokio::test]
+async fn adding_a_taken_email_on_edit_warns_before_any_write() {
+    // Someone else in the registry has it: a warning before any write.
+    let (status, body) = people_call(
+        "PUT",
+        &format!("/people/{}", Uuid::new_v4()),
+        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "taken@example.com" }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["matches"][0]["display_name"], "Ada");
+}
+
+#[tokio::test]
 async fn a_node_viewer_can_list_its_people_and_a_stranger_cannot() {
     let (status, _) = people_call(
         "GET",

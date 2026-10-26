@@ -71,6 +71,7 @@ pub fn Sidebar(
             // Kanban surface made it redundant.)
             <SidebarLink icon="task_alt"       label="Tasks"     on_click=nav!("/tasks/my-day") collapsed=collapsed />
             <SidebarLink icon="sticky_note_2"  label="Notes"     on_click=nav!("/notes")     collapsed=collapsed />
+            <SidebarLink icon="group"          label="People"    on_click=nav!("/people")    collapsed=collapsed />
             <SidebarLink icon="dashboard"      label="Dashboard" on_click=nav!("/dashboard") collapsed=collapsed />
             <SidebarLink icon="share"          label="Graph"     on_click=nav!("/graph")     collapsed=collapsed />
             <div class="border-t border-stone-200 dark:border-stone-700 my-3" />

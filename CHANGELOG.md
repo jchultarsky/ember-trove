@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — People: the registry and the node section (#147, part 2)
+- **A People page** (`/people`, in the sidebar): search by name, company,
+  email or phone, and create someone with just a name.
+- **A person's card** (`/people/:id`) shows only the fields that are filled
+  in. Emails and phones are `mailto:`/`tel:` links with a copy button. Edit
+  covers every field, with labelled email/phone rows and one preferred each.
+  **"Used in"** lists every node the person is on, with their role there.
+- **Duplicate warning:** saving an email that someone else in your registry
+  already has shows who it is, with "Save anyway". Saving a person with
+  their own email never warns.
+- **A People section on every node page**, after Notes:
+  - Add someone from your registry, or create them inline ("Create “…”");
+    an APG combobox like the node picker.
+  - Set a role (suggestions from roles you've used) and a note for this
+    node, or remove them. Removing never deletes the person.
+  - Only the node's own owner gets these controls. A sharee sees name and
+    role only.
+- The People section's Role field is a datalist input, so tests address it
+  as a combobox (`.claude/rules/e2e.md`).
+
+### Fixed — new icons show up right after a release
+- The icon font is a subset that's refreshed in place under an unhashed
+  name, and `/fonts/` is cached for 7 days. So after a release, newly added
+  icons could show as their raw names ("mail", "call") for up to a week.
+  `scripts/refresh-icon-font.sh` now stamps a content hash into the font's
+  references (`?v=…` in `index.html` and `input.css`). The font was
+  refreshed for the People icons.
+- The People pages have browser-tab titles.
+
+
 ### Added — People: the data model and API (#147, part 1)
 - **People** are an entity, not a node type. Nodes are documents, and a
   person is someone documents refer to.

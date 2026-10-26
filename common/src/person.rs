@@ -396,6 +396,27 @@ pub fn email_keys(input: &PersonInput) -> Vec<String> {
         .collect()
 }
 
+/// The contact point to show first: the preferred one, else the first.
+pub fn primary(points: &[ContactPoint]) -> Option<&ContactPoint> {
+    points
+        .iter()
+        .find(|p| p.preferred)
+        .or_else(|| points.first())
+}
+
+/// Whether `p` matches the picker's text: name, company, any email or phone,
+/// case-insensitively. Blank text matches everyone.
+pub fn matches(p: &Person, q: &str) -> bool {
+    let q = q.trim().to_lowercase();
+    if q.is_empty() {
+        return true;
+    }
+    let hit = |s: &str| s.to_lowercase().contains(&q);
+    hit(&p.display_name)
+        || p.company.as_deref().is_some_and(hit)
+        || p.emails.iter().chain(&p.phones).any(|c| hit(&c.value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,5 +641,23 @@ mod tests {
             !json.contains("example.com") && !json.contains("private"),
             "{json}"
         );
+    }
+
+    #[test]
+    fn the_primary_contact_is_the_preferred_one_else_the_first() {
+        let a = cp("work", "a@x.test", false);
+        let b = cp("home", "b@x.test", true);
+        assert_eq!(primary(&[a.clone(), b.clone()]), Some(&b));
+        assert_eq!(primary(std::slice::from_ref(&a)), Some(&a));
+        assert_eq!(primary(&[]), None);
+    }
+
+    #[test]
+    fn the_picker_matches_name_company_email_and_phone() {
+        let p = membership("o").person;
+        for q in ["ada", "ANALYTICAL", "example.com", ""] {
+            assert!(matches(&p, q), "{q}");
+        }
+        assert!(!matches(&p, "babbage"));
     }
 }

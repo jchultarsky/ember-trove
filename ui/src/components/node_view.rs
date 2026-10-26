@@ -130,6 +130,12 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             } else {
                                 false
                             };
+                            // The node's own owner, without the admin bypass: people
+                            // are owner-only (#147), so the admin can't change them.
+                            let is_canonical_owner = matches!(
+                                auth_state.get_untracked(),
+                                AuthStatus::Authenticated(ref user) if user.sub == n.owner_id
+                            );
 
                             // Record this node visit in the localStorage recent list.
                             crate::recent::push_recent(
@@ -368,6 +374,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <TaskPanel node_id=id />
                                         // Note panel — append-only; owner can add, everyone can read
                                         <NotePanel node_id=id is_owner=is_owner />
+                                        // People (#147): only the node's own owner may change them.
+                                        <crate::components::node_people::NodePeoplePanel node_id=id can_edit=is_canonical_owner />
                                         // External links panel — grouped with other collapsible sections
                                         <LinksPanel node_id=id is_editor=is_owner />
                                         <EdgePanel node_id=id />

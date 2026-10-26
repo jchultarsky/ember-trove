@@ -17,6 +17,7 @@ use leptos::prelude::*;
 pub enum NodeSection {
     Tasks,
     Notes,
+    People,
     Links,
     Connections,
     LocalGraph,
@@ -29,9 +30,10 @@ pub enum NodeSection {
 
 impl NodeSection {
     /// Page order: the outline lists them this way.
-    pub const ALL: [NodeSection; 10] = [
+    pub const ALL: [NodeSection; 11] = [
         NodeSection::Tasks,
         NodeSection::Notes,
+        NodeSection::People,
         NodeSection::Links,
         NodeSection::Connections,
         NodeSection::LocalGraph,
@@ -46,6 +48,7 @@ impl NodeSection {
         match self {
             NodeSection::Tasks => "Tasks",
             NodeSection::Notes => "Notes",
+            NodeSection::People => "People",
             NodeSection::Links => "External Links",
             NodeSection::Connections => "Connections",
             NodeSection::LocalGraph => "Local Graph",
@@ -61,6 +64,7 @@ impl NodeSection {
         match self {
             NodeSection::Tasks => "check_box",
             NodeSection::Notes => "sticky_note_2",
+            NodeSection::People => "group",
             NodeSection::Links => "open_in_new",
             NodeSection::Connections => "hub",
             NodeSection::LocalGraph => "hub",
@@ -78,6 +82,7 @@ impl NodeSection {
         match self {
             NodeSection::Tasks => "tasks",
             NodeSection::Notes => "notes",
+            NodeSection::People => "people",
             NodeSection::Links => "links",
             NodeSection::Connections => "connections",
             NodeSection::LocalGraph => "local-graph",
