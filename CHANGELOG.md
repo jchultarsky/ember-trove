@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — public share links are removed (#147)
+- **Owner decision:** public share links (`/share/{token}`) are gone. A link
+  gave anyone who had it read access to a node without signing in, and it
+  was too easy to publish personal data by accident. This also clears the
+  way for People (#147): contact details can never leak through a public
+  link, because there are none.
+- Removed: the public share view, the "Public Links" section on the node
+  page, `GET/POST /api/nodes/{id}/share`, `DELETE /api/nodes/{id}/share/{token}`
+  and `GET /share/{token}`. Sharing with signed-in users (the Sharing
+  section) is unchanged.
+- **Migration 036 drops the `share_tokens` table, so every existing link
+  stops working.** That's intended. Only the random tokens are lost; the
+  nodes they pointed at are untouched.
+- Backups no longer include share tokens. Older archives that still carry
+  them restore fine; the field is ignored.
+
 ### Documentation — a written collaboration protocol (#145)
 - `COLLABORATION.md` sets out the roles: the owner, Muse AI as proposer on
   `jchultarsky101`, and Claude Code as developer on `jchultarsky`. It also

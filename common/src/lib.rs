@@ -53,7 +53,6 @@ pub mod picker;
 pub mod project_status;
 pub mod quickadd;
 pub mod search;
-pub mod share_token;
 pub mod slug;
 pub mod tag;
 pub mod task;

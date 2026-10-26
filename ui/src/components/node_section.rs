@@ -23,14 +23,13 @@ pub enum NodeSection {
     LinkedHere,
     Attachments,
     Sharing,
-    PublicLinks,
     Versions,
     Activity,
 }
 
 impl NodeSection {
     /// Page order: the outline lists them this way.
-    pub const ALL: [NodeSection; 11] = [
+    pub const ALL: [NodeSection; 10] = [
         NodeSection::Tasks,
         NodeSection::Notes,
         NodeSection::Links,
@@ -39,7 +38,6 @@ impl NodeSection {
         NodeSection::LinkedHere,
         NodeSection::Attachments,
         NodeSection::Sharing,
-        NodeSection::PublicLinks,
         NodeSection::Versions,
         NodeSection::Activity,
     ];
@@ -54,7 +52,6 @@ impl NodeSection {
             NodeSection::LinkedHere => "Linked Here",
             NodeSection::Attachments => "Attachments",
             NodeSection::Sharing => "Sharing",
-            NodeSection::PublicLinks => "Public Links",
             NodeSection::Versions => "Version History",
             NodeSection::Activity => "Activity",
         }
@@ -70,7 +67,6 @@ impl NodeSection {
             NodeSection::LinkedHere => "link",
             NodeSection::Attachments => "attach_file",
             NodeSection::Sharing => "group",
-            NodeSection::PublicLinks => "public",
             NodeSection::Versions => "history_edu",
             NodeSection::Activity => "history",
         }
@@ -88,7 +84,6 @@ impl NodeSection {
             NodeSection::LinkedHere => "linked-here",
             NodeSection::Attachments => "attachments",
             NodeSection::Sharing => "sharing",
-            NodeSection::PublicLinks => "public-links",
             NodeSection::Versions => "versions",
             NodeSection::Activity => "activity",
         }

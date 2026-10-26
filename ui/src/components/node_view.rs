@@ -12,7 +12,6 @@ use crate::components::node_meta::{
 };
 use crate::components::note_panel::NotePanel;
 use crate::components::permission_dialog::PermissionPanel;
-use crate::components::share_panel::SharePanel;
 use crate::components::tag_bar::TagBar;
 use crate::components::task_panel::TaskPanel;
 use crate::components::toast::{ToastLevel, push_toast};
@@ -376,7 +375,6 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <BacklinksPanel node_id=id title=n.title.clone() />
                                         <AttachmentPanel node_id=id />
                                         <PermissionPanel node_id=id is_owner=is_owner />
-                                        <SharePanel node_id=id is_owner=is_owner />
                                         <VersionPanel
                                             node_id=id
                                             is_editor=is_owner

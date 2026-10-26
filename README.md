@@ -31,7 +31,6 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Keyboard shortcuts** — `n` new node · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields.
 - **Multi-user permissions** — nodes are **private by default**. Owners can invite others by email with Viewer / Editor / Owner roles. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
-- **Public share links** — generate opaque share tokens for read-only access to a node without login.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
 - **Light / dark mode** — class-based Tailwind v4 warm ember theme, persisted in `localStorage`.
 - **Mobile-responsive** — hamburger top bar on mobile; sidebar slides in as an overlay.
@@ -383,8 +382,6 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/activity` | Audit log for this node |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
-| POST | `/api/nodes/{id}/share` | Create a public share token |
-| GET | `/api/nodes/{id}/share` | List share tokens for this node |
 
 ### Edges
 
@@ -481,13 +478,6 @@ All routes are nested under `/api`.
 | POST | `/api/templates` | Create a template |
 | PUT | `/api/templates/{id}` | Update a template |
 | DELETE | `/api/templates/{id}` | Delete a template |
-
-### Public Share Links
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/share/{token}` | Read-only public view — no login required |
-| DELETE | `/api/share/{token}` | Revoke a share token |
 
 ### Admin (admin role required)
 

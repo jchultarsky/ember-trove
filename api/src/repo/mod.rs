@@ -17,7 +17,6 @@ mod pg_tests;
 pub mod pkce;
 pub mod search;
 pub mod search_presets;
-pub mod share_token;
 pub mod tag;
 pub mod task;
 pub mod template;

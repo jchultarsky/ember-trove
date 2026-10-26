@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::{
     attachment::Attachment, edge::Edge, favorite::Favorite, graph::NodePosition, node::Node,
-    node_link::NodeLink, node_version::NodeVersion, note::Note, permission::Permission,
-    share_token::ShareToken, tag::Tag, task::Task,
+    node_link::NodeLink, node_version::NodeVersion, note::Note, permission::Permission, tag::Tag,
+    task::Task,
 };
 
 /// Entity count summary embedded in the manifest and returned for previews.
@@ -69,9 +69,9 @@ pub struct BackupData {
     /// Sharing permissions.
     #[serde(default)]
     pub permissions: Vec<Permission>,
-    /// Public share tokens.
-    #[serde(default)]
-    pub share_tokens: Vec<ShareToken>,
+    // `share_tokens` was here until public share links were removed (#147).
+    // Older archives still carry it; serde ignores the unknown field, so they
+    // restore without their (now meaningless) tokens.
     /// Node body version history.
     #[serde(default)]
     pub node_versions: Vec<NodeVersion>,
@@ -88,4 +88,29 @@ pub struct BackupPreview {
     pub entity_counts: EntityCounts,
     /// Human-readable warnings the user should acknowledge before restoring.
     pub warnings: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_archive_with_share_tokens_still_restores() {
+        // Archives made before #147 carry `share_tokens`; the field is gone,
+        // and restoring must not fail on it.
+        let json = r#"{
+            "nodes": [], "edges": [], "tags": [], "notes": [], "tasks": [],
+            "attachments": [],
+            "share_tokens": [{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "token": "00000000-0000-0000-0000-000000000003",
+                "created_by": "someone",
+                "created_at": "2026-01-01T00:00:00Z",
+                "expires_at": null
+            }]
+        }"#;
+        let data: BackupData = serde_json::from_str(json).expect("old archive must parse");
+        assert!(data.nodes.is_empty() && data.permissions.is_empty());
+    }
 }

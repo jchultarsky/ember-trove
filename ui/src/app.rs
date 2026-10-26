@@ -7,10 +7,7 @@ use leptos_router::components::Router;
 use crate::{
     api::fetch_api_version,
     auth::provide_auth_state,
-    components::{
-        dark_mode_toggle::Theme, layout::Layout, public_share_view::PublicShareView,
-        toast::ToastState,
-    },
+    components::{dark_mode_toggle::Theme, layout::Layout, toast::ToastState},
 };
 
 // ── localStorage helpers ───────────────────────────────────────────────────
@@ -66,17 +63,6 @@ pub struct TemplatePrefill {
 
 #[component]
 pub fn App() -> impl IntoView {
-    // Public share links (`/share/<uuid>`) render a standalone read-only view
-    // without authentication or the main layout.
-    let pathname = web_sys::window()
-        .and_then(|w| w.location().pathname().ok())
-        .unwrap_or_default();
-    if let Some(token_str) = pathname.strip_prefix("/share/")
-        && let Ok(token) = token_str.parse::<uuid::Uuid>()
-    {
-        return view! { <PublicShareView token=token /> }.into_any();
-    }
-
     let auth_state = provide_auth_state();
 
     // Persist theme in localStorage; with no stored preference, follow the
