@@ -82,6 +82,22 @@ pub struct PersonInput {
     pub notes: Option<String>,
 }
 
+/// A saved person as the editor's starting values (edit opens on these).
+impl From<&Person> for PersonInput {
+    fn from(p: &Person) -> Self {
+        PersonInput {
+            display_name: p.display_name.clone(),
+            company: p.company.clone(),
+            position: p.position.clone(),
+            emails: p.emails.clone(),
+            phones: p.phones.clone(),
+            address_label: p.address_label.clone(),
+            address: p.address.clone(),
+            notes: p.notes.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PersonError {
     /// The name is blank.
@@ -659,5 +675,19 @@ mod tests {
             assert!(matches(&p, q), "{q}");
         }
         assert!(!matches(&p, "babbage"));
+    }
+
+    #[test]
+    fn a_person_round_trips_into_the_editors_input() {
+        let p = membership("o").person;
+        let input = PersonInput::from(&p);
+        assert_eq!(input.display_name, p.display_name);
+        assert_eq!(
+            (input.company, input.notes),
+            (p.company.clone(), p.notes.clone())
+        );
+        assert_eq!(input.emails, p.emails);
+        // And it's already normal: saving it unchanged changes nothing.
+        assert_eq!(normalize(PersonInput::from(&p)), Ok(PersonInput::from(&p)));
     }
 }
