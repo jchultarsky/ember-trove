@@ -374,6 +374,8 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/nodes/:id/edit") view=NodeEditRoute />
                         <Route path=path!("/tags")           view=TagManager />
                         <Route path=path!("/notes")          view=NotesView />
+                        <Route path=path!("/people")         view=crate::components::people_view::PeopleView />
+                        <Route path=path!("/people/:id")     view=crate::components::people_view::PersonRoute />
                         <Route path=path!("/templates")      view=TemplatesView />
                                 <Route path=path!("/webhooks")       view=WebhooksView />
                         <Route path=path!("/admin/users")       view=AdminView />
@@ -531,6 +533,10 @@ fn section_title(path: &str) -> &'static str {
         "Search"
     } else if path.starts_with("/notes") {
         "Notes"
+    } else if path.starts_with("/people/") {
+        "Person"
+    } else if path.starts_with("/people") {
+        "People"
     } else if path == "/nodes/new" {
         "New Node"
     } else if path.starts_with("/nodes/") && path.ends_with("/edit") {

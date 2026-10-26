@@ -12,6 +12,7 @@ pub mod node_link;
 pub mod node_version;
 pub mod note;
 pub mod permission;
+pub mod person;
 #[cfg(all(test, feature = "pg-tests"))]
 mod pg_tests;
 pub mod pkce;

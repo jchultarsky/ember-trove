@@ -1261,3 +1261,166 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
     let too_long = repo.update(p1.id, upd(Some(Some("x".repeat(41))))).await;
     assert!(too_long.is_err());
 }
+
+// ── People (#147) ─────────────────────────────────────────────────────────────
+
+fn person(name: &str, email: Option<&str>) -> common::person::PersonInput {
+    common::person::PersonInput {
+        display_name: name.into(),
+        company: Some("Acme".into()),
+        emails: email
+            .map(|e| {
+                vec![common::person::ContactPoint {
+                    label: "work".into(),
+                    value: e.into(),
+                    preferred: true,
+                }]
+            })
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn people_are_owner_scoped_searchable_and_duplicate_checked(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    let repo = PgPersonRepo::new(pool.clone());
+    let ada = repo
+        .create("a", &person("Ada Lovelace", Some("ada@example.com")))
+        .await
+        .expect("ada");
+    repo.create("a", &person("Charles Babbage", Some("cb@engines.test")))
+        .await
+        .expect("cb");
+    let theirs = repo
+        .create("b", &person("Ada Byron", Some("ada@example.com")))
+        .await
+        .expect("b");
+
+    // The JSON contact list round-trips.
+    assert_eq!(ada.emails[0].value, "ada@example.com");
+    // Owner-scoped: b's person doesn't exist for a, even by id.
+    assert!(matches!(
+        repo.get("a", theirs.id).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert!(matches!(
+        repo.delete("a", theirs.id).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    let names =
+        |v: Vec<common::person::Person>| v.into_iter().map(|p| p.display_name).collect::<Vec<_>>();
+    assert_eq!(
+        names(repo.list("a", None, 100).await.unwrap()),
+        ["Ada Lovelace", "Charles Babbage"]
+    );
+    // Search covers name, company, email and phone; LIKE wildcards are literal.
+    assert_eq!(
+        names(repo.list("a", Some("ENGINES"), 100).await.unwrap()),
+        ["Charles Babbage"]
+    );
+    assert_eq!(
+        names(repo.list("a", Some("lovel"), 100).await.unwrap()),
+        ["Ada Lovelace"]
+    );
+    assert!(repo.list("a", Some("%"), 100).await.unwrap().is_empty());
+
+    // The duplicate check is per owner and case-insensitive.
+    let dup = repo
+        .find_by_emails("a", &["ada@example.com".into()])
+        .await
+        .unwrap();
+    assert_eq!(dup.len(), 1);
+    assert_eq!(dup[0].id, ada.id);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn memberships_are_unique_node_scoped_and_cascade(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    let repo = PgPersonRepo::new(pool.clone());
+    let project = create_node(&pool, "a", "Project X").await;
+    let other = create_node(&pool, "a", "Project Y").await;
+    let ada = repo.create("a", &person("Ada", None)).await.unwrap();
+
+    let m = repo
+        .add_membership(project.id, ada.id, Some("Sponsor"), Some("kickoff"))
+        .await
+        .unwrap();
+    // One membership per person per node.
+    assert!(matches!(
+        repo.add_membership(project.id, ada.id, None, None).await,
+        Err(EmberTroveError::AlreadyExists(_))
+    ));
+    repo.add_membership(other.id, ada.id, Some("sponsor"), None)
+        .await
+        .unwrap();
+
+    let on_project = repo.memberships_for_node(project.id).await.unwrap();
+    assert_eq!(on_project.len(), 1);
+    assert_eq!(
+        (
+            on_project[0].role.as_deref(),
+            on_project[0].person.display_name.as_str()
+        ),
+        (Some("Sponsor"), "Ada")
+    );
+
+    // "Used in" and the role suggestions (case variants are one role).
+    let used = repo.usages("a", ada.id).await.unwrap();
+    assert_eq!(
+        used.iter()
+            .map(|u| u.node_title.as_str())
+            .collect::<Vec<_>>(),
+        ["Project X", "Project Y"]
+    );
+    assert!(matches!(
+        repo.usages("b", ada.id).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    let roles = repo.role_counts("a").await.unwrap();
+    assert_eq!((roles.len(), roles[0].count), (1, 2));
+    assert!(repo.role_counts("b").await.unwrap().is_empty());
+
+    // Update and remove are scoped to the path's node.
+    assert!(matches!(
+        repo.update_membership(other.id, m, Some("x"), None).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    repo.update_membership(project.id, m, Some("Approver"), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        repo.remove_membership(other.id, m).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    repo.remove_membership(project.id, m).await.unwrap();
+    // Removing a membership never deletes the person.
+    assert!(repo.get("a", ada.id).await.is_ok());
+
+    // Deleting a node or a person removes their memberships.
+    PgNodeRepo::new(pool.clone())
+        .delete(other.id)
+        .await
+        .unwrap();
+    assert!(repo.usages("a", ada.id).await.unwrap().is_empty());
+    repo.add_membership(project.id, ada.id, None, None)
+        .await
+        .unwrap();
+    repo.delete("a", ada.id).await.unwrap();
+    assert!(
+        repo.memberships_for_node(project.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_database_refuses_an_oversized_person(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    // Defence in depth behind `common::person::normalize`.
+    let res = PgPersonRepo::new(pool)
+        .create("a", &person(&"x".repeat(201), None))
+        .await;
+    assert!(res.is_err());
+}

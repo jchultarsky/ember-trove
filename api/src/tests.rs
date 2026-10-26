@@ -706,6 +706,138 @@ fn fake_node(slug: &str, owner: &str) -> Node {
     }
 }
 
+/// People stub for the handler tests (#147). The "registry" holds one
+/// person, `AZ_PERSON`, owned by `test-sub`; any other id is a 404, the way
+/// another owner's person is.
+const AZ_PERSON: u128 = 0xa2_0e01;
+
+struct StubPersonRepo;
+#[async_trait]
+impl crate::repo::person::PersonRepo for StubPersonRepo {
+    async fn list(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: i64,
+    ) -> Result<Vec<common::person::Person>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn get(
+        &self,
+        owner: &str,
+        id: common::id::PersonId,
+    ) -> Result<common::person::Person, EmberTroveError> {
+        if owner == "test-sub" && id.0 == Uuid::from_u128(AZ_PERSON) {
+            let now = chrono::Utc::now();
+            Ok(common::person::Person {
+                id,
+                owner_id: owner.into(),
+                display_name: "Ada".into(),
+                company: None,
+                position: None,
+                emails: vec![],
+                phones: vec![],
+                address_label: None,
+                address: None,
+                notes: None,
+                created_at: now,
+                updated_at: now,
+            })
+        } else {
+            Err(EmberTroveError::NotFound(format!("person {id} not found")))
+        }
+    }
+    async fn create(
+        &self,
+        _: &str,
+        _: &common::person::PersonInput,
+    ) -> Result<common::person::Person, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update(
+        &self,
+        _: &str,
+        _: common::id::PersonId,
+        _: &common::person::PersonInput,
+    ) -> Result<common::person::Person, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: &str, _: common::id::PersonId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find_by_emails(
+        &self,
+        _: &str,
+        lowered: &[String],
+    ) -> Result<Vec<common::person::DuplicateMatch>, EmberTroveError> {
+        // Exactly one known address, so the duplicate warning can be tested.
+        Ok(lowered
+            .iter()
+            .filter(|e| e.as_str() == "taken@example.com")
+            .map(|e| common::person::DuplicateMatch {
+                id: common::id::PersonId(Uuid::from_u128(AZ_PERSON)),
+                display_name: "Ada".into(),
+                email: e.clone(),
+            })
+            .collect())
+    }
+    async fn usages(
+        &self,
+        _: &str,
+        _: common::id::PersonId,
+    ) -> Result<Vec<common::person::PersonUsage>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn role_counts(
+        &self,
+        _: &str,
+    ) -> Result<Vec<common::person::RoleCount>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn memberships_for_node(
+        &self,
+        _: NodeId,
+    ) -> Result<Vec<common::person::Membership>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn add_membership(
+        &self,
+        _: NodeId,
+        _: common::id::PersonId,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<common::id::MembershipId, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn update_membership(
+        &self,
+        _: NodeId,
+        _: common::id::MembershipId,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn remove_membership(
+        &self,
+        _: NodeId,
+        _: common::id::MembershipId,
+    ) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(
+        &self,
+    ) -> Result<
+        (
+            Vec<common::person::Person>,
+            Vec<common::person::MembershipRecord>,
+        ),
+        EmberTroveError,
+    > {
+        Ok((vec![], vec![]))
+    }
+}
+
 struct StubActivityRepo;
 #[async_trait]
 impl ActivityRepo for StubActivityRepo {
@@ -927,6 +1059,7 @@ fn test_state() -> AppState {
         backup: Arc::new(StubBackupRepo),
         favorites: Arc::new(StubFavoriteRepo),
         activity: Arc::new(StubActivityRepo),
+        people: Arc::new(StubPersonRepo),
         node_versions: Arc::new(StubNodeVersionRepo),
         templates: Arc::new(StubTemplateRepo),
         search_presets: Arc::new(StubSearchPresetRepo),
@@ -2096,4 +2229,143 @@ async fn project_status_suggestions_are_the_callers_own() {
         body,
         serde_json::json!([{ "status": "of test-sub", "count": 1 }])
     );
+}
+
+// ── People (#147) ─────────────────────────────────────────────────────────────
+
+fn people_app() -> Router {
+    Router::new()
+        .nest("/people", crate::routes::people::router())
+        .nest(
+            "/nodes/{node_id}/people",
+            crate::routes::people::node_router(),
+        )
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state())
+}
+
+async fn people_call(
+    method: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let resp = people_app()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn people_routes_registered() {
+    assert_route_registered("GET", "/people").await;
+    assert_route_registered("GET", "/people/roles").await;
+    assert_route_registered("GET", &format!("/nodes/{}/people", Uuid::new_v4())).await;
+}
+
+#[tokio::test]
+async fn someone_elses_person_is_a_404_like_a_missing_one() {
+    let (status, _) = people_call(
+        "GET",
+        &format!("/people/{}", Uuid::new_v4()),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = people_call(
+        "GET",
+        &format!("/people/{}", Uuid::from_u128(AZ_PERSON)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        (status, body["display_name"].as_str()),
+        (StatusCode::OK, Some("Ada"))
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_person_is_rejected_before_any_write() {
+    // The stub's `create` is unimplemented: reaching it would panic.
+    for bad in [
+        serde_json::json!({ "display_name": "   " }),
+        serde_json::json!({ "display_name": "Ada", "emails": [{ "value": "not-an-email" }] }),
+    ] {
+        let (status, _) = people_call("POST", "/people", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+#[tokio::test]
+async fn a_matching_email_is_a_duplicate_warning_not_a_silent_create() {
+    let (status, body) = people_call(
+        "POST",
+        "/people",
+        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "Taken@Example.com" }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["matches"][0]["display_name"], "Ada");
+}
+
+#[tokio::test]
+async fn adding_a_taken_email_on_edit_warns_before_any_write() {
+    // Someone else in the registry has it: a warning before any write.
+    let (status, body) = people_call(
+        "PUT",
+        &format!("/people/{}", Uuid::new_v4()),
+        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "taken@example.com" }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["matches"][0]["display_name"], "Ada");
+}
+
+#[tokio::test]
+async fn a_node_viewer_can_list_its_people_and_a_stranger_cannot() {
+    let (status, _) = people_call(
+        "GET",
+        &format!("/nodes/{}/people", Uuid::from_u128(AZ_VIEW_NODE)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = people_call(
+        "GET",
+        &format!("/nodes/{}/people", Uuid::from_u128(AZ_FOREIGN_NODE)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+        "{status}"
+    );
+}
+
+#[tokio::test]
+async fn only_the_nodes_owner_can_change_its_people() {
+    let body = serde_json::json!({ "person_id": Uuid::from_u128(AZ_PERSON) });
+    // A viewer, an editor who isn't the owner, and a stranger: all refused
+    // before anything is written (the stub's add_membership would panic).
+    for node in [AZ_VIEW_NODE, AZ_EDIT_NODE, AZ_FOREIGN_NODE, AZ_OWNED_NODE] {
+        let (status, _) = people_call(
+            "POST",
+            &format!("/nodes/{}/people", Uuid::from_u128(node)),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "node {node:#x}");
+    }
 }

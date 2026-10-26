@@ -13,7 +13,7 @@ use crate::{
         activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo, edge::EdgeRepo,
         editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
         node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
-        permission::PermissionRepo, pkce::PkceRepo, search::SearchRepo,
+        permission::PermissionRepo, person::PersonRepo, pkce::PkceRepo, search::SearchRepo,
         search_presets::SearchPresetRepo, tag::TagRepo, task::TaskRepo, template::TemplateRepo,
         webhook::WebhookRepo,
     },
@@ -29,6 +29,8 @@ pub struct AppState {
     pub notes: Arc<dyn NoteRepo>,
     pub attachments: Arc<dyn AttachmentRepo>,
     pub permissions: Arc<dyn PermissionRepo>,
+    /// People and memberships (#147). Owner-scoped, no admin bypass.
+    pub people: Arc<dyn PersonRepo>,
     pub search: Arc<dyn SearchRepo>,
     pub graph: Arc<dyn GraphRepo>,
     pub backup: Arc<dyn BackupRepo>,

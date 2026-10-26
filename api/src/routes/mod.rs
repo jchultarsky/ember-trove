@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod node_links;
 pub mod nodes;
 pub mod notes;
+pub mod people;
 pub mod permissions;
 pub mod search;
 pub mod search_presets;
@@ -160,6 +161,8 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/graph", graph::router())
         .nest("/permissions", permissions::router())
         .nest("/favorites", favorites::router())
+        .nest("/people", people::router())
+        .nest("/nodes/{node_id}/people", people::node_router())
         .nest("/templates", templates::router())
         .nest("/search-presets", search_presets::router())
         .nest("/nodes/{node_id}/links", node_links::router())

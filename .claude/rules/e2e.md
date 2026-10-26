@@ -78,6 +78,10 @@ CI job is too slow a feedback loop for selector work.
   `aria-label` is its placeholder). Open picker lists are absolutely
   positioned and cover the fields below them, so a click on such a field
   waits forever. Click something beside the picker instead.
+- **An `<input list=…>` (a datalist) is a combobox too** (2026-10-26, #147):
+  the People section's Role field has `role="combobox"`, so
+  `getByRole('textbox', { name: 'Role' })` never matches. Use
+  `getByRole('combobox', { name: 'Role' })`.
 - **Duplicate titles can't be made with one user** (the API returns 409). To
   test same-titled search results, intercept `/api/search` with
   `page.route` (`node_picker.spec.ts`).

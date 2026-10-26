@@ -4,8 +4,17 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
-    attachment::Attachment, edge::Edge, favorite::Favorite, graph::NodePosition, node::Node,
-    node_link::NodeLink, node_version::NodeVersion, note::Note, permission::Permission, tag::Tag,
+    attachment::Attachment,
+    edge::Edge,
+    favorite::Favorite,
+    graph::NodePosition,
+    node::Node,
+    node_link::NodeLink,
+    node_version::NodeVersion,
+    note::Note,
+    permission::Permission,
+    person::{MembershipRecord, Person},
+    tag::Tag,
     task::Task,
 };
 
@@ -18,6 +27,9 @@ pub struct EntityCounts {
     pub notes: u32,
     pub tasks: u32,
     pub attachments: u32,
+    /// People in the registry (#147). 0 for archives made before them.
+    #[serde(default)]
+    pub people: u32,
 }
 
 /// Top-level manifest written as `manifest.json` inside the archive.
@@ -78,6 +90,14 @@ pub struct BackupData {
     /// Graph canvas positions.
     #[serde(default)]
     pub node_positions: Vec<NodePosition>,
+    // ── People (#147) ─────────────────────────────────────────────────────
+    /// The registry: third parties' contact details, so archives need the
+    /// same care as node bodies.
+    #[serde(default)]
+    pub people: Vec<Person>,
+    /// Memberships: a person in a node's context.
+    #[serde(default)]
+    pub node_people: Vec<MembershipRecord>,
 }
 
 /// Returned by the preview endpoint before a restore is confirmed.

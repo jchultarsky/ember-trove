@@ -92,6 +92,9 @@ pub async fn create_backup(
         .await
         .map_err(ApiError::from)?;
 
+    // People (#147): third-party contact details, all owners (admin backup).
+    let (people, node_people) = state.people.list_all().await.map_err(ApiError::from)?;
+
     let entity_counts = EntityCounts {
         nodes: nodes.len() as u32,
         edges: edges.len() as u32,
@@ -99,6 +102,7 @@ pub async fn create_backup(
         notes: notes.len() as u32,
         tasks: tasks.len() as u32,
         attachments: attachments.len() as u32,
+        people: people.len() as u32,
     };
 
     let now = chrono::Utc::now();
@@ -123,6 +127,8 @@ pub async fn create_backup(
         permissions,
         node_versions,
         node_positions,
+        people,
+        node_people,
     };
 
     // Build the tar.gz archive in memory.
@@ -568,6 +574,58 @@ pub async fn execute_restore(
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node_position failed: {e}")))?;
+    }
+
+    // Insert people (#147), then their memberships (they need both the
+    // node and the person rows). Owners are kept as stored, like nodes.
+    for p in &data.people {
+        sqlx::query(
+            r#"
+            INSERT INTO people
+                (id, owner_id, display_name, company, position, emails, phones,
+                 address_label, address, notes, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ON CONFLICT (id) DO UPDATE
+                SET display_name = EXCLUDED.display_name, company = EXCLUDED.company,
+                    position = EXCLUDED.position, emails = EXCLUDED.emails,
+                    phones = EXCLUDED.phones, address_label = EXCLUDED.address_label,
+                    address = EXCLUDED.address, notes = EXCLUDED.notes
+            "#,
+        )
+        .bind(p.id.0)
+        .bind(&p.owner_id)
+        .bind(&p.display_name)
+        .bind(&p.company)
+        .bind(&p.position)
+        .bind(sqlx::types::Json(&p.emails))
+        .bind(sqlx::types::Json(&p.phones))
+        .bind(&p.address_label)
+        .bind(&p.address)
+        .bind(&p.notes)
+        .bind(p.created_at)
+        .bind(p.updated_at)
+        .execute(&mut *tx)
+        .await
+        // Never include the row: it's someone's contact details.
+        .map_err(|e| ApiError::Internal(format!("insert person failed: {e}")))?;
+    }
+    for m in &data.node_people {
+        sqlx::query(
+            r#"
+            INSERT INTO node_people (id, node_id, person_id, role, note, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(m.id.0)
+        .bind(m.node_id.0)
+        .bind(m.person_id.0)
+        .bind(&m.role)
+        .bind(&m.note)
+        .bind(m.created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::Internal(format!("insert membership failed: {e}")))?;
     }
 
     tx.commit()

@@ -383,6 +383,24 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
 
+### People
+
+A registry of people, and memberships that place a person on a node (#147).
+**People are visible to their owner only** (there's no admin bypass). Someone
+a node is shared with sees a membership's name and role, never contact
+details.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/people?q=` | The caller's people; `q` searches name, company, email and phone |
+| POST | `/api/people[?confirm=true]` | Create; `409` with matches if an email is already in the registry (`confirm` creates anyway) |
+| GET / PUT / DELETE | `/api/people/{id}` | Read, replace or delete one of the caller's people (deleting removes their memberships) |
+| GET | `/api/people/{id}/usages` | "Used in": the nodes a person appears on, with their role |
+| GET | `/api/people/roles` | The caller's roles with counts (suggestions) |
+| GET | `/api/nodes/{id}/people` | A node's people, redacted per viewer |
+| POST | `/api/nodes/{id}/people` | Add one of the caller's people to a node (the node's owner only) |
+| PUT / DELETE | `/api/nodes/{id}/people/{membership_id}` | Change a membership's role/note, or remove it (the node's owner only) |
+
 ### Edges
 
 | Method | Path | Description |
