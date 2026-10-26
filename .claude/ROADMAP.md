@@ -5,6 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-26)
 
+- **v2.39.0 shipped: People follow-ups (#154, #155, #156; PRs #157–#159).**
+  - **Addresses are a list**, like emails and phones: zero or more, each
+    with a label, a multi-line value and a preferred marker. Migration 038
+    moves each old address into a one-entry list and drops the
+    `address_label` / `address` columns in the same transaction. Old
+    backups and pre-upgrade tabs still work (the API keeps the stored list).
+  - **People surfaces follow the button language**: icon-only add, remove
+    and close in the person editor and the node's People section; the
+    `/people` registry uses the full width.
+  - **Creating a person from `/people` returns to the list**, with the new
+    row highlighted and a toast, so adding several people costs no Backs.
+
 - **v2.38.0 shipped: the person editor and one button language (#152, #153).**
   - **One person editor** for New, Edit and a node's "Create “…”": a
     centred dialog on desktop, a full-screen sheet on phones

@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.39.0] - 2026-10-26
+
 ### Changed — addresses are a list, like emails and phones (#155)
 - A person can have **zero, one or many addresses**, each with a free-text
   label ("home", "office"), a freeform multi-line value and a preferred
