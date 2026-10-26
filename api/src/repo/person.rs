@@ -100,8 +100,7 @@ struct PersonRow {
     position: Option<String>,
     emails: Json<Vec<ContactPoint>>,
     phones: Json<Vec<ContactPoint>>,
-    address_label: Option<String>,
-    address: Option<String>,
+    addresses: Json<Vec<ContactPoint>>,
     notes: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -117,8 +116,7 @@ impl From<PersonRow> for Person {
             position: r.position,
             emails: r.emails.0,
             phones: r.phones.0,
-            address_label: r.address_label,
-            address: r.address,
+            addresses: r.addresses.0,
             notes: r.notes,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -127,7 +125,7 @@ impl From<PersonRow> for Person {
 }
 
 const PERSON_COLS: &str = "id, owner_id, display_name, company, position, emails, phones, \
-     address_label, address, notes, created_at, updated_at";
+     addresses, notes, created_at, updated_at";
 
 fn internal(what: &str) -> impl Fn(sqlx::Error) -> EmberTroveError + '_ {
     move |e| EmberTroveError::Internal(format!("{what} failed: {e}"))
@@ -188,8 +186,8 @@ impl PersonRepo for PgPersonRepo {
         let row = sqlx::query_as::<_, PersonRow>(&format!(
             r#"
             INSERT INTO people (owner_id, display_name, company, position, emails, phones,
-                                address_label, address, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                addresses, notes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING {PERSON_COLS}
             "#
         ))
@@ -199,8 +197,7 @@ impl PersonRepo for PgPersonRepo {
         .bind(&p.position)
         .bind(Json(&p.emails))
         .bind(Json(&p.phones))
-        .bind(&p.address_label)
-        .bind(&p.address)
+        .bind(Json(&p.addresses))
         .bind(&p.notes)
         .fetch_one(&self.pool)
         .await
@@ -218,7 +215,7 @@ impl PersonRepo for PgPersonRepo {
             r#"
             UPDATE people SET
                 display_name = $3, company = $4, position = $5, emails = $6, phones = $7,
-                address_label = $8, address = $9, notes = $10
+                addresses = $8, notes = $9
             WHERE id = $1 AND owner_id = $2
             RETURNING {PERSON_COLS}
             "#
@@ -230,8 +227,7 @@ impl PersonRepo for PgPersonRepo {
         .bind(&p.position)
         .bind(Json(&p.emails))
         .bind(Json(&p.phones))
-        .bind(&p.address_label)
-        .bind(&p.address)
+        .bind(Json(&p.addresses))
         .bind(&p.notes)
         .fetch_optional(&self.pool)
         .await
@@ -379,7 +375,7 @@ impl PersonRepo for PgPersonRepo {
             SELECT m.id AS m_id, m.node_id AS m_node_id, m.role AS m_role, m.note AS m_note,
                    m.created_at AS m_created_at,
                    p.id, p.owner_id, p.display_name, p.company, p.position, p.emails,
-                   p.phones, p.address_label, p.address, p.notes, p.created_at, p.updated_at
+                   p.phones, p.addresses, p.notes, p.created_at, p.updated_at
             FROM node_people m JOIN people p ON p.id = m.person_id
             WHERE m.node_id = $1
             ORDER BY lower(p.display_name), m.id

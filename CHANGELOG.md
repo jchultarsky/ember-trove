@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — addresses are a list, like emails and phones (#155)
+- A person can have **zero, one or many addresses**, each with a free-text
+  label ("home", "office"), a freeform multi-line value and a preferred
+  marker. The editor uses the same row as emails and phones ("+ Add
+  address", per-row remove, one preferred), and the card lists them with a
+  copy button. Limits match the other channels: 10 entries, 1000 characters
+  per address, 30 per label.
+- **Migration 038** moves each existing address into a one-entry list
+  (preferred, keeping its label) and drops the old `address_label` /
+  `address` columns in the same transaction. `updated_at` is left alone.
+- **Compatibility:** backups written before this restore their single
+  address into the list. A browser tab opened before the upgrade still
+  sends the old shape; the API then keeps the stored address list (adding
+  the old-style address only if it's new) instead of wiping it.
+
+### Security
+- No change to who can see addresses: they stay owner-only contact
+  details, redacted from node sharees like emails and phones. The old
+  columns are dropped rather than left as a stale copy of personal data.
+
 ## [2.38.0] - 2026-10-26
 
 ### Changed — one button language across the UI

@@ -1282,6 +1282,38 @@ fn person(name: &str, email: Option<&str>) -> common::person::PersonInput {
 }
 
 #[sqlx::test(migrations = "../migrations")]
+async fn a_persons_address_list_round_trips_and_is_replaced_on_update(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    use common::person::ContactPoint;
+    let repo = PgPersonRepo::new(pool.clone());
+    let addr = |label: &str, value: &str, preferred| ContactPoint {
+        label: label.into(),
+        value: value.into(),
+        preferred,
+    };
+    let two = vec![
+        addr("home", "1 Main St\nSpringfield", true),
+        addr("office", "2 Elm St", false),
+    ];
+    let mut input = person("Ada", None);
+    input.addresses = two.clone();
+    let ada = repo.create("a", &input).await.expect("create");
+    assert_eq!(ada.addresses, two);
+    assert_eq!(repo.get("a", ada.id).await.unwrap().addresses, two);
+
+    // Zero addresses is a valid card.
+    input.addresses = vec![];
+    let ada = repo.update("a", ada.id, &input).await.expect("update");
+    assert!(ada.addresses.is_empty());
+
+    // The CHECK mirrors MAX_CONTACT_POINTS as defence in depth.
+    input.addresses = (0..=common::person::MAX_CONTACT_POINTS)
+        .map(|i| addr("", &format!("{i} Main St"), false))
+        .collect();
+    assert!(repo.update("a", ada.id, &input).await.is_err());
+}
+
+#[sqlx::test(migrations = "../migrations")]
 async fn people_are_owner_scoped_searchable_and_duplicate_checked(pool: PgPool) {
     use super::person::{PersonRepo, PgPersonRepo};
     let repo = PgPersonRepo::new(pool.clone());

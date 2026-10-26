@@ -4,7 +4,7 @@
 //!
 //! These are third parties' contact details. The API only ever returns the
 //! caller's own people, so nothing here has to filter. Contact values render
-//! as text (never HTML) and as mailto:/tel: links.
+//! as text (never HTML) and as mailto:/tel: links; addresses as plain text.
 
 use common::id::PersonId;
 use common::person::{ContactPoint, DuplicateMatch, Person, PersonInput, PersonUsage, primary};
@@ -25,17 +25,18 @@ const INPUT_CLASS: &str = "w-full text-sm bg-stone-100 dark:bg-stone-800 text-st
 const LABEL_CLASS: &str = "block text-xs font-medium text-stone-500 dark:text-stone-400 mb-1";
 
 /// `mailto:` / `tel:` href for a contact value. Phone links keep only what
-/// a dialer reads.
-fn contact_href(kind: ContactKind, value: &str) -> String {
+/// a dialer reads. Addresses have none: map links are out of scope (#155).
+fn contact_href(kind: ContactKind, value: &str) -> Option<String> {
     match kind {
-        ContactKind::Email => format!("mailto:{value}"),
-        ContactKind::Phone => format!(
+        ContactKind::Email => Some(format!("mailto:{value}")),
+        ContactKind::Phone => Some(format!(
             "tel:{}",
             value
                 .chars()
                 .filter(|c| c.is_ascii_digit() || *c == '+')
                 .collect::<String>()
-        ),
+        )),
+        ContactKind::Address => None,
     }
 }
 
@@ -43,10 +44,11 @@ fn contact_href(kind: ContactKind, value: &str) -> String {
 pub enum ContactKind {
     Email,
     Phone,
+    Address,
 }
 
-/// One email or phone as actions: the value is a mailto:/tel: link, and a
-/// button copies it.
+/// One email, phone or address as actions: an email or phone is a
+/// mailto:/tel: link, an address is multi-line text, and a button copies it.
 #[component]
 pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
     let href = contact_href(kind, &point.value);
@@ -54,20 +56,38 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
     let icon = match kind {
         ContactKind::Email => "mail",
         ContactKind::Phone => "call",
+        ContactKind::Address => "location_on",
     };
     let copy_label = match kind {
         ContactKind::Email => "Copy email",
         ContactKind::Phone => "Copy phone",
+        ContactKind::Address => "Copy address",
     };
-    view! {
-        <span class="inline-flex items-center gap-1 min-w-0 text-sm">
-            <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">
-                {icon}
-            </span>
+    let shown = match href {
+        Some(href) => view! {
             <a href=href class="text-amber-700 dark:text-amber-400 hover:underline truncate"
                 on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
                 {point.value.clone()}
             </a>
+        }
+        .into_any(),
+        None => view! {
+            <span class="whitespace-pre-line text-stone-700 dark:text-stone-300">{point.value.clone()}</span>
+        }
+        .into_any(),
+    };
+    // A multi-line address keeps its icon and buttons on the first line.
+    let row = if kind == ContactKind::Address {
+        "inline-flex items-start gap-1 min-w-0 text-sm"
+    } else {
+        "inline-flex items-center gap-1 min-w-0 text-sm"
+    };
+    view! {
+        <span class=row>
+            <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">
+                {icon}
+            </span>
+            {shown}
             {(!point.label.is_empty()).then(|| view! {
                 <span class="text-xs text-stone-400">{point.label.clone()}</span>
             })}
@@ -88,7 +108,7 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
     }
 }
 
-/// The editable contact list (emails or phones). Typing writes through
+/// The editable contact list (emails, phones or addresses). Typing writes through
 /// untracked, so inputs never re-render (and lose focus) mid-word. Only
 /// adding or removing a row redraws the list.
 #[component]
@@ -97,10 +117,12 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
     let (noun, placeholder, input_type) = match kind {
         ContactKind::Email => ("email", "name@example.com", "email"),
         ContactKind::Phone => ("phone", "+1 555 010 0000", "tel"),
+        ContactKind::Address => ("address", "1 Main St\nSpringfield", "text"),
     };
     let label_placeholder = match kind {
         ContactKind::Email => "work",
         ContactKind::Phone => "cell",
+        ContactKind::Address => "home",
     };
     view! {
         <div class="space-y-1.5">
@@ -122,17 +144,36 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                                 points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.label = v; });
                             }
                         />
-                        <input
-                            type=input_type
-                            class=INPUT_CLASS
-                            placeholder=placeholder
-                            aria-label=noun
-                            prop:value=p.value.clone()
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
-                            }
-                        />
+                        {if kind == ContactKind::Address {
+                            // Freeform and multi-line, like the old single field.
+                            view! {
+                                <textarea
+                                    rows="2"
+                                    class=INPUT_CLASS
+                                    placeholder=placeholder
+                                    aria-label=noun
+                                    prop:value=p.value.clone()
+                                    on:input=move |ev| {
+                                        let v = event_target_value(&ev);
+                                        points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
+                                    }
+                                />
+                            }.into_any()
+                        } else {
+                            view! {
+                                <input
+                                    type=input_type
+                                    class=INPUT_CLASS
+                                    placeholder=placeholder
+                                    aria-label=noun
+                                    prop:value=p.value.clone()
+                                    on:input=move |ev| {
+                                        let v = event_target_value(&ev);
+                                        points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
+                                    }
+                                />
+                            }.into_any()
+                        }}
                         <label class="flex items-center gap-1 text-xs text-stone-500 shrink-0" title="Preferred">
                             <input
                                 type="radio"
@@ -186,8 +227,7 @@ struct PersonDraft {
     position: RwSignal<String>,
     emails: RwSignal<Vec<ContactPoint>>,
     phones: RwSignal<Vec<ContactPoint>>,
-    address_label: RwSignal<String>,
-    address: RwSignal<String>,
+    addresses: RwSignal<Vec<ContactPoint>>,
     notes: RwSignal<String>,
 }
 
@@ -199,8 +239,7 @@ impl PersonDraft {
             position: RwSignal::new(String::new()),
             emails: RwSignal::new(Vec::new()),
             phones: RwSignal::new(Vec::new()),
-            address_label: RwSignal::new(String::new()),
-            address: RwSignal::new(String::new()),
+            addresses: RwSignal::new(Vec::new()),
             notes: RwSignal::new(String::new()),
         }
     }
@@ -211,8 +250,7 @@ impl PersonDraft {
         self.position.set(p.position.unwrap_or_default());
         self.emails.set(p.emails);
         self.phones.set(p.phones);
-        self.address_label.set(p.address_label.unwrap_or_default());
-        self.address.set(p.address.unwrap_or_default());
+        self.addresses.set(p.addresses);
         self.notes.set(p.notes.unwrap_or_default());
     }
 
@@ -231,8 +269,7 @@ impl PersonDraft {
             position: opt(self.position.get_untracked()),
             emails: rows(self.emails.get_untracked()),
             phones: rows(self.phones.get_untracked()),
-            address_label: opt(self.address_label.get_untracked()),
-            address: opt(self.address.get_untracked()),
+            addresses: rows(self.addresses.get_untracked()),
             notes: opt(self.notes.get_untracked()),
         }
     }
@@ -416,13 +453,9 @@ pub fn PersonEditor(
                     <span class=LABEL_CLASS>"Phones"</span>
                     <ContactListEditor kind=ContactKind::Phone points=draft.phones />
                 </div>
-                <div class="grid grid-cols-1 sm:grid-cols-[10rem_1fr] gap-3">
-                    {field("Address label", draft.address_label)}
-                    <label class="block">
-                        <span class=LABEL_CLASS>"Address"</span>
-                        <textarea rows="2" class=INPUT_CLASS prop:value=move || draft.address.get()
-                            on:input=move |ev| draft.address.set(event_target_value(&ev)) />
-                    </label>
+                <div>
+                    <span class=LABEL_CLASS>"Addresses"</span>
+                    <ContactListEditor kind=ContactKind::Address points=draft.addresses />
                 </div>
                 <label class="block">
                     <span class=LABEL_CLASS>"Notes"</span>
@@ -674,7 +707,7 @@ fn PersonCard(
         .join(" \u{b7} ");
     let empty = person.emails.is_empty()
         && person.phones.is_empty()
-        && person.address.is_none()
+        && person.addresses.is_empty()
         && person.notes.is_none();
     view! {
         <div class="space-y-4" data-testid="person-card">
@@ -694,10 +727,9 @@ fn PersonCard(
                 {person.emails.into_iter().map(|e| view! { <div><ContactAction kind=ContactKind::Email point=e /></div> }).collect_view()}
                 {person.phones.into_iter().map(|p| view! { <div><ContactAction kind=ContactKind::Phone point=p /></div> }).collect_view()}
             </div>
-            {person.address.map(|a| view! {
-                <div class="text-sm">
-                    <div class=LABEL_CLASS>{person.address_label.unwrap_or_else(|| "Address".into())}</div>
-                    <p class="whitespace-pre-line text-stone-700 dark:text-stone-300">{a}</p>
+            {(!person.addresses.is_empty()).then(|| view! {
+                <div class="space-y-1.5" data-testid="person-addresses">
+                    {person.addresses.into_iter().map(|a| view! { <div><ContactAction kind=ContactKind::Address point=a /></div> }).collect_view()}
                 </div>
             })}
             {person.notes.map(|n| view! {

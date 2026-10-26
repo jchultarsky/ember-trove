@@ -737,8 +737,7 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
                 position: None,
                 emails: vec![],
                 phones: vec![],
-                address_label: None,
-                address: None,
+                addresses: vec![],
                 notes: None,
                 created_at: now,
                 updated_at: now,
@@ -2326,11 +2325,46 @@ async fn adding_a_taken_email_on_edit_warns_before_any_write() {
     let (status, body) = people_call(
         "PUT",
         &format!("/people/{}", Uuid::new_v4()),
-        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "taken@example.com" }] }),
+        serde_json::json!({
+            "display_name": "Ada L.",
+            "emails": [{ "value": "taken@example.com" }],
+            "addresses": [],
+        }),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["matches"][0]["display_name"], "Ada");
+}
+
+#[tokio::test]
+async fn a_pre_155_edit_reads_the_stored_addresses_owner_scoped() {
+    // A stale tab's body has no `addresses`, so the route reads the stored
+    // list first. That read is owner-scoped: another owner's person (or a
+    // missing one) is a 404, before the duplicate check or any write.
+    let (status, _) = people_call(
+        "PUT",
+        &format!("/people/{}", Uuid::new_v4()),
+        serde_json::json!({ "display_name": "Ada L.", "address": "1 Main St" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_address_entry_is_validated_like_emails_and_phones() {
+    let (status, _) = people_call(
+        "POST",
+        "/people",
+        serde_json::json!({
+            "display_name": "Ada",
+            "addresses": [
+                { "label": "home", "value": "1 Main St", "preferred": true },
+                { "label": "office", "value": "2 Elm St", "preferred": true },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
