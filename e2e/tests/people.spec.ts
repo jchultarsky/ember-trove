@@ -168,3 +168,43 @@ test('privacy: a sharee sees name and role only; another user\'s person is a 404
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+test('global search finds people: the search page, the header dropdown and the palette', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  const name = `e2e Hedy ${stamp}`;
+  await wipePeople(request, stamp);
+  try {
+    const hedy: Person = await (
+      await request.post('/api/people', { data: { display_name: name, company: 'Frequency Hopping' } })
+    ).json();
+
+    // The search page: a People group, which hides under a node-only filter.
+    await page.goto('/tasks/my-day');
+    await expect(page.locator('main')).toBeVisible();
+    const bar = page.getByPlaceholder('Search\u2026 (Enter)');
+    await bar.fill(`Hedy ${stamp}`);
+
+    // The header dropdown lists the person; clicking opens their card.
+    const fromBar = page.getByTestId('search-bar-person').filter({ hasText: name });
+    await expect(fromBar).toBeVisible();
+    await bar.press('Enter');
+    await expect(page).toHaveURL(/\/search$/);
+    const group = page.getByTestId('search-people');
+    await expect(group.getByRole('button', { name: new RegExp(name) })).toBeVisible();
+    await group.getByRole('button', { name: new RegExp(name) }).click();
+    await expect(page).toHaveURL(new RegExp(`/people/${hedy.id}$`));
+
+    // The palette: the person is an action, after node titles and before commands.
+    await page.keyboard.press('ControlOrMeta+k');
+    const input = page.getByPlaceholder('Search nodes, or type a new title\u2026');
+    await expect(input).toBeFocused();
+    await input.fill(`Hedy ${stamp}`);
+    const item = page.getByRole('dialog').getByRole('button', { name: new RegExp(name) });
+    await expect(item).toBeVisible();
+    await item.click();
+    await expect(page).toHaveURL(new RegExp(`/people/${hedy.id}$`));
+  } finally {
+    await wipePeople(request, stamp);
+  }
+});
+
