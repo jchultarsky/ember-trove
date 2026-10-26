@@ -64,11 +64,12 @@ pub fn DeleteConfirmModal(
                     "Cancel"
                 </button>
                 <button
-                    class="px-4 py-2 text-sm font-medium rounded-lg
+                    class="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg
                            bg-red-600 hover:bg-red-700
                            text-white transition-colors"
                     on:click=move |_| on_confirm.run(())
                 >
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"delete"</span>
                     "Delete"
                 </button>
             </div>

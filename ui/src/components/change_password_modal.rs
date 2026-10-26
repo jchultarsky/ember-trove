@@ -197,12 +197,13 @@ pub fn ChangePasswordModal(
                                 "Cancel"
                             </button>
                             <button
-                                class="text-xs bg-ember hover:bg-ember-strong text-white
+                                class="inline-flex items-center justify-center gap-1.5 text-xs bg-ember hover:bg-ember-strong text-white
                                    rounded px-4 py-1.5 transition-colors
                                    disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled=move || saving.get()
                                 on:click=move |_| do_submit()
                             >
+                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"key"</span>
                                 {move || if saving.get() { "Saving…" } else { "Change password" }}
                             </button>
                         </div>

@@ -40,6 +40,16 @@ impl IconButtonVariant {
     }
 }
 
+/// `IconButton`'s classes, for an icon-only `<button>` that keeps its own
+/// handler (a long closure, a `disabled` signal…), so the look stays one.
+pub fn icon_button_class(variant: IconButtonVariant) -> String {
+    format!(
+        "p-1.5 rounded-lg text-stone-400 transition-colors cursor-pointer \
+         disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent {}",
+        variant.hover_classes()
+    )
+}
+
 /// A compact, icon-only button with a tooltip and accessible label.
 ///
 /// Canonical treatment for inline-edit confirm/cancel and row/toolbar actions —
@@ -67,11 +77,7 @@ pub fn IconButton(
     #[prop(optional)]
     stop_propagation: bool,
 ) -> impl IntoView {
-    let class = format!(
-        "p-1.5 rounded-lg text-stone-400 transition-colors cursor-pointer \
-         disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent {}",
-        variant.hover_classes()
-    );
+    let class = icon_button_class(variant);
     view! {
         <button
             type="button"

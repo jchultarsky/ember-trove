@@ -57,13 +57,14 @@ pub fn UpdateBanner() -> impl IntoView {
                 </span>
                 <button
                     type="button"
-                    class="px-3 py-1 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
+                    class="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
                     on:click=move |_| {
                         if let Some(w) = web_sys::window() {
                             let _ = w.location().reload();
                         }
                     }
                 >
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"refresh"</span>
                     "Reload"
                 </button>
             </div>

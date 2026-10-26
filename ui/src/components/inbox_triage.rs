@@ -289,9 +289,10 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                                   style="font-size: 48px;">"check_circle"</span>
                             <p class="text-stone-400 dark:text-stone-500 text-sm">"Nothing to process."</p>
                             <button
-                                class="text-xs text-amber-600 dark:text-amber-400 hover:underline"
+                                class="inline-flex items-center justify-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 hover:underline"
                                 on:click=move |_| on_exit.run(())
                             >
+                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"arrow_back"</span>
                                 "Back to inbox"
                             </button>
                         </div>
