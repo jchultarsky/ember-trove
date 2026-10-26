@@ -4,7 +4,8 @@
 //! A person is an entity, not a node: nodes are documents, and a person is
 //! someone documents refer to. Fields are a vCard subset (FN, ORG, TITLE,
 //! EMAIL, TEL, ADR as freeform text, NOTE), so later import/export is a
-//! mapping rather than a redesign.
+//! mapping rather than a redesign. All three channels are lists of labelled
+//! values with at most one preferred, like vCard's TYPE and PREF (#155).
 //!
 //! **Privacy:** these are third parties' personal details, and they never
 //! signed up. A person is visible only to its owner, including the admin
@@ -30,10 +31,11 @@ pub const MAX_ADDRESS: usize = 1000;
 pub const MAX_NOTES: usize = 10_000;
 pub const MAX_ROLE: usize = 100;
 pub const MAX_MEMBERSHIP_NOTE: usize = 2000;
-/// At most this many emails, and this many phones, per person.
+/// At most this many emails, phones, and addresses (each) per person.
 pub const MAX_CONTACT_POINTS: usize = 10;
 
-/// One email address or phone number with an open label ("work", "cell").
+/// One email address, phone number or postal address with an open label
+/// ("work", "cell", "home"). An address value may span lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct ContactPoint {
     #[serde(default)]
@@ -45,7 +47,11 @@ pub struct ContactPoint {
 }
 
 /// A person in the registry. Only its owner ever receives this.
+///
+/// Deserializes through [`PersonWire`] so backups written before #155 (one
+/// `address_label` + `address`) restore their address instead of losing it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(from = "PersonWire")]
 pub struct Person {
     pub id: PersonId,
     pub owner_id: String,
@@ -54,8 +60,7 @@ pub struct Person {
     pub position: Option<String>,
     pub emails: Vec<ContactPoint>,
     pub phones: Vec<ContactPoint>,
-    pub address_label: Option<String>,
-    pub address: Option<String>,
+    pub addresses: Vec<ContactPoint>,
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -75,11 +80,129 @@ pub struct PersonInput {
     #[serde(default)]
     pub phones: Vec<ContactPoint>,
     #[serde(default)]
+    pub addresses: Vec<ContactPoint>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+/// The single address of the pre-#155 shape as a list entry, if it has a
+/// value. It's preferred: it was the person's only address.
+fn legacy_address(label: Option<String>, value: Option<String>) -> Option<ContactPoint> {
+    let value = value.filter(|v| !v.trim().is_empty())?;
+    Some(ContactPoint {
+        label: label.unwrap_or_default(),
+        value,
+        preferred: true,
+    })
+}
+
+/// [`Person`] as it may arrive: the current shape, or a pre-#155 backup's.
+#[derive(Deserialize)]
+struct PersonWire {
+    id: PersonId,
+    owner_id: String,
+    display_name: String,
+    company: Option<String>,
+    position: Option<String>,
+    emails: Vec<ContactPoint>,
+    phones: Vec<ContactPoint>,
+    #[serde(default)]
+    addresses: Vec<ContactPoint>,
+    #[serde(default)]
+    address_label: Option<String>,
+    #[serde(default)]
+    address: Option<String>,
+    notes: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<PersonWire> for Person {
+    fn from(w: PersonWire) -> Self {
+        let mut addresses = w.addresses;
+        if addresses.is_empty() {
+            addresses.extend(legacy_address(w.address_label, w.address));
+        }
+        Person {
+            id: w.id,
+            owner_id: w.owner_id,
+            display_name: w.display_name,
+            company: w.company,
+            position: w.position,
+            emails: w.emails,
+            phones: w.phones,
+            addresses,
+            notes: w.notes,
+            created_at: w.created_at,
+            updated_at: w.updated_at,
+        }
+    }
+}
+
+/// The body `POST /people` and `PUT /people/{id}` accept: a [`PersonInput`],
+/// or the pre-#155 shape a browser tab opened before the upgrade still sends
+/// (`address_label` + `address`, no `addresses`).
+///
+/// Such a client never saw the address list, so a PUT from it must not wipe
+/// the list: when `addresses` is absent, [`PersonBody::resolve`] keeps the
+/// stored entries and adds the old-style address if it's a new one.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, ToSchema)]
+pub struct PersonBody {
+    pub display_name: String,
+    #[serde(default)]
+    pub company: Option<String>,
+    #[serde(default)]
+    pub position: Option<String>,
+    #[serde(default)]
+    pub emails: Vec<ContactPoint>,
+    #[serde(default)]
+    pub phones: Vec<ContactPoint>,
+    /// Absent only from pre-#155 clients.
+    #[serde(default)]
+    pub addresses: Option<Vec<ContactPoint>>,
+    /// Pre-#155 clients only.
+    #[serde(default)]
     pub address_label: Option<String>,
+    /// Pre-#155 clients only.
     #[serde(default)]
     pub address: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+impl PersonBody {
+    /// The input to save. `stored` is the person's current address list
+    /// (empty on create); it only matters for a pre-#155 body.
+    pub fn resolve(self, stored: &[ContactPoint]) -> PersonInput {
+        let addresses = match self.addresses {
+            Some(list) => list,
+            None => {
+                let mut list = stored.to_vec();
+                if let Some(old) = legacy_address(self.address_label, self.address)
+                    && !list.iter().any(|a| a.value.trim() == old.value.trim())
+                {
+                    let preferred = list.is_empty();
+                    list.push(ContactPoint { preferred, ..old });
+                }
+                list
+            }
+        };
+        PersonInput {
+            display_name: self.display_name,
+            company: self.company,
+            position: self.position,
+            emails: self.emails,
+            phones: self.phones,
+            addresses,
+            notes: self.notes,
+        }
+    }
+
+    /// Whether this body came from a pre-#155 client, so the caller needs
+    /// the stored addresses to [`resolve`](Self::resolve) it.
+    pub fn is_legacy(&self) -> bool {
+        self.addresses.is_none()
+    }
 }
 
 /// A saved person as the editor's starting values (edit opens on these).
@@ -91,8 +214,7 @@ impl From<&Person> for PersonInput {
             position: p.position.clone(),
             emails: p.emails.clone(),
             phones: p.phones.clone(),
-            address_label: p.address_label.clone(),
-            address: p.address.clone(),
+            addresses: p.addresses.clone(),
             notes: p.notes.clone(),
         }
     }
@@ -154,8 +276,7 @@ pub fn normalize(input: PersonInput) -> Result<PersonInput, PersonError> {
         position: optional_line("position", input.position, MAX_POSITION)?,
         emails: contact_points("emails", input.emails, MAX_EMAIL, valid_email)?,
         phones: contact_points("phones", input.phones, MAX_PHONE, valid_phone)?,
-        address_label: optional_line("address label", input.address_label, MAX_LABEL)?,
-        address: optional_text("address", input.address, MAX_ADDRESS)?,
+        addresses: contact_points("addresses", input.addresses, MAX_ADDRESS, |_| true)?,
         notes: optional_text("notes", input.notes, MAX_NOTES)?,
     })
 }
@@ -189,7 +310,7 @@ fn optional_line(
     }
 }
 
-/// A multi-line field (address, notes): line breaks are fine.
+/// A multi-line field (notes): line breaks are fine.
 fn optional_text(
     field: &'static str,
     value: Option<String>,
@@ -221,7 +342,12 @@ fn contact_points(
             return Err(PersonError::EmptyValue { field });
         }
         check_line(field, &label, MAX_LABEL)?;
-        check_line(field, &value, max_value)?;
+        if field == "addresses" {
+            // An address spans lines; it's freeform text, never parsed.
+            too_long(field, &value, max_value)?;
+        } else {
+            check_line(field, &value, max_value)?;
+        }
         if !valid(&value) {
             return Err(if field == "emails" {
                 PersonError::InvalidEmail
@@ -335,7 +461,7 @@ pub struct MembershipView {
     /// Owner only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Owner only: company, position, emails, phones, address, notes.
+    /// Owner only: company, position, emails, phones, addresses, notes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub person: Option<Person>,
 }
@@ -564,12 +690,14 @@ mod tests {
     #[test]
     fn multi_line_fields_keep_their_lines_but_are_bounded() {
         let p = normalize(PersonInput {
-            address: Some("1 Main St\nSpringfield".into()),
             notes: Some("Prefers email.\nMet at the conference.".into()),
             ..named("Ada")
         })
         .unwrap();
-        assert_eq!(p.address.as_deref(), Some("1 Main St\nSpringfield"));
+        assert_eq!(
+            p.notes.as_deref(),
+            Some("Prefers email.\nMet at the conference.")
+        );
         let long = normalize(PersonInput {
             notes: Some("x".repeat(MAX_NOTES + 1)),
             ..named("Ada")
@@ -624,8 +752,7 @@ mod tests {
                 position: None,
                 emails: vec![cp("work", "ada@example.com", true)],
                 phones: vec![],
-                address_label: None,
-                address: None,
+                addresses: vec![cp("home", "1 Main St\nSpringfield", true)],
                 notes: Some("private".into()),
                 created_at: now,
                 updated_at: now,
@@ -675,6 +802,136 @@ mod tests {
             assert!(matches(&p, q), "{q}");
         }
         assert!(!matches(&p, "babbage"));
+    }
+
+    #[test]
+    fn addresses_are_a_list_like_emails_and_phones() {
+        let p = normalize(PersonInput {
+            addresses: vec![
+                cp(" home ", " 1 Main St\nSpringfield ", true),
+                cp("", "", false), // an untouched "add" row
+                cp("office", "2 Elm St", false),
+                cp("office", "3 Oak Ave\r\nSuite 4", false),
+            ],
+            ..named("Ada")
+        })
+        .unwrap();
+        assert_eq!(
+            p.addresses,
+            vec![
+                cp("home", "1 Main St\nSpringfield", true),
+                cp("office", "2 Elm St", false),
+                cp("office", "3 Oak Ave\r\nSuite 4", false),
+            ]
+        );
+        // Zero addresses is fine.
+        assert_eq!(normalize(named("Ada")).unwrap().addresses, vec![]);
+    }
+
+    #[test]
+    fn address_entries_follow_the_list_rules() {
+        let with = |addresses| {
+            normalize(PersonInput {
+                addresses,
+                ..named("Ada")
+            })
+        };
+        assert_eq!(
+            with(vec![cp("a", "1", true), cp("b", "2", true)]),
+            Err(PersonError::MultiplePreferred { field: "addresses" })
+        );
+        assert_eq!(
+            with(vec![cp("home", " \n ", false)]),
+            Err(PersonError::EmptyValue { field: "addresses" })
+        );
+        assert_eq!(
+            with(vec![cp("home\nwork", "1 Main St", false)]),
+            Err(PersonError::ControlChar { field: "addresses" })
+        );
+        assert_eq!(
+            with(vec![cp("", &"x".repeat(MAX_ADDRESS + 1), false)]),
+            Err(PersonError::TooLong {
+                field: "addresses",
+                max: MAX_ADDRESS
+            })
+        );
+        assert!(with(vec![cp("", &"é".repeat(MAX_ADDRESS), false)]).is_ok());
+        let many = (0..=MAX_CONTACT_POINTS)
+            .map(|i| cp("", &format!("{i} Main St"), false))
+            .collect();
+        assert_eq!(with(many), Err(PersonError::TooMany { field: "addresses" }));
+    }
+
+    #[test]
+    fn a_pre_155_backup_restores_its_single_address() {
+        let mut v = serde_json::to_value(membership("o").person).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("addresses");
+        obj.insert("address_label".into(), "office".into());
+        obj.insert("address".into(), "2 Elm St".into());
+        let p: Person = serde_json::from_value(v.clone()).unwrap();
+        assert_eq!(p.addresses, vec![cp("office", "2 Elm St", true)]);
+
+        // No address at all: an empty list.
+        let obj = v.as_object_mut().unwrap();
+        obj.insert("address_label".into(), serde_json::Value::Null);
+        obj.insert("address".into(), serde_json::Value::Null);
+        let p: Person = serde_json::from_value(v).unwrap();
+        assert_eq!(p.addresses, vec![]);
+    }
+
+    #[test]
+    fn a_person_round_trips_through_json() {
+        let p = membership("o").person;
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("address_label"), "{json}");
+        assert_eq!(serde_json::from_str::<Person>(&json).unwrap(), p);
+    }
+
+    fn body(json: serde_json::Value) -> PersonBody {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn a_current_body_replaces_the_address_list() {
+        let b = body(serde_json::json!({
+            "display_name": "Ada",
+            "addresses": [{"label": "home", "value": "1 Main St", "preferred": true}],
+        }));
+        assert!(!b.is_legacy());
+        let stored = [cp("office", "2 Elm St", true)];
+        assert_eq!(
+            b.resolve(&stored).addresses,
+            vec![cp("home", "1 Main St", true)]
+        );
+        // An explicit empty list clears them.
+        let b = body(serde_json::json!({"display_name": "Ada", "addresses": []}));
+        assert_eq!(b.resolve(&stored).addresses, vec![]);
+    }
+
+    #[test]
+    fn a_pre_155_body_never_wipes_the_stored_addresses() {
+        let stored = [
+            cp("home", "1 Main St", true),
+            cp("office", "2 Elm St", false),
+        ];
+        // A stale tab that never saw the list sends no address at all.
+        let b = body(serde_json::json!({"display_name": "Ada", "address": null}));
+        assert!(b.is_legacy());
+        assert_eq!(b.resolve(&stored).addresses, stored.to_vec());
+        // Its old single address is added when it's new...
+        let b = body(serde_json::json!({
+            "display_name": "Ada", "address_label": "lab", "address": "3 Oak Ave",
+        }));
+        let mut want = stored.to_vec();
+        want.push(cp("lab", "3 Oak Ave", false));
+        assert_eq!(b.resolve(&stored).addresses, want);
+        // ...and not duplicated when it's already there.
+        let b = body(serde_json::json!({"display_name": "Ada", "address": " 2 Elm St "}));
+        assert_eq!(b.resolve(&stored).addresses, stored.to_vec());
+        // On create (nothing stored) it becomes the preferred address.
+        let b = body(serde_json::json!({"display_name": "Ada", "address": "3 Oak Ave"}));
+        assert_eq!(b.resolve(&[]).addresses, vec![cp("", "3 Oak Ave", true)]);
     }
 
     #[test]

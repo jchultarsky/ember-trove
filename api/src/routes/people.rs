@@ -23,7 +23,7 @@ use common::{
     auth::AuthClaims,
     id::{MembershipId, NodeId, PersonId},
     person::{
-        DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
+        DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView, Person, PersonBody,
         PersonUsage, RoleCount, email_keys, normalize, normalize_membership,
     },
 };
@@ -105,9 +105,9 @@ async fn create_person(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Query(params): Query<CreateParams>,
-    Json(input): Json<PersonInput>,
+    Json(body): Json<PersonBody>,
 ) -> Result<Response, ApiError> {
-    let input = normalize(input).map_err(invalid)?;
+    let input = normalize(body.resolve(&[])).map_err(invalid)?;
     if !params.confirm {
         let matches = state
             .people
@@ -137,10 +137,17 @@ async fn update_person(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
     Query(params): Query<CreateParams>,
-    Json(input): Json<PersonInput>,
+    Json(body): Json<PersonBody>,
 ) -> Result<Response, ApiError> {
     let id = PersonId(id);
-    let input = normalize(input).map_err(invalid)?;
+    // A pre-#155 tab doesn't send the address list: keep the stored one.
+    // The lookup is owner-scoped, so another owner's id is still a 404.
+    let stored = if body.is_legacy() {
+        state.people.get(&claims.sub, id).await?.addresses
+    } else {
+        Vec::new()
+    };
+    let input = normalize(body.resolve(&stored)).map_err(invalid)?;
     if !params.confirm {
         let matches: Vec<_> = state
             .people
