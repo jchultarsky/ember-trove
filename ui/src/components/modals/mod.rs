@@ -18,6 +18,9 @@ pub enum ModalPlacement {
     Center,
     /// Near the top, like a launcher (palette, quick capture).
     Top,
+    /// A full-screen sheet on phones, a centred dialog from `sm` up: for
+    /// forms too tall for a phone-sized dialog (the person editor).
+    Sheet,
 }
 
 /// The chrome every modal shares: portal, blurred backdrop (click closes),
@@ -75,11 +78,24 @@ pub fn ModalShell(
             "fixed inset-0 z-50 flex items-start justify-center p-4 pt-16 sm:pt-24 \
              pointer-events-none"
         }
+        ModalPlacement::Sheet => {
+            "fixed inset-0 z-50 flex items-stretch justify-center sm:items-center sm:p-4 \
+             pointer-events-none"
+        }
     };
-    let panel = StoredValue::new(format!(
-        "pointer-events-auto bg-white dark:bg-stone-900 rounded-2xl shadow-2xl \
-         border border-stone-200 dark:border-stone-700 {panel_class}"
-    ));
+    // A sheet is edge to edge on phones: no rounding or border until `sm`.
+    // Separate base strings, so no two classes compete for one property.
+    let surface = match placement {
+        ModalPlacement::Sheet => {
+            "pointer-events-auto bg-white dark:bg-stone-900 shadow-2xl w-full \
+             sm:rounded-2xl sm:border border-stone-200 dark:border-stone-700"
+        }
+        _ => {
+            "pointer-events-auto bg-white dark:bg-stone-900 rounded-2xl shadow-2xl \
+             border border-stone-200 dark:border-stone-700"
+        }
+    };
+    let panel = StoredValue::new(format!("{surface} {panel_class}"));
     let children = StoredValue::new(children);
 
     view! {

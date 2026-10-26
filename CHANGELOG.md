@@ -38,6 +38,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   now reads the span's content, including both arms of an `if`/`else`. The
   font is refreshed (141 names).
 
+### Changed — one person editor for new and edit
+- **Creating and editing a person use the same editor.** It's a dialog on
+  desktop and a full-screen sheet on phones, with Save and Cancel pinned at
+  the bottom. Before, "New person" only asked for a name and you then had
+  to edit the card. Only the name is required.
+- **Creating from a node's People section** ("Create “…”") opens the same
+  editor with the name filled in; saving adds the new person to the node.
+  It used to save a name-only person.
+- **On desktop**, company/position and address label/address sit side by
+  side, and email/phone rows are one line. **On phones** each row stacks
+  its label above the value, and nothing scrolls sideways.
+- Ctrl/⌘+Enter saves from any field. Cancel discards. Escape or a click on
+  the backdrop discards with "Changes discarded · Undo", like the task and
+  note editors.
+- The duplicate-email warning and validation errors show inside the
+  editor. The card stays a page, with Edit opening the editor.
+- `ModalShell` gains a `Sheet` placement: edge to edge on phones, a centred
+  dialog from `sm` up.
+- **The People screens use the app's icon buttons:** pencil and trash on
+  the card (like the node page header), an icon for New person (like New
+  node), and ✓/✕ in a member's inline role editor (like the task editors).
+  The editor's Save keeps its word, with a ✓, like the create-node dialog's
+  "+ Create".
+
 
 ## [2.37.0] - 2026-10-26
 
