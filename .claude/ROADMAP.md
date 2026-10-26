@@ -3,7 +3,32 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-25)
+## Current state (2026-10-26)
+
+- **v2.37.0 shipped: People (#147; PRs #148–#151) and no more public links.**
+  - **Public share links are removed** (owner decision). Migration 036 drops
+    `share_tokens`, so the only unauthenticated content route is gone.
+  - **People are an entity, not a node type.** There's a registry of persons
+    (a vCard subset) and memberships that place a person on a node with a
+    role and a note (migration 037, `node_people`).
+  - **Privacy:**
+    - A person is visible to its owner only, with **no admin bypass**.
+    - A node sharee sees a membership's name and role only.
+    - Only the node's canonical owner can change its people.
+  - **UI:** a `/people` registry, the `/people/:id` card ("Used in", mailto/tel
+    actions, a duplicate-email warning on create and save), and a People node
+    section (picker-first add, inline create, role and note).
+  - Backups carry people. People appear in global search as their own group
+    (the search page, the header dropdown and the palette, with ranking node
+    titles → people → commands); `SearchResult` is unchanged.
+  - **Fixes found along the way:**
+    - the icon font's URL is content-hashed (new glyphs used to show as text
+      for up to 7 days);
+    - an unmount-after-await panic on the search page.
+  - **Architecture decision:** documents vs entities. People are the first
+    owned entity that isn't anchored to a node, so their authorization is
+    owner-based rather than following node permissions. The planned ontology
+    session can build on that without unpicking it.
 
 - **v2.36.0 shipped: a project's status is a field (#143, PR #144).**
   - **The field:** `nodes.project_status`, an open-valued token of at most
