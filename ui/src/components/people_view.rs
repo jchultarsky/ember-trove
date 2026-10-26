@@ -94,16 +94,31 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
 #[component]
 fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> impl IntoView {
     let redraw = RwSignal::new(0u32);
-    let (noun, placeholder, input_type) = match kind {
-        ContactKind::Email => ("email", "name@example.com", "email"),
-        ContactKind::Phone => ("phone", "+1 555 010 0000", "tel"),
+    let (noun, heading, placeholder, input_type) = match kind {
+        ContactKind::Email => ("email", "Emails", "name@example.com", "email"),
+        ContactKind::Phone => ("phone", "Phones", "+1 555 010 0000", "tel"),
     };
+    let add = Callback::new(move |()| {
+        points.update_untracked(|ps| {
+            ps.push(ContactPoint {
+                label: String::new(),
+                value: String::new(),
+                preferred: ps.is_empty(),
+            })
+        });
+        redraw.update(|n| *n += 1);
+    });
     let label_placeholder = match kind {
         ContactKind::Email => "work",
         ContactKind::Phone => "cell",
     };
     view! {
         <div class="space-y-1.5">
+            // Add is a row action: icon-only, beside the list's heading (#156).
+            <div class="flex items-center justify-between">
+                <span class=LABEL_CLASS>{heading}</span>
+                <IconButton icon="add" label=format!("Add {noun}") on_click=add />
+            </div>
             {move || {
                 redraw.track();
                 points.get_untracked().into_iter().enumerate().map(|(i, p)| view! {
@@ -144,35 +159,15 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                             />
                             "Preferred"
                         </label>
-                        <button
-                            type="button"
-                            class="p-1 rounded text-stone-400 hover:text-red-500 cursor-pointer"
-                            title=format!("Remove {noun}")
-                            aria-label=format!("Remove {noun}")
-                            on:click=move |_| {
+                        <IconButton icon="close" label=format!("Remove {noun}")
+                            variant=IconButtonVariant::Danger
+                            on_click=Callback::new(move |()| {
                                 points.update_untracked(|ps| { if i < ps.len() { ps.remove(i); } });
                                 redraw.update(|n| *n += 1);
-                            }
-                        >
-                            <span class="material-symbols-outlined" style="font-size:16px;" aria-hidden="true">"close"</span>
-                        </button>
+                            }) />
                     </div>
                 }).collect_view()
             }}
-            <button
-                type="button"
-                class="text-xs text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
-                on:click=move |_| {
-                    points.update_untracked(|ps| ps.push(ContactPoint {
-                        label: String::new(),
-                        value: String::new(),
-                        preferred: ps.is_empty(),
-                    }));
-                    redraw.update(|n| *n += 1);
-                }
-            >
-                {format!("+ Add {noun}")}
-            </button>
         </div>
     }
 }
@@ -380,10 +375,7 @@ pub fn PersonEditor(
             <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-stone-200 dark:border-stone-800"
                 data-testid="person-editor">
                 <h2 class="font-display text-lg text-stone-900 dark:text-stone-100">{title}</h2>
-                <button type="button" class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                    title="Close" aria-label="Close" on:click=move |_| dismiss.run(())>
-                    <span class="material-symbols-outlined" aria-hidden="true">"close"</span>
-                </button>
+                <IconButton icon="close" label="Close" on_click=dismiss />
             </div>
             <form
                 id=form_id
@@ -408,14 +400,8 @@ pub fn PersonEditor(
                     {field("Company", draft.company)}
                     {field("Position", draft.position)}
                 </div>
-                <div>
-                    <span class=LABEL_CLASS>"Emails"</span>
-                    <ContactListEditor kind=ContactKind::Email points=draft.emails />
-                </div>
-                <div>
-                    <span class=LABEL_CLASS>"Phones"</span>
-                    <ContactListEditor kind=ContactKind::Phone points=draft.phones />
-                </div>
+                <ContactListEditor kind=ContactKind::Email points=draft.emails />
+                <ContactListEditor kind=ContactKind::Phone points=draft.phones />
                 <div class="grid grid-cols-1 sm:grid-cols-[10rem_1fr] gap-3">
                     {field("Address label", draft.address_label)}
                     <label class="block">
@@ -512,7 +498,8 @@ pub fn PeopleView() -> impl IntoView {
                 <IconButton icon="person_add" label="New person"
                     on_click=Callback::new(move |()| editor_open.set(true)) />
             </PageHeader>
-            <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4 max-w-3xl">
+            // Full width, like the node list: a registry is scanned (#156).
+            <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4">
                 <PersonEditor open=editor_open target=EditorTarget::New
                     initial=Signal::derive(PersonInput::default) on_saved=on_created />
                 <input
