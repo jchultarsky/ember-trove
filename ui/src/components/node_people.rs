@@ -14,7 +14,7 @@ use common::person::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
-use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::node_section::{NodeSection, SectionShell};
 use crate::components::people_view::{ContactAction, ContactKind, EditorTarget, PersonEditor};
 use crate::components::toast::{ToastLevel, push_toast};
@@ -55,8 +55,7 @@ pub fn NodePeoplePanel(
             {move || (open.get() && can_edit).then(|| view! {
                 <button
                     type="button"
-                    class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                        hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
+                    class=icon_button_class(IconButtonVariant::Neutral)
                     title=move || if adding.get() { "Cancel" } else { "Add person" }
                     aria-label=move || if adding.get() { "Cancel" } else { "Add person" }
                     on:click=move |_| adding.update(|v| *v = !*v)
@@ -246,16 +245,10 @@ fn MemberRow(
             </div>
             {(can_edit).then(|| view! {
                 <div class="flex items-center gap-0.5 shrink-0">
-                    <button type="button" class="p-1 rounded text-stone-400 hover:text-stone-600 cursor-pointer"
-                        title="Edit role and note" aria-label="Edit role and note"
-                        on:click=move |_| editing.update(|v| *v = !*v)>
-                        <span class="material-symbols-outlined" style="font-size:16px;" aria-hidden="true">"edit"</span>
-                    </button>
-                    <button type="button" class="p-1 rounded text-stone-400 hover:text-red-500 cursor-pointer"
-                        title="Remove from this node" aria-label="Remove from this node"
-                        on:click=move |_| remove()>
-                        <span class="material-symbols-outlined" style="font-size:16px;" aria-hidden="true">"person_remove"</span>
-                    </button>
+                    <IconButton icon="edit" label="Edit role and note"
+                        on_click=Callback::new(move |()| editing.update(|v| *v = !*v)) />
+                    <IconButton icon="person_remove" label="Remove from this node"
+                        variant=IconButtonVariant::Danger on_click=Callback::new(move |()| remove()) />
                 </div>
             })}
         </li>

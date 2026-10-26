@@ -114,11 +114,21 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
 #[component]
 fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> impl IntoView {
     let redraw = RwSignal::new(0u32);
-    let (noun, placeholder, input_type) = match kind {
-        ContactKind::Email => ("email", "name@example.com", "email"),
-        ContactKind::Phone => ("phone", "+1 555 010 0000", "tel"),
-        ContactKind::Address => ("address", "1 Main St\nSpringfield", "text"),
+    let (noun, heading, placeholder, input_type) = match kind {
+        ContactKind::Email => ("email", "Emails", "name@example.com", "email"),
+        ContactKind::Phone => ("phone", "Phones", "+1 555 010 0000", "tel"),
+        ContactKind::Address => ("address", "Addresses", "1 Main St\nSpringfield", "text"),
     };
+    let add = Callback::new(move |()| {
+        points.update_untracked(|ps| {
+            ps.push(ContactPoint {
+                label: String::new(),
+                value: String::new(),
+                preferred: ps.is_empty(),
+            })
+        });
+        redraw.update(|n| *n += 1);
+    });
     let label_placeholder = match kind {
         ContactKind::Email => "work",
         ContactKind::Phone => "cell",
@@ -126,6 +136,11 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
     };
     view! {
         <div class="space-y-1.5">
+            // Add is a row action: icon-only, beside the list's heading (#156).
+            <div class="flex items-center justify-between">
+                <span class=LABEL_CLASS>{heading}</span>
+                <IconButton icon="add" label=format!("Add {noun}") on_click=add />
+            </div>
             {move || {
                 redraw.track();
                 points.get_untracked().into_iter().enumerate().map(|(i, p)| view! {
@@ -185,35 +200,15 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                             />
                             "Preferred"
                         </label>
-                        <button
-                            type="button"
-                            class="p-1 rounded text-stone-400 hover:text-red-500 cursor-pointer"
-                            title=format!("Remove {noun}")
-                            aria-label=format!("Remove {noun}")
-                            on:click=move |_| {
+                        <IconButton icon="close" label=format!("Remove {noun}")
+                            variant=IconButtonVariant::Danger
+                            on_click=Callback::new(move |()| {
                                 points.update_untracked(|ps| { if i < ps.len() { ps.remove(i); } });
                                 redraw.update(|n| *n += 1);
-                            }
-                        >
-                            <span class="material-symbols-outlined" style="font-size:16px;" aria-hidden="true">"close"</span>
-                        </button>
+                            }) />
                     </div>
                 }).collect_view()
             }}
-            <button
-                type="button"
-                class="text-xs text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
-                on:click=move |_| {
-                    points.update_untracked(|ps| ps.push(ContactPoint {
-                        label: String::new(),
-                        value: String::new(),
-                        preferred: ps.is_empty(),
-                    }));
-                    redraw.update(|n| *n += 1);
-                }
-            >
-                {format!("+ Add {noun}")}
-            </button>
         </div>
     }
 }
@@ -417,10 +412,7 @@ pub fn PersonEditor(
             <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-stone-200 dark:border-stone-800"
                 data-testid="person-editor">
                 <h2 class="font-display text-lg text-stone-900 dark:text-stone-100">{title}</h2>
-                <button type="button" class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                    title="Close" aria-label="Close" on:click=move |_| dismiss.run(())>
-                    <span class="material-symbols-outlined" aria-hidden="true">"close"</span>
-                </button>
+                <IconButton icon="close" label="Close" on_click=dismiss />
             </div>
             <form
                 id=form_id
@@ -445,18 +437,9 @@ pub fn PersonEditor(
                     {field("Company", draft.company)}
                     {field("Position", draft.position)}
                 </div>
-                <div>
-                    <span class=LABEL_CLASS>"Emails"</span>
-                    <ContactListEditor kind=ContactKind::Email points=draft.emails />
-                </div>
-                <div>
-                    <span class=LABEL_CLASS>"Phones"</span>
-                    <ContactListEditor kind=ContactKind::Phone points=draft.phones />
-                </div>
-                <div>
-                    <span class=LABEL_CLASS>"Addresses"</span>
-                    <ContactListEditor kind=ContactKind::Address points=draft.addresses />
-                </div>
+                <ContactListEditor kind=ContactKind::Email points=draft.emails />
+                <ContactListEditor kind=ContactKind::Phone points=draft.phones />
+                <ContactListEditor kind=ContactKind::Address points=draft.addresses />
                 <label class="block">
                     <span class=LABEL_CLASS>"Notes"</span>
                     <textarea rows="4" class=INPUT_CLASS prop:value=move || draft.notes.get()
@@ -525,17 +508,40 @@ pub fn DuplicateNotice(
 
 // ── /people ────────────────────────────────────────────────────────────────────
 
+/// How long a just-created row stays highlighted in the registry.
+const NEW_ROW_HIGHLIGHT: std::time::Duration = std::time::Duration::from_millis(2500);
+
 #[component]
 pub fn PeopleView() -> impl IntoView {
-    let navigate = StoredValue::new(use_navigate());
     let query = RwSignal::new(String::new());
+    // Bumped after a create, so the list refetches with the new row in it.
+    let version = RwSignal::new(0u32);
     let people = LocalResource::new(move || {
+        version.track();
         let q = query.get();
         async move { crate::api::fetch_people(Some(&q)).await }
     });
     let editor_open = RwSignal::new(false);
+    // The row to highlight briefly: the person just created.
+    let highlight = RwSignal::new(None::<PersonId>);
+    // A modal flow returns to where it was launched from (#154): creating
+    // from the registry stays on the registry, so adding several people in
+    // a row needs no Back. The person's page is opened explicitly (a row).
     let on_created = Callback::new(move |p: Person| {
-        navigate.get_value()(&format!("/people/{}", p.id), Default::default());
+        // A search that doesn't match the new person would hide its row.
+        query.set(String::new());
+        version.update(|v| *v += 1);
+        highlight.set(Some(p.id));
+        push_toast(ToastLevel::Success, "Person added.");
+        set_timeout(
+            move || {
+                // Only clear our own highlight, not a newer one.
+                if highlight.try_get_untracked() == Some(Some(p.id)) {
+                    highlight.try_set(None);
+                }
+            },
+            NEW_ROW_HIGHLIGHT,
+        );
     });
 
     view! {
@@ -545,7 +551,8 @@ pub fn PeopleView() -> impl IntoView {
                 <IconButton icon="person_add" label="New person"
                     on_click=Callback::new(move |()| editor_open.set(true)) />
             </PageHeader>
-            <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4 max-w-3xl">
+            // Full width, like the node list: a registry is scanned (#156).
+            <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4">
                 <PersonEditor open=editor_open target=EditorTarget::New
                     initial=Signal::derive(PersonInput::default) on_saved=on_created />
                 <input
@@ -556,7 +563,9 @@ pub fn PeopleView() -> impl IntoView {
                     prop:value=move || query.get()
                     on:input=move |ev| query.set(event_target_value(&ev))
                 />
-                <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading\u{2026}"</p> }>
+                // Transition, not Suspense: a refetch (search, a create) keeps
+                // the current list on screen instead of flashing "Loading…".
+                <Transition fallback=|| view! { <p class="text-sm text-stone-400">"Loading\u{2026}"</p> }>
                     {move || people.get().map(|r| match r {
                         Ok(list) if list.is_empty() => view! {
                             <EmptyState icon="group" message="No people yet."
@@ -564,19 +573,30 @@ pub fn PeopleView() -> impl IntoView {
                         }.into_any(),
                         Ok(list) => view! {
                             <ul class="divide-y divide-stone-100 dark:divide-stone-800 rounded-lg border border-stone-200 dark:border-stone-800">
-                                {list.into_iter().map(|p| view! { <PersonRow person=p /> }).collect_view()}
+                                {list.into_iter().map(|p| {
+                                    let id = p.id;
+                                    view! {
+                                        <PersonRow person=p
+                                            highlighted=Signal::derive(move || highlight.get() == Some(id)) />
+                                    }
+                                }).collect_view()}
                             </ul>
                         }.into_any(),
                         Err(e) => view! { <p class="text-sm text-red-500">{format!("Error: {e}")}</p> }.into_any(),
                     })}
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }
 }
 
 #[component]
-fn PersonRow(person: Person) -> impl IntoView {
+fn PersonRow(
+    person: Person,
+    /// Just created: tinted for a moment and scrolled into view.
+    #[prop(into)]
+    highlighted: Signal<bool>,
+) -> impl IntoView {
     let navigate = use_navigate();
     let id = person.id;
     let subtitle = [person.position.clone(), person.company.clone()]
@@ -585,9 +605,25 @@ fn PersonRow(person: Person) -> impl IntoView {
         .collect::<Vec<_>>()
         .join(" \u{b7} ");
     let email = primary(&person.emails).cloned();
+    let row_ref: NodeRef<leptos::html::Li> = NodeRef::new();
+    Effect::new(move |_| {
+        if highlighted.get()
+            && let Some(el) = row_ref.get()
+        {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            el.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    });
     view! {
-        <li class="px-4 py-3 hover:bg-stone-50 dark:hover:bg-stone-900/60 cursor-pointer"
+        <li node_ref=row_ref
+            class=move || if highlighted.get() {
+                "px-4 py-3 cursor-pointer transition-colors bg-amber-50 dark:bg-amber-900/20"
+            } else {
+                "px-4 py-3 cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-stone-900/60"
+            }
             data-testid="person-row"
+            data-new=move || highlighted.get().then_some("true")
             on:click=move |_| navigate(&format!("/people/{id}"), Default::default())>
             <div class="text-sm font-medium text-stone-900 dark:text-stone-100">{person.display_name.clone()}</div>
             <div class="flex flex-wrap items-center gap-x-3 text-xs text-stone-500">
