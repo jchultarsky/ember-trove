@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.38.0] - 2026-10-26
+
 ### Changed — one button language across the UI
 - **The three-tier rule** (owner decision, now in `.claude/rules/leptos.md`):
   1. **Icon only** (`IconButton`) for header, toolbar, row, card and
