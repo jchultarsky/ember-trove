@@ -194,9 +194,10 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                             {label}
                         </button>
                         <button
-                            class="text-xs text-stone-300 dark:text-stone-600
-                                   hover:text-red-500 dark:hover:text-red-400
-                                   transition-colors cursor-pointer"
+                    aria-label="Delete all completed tasks"
+                            class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Danger,
+                    )
                             title="Delete all completed tasks"
                             on:click=move |_| {
                                 let ids = ids_for_clear.clone();
@@ -248,7 +249,7 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                                 });
                             }
                         >
-                            "Clear all"
+                            <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"delete_sweep"</span>
                         </button>
                     </div>
                 }.into_any()

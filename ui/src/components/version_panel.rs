@@ -90,10 +90,11 @@ pub fn VersionPanel(
                                                     </div>
                                                     {(!is_latest && is_editor).then(move || view! {
                                                         <button
-                                                            class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-400 hover:border-amber-500 hover:text-amber-600 dark:hover:text-amber-400 transition-colors disabled:opacity-40"
+                                                            class="inline-flex items-center justify-center gap-1.5 text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-400 hover:border-amber-500 hover:text-amber-600 dark:hover:text-amber-400 transition-colors disabled:opacity-40"
                                                             disabled=busy
                                                             on:click=move |_| do_restore(vid)
                                                         >
+                                                            <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"history"</span>
                                                             {move || if busy() { "Restoring…" } else { "Restore" }}
                                                         </button>
                                                     })}

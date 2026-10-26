@@ -267,11 +267,12 @@ pub fn NotesView() -> impl IntoView {
                         <NodePicker selected=selected_node placeholder="Attach to a node (optional)…" />
                     </div>
                     <button
-                        class="ml-auto px-3 py-1.5 rounded-lg bg-ember text-white text-sm font-medium
+                        class="inline-flex items-center justify-center gap-1.5 ml-auto px-3 py-1.5 rounded-lg bg-ember text-white text-sm font-medium
                             hover:bg-ember-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         disabled=move || posting.get() || body.get().trim().is_empty()
                         on:click=move |_| do_post()
                     >
+                        <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"send"</span>
                         {move || if posting.get() { "Posting…" } else { "Post" }}
                     </button>
                 </div>
@@ -350,13 +351,14 @@ pub fn NotesView() -> impl IntoView {
                 // Reset
                 <Show when=any_filter_active>
                     <button
-                        class="px-2.5 py-1.5 rounded-lg text-sm text-stone-500 dark:text-stone-400
-                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                    aria-label="Clear all filters"
+                        class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Neutral,
+                    )
                         title="Clear all filters"
                         on:click=move |_| reset_filters()
                     >
-                        "Reset"
-                    </button>
+                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"filter_alt_off"</span>                    </button>
                 </Show>
             </div>
 
@@ -462,13 +464,14 @@ pub fn NotesView() -> impl IntoView {
                     {move || has_more.get().then(|| view! {
                         <div class="flex justify-center pt-4">
                             <button
-                                class="px-4 py-1.5 rounded-lg text-sm font-medium text-amber-700 \
+                                class="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium text-amber-700 \
                                     dark:text-amber-400 border border-amber-300 dark:border-amber-800 \
                                     hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors \
                                     disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled=move || loading_more.get()
                                 on:click=move |_| load_more()
                             >
+                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"expand_more"</span>
                                 {move || if loading_more.get() { "Loading…" } else { "Load more" }}
                             </button>
                         </div>

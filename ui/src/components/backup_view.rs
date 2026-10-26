@@ -169,7 +169,7 @@ pub fn BackupView() -> impl IntoView {
                                     }).collect_view()}
                                     <div class="flex gap-2 pt-1">
                                         <button
-                                            class="px-4 py-2 rounded-lg bg-red-600 text-white
+                                            class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 text-white
                                                 text-sm font-medium hover:bg-red-700
                                                 disabled:opacity-40 transition-colors"
                                             disabled=move || restoring.get()
@@ -195,6 +195,7 @@ pub fn BackupView() -> impl IntoView {
                                                 });
                                             }
                                         >
+                                            <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"restore"</span>
                                             {move || if restoring.get() {
                                                 "Restoring…"
                                             } else {

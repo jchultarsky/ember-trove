@@ -25,11 +25,16 @@ for f in glob.glob('ui/src/**/*.rs', recursive=True):
     # icon="name" / icon: "name" props and fields
     for m in re.finditer(r'icon\s*[:=]\s*"([a-z][a-z0-9_]+)"', t):
         names.add(m.group(1))
-    # literal shortly after a material-symbols-outlined class mention
+    # the glyph inside a material-symbols-outlined span: every literal
+    # between the end of its opening tag and </span>, so `aria-hidden="true"`
+    # or a style attribute is never mistaken for the name, and both arms of an
+    # `if … { "a" } else { "b" }` count
     for m in re.finditer(r'material-symbols-outlined', t):
-        lit = re.search(r'"([a-z][a-z0-9_]{2,40})"', t[m.end():m.end()+250])
-        if lit:
-            names.add(lit.group(1))
+        gt = t.find('>', m.end())
+        end = t.find('</span>', gt)
+        if gt != -1 and end != -1 and end - gt < 400:
+            for lit in re.findall(r'"([a-z][a-z0-9_]{2,40})"', t[gt:end]):
+                names.add(lit)
     # match arms / ternaries returning icon literals in icon-rendering files
     if 'material-symbols' in t:
         for p in (r'=>\s*\(?[^)\n]*?"([a-z][a-z0-9_]{2,30})"',

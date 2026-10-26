@@ -303,12 +303,16 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                 // Collapse all / Expand all — any viewer (state is per account).
                 {move || (open.get() && !note_ids().is_empty()).then(|| view! {
                     <button
-                        class="px-2 py-1 rounded-lg text-xs text-stone-400 hover:text-stone-600
-                            dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
-                            transition-colors cursor-pointer"
+                        class=crate::components::icon_button::icon_button_class(
+                            crate::components::icon_button::IconButtonVariant::Neutral,
+                        )
+                        title=move || if all_collapsed() { "Expand all" } else { "Collapse all" }
+                        aria-label=move || if all_collapsed() { "Expand all" } else { "Collapse all" }
                         on:click=move |_| set_all(!all_collapsed())
                     >
-                        {move || if all_collapsed() { "Expand all" } else { "Collapse all" }}
+                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                            {move || if all_collapsed() { "unfold_more" } else { "unfold_less" }}
+                        </span>
                     </button>
                 })}
                 {move || (is_owner && open.get()).then(|| view! {

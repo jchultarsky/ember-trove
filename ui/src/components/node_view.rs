@@ -886,16 +886,15 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
                                                         <span class="font-medium truncate">{hit_title}</span>
                                                     </button>
                                                     <button
-                                                        class="text-xs px-2 py-0.5 rounded border border-stone-200 dark:border-stone-700
-                                                            text-stone-500 dark:text-stone-400
-                                                            hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400
-                                                            disabled:opacity-50 transition-colors shrink-0"
+                    aria-label="Link this mention"
+                                                        class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Accent,
+                    )
                                                         title="Turn the first plain-text mention into a wikilink"
                                                         disabled=move || linking.get()
                                                         on:click=move |_| do_link(hit_id)
                                                     >
-                                                        "Link"
-                                                    </button>
+                                                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"link"</span>                                                    </button>
                                                 </div>
                                             }
                                         }).collect::<Vec<_>>()}

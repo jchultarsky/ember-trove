@@ -160,13 +160,14 @@ pub fn TagBar(node_id: NodeId) -> impl IntoView {
                 } else {
                     view! {
                         <button
-                            class="inline-flex items-center px-2 py-0.5 rounded-full text-xs
-                                text-stone-500 dark:text-stone-400 border border-dashed
-                                border-stone-300 dark:border-stone-600 hover:border-stone-400
-                                dark:hover:border-stone-500 transition-colors"
+                    aria-label="Add tag"
+                    title="Add tag"
+                            class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Neutral,
+                    )
                             on:click=move |_| show_input.set(true)
                         >
-                            "+ Tag"
+                            <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"new_label"</span>
                         </button>
                     }.into_any()
                 }

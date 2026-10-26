@@ -6,6 +6,39 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — one button language across the UI
+- **The three-tier rule** (owner decision, now in `.claude/rules/leptos.md`):
+  1. **Icon only** (`IconButton`) for header, toolbar, row, card and
+     inline-editor actions.
+  2. **Icon + word** for a dialog or form's commit button and for
+     call-to-action buttons.
+  3. **Word only** for a dialog's Cancel, tabs and filter pills, menu items,
+     and links inside sentences.
+- **Now icon-only (12):**
+  - Webhooks: Edit, Delete, and New webhook (like New node's +).
+  - The node page's mention "Link".
+  - Notes: Expand all / Collapse all, and the notes filter Reset.
+  - The tag bar's "+ Tag", the task panel's "Clear all", and search
+    history "Clear all".
+  - Calendar: Today. Graph toolbar: Fit and Auto-arrange (spinning while it
+    works).
+  - Each keeps its word as tooltip and accessible name.
+- **Gain an icon beside the word (17):**
+  - Dialog commits: Create User, Save Roles, Change password, Confirm
+    Restore, the graph's Create edge, Add favorite, the confirm dialog's
+    Delete, Capture, Post, Save webhook, Use Template, Restore version, Save
+    search preset.
+  - Other buttons: Reload (update banner), Logout, Back to inbox, Load more.
+- `icon_button_class(variant)` exposes `IconButton`'s look for buttons that
+  keep their own handler.
+
+### Fixed
+- `scripts/refresh-icon-font.sh` missed glyphs whose `<span>` put
+  `aria-hidden="true"` after the class: it took "true" as the glyph name. It
+  now reads the span's content, including both arms of an `if`/`else`. The
+  font is refreshed (141 names).
+
+
 ## [2.37.0] - 2026-10-26
 
 ### Added — people in global search (#147, part 3)

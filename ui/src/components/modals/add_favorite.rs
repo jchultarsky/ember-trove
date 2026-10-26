@@ -220,7 +220,7 @@ pub fn AddFavoriteModal(
                     "Cancel"
                 </button>
                 <button
-                    class="px-4 py-2 text-sm font-medium bg-ember hover:bg-ember-strong
+                    class="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium bg-ember hover:bg-ember-strong
                            text-white rounded-lg disabled:opacity-50 cursor-pointer"
                     disabled=move || {
                         loading.get()
@@ -228,6 +228,7 @@ pub fn AddFavoriteModal(
                     }
                     on:click=move |_| handle_submit()
                 >
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"star"</span>
                     {move || if loading.get() { "Adding…" } else { "Add" }}
                 </button>
             </div>
