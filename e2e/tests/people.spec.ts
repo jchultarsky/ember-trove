@@ -1,4 +1,4 @@
-import { test, expect, createNode, shareNode, type APIRequestContext } from './fixtures';
+import { test, expect, createNode, shareNode, type APIRequestContext, type Page } from './fixtures';
 
 /**
  * People (#147): the registry and a person's card, the People section on a
@@ -16,7 +16,10 @@ async function wipePeople(request: APIRequestContext, stamp: string) {
   for (const p of people) await request.delete(`/api/people/${p.id}`);
 }
 
-test('the registry: create a person, fill the card, and the duplicate warning', async ({ page, request }) => {
+/** The shared person editor: a dialog (desktop) or sheet (phone). */
+const editor = (page: Page) => page.getByRole('dialog', { name: /New person|Edit person/ });
+
+test('the registry: one editor for new and edit, and the duplicate warning', async ({ page, request }) => {
   const stamp = `${Date.now()}`;
   const name = `e2e Ada ${stamp}`;
   const email = `ada.${stamp}@example.com`;
@@ -28,32 +31,47 @@ test('the registry: create a person, fill the card, and the duplicate warning', 
     });
     expect(first.status()).toBe(201);
 
+    // New person: the full editor straight away, name focused.
     await page.goto('/people');
     await page.getByRole('button', { name: 'New person' }).click();
-    await page.getByRole('textbox', { name: "New person's name" }).fill(name);
-    await page.getByRole('button', { name: 'Create' }).click();
-    await expect(page).toHaveURL(/\/people\/[0-9a-f-]{36}$/);
-    await expect(page.getByTestId('person-card').getByRole('heading', { name })).toBeVisible();
-
-    // Fill in the card.
-    await page.getByRole('button', { name: 'Edit' }).click();
-    const form = page.getByTestId('person-form');
-    await form.getByRole('button', { name: '+ Add email' }).click();
-    await form.getByRole('textbox', { name: 'email', exact: true }).fill(email);
-    await form.getByRole('button', { name: '+ Add phone' }).click();
-    await form.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0000');
-    await form.getByRole('button', { name: 'Save' }).click();
-    const warning = page.getByTestId('duplicate-warning');
+    const dlg = editor(page);
+    await expect(dlg).toBeVisible();
+    await expect(dlg.getByRole('textbox', { name: 'Name' })).toBeFocused();
+    await dlg.getByRole('textbox', { name: 'Name' }).fill(name);
+    await dlg.getByRole('textbox', { name: 'Company' }).fill('Analytical Engines');
+    await dlg.getByRole('button', { name: '+ Add email' }).click();
+    await dlg.getByRole('textbox', { name: 'email', exact: true }).fill(email);
+    await dlg.getByRole('button', { name: '+ Add phone' }).click();
+    await dlg.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0000');
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    // The duplicate warning shows inside the editor.
+    const warning = dlg.getByTestId('duplicate-warning');
     await expect(warning).toContainText(`e2e Ada original ${stamp}`);
     await warning.getByRole('button', { name: 'Save anyway' }).click();
+    await expect(dlg).toHaveCount(0);
+    await expect(page).toHaveURL(/\/people\/[0-9a-f-]{36}$/);
 
-    // Contact values are actions.
+    // The card: contact values are actions.
     const card = page.getByTestId('person-card');
+    await expect(card.getByRole('heading', { name })).toBeVisible();
     await expect(card.getByRole('link', { name: email })).toHaveAttribute('href', `mailto:${email}`);
     await expect(card.getByRole('link', { name: '+1 555 010 0000' })).toHaveAttribute('href', 'tel:+15550100000');
 
-    // Re-saving a person with their own email isn't a duplicate of
-    // themselves (here: the original, whose email no one else had before).
+    // Edit opens the same editor on the saved values.
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await expect(editor(page).getByRole('heading', { name: 'Edit person' })).toBeVisible();
+    await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue(name);
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Analytical Engines');
+    await editor(page).getByRole('textbox', { name: 'Position' }).fill('Analyst');
+    // Ctrl/⌘+Enter saves from any field. The person keeps their own email,
+    // which matches the original's, so this is a confirmed duplicate: the
+    // warning shows again, and "Save anyway" saves.
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await editor(page).getByTestId('duplicate-warning').getByRole('button', { name: 'Save anyway' }).click();
+    await expect(editor(page)).toHaveCount(0);
+    await expect(card).toContainText('Analyst');
+
+    // Re-saving a person whose email no one else has never warns.
     const original: Person = await first.json();
     const resave = await request.put(`/api/people/${original.id}`, {
       data: { display_name: original.display_name, emails: [{ label: 'work', value: `solo.${stamp}@example.com` }] },
@@ -67,8 +85,61 @@ test('the registry: create a person, fill the card, and the duplicate warning', 
     // The registry search finds them by email.
     await page.goto('/people');
     await page.getByRole('searchbox', { name: 'Search people' }).fill(`ada.${stamp}`);
-    // The original moved to another address, so one match is left.
     await expect(page.getByTestId('person-row')).toHaveCount(1);
+  } finally {
+    await wipePeople(request, stamp);
+  }
+});
+
+test('the editor: Cancel discards, Escape discards with Undo', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  await wipePeople(request, stamp);
+  try {
+    const p: Person = await (await request.post('/api/people', { data: { display_name: `e2e Mary ${stamp}` } })).json();
+    await page.goto(`/people/${p.id}`);
+    const card = page.getByTestId('person-card');
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await editor(page).getByRole('textbox', { name: 'Company' }).fill('Somerville');
+    // Escape with a change: closed, with "Changes discarded · Undo".
+    await page.keyboard.press('Escape');
+    await expect(editor(page)).toHaveCount(0);
+    await page.getByRole('button', { name: 'Undo' }).click();
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Somerville');
+    // Cancel discards outright, and the next Edit starts from the saved values.
+    await editor(page).getByRole('button', { name: 'Cancel' }).click();
+    await expect(editor(page)).toHaveCount(0);
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('');
+    expect(new URL(page.url()).pathname).toBe(`/people/${p.id}`);
+  } finally {
+    await wipePeople(request, stamp);
+  }
+});
+
+test('on a phone the editor is a full-screen sheet with Save in reach', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  await wipePeople(request, stamp);
+  await page.setViewportSize({ width: 375, height: 812 });
+  try {
+    await page.goto('/people');
+    await expect(page.locator('main')).toBeVisible();
+    await page.getByRole('button', { name: 'New person' }).click();
+    const dlg = editor(page);
+    await expect(dlg).toBeVisible();
+    const box = await dlg.boundingBox();
+    expect(box).toMatchObject({ x: 0, y: 0, width: 375, height: 812 });
+    // Contact rows stack: the label sits above the value, not beside it.
+    await dlg.getByRole('button', { name: '+ Add phone' }).click();
+    const label = await dlg.getByRole('textbox', { name: 'phone label' }).boundingBox();
+    const value = await dlg.getByRole('textbox', { name: 'phone', exact: true }).boundingBox();
+    expect(label!.y + label!.height).toBeLessThanOrEqual(value!.y);
+    // Nothing scrolls sideways, and Save is on screen.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+    const save = await dlg.getByRole('button', { name: 'Save' }).boundingBox();
+    expect(save!.y + save!.height).toBeLessThanOrEqual(812);
+    await dlg.getByRole('textbox', { name: 'Name' }).fill(`e2e Katherine ${stamp}`);
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(page).toHaveURL(/\/people\/[0-9a-f-]{36}$/);
   } finally {
     await wipePeople(request, stamp);
   }
@@ -97,12 +168,19 @@ test('a node: add from the registry or create inline, set a role, remove', async
     const rows = section.getByTestId('node-person');
     await expect(rows).toHaveCount(1);
 
-    // Create inline when there's no match.
+    // Create inline when there's no match: the same editor, name filled in,
+    // and saving adds the new person here.
     await section.getByRole('button', { name: 'Add person' }).click();
     await section.getByRole('combobox', { name: 'Find or create a person' }).fill(`e2e Linus ${stamp}`);
     await expect(section.getByRole('option', { selected: true })).toContainText('Create');
     await page.keyboard.press('Enter');
+    const dlg = page.getByRole('dialog', { name: 'New person' });
+    await expect(dlg.getByRole('textbox', { name: 'Name' })).toHaveValue(`e2e Linus ${stamp}`);
+    await dlg.getByRole('textbox', { name: 'Company' }).fill('Kernel');
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(dlg).toHaveCount(0);
     await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: `e2e Linus ${stamp}` })).toContainText('Kernel');
 
     // Role on the membership.
     const grace = rows.filter({ hasText: `e2e Grace ${stamp}` });
