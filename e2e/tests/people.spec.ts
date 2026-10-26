@@ -39,9 +39,9 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await expect(dlg.getByRole('textbox', { name: 'Name' })).toBeFocused();
     await dlg.getByRole('textbox', { name: 'Name' }).fill(name);
     await dlg.getByRole('textbox', { name: 'Company' }).fill('Analytical Engines');
-    await dlg.getByRole('button', { name: '+ Add email' }).click();
+    await dlg.getByRole('button', { name: 'Add email' }).click();
     await dlg.getByRole('textbox', { name: 'email', exact: true }).fill(email);
-    await dlg.getByRole('button', { name: '+ Add phone' }).click();
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
     await dlg.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0000');
     await dlg.getByRole('button', { name: 'Save' }).click();
     // The duplicate warning shows inside the editor.
@@ -49,6 +49,19 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await expect(warning).toContainText(`e2e Ada original ${stamp}`);
     await warning.getByRole('button', { name: 'Save anyway' }).click();
     await expect(dlg).toHaveCount(0);
+    // Saving returns to the registry (#154): the new row is there,
+    // highlighted, with a toast. Its card is a row click away.
+    await expect(page).toHaveURL(/\/people$/);
+    await expect(page.getByText('Person added.')).toBeVisible();
+    const row = page.getByTestId('person-row').filter({ hasText: name });
+    await expect(row).toHaveAttribute('data-new', 'true');
+    // Another New starts from a blank form (the burst case).
+    await page.getByRole('button', { name: 'New person' }).click();
+    await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue('');
+    await editor(page).getByRole('button', { name: 'Cancel' }).click();
+    // Click the name: the row's centre can land on its email link or copy
+    // button, which stop propagation.
+    await row.getByText(name, { exact: true }).click();
     await expect(page).toHaveURL(/\/people\/[0-9a-f-]{36}$/);
 
     // The card: contact values are actions.
@@ -129,7 +142,7 @@ test('on a phone the editor is a full-screen sheet with Save in reach', async ({
     const box = await dlg.boundingBox();
     expect(box).toMatchObject({ x: 0, y: 0, width: 375, height: 812 });
     // Contact rows stack: the label sits above the value, not beside it.
-    await dlg.getByRole('button', { name: '+ Add phone' }).click();
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
     const label = await dlg.getByRole('textbox', { name: 'phone label' }).boundingBox();
     const value = await dlg.getByRole('textbox', { name: 'phone', exact: true }).boundingBox();
     expect(label!.y + label!.height).toBeLessThanOrEqual(value!.y);
@@ -139,7 +152,9 @@ test('on a phone the editor is a full-screen sheet with Save in reach', async ({
     expect(save!.y + save!.height).toBeLessThanOrEqual(812);
     await dlg.getByRole('textbox', { name: 'Name' }).fill(`e2e Katherine ${stamp}`);
     await dlg.getByRole('button', { name: 'Save' }).click();
-    await expect(page).toHaveURL(/\/people\/[0-9a-f-]{36}$/);
+    await expect(dlg).toHaveCount(0);
+    await expect(page).toHaveURL(/\/people$/);
+    await expect(page.getByTestId('person-row').filter({ hasText: `e2e Katherine ${stamp}` })).toBeVisible();
   } finally {
     await wipePeople(request, stamp);
   }

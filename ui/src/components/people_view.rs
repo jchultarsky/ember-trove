@@ -4,7 +4,7 @@
 //!
 //! These are third parties' contact details. The API only ever returns the
 //! caller's own people, so nothing here has to filter. Contact values render
-//! as text (never HTML) and as mailto:/tel: links.
+//! as text (never HTML) and as mailto:/tel: links; addresses as plain text.
 
 use common::id::PersonId;
 use common::person::{ContactPoint, DuplicateMatch, Person, PersonInput, PersonUsage, primary};
@@ -25,17 +25,18 @@ const INPUT_CLASS: &str = "w-full text-sm bg-stone-100 dark:bg-stone-800 text-st
 const LABEL_CLASS: &str = "block text-xs font-medium text-stone-500 dark:text-stone-400 mb-1";
 
 /// `mailto:` / `tel:` href for a contact value. Phone links keep only what
-/// a dialer reads.
-fn contact_href(kind: ContactKind, value: &str) -> String {
+/// a dialer reads. Addresses have none: map links are out of scope (#155).
+fn contact_href(kind: ContactKind, value: &str) -> Option<String> {
     match kind {
-        ContactKind::Email => format!("mailto:{value}"),
-        ContactKind::Phone => format!(
+        ContactKind::Email => Some(format!("mailto:{value}")),
+        ContactKind::Phone => Some(format!(
             "tel:{}",
             value
                 .chars()
                 .filter(|c| c.is_ascii_digit() || *c == '+')
                 .collect::<String>()
-        ),
+        )),
+        ContactKind::Address => None,
     }
 }
 
@@ -43,10 +44,11 @@ fn contact_href(kind: ContactKind, value: &str) -> String {
 pub enum ContactKind {
     Email,
     Phone,
+    Address,
 }
 
-/// One email or phone as actions: the value is a mailto:/tel: link, and a
-/// button copies it.
+/// One email, phone or address as actions: an email or phone is a
+/// mailto:/tel: link, an address is multi-line text, and a button copies it.
 #[component]
 pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
     let href = contact_href(kind, &point.value);
@@ -54,20 +56,38 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
     let icon = match kind {
         ContactKind::Email => "mail",
         ContactKind::Phone => "call",
+        ContactKind::Address => "location_on",
     };
     let copy_label = match kind {
         ContactKind::Email => "Copy email",
         ContactKind::Phone => "Copy phone",
+        ContactKind::Address => "Copy address",
     };
-    view! {
-        <span class="inline-flex items-center gap-1 min-w-0 text-sm">
-            <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">
-                {icon}
-            </span>
+    let shown = match href {
+        Some(href) => view! {
             <a href=href class="text-amber-700 dark:text-amber-400 hover:underline truncate"
                 on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
                 {point.value.clone()}
             </a>
+        }
+        .into_any(),
+        None => view! {
+            <span class="whitespace-pre-line text-stone-700 dark:text-stone-300">{point.value.clone()}</span>
+        }
+        .into_any(),
+    };
+    // A multi-line address keeps its icon and buttons on the first line.
+    let row = if kind == ContactKind::Address {
+        "inline-flex items-start gap-1 min-w-0 text-sm"
+    } else {
+        "inline-flex items-center gap-1 min-w-0 text-sm"
+    };
+    view! {
+        <span class=row>
+            <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">
+                {icon}
+            </span>
+            {shown}
             {(!point.label.is_empty()).then(|| view! {
                 <span class="text-xs text-stone-400">{point.label.clone()}</span>
             })}
@@ -88,22 +108,39 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
     }
 }
 
-/// The editable contact list (emails or phones). Typing writes through
+/// The editable contact list (emails, phones or addresses). Typing writes through
 /// untracked, so inputs never re-render (and lose focus) mid-word. Only
 /// adding or removing a row redraws the list.
 #[component]
 fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> impl IntoView {
     let redraw = RwSignal::new(0u32);
-    let (noun, placeholder, input_type) = match kind {
-        ContactKind::Email => ("email", "name@example.com", "email"),
-        ContactKind::Phone => ("phone", "+1 555 010 0000", "tel"),
+    let (noun, heading, placeholder, input_type) = match kind {
+        ContactKind::Email => ("email", "Emails", "name@example.com", "email"),
+        ContactKind::Phone => ("phone", "Phones", "+1 555 010 0000", "tel"),
+        ContactKind::Address => ("address", "Addresses", "1 Main St\nSpringfield", "text"),
     };
+    let add = Callback::new(move |()| {
+        points.update_untracked(|ps| {
+            ps.push(ContactPoint {
+                label: String::new(),
+                value: String::new(),
+                preferred: ps.is_empty(),
+            })
+        });
+        redraw.update(|n| *n += 1);
+    });
     let label_placeholder = match kind {
         ContactKind::Email => "work",
         ContactKind::Phone => "cell",
+        ContactKind::Address => "home",
     };
     view! {
         <div class="space-y-1.5">
+            // Add is a row action: icon-only, beside the list's heading (#156).
+            <div class="flex items-center justify-between">
+                <span class=LABEL_CLASS>{heading}</span>
+                <IconButton icon="add" label=format!("Add {noun}") on_click=add />
+            </div>
             {move || {
                 redraw.track();
                 points.get_untracked().into_iter().enumerate().map(|(i, p)| view! {
@@ -122,17 +159,36 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                                 points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.label = v; });
                             }
                         />
-                        <input
-                            type=input_type
-                            class=INPUT_CLASS
-                            placeholder=placeholder
-                            aria-label=noun
-                            prop:value=p.value.clone()
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
-                            }
-                        />
+                        {if kind == ContactKind::Address {
+                            // Freeform and multi-line, like the old single field.
+                            view! {
+                                <textarea
+                                    rows="2"
+                                    class=INPUT_CLASS
+                                    placeholder=placeholder
+                                    aria-label=noun
+                                    prop:value=p.value.clone()
+                                    on:input=move |ev| {
+                                        let v = event_target_value(&ev);
+                                        points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
+                                    }
+                                />
+                            }.into_any()
+                        } else {
+                            view! {
+                                <input
+                                    type=input_type
+                                    class=INPUT_CLASS
+                                    placeholder=placeholder
+                                    aria-label=noun
+                                    prop:value=p.value.clone()
+                                    on:input=move |ev| {
+                                        let v = event_target_value(&ev);
+                                        points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
+                                    }
+                                />
+                            }.into_any()
+                        }}
                         <label class="flex items-center gap-1 text-xs text-stone-500 shrink-0" title="Preferred">
                             <input
                                 type="radio"
@@ -144,35 +200,15 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                             />
                             "Preferred"
                         </label>
-                        <button
-                            type="button"
-                            class="p-1 rounded text-stone-400 hover:text-red-500 cursor-pointer"
-                            title=format!("Remove {noun}")
-                            aria-label=format!("Remove {noun}")
-                            on:click=move |_| {
+                        <IconButton icon="close" label=format!("Remove {noun}")
+                            variant=IconButtonVariant::Danger
+                            on_click=Callback::new(move |()| {
                                 points.update_untracked(|ps| { if i < ps.len() { ps.remove(i); } });
                                 redraw.update(|n| *n += 1);
-                            }
-                        >
-                            <span class="material-symbols-outlined" style="font-size:16px;" aria-hidden="true">"close"</span>
-                        </button>
+                            }) />
                     </div>
                 }).collect_view()
             }}
-            <button
-                type="button"
-                class="text-xs text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
-                on:click=move |_| {
-                    points.update_untracked(|ps| ps.push(ContactPoint {
-                        label: String::new(),
-                        value: String::new(),
-                        preferred: ps.is_empty(),
-                    }));
-                    redraw.update(|n| *n += 1);
-                }
-            >
-                {format!("+ Add {noun}")}
-            </button>
         </div>
     }
 }
@@ -186,8 +222,7 @@ struct PersonDraft {
     position: RwSignal<String>,
     emails: RwSignal<Vec<ContactPoint>>,
     phones: RwSignal<Vec<ContactPoint>>,
-    address_label: RwSignal<String>,
-    address: RwSignal<String>,
+    addresses: RwSignal<Vec<ContactPoint>>,
     notes: RwSignal<String>,
 }
 
@@ -199,8 +234,7 @@ impl PersonDraft {
             position: RwSignal::new(String::new()),
             emails: RwSignal::new(Vec::new()),
             phones: RwSignal::new(Vec::new()),
-            address_label: RwSignal::new(String::new()),
-            address: RwSignal::new(String::new()),
+            addresses: RwSignal::new(Vec::new()),
             notes: RwSignal::new(String::new()),
         }
     }
@@ -211,8 +245,7 @@ impl PersonDraft {
         self.position.set(p.position.unwrap_or_default());
         self.emails.set(p.emails);
         self.phones.set(p.phones);
-        self.address_label.set(p.address_label.unwrap_or_default());
-        self.address.set(p.address.unwrap_or_default());
+        self.addresses.set(p.addresses);
         self.notes.set(p.notes.unwrap_or_default());
     }
 
@@ -231,8 +264,7 @@ impl PersonDraft {
             position: opt(self.position.get_untracked()),
             emails: rows(self.emails.get_untracked()),
             phones: rows(self.phones.get_untracked()),
-            address_label: opt(self.address_label.get_untracked()),
-            address: opt(self.address.get_untracked()),
+            addresses: rows(self.addresses.get_untracked()),
             notes: opt(self.notes.get_untracked()),
         }
     }
@@ -380,10 +412,7 @@ pub fn PersonEditor(
             <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-stone-200 dark:border-stone-800"
                 data-testid="person-editor">
                 <h2 class="font-display text-lg text-stone-900 dark:text-stone-100">{title}</h2>
-                <button type="button" class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                    title="Close" aria-label="Close" on:click=move |_| dismiss.run(())>
-                    <span class="material-symbols-outlined" aria-hidden="true">"close"</span>
-                </button>
+                <IconButton icon="close" label="Close" on_click=dismiss />
             </div>
             <form
                 id=form_id
@@ -408,22 +437,9 @@ pub fn PersonEditor(
                     {field("Company", draft.company)}
                     {field("Position", draft.position)}
                 </div>
-                <div>
-                    <span class=LABEL_CLASS>"Emails"</span>
-                    <ContactListEditor kind=ContactKind::Email points=draft.emails />
-                </div>
-                <div>
-                    <span class=LABEL_CLASS>"Phones"</span>
-                    <ContactListEditor kind=ContactKind::Phone points=draft.phones />
-                </div>
-                <div class="grid grid-cols-1 sm:grid-cols-[10rem_1fr] gap-3">
-                    {field("Address label", draft.address_label)}
-                    <label class="block">
-                        <span class=LABEL_CLASS>"Address"</span>
-                        <textarea rows="2" class=INPUT_CLASS prop:value=move || draft.address.get()
-                            on:input=move |ev| draft.address.set(event_target_value(&ev)) />
-                    </label>
-                </div>
+                <ContactListEditor kind=ContactKind::Email points=draft.emails />
+                <ContactListEditor kind=ContactKind::Phone points=draft.phones />
+                <ContactListEditor kind=ContactKind::Address points=draft.addresses />
                 <label class="block">
                     <span class=LABEL_CLASS>"Notes"</span>
                     <textarea rows="4" class=INPUT_CLASS prop:value=move || draft.notes.get()
@@ -492,17 +508,40 @@ pub fn DuplicateNotice(
 
 // ── /people ────────────────────────────────────────────────────────────────────
 
+/// How long a just-created row stays highlighted in the registry.
+const NEW_ROW_HIGHLIGHT: std::time::Duration = std::time::Duration::from_millis(2500);
+
 #[component]
 pub fn PeopleView() -> impl IntoView {
-    let navigate = StoredValue::new(use_navigate());
     let query = RwSignal::new(String::new());
+    // Bumped after a create, so the list refetches with the new row in it.
+    let version = RwSignal::new(0u32);
     let people = LocalResource::new(move || {
+        version.track();
         let q = query.get();
         async move { crate::api::fetch_people(Some(&q)).await }
     });
     let editor_open = RwSignal::new(false);
+    // The row to highlight briefly: the person just created.
+    let highlight = RwSignal::new(None::<PersonId>);
+    // A modal flow returns to where it was launched from (#154): creating
+    // from the registry stays on the registry, so adding several people in
+    // a row needs no Back. The person's page is opened explicitly (a row).
     let on_created = Callback::new(move |p: Person| {
-        navigate.get_value()(&format!("/people/{}", p.id), Default::default());
+        // A search that doesn't match the new person would hide its row.
+        query.set(String::new());
+        version.update(|v| *v += 1);
+        highlight.set(Some(p.id));
+        push_toast(ToastLevel::Success, "Person added.");
+        set_timeout(
+            move || {
+                // Only clear our own highlight, not a newer one.
+                if highlight.try_get_untracked() == Some(Some(p.id)) {
+                    highlight.try_set(None);
+                }
+            },
+            NEW_ROW_HIGHLIGHT,
+        );
     });
 
     view! {
@@ -512,7 +551,8 @@ pub fn PeopleView() -> impl IntoView {
                 <IconButton icon="person_add" label="New person"
                     on_click=Callback::new(move |()| editor_open.set(true)) />
             </PageHeader>
-            <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4 max-w-3xl">
+            // Full width, like the node list: a registry is scanned (#156).
+            <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4">
                 <PersonEditor open=editor_open target=EditorTarget::New
                     initial=Signal::derive(PersonInput::default) on_saved=on_created />
                 <input
@@ -523,7 +563,9 @@ pub fn PeopleView() -> impl IntoView {
                     prop:value=move || query.get()
                     on:input=move |ev| query.set(event_target_value(&ev))
                 />
-                <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading\u{2026}"</p> }>
+                // Transition, not Suspense: a refetch (search, a create) keeps
+                // the current list on screen instead of flashing "Loading…".
+                <Transition fallback=|| view! { <p class="text-sm text-stone-400">"Loading\u{2026}"</p> }>
                     {move || people.get().map(|r| match r {
                         Ok(list) if list.is_empty() => view! {
                             <EmptyState icon="group" message="No people yet."
@@ -531,19 +573,30 @@ pub fn PeopleView() -> impl IntoView {
                         }.into_any(),
                         Ok(list) => view! {
                             <ul class="divide-y divide-stone-100 dark:divide-stone-800 rounded-lg border border-stone-200 dark:border-stone-800">
-                                {list.into_iter().map(|p| view! { <PersonRow person=p /> }).collect_view()}
+                                {list.into_iter().map(|p| {
+                                    let id = p.id;
+                                    view! {
+                                        <PersonRow person=p
+                                            highlighted=Signal::derive(move || highlight.get() == Some(id)) />
+                                    }
+                                }).collect_view()}
                             </ul>
                         }.into_any(),
                         Err(e) => view! { <p class="text-sm text-red-500">{format!("Error: {e}")}</p> }.into_any(),
                     })}
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }
 }
 
 #[component]
-fn PersonRow(person: Person) -> impl IntoView {
+fn PersonRow(
+    person: Person,
+    /// Just created: tinted for a moment and scrolled into view.
+    #[prop(into)]
+    highlighted: Signal<bool>,
+) -> impl IntoView {
     let navigate = use_navigate();
     let id = person.id;
     let subtitle = [person.position.clone(), person.company.clone()]
@@ -552,9 +605,25 @@ fn PersonRow(person: Person) -> impl IntoView {
         .collect::<Vec<_>>()
         .join(" \u{b7} ");
     let email = primary(&person.emails).cloned();
+    let row_ref: NodeRef<leptos::html::Li> = NodeRef::new();
+    Effect::new(move |_| {
+        if highlighted.get()
+            && let Some(el) = row_ref.get()
+        {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            el.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    });
     view! {
-        <li class="px-4 py-3 hover:bg-stone-50 dark:hover:bg-stone-900/60 cursor-pointer"
+        <li node_ref=row_ref
+            class=move || if highlighted.get() {
+                "px-4 py-3 cursor-pointer transition-colors bg-amber-50 dark:bg-amber-900/20"
+            } else {
+                "px-4 py-3 cursor-pointer transition-colors hover:bg-stone-50 dark:hover:bg-stone-900/60"
+            }
             data-testid="person-row"
+            data-new=move || highlighted.get().then_some("true")
             on:click=move |_| navigate(&format!("/people/{id}"), Default::default())>
             <div class="text-sm font-medium text-stone-900 dark:text-stone-100">{person.display_name.clone()}</div>
             <div class="flex flex-wrap items-center gap-x-3 text-xs text-stone-500">
@@ -674,7 +743,7 @@ fn PersonCard(
         .join(" \u{b7} ");
     let empty = person.emails.is_empty()
         && person.phones.is_empty()
-        && person.address.is_none()
+        && person.addresses.is_empty()
         && person.notes.is_none();
     view! {
         <div class="space-y-4" data-testid="person-card">
@@ -694,10 +763,9 @@ fn PersonCard(
                 {person.emails.into_iter().map(|e| view! { <div><ContactAction kind=ContactKind::Email point=e /></div> }).collect_view()}
                 {person.phones.into_iter().map(|p| view! { <div><ContactAction kind=ContactKind::Phone point=p /></div> }).collect_view()}
             </div>
-            {person.address.map(|a| view! {
-                <div class="text-sm">
-                    <div class=LABEL_CLASS>{person.address_label.unwrap_or_else(|| "Address".into())}</div>
-                    <p class="whitespace-pre-line text-stone-700 dark:text-stone-300">{a}</p>
+            {(!person.addresses.is_empty()).then(|| view! {
+                <div class="space-y-1.5" data-testid="person-addresses">
+                    {person.addresses.into_iter().map(|a| view! { <div><ContactAction kind=ContactKind::Address point=a /></div> }).collect_view()}
                 </div>
             })}
             {person.notes.map(|n| view! {

@@ -583,13 +583,13 @@ pub async fn execute_restore(
             r#"
             INSERT INTO people
                 (id, owner_id, display_name, company, position, emails, phones,
-                 address_label, address, notes, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 addresses, notes, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (id) DO UPDATE
                 SET display_name = EXCLUDED.display_name, company = EXCLUDED.company,
                     position = EXCLUDED.position, emails = EXCLUDED.emails,
-                    phones = EXCLUDED.phones, address_label = EXCLUDED.address_label,
-                    address = EXCLUDED.address, notes = EXCLUDED.notes
+                    phones = EXCLUDED.phones, addresses = EXCLUDED.addresses,
+                    notes = EXCLUDED.notes
             "#,
         )
         .bind(p.id.0)
@@ -599,8 +599,7 @@ pub async fn execute_restore(
         .bind(&p.position)
         .bind(sqlx::types::Json(&p.emails))
         .bind(sqlx::types::Json(&p.phones))
-        .bind(&p.address_label)
-        .bind(&p.address)
+        .bind(sqlx::types::Json(&p.addresses))
         .bind(&p.notes)
         .bind(p.created_at)
         .bind(p.updated_at)
