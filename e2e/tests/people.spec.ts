@@ -59,7 +59,9 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await page.getByRole('button', { name: 'New person' }).click();
     await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue('');
     await editor(page).getByRole('button', { name: 'Cancel' }).click();
-    await row.click();
+    // Click the name: the row's centre can land on its email link or copy
+    // button, which stop propagation.
+    await row.getByText(name, { exact: true }).click();
     await expect(page).toHaveURL(/\/people\/[0-9a-f-]{36}$/);
 
     // The card: contact values are actions.
