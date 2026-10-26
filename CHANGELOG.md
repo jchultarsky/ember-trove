@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.37.0] - 2026-10-26
+
 ### Added — people in global search (#147, part 3)
 - **Search page:** a People group above the node results. It hides while a
   node-only filter (type, published-only, tags, dates) is on, since those
