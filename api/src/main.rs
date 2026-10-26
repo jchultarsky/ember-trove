@@ -31,8 +31,8 @@ use repo::{
     editor_pref::PgEditorPrefRepo, favorite::PgFavoriteRepo, graph::PgGraphRepo, node::PgNodeRepo,
     node_link::PgNodeLinkRepo, node_version::PgNodeVersionRepo, note::PgNoteRepo,
     permission::PgPermissionRepo, pkce::PgPkceRepo, search::PgSearchRepo,
-    search_presets::PgSearchPresetRepo, share_token::PgShareTokenRepo, tag::PgTagRepo,
-    task::PgTaskRepo, template::PgTemplateRepo, webhook::PgWebhookRepo,
+    search_presets::PgSearchPresetRepo, tag::PgTagRepo, task::PgTaskRepo, template::PgTemplateRepo,
+    webhook::PgWebhookRepo,
 };
 use state::AppState;
 
@@ -156,7 +156,6 @@ async fn main() -> anyhow::Result<()> {
         graph: Arc::new(PgGraphRepo::new(pool.clone())),
         backup: Arc::new(PgBackupRepo::new(pool.clone())),
         favorites: Arc::new(PgFavoriteRepo::new(pool.clone())),
-        share_tokens: Arc::new(PgShareTokenRepo::new(pool.clone())),
         activity: Arc::new(PgActivityRepo::new(pool.clone())),
         node_versions: Arc::new(PgNodeVersionRepo::new(pool.clone())),
         templates: Arc::new(PgTemplateRepo::new(pool.clone())),

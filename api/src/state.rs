@@ -14,8 +14,8 @@ use crate::{
         editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
         node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
         permission::PermissionRepo, pkce::PkceRepo, search::SearchRepo,
-        search_presets::SearchPresetRepo, share_token::ShareTokenRepo, tag::TagRepo,
-        task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
+        search_presets::SearchPresetRepo, tag::TagRepo, task::TaskRepo, template::TemplateRepo,
+        webhook::WebhookRepo,
     },
 };
 
@@ -33,7 +33,6 @@ pub struct AppState {
     pub graph: Arc<dyn GraphRepo>,
     pub backup: Arc<dyn BackupRepo>,
     pub favorites: Arc<dyn FavoriteRepo>,
-    pub share_tokens: Arc<dyn ShareTokenRepo>,
     pub activity: Arc<dyn ActivityRepo>,
     pub node_versions: Arc<dyn NodeVersionRepo>,
     pub templates: Arc<dyn TemplateRepo>,

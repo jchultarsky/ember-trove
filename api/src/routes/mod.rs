@@ -15,7 +15,6 @@ pub mod notes;
 pub mod permissions;
 pub mod search;
 pub mod search_presets;
-pub mod share;
 pub mod tags;
 pub mod tasks;
 pub mod templates;
@@ -161,7 +160,6 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/graph", graph::router())
         .nest("/permissions", permissions::router())
         .nest("/favorites", favorites::router())
-        .nest("/nodes/{node_id}/share", share::node_share_router())
         .nest("/templates", templates::router())
         .nest("/search-presets", search_presets::router())
         .nest("/nodes/{node_id}/links", node_links::router())
@@ -173,14 +171,12 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/editor-prefs", editor_prefs::router())
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    // Rate-limited public routes (auth callbacks, public share links) +
-    // protected routes. `/share/{token}` is unauthenticated and performs a
-    // token lookup, so it MUST sit behind the governor like every other
-    // public endpoint. Health is intentionally excluded — monitoring tools
-    // must never be rate-limited.
+    // Rate-limited public routes (auth callbacks) + protected routes. Every
+    // public endpoint sits behind the governor. Health is intentionally
+    // excluded: monitoring tools must never be rate-limited. (Public share
+    // links, the one unauthenticated content route, were removed in #147.)
     let rate_limited = Router::new()
         .merge(auth::public_router())
-        .nest("/share", share::public_share_router())
         .merge(protected)
         .layer(rate_limit);
 

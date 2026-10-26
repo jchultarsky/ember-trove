@@ -22,7 +22,6 @@ use chrono::{Duration, Utc};
 use common::{
     EmberTroveError,
     node::{CreateNodeRequest, Node, NodeType},
-    share_token::CreateShareTokenRequest,
     task::{CreateTaskRequest, TaskStatus, UpdateTaskRequest},
 };
 use sqlx::PgPool;
@@ -35,7 +34,6 @@ use super::{
     note::{NoteRepo, PgNoteRepo},
     permission::{PermissionRepo, PgPermissionRepo},
     search::{PgSearchRepo, SearchRepo},
-    share_token::{PgShareTokenRepo, ShareTokenRepo},
     task::{PgTaskRepo, TaskRepo},
 };
 
@@ -90,97 +88,6 @@ async fn node_list_all_for_owner_scopes_to_owner(pool: PgPool) {
 
     let all = repo.list_all().await.expect("admin list");
     assert_eq!(all.len(), 2, "unscoped list must see both owners' nodes");
-}
-
-// ── Share tokens: lifecycle, expiry, node-scoped revocation ───────────────────
-
-#[sqlx::test(migrations = "../migrations")]
-async fn share_token_expiry_filters_lookup(pool: PgPool) {
-    let node = create_node(&pool, "owner-a", "shared").await;
-    let tokens = PgShareTokenRepo::new(pool.clone());
-
-    let live = tokens
-        .create(
-            node.id,
-            "owner-a",
-            &CreateShareTokenRequest { expires_at: None },
-        )
-        .await
-        .expect("create live token");
-    assert!(
-        tokens
-            .find_by_token(live.token)
-            .await
-            .expect("lookup")
-            .is_some(),
-        "unexpired token must resolve"
-    );
-
-    let expired = tokens
-        .create(
-            node.id,
-            "owner-a",
-            &CreateShareTokenRequest {
-                expires_at: Some(Utc::now() - Duration::hours(1)),
-            },
-        )
-        .await
-        .expect("create expired token");
-    assert!(
-        tokens
-            .find_by_token(expired.token)
-            .await
-            .expect("lookup")
-            .is_none(),
-        "expired token must NOT resolve"
-    );
-}
-
-#[sqlx::test(migrations = "../migrations")]
-async fn share_token_revoke_is_scoped_to_node(pool: PgPool) {
-    // SQL-level regression for the v2.22.4 fix: revocation matches BOTH the
-    // token id and the node id, so proving ownership of one node cannot
-    // revoke another node's token.
-    let node_a = create_node(&pool, "owner-a", "node a").await;
-    let node_b = create_node(&pool, "owner-b", "node b").await;
-    let tokens = PgShareTokenRepo::new(pool.clone());
-    let token = tokens
-        .create(
-            node_a.id,
-            "owner-a",
-            &CreateShareTokenRequest { expires_at: None },
-        )
-        .await
-        .expect("create token");
-
-    // Wrong node: NotFound, and the token must survive.
-    let wrong = tokens.revoke(token.id, node_b.id).await;
-    assert!(
-        matches!(wrong, Err(EmberTroveError::NotFound(_))),
-        "cross-node revoke must be NotFound, got {wrong:?}"
-    );
-    assert!(
-        tokens
-            .find_by_token(token.token)
-            .await
-            .expect("lookup")
-            .is_some(),
-        "token must still exist after a cross-node revoke attempt"
-    );
-
-    // Owning node: revoked for real.
-    tokens
-        .revoke(token.id, node_a.id)
-        .await
-        .expect("legit revoke");
-    assert!(
-        tokens
-            .find_by_token(token.token)
-            .await
-            .expect("lookup")
-            .is_none(),
-        "token must be gone after a legitimate revoke"
-    );
 }
 
 // ── Cross-owner isolation (hotfix: wiki links, edges, permissions, graph) ────

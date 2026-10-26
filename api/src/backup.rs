@@ -80,11 +80,6 @@ pub async fn create_backup(
         .list_all(None)
         .await
         .map_err(ApiError::from)?;
-    let share_tokens = state
-        .share_tokens
-        .list_all()
-        .await
-        .map_err(ApiError::from)?;
     let node_versions = state
         .node_versions
         .list_all()
@@ -126,7 +121,6 @@ pub async fn create_backup(
         node_links,
         favorites,
         permissions,
-        share_tokens,
         node_versions,
         node_positions,
     };
@@ -538,26 +532,6 @@ pub async fn execute_restore(
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(format!("insert permission failed: {e}")))?;
-    }
-
-    // Insert share tokens.
-    for token in &data.share_tokens {
-        sqlx::query(
-            r#"
-            INSERT INTO share_tokens (id, node_id, token, created_by, created_at, expires_at)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (id) DO NOTHING
-            "#,
-        )
-        .bind(token.id.0)
-        .bind(token.node_id.0)
-        .bind(token.token)
-        .bind(&token.created_by)
-        .bind(token.created_at)
-        .bind(token.expires_at)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ApiError::Internal(format!("insert share_token failed: {e}")))?;
     }
 
     // Insert node versions.
