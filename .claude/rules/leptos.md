@@ -24,7 +24,7 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   <Route path=path!("/tasks/inbox") view=|| view!{ <TasksView active=TasksTab::Inbox/> } />
   ```
 - **URL map:** `/tasks/my-day` · `/tasks/inbox` · `/tasks/calendar` · `/dashboard` ·
-  `/graph` · `/search` · `/notes` · `/nodes` · `/nodes/new` · `/nodes/:id` ·
+  `/graph` · `/search` · `/notes` · `/people` · `/people/:id` · `/nodes` · `/nodes/new` · `/nodes/:id` ·
   `/nodes/:id/edit` · `/tags` · `/templates` · `/admin/users` · `/admin/permissions` ·
   `/admin/backup`. Legacy `/my-day`, `/inbox`, `/calendar` redirect to `/tasks/...`
   (bookmarks/PWA shortcuts predating v2.3.0).

@@ -42,10 +42,7 @@ use common::{
     edge::{CreateEdgeRequest, Edge, EdgeWithTitles},
     favorite::{CreateFavoriteRequest, Favorite},
     graph::NodePosition,
-    id::{
-        AttachmentId, EdgeId, FavoriteId, NodeId, PermissionId, ShareTokenId, TagId, TaskId,
-        TemplateId,
-    },
+    id::{AttachmentId, EdgeId, FavoriteId, NodeId, PermissionId, TagId, TaskId, TemplateId},
     id::{NodeLinkId, SearchPresetId, WebhookId},
     node::{
         CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeTitleEntry, NodeType,
@@ -74,8 +71,8 @@ use crate::{
         activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo, edge::EdgeRepo,
         favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_link::NodeLinkRepo,
         node_version::NodeVersionRepo, note::NoteRepo, permission::PermissionRepo, pkce::PkceRepo,
-        search::SearchRepo, search_presets::SearchPresetRepo, share_token::ShareTokenRepo,
-        tag::TagRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
+        search::SearchRepo, search_presets::SearchPresetRepo, tag::TagRepo, task::TaskRepo,
+        template::TemplateRepo, webhook::WebhookRepo,
     },
     routes::build_router,
     state::AppState,
@@ -85,7 +82,7 @@ use crate::{
 // Most methods panic with `unimplemented!()`: they are never reached because
 // the auth middleware short-circuits every protected request when oidc = None.
 // Handler tests that inject claims (`claims_app`) get canned data instead —
-// the restore flow, share tokens, export, and the "Authorization world"
+// the restore flow, export, and the "Authorization world"
 // below that the authZ tests run against.
 
 struct StubNodeRepo;
@@ -709,50 +706,135 @@ fn fake_node(slug: &str, owner: &str) -> Node {
     }
 }
 
-/// The one share token the stub "database" holds: token `STUB_SHARE_TOKEN_ID`
-/// belongs to node `STUB_SHARE_NODE_ID`. Lets tests prove node-scoping.
-const STUB_SHARE_TOKEN_ID: u128 = 0x5eed_0001;
-const STUB_SHARE_NODE_ID: u128 = 0x5eed_0002;
+/// People stub for the handler tests (#147). The "registry" holds one
+/// person, `AZ_PERSON`, owned by `test-sub`; any other id is a 404, the way
+/// another owner's person is.
+const AZ_PERSON: u128 = 0xa2_0e01;
 
-struct StubShareTokenRepo;
+struct StubPersonRepo;
 #[async_trait]
-impl ShareTokenRepo for StubShareTokenRepo {
-    async fn list_all(&self) -> Result<Vec<common::share_token::ShareToken>, EmberTroveError> {
-        unimplemented!()
+impl crate::repo::person::PersonRepo for StubPersonRepo {
+    async fn list(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: i64,
+    ) -> Result<Vec<common::person::Person>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn get(
+        &self,
+        owner: &str,
+        id: common::id::PersonId,
+    ) -> Result<common::person::Person, EmberTroveError> {
+        if owner == "test-sub" && id.0 == Uuid::from_u128(AZ_PERSON) {
+            let now = chrono::Utc::now();
+            Ok(common::person::Person {
+                id,
+                owner_id: owner.into(),
+                display_name: "Ada".into(),
+                company: None,
+                position: None,
+                emails: vec![],
+                phones: vec![],
+                address_label: None,
+                address: None,
+                notes: None,
+                created_at: now,
+                updated_at: now,
+            })
+        } else {
+            Err(EmberTroveError::NotFound(format!("person {id} not found")))
+        }
     }
     async fn create(
         &self,
-        _: NodeId,
         _: &str,
-        _: &common::share_token::CreateShareTokenRequest,
-    ) -> Result<common::share_token::ShareToken, EmberTroveError> {
+        _: &common::person::PersonInput,
+    ) -> Result<common::person::Person, EmberTroveError> {
         unimplemented!()
     }
-    async fn list(
+    async fn update(
+        &self,
+        _: &str,
+        _: common::id::PersonId,
+        _: &common::person::PersonInput,
+    ) -> Result<common::person::Person, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, _: &str, _: common::id::PersonId) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn find_by_emails(
+        &self,
+        _: &str,
+        lowered: &[String],
+    ) -> Result<Vec<common::person::DuplicateMatch>, EmberTroveError> {
+        // Exactly one known address, so the duplicate warning can be tested.
+        Ok(lowered
+            .iter()
+            .filter(|e| e.as_str() == "taken@example.com")
+            .map(|e| common::person::DuplicateMatch {
+                id: common::id::PersonId(Uuid::from_u128(AZ_PERSON)),
+                display_name: "Ada".into(),
+                email: e.clone(),
+            })
+            .collect())
+    }
+    async fn usages(
+        &self,
+        _: &str,
+        _: common::id::PersonId,
+    ) -> Result<Vec<common::person::PersonUsage>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn role_counts(
+        &self,
+        _: &str,
+    ) -> Result<Vec<common::person::RoleCount>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn memberships_for_node(
         &self,
         _: NodeId,
-    ) -> Result<Vec<common::share_token::ShareToken>, EmberTroveError> {
+    ) -> Result<Vec<common::person::Membership>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn add_membership(
+        &self,
+        _: NodeId,
+        _: common::id::PersonId,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<common::id::MembershipId, EmberTroveError> {
         unimplemented!()
     }
-    async fn find_by_token(
+    async fn update_membership(
         &self,
-        _: Uuid,
-    ) -> Result<Option<common::share_token::ShareToken>, EmberTroveError> {
-        // No matching token — the public share handler turns this into 404.
-        Ok(None)
+        _: NodeId,
+        _: common::id::MembershipId,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<(), EmberTroveError> {
+        unimplemented!()
     }
-    async fn revoke(&self, id: ShareTokenId, node_id: NodeId) -> Result<(), EmberTroveError> {
-        // Mirror the production SQL (`WHERE id = $1 AND node_id = $2`): only
-        // the canned (token, node) pair exists; anything else is NotFound.
-        if id.inner() == Uuid::from_u128(STUB_SHARE_TOKEN_ID)
-            && node_id.inner() == Uuid::from_u128(STUB_SHARE_NODE_ID)
-        {
-            Ok(())
-        } else {
-            Err(EmberTroveError::NotFound(format!(
-                "share token {id} not found"
-            )))
-        }
+    async fn remove_membership(
+        &self,
+        _: NodeId,
+        _: common::id::MembershipId,
+    ) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(
+        &self,
+    ) -> Result<
+        (
+            Vec<common::person::Person>,
+            Vec<common::person::MembershipRecord>,
+        ),
+        EmberTroveError,
+    > {
+        Ok((vec![], vec![]))
     }
 }
 
@@ -976,8 +1058,8 @@ fn test_state() -> AppState {
         graph: Arc::new(StubGraphRepo),
         backup: Arc::new(StubBackupRepo),
         favorites: Arc::new(StubFavoriteRepo),
-        share_tokens: Arc::new(StubShareTokenRepo),
         activity: Arc::new(StubActivityRepo),
+        people: Arc::new(StubPersonRepo),
         node_versions: Arc::new(StubNodeVersionRepo),
         templates: Arc::new(StubTemplateRepo),
         search_presets: Arc::new(StubSearchPresetRepo),
@@ -1456,75 +1538,45 @@ fn admin_claims() -> common::auth::AuthClaims {
     }
 }
 
-/// Mini-router for the protected share endpoints with injected claims —
-/// same pattern as the task/note restore tests.
-fn share_test_app() -> Router {
-    Router::new()
-        .nest(
-            "/nodes/{node_id}/share",
-            crate::routes::share::node_share_router(),
-        )
-        .layer(axum::Extension(admin_claims()))
-        .with_state(test_state())
-}
+// ── Public share links are gone (#147) ────────────────────────────────────────
 
+/// Owner decision (#147): public share links were removed entirely. They
+/// were unauthenticated read access to a node, and too easy to publish by
+/// accident. No old URL may reach a handler: each is either unrouted (404)
+/// or stopped by the auth layer that wraps everything that isn't public. In
+/// this harness that layer answers 500, because there is no OIDC, and in
+/// production it answers 401. Neither has a share handler's body.
 #[tokio::test]
-async fn share_revoke_succeeds_for_the_owning_node() {
-    let node = Uuid::from_u128(STUB_SHARE_NODE_ID);
-    let token = Uuid::from_u128(STUB_SHARE_TOKEN_ID);
-    let resp = share_test_app()
-        .oneshot(
-            Request::delete(format!("/nodes/{node}/share/{token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-}
-
-#[tokio::test]
-async fn share_revoke_is_scoped_to_the_path_node() {
-    // Regression (v2.22.4): revoke used to delete by token id alone, so an
-    // owner of ANY node could revoke another node's token. The repo call now
-    // carries the path's node id; a mismatched node must be NotFound.
-    let other_node = Uuid::from_u128(0xbad_c0de);
-    let token = Uuid::from_u128(STUB_SHARE_TOKEN_ID);
-    let resp = share_test_app()
-        .oneshot(
-            Request::delete(format!("/nodes/{other_node}/share/{token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::NOT_FOUND,
-        "a token belonging to a different node must not be revocable"
-    );
-}
-
-#[tokio::test]
-async fn public_share_route_is_rate_limited() {
-    // Regression (v2.22.4): /share/{token} used to be mounted OUTSIDE the
-    // governor — the only ungoverned unauthenticated endpoint. Behind the
-    // governor, a request with no derivable client IP (no X-Real-IP /
-    // X-Forwarded-For / ConnectInfo) is rejected by the key extractor instead
-    // of reaching the handler.
-    let resp = test_app()
-        .oneshot(
-            Request::get(format!("/share/{}", Uuid::new_v4()))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(
-        resp.status().is_server_error(),
-        "governor must gate /share/{{token}}; got {}",
-        resp.status()
-    );
+async fn public_share_link_routes_are_gone() {
+    let node = Uuid::new_v4();
+    let token = Uuid::new_v4();
+    for (method, uri) in [
+        ("GET", format!("/share/{token}")),
+        ("GET", format!("/nodes/{node}/share")),
+        ("POST", format!("/nodes/{node}/share")),
+        ("DELETE", format!("/nodes/{node}/share/{token}")),
+        ("DELETE", format!("/share/{token}")),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(&uri)
+            .header("x-forwarded-for", "127.0.0.1")
+            .header("content-type", "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let resp = test_app().oneshot(req).await.unwrap();
+        let status = resp.status();
+        assert!(
+            status == StatusCode::NOT_FOUND || status == StatusCode::INTERNAL_SERVER_ERROR,
+            "{method} {uri} must be unrouted or behind auth, got {status}"
+        );
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body).to_lowercase();
+        assert!(
+            !body.contains("share"),
+            "{method} {uri} reached a share handler: {body}"
+        );
+    }
 }
 
 // ── Privileged & previously-untested route groups (v2.23.0) ──────────────────
@@ -1834,28 +1886,6 @@ async fn editor_prefs_bulk_collapse_validates_batch() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
-}
-
-#[tokio::test]
-async fn public_share_route_still_reachable_behind_governor() {
-    // With a client IP the governor admits the request; the stub repo has no
-    // matching token, so the HANDLER's 404 (JSON error body) proves the route
-    // is registered — an unmatched route would 404 with an empty body.
-    let resp = test_app()
-        .oneshot(
-            Request::get(format!("/share/{}", Uuid::new_v4()))
-                .header("x-forwarded-for", "127.0.0.1")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    assert!(
-        String::from_utf8_lossy(&body).contains("share token"),
-        "expected the share handler's JSON error body, not a bare route miss"
-    );
 }
 
 // ── Handler-level authorization (v2.31.1 fixes) ──────────────────────────────
@@ -2199,4 +2229,143 @@ async fn project_status_suggestions_are_the_callers_own() {
         body,
         serde_json::json!([{ "status": "of test-sub", "count": 1 }])
     );
+}
+
+// ── People (#147) ─────────────────────────────────────────────────────────────
+
+fn people_app() -> Router {
+    Router::new()
+        .nest("/people", crate::routes::people::router())
+        .nest(
+            "/nodes/{node_id}/people",
+            crate::routes::people::node_router(),
+        )
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state())
+}
+
+async fn people_call(
+    method: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let resp = people_app()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn people_routes_registered() {
+    assert_route_registered("GET", "/people").await;
+    assert_route_registered("GET", "/people/roles").await;
+    assert_route_registered("GET", &format!("/nodes/{}/people", Uuid::new_v4())).await;
+}
+
+#[tokio::test]
+async fn someone_elses_person_is_a_404_like_a_missing_one() {
+    let (status, _) = people_call(
+        "GET",
+        &format!("/people/{}", Uuid::new_v4()),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = people_call(
+        "GET",
+        &format!("/people/{}", Uuid::from_u128(AZ_PERSON)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        (status, body["display_name"].as_str()),
+        (StatusCode::OK, Some("Ada"))
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_person_is_rejected_before_any_write() {
+    // The stub's `create` is unimplemented: reaching it would panic.
+    for bad in [
+        serde_json::json!({ "display_name": "   " }),
+        serde_json::json!({ "display_name": "Ada", "emails": [{ "value": "not-an-email" }] }),
+    ] {
+        let (status, _) = people_call("POST", "/people", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+#[tokio::test]
+async fn a_matching_email_is_a_duplicate_warning_not_a_silent_create() {
+    let (status, body) = people_call(
+        "POST",
+        "/people",
+        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "Taken@Example.com" }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["matches"][0]["display_name"], "Ada");
+}
+
+#[tokio::test]
+async fn adding_a_taken_email_on_edit_warns_before_any_write() {
+    // Someone else in the registry has it: a warning before any write.
+    let (status, body) = people_call(
+        "PUT",
+        &format!("/people/{}", Uuid::new_v4()),
+        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "taken@example.com" }] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["matches"][0]["display_name"], "Ada");
+}
+
+#[tokio::test]
+async fn a_node_viewer_can_list_its_people_and_a_stranger_cannot() {
+    let (status, _) = people_call(
+        "GET",
+        &format!("/nodes/{}/people", Uuid::from_u128(AZ_VIEW_NODE)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = people_call(
+        "GET",
+        &format!("/nodes/{}/people", Uuid::from_u128(AZ_FOREIGN_NODE)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+        "{status}"
+    );
+}
+
+#[tokio::test]
+async fn only_the_nodes_owner_can_change_its_people() {
+    let body = serde_json::json!({ "person_id": Uuid::from_u128(AZ_PERSON) });
+    // A viewer, an editor who isn't the owner, and a stranger: all refused
+    // before anything is written (the stub's add_membership would panic).
+    for node in [AZ_VIEW_NODE, AZ_EDIT_NODE, AZ_FOREIGN_NODE, AZ_OWNED_NODE] {
+        let (status, _) = people_call(
+            "POST",
+            &format!("/nodes/{}/people", Uuid::from_u128(node)),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "node {node:#x}");
+    }
 }

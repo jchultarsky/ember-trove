@@ -19,6 +19,17 @@ pub fn use_node_search(query: RwSignal<String>) -> RwSignal<Vec<SearchResult>> {
     .0
 }
 
+/// People search for global search (#147): the palette, the search page and
+/// the header dropdown. Same debounce and latest-wins behaviour as the node
+/// search. It's the owner-only `/api/people`, so it never returns anyone
+/// else's people.
+pub fn use_people_search(query: RwSignal<String>) -> RwSignal<Vec<common::person::Person>> {
+    use_debounced(query, |q: String| async move {
+        crate::api::search_people(&q, 5).await
+    })
+    .0
+}
+
 /// Title suggestions for TEXT completion: the editor's `[[` autocomplete,
 /// which inserts a title into Markdown rather than choosing a node value.
 /// Fields that choose a node use [`NodePicker`] (#130). Same lookup, same

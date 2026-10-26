@@ -5,7 +5,8 @@
 # ONLY the ligature glyphs for icon names the UI actually uses (~91 KB vs
 # ~4 MB for the full set). A newly added icon name will render as raw text
 # ("wb_sunny") until it is added to the subset — run this script after
-# introducing a new icon and commit the refreshed .woff2.
+# introducing a new icon and commit the refreshed .woff2 (and the ?v= stamps
+# it writes into ui/index.html and ui/input.css).
 #
 # Google's css2 API does the subsetting server-side via `icon_names`; we
 # scan ui/src for icon-name literals (icon= props, material-symbols spans,
@@ -51,7 +52,19 @@ URL=$(echo "$CSS" | python3 -c "import re,sys; print(re.search(r'url\((\S+?)\) f
 curl -fsS -o ui/public/fonts/material-symbols-outlined.woff2 "$URL"
 
 python3 - <<'EOF'
+import hashlib, re
 d = open('ui/public/fonts/material-symbols-outlined.woff2','rb').read()
 assert d[:4] == b'wOF2', 'not a woff2 file'
 print(f'ui/public/fonts/material-symbols-outlined.woff2 refreshed ({len(d)//1024} KB)')
+# Cache-bust: the filename isn't hashed and /fonts/ is cached for 7 days,
+# so stamp a content hash into every reference. index.html is never cached
+# and the compiled CSS is content-hashed, so clients fetch the new glyphs at
+# once instead of showing raw names ("mail") for up to a week (#147).
+v = hashlib.sha256(d).hexdigest()[:10]
+for ref in ('ui/index.html', 'ui/input.css'):
+    t = open(ref).read()
+    t2 = re.sub(r'material-symbols-outlined\.woff2(\?v=[0-9a-f]+)?',
+                f'material-symbols-outlined.woff2?v={v}', t)
+    open(ref, 'w').write(t2)
+print(f'font references stamped ?v={v}')
 EOF

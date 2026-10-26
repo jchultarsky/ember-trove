@@ -31,7 +31,6 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Keyboard shortcuts** — `n` new node · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields.
 - **Multi-user permissions** — nodes are **private by default**. Owners can invite others by email with Viewer / Editor / Owner roles. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
-- **Public share links** — generate opaque share tokens for read-only access to a node without login.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
 - **Light / dark mode** — class-based Tailwind v4 warm ember theme, persisted in `localStorage`.
 - **Mobile-responsive** — hamburger top bar on mobile; sidebar slides in as an overlay.
@@ -383,8 +382,24 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/activity` | Audit log for this node |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
-| POST | `/api/nodes/{id}/share` | Create a public share token |
-| GET | `/api/nodes/{id}/share` | List share tokens for this node |
+
+### People
+
+A registry of people, and memberships that place a person on a node (#147).
+**People are visible to their owner only** (there's no admin bypass). Someone
+a node is shared with sees a membership's name and role, never contact
+details.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/people?q=` | The caller's people; `q` searches name, company, email and phone |
+| POST | `/api/people[?confirm=true]` | Create; `409` with matches if an email is already in the registry (`confirm` creates anyway) |
+| GET / PUT / DELETE | `/api/people/{id}` | Read, replace or delete one of the caller's people (deleting removes their memberships) |
+| GET | `/api/people/{id}/usages` | "Used in": the nodes a person appears on, with their role |
+| GET | `/api/people/roles` | The caller's roles with counts (suggestions) |
+| GET | `/api/nodes/{id}/people` | A node's people, redacted per viewer |
+| POST | `/api/nodes/{id}/people` | Add one of the caller's people to a node (the node's owner only) |
+| PUT / DELETE | `/api/nodes/{id}/people/{membership_id}` | Change a membership's role/note, or remove it (the node's owner only) |
 
 ### Edges
 
@@ -481,13 +496,6 @@ All routes are nested under `/api`.
 | POST | `/api/templates` | Create a template |
 | PUT | `/api/templates/{id}` | Update a template |
 | DELETE | `/api/templates/{id}` | Delete a template |
-
-### Public Share Links
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/share/{token}` | Read-only public view — no login required |
-| DELETE | `/api/share/{token}` | Revoke a share token |
 
 ### Admin (admin role required)
 

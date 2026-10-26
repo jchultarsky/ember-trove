@@ -54,8 +54,8 @@ test('every section is in the outline and one shared look (#131)', async ({ page
     await page.getByRole('button', { name: 'Sections', exact: true }).click();
     const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
     await expect(items).toHaveText([
-      /Tasks/, /Notes/, /External Links/, /Connections/, /Local Graph/, /Linked Here/,
-      /Attachments/, /Sharing/, /Public Links/, /Version History/, /Activity/,
+      /Tasks/, /Notes/, /People/, /External Links/, /Connections/, /Local Graph/,
+      /Linked Here/, /Attachments/, /Sharing/, /Version History/, /Activity/,
     ]);
     // Jumping to a collapsed section opens and focuses it.
     await items.filter({ hasText: 'Version History' }).click();
@@ -63,6 +63,7 @@ test('every section is in the outline and one shared look (#131)', async ({ page
     await expect(versions).toBeFocused();
     await expect(versions.getByRole('button', { name: /Version History/ })).toHaveAttribute('aria-expanded', 'true');
     // One heading style: every section heading is an h2, named like the outline.
+    // Public Links went and People came (#147).
     await expect(page.locator('[data-testid^="node-"] h2')).toHaveCount(11);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);

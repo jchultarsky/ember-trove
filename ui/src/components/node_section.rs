@@ -17,13 +17,13 @@ use leptos::prelude::*;
 pub enum NodeSection {
     Tasks,
     Notes,
+    People,
     Links,
     Connections,
     LocalGraph,
     LinkedHere,
     Attachments,
     Sharing,
-    PublicLinks,
     Versions,
     Activity,
 }
@@ -33,13 +33,13 @@ impl NodeSection {
     pub const ALL: [NodeSection; 11] = [
         NodeSection::Tasks,
         NodeSection::Notes,
+        NodeSection::People,
         NodeSection::Links,
         NodeSection::Connections,
         NodeSection::LocalGraph,
         NodeSection::LinkedHere,
         NodeSection::Attachments,
         NodeSection::Sharing,
-        NodeSection::PublicLinks,
         NodeSection::Versions,
         NodeSection::Activity,
     ];
@@ -48,13 +48,13 @@ impl NodeSection {
         match self {
             NodeSection::Tasks => "Tasks",
             NodeSection::Notes => "Notes",
+            NodeSection::People => "People",
             NodeSection::Links => "External Links",
             NodeSection::Connections => "Connections",
             NodeSection::LocalGraph => "Local Graph",
             NodeSection::LinkedHere => "Linked Here",
             NodeSection::Attachments => "Attachments",
             NodeSection::Sharing => "Sharing",
-            NodeSection::PublicLinks => "Public Links",
             NodeSection::Versions => "Version History",
             NodeSection::Activity => "Activity",
         }
@@ -64,13 +64,13 @@ impl NodeSection {
         match self {
             NodeSection::Tasks => "check_box",
             NodeSection::Notes => "sticky_note_2",
+            NodeSection::People => "group",
             NodeSection::Links => "open_in_new",
             NodeSection::Connections => "hub",
             NodeSection::LocalGraph => "hub",
             NodeSection::LinkedHere => "link",
             NodeSection::Attachments => "attach_file",
             NodeSection::Sharing => "group",
-            NodeSection::PublicLinks => "public",
             NodeSection::Versions => "history_edu",
             NodeSection::Activity => "history",
         }
@@ -82,13 +82,13 @@ impl NodeSection {
         match self {
             NodeSection::Tasks => "tasks",
             NodeSection::Notes => "notes",
+            NodeSection::People => "people",
             NodeSection::Links => "links",
             NodeSection::Connections => "connections",
             NodeSection::LocalGraph => "local-graph",
             NodeSection::LinkedHere => "linked-here",
             NodeSection::Attachments => "attachments",
             NodeSection::Sharing => "sharing",
-            NodeSection::PublicLinks => "public-links",
             NodeSection::Versions => "versions",
             NodeSection::Activity => "activity",
         }

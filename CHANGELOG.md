@@ -6,6 +6,116 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.37.0] - 2026-10-26
+
+### Added — people in global search (#147, part 3)
+- **Search page:** a People group above the node results. It hides while a
+  node-only filter (type, published-only, tags, dates) is on, since those
+  can't apply to people.
+- **Header search:** up to three people under the node matches.
+- **Cmd-K palette:** an "Open person" action and a **Go to People** command.
+  The ranking contract is now: node title matches → people → commands →
+  body-only node matches → Create (unit-tested).
+- Everything comes from the owner-only `GET /api/people?q=`, so search never
+  shows anyone else's people, the admin included. `SearchResult` is
+  unchanged.
+
+### Fixed
+- Leaving the search page while a node search was still in flight crashed
+  the app (a WASM panic that broke every click until reload). The response
+  wrote to the unmounted page's signals; it now uses the `try_` variants.
+
+
+### Added — People: the registry and the node section (#147, part 2)
+- **A People page** (`/people`, in the sidebar): search by name, company,
+  email or phone, and create someone with just a name.
+- **A person's card** (`/people/:id`) shows only the fields that are filled
+  in. Emails and phones are `mailto:`/`tel:` links with a copy button. Edit
+  covers every field, with labelled email/phone rows and one preferred each.
+  **"Used in"** lists every node the person is on, with their role there.
+- **Duplicate warning:** saving an email that someone else in your registry
+  already has shows who it is, with "Save anyway". Saving a person with
+  their own email never warns.
+- **A People section on every node page**, after Notes:
+  - Add someone from your registry, or create them inline ("Create “…”");
+    an APG combobox like the node picker.
+  - Set a role (suggestions from roles you've used) and a note for this
+    node, or remove them. Removing never deletes the person.
+  - Only the node's own owner gets these controls. A sharee sees name and
+    role only.
+- The People section's Role field is a datalist input, so tests address it
+  as a combobox (`.claude/rules/e2e.md`).
+
+### Fixed — new icons show up right after a release
+- The icon font is a subset that's refreshed in place under an unhashed
+  name, and `/fonts/` is cached for 7 days. So after a release, newly added
+  icons could show as their raw names ("mail", "call") for up to a week.
+  `scripts/refresh-icon-font.sh` now stamps a content hash into the font's
+  references (`?v=…` in `index.html` and `input.css`). The font was
+  refreshed for the People icons.
+- The People pages have browser-tab titles.
+
+
+### Added — People: the data model and API (#147, part 1)
+- **People** are an entity, not a node type. Nodes are documents, and a
+  person is someone documents refer to.
+  - Fields are a vCard subset: name (the only required field), company,
+    position, labelled emails and phones with one preferred each, a freeform
+    address and notes.
+  - Migration 037 adds `people` and `node_people` (memberships).
+- **Memberships** place a person on a node, with a role and a note for that
+  context. There's one per person per node. Removing a membership never
+  deletes the person; deleting the node or the person removes it.
+- **Duplicates:** creating a person whose email is already in your registry
+  returns `409` with the matches, unless `?confirm=true`. Email is a
+  duplicate signal, never an identity key.
+- **Backups** carry people and memberships from the start. Older archives
+  restore with none.
+- The UI arrives in the next PR; the two ship in one release.
+
+### Security
+- **Contact details are visible to their owner only, including the admin.**
+  `/api/people/*` is scoped to the caller. Another owner's person is a 404,
+  the same as a missing one.
+- `GET /api/nodes/{id}/people` needs view access to the node and is redacted
+  per viewer. The person's owner sees the card and the note; a sharee or the
+  admin sees name and role only.
+- Only the node's own owner can change its people, and only with people they
+  own. An editor can't put their contacts onto someone else's node.
+- Validation runs in `common::person`, with database CHECKs behind it, and
+  contact details never appear in logs or error messages.
+
+
+### Security — public share links are removed (#147)
+- **Owner decision:** public share links (`/share/{token}`) are gone. A link
+  gave anyone who had it read access to a node without signing in, and it
+  was too easy to publish personal data by accident. This also clears the
+  way for People (#147): contact details can never leak through a public
+  link, because there are none.
+- Removed: the public share view, the "Public Links" section on the node
+  page, `GET/POST /api/nodes/{id}/share`, `DELETE /api/nodes/{id}/share/{token}`
+  and `GET /share/{token}`. Sharing with signed-in users (the Sharing
+  section) is unchanged.
+- **Migration 036 drops the `share_tokens` table, so every existing link
+  stops working.** That's intended. Only the random tokens are lost; the
+  nodes they pointed at are untouched.
+- Backups no longer include share tokens. Older archives that still carry
+  them restore fine; the field is ignored.
+
+### Documentation — a written collaboration protocol (#145)
+- `COLLABORATION.md` sets out the roles: the owner, Muse AI as proposer on
+  `jchultarsky101`, and Claude Code as developer on `jchultarsky`. It also
+  covers the `state:` labels and the standing rules:
+  - review before implementation;
+  - decisions written on the issue;
+  - the `DECISION NEEDED:` marker;
+  - role headers on assistant comments;
+  - only the two owner accounts are trusted, and issues from either one
+    count as pre-approved.
+- New issue forms: **Proposal** and **Question for the owner**. The existing
+  bug and feature forms stay as they are, for outside reporters.
+- The PR template has a `Proposal: #NNN` line.
+
 ## [2.36.0] - 2026-10-25
 
 ### Changed — a project's status is a field, not prose (#143)

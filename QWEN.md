@@ -106,7 +106,7 @@ Three-tier router with layer stack (outermost → innermost):
 PropagateRequestIdLayer → SetRequestIdLayer → TimeoutLayer(30s) → CorsLayer → GovernorLayer → require_auth → handlers
 ```
 
-- **Public routes**: `/health`, `/share/*`, `/auth/login`, `/auth/callback`, `/auth/refresh`, `/auth/logout` — no auth required
+- **Public routes**: `/health`, `/auth/login`, `/auth/callback`, `/auth/refresh`, `/auth/logout` — no auth required
 - **Rate-limited routes**: Public + all protected behind `GovernorLayer` (10 req/s per IP, burst 100, POST/PUT/DELETE/PATCH only)
 - **Protected routes**: Everything else behind `require_auth` middleware
 
@@ -191,7 +191,7 @@ Uses `gloo_net::http::Request` for all HTTP calls. `parse_json<T>()` helper hand
 
 | Module | Key Types | Gotcha |
 |--------|-----------|--------|
-| `id.rs` | `uuid_newtype!` macro → 14 newtypes: `NodeId`, `EdgeId`, `TagId`, `AttachmentId`, `PermissionId`, `TaskId`, `NoteId`, `FavoriteId`, `ShareTokenId`, `ActivityId`, `NodeVersionId`, `TemplateId`, `SearchPresetId`, `NodeLinkId` | All `[serde(transparent)]`, with `Display`, `FromStr`, `Default` |
+| `id.rs` | `uuid_newtype!` macro → 13 newtypes: `NodeId`, `EdgeId`, `TagId`, `AttachmentId`, `PermissionId`, `TaskId`, `NoteId`, `FavoriteId`, `ActivityId`, `NodeVersionId`, `TemplateId`, `SearchPresetId`, `NodeLinkId` | All `[serde(transparent)]`, with `Display`, `FromStr`, `Default` |
 | `node.rs` | `NodeType` (Article/Project/Area/Resource/Reference), `NodeStatus` (Draft/Published/Archived), `Node`, CRUD requests | `NodeType`/`NodeStatus` serialize as `snake_case` (lowercase!) |
 | `permission.rs` | `PermissionRole` (Owner/Editor/Viewer), `Permission`, Grant/Update requests | |
 | `activity.rs` | `ActivityAction` (11 variants), `ActivityEntry` | |
