@@ -55,3 +55,5 @@ uuid_newtype!(TemplateId);
 uuid_newtype!(SearchPresetId);
 uuid_newtype!(NodeLinkId);
 uuid_newtype!(WebhookId);
+uuid_newtype!(PersonId);
+uuid_newtype!(MembershipId);

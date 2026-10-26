@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — People: the data model and API (#147, part 1)
+- **People** are an entity, not a node type. Nodes are documents, and a
+  person is someone documents refer to.
+  - Fields are a vCard subset: name (the only required field), company,
+    position, labelled emails and phones with one preferred each, a freeform
+    address and notes.
+  - Migration 037 adds `people` and `node_people` (memberships).
+- **Memberships** place a person on a node, with a role and a note for that
+  context. There's one per person per node. Removing a membership never
+  deletes the person; deleting the node or the person removes it.
+- **Duplicates:** creating a person whose email is already in your registry
+  returns `409` with the matches, unless `?confirm=true`. Email is a
+  duplicate signal, never an identity key.
+- **Backups** carry people and memberships from the start. Older archives
+  restore with none.
+- The UI arrives in the next PR; the two ship in one release.
+
+### Security
+- **Contact details are visible to their owner only, including the admin.**
+  `/api/people/*` is scoped to the caller. Another owner's person is a 404,
+  the same as a missing one.
+- `GET /api/nodes/{id}/people` needs view access to the node and is redacted
+  per viewer. The person's owner sees the card and the note; a sharee or the
+  admin sees name and role only.
+- Only the node's own owner can change its people, and only with people they
+  own. An editor can't put their contacts onto someone else's node.
+- Validation runs in `common::person`, with database CHECKs behind it, and
+  contact details never appear in logs or error messages.
+
+
 ### Security — public share links are removed (#147)
 - **Owner decision:** public share links (`/share/{token}`) are gone. A link
   gave anyone who had it read access to a node without signing in, and it
