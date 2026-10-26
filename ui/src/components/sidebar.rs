@@ -184,10 +184,11 @@ pub fn Sidebar(
                                         "Change password"
                                     </button>
                                     <button
-                                        class="text-xs text-stone-400 hover:text-stone-600
+                                        class="inline-flex items-center justify-center gap-1 text-xs text-stone-400 hover:text-stone-600
                                                dark:hover:text-stone-300 cursor-pointer"
                                         on:click=on_logout
                                     >
+                                        <span class="material-symbols-outlined" style="font-size: 13px;" aria-hidden="true">"logout"</span>
                                         "Logout"
                                     </button>
                                 </div>

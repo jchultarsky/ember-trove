@@ -450,7 +450,7 @@ pub fn SearchView() -> impl IntoView {
                                                         on:input=move |ev| preset_name.set(event_target_value(&ev))
                                                     />
                                                     <button
-                                                        class="text-xs px-2 py-1 rounded bg-ember text-white
+                                                        class="inline-flex items-center justify-center gap-1.5 text-xs px-2 py-1 rounded bg-ember text-white
                                                             hover:bg-ember-strong transition-colors"
                                                         on:click=move |_| {
                                                             let name = preset_name.get_untracked()
@@ -494,6 +494,7 @@ pub fn SearchView() -> impl IntoView {
                                                             });
                                                         }
                                                     >
+                                                        <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"bookmark_add"</span>
                                                         "Save"
                                                     </button>
                                                     <button
@@ -866,15 +867,17 @@ pub fn SearchView() -> impl IntoView {
                                     "Recent searches"
                                 </h2>
                                 <button
-                                    class="text-xs text-stone-400 dark:text-stone-500
-                                           hover:text-stone-600 dark:hover:text-stone-300
-                                           transition-colors cursor-pointer"
+                    aria-label="Clear search history"
+                    title="Clear search history"
+                                    class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Danger,
+                    )
                                     on:click=move |_| {
                                         clear_history();
                                         history.set(Vec::new());
                                     }
                                 >
-                                    "Clear all"
+                                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"delete_sweep"</span>
                                 </button>
                             </div>
                             <div class="space-y-1">

@@ -213,11 +213,12 @@ pub fn FastCaptureModal(
                 </button>
                 <button
                     type="button"
-                    class="px-4 py-1.5 rounded-lg bg-ember text-white text-sm \
+                    class="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-lg bg-ember text-white text-sm \
                            hover:bg-ember-strong disabled:opacity-50"
                     prop:disabled=move || loading.get()
                     on:click=move |_| submit_pending.set(true)
                 >
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"bolt"</span>
                     {move || if loading.get() { "Saving…" } else { "Capture" }}
                 </button>
             </div>

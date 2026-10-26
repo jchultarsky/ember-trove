@@ -628,6 +628,7 @@ pub fn GraphView() -> impl IntoView {
                 </button>
                 // Fit button
                 <button
+                    aria-label="Fit"
                     class="h-8 px-2.5 text-xs font-medium
                            text-stone-600 dark:text-stone-300
                            hover:bg-stone-50 dark:hover:bg-stone-800 cursor-pointer transition-colors
@@ -643,7 +644,7 @@ pub fn GraphView() -> impl IntoView {
                         zoom_input.set(format!("{:.0}", fz * 100.0));
                     }
                 >
-                    "Fit"
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"fit_screen"</span>
                 </button>
                 // Auto-arrange button
                 <button
@@ -659,24 +660,23 @@ pub fn GraphView() -> impl IntoView {
                         }
                     }
                     title="Cluster connected nodes around hubs (refines your current arrangement)"
+                    aria-label=move || if re_layouting.get() { "Arranging\u{2026}" } else { "Auto-arrange" }
                     disabled=move || re_layouting.get()
                     on:click=move |_| {
                         re_layout.set(true);
                     }
                 >
-                    {move || {
-                        if re_layouting.get() {
-                            view! {
-                                <span class="flex items-center gap-1">
-                                    <span class="inline-block animate-spin" style="font-size: 12px;">"⟳"</span>
-                                    "Arranging…"
-                                </span>
-                            }
-                            .into_any()
+                    <span
+                        class=move || if re_layouting.get() {
+                            "material-symbols-outlined animate-spin"
                         } else {
-                            view! { "Auto-arrange" }.into_any()
+                            "material-symbols-outlined"
                         }
-                    }}
+                        style="font-size: 16px;"
+                        aria-hidden="true"
+                    >
+                        {move || if re_layouting.get() { "progress_activity" } else { "hub" }}
+                    </span>
                 </button>
 
                 // ── Zoom controls ──────────────────────────────────────────
@@ -820,7 +820,7 @@ pub fn GraphView() -> impl IntoView {
                                     "Cancel"
                                 </button>
                                 <button
-                                    class="px-3 py-1.5 text-sm font-medium rounded-lg
+                                    class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg
                                            bg-ember hover:bg-ember-strong text-white
                                            disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                                     disabled=move || edge_saving.get()
@@ -862,6 +862,7 @@ pub fn GraphView() -> impl IntoView {
                                         });
                                     }
                                 >
+                                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"add"</span>
                                     {move || if edge_saving.get() { "Saving…" } else { "Create" }}
                                 </button>
                             </div>

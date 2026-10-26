@@ -14,9 +14,9 @@ use common::person::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
-use crate::api::SavePerson;
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_section::{NodeSection, SectionShell};
-use crate::components::people_view::{ContactAction, ContactKind};
+use crate::components::people_view::{ContactAction, ContactKind, EditorTarget, PersonEditor};
 use crate::components::toast::{ToastLevel, push_toast};
 
 const INPUT_CLASS: &str = "w-full text-xs bg-stone-100 dark:bg-stone-800 text-stone-800 \
@@ -74,9 +74,33 @@ pub fn NodePeoplePanel(
         adding.set(false);
         refresh.update(|n| *n += 1);
     });
+    // "Create “…”" opens the shared editor with the typed name; saving the
+    // new person also adds them here.
+    let editor_open = RwSignal::new(false);
+    let prefill = RwSignal::new(String::new());
+    let on_create = Callback::new(move |name: String| {
+        prefill.set(name);
+        editor_open.set(true);
+    });
+    let on_created = Callback::new(move |p: Person| {
+        wasm_bindgen_futures::spawn_local(async move {
+            let input = MembershipInput {
+                person_id: p.id,
+                role: None,
+                note: None,
+            };
+            match crate::api::add_node_person(node_id, &input).await {
+                Ok(_) => on_added.run(()),
+                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't add: {e}")),
+            }
+        });
+    });
 
     view! {
         <SectionShell section=NodeSection::People open=open count=count actions=actions>
+            <PersonEditor open=editor_open target=EditorTarget::New
+                initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
+                on_saved=on_created />
             <datalist id=roles_list_id.get_value()>
                 {move || roles.get().unwrap_or_default().into_iter().map(|r| view! {
                     <option value=r.role />
@@ -90,7 +114,7 @@ pub fn NodePeoplePanel(
                     .into_iter()
                     .map(|m| m.person_id)
                     .collect();
-                view! { <PersonPicker node_id=node_id taken=taken on_added=on_added /> }
+                view! { <PersonPicker node_id=node_id taken=taken on_added=on_added on_create=on_create /> }
             })}
             <Suspense fallback=|| view! { <p class="text-xs text-stone-400">"Loading\u{2026}"</p> }>
                 {move || {
@@ -210,10 +234,12 @@ fn MemberRow(
                         <textarea rows="2" class=INPUT_CLASS placeholder="Note about them on this node\u{2026}"
                             aria-label="Note"
                             prop:value=move || note.get() on:input=move |ev| note.set(event_target_value(&ev)) />
-                        <div class="flex gap-2">
-                            <button type="submit" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-ember text-white cursor-pointer">"Save"</button>
-                            <button type="button" class="px-2.5 py-1 rounded-lg text-xs text-stone-600 dark:text-stone-300 cursor-pointer"
-                                on:click=move |_| editing.set(false)>"Cancel"</button>
+                        // ✓ / ✕, like the task editors' inline Save and Cancel.
+                        <div class="flex gap-1">
+                            <IconButton icon="check" label="Save" variant=IconButtonVariant::Save
+                                on_click=Callback::new(move |()| save()) />
+                            <IconButton icon="close" label="Cancel"
+                                on_click=Callback::new(move |()| editing.set(false)) />
                         </div>
                     </form>
                 })}
@@ -256,6 +282,9 @@ fn PersonPicker(
     /// People already on the node (not offered again).
     taken: Vec<common::id::PersonId>,
     #[prop(into)] on_added: Callback<()>,
+    /// "Create “…”": open the person editor with this name.
+    #[prop(into)]
+    on_create: Callback<String>,
 ) -> impl IntoView {
     let base = format!(
         "person-picker-{}",
@@ -301,44 +330,31 @@ fn PersonPicker(
         let Some(choice) = options.with_untracked(|o| o.get(i).cloned()) else {
             return;
         };
+        let person_id = match choice {
+            // A new person goes through the full editor first.
+            Pick::Create(name) => {
+                on_create.run(name);
+                return;
+            }
+            Pick::Existing(p) => p.id,
+        };
         if busy.get_untracked() {
             return;
         }
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let person_id = match choice {
-                Pick::Existing(p) => Ok(p.id),
-                Pick::Create(name) => {
-                    let input = PersonInput {
-                        display_name: name,
-                        ..Default::default()
-                    };
-                    match crate::api::create_person(&input, false).await {
-                        Ok(SavePerson::Saved(p)) => Ok(p.id),
-                        // No email given, so there's nothing to match: a
-                        // warning here can't happen. Treat it as an error.
-                        Ok(SavePerson::Duplicate(_)) => Err("duplicate".to_string()),
-                        Err(e) => Err(e.to_string()),
-                    }
-                }
-            };
-            let result = match person_id {
-                Ok(person_id) => crate::api::add_node_person(
-                    node_id,
-                    &MembershipInput {
-                        person_id,
-                        role: None,
-                        note: None,
-                    },
-                )
-                .await
-                .map(|_| ())
-                .map_err(|e| e.to_string()),
-                Err(e) => Err(e),
-            };
-            busy.set(false);
+            let result = crate::api::add_node_person(
+                node_id,
+                &MembershipInput {
+                    person_id,
+                    role: None,
+                    note: None,
+                },
+            )
+            .await;
+            busy.try_set(false);
             match result {
-                Ok(()) => on_added.run(()),
+                Ok(_) => on_added.run(()),
                 Err(e) => push_toast(ToastLevel::Error, format!("Couldn't add: {e}")),
             }
         });

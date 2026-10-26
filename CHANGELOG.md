@@ -6,6 +6,65 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.38.0] - 2026-10-26
+
+### Changed — one button language across the UI
+- **The three-tier rule** (owner decision, now in `.claude/rules/leptos.md`):
+  1. **Icon only** (`IconButton`) for header, toolbar, row, card and
+     inline-editor actions.
+  2. **Icon + word** for a dialog or form's commit button and for
+     call-to-action buttons.
+  3. **Word only** for a dialog's Cancel, tabs and filter pills, menu items,
+     and links inside sentences.
+- **Now icon-only (12):**
+  - Webhooks: Edit, Delete, and New webhook (like New node's +).
+  - The node page's mention "Link".
+  - Notes: Expand all / Collapse all, and the notes filter Reset.
+  - The tag bar's "+ Tag", the task panel's "Clear all", and search
+    history "Clear all".
+  - Calendar: Today. Graph toolbar: Fit and Auto-arrange (spinning while it
+    works).
+  - Each keeps its word as tooltip and accessible name.
+- **Gain an icon beside the word (17):**
+  - Dialog commits: Create User, Save Roles, Change password, Confirm
+    Restore, the graph's Create edge, Add favorite, the confirm dialog's
+    Delete, Capture, Post, Save webhook, Use Template, Restore version, Save
+    search preset.
+  - Other buttons: Reload (update banner), Logout, Back to inbox, Load more.
+- `icon_button_class(variant)` exposes `IconButton`'s look for buttons that
+  keep their own handler.
+
+### Fixed
+- `scripts/refresh-icon-font.sh` missed glyphs whose `<span>` put
+  `aria-hidden="true"` after the class: it took "true" as the glyph name. It
+  now reads the span's content, including both arms of an `if`/`else`. The
+  font is refreshed (141 names).
+
+### Changed — one person editor for new and edit
+- **Creating and editing a person use the same editor.** It's a dialog on
+  desktop and a full-screen sheet on phones, with Save and Cancel pinned at
+  the bottom. Before, "New person" only asked for a name and you then had
+  to edit the card. Only the name is required.
+- **Creating from a node's People section** ("Create “…”") opens the same
+  editor with the name filled in; saving adds the new person to the node.
+  It used to save a name-only person.
+- **On desktop**, company/position and address label/address sit side by
+  side, and email/phone rows are one line. **On phones** each row stacks
+  its label above the value, and nothing scrolls sideways.
+- Ctrl/⌘+Enter saves from any field. Cancel discards. Escape or a click on
+  the backdrop discards with "Changes discarded · Undo", like the task and
+  note editors.
+- The duplicate-email warning and validation errors show inside the
+  editor. The card stays a page, with Edit opening the editor.
+- `ModalShell` gains a `Sheet` placement: edge to edge on phones, a centred
+  dialog from `sm` up.
+- **The People screens use the app's icon buttons:** pencil and trash on
+  the card (like the node page header), an icon for New person (like New
+  node), and ✓/✕ in a member's inline role editor (like the task editors).
+  The editor's Save keeps its word, with a ✓, like the create-node dialog's
+  "+ Create".
+
+
 ## [2.37.0] - 2026-10-26
 
 ### Added — people in global search (#147, part 3)

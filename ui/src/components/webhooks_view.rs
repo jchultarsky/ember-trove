@@ -120,11 +120,14 @@ pub fn WebhooksView() -> impl IntoView {
             <div class="flex items-center justify-between mb-1">
                 <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">"Webhooks"</h1>
                 <button
-                    class="px-3 py-1.5 text-sm font-medium rounded-lg bg-ember
-                           hover:bg-ember-strong text-white transition-colors cursor-pointer"
+                    aria-label="New webhook"
+                    title="New webhook"
+                    class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Neutral,
+                    )
                     on:click=open_create
                 >
-                    "New Webhook"
+                    <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"add"</span>
                 </button>
             </div>
             <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">
@@ -233,12 +236,13 @@ pub fn WebhooksView() -> impl IntoView {
                                 "Cancel"
                             </button>
                             <button
-                                class="px-3 py-1.5 text-sm font-medium rounded-lg bg-ember
+                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg bg-ember
                                        hover:bg-ember-strong text-white transition-colors cursor-pointer
                                        disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled=move || saving.get()
                                 on:click=move |_| submit()
                             >
+                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"check"</span>
                                 {move || if saving.get() { "Saving…" } else { "Save" }}
                             </button>
                         </div>
@@ -312,8 +316,11 @@ pub fn WebhooksView() -> impl IntoView {
                                                 {if hook.is_active { "Active" } else { "Paused" }}
                                             </button>
                                             <button
-                                                class="text-sm text-stone-500 dark:text-stone-400 cursor-pointer
-                                                       hover:text-stone-800 dark:hover:text-stone-200"
+                    aria-label="Edit webhook"
+                    title="Edit webhook"
+                                                class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Neutral,
+                    )
                                                 on:click=move |_| {
                                                     let h = edit_hook.clone();
                                                     form_url.set(h.url.clone());
@@ -323,14 +330,16 @@ pub fn WebhooksView() -> impl IntoView {
                                                     editing.set(Some(Some(h)));
                                                 }
                                             >
-                                                "Edit"
-                                            </button>
+                                                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"edit"</span>                                            </button>
                                             <button
-                                                class="text-sm text-red-500 cursor-pointer hover:text-red-700"
+                    aria-label="Delete webhook"
+                    title="Delete webhook"
+                                                class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Danger,
+                    )
                                                 on:click=move |_| delete_confirm.set(Some(confirm_hook.clone()))
                                             >
-                                                "Delete"
-                                            </button>
+                                                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"delete"</span>                                            </button>
                                         </li>
                                     }
                                 }).collect_view()}

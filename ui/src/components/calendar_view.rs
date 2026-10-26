@@ -336,17 +336,17 @@ pub fn CalendarView() -> impl IntoView {
                         <span aria-hidden="true" class="material-symbols-outlined">"chevron_right"</span>
                     </button>
                     <button
-                        class="ml-2 px-3 py-1 text-xs rounded-lg bg-stone-100 dark:bg-stone-800 \
-                            text-stone-600 dark:text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-700 \
-                            transition-colors cursor-pointer"
+                    aria-label="Jump to today"
+                        class=crate::components::icon_button::icon_button_class(
+                        crate::components::icon_button::IconButtonVariant::Neutral,
+                    )
                         title="Jump to today"
                         on:click=move |_| {
                             year_sig.set(today.year());
                             month_sig.set(today.month());
                         }
                     >
-                        "Today"
-                    </button>
+                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"today"</span>                    </button>
                 </div>
             </PageHeader>
 

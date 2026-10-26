@@ -495,7 +495,7 @@ pub fn TemplatesView() -> impl IntoView {
                                         // ── Footer: Use button ──────────────────────
                                         <div class="px-4 pb-4 pt-1">
                                             <button
-                                                class="w-full py-2 rounded-lg text-xs font-medium
+                                                class="inline-flex items-center justify-center gap-1.5 w-full py-2 rounded-lg text-xs font-medium
                                                        bg-amber-50 dark:bg-amber-900/20
                                                        text-amber-700 dark:text-amber-400
                                                        hover:bg-amber-100 dark:hover:bg-amber-900/40
@@ -503,6 +503,7 @@ pub fn TemplatesView() -> impl IntoView {
                                                        border border-amber-200 dark:border-amber-800/40"
                                                 on:click=move |_| on_use(t_use.clone())
                                             >
+                                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"content_copy"</span>
                                                 "Use Template"
                                             </button>
                                         </div>

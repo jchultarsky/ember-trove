@@ -223,11 +223,12 @@ pub fn AdminView() -> impl IntoView {
                                 "Send password-setup email"
                             </label>
                             <button
-                                class="px-4 py-2 rounded-lg bg-ember text-white text-sm font-medium
+                                class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-ember text-white text-sm font-medium
                                     hover:bg-ember-strong disabled:opacity-40 transition-colors"
                                 on:click=on_create
                                 disabled=move || creating.get()
                             >
+                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"person_add"</span>
                                 {move || if creating.get() { "Creating…" } else { "Create User" }}
                             </button>
                         </div>
@@ -468,7 +469,7 @@ fn UserRow(
                         </div>
                         <div class="flex items-center gap-2">
                             <button
-                                class="px-3 py-1.5 rounded-lg bg-ember text-white text-xs font-medium
+                                class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-ember text-white text-xs font-medium
                                     hover:bg-ember-strong disabled:opacity-40 transition-colors"
                                 on:click={
                                     let uid_r = user_id_for_roles.clone();
@@ -492,6 +493,7 @@ fn UserRow(
                                 }
                                 disabled=move || saving_roles.get()
                             >
+                                <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"check"</span>
                                 {move || if saving_roles.get() { "Saving…" } else { "Save Roles" }}
                             </button>
                             <button

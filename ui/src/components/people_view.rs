@@ -14,8 +14,10 @@ use leptos_router::hooks::{use_navigate, use_params_map};
 use crate::api::SavePerson;
 use crate::components::empty_state::EmptyState;
 use crate::components::format_helpers::copy_to_clipboard;
+use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::modals::{ModalPlacement, ModalShell};
 use crate::components::page_header::PageHeader;
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::toast::{ToastLevel, push_toast, push_undo_toast};
 
 const INPUT_CLASS: &str = "w-full text-sm bg-stone-100 dark:bg-stone-800 text-stone-800 \
      dark:text-stone-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 \
@@ -105,10 +107,13 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
             {move || {
                 redraw.track();
                 points.get_untracked().into_iter().enumerate().map(|(i, p)| view! {
-                    <div class="flex items-center gap-1.5" data-testid=format!("{noun}-row")>
+                    // Phones: the label gets its own line, then value +
+                    // preferred + remove, instead of four controls on one line.
+                    <div class="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[7rem_1fr_auto_auto] gap-x-1.5 gap-y-1 items-center"
+                        data-testid=format!("{noun}-row")>
                         <input
                             type="text"
-                            class=format!("{INPUT_CLASS} !w-24")
+                            class=format!("{INPUT_CLASS} col-span-3 sm:col-span-1")
                             placeholder=label_placeholder
                             aria-label=format!("{noun} label")
                             prop:value=p.label.clone()
@@ -172,37 +177,180 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
     }
 }
 
-/// Edit every field of a person. The server validates (`common::person::
-/// normalize`); its message is shown as-is.
+/// The editor's working copy of a person: a signal per field, owned by the
+/// [`PersonEditor`], so Undo can put back exactly what was typed.
+#[derive(Clone, Copy)]
+struct PersonDraft {
+    name: RwSignal<String>,
+    company: RwSignal<String>,
+    position: RwSignal<String>,
+    emails: RwSignal<Vec<ContactPoint>>,
+    phones: RwSignal<Vec<ContactPoint>>,
+    address_label: RwSignal<String>,
+    address: RwSignal<String>,
+    notes: RwSignal<String>,
+}
+
+impl PersonDraft {
+    fn new() -> Self {
+        Self {
+            name: RwSignal::new(String::new()),
+            company: RwSignal::new(String::new()),
+            position: RwSignal::new(String::new()),
+            emails: RwSignal::new(Vec::new()),
+            phones: RwSignal::new(Vec::new()),
+            address_label: RwSignal::new(String::new()),
+            address: RwSignal::new(String::new()),
+            notes: RwSignal::new(String::new()),
+        }
+    }
+
+    fn load(&self, p: PersonInput) {
+        self.name.set(p.display_name);
+        self.company.set(p.company.unwrap_or_default());
+        self.position.set(p.position.unwrap_or_default());
+        self.emails.set(p.emails);
+        self.phones.set(p.phones);
+        self.address_label.set(p.address_label.unwrap_or_default());
+        self.address.set(p.address.unwrap_or_default());
+        self.notes.set(p.notes.unwrap_or_default());
+    }
+
+    /// The current values. Untouched contact rows are left out; the server
+    /// drops them anyway, and they mustn't make a draft look edited.
+    fn read(&self) -> PersonInput {
+        let opt = |s: String| (!s.trim().is_empty()).then_some(s);
+        let rows = |v: Vec<ContactPoint>| {
+            v.into_iter()
+                .filter(|c| !(c.label.trim().is_empty() && c.value.trim().is_empty()))
+                .collect()
+        };
+        PersonInput {
+            display_name: self.name.get_untracked(),
+            company: opt(self.company.get_untracked()),
+            position: opt(self.position.get_untracked()),
+            emails: rows(self.emails.get_untracked()),
+            phones: rows(self.phones.get_untracked()),
+            address_label: opt(self.address_label.get_untracked()),
+            address: opt(self.address.get_untracked()),
+            notes: opt(self.notes.get_untracked()),
+        }
+    }
+}
+
+/// What the [`PersonEditor`] saves: a new person, or an existing one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum EditorTarget {
+    New,
+    Existing(PersonId),
+}
+
+/// The one person editor (create and edit look the same): a centred dialog
+/// on desktop and a full-screen sheet on phones (`ModalPlacement::Sheet`),
+/// with Save and Cancel pinned at the bottom. Only the name is required.
+///
+/// - Cancel closes and discards.
+/// - Escape or a backdrop click with changes closes with "Changes
+///   discarded · Undo", the task and note editors' pattern (#123).
+/// - Ctrl/⌘+Enter saves.
+/// - The duplicate-email warning and the server's validation messages show
+///   inside the dialog.
 #[component]
-pub fn PersonForm(
-    initial: PersonInput,
-    #[prop(into)] on_save: Callback<PersonInput>,
-    #[prop(into)] on_cancel: Callback<()>,
-    #[prop(into)] saving: Signal<bool>,
+pub fn PersonEditor(
+    /// Open state, owned by the caller (it opens the editor).
+    open: RwSignal<bool>,
+    target: EditorTarget,
+    /// The values to start from, read each time the editor opens: the
+    /// person being edited, or a prefilled name.
+    #[prop(into)]
+    initial: Signal<PersonInput>,
+    /// Runs after a successful save, with the saved person; the editor has
+    /// already closed.
+    #[prop(into)]
+    on_saved: Callback<Person>,
 ) -> impl IntoView {
-    let name = RwSignal::new(initial.display_name);
-    let company = RwSignal::new(initial.company.unwrap_or_default());
-    let position = RwSignal::new(initial.position.unwrap_or_default());
-    let emails = RwSignal::new(initial.emails);
-    let phones = RwSignal::new(initial.phones);
-    let address_label = RwSignal::new(initial.address_label.unwrap_or_default());
-    let address = RwSignal::new(initial.address.unwrap_or_default());
-    let notes = RwSignal::new(initial.notes.unwrap_or_default());
-    let opt = |s: String| (!s.trim().is_empty()).then_some(s);
-    let submit = move || {
-        on_save.run(PersonInput {
-            display_name: name.get_untracked(),
-            company: opt(company.get_untracked()),
-            position: opt(position.get_untracked()),
-            emails: emails.get_untracked(),
-            phones: phones.get_untracked(),
-            address_label: opt(address_label.get_untracked()),
-            address: opt(address.get_untracked()),
-            notes: opt(notes.get_untracked()),
+    let draft = PersonDraft::new();
+    let baseline = StoredValue::new(PersonInput::default());
+    // Set by Undo, so reopening keeps the restored values.
+    let restoring = StoredValue::new(false);
+    let saving = RwSignal::new(false);
+    let duplicate = RwSignal::new(None::<Vec<DuplicateMatch>>);
+    let error = RwSignal::new(None::<String>);
+    let form_id = match target {
+        EditorTarget::New => "person-editor-form-new",
+        EditorTarget::Existing(_) => "person-editor-form-edit",
+    };
+    let title = match target {
+        EditorTarget::New => "New person",
+        EditorTarget::Existing(_) => "Edit person",
+    };
+
+    // Each opening starts from `initial`, except right after an Undo.
+    Effect::new(move |was_open: Option<bool>| {
+        let is_open = open.get();
+        if is_open && was_open != Some(true) {
+            duplicate.set(None);
+            error.set(None);
+            if restoring.get_value() {
+                restoring.set_value(false);
+            } else {
+                draft.load(initial.get_untracked());
+                baseline.set_value(draft.read());
+            }
+        }
+        is_open
+    });
+
+    let save = move |confirm: bool| {
+        if saving.get_untracked() {
+            return;
+        }
+        let input = draft.read();
+        saving.set(true);
+        error.set(None);
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = match target {
+                EditorTarget::New => crate::api::create_person(&input, confirm).await,
+                EditorTarget::Existing(id) => crate::api::update_person(id, &input, confirm).await,
+            };
+            saving.try_set(false);
+            match result {
+                Ok(SavePerson::Saved(p)) => {
+                    open.try_set(false);
+                    on_saved.run(p);
+                }
+                Ok(SavePerson::Duplicate(w)) => {
+                    duplicate.try_set(Some(w.matches));
+                }
+                Err(e) => {
+                    error.try_set(Some(e.to_string()));
+                }
+            }
         });
     };
-    let field = |label: &'static str, sig: RwSignal<String>| {
+
+    // Escape and the backdrop: discard, with Undo when something changed.
+    let dismiss = Callback::new(move |()| {
+        let typed = draft.read();
+        open.set(false);
+        if typed != baseline.get_value() {
+            push_undo_toast(
+                "Changes discarded",
+                std::sync::Arc::new(move || {
+                    draft.load(typed.clone());
+                    restoring.set_value(true);
+                    open.try_set(true);
+                }),
+            );
+        }
+    });
+    let on_key = Callback::new(move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+            ev.prevent_default();
+            save(false);
+        }
+    });
+    let field = move |label: &'static str, sig: RwSignal<String>| {
         view! {
             <label class="block">
                 <span class=LABEL_CLASS>{label}</span>
@@ -211,51 +359,96 @@ pub fn PersonForm(
             </label>
         }
     };
+    let name_ref: NodeRef<leptos::html::Input> = NodeRef::new();
+    Effect::new(move |_| {
+        if open.get()
+            && let Some(el) = name_ref.get()
+        {
+            let _ = el.focus();
+        }
+    });
+
     view! {
-        <form
-            class="space-y-4"
-            data-testid="person-form"
-            on:submit=move |ev| { ev.prevent_default(); submit(); }
+        <ModalShell
+            show=open
+            on_close=dismiss
+            label=title
+            placement=ModalPlacement::Sheet
+            panel_class="h-full sm:h-auto sm:max-h-[90vh] sm:max-w-2xl flex flex-col"
+            on_key=on_key
         >
-            {field("Name", name)}
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {field("Company", company)}
-                {field("Position", position)}
-            </div>
-            <div>
-                <span class=LABEL_CLASS>"Emails"</span>
-                <ContactListEditor kind=ContactKind::Email points=emails />
-            </div>
-            <div>
-                <span class=LABEL_CLASS>"Phones"</span>
-                <ContactListEditor kind=ContactKind::Phone points=phones />
-            </div>
-            <div class="grid grid-cols-1 sm:grid-cols-[8rem_1fr] gap-3">
-                {field("Address label", address_label)}
-                <label class="block">
-                    <span class=LABEL_CLASS>"Address"</span>
-                    <textarea rows="2" class=INPUT_CLASS prop:value=move || address.get()
-                        on:input=move |ev| address.set(event_target_value(&ev)) />
-                </label>
-            </div>
-            <label class="block">
-                <span class=LABEL_CLASS>"Notes"</span>
-                <textarea rows="3" class=INPUT_CLASS prop:value=move || notes.get()
-                    on:input=move |ev| notes.set(event_target_value(&ev)) />
-            </label>
-            <div class="flex items-center gap-2">
-                <button type="submit"
-                    class="px-3 py-1.5 rounded-lg text-sm font-medium bg-ember text-white disabled:opacity-50 cursor-pointer"
-                    disabled=move || saving.get()>
-                    "Save"
+            <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-stone-200 dark:border-stone-800"
+                data-testid="person-editor">
+                <h2 class="font-display text-lg text-stone-900 dark:text-stone-100">{title}</h2>
+                <button type="button" class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+                    title="Close" aria-label="Close" on:click=move |_| dismiss.run(())>
+                    <span class="material-symbols-outlined" aria-hidden="true">"close"</span>
                 </button>
+            </div>
+            <form
+                id=form_id
+                class="flex-1 overflow-y-auto px-4 py-4 space-y-4"
+                data-testid="person-form"
+                on:submit=move |ev| { ev.prevent_default(); save(false); }
+            >
+                {move || error.get().map(|e| view! {
+                    <p class="text-sm text-red-600 dark:text-red-400" role="alert">{e}</p>
+                })}
+                {move || duplicate.get().map(|matches| view! {
+                    <DuplicateNotice matches=matches proceed_label="Save anyway"
+                        on_proceed=Callback::new(move |()| save(true)) />
+                })}
+                <label class="block">
+                    <span class=LABEL_CLASS>"Name"</span>
+                    <input type="text" node_ref=name_ref class=INPUT_CLASS required=true
+                        prop:value=move || draft.name.get()
+                        on:input=move |ev| draft.name.set(event_target_value(&ev)) />
+                </label>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {field("Company", draft.company)}
+                    {field("Position", draft.position)}
+                </div>
+                <div>
+                    <span class=LABEL_CLASS>"Emails"</span>
+                    <ContactListEditor kind=ContactKind::Email points=draft.emails />
+                </div>
+                <div>
+                    <span class=LABEL_CLASS>"Phones"</span>
+                    <ContactListEditor kind=ContactKind::Phone points=draft.phones />
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-[10rem_1fr] gap-3">
+                    {field("Address label", draft.address_label)}
+                    <label class="block">
+                        <span class=LABEL_CLASS>"Address"</span>
+                        <textarea rows="2" class=INPUT_CLASS prop:value=move || draft.address.get()
+                            on:input=move |ev| draft.address.set(event_target_value(&ev)) />
+                    </label>
+                </div>
+                <label class="block">
+                    <span class=LABEL_CLASS>"Notes"</span>
+                    <textarea rows="4" class=INPUT_CLASS prop:value=move || draft.notes.get()
+                        on:input=move |ev| draft.notes.set(event_target_value(&ev)) />
+                </label>
+            </form>
+            // Pinned, so Save stays reachable on a phone however long the form.
+            <div class="flex items-center justify-end gap-2 px-4 pt-3 border-t border-stone-200 dark:border-stone-800"
+                style="padding-bottom: max(0.75rem, env(safe-area-inset-bottom));">
                 <button type="button"
-                    class="px-3 py-1.5 rounded-lg text-sm text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                    on:click=move |_| on_cancel.run(())>
+                    class="px-3 py-2 rounded-lg text-sm text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+                    on:click=move |_| open.set(false)>
                     "Cancel"
                 </button>
+                // A dialog's commit button keeps its word, with an icon, as in
+                // the create-node dialog: a lone check is ambiguous there.
+                <button type="submit" form=form_id
+                    class="px-4 py-2 rounded-lg text-sm font-medium bg-ember hover:bg-ember-strong text-white
+                        disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1.5"
+                    disabled=move || saving.get() || draft.name.get().trim().is_empty()>
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"check"</span>
+                    "Save"
+                </button>
             </div>
-        </form>
+        </ModalShell>
     }
 }
 
@@ -307,63 +500,21 @@ pub fn PeopleView() -> impl IntoView {
         let q = query.get();
         async move { crate::api::fetch_people(Some(&q)).await }
     });
-    let creating = RwSignal::new(false);
-    let new_name = RwSignal::new(String::new());
-    let duplicate = RwSignal::new(None::<Vec<DuplicateMatch>>);
-    let busy = RwSignal::new(false);
-
-    let create = move |confirm: bool| {
-        let name = new_name.get_untracked();
-        if name.trim().is_empty() || busy.get_untracked() {
-            return;
-        }
-        busy.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            let input = PersonInput {
-                display_name: name,
-                ..Default::default()
-            };
-            match crate::api::create_person(&input, confirm).await {
-                Ok(SavePerson::Saved(p)) => {
-                    navigate.get_value()(&format!("/people/{}", p.id), Default::default());
-                }
-                Ok(SavePerson::Duplicate(w)) => duplicate.set(Some(w.matches)),
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't create: {e}")),
-            }
-            busy.set(false);
-        });
-    };
+    let editor_open = RwSignal::new(false);
+    let on_created = Callback::new(move |p: Person| {
+        navigate.get_value()(&format!("/people/{}", p.id), Default::default());
+    });
 
     view! {
         <div class="flex flex-col h-full">
             <PageHeader icon="group" title="People">
-                <button
-                    type="button"
-                    class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-ember text-white cursor-pointer"
-                    on:click=move |_| { creating.set(true); duplicate.set(None); }
-                >
-                    <span class="material-symbols-outlined" style="font-size:16px;" aria-hidden="true">"person_add"</span>
-                    "New person"
-                </button>
+                // Icon-only, like the node list's "New node" (+).
+                <IconButton icon="person_add" label="New person"
+                    on_click=Callback::new(move |()| editor_open.set(true)) />
             </PageHeader>
             <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4 max-w-3xl">
-                {move || creating.get().then(|| view! {
-                    <form class="flex items-center gap-2" data-testid="new-person-form"
-                        on:submit=move |ev| { ev.prevent_default(); create(false); }>
-                        <input type="text" class=INPUT_CLASS placeholder="Name\u{2026}" aria-label="New person's name"
-                            autofocus=true
-                            prop:value=move || new_name.get()
-                            on:input=move |ev| new_name.set(event_target_value(&ev)) />
-                        <button type="submit" class="px-3 py-1.5 rounded-lg text-sm font-medium bg-ember text-white cursor-pointer disabled:opacity-50"
-                            disabled=move || busy.get() || new_name.get().trim().is_empty()>
-                            "Create"
-                        </button>
-                    </form>
-                })}
-                {move || duplicate.get().map(|matches| view! {
-                    <DuplicateNotice matches=matches proceed_label="Create a new person anyway"
-                        on_proceed=Callback::new(move |()| create(true)) />
-                })}
+                <PersonEditor open=editor_open target=EditorTarget::New
+                    initial=Signal::derive(PersonInput::default) on_saved=on_created />
                 <input
                     type="search"
                     class=INPUT_CLASS
@@ -437,28 +588,18 @@ fn PersonView(id: PersonId) -> impl IntoView {
         version.track();
         crate::api::fetch_person_usages(id)
     });
-    let editing = RwSignal::new(false);
-    let saving = RwSignal::new(false);
-    // The last save that hit the duplicate warning, kept to "Save anyway".
-    let pending = RwSignal::new(None::<(PersonInput, Vec<DuplicateMatch>)>);
-
-    let save_with = move |input: PersonInput, confirm: bool| {
-        saving.set(true);
-        wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_person(id, &input, confirm).await {
-                Ok(SavePerson::Saved(_)) => {
-                    pending.set(None);
-                    editing.set(false);
-                    version.update(|v| *v += 1);
-                    push_toast(ToastLevel::Success, "Saved.");
-                }
-                Ok(SavePerson::Duplicate(w)) => pending.set(Some((input, w.matches))),
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't save: {e}")),
-            }
-            saving.set(false);
-        });
-    };
-    let save = move |input: PersonInput| save_with(input, false);
+    let editor_open = RwSignal::new(false);
+    let current = Signal::derive(move || {
+        person
+            .get()
+            .and_then(Result::ok)
+            .map(|p| PersonInput::from(&p))
+            .unwrap_or_default()
+    });
+    let on_saved = Callback::new(move |_: Person| {
+        version.update(|v| *v += 1);
+        push_toast(ToastLevel::Success, "Saved.");
+    });
     let delete = move || {
         let ok = web_sys::window()
             .and_then(|w| {
@@ -487,32 +628,14 @@ fn PersonView(id: PersonId) -> impl IntoView {
                 </button>
             </PageHeader>
             <div class="flex-1 overflow-auto p-4 md:p-6 max-w-3xl space-y-6">
-                {move || pending.get().map(|(input, matches)| view! {
-                    <DuplicateNotice matches=matches proceed_label="Save anyway"
-                        on_proceed=Callback::new(move |()| save_with(input.clone(), true)) />
-                })}
+                <PersonEditor open=editor_open target=EditorTarget::Existing(id)
+                    initial=current on_saved=on_saved />
                 <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading\u{2026}"</p> }>
                     {move || person.get().map(|r| match r {
                         Err(e) => view! { <p class="text-sm text-red-500">{format!("Error: {e}")}</p> }.into_any(),
-                        Ok(p) if editing.get() => {
-                            let initial = PersonInput {
-                                display_name: p.display_name,
-                                company: p.company,
-                                position: p.position,
-                                emails: p.emails,
-                                phones: p.phones,
-                                address_label: p.address_label,
-                                address: p.address,
-                                notes: p.notes,
-                            };
-                            view! {
-                                <PersonForm initial=initial on_save=Callback::new(save)
-                                    on_cancel=Callback::new(move |()| editing.set(false)) saving=saving />
-                            }.into_any()
-                        }
                         Ok(p) => view! {
                             <PersonCard person=p
-                                on_edit=Callback::new(move |()| editing.set(true))
+                                on_edit=Callback::new(move |()| editor_open.set(true))
                                 on_delete=Callback::new(move |()| delete()) />
                         }.into_any(),
                     })}
@@ -560,13 +683,11 @@ fn PersonCard(
                     <h1 class="font-display text-2xl text-stone-900 dark:text-stone-100">{person.display_name.clone()}</h1>
                     {(!subtitle.is_empty()).then(|| view! { <p class="text-sm text-stone-500">{subtitle}</p> })}
                 </div>
+                // Icon-only, like the node page header's edit and delete.
                 <div class="flex items-center gap-1">
-                    <button type="button" class="px-3 py-1.5 rounded-lg text-sm border border-stone-200 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                        on:click=move |_| on_edit.run(())>"Edit"</button>
-                    <button type="button" class="p-1.5 rounded-lg text-stone-400 hover:text-red-500 cursor-pointer"
-                        title="Delete person" aria-label="Delete person" on:click=move |_| on_delete.run(())>
-                        <span class="material-symbols-outlined" aria-hidden="true">"delete"</span>
-                    </button>
+                    <IconButton icon="edit" label="Edit person" on_click=on_edit />
+                    <IconButton icon="delete" label="Delete person" variant=IconButtonVariant::Danger
+                        on_click=on_delete />
                 </div>
             </div>
             <div class="space-y-1.5">

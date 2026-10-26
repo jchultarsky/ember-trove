@@ -79,6 +79,23 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   Radius convention: cards `rounded-lg` · popovers `rounded-xl` · modals
   `rounded-2xl`; card row dividers `divide-stone-100 dark:divide-stone-800`.
   See `.claude/patterns/page-scaffold.rs`.
+- **Buttons: icon, icon + word, or word (owner rule, 2026-10-26).** One design
+  language everywhere:
+  1. **Icon only** for actions in page headers, toolbars, rows, cards and
+     inline editors: edit, delete, add, inline save ✓ / cancel ✕, copy, link,
+     expand/collapse, close. Use `IconButton` (`icon_button.rs`): its `label`
+     is the tooltip and the accessible name. Never a text "Edit" next to an
+     icon trash can.
+  2. **Icon + word** for the commit button of a dialog or form, and for
+     call-to-action buttons (Reload, Logout, Load more). The create-node
+     dialog's "+ Create" is the model: a lone ✓ next to ✕ is easy to misread
+     at the moment of decision.
+  3. **Word only** for a dialog's secondary Cancel, segmented tabs and filter
+     pills, menu items, and links inside sentences or notices ("Show 3
+     more…", "Save anyway", Undo).
+
+  A new glyph renders as its raw name until it's in the font subset: run
+  `scripts/refresh-icon-font.sh` after adding one.
 - **Context newtypes** to prevent collisions:
   `#[derive(Clone, Copy)] struct ShowCapture(pub RwSignal<bool>);` (see `ui/src/app.rs`).
 - **Required context = `expect_context::<T>()`, never `use_context::<T>().expect(..)`.**
