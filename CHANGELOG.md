@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — People surfaces follow the button language (#156)
+- **Person editor:** "+ Add email" / "+ Add phone" text links become
+  icon-only add buttons beside the Emails / Phones headings; the per-row
+  remove and the header close are now `IconButton`s (same size and hover as
+  the rest of the app). Save (icon + word) and Cancel (word) already matched.
+- **People section on a node:** the add/cancel toggle, edit role and remove
+  buttons use the shared `IconButton` treatment instead of hand-rolled
+  classes.
+- **People registry (`/people`)** spans the available width; the
+  `max-w-3xl` cap was a People-only style (no shared container changed).
+
 ## [2.38.0] - 2026-10-26
 
 ### Changed — one button language across the UI
