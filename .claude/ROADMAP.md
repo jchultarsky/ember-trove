@@ -5,6 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-26)
 
+- **v2.38.0 shipped: the person editor and one button language (#152, #153).**
+  - **One person editor** for New, Edit and a node's "Create “…”": a
+    centred dialog on desktop, a full-screen sheet on phones
+    (`ModalPlacement::Sheet`). Cancel discards; Escape discards with Undo.
+  - **The three-tier button rule**, recorded in `.claude/rules/leptos.md`:
+    icon-only for header, toolbar, row and inline actions; icon + word for
+    dialog commits and calls to action; word-only for Cancel, tabs, pills,
+    menus and inline links. 12 buttons became icon-only and 17 gained an
+    icon.
+  - **`refresh-icon-font.sh` now reads a span's content**, so it no longer
+    misses glyphs. It used to take `aria-hidden="true"` for the name.
+
 - **v2.37.0 shipped: People (#147; PRs #148–#151) and no more public links.**
   - **Public share links are removed** (owner decision). Migration 036 drops
     `share_tokens`, so the only unauthenticated content route is gone.
