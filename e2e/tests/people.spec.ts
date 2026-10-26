@@ -39,9 +39,9 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await expect(dlg.getByRole('textbox', { name: 'Name' })).toBeFocused();
     await dlg.getByRole('textbox', { name: 'Name' }).fill(name);
     await dlg.getByRole('textbox', { name: 'Company' }).fill('Analytical Engines');
-    await dlg.getByRole('button', { name: '+ Add email' }).click();
+    await dlg.getByRole('button', { name: 'Add email' }).click();
     await dlg.getByRole('textbox', { name: 'email', exact: true }).fill(email);
-    await dlg.getByRole('button', { name: '+ Add phone' }).click();
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
     await dlg.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0000');
     await dlg.getByRole('button', { name: 'Save' }).click();
     // The duplicate warning shows inside the editor.
@@ -142,7 +142,7 @@ test('on a phone the editor is a full-screen sheet with Save in reach', async ({
     const box = await dlg.boundingBox();
     expect(box).toMatchObject({ x: 0, y: 0, width: 375, height: 812 });
     // Contact rows stack: the label sits above the value, not beside it.
-    await dlg.getByRole('button', { name: '+ Add phone' }).click();
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
     const label = await dlg.getByRole('textbox', { name: 'phone label' }).boundingBox();
     const value = await dlg.getByRole('textbox', { name: 'phone', exact: true }).boundingBox();
     expect(label!.y + label!.height).toBeLessThanOrEqual(value!.y);
