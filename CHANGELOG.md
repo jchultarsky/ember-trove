@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — people in global search (#147, part 3)
+- **Search page:** a People group above the node results. It hides while a
+  node-only filter (type, published-only, tags, dates) is on, since those
+  can't apply to people.
+- **Header search:** up to three people under the node matches.
+- **Cmd-K palette:** an "Open person" action and a **Go to People** command.
+  The ranking contract is now: node title matches → people → commands →
+  body-only node matches → Create (unit-tested).
+- Everything comes from the owner-only `GET /api/people?q=`, so search never
+  shows anyone else's people, the admin included. `SearchResult` is
+  unchanged.
+
+### Fixed
+- Leaving the search page while a node search was still in flight crashed
+  the app (a WASM panic that broke every click until reload). The response
+  wrote to the unmounted page's signals; it now uses the `try_` variants.
+
+
 ### Added — People: the registry and the node section (#147, part 2)
 - **A People page** (`/people`, in the sidebar): search by name, company,
   email or phone, and create someone with just a name.

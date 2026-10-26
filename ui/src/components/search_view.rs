@@ -130,6 +130,17 @@ pub fn SearchView() -> impl IntoView {
     let loading = RwSignal::new(false);
     let search_version = RwSignal::new(0u32);
     let history: RwSignal<Vec<String>> = RwSignal::new(load_history());
+    // People in global search (#147): their own group, from the owner-only
+    // /api/people. The node-only filters can't apply to people, so the
+    // group hides while any of them is set rather than ignoring them.
+    let people = crate::components::node_picker::use_people_search(search_query);
+    let node_filters_active = move || {
+        node_type_filter.get().is_some()
+            || published_only.get()
+            || !tag_filters.get().is_empty()
+            || !updated_after.get().is_empty()
+            || !updated_before.get().is_empty()
+    };
 
     // Fetch all tags once for the picker.
     let all_tags: LocalResource<Vec<Tag>> =
@@ -171,7 +182,11 @@ pub fn SearchView() -> impl IntoView {
 
         wasm_bindgen_futures::spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(300).await;
-            if search_version.get_untracked() != version {
+            // `try_`: the page may have unmounted while this waited or ran.
+            // A plain `get`/`set` on a disposed signal panics, and that
+            // poisons the WASM runtime (#147 e2e: clicking a People result
+            // while a node search was still in flight).
+            if search_version.try_get_untracked() != Some(version) {
                 return;
             }
             let sort_str = if sort_val == "relevance" {
@@ -205,22 +220,22 @@ pub fn SearchView() -> impl IntoView {
             .await
             {
                 Ok(resp) => {
-                    if search_version.get_untracked() == version {
+                    if search_version.try_get_untracked() == Some(version) {
                         if resp.total > 0 {
                             push_history(&q);
-                            history.set(load_history());
+                            history.try_set(load_history());
                         }
-                        results.set(Some(resp));
+                        results.try_set(Some(resp));
                     }
                 }
                 Err(e) => {
-                    if search_version.get_untracked() == version {
-                        error_msg.set(Some(format!("{e}")));
+                    if search_version.try_get_untracked() == Some(version) {
+                        error_msg.try_set(Some(format!("{e}")));
                     }
                 }
             }
-            if search_version.get_untracked() == version {
-                loading.set(false);
+            if search_version.try_get_untracked() == Some(version) {
+                loading.try_set(false);
             }
         });
     };
@@ -620,6 +635,37 @@ pub fn SearchView() -> impl IntoView {
                         {msg}
                     </div>
                 })}
+
+                {move || {
+                    let found = people.get();
+                    (!found.is_empty() && !node_filters_active()).then(|| view! {
+                        <section class="mb-5" aria-labelledby="search-people-heading" data-testid="search-people">
+                            <h2 id="search-people-heading"
+                                class="text-xs font-semibold uppercase tracking-wider text-stone-400 dark:text-stone-500 mb-2">
+                                "People"
+                            </h2>
+                            <ul class="flex flex-wrap gap-2">
+                                {found.into_iter().map(|p| {
+                                    let id = p.id;
+                                    let detail = [p.position.clone(), p.company.clone()]
+                                        .into_iter().flatten().collect::<Vec<_>>().join(" \u{b7} ");
+                                    view! {
+                                        <li>
+                                            <button type="button"
+                                                class="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-stone-200 dark:border-stone-700
+                                                    hover:bg-stone-50 dark:hover:bg-stone-800 text-sm cursor-pointer"
+                                                on:click=move |_| navigate.get_value()(&format!("/people/{id}"), Default::default())>
+                                                <span class="material-symbols-outlined text-stone-400" style="font-size:16px;" aria-hidden="true">"person"</span>
+                                                <span class="font-medium text-stone-800 dark:text-stone-100">{p.display_name}</span>
+                                                {(!detail.is_empty()).then(|| view! { <span class="text-xs text-stone-500">{detail}</span> })}
+                                            </button>
+                                        </li>
+                                    }
+                                }).collect_view()}
+                            </ul>
+                        </section>
+                    })
+                }}
 
                 {move || {
                     results.get().map(|resp| {

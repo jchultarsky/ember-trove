@@ -26,6 +26,15 @@ pub async fn fetch_people(q: Option<&str>) -> Result<Vec<Person>, UiError> {
     }
 }
 
+/// At most `limit` of the caller's people matching `q` (global search).
+pub async fn search_people(q: &str, limit: u32) -> Result<Vec<Person>, UiError> {
+    get_json(&format!(
+        "/people?limit={limit}&q={}",
+        js_sys::encode_uri_component(q.trim())
+    ))
+    .await
+}
+
 pub async fn fetch_person(id: PersonId) -> Result<Person, UiError> {
     get_json(&format!("/people/{id}")).await
 }

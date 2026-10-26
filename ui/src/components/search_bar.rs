@@ -16,6 +16,8 @@ pub fn SearchBar() -> impl IntoView {
     let search_query = expect_context::<RwSignal<String>>();
 
     let results: RwSignal<Vec<SearchResult>> = RwSignal::new(vec![]);
+    // People matches (#147), from the owner-only /api/people.
+    let people: RwSignal<Vec<common::person::Person>> = RwSignal::new(vec![]);
     let show_dropdown = RwSignal::new(false);
     let loading = RwSignal::new(false);
     let debounce_version = RwSignal::new(0u32);
@@ -29,6 +31,7 @@ pub fn SearchBar() -> impl IntoView {
 
         if q.len() < 2 || location.pathname.get_untracked() == "/search" {
             results.set(vec![]);
+            people.set(vec![]);
             show_dropdown.set(false);
             loading.set(false);
             return;
@@ -46,18 +49,16 @@ pub fn SearchBar() -> impl IntoView {
                 show_dropdown.set(false);
                 return;
             }
-            match crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6)
-                .await
-            {
-                Ok(resp) => {
-                    if debounce_version.get_untracked() == version {
-                        results.set(resp.results);
-                        show_dropdown.set(true);
-                    }
-                }
-                Err(_) => {
-                    results.set(vec![]);
-                }
+            // One after the other: the ui crate has no `futures` for a join,
+            // and the people query is a cheap indexed lookup.
+            let nodes =
+                crate::api::search_nodes(&q, false, None, None, &[], "or", None, None, None, 1, 6)
+                    .await;
+            let found = crate::api::search_people(&q, 3).await;
+            if debounce_version.get_untracked() == version {
+                results.set(nodes.map(|r| r.results).unwrap_or_default());
+                people.set(found.unwrap_or_default());
+                show_dropdown.set(true);
             }
             loading.set(false);
         });
@@ -73,6 +74,7 @@ pub fn SearchBar() -> impl IntoView {
         if prev.is_some_and(|p| p != path) && path != "/search" {
             search_query.set(String::new());
             results.set(vec![]);
+            people.set(vec![]);
             show_dropdown.set(false);
         }
         path
@@ -104,7 +106,9 @@ pub fn SearchBar() -> impl IntoView {
     };
 
     let on_focus = move |_| {
-        if location.pathname.get_untracked() != "/search" && !results.get_untracked().is_empty() {
+        if location.pathname.get_untracked() != "/search"
+            && !(results.get_untracked().is_empty() && people.get_untracked().is_empty())
+        {
             show_dropdown.set(true);
         }
     };
@@ -139,7 +143,8 @@ pub fn SearchBar() -> impl IntoView {
                 let visible = show_dropdown.get();
                 let on_search_view = location.pathname.get() == "/search";
                 let items = results.get();
-                if !visible || on_search_view || items.is_empty() {
+                let found = people.get();
+                if !visible || on_search_view || (items.is_empty() && found.is_empty()) {
                     return None;
                 }
                 Some(view! {
@@ -170,6 +175,31 @@ pub fn SearchBar() -> impl IntoView {
                                             crate::components::format_helpers::format_relative_short(u)
                                         ))}
                                     </div>
+                                </button>
+                            }
+                        }).collect::<Vec<_>>()}
+                        {found.into_iter().map(|p| {
+                            let id = p.id;
+                            let navigate = navigate.clone();
+                            view! {
+                                <button
+                                    class="w-full text-left px-3 py-2 text-sm hover:bg-stone-50
+                                        dark:hover:bg-stone-800 transition-colors border-b
+                                        border-stone-100 dark:border-stone-800 flex items-center gap-2"
+                                    data-testid="search-bar-person"
+                                    on:mousedown=move |ev| {
+                                        ev.prevent_default();
+                                        show_dropdown.set(false);
+                                        navigate(&format!("/people/{id}"), Default::default());
+                                    }
+                                >
+                                    <span class="material-symbols-outlined text-stone-400" style="font-size:16px;" aria-hidden="true">"person"</span>
+                                    <span class="min-w-0">
+                                        <span class="block font-medium text-stone-900 dark:text-stone-100 truncate">{p.display_name}</span>
+                                        <span class="block text-xs text-stone-400 truncate">
+                                            {p.company.map(|c| format!("Person \u{00b7} {c}")).unwrap_or_else(|| "Person".into())}
+                                        </span>
+                                    </span>
                                 </button>
                             }
                         }).collect::<Vec<_>>()}

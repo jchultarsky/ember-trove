@@ -57,6 +57,8 @@ enum PaletteAction {
         title: String,
         icon: String,
     },
+    /// Open a person's card (#147).
+    OpenPerson { id: uuid::Uuid, name: String },
     /// Open the structured `CreateNodeModal` with `title` pre-filled.
     CreateNode { title: String },
     /// An app command (navigation, capture, theme, …).
@@ -67,6 +69,7 @@ impl PaletteAction {
     fn icon(&self) -> &str {
         match self {
             PaletteAction::OpenNode { icon, .. } => icon,
+            PaletteAction::OpenPerson { .. } => "person",
             PaletteAction::CreateNode { .. } => "add",
             PaletteAction::Command(spec) => spec.icon,
         }
@@ -74,6 +77,7 @@ impl PaletteAction {
     fn primary(&self) -> &str {
         match self {
             PaletteAction::OpenNode { title, .. } => title,
+            PaletteAction::OpenPerson { name, .. } => name,
             PaletteAction::CreateNode { title } => title,
             PaletteAction::Command(spec) => spec.label,
         }
@@ -81,6 +85,7 @@ impl PaletteAction {
     fn secondary(&self) -> &'static str {
         match self {
             PaletteAction::OpenNode { .. } => "Open",
+            PaletteAction::OpenPerson { .. } => "Person",
             PaletteAction::CreateNode { .. } => "Create new node",
             // The global shortcut, shown so the palette teaches the faster path.
             PaletteAction::Command(spec) => spec.hint,
@@ -103,6 +108,7 @@ enum Command {
     GoDashboard,
     GoGraph,
     GoNotes,
+    GoPeople,
     GoNodes,
     GoTags,
     GoTemplates,
@@ -221,6 +227,13 @@ const GLOBAL_COMMANDS: &[CommandSpec] = &[
         hint: "",
     },
     CommandSpec {
+        cmd: Command::GoPeople,
+        label: "Go to People",
+        icon: "group",
+        keywords: "contacts team registry person",
+        hint: "",
+    },
+    CommandSpec {
         cmd: Command::GoNodes,
         label: "Go to All Nodes",
         icon: "list",
@@ -306,9 +319,11 @@ fn command_matches(spec: &CommandSpec, q: &str) -> bool {
 /// Order the non-empty-query action list:
 ///
 /// 1. nodes whose **title** contains the query — the quick-switcher core,
-/// 2. matching commands,
-/// 3. nodes that matched only via body/notes/tasks text,
-/// 4. the Create action (always last).
+/// 2. people who match (name, company, email or phone; #147). A name is a
+///    title-like hit, so they follow node titles but outrank everything else,
+/// 3. matching commands,
+/// 4. nodes that matched only via body/notes/tasks text,
+/// 5. the Create action (always last).
 ///
 /// Commands outrank body-only node hits so a command-intent query ("theme",
 /// "dark") isn't hijacked by prose that merely mentions the word — found
@@ -316,6 +331,7 @@ fn command_matches(spec: &CommandSpec, q: &str) -> bool {
 /// still puts that node first.
 fn ranked_actions(
     results: &[SearchResult],
+    people: &[common::person::Person],
     cmds: Vec<&'static CommandSpec>,
     trimmed: &str,
 ) -> Vec<PaletteAction> {
@@ -330,6 +346,10 @@ fn ranked_actions(
         .partition(|r| r.title.to_lowercase().contains(&q));
 
     let mut out: Vec<PaletteAction> = title_hits.into_iter().map(open).collect();
+    out.extend(people.iter().take(5).map(|p| PaletteAction::OpenPerson {
+        id: p.id.0,
+        name: p.display_name.clone(),
+    }));
     out.extend(cmds.into_iter().map(PaletteAction::Command));
     out.extend(body_hits.into_iter().map(open));
     out.push(PaletteAction::CreateNode {
@@ -368,6 +388,24 @@ mod tests {
             .expect("command exists")
     }
 
+    fn person(name: &str) -> common::person::Person {
+        let now = chrono::Utc::now();
+        common::person::Person {
+            id: common::id::PersonId(uuid::Uuid::new_v4()),
+            owner_id: "o".into(),
+            display_name: name.into(),
+            company: None,
+            position: None,
+            emails: vec![],
+            phones: vec![],
+            address_label: None,
+            address: None,
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     fn labels(actions: &[PaletteAction]) -> Vec<String> {
         actions.iter().map(|a| a.primary().to_string()).collect()
     }
@@ -378,7 +416,7 @@ mod tests {
         // come first (the v2.21.3 hijack).
         let results = vec![result("Dartmouth Seminar"), result("Product Definition")];
         let cmds = vec![command("Toggle dark mode")];
-        let out = ranked_actions(&results, cmds, "theme");
+        let out = ranked_actions(&results, &[], cmds, "theme");
         assert_eq!(
             labels(&out),
             vec![
@@ -396,7 +434,7 @@ mod tests {
         // when a command also matches.
         let results = vec![result("Dark Patterns Research"), result("Unrelated")];
         let cmds = vec![command("Toggle dark mode")];
-        let out = ranked_actions(&results, cmds, "dark");
+        let out = ranked_actions(&results, &[], cmds, "dark");
         assert_eq!(
             labels(&out),
             vec![
@@ -409,9 +447,30 @@ mod tests {
     }
 
     #[test]
+    fn people_sit_between_title_matches_and_commands() {
+        // #147: a person's name is a title-like hit, but nodes stay first,
+        // and people still outrank commands and body-only node matches.
+        let results = vec![result("Dark Patterns Research"), result("Unrelated")];
+        let people = vec![person("Darko Novak")];
+        let cmds = vec![command("Toggle dark mode")];
+        let out = ranked_actions(&results, &people, cmds, "dark");
+        assert_eq!(
+            labels(&out),
+            vec![
+                "Dark Patterns Research",
+                "Darko Novak",
+                "Toggle dark mode",
+                "Unrelated",
+                "dark",
+            ]
+        );
+        assert!(matches!(out[1], PaletteAction::OpenPerson { .. }));
+    }
+
+    #[test]
     fn title_match_is_case_insensitive_and_create_is_last() {
         let results = vec![result("my PROJECT plan")];
-        let out = ranked_actions(&results, vec![], "project");
+        let out = ranked_actions(&results, &[], vec![], "project");
         assert_eq!(labels(&out), vec!["my PROJECT plan", "project"]);
         assert!(matches!(out.last(), Some(PaletteAction::CreateNode { .. })));
     }
@@ -437,6 +496,7 @@ pub fn CommandPalette(
 ) -> impl IntoView {
     let query: RwSignal<String> = RwSignal::new(String::new());
     let results = crate::components::node_picker::use_node_search(query);
+    let people = crate::components::node_picker::use_people_search(query);
     let recent: RwSignal<Vec<RecentEntry>> = RwSignal::new(Vec::new());
     let highlight: RwSignal<usize> = RwSignal::new(0);
     let input_ref: NodeRef<html::Input> = NodeRef::new();
@@ -509,7 +569,7 @@ pub fn CommandPalette(
                     .filter(|s| command_matches(s, trimmed)),
             );
             cmds.truncate(5);
-            out.extend(ranked_actions(&results.get(), cmds, trimmed));
+            out.extend(ranked_actions(&results.get(), &people.get(), cmds, trimmed));
         }
         out
     });
@@ -535,6 +595,10 @@ pub fn CommandPalette(
                 navigate.get_value()(&format!("/nodes/{id}"), Default::default());
                 on_close.run(());
             }
+            PaletteAction::OpenPerson { id, .. } => {
+                navigate.get_value()(&format!("/people/{id}"), Default::default());
+                on_close.run(());
+            }
             PaletteAction::CreateNode { title } => {
                 on_close.run(());
                 on_create.run(title);
@@ -549,6 +613,7 @@ pub fn CommandPalette(
                     Command::GoDashboard => nav("/dashboard", Default::default()),
                     Command::GoGraph => nav("/graph", Default::default()),
                     Command::GoNotes => nav("/notes", Default::default()),
+                    Command::GoPeople => nav("/people", Default::default()),
                     Command::GoNodes => nav("/nodes", Default::default()),
                     Command::GoTags => nav("/tags", Default::default()),
                     Command::GoTemplates => nav("/templates", Default::default()),
