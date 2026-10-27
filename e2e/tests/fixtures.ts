@@ -8,7 +8,7 @@ import { test as base, expect, type APIRequestContext } from '@playwright/test';
  */
 
 export { expect };
-export type { APIRequestContext, Locator, Page } from '@playwright/test';
+export type { APIRequestContext, Locator, Page, Route } from '@playwright/test';
 
 export const test = base.extend<{
   pageErrors: string[];

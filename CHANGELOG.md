@@ -6,6 +6,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed — stalled and failed saves are visible, and unsaved edits survive (#161)
+- **A stalled save is no longer an endless "Saving…".** After 5 s the
+  editor's label reads "Still saving…"; after 15 s it stops waiting and
+  shows "Save failed" with a **Retry** button. Saving is re-enabled at that
+  point. Before, a hung request kept the editor locked: the Save button and
+  autosave stayed off for the rest of the visit. A failed save also retries
+  once by itself when the browser reports it is back online.
+- **A late response can't leave old text behind.** If a request that was
+  given up on lands after all, the editor records what the server now holds
+  and re-sends the current text if it differs. A late success also clears
+  "Save failed".
+- **Edits that never reached the server are kept on this device.** The
+  editor stores them in a local draft, per user and node, when a save
+  starts, when the page unloads, and when the editor closes. The draft is
+  deleted as soon as the server confirms that text. On return the editor
+  offers the draft ("Unsaved edits from … were kept on this device", with
+  Restore and Discard) and warns if the node changed elsewhere since. A
+  draft the server already has is dropped silently. Before, a reload during
+  a save threw the edit away: the session-refresh path after a 401 reloads
+  the page without re-sending the pending save. This was the likely cause
+  of the reported loss.
+- Thresholds, attempt tracking and the restore decision are pure logic in
+  `common::save_status` with unit tests. A new e2e spec
+  (`save_state.spec.ts`) holds and fails the save request.
+
+### Security
+- **An explicit logout clears every editor draft**, both edit drafts and the
+  new-node draft, so node text isn't left in `localStorage` on a shared
+  device. This changes behavior: logging out now discards an unsaved
+  new-node draft. A redirect to login after the session expires keeps
+  drafts, since that is the case they exist for. Edit drafts are keyed by
+  user subject, so a second account in the same browser is never offered
+  another user's unsaved text of a shared node.
+
 ### Changed
 - **Migration 039 drops the duplicate index on `nodes.owner_id`.** Migration
   001 (`idx_nodes_owner`) and 021 (`nodes_owner_id_idx`) indexed the same

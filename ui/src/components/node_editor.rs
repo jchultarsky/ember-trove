@@ -1,6 +1,10 @@
 use common::{
     id::{NodeId, TemplateId},
     node::{CreateNodeRequest, NodeStatus, NodeType, UpdateNodeRequest},
+    save_status::{
+        DraftOnReturn, EditDraft, SAVE_FAILED_AFTER_MS, STILL_SAVING_AFTER_MS, SaveState,
+        SaveTracker, Settled, fingerprint,
+    },
     template::{
         CreateBodySource, NodeTemplate, default_for_type, may_replace_body, picker_order,
         resolve_create_body,
@@ -30,44 +34,6 @@ const AUTOSAVE_DEBOUNCE_MS: u32 = 2_000;
 /// The editor's persisted snapshot: (title, body, status). `node_type` is
 /// excluded in edit mode because `UpdateNodeRequest` cannot change it.
 type Snapshot = (String, String, String);
-
-/// Save lifecycle, surfaced in the header indicator.
-#[derive(Clone, Copy, PartialEq)]
-enum SaveState {
-    /// Pristine — nothing to persist.
-    Idle,
-    /// Local changes not yet persisted (autosave pending).
-    Dirty,
-    /// A save is in flight.
-    Saving,
-    /// Persisted — server-side in edit mode, localStorage draft in create mode.
-    Saved,
-    /// Last save attempt failed; the edits are still held locally.
-    Failed,
-}
-
-impl SaveState {
-    /// Indicator label. Create-mode wording must not imply the node exists
-    /// on the server — only a local draft does. `saved_at` (local time of the
-    /// last server save) turns "Saved" into "Saved · 4:02 PM", so a glance
-    /// answers "did my last keystrokes land?" (#98 item 6).
-    fn label(self, edit_mode: bool, saved_at: Option<&str>) -> String {
-        match (self, saved_at) {
-            (SaveState::Idle, _) => String::new(),
-            (SaveState::Dirty, _) => "Unsaved changes\u{2026}".into(),
-            (SaveState::Saving, _) => "Saving\u{2026}".into(),
-            (SaveState::Saved, Some(at)) if edit_mode => format!("Saved \u{b7} {at}"),
-            (SaveState::Saved, None) if edit_mode => "Saved".into(),
-            (SaveState::Saved, _) => "Draft kept locally".into(),
-            (SaveState::Failed, _) => "Couldn\u{2019}t save \u{2014} edits kept here".into(),
-        }
-    }
-
-    /// Pending states read a shade stronger than the settled "Saved".
-    fn is_pending(self) -> bool {
-        matches!(self, SaveState::Dirty | SaveState::Saving)
-    }
-}
 
 /// Convert a UTF-16 code-unit offset (as reported by `selectionStart` in the
 /// DOM) to a UTF-8 byte offset safe for slicing a Rust `&str`.
@@ -175,32 +141,6 @@ mod tests {
         let text = "See [[foo";
         let cursor_u16 = text.encode_utf16().count();
         assert_eq!(wikilink_query_at(text, cursor_u16), Some("foo".to_string()));
-    }
-
-    #[test]
-    fn save_state_saved_label_distinguishes_modes() {
-        // Create mode persists only a local draft — the label must not claim
-        // the node was saved to the server.
-        assert_eq!(SaveState::Saved.label(true, None), "Saved");
-        assert_eq!(SaveState::Saved.label(false, None), "Draft kept locally");
-        assert_eq!(SaveState::Idle.label(true, None), "");
-    }
-
-    #[test]
-    fn save_state_saved_label_carries_the_save_time() {
-        assert_eq!(
-            SaveState::Saved.label(true, Some("4:02 PM")),
-            "Saved \u{b7} 4:02 PM"
-        );
-        // A local draft never claims a server save time.
-        assert_eq!(
-            SaveState::Saved.label(false, Some("4:02 PM")),
-            "Draft kept locally"
-        );
-        assert_eq!(
-            SaveState::Dirty.label(true, Some("4:02 PM")),
-            "Unsaved changes\u{2026}"
-        );
     }
 }
 
@@ -407,6 +347,128 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         )
     };
 
+    // ── Stall watchdog & local edit drafts (#161) ───────────────────────────
+    // Numbers save attempts so the "Still saving…" / give-up timers and late
+    // responses act only on the attempt they belong to.
+    let tracker = StoredValue::new(SaveTracker::default());
+    // Edit-mode drafts are keyed by (user, node); without a subject (never
+    // expected inside AuthGate) drafts are simply off.
+    let draft_key: StoredValue<Option<(String, String)>> = StoredValue::new(node.and_then(|id| {
+        use_context::<crate::auth::AuthState>().and_then(|a| match a.get_untracked() {
+            crate::auth::AuthStatus::Authenticated(u) => Some((u.sub, id.to_string())),
+            _ => None,
+        })
+    }));
+    // A kept draft found on open, awaiting Restore / Discard; the flag says
+    // the server copy changed since the draft was taken.
+    let restore_offer: RwSignal<Option<(EditDraft, bool)>> = RwSignal::new(None);
+    // Keep unconfirmed edits on this device: when a save starts (before the
+    // request, so a 401 refresh reload can't lose them), on page unload, and
+    // on unmount. Reads only untracked values, so it is safe in listeners.
+    let keep_draft = move || {
+        let Some(Some((sub, id))) = draft_key.try_get_value() else {
+            return;
+        };
+        let (Some(Some(base)), Some(snap)) = (
+            baseline.try_get_untracked(),
+            title
+                .try_get_untracked()
+                .and_then(|t| Some((t, body.try_get_untracked()?, status.try_get_untracked()?))),
+        ) else {
+            return;
+        };
+        if snap == base {
+            return;
+        }
+        crate::draft::write_edit_draft(
+            &sub,
+            &id,
+            &EditDraft {
+                title: snap.0,
+                body: snap.1,
+                status: snap.2,
+                kept_at: chrono::DateTime::from_timestamp_millis(js_sys::Date::now() as i64)
+                    .unwrap_or_default(),
+                base: fingerprint(&base.0, &base.1, &base.2),
+            },
+        );
+    };
+    // Drop the draft once the server holds exactly what the editor shows.
+    let forget_draft_if_confirmed = move || {
+        let Some(Some((sub, id))) = draft_key.try_get_value() else {
+            return;
+        };
+        let current = title
+            .try_get_untracked()
+            .and_then(|t| Some((t, body.try_get_untracked()?, status.try_get_untracked()?)));
+        if current.is_some() && baseline.try_get_untracked().flatten() == current {
+            crate::draft::clear_edit_draft(&sub, &id);
+        }
+    };
+    // Begin a save attempt: label "Saving…", then arm the watchdog. The
+    // timers outlive the editor (`forget`), so they only use `try_` access.
+    let begin_attempt = move || -> u64 {
+        let attempt = tracker.try_update_value(|t| t.begin()).unwrap_or_default();
+        saving.set(true);
+        save_state.set(SaveState::Saving);
+        Timeout::new(STILL_SAVING_AFTER_MS, move || {
+            if tracker.try_with_value(|t| t.is_watched(attempt)) == Some(true) {
+                save_state.try_set(SaveState::StillSaving);
+            }
+        })
+        .forget();
+        Timeout::new(SAVE_FAILED_AFTER_MS, move || {
+            if tracker.try_update_value(|t| t.give_up(attempt)) == Some(true) {
+                // Stop waiting: re-enable Save / autosave and say so. The
+                // request may still land; `finish_attempt` handles that.
+                saving.try_set(false);
+                save_state.try_set(SaveState::Failed);
+            }
+        })
+        .forget();
+        attempt
+    };
+    // Settle an edit-mode attempt that carried `snap`; returns whether it was
+    // the watched one. Any success — even a late one from an attempt we gave
+    // up on — tells us what the server now holds, so the baseline follows it
+    // and the recheck re-sends the editor's text if it differs. That way a
+    // stale request landing after a newer one can't leave old text behind
+    // (at the cost of one extra save).
+    let finish_attempt = move |attempt: u64, snap: Snapshot, ok: bool| -> bool {
+        let watched = tracker.try_update_value(|t| t.settle(attempt)) == Some(Settled::Watched);
+        let state = save_state.try_get_untracked();
+        if ok {
+            baseline.try_set(Some(snap));
+            saved_at.try_set(
+                Some(crate::components::format_helpers::local_time_now()).filter(|t| !t.is_empty()),
+            );
+            if watched || state == Some(SaveState::Failed) {
+                save_state.try_set(SaveState::Saved);
+                error_msg.try_set(None);
+            }
+            forget_draft_if_confirmed();
+        } else if watched {
+            // Keep the edits (and the local draft) and don't auto-retry here
+            // (an offline session would hammer the API): Retry, the next
+            // keystroke, or the browser coming back online sends it again.
+            save_state.try_set(SaveState::Failed);
+        }
+        if watched {
+            saving.try_set(false);
+        }
+        let more_edits = baseline.try_get_untracked().flatten()
+            != title
+                .try_get_untracked()
+                .and_then(|t| Some((t, body.try_get_untracked()?, status.try_get_untracked()?)));
+        if more_edits
+            && tracker.try_with_value(|t| !t.in_flight()) == Some(true)
+            && save_state.try_get_untracked() != Some(SaveState::Failed)
+        {
+            autosave_now.try_set(true);
+        }
+        watched
+    };
+
     // Preview visibility — starts visible on wide viewports, hidden on narrow.
     let show_preview = RwSignal::new(is_wide_viewport());
 
@@ -546,6 +608,18 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     body.set(snap.1.clone());
                     node_type.set(n.node_type.as_str().to_string());
                     status.set(snap.2.clone());
+                    // Edits kept from an earlier visit that never reached the
+                    // server (#161)? Offer them back; never apply silently.
+                    if let Some(Some((sub, nid))) = draft_key.try_get_value()
+                        && let Some(d) = crate::draft::read_edit_draft(&sub, &nid)
+                    {
+                        match common::save_status::on_return(&d, &snap.0, &snap.1, &snap.2) {
+                            DraftOnReturn::Discard => crate::draft::clear_edit_draft(&sub, &nid),
+                            DraftOnReturn::Offer { server_changed } => {
+                                restore_offer.try_set(Some((d, server_changed)));
+                            }
+                        }
+                    }
                     baseline.set(Some(snap));
                     fetching.set(false);
                 }
@@ -573,7 +647,14 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             if snap == base {
                 return;
             }
-            save_state.set(SaveState::Dirty);
+            // A stalled or failed save stays visible while typing goes on:
+            // "Unsaved changes…" must not paper over it (#161).
+            if !matches!(
+                save_state.get_untracked(),
+                SaveState::StillSaving | SaveState::Failed
+            ) {
+                save_state.set(SaveState::Dirty);
+            }
             let v = autosave_v.get_untracked() + 1;
             autosave_v.set(v);
             Timeout::new(AUTOSAVE_DEBOUNCE_MS, move || {
@@ -634,8 +715,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         if baseline.get_untracked().as_ref() == Some(&snap) {
             return;
         }
-        saving.set(true);
-        save_state.set(SaveState::Saving);
+        keep_draft();
+        let attempt = begin_attempt();
         wasm_bindgen_futures::spawn_local(async move {
             let req = UpdateNodeRequest {
                 title: Some(snap.0.clone()),
@@ -644,30 +725,23 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
                 project_status: None,
             };
-            match crate::api::update_node(id, &req).await {
-                Ok(_) => {
-                    baseline.set(Some(snap));
-                    saved_at.set(
-                        Some(crate::components::format_helpers::local_time_now())
-                            .filter(|t| !t.is_empty()),
-                    );
-                    save_state.set(SaveState::Saved);
-                }
-                Err(_) => {
-                    // Keep the edits and don't auto-retry (an offline session
-                    // would hammer the API); the next keystroke schedules a
-                    // fresh attempt, and the unmount flush is a last resort.
-                    save_state.set(SaveState::Failed);
-                }
-            }
-            saving.set(false);
-            if save_state.get_untracked() != SaveState::Failed
-                && baseline.get_untracked().as_ref() != Some(&snapshot_now())
-            {
-                autosave_now.set(true);
-            }
+            let ok = crate::api::update_node(id, &req).await.is_ok();
+            finish_attempt(attempt, snap, ok);
         });
     });
+
+    // Retry a failed save now: Retry button, or the browser coming back
+    // online. The executor re-checks everything (in flight, baseline).
+    let retry_save = move || {
+        if node.is_some() && save_state.try_get_untracked() == Some(SaveState::Failed) {
+            error_msg.try_set(None);
+            autosave_now.try_set(true);
+        }
+    };
+    if node.is_some() {
+        let online = window_event_listener(ev::online, move |_| retry_save());
+        on_cleanup(move || online.remove());
+    }
 
     // Warn before the tab closes/refreshes with unpersisted edits. Edit mode
     // only: create mode is already covered by the localStorage draft.
@@ -677,6 +751,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 let dirty = baseline
                     .get_untracked()
                     .is_some_and(|base| base != snapshot_now());
+                if dirty {
+                    // A reload (the 401 refresh path, the update banner) or
+                    // tab close may follow; keep the edits either way.
+                    keep_draft();
+                }
                 if dirty || saving.get_untracked() {
                     ev.prevent_default();
                     // Some browsers require a return value for the prompt.
@@ -684,6 +763,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 }
             });
         on_cleanup(move || unload_handle.remove());
+        // `pagehide` fires where `beforeunload` may not (mobile Safari,
+        // bfcache): the last reliable moment to keep the edits.
+        let pagehide = window_event_listener_untyped("pagehide", move |_| keep_draft());
+        on_cleanup(move || pagehide.remove());
     }
 
     // Last-chance flush: navigating away (Escape, sidebar link, browser back)
@@ -698,6 +781,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         if snap == base {
             return;
         }
+        // If the flush fails too, the draft is offered on the next visit.
+        keep_draft();
+        let key = draft_key.get_value();
         wasm_bindgen_futures::spawn_local(async move {
             let req = UpdateNodeRequest {
                 title: Some(snap.0),
@@ -708,6 +794,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             };
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
+                    if let Some((sub, nid)) = key {
+                        crate::draft::clear_edit_draft(&sub, &nid);
+                    }
                     refresh.update(|n| *n += 1);
                     if let Some(ts) = toast_state {
                         ts.push(ToastLevel::Success, "Unsaved edits saved.");
@@ -771,11 +860,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     };
 
     let on_save = move |_: web_sys::MouseEvent| {
-        saving.set(true);
-        save_state.set(SaveState::Saving);
         error_msg.set(None);
         let snap = snapshot_now();
         let nt_str = node_type.get_untracked();
+        keep_draft();
+        let attempt = begin_attempt();
 
         let nav = nav_save.clone();
         wasm_bindgen_futures::spawn_local(async move {
@@ -808,32 +897,48 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 crate::api::create_node(&req).await
             };
 
-            match result {
-                Ok(saved_node) => {
-                    if node.is_none() {
-                        // Invalidate any pending draft-write timeout before
-                        // clearing, or it would resurrect the draft for a
-                        // node that now exists.
-                        autosave_v.set(autosave_v.get_untracked() + 1);
-                        crate::draft::clear_draft();
+            if node.is_some() {
+                // Edit mode settles like autosave (late responses included);
+                // only the watched attempt navigates — a late one must not
+                // yank the user out of an editor they kept working in.
+                // `finish_attempt` sets the baseline first, so the unmount
+                // flush the navigation triggers is a no-op.
+                let watched = finish_attempt(attempt, snap, result.is_ok());
+                match result {
+                    Ok(saved_node) if watched => {
+                        refresh.update(|n| *n += 1);
+                        nav(&format!("/nodes/{}", saved_node.id), Default::default());
                     }
-                    // Mark the saved snapshot as the baseline so the unmount
-                    // flush (triggered by the navigation below) is a no-op.
-                    baseline.set(Some(snap));
-                    saved_at.set(
-                        Some(crate::components::format_helpers::local_time_now())
-                            .filter(|t| !t.is_empty()),
-                    );
-                    save_state.set(SaveState::Saved);
+                    Err(e) if watched => {
+                        error_msg.try_set(Some(format!("{e}")));
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            let watched = tracker.try_update_value(|t| t.settle(attempt)) == Some(Settled::Watched);
+            match result {
+                // Create mode follows even a late success: the node exists
+                // now, and the local create draft must not outlive it.
+                Ok(saved_node) => {
+                    // Invalidate any pending draft-write timeout before
+                    // clearing, or it would resurrect the draft for a node
+                    // that now exists.
+                    autosave_v.try_set(autosave_v.try_get_untracked().unwrap_or_default() + 1);
+                    crate::draft::clear_draft();
+                    save_state.try_set(SaveState::Saved);
                     refresh.update(|n| *n += 1);
                     nav(&format!("/nodes/{}", saved_node.id), Default::default());
                 }
-                Err(e) => {
-                    save_state.set(SaveState::Failed);
-                    error_msg.set(Some(format!("{e}")));
+                Err(e) if watched => {
+                    save_state.try_set(SaveState::Failed);
+                    error_msg.try_set(Some(format!("{e}")));
                 }
+                Err(_) => {}
             }
-            saving.set(false);
+            if watched {
+                saving.try_set(false);
+            }
         });
     };
 
@@ -1051,9 +1156,26 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                             }
                         }
                         aria-live="polite"
+                        data-testid="save-state"
                     >
                         {move || save_state.get().label(node.is_some(), saved_at.get().as_deref())}
                     </span>
+                    // A failed edit-mode save offers Retry (#161). Icon + word:
+                    // a call to action, per the button rule.
+                    {move || (node.is_some() && save_state.get() == SaveState::Failed).then(|| view! {
+                        <button
+                            type="button"
+                            data-testid="save-retry"
+                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium
+                                text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20
+                                hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors whitespace-nowrap"
+                            title="Your edits are kept on this device. Send them again now."
+                            on:click=move |_| retry_save()
+                        >
+                            <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"refresh"</span>
+                            "Retry"
+                        </button>
+                    })}
                     // Preview toggle button
                     <button
                         class=move || {
@@ -1097,6 +1219,57 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 <div class="px-6 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
                     {msg}
                 </div>
+            })}
+            // Kept edits from an earlier visit that never reached the server
+            // (#161): offered, never applied silently.
+            {move || restore_offer.get().map(|(d, server_changed)| {
+                let when = crate::components::format_helpers::format_timestamp(&d.kept_at);
+                view! {
+                    <div
+                        data-testid="draft-restore"
+                        role="status"
+                        class="flex flex-wrap items-center gap-x-3 gap-y-1 px-6 py-2 text-sm
+                            bg-amber-50 dark:bg-stone-900 text-amber-900 dark:text-amber-200
+                            border-b border-amber-200 dark:border-amber-800"
+                    >
+                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"info"</span>
+                        <span class="flex-1 min-w-0">
+                            {format!("Unsaved edits from {when} were kept on this device.")}
+                            {server_changed.then_some(
+                                " This node has changed since \u{2014} restoring replaces that text (it stays in History)."
+                            )}
+                        </span>
+                        <button
+                            type="button"
+                            class="px-3 py-1 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
+                            on:click=move |_| {
+                                // Applying them makes the editor dirty, so
+                                // autosave sends them like any other edit.
+                                if let Some((d, _)) = restore_offer.get_untracked() {
+                                    title.set(d.title);
+                                    body.set(d.body);
+                                    status.set(d.status);
+                                }
+                                restore_offer.set(None);
+                            }
+                        >
+                            "Restore"
+                        </button>
+                        <button
+                            type="button"
+                            class="px-3 py-1 rounded-lg text-xs font-medium text-amber-900 dark:text-amber-200
+                                hover:bg-amber-100 dark:hover:bg-stone-800"
+                            on:click=move |_| {
+                                if let Some((sub, nid)) = draft_key.get_value() {
+                                    crate::draft::clear_edit_draft(&sub, &nid);
+                                }
+                                restore_offer.set(None);
+                            }
+                        >
+                            "Discard"
+                        </button>
+                    </div>
+                }
             })}
             // Split editor + preview
             <div class="flex flex-1 divide-x divide-stone-200 dark:divide-stone-700 min-h-0">

@@ -486,6 +486,13 @@ release entries above and in git history.
   `e2e`) after v2.21.1 proved host-side gates can't see WASM runtime bugs.
   19 specs today; grow them alongside new UI surfaces, and keep pushing pure
   logic into `common/` for unit coverage.
+- **Follow-ups from #161 (save stalls):** (1) on a 401, refresh and **retry
+  the request** instead of `location.reload()` in `api::handle_error_response`.
+  Every helper and hand-built `Request` needs a rebuildable request, so this
+  is its own PR. Edit drafts already prevent the data loss. (2) Optimistic
+  concurrency on `PUT /nodes/:id` (`If-Match` / `updated_at`), so the server
+  rejects a stale late write instead of the client correcting it with a
+  re-save.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
   not a repo deliverable).
 - **Deferred by owner decision (2026-10-26), not critical:**

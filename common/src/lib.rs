@@ -53,6 +53,7 @@ pub mod person;
 pub mod picker;
 pub mod project_status;
 pub mod quickadd;
+pub mod save_status;
 pub mod search;
 pub mod slug;
 pub mod tag;

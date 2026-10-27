@@ -19,6 +19,9 @@ pub fn Sidebar(
     let show_change_pw = RwSignal::new(false);
 
     let on_logout = move |_| {
+        // Drafts hold node content in plaintext; don't leave it behind on a
+        // shared device (#161).
+        crate::draft::clear_all_drafts();
         wasm_bindgen_futures::spawn_local(async move {
             if let Ok(url) = crate::api::fetch_logout_url().await
                 && let Some(window) = web_sys::window()

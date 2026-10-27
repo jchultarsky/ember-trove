@@ -296,3 +296,20 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   property (background, border, padding, shadow) on **both** `.prose pre code` **and**
   `.dark .prose pre code` in the same edit. The dark reset must be on `.dark .prose pre code`
   specifically to win specificity. — 2026-04 (v2.10.2–v2.10.4)
+
+### Edit lost after "Saving…" stalls and the page reloads itself (#161)
+- **Symptom:** the editor sits on "Saving…" for a long time, then the page reloads to
+  the last-saved text and the latest edit is gone. Or "Saving…" never clears, the
+  Save button stays disabled, and nothing autosaves again.
+- **Cause:** `api::handle_error_response` handles a 401 (the hourly ID-token expiry) by
+  refreshing and then calling `location.reload()`. The reload does **not** re-send the
+  pending save (`PUT`); it re-runs GETs and the in-memory edit is gone. The caller's future is
+  parked forever, so `saving` stays `true`. Separately, a browser `fetch` has no
+  client-side timeout, so a request held up across a deploy also leaves "Saving…" up.
+- **Fix (v2.40):** a watchdog per save attempt (`common::save_status::SaveTracker`, 5 s
+  "Still saving…", 15 s "Save failed" + Retry, saving re-enabled). Unconfirmed edits
+  are kept in a per-user, per-node local draft from the moment a save starts, offered
+  back on return. Rule: **any code path that can reload or redirect must assume
+  in-memory editor state is lost.** Persist first. Never treat a reload as a retry
+  for writes. Follow-up: refresh + retry the request instead of reloading.
+  — 2026-10-26

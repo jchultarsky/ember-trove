@@ -48,6 +48,15 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   — there is no reactive owner there; capture context values before spawning
   (toast.rs has a global fallback for this reason).
 
+- **Forgotten timers and post-`.await` code use `try_` signal access**
+  (`try_get_untracked`, `try_set`, `StoredValue::try_update_value`). A
+  `Timeout::forget()` or a response can arrive after the component is gone,
+  and a plain `get_untracked` on a disposed signal panics. Real example: the
+  save watchdog in `node_editor.rs` (#161).
+- **Editor save state is `common::save_status`** (#161). It holds the labels,
+  the stall thresholds, the `SaveTracker` attempt ids and the edit-draft
+  restore decision. Any path that reloads or redirects must assume in-memory
+  edits are lost: keep a draft first (ERRORS.md).
 - **Static `style=` / `title=` must be closures** — `style=move || ...` — for reactive attrs.
 - **Moving a non-`Copy` value into an inner closure makes it `FnOnce` and breaks
   reactivity.** Clone signals/`navigate` before the inner `move ||` in each `map` iteration.

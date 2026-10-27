@@ -82,6 +82,13 @@ CI job is too slow a feedback loop for selector work.
   the People section's Role field has `role="combobox"`, so
   `getByRole('textbox', { name: 'Role' })` never matches. Use
   `getByRole('combobox', { name: 'Role' })`.
+- **Node saves are `PUT /api/nodes/:id`, not PATCH** (2026-10-26, #161). A
+  `page.route` filter on `PATCH` matches nothing, and the save goes through.
+- **Settle held routes before `page.unroute`** (2026-10-26, #161). To fake a
+  stalled request, keep the `Route` without answering it. `unroute` releases
+  pending routes to the network itself, so a later `abort()`/`continue()`
+  throws "Route is already handled". Abort or continue them first, then
+  unroute (`holdSaves` in save_state.spec.ts).
 - **Duplicate titles can't be made with one user** (the API returns 409). To
   test same-titled search results, intercept `/api/search` with
   `page.route` (`node_picker.spec.ts`).
