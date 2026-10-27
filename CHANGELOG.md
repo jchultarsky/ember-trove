@@ -13,6 +13,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   section shows `person` instead of `group` (Tasks already differed). A small
   "Workspace" caption sits above the sidebar's global entries and is hidden
   when the sidebar is collapsed. A unit test keeps the icons apart.
+- **Member cards show every email and phone (#172).** A node's People list
+  showed only the preferred email and phone, so a second number looked like
+  it was never recorded. Cards now list up to three of each, preferred
+  first, and a "+n more" link to the person page counts the rest
+  (`common::person::card_contacts`).
+
+### Fixed
+- **An expired session no longer reloads the page.** When a call got a 401,
+  the app refreshed the session and then reloaded the whole page, losing
+  scroll position, open dialogs and anything not yet saved. It now renews the
+  session and re-sends the call in place (`api::send_authed`). A refresh
+  that gets no answer (offline, 5xx, or no reply within 10 s) is an ordinary
+  error with Retry, not a trip to the login page. Only a refused refresh, or
+  a second 401 on the new session, goes to login.
+
+### Security
+- **Concurrent 401s share one session refresh.** Every call that got a 401
+  at the same moment used to start its own refresh. The server rotates the
+  refresh token, so the second of two racing refreshes could be refused and
+  log the user out. One refresh is now shared (`common::session_retry`), and
+  a call sent before a finished refresh just re-sends. Re-sending is safe for
+  writes because the API rejects an unauthenticated call before any handler
+  runs; no token is ever handled by the UI (the cookies stay httpOnly).
 
 ### Tooling
 - **`refresh-icon-font.sh` also collects `*_ICON` consts** (#173), so a glyph
