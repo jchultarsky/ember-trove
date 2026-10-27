@@ -160,7 +160,7 @@ test('on a phone the editor is a full-screen sheet with Save in reach', async ({
   }
 });
 
-test('a node: add from the registry or create inline, set a role, remove', async ({ page, request }) => {
+test('a node: add from the registry or create inline, with a role, remove', async ({ page, request }) => {
   const stamp = `${Date.now()}`;
   const node = await createNode(request, `e2e people project ${stamp}`, { node_type: 'project' });
   await wipePeople(request, stamp);
@@ -168,6 +168,7 @@ test('a node: add from the registry or create inline, set a role, remove', async
     const existing: Person = await (
       await request.post('/api/people', { data: { display_name: `e2e Grace ${stamp}`, company: 'Navy' } })
     ).json();
+    await request.post('/api/people', { data: { display_name: `e2e Hopper ${stamp}` } });
 
     await page.goto(`/nodes/${node.id}`);
     const section = page.getByTestId('node-people');
@@ -176,12 +177,20 @@ test('a node: add from the registry or create inline, set a role, remove', async
     const picker = section.getByRole('combobox', { name: 'Find or create a person' });
     await expect(picker).toBeFocused();
 
-    // From the registry.
+    // From the registry: picking asks for the optional Role and Note, then
+    // attaches with them in one motion (#162).
     await picker.fill(`Grace ${stamp}`);
     await expect(section.getByRole('option', { selected: true })).toContainText(`e2e Grace ${stamp}`);
     await page.keyboard.press('Enter');
+    const attach = section.getByTestId('person-attach');
+    await expect(attach).toContainText(`e2e Grace ${stamp}`);
+    // An input with a datalist is a combobox, not a textbox.
+    await expect(attach.getByRole('combobox', { name: 'Role' })).toBeFocused();
+    await attach.getByRole('combobox', { name: 'Role' }).fill('Approver');
+    await page.keyboard.press('Enter');
     const rows = section.getByTestId('node-person');
     await expect(rows).toHaveCount(1);
+    await expect(rows.first().getByTestId('member-role')).toHaveText('Approver');
 
     // Create inline when there's no match: the same editor, name filled in,
     // and saving adds the new person here.
@@ -192,15 +201,31 @@ test('a node: add from the registry or create inline, set a role, remove', async
     const dlg = page.getByRole('dialog', { name: 'New person' });
     await expect(dlg.getByRole('textbox', { name: 'Name' })).toHaveValue(`e2e Linus ${stamp}`);
     await dlg.getByRole('textbox', { name: 'Company' }).fill('Kernel');
+    // The membership's own block, apart from the person's fields.
+    const onNode = dlg.getByRole('group', { name: 'On this node' });
+    await onNode.getByRole('combobox', { name: 'Role' }).fill('Maintainer');
+    await onNode.getByRole('textbox', { name: 'Note' }).fill('owns the kernel');
     await dlg.getByRole('button', { name: 'Save' }).click();
     await expect(dlg).toHaveCount(0);
     await expect(rows).toHaveCount(2);
-    await expect(rows.filter({ hasText: `e2e Linus ${stamp}` })).toContainText('Kernel');
+    const linus = rows.filter({ hasText: `e2e Linus ${stamp}` });
+    await expect(linus).toContainText('Kernel');
+    await expect(linus.getByTestId('member-role')).toHaveText('Maintainer');
+    await expect(linus).toContainText('owns the kernel');
 
-    // Role on the membership.
+    // Back from the attach step returns to the search, nothing attached.
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await section.getByRole('combobox', { name: 'Find or create a person' }).fill(`Hopper ${stamp}`);
+    await expect(section.getByRole('option', { selected: true })).toContainText(`e2e Hopper ${stamp}`);
+    await page.keyboard.press('Enter');
+    await section.getByTestId('person-attach').getByRole('button', { name: 'Back' }).click();
+    await expect(section.getByRole('combobox', { name: 'Find or create a person' })).toBeFocused();
+    await section.getByRole('button', { name: 'Cancel' }).click();
+    await expect(rows).toHaveCount(2);
+
+    // The row editor still changes the role later.
     const grace = rows.filter({ hasText: `e2e Grace ${stamp}` });
     await grace.getByRole('button', { name: 'Edit role and note' }).click();
-    // An input with a datalist is a combobox, not a textbox.
     await grace.getByRole('combobox', { name: 'Role' }).fill('Sponsor');
     await grace.getByRole('button', { name: 'Save' }).click();
     await expect(grace.getByTestId('member-role')).toHaveText('Sponsor');

@@ -7,7 +7,7 @@
 //! Only the node's own owner can add, edit or remove, and the picker offers
 //! only their own registry.
 
-use common::id::NodeId;
+use common::id::{NodeId, PersonId};
 use common::person::{
     MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput, matches, primary,
 };
@@ -21,6 +21,75 @@ use crate::components::toast::{ToastLevel, push_toast};
 
 const INPUT_CLASS: &str = "w-full text-xs bg-stone-100 dark:bg-stone-800 text-stone-800 \
      dark:text-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500";
+
+/// What is typed for a membership (its role and note), as opposed to the
+/// person's own card. Shared by the row editor and both attach paths
+/// (#162), so the role is captured when it's known: at attach time.
+#[derive(Clone, Copy)]
+pub struct MembershipDraft {
+    pub role: RwSignal<String>,
+    pub note: RwSignal<String>,
+    /// The `<datalist>` of the owner's roles, for suggestions.
+    pub roles_list_id: StoredValue<String>,
+}
+
+impl MembershipDraft {
+    pub fn new(roles_list_id: StoredValue<String>) -> Self {
+        Self {
+            role: RwSignal::new(String::new()),
+            note: RwSignal::new(String::new()),
+            roles_list_id,
+        }
+    }
+
+    pub fn clear(&self) {
+        self.role.set(String::new());
+        self.note.set(String::new());
+    }
+
+    pub fn is_blank(&self) -> bool {
+        self.role.with_untracked(|r| r.trim().is_empty())
+            && self.note.with_untracked(|n| n.trim().is_empty())
+    }
+
+    pub fn input(&self, person_id: PersonId) -> MembershipInput {
+        MembershipInput::from_typed(
+            person_id,
+            &self.role.get_untracked(),
+            &self.note.get_untracked(),
+        )
+    }
+}
+
+/// The Role (with suggestions) and Note fields of a membership.
+#[component]
+pub fn MembershipFields(
+    draft: MembershipDraft,
+    /// Focus the Role field on mount.
+    #[prop(optional)]
+    autofocus: bool,
+) -> impl IntoView {
+    let role_ref: NodeRef<leptos::html::Input> = NodeRef::new();
+    Effect::new(move |_| {
+        if autofocus && let Some(el) = role_ref.get() {
+            let _ = el.focus();
+        }
+    });
+    let MembershipDraft {
+        role,
+        note,
+        roles_list_id,
+    } = draft;
+    view! {
+        <input type="text" node_ref=role_ref class=INPUT_CLASS
+            placeholder="Role here (sponsor, approver\u{2026})"
+            aria-label="Role" list=roles_list_id.get_value()
+            prop:value=move || role.get() on:input=move |ev| role.set(event_target_value(&ev)) />
+        <textarea rows="2" class=INPUT_CLASS placeholder="Note about them on this node\u{2026}"
+            aria-label="Note"
+            prop:value=move || note.get() on:input=move |ev| note.set(event_target_value(&ev)) />
+    }
+}
 
 #[component]
 pub fn NodePeoplePanel(
@@ -77,17 +146,16 @@ pub fn NodePeoplePanel(
     // new person also adds them here.
     let editor_open = RwSignal::new(false);
     let prefill = RwSignal::new(String::new());
+    // The editor's "On this node" block: the membership, saved in the same
+    // motion as the person (#162).
+    let new_membership = MembershipDraft::new(roles_list_id);
     let on_create = Callback::new(move |name: String| {
         prefill.set(name);
         editor_open.set(true);
     });
     let on_created = Callback::new(move |p: Person| {
+        let input = new_membership.input(p.id);
         wasm_bindgen_futures::spawn_local(async move {
-            let input = MembershipInput {
-                person_id: p.id,
-                role: None,
-                note: None,
-            };
             match crate::api::add_node_person(node_id, &input).await {
                 Ok(_) => on_added.run(()),
                 Err(e) => push_toast(ToastLevel::Error, format!("Couldn't add: {e}")),
@@ -99,7 +167,7 @@ pub fn NodePeoplePanel(
         <SectionShell section=NodeSection::People open=open count=count actions=actions>
             <PersonEditor open=editor_open target=EditorTarget::New
                 initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
-                on_saved=on_created />
+                membership=new_membership on_saved=on_created />
             <datalist id=roles_list_id.get_value()>
                 {move || roles.get().unwrap_or_default().into_iter().map(|r| view! {
                     <option value=r.role />
@@ -113,7 +181,8 @@ pub fn NodePeoplePanel(
                     .into_iter()
                     .map(|m| m.person_id)
                     .collect();
-                view! { <PersonPicker node_id=node_id taken=taken on_added=on_added on_create=on_create /> }
+                view! { <PersonPicker node_id=node_id taken=taken roles_list_id=roles_list_id
+                    on_added=on_added on_create=on_create /> }
             })}
             <Suspense fallback=|| view! { <p class="text-xs text-stone-400">"Loading\u{2026}"</p> }>
                 {move || {
@@ -151,8 +220,12 @@ fn MemberRow(
     let navigate = StoredValue::new(use_navigate());
     let id = member.id;
     let editing = RwSignal::new(false);
-    let role = RwSignal::new(member.role.clone().unwrap_or_default());
-    let note = RwSignal::new(member.note.clone().unwrap_or_default());
+    let draft = MembershipDraft {
+        role: RwSignal::new(member.role.clone().unwrap_or_default()),
+        note: RwSignal::new(member.note.clone().unwrap_or_default()),
+        roles_list_id: StoredValue::new(roles_list_id),
+    };
+    let MembershipDraft { role, note, .. } = draft;
     let person_id = member.person_id;
     let card = member.person.clone();
     let subtitle = card
@@ -227,12 +300,7 @@ fn MemberRow(
                 })}
                 {move || editing.get().then(|| view! {
                     <form class="space-y-1.5 pt-1" on:submit=move |ev| { ev.prevent_default(); save(); }>
-                        <input type="text" class=INPUT_CLASS placeholder="Role here (sponsor, approver\u{2026})"
-                            aria-label="Role" list=roles_list_id.clone()
-                            prop:value=move || role.get() on:input=move |ev| role.set(event_target_value(&ev)) />
-                        <textarea rows="2" class=INPUT_CLASS placeholder="Note about them on this node\u{2026}"
-                            aria-label="Note"
-                            prop:value=move || note.get() on:input=move |ev| note.set(event_target_value(&ev)) />
+                        <MembershipFields draft=draft />
                         // ✓ / ✕, like the task editors' inline Save and Cancel.
                         <div class="flex gap-1">
                             <IconButton icon="check" label="Save" variant=IconButtonVariant::Save
@@ -273,7 +341,8 @@ enum Pick {
 fn PersonPicker(
     node_id: NodeId,
     /// People already on the node (not offered again).
-    taken: Vec<common::id::PersonId>,
+    taken: Vec<PersonId>,
+    roles_list_id: StoredValue<String>,
     #[prop(into)] on_added: Callback<()>,
     /// "Create “…”": open the person editor with this name.
     #[prop(into)]
@@ -283,7 +352,7 @@ fn PersonPicker(
         "person-picker-{}",
         NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
-    let list_id = format!("{base}-list");
+    let list_id = StoredValue::new(format!("{base}-list"));
     let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
     let query = RwSignal::new(String::new());
     let registry = LocalResource::new(|| crate::api::fetch_people(None));
@@ -312,6 +381,10 @@ fn PersonPicker(
         active.set((!empty).then_some(0));
     });
     let busy = RwSignal::new(false);
+    // An existing person, picked: the optional Role and Note come next,
+    // before attaching (#162). Blank attaches exactly as before.
+    let chosen = RwSignal::new(None::<Person>);
+    let membership = MembershipDraft::new(roles_list_id);
     let input_ref: NodeRef<leptos::html::Input> = NodeRef::new();
     Effect::new(move |_| {
         if let Some(el) = input_ref.get() {
@@ -323,28 +396,26 @@ fn PersonPicker(
         let Some(choice) = options.with_untracked(|o| o.get(i).cloned()) else {
             return;
         };
-        let person_id = match choice {
+        match choice {
             // A new person goes through the full editor first.
-            Pick::Create(name) => {
-                on_create.run(name);
-                return;
+            Pick::Create(name) => on_create.run(name),
+            Pick::Existing(p) => {
+                membership.clear();
+                chosen.set(Some(p));
             }
-            Pick::Existing(p) => p.id,
+        }
+    };
+    let attach = move || {
+        let Some(person) = chosen.get_untracked() else {
+            return;
         };
         if busy.get_untracked() {
             return;
         }
         busy.set(true);
+        let input = membership.input(person.id);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::add_node_person(
-                node_id,
-                &MembershipInput {
-                    person_id,
-                    role: None,
-                    note: None,
-                },
-            )
-            .await;
+            let result = crate::api::add_node_person(node_id, &input).await;
             busy.try_set(false);
             match result {
                 Ok(_) => on_added.run(()),
@@ -378,8 +449,53 @@ fn PersonPicker(
         _ => {}
     };
 
-    let list_id_attr = list_id.clone();
+    // Back to the search: it remounts, with the query kept, and the focus
+    // effect above puts the caret back in it.
+    let back = move || chosen.set(None);
+    // Escape steps back to the search; Ctrl/⌘+Enter attaches from the note.
+    let on_confirm_key = move |ev: leptos::ev::KeyboardEvent| match ev.key().as_str() {
+        "Escape" => {
+            ev.prevent_default();
+            ev.stop_propagation();
+            back();
+        }
+        "Enter" if ev.ctrl_key() || ev.meta_key() => {
+            ev.prevent_default();
+            attach();
+        }
+        _ => {}
+    };
+
     view! {
+        <Show when=move || chosen.with(Option::is_some)>
+            <form class="mb-2 space-y-1.5 rounded-lg border border-stone-200 dark:border-stone-800 p-2"
+                data-testid="person-attach"
+                on:submit=move |ev| { ev.prevent_default(); attach(); }
+                on:keydown=on_confirm_key>
+                <div class="flex items-center gap-2 text-xs text-stone-700 dark:text-stone-300">
+                    <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">"person"</span>
+                    <span class="font-medium truncate">{move || chosen.with(|c| c.as_ref().map(|p| p.display_name.clone()))}</span>
+                    <span class="ml-auto text-stone-400">"On this node (optional)"</span>
+                </div>
+                <MembershipFields draft=membership autofocus=true />
+                <div class="flex justify-end gap-2">
+                    <button type="button"
+                        class="px-2 py-1 rounded-lg text-xs text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+                        on:click=move |_| back()>
+                        "Back"
+                    </button>
+                    // A form's commit button: icon + word.
+                    <button type="submit"
+                        class="px-2.5 py-1 rounded-lg text-xs font-medium bg-ember hover:bg-ember-strong text-white
+                            disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-1"
+                        disabled=move || busy.get()>
+                        <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"person_add"</span>
+                        "Add"
+                    </button>
+                </div>
+            </form>
+        </Show>
+        <Show when=move || chosen.with(Option::is_none)>
         <div class="relative mb-2" data-testid="person-picker">
             <input
                 node_ref=input_ref
@@ -387,7 +503,7 @@ fn PersonPicker(
                 role="combobox"
                 aria-label="Find or create a person"
                 aria-autocomplete="list"
-                aria-controls=list_id_attr
+                aria-controls=list_id.get_value()
                 aria-expanded="true"
                 aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
                 placeholder="Find or create a person\u{2026}"
@@ -396,7 +512,7 @@ fn PersonPicker(
                 on:input=move |ev| query.set(event_target_value(&ev))
                 on:keydown=on_keydown
             />
-            <div id=list_id role="listbox" aria-label="People" class="mt-1 max-h-56 overflow-y-auto">
+            <div id=list_id.get_value() role="listbox" aria-label="People" class="mt-1 max-h-56 overflow-y-auto">
                 {move || options.get().into_iter().enumerate().map(|(i, o)| {
                     let (label, detail, icon) = match &o {
                         Pick::Existing(p) => (
@@ -427,5 +543,6 @@ fn PersonPicker(
                 }).collect_view()}
             </div>
         </div>
+        </Show>
     }
 }

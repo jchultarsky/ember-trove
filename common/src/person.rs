@@ -407,6 +407,23 @@ pub struct MembershipInput {
     pub note: Option<String>,
 }
 
+impl MembershipInput {
+    /// A membership from what was typed in an attach flow (#162): blank
+    /// fields mean none, so leaving the Role and Note empty attaches
+    /// exactly as before. The API still validates (`normalize_membership`).
+    pub fn from_typed(person_id: PersonId, role: &str, note: &str) -> Self {
+        let filled = |s: &str| {
+            let t = s.trim();
+            (!t.is_empty()).then(|| t.to_string())
+        };
+        Self {
+            person_id,
+            role: filled(role),
+            note: filled(note),
+        }
+    }
+}
+
 /// Change a membership's role or note (the person stays the same).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct MembershipUpdate {
@@ -562,6 +579,28 @@ pub fn matches(p: &Person, q: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn membership_from_typed_blank_is_todays_attach() {
+        let id = PersonId::new();
+        let m = MembershipInput::from_typed(id, "  ", "\n\t");
+        assert_eq!(
+            m,
+            MembershipInput {
+                person_id: id,
+                role: None,
+                note: None,
+            }
+        );
+    }
+
+    #[test]
+    fn membership_from_typed_trims_role_and_note() {
+        let id = PersonId::new();
+        let m = MembershipInput::from_typed(id, " Sponsor ", " met at kickoff\n");
+        assert_eq!(m.role.as_deref(), Some("Sponsor"));
+        assert_eq!(m.note.as_deref(), Some("met at kickoff"));
+    }
 
     fn cp(label: &str, value: &str, preferred: bool) -> ContactPoint {
         ContactPoint {

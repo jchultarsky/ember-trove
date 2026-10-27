@@ -6,6 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Set a person's Role and Note while attaching them to a node (#162).**
+  Picking someone from the People section's picker now opens a short
+  step with the optional Role (suggesting the roles you already use) and
+  Note; Enter attaches. Creating a new person from the section adds an
+  "On this node" block to the editor, set apart from the person's own
+  fields, so Save creates the person and attaches them with the role in
+  one motion. Leaving the fields blank attaches exactly as before, and
+  "Edit role and note" on the row still changes them later. Role and Note
+  travel in the existing `POST /api/nodes/{id}/people` body, so the API is
+  unchanged.
+
+### Changed
+- **Migration 039 drops the duplicate index on `nodes.owner_id`.** Migration
+  001 (`idx_nodes_owner`) and 021 (`nodes_owner_id_idx`) indexed the same
+  column, so every node write maintained two identical btrees. The 001
+  index stays, so owner-scoped queries use the same plan as before.
+
+### Documentation
+- **Roadmap trimmed.** The finished 2026-07-17 plan of record is condensed
+  into a short closed summary, stale "in progress" markers are gone, and
+  the remaining refactors carry fresh counts. Further local-auth work and
+  the ontology session are recorded as deferred (owner decision
+  2026-10-26). Zero-AWS local login itself already ships (PR #43).
+
 ### Fixed
 - **The node editor no longer hides a stuck save, or drops its edit on
   reload (#161).** A save in flight for 5 s now reads "Still saving…". At
@@ -26,19 +51,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   someone else's text. Logout removes every edit draft and stops new ones
   being written for the rest of that page. The tradeoff: a save still
   pending at logout is lost.
-
-### Changed
-- **Migration 039 drops the duplicate index on `nodes.owner_id`.** Migration
-  001 (`idx_nodes_owner`) and 021 (`nodes_owner_id_idx`) indexed the same
-  column, so every node write maintained two identical btrees. The 001
-  index stays, so owner-scoped queries use the same plan as before.
-
-### Documentation
-- **Roadmap trimmed.** The finished 2026-07-17 plan of record is condensed
-  into a short closed summary, stale "in progress" markers are gone, and
-  the remaining refactors carry fresh counts. Further local-auth work and
-  the ontology session are recorded as deferred (owner decision
-  2026-10-26). Zero-AWS local login itself already ships (PR #43).
 
 ## [2.39.0] - 2026-10-26
 
