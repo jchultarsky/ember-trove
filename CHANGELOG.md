@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.40.0] - 2026-10-27
+
 ### Added
 - **Set a person's Role and Note while attaching them to a node (#162).**
   Picking someone from the People section's picker now opens a short
