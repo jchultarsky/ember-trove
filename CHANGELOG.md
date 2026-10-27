@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Set a person's Role and Note while attaching them to a node (#162).**
+  Picking someone from the People section's picker now opens a short
+  step with the optional Role (suggesting the roles you already use) and
+  Note; Enter attaches. Creating a new person from the section adds an
+  "On this node" block to the editor, set apart from the person's own
+  fields, so Save creates the person and attaches them with the role in
+  one motion. Leaving the fields blank attaches exactly as before, and
+  "Edit role and note" on the row still changes them later. Role and Note
+  travel in the existing `POST /api/nodes/{id}/people` body, so the API is
+  unchanged.
+
 ### Fixed — stalled and failed saves are visible, and unsaved edits survive (#161)
 - **A stalled save is no longer an endless "Saving…".** After 5 s the
   editor's label reads "Still saving…"; after 15 s it stops waiting and
