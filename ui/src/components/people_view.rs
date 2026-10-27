@@ -24,6 +24,8 @@ const INPUT_CLASS: &str = "w-full text-sm bg-stone-100 dark:bg-stone-800 text-st
      dark:text-stone-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 \
      focus:ring-amber-500";
 const LABEL_CLASS: &str = "block text-xs font-medium text-stone-500 dark:text-stone-400 mb-1";
+/// Helper text under a field, tied to it with `aria-describedby`.
+pub(crate) const HINT_CLASS: &str = "block mt-1 text-xs text-stone-500 dark:text-stone-400";
 
 /// `mailto:` / `tel:` href for a contact value. Phone links keep only what
 /// a dialer reads. Addresses have none: map links are out of scope (#155).
@@ -318,6 +320,7 @@ pub fn PersonEditor(
         EditorTarget::New => "person-editor-form-new",
         EditorTarget::Existing(_) => "person-editor-form-edit",
     };
+    let position_hint_id = StoredValue::new(format!("{form_id}-position-hint"));
     let title = match target {
         EditorTarget::New => "New person",
         EditorTarget::Existing(_) => "Edit person",
@@ -447,7 +450,18 @@ pub fn PersonEditor(
                 </label>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {field("Company", draft.company)}
-                    {field("Position", draft.position)}
+                    // Position is the person's, Role the membership's (#147); the
+                    // hint says so while typing, which a placeholder can't (#182).
+                    <label class="block">
+                        <span class=LABEL_CLASS>"Position"</span>
+                        <input type="text" class=INPUT_CLASS
+                            aria-describedby=position_hint_id.get_value()
+                            prop:value=move || draft.position.get()
+                            on:input=move |ev| draft.position.set(event_target_value(&ev)) />
+                        <span id=position_hint_id.get_value() class=HINT_CLASS>
+                            "Their job title \u{2014} stays with the person on every node."
+                        </span>
+                    </label>
                 </div>
                 <ContactListEditor kind=ContactKind::Email points=draft.emails />
                 <ContactListEditor kind=ContactKind::Phone points=draft.phones />

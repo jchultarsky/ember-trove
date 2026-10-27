@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The person editor explains Position vs Role (#182).** Position now has
+  the hint "Their job title — stays with the person on every node.", and
+  every Role field (the attach step, "On this node" in the editor, and Edit
+  role and note) has "Their part in this node only." Both hints are tied to
+  their field with `aria-describedby`, so screen readers announce them too.
+  Text only: no schema or behavior change.
+
 ### Fixed
 - **Picker options answer an accessibility press (#174).** The person,
   Role, node and project-status pickers committed an option only on

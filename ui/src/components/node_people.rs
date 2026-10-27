@@ -17,7 +17,9 @@ use leptos_router::hooks::use_navigate;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::node_section::{NodeSection, SectionShell};
-use crate::components::people_view::{ContactAction, ContactKind, EditorTarget, PersonEditor};
+use crate::components::people_view::{
+    ContactAction, ContactKind, EditorTarget, HINT_CLASS, PersonEditor,
+};
 use crate::components::toast::{ToastLevel, push_toast};
 
 const INPUT_CLASS: &str = "w-full text-xs bg-stone-100 dark:bg-stone-800 text-stone-800 \
@@ -89,6 +91,7 @@ pub fn MembershipFields(
         NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let list_id = StoredValue::new(format!("{base}-list"));
+    let hint_id = StoredValue::new(format!("{base}-hint"));
     let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
     // Shown while typing; closed by a choice, Escape or leaving the field.
     let listing = RwSignal::new(false);
@@ -149,6 +152,7 @@ pub fn MembershipFields(
                 placeholder="Role here (sponsor, approver\u{2026})"
                 role="combobox" aria-label="Role" aria-autocomplete="list"
                 aria-controls=list_id.get_value()
+                aria-describedby=hint_id.get_value()
                 aria-expanded=move || if expanded() { "true" } else { "false" }
                 aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
                 autocomplete="off"
@@ -190,6 +194,10 @@ pub fn MembershipFields(
                     </div>
                 }).collect_view())}
             </div>
+            // The membership's half of Position vs Role (#147, #182).
+            <span id=hint_id.get_value() class=HINT_CLASS>
+                "Their part in this node only."
+            </span>
         </div>
         <textarea rows="2" class=INPUT_CLASS placeholder="Note about them on this node\u{2026}"
             aria-label="Note"
