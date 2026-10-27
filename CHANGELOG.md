@@ -31,6 +31,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   the ontology session are recorded as deferred (owner decision
   2026-10-26). Zero-AWS local login itself already ships (PR #43).
 
+### Fixed
+- **The node editor no longer hides a stuck save, or drops its edit on
+  reload (#161).** A save in flight for 5 s now reads "Still saving…". At
+  15 s the request is aborted, so it can't land later over a newer save, and
+  the editor shows a failure with **Retry**. A failed save also retries once
+  by itself when the browser comes back online. Until a save lands, the
+  edit is also kept in a local draft (written when the save starts, when it
+  fails, and on `beforeunload`, which covers the update banner's reload and
+  the 401 refresh reload behind #161's lost edit). Opening the node again
+  offers **Restore / Discard**, and a draft the server already has is
+  dropped without asking. The thresholds and the restore rule live in
+  `common::save_watch`.
+
+### Security
+- **Edit drafts are scoped to the user and wiped on logout (#161).** The
+  new drafts hold node content in `localStorage`, so the key includes the
+  user's subject: another account in the same browser is never offered
+  someone else's text. Logout removes every edit draft and stops new ones
+  being written for the rest of that page. The tradeoff: a save still
+  pending at logout is lost.
+
 ## [2.39.0] - 2026-10-26
 
 ### Changed — addresses are a list, like emails and phones (#155)
