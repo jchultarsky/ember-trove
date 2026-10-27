@@ -5,6 +5,15 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-27)
 
+- **v2.41.0 shipped: draft staleness and expiry (#161 gaps; PR #168).**
+  - **Restore says when the node changed since.** Edit drafts carry
+    `base_fps` (the editor's `own_fps`); the offer warns that restoring
+    replaces a change made elsewhere (it stays in History; History keeps
+    bodies only). v2.40.0 drafts say the node *may* have changed.
+  - **Drafts expire 14 days after their last write** (`DRAFT_TTL_MS`). An
+    expired draft is never offered, and a startup sweep removes every
+    account's expired drafts; unstamped v2.40.0 drafts get dated, not lost.
+
 - **v2.40.0 shipped: honest saves (#161; PRs #164, #167), Role and Note at
   attach (#162; PRs #163, #165), and migration 039 (#160).**
   - **Node saves can't stall silently.** "Still saving…" at 5 s; at 15 s
@@ -511,8 +520,8 @@ release entries above and in git history.
   - On a 401, the API client reloads the page instead of retrying the
     request (`api::handle_error_response`). Drafts and the give-up now make
     this safe, but a retry would avoid the reload.
-  - An edit draft's restore offer doesn't say if the node changed since the
-    draft was taken (no base fingerprint), and drafts never expire.
+  - ~~Restore offer silent about a node changed since the draft; drafts
+    never expire~~: fixed in v2.41.0.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
   not a repo deliverable).
 - **Deferred by owner decision (2026-10-26), not critical:**
