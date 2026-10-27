@@ -253,7 +253,8 @@ fn excerpt_sanitizer() -> ammonia::Builder<'static> {
 /// links and wiki-links become inert styled text; task-list markers become
 /// ☐ / ☑; a table collapses to its header cells joined by " · ". Images, code
 /// blocks, rules, footnotes and raw HTML are dropped. Rendering stops at the
-/// first top-level block boundary past [`EXCERPT_BUDGET`] characters.
+/// first top-level block boundary or list item past [`EXCERPT_BUDGET`]
+/// characters, so a body that is one long list is cut short too.
 pub fn render_excerpt(source: &str) -> Option<String> {
     let prepared = excerpt_wikilinks(source);
     let mut out: Vec<Event> = Vec::new();
@@ -263,6 +264,9 @@ pub fn render_excerpt(source: &str) -> Option<String> {
     let mut in_table_head = false;
     let mut head_cells = 0usize;
     let mut text_len = 0usize;
+    // Closers of the tags emitted and still open, innermost last, so a cut
+    // inside a list can close everything it opened.
+    let mut open: Vec<Event> = Vec::new();
 
     for ev in Parser::new_ext(&prepared, MD_OPTIONS) {
         match &ev {
@@ -283,12 +287,24 @@ pub fn render_excerpt(source: &str) -> Option<String> {
                 | Tag::Item
                 | Tag::Emphasis
                 | Tag::Strong
-                | Tag::Strikethrough => Some(Event::Start(tag)),
-                Tag::Heading { .. } => Some(Event::Html("<p><strong>".into())),
-                Tag::Link { .. } => Some(Event::Html(
-                    format!(r#"<span class="{EXCERPT_LINK_CLASS}">"#).into(),
-                )),
-                Tag::Table(_) => Some(Event::Html("<p>".into())),
+                | Tag::Strikethrough => {
+                    open.push(Event::End(tag.to_end()));
+                    Some(Event::Start(tag))
+                }
+                Tag::Heading { .. } => {
+                    open.push(Event::Html("</strong></p>".into()));
+                    Some(Event::Html("<p><strong>".into()))
+                }
+                Tag::Link { .. } => {
+                    open.push(Event::Html("</span>".into()));
+                    Some(Event::Html(
+                        format!(r#"<span class="{EXCERPT_LINK_CLASS}">"#).into(),
+                    ))
+                }
+                Tag::Table(_) => {
+                    open.push(Event::Html("</p>".into()));
+                    Some(Event::Html("<p>".into()))
+                }
                 Tag::TableHead => {
                     in_table_head = true;
                     head_cells = 0;
@@ -312,10 +328,10 @@ pub fn render_excerpt(source: &str) -> Option<String> {
                 | TagEnd::Item
                 | TagEnd::Emphasis
                 | TagEnd::Strong
-                | TagEnd::Strikethrough => Some(Event::End(end)),
-                TagEnd::Heading(_) => Some(Event::Html("</strong></p>".into())),
-                TagEnd::Link => Some(Event::Html("</span>".into())),
-                TagEnd::Table => Some(Event::Html("</p>".into())),
+                | TagEnd::Strikethrough
+                | TagEnd::Heading(_)
+                | TagEnd::Link
+                | TagEnd::Table => open.pop(),
                 TagEnd::TableHead => {
                     in_table_head = false;
                     None
@@ -337,8 +353,10 @@ pub fn render_excerpt(source: &str) -> Option<String> {
             // Raw HTML, rules, footnote refs, math: not in a card.
             _ => None,
         };
+        let item_done = matches!(mapped, Some(Event::End(TagEnd::Item)));
         out.extend(mapped);
-        if depth == 0 && text_len >= EXCERPT_BUDGET {
+        if text_len >= EXCERPT_BUDGET && (depth == 0 || item_done) {
+            out.extend(open.drain(..).rev());
             break;
         }
     }
@@ -457,5 +475,31 @@ mod tests {
         // A short body is rendered whole.
         let short = render_excerpt("one\n\ntwo").unwrap();
         assert!(short.contains("two"), "{short}");
+    }
+
+    #[test]
+    fn excerpt_of_one_long_list_stops_at_an_item_past_the_budget() {
+        // A body that is a single long list (a big task list) has no
+        // top-level boundary until its end; it must still be cut short.
+        let items: String = (0..500).map(|i| format!("- [ ] task {i}\n")).collect();
+        let html = render_excerpt(&format!("{items}- LAST")).unwrap();
+        assert!(!html.contains("LAST"), "the whole list was rendered");
+        assert!(html.len() < 4_000, "{} bytes", html.len());
+        // Cut at an item boundary, with every open tag closed.
+        assert!(html.trim_end().ends_with("</li>\n</ul>"), "{html}");
+        // The same inside a nested list: both lists are closed.
+        let nested: String = (0..500).map(|i| format!("  - sub {i}\n")).collect();
+        let html = render_excerpt(&format!("- top\n{nested}- LAST")).unwrap();
+        assert!(!html.contains("LAST"), "the whole list was rendered");
+        assert_eq!(
+            html.matches("<ul>").count(),
+            html.matches("</ul>").count(),
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("<li>").count(),
+            html.matches("</li>").count(),
+            "{html}"
+        );
     }
 }
