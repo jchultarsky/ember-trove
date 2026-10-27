@@ -132,6 +132,17 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
+            # Free space before the pull. Images the running containers use
+            # are kept, so a failed deploy below still has them. A full disk
+            # failed the v2.41.0 pull (2026-10-27): the old cleanup only ran
+            # after a healthy deploy, so once the disk filled no deploy got
+            # that far.
+            echo "=== Freeing disk before pull ==="
+            df -h / | tail -1
+            docker image prune -a -f >/dev/null || true
+            docker builder prune -a -f >/dev/null || true
+            df -h / | tail -1
+
             echo "=== Pulling pre-built images for ${TAG} ==="
             docker pull "${API_IMAGE}:${TAG}"
             docker pull "${UI_IMAGE}:${TAG}"
@@ -162,5 +173,11 @@ jobs:
               fi
             done
 
+            # Healthy: drop every image no container uses, tagged ones
+            # included (without -a, prune removed only dangling images, and
+            # each release's ~300 MB stayed on disk). Rolling back pulls the
+            # previous tag from GHCR again.
             echo "=== Cleaning up old images ==="
-            docker image prune -f --filter "until=24h" || true
+            docker image prune -a -f || true
+            docker builder prune -a -f || true
+            df -h / | tail -1

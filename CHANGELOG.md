@@ -6,6 +6,55 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.42.0] - 2026-10-27
+
+### Changed
+- **The sidebar's Tasks, Notes and People no longer look like a node's own
+  sections (#173).** The sidebar stays global. A node page's Notes section
+  now shows `notes` instead of the sidebar's `sticky_note_2`, and its People
+  section shows `person` instead of `group` (Tasks already differed). A small
+  "Workspace" caption sits above the sidebar's global entries and is hidden
+  when the sidebar is collapsed. A unit test keeps the icons apart.
+- **Member cards show every email and phone (#172).** A node's People list
+  showed only the preferred email and phone, so a second number looked like
+  it was never recorded. Cards now list up to three of each, preferred
+  first, and a "+n more" link to the person page counts the rest
+  (`common::person::card_contacts`).
+
+### Fixed
+- **A membership's Role saves what you typed (#171).** The Role field used
+  the browser's datalist, which could save a suggestion's spelling ("abc")
+  over the typed text ("ABC") without a sign, and kept Cmd/Ctrl+A from
+  selecting the field. It is now the app's own combobox: suggestions are
+  only offered (a different casing included), a suggestion is committed
+  only when chosen by click or by ↑/↓ then Enter, and it shows in the field
+  before saving. Every other key, select-all included, is the input's.
+- **An expired session no longer reloads the page.** When a call got a 401,
+  the app refreshed the session and then reloaded the whole page, losing
+  scroll position, open dialogs and anything not yet saved. It now renews the
+  session and re-sends the call in place (`api::send_authed`). A refresh
+  that gets no answer (offline, 5xx, or no reply within 10 s) is an ordinary
+  error with Retry, not a trip to the login page. Only a refused refresh, or
+  a second 401 on the new session, goes to login.
+
+### Security
+- **Concurrent 401s share one session refresh.** Every call that got a 401
+  at the same moment used to start its own refresh. The server rotates the
+  refresh token, so the second of two racing refreshes could be refused and
+  log the user out. One refresh is now shared (`common::session_retry`), and
+  a call sent before a finished refresh just re-sends. Re-sending is safe for
+  writes because the API rejects an unauthenticated call before any handler
+  runs; no token is ever handled by the UI (the cookies stay httpOnly).
+
+### Tooling
+- **`refresh-icon-font.sh` also collects `*_ICON` consts** (#173), so a glyph
+  named only in a const still lands in the font subset.
+- **Deploys can no longer fill the production disk.** The release deploy
+  removed only untagged images, so every release's images, plus build cache,
+  piled up until the v2.41.0 pull failed on a full disk. It now prunes unused
+  images and build cache before pulling and again after a healthy deploy;
+  images the running containers use are kept.
+
 ## [2.41.0] - 2026-10-27
 
 ### Fixed

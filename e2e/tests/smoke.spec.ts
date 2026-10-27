@@ -22,6 +22,21 @@ test.describe('app shell', () => {
     await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible();
   });
 
+  // #173: a caption marks the sidebar's Tasks / Notes / People as global,
+  // not the node page's sections of the same names. CSS uppercases it; the
+  // DOM text is "Workspace". Collapsing the sidebar hides it.
+  test('captions the global sidebar entries; hidden when collapsed', async ({ page }) => {
+    await page.goto('/tasks/my-day');
+    const caption = page.getByTestId('sidebar-caption-workspace');
+    await expect(caption).toHaveText('Workspace');
+    await expect(caption).toBeVisible();
+
+    await page.locator('button[title="Collapse sidebar"]').click();
+    await expect(caption).toHaveCount(0);
+    await page.locator('button[title="Expand sidebar"]').click();
+    await expect(caption).toBeVisible();
+  });
+
   // The suite must run under an eval-free CSP, or the `cspViolations`
   // fixture proves nothing. WebAssembly needs only 'wasm-unsafe-eval'.
   test('is served with an eval-free CSP', async ({ page }) => {

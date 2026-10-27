@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-27)
 
+- **v2.42.0 shipped: session renewal in place (#161 gap; PR #176), member
+  card contacts (#172; PR #177), Role combobox (#171; PR #179), sidebar vs
+  section labels (#173; PR #181), deploy image cleanup (PR #169).**
+  - **A 401 renews the session and re-sends the call, no reload.** Every
+    call goes through `api::send_authed`; concurrent 401s share one refresh
+    (`common::session_retry::RefreshGate`), and an unanswered refresh (10 s)
+    is an ordinary error, not a logout.
+  - **Release deploys prune unused images and build cache** before the pull
+    and after a healthy deploy (the v2.41.0 full-disk failure). Never volumes.
+
 - **v2.41.0 shipped: draft staleness and expiry (#161 gaps; PR #168).**
   - **Restore says when the node changed since.** Edit drafts carry
     `base_fps` (the editor's `own_fps`); the offer warns that restoring
@@ -517,9 +527,9 @@ release entries above and in git history.
   19 specs today; grow them alongside new UI surfaces, and keep pushing pure
   logic into `common/` for unit coverage.
 - **Known gaps after #161 (not yet scheduled):**
-  - On a 401, the API client reloads the page instead of retrying the
-    request (`api::handle_error_response`). Drafts and the give-up now make
-    this safe, but a retry would avoid the reload.
+  - ~~On a 401 the API client reloads the page instead of retrying~~:
+    fixed in v2.42.0 (`api::send_authed`, one shared refresh, retry in
+    place).
   - ~~Restore offer silent about a node changed since the draft; drafts
     never expire~~: fixed in v2.41.0.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,

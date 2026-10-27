@@ -9,7 +9,8 @@
 
 use common::id::{NodeId, PersonId};
 use common::person::{
-    MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput, matches, primary,
+    CARD_CONTACTS, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
+    card_contacts, matches,
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -29,16 +30,16 @@ const INPUT_CLASS: &str = "w-full text-xs bg-stone-100 dark:bg-stone-800 text-st
 pub struct MembershipDraft {
     pub role: RwSignal<String>,
     pub note: RwSignal<String>,
-    /// The `<datalist>` of the owner's roles, for suggestions.
-    pub roles_list_id: StoredValue<String>,
+    /// The owner's roles, most used first, for suggestions.
+    pub roles: Signal<Vec<String>>,
 }
 
 impl MembershipDraft {
-    pub fn new(roles_list_id: StoredValue<String>) -> Self {
+    pub fn new(roles: Signal<Vec<String>>) -> Self {
         Self {
             role: RwSignal::new(String::new()),
             note: RwSignal::new(String::new()),
-            roles_list_id,
+            roles,
         }
     }
 
@@ -62,6 +63,13 @@ impl MembershipDraft {
 }
 
 /// The Role (with suggestions) and Note fields of a membership.
+///
+/// The Role is an APG combobox of our own, not an `<input list>` (#171):
+/// the browser's datalist could commit a suggestion's spelling ("abc") over
+/// what was typed ("ABC") and swallowed select-all. Here the typed text is
+/// what's saved; a suggestion is committed only when it's chosen, by click
+/// or by ↑/↓ then Enter, and it then shows in the field before any save.
+/// Every other key is left to the input.
 #[component]
 pub fn MembershipFields(
     draft: MembershipDraft,
@@ -75,16 +83,107 @@ pub fn MembershipFields(
             let _ = el.focus();
         }
     });
-    let MembershipDraft {
-        role,
-        note,
-        roles_list_id,
-    } = draft;
+    let MembershipDraft { role, note, roles } = draft;
+    let base = format!(
+        "role-combo-{}",
+        NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let list_id = StoredValue::new(format!("{base}-list"));
+    let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
+    // Shown while typing; closed by a choice, Escape or leaving the field.
+    let listing = RwSignal::new(false);
+    // Only the arrow keys set this, never typing or hover: Enter commits an
+    // option only when the user moved onto it.
+    let active = RwSignal::new(None::<usize>);
+    let options = Memo::new(move |_| {
+        roles.with(|r| common::picker::free_text_suggestions(&role.get(), r, 8))
+    });
+    let expanded = move || listing.get() && options.with(|o| !o.is_empty());
+    let close = move || {
+        listing.set(false);
+        active.set(None);
+    };
+    let choose = move |i: usize| {
+        let picked = options.with_untracked(|o| {
+            common::picker::free_text_commit(&role.get_untracked(), Some(i), o).to_string()
+        });
+        role.set(picked);
+        close();
+    };
+    let on_keydown = move |ev: leptos::ev::KeyboardEvent| match ev.key().as_str() {
+        "ArrowDown" | "ArrowUp" => {
+            let len = options.with_untracked(Vec::len);
+            if len > 0 {
+                ev.prevent_default();
+                listing.set(true);
+                active.set(common::picker::step(
+                    active.get_untracked(),
+                    len,
+                    ev.key() == "ArrowDown",
+                ));
+            }
+        }
+        // Plain Enter on a chosen option picks it; otherwise it falls through
+        // to the form (attach / save) with the typed text.
+        "Enter" if !(ev.ctrl_key() || ev.meta_key()) => {
+            if listing.get_untracked()
+                && let Some(i) = active.get_untracked()
+            {
+                ev.prevent_default();
+                ev.stop_propagation();
+                choose(i);
+            }
+        }
+        // Closing the list is this Escape's whole job: stopped, so the
+        // form, dialog or page doesn't also act on it.
+        "Escape" if listing.get_untracked() && options.with_untracked(|o| !o.is_empty()) => {
+            ev.prevent_default();
+            ev.stop_propagation();
+            close();
+        }
+        _ => {}
+    };
     view! {
-        <input type="text" node_ref=role_ref class=INPUT_CLASS
-            placeholder="Role here (sponsor, approver\u{2026})"
-            aria-label="Role" list=roles_list_id.get_value()
-            prop:value=move || role.get() on:input=move |ev| role.set(event_target_value(&ev)) />
+        <div>
+            <input type="text" node_ref=role_ref class=INPUT_CLASS
+                placeholder="Role here (sponsor, approver\u{2026})"
+                role="combobox" aria-label="Role" aria-autocomplete="list"
+                aria-controls=list_id.get_value()
+                aria-expanded=move || if expanded() { "true" } else { "false" }
+                aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
+                autocomplete="off"
+                prop:value=move || role.get()
+                on:input=move |ev| {
+                    role.set(event_target_value(&ev));
+                    active.set(None);
+                    listing.set(true);
+                }
+                on:click=move |_| listing.set(true)
+                on:blur=move |_| close()
+                on:keydown=on_keydown />
+            // In the flow, not floating: an open list never covers the
+            // fields below it.
+            <div id=list_id.get_value() role="listbox" aria-label="Role suggestions"
+                class="mt-1 max-h-40 overflow-y-auto"
+                class:hidden=move || !expanded()>
+                {move || expanded().then(|| options.get().into_iter().enumerate().map(|(i, o)| view! {
+                    <div
+                        id=opt_id.get_value()(i)
+                        role="option"
+                        aria-selected=move || if active.get() == Some(i) { "true" } else { "false" }
+                        class=move || format!(
+                            "px-2 py-1 rounded-lg text-xs cursor-pointer text-stone-700 \
+                             dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 {}",
+                            if active.get() == Some(i) { "bg-amber-50 dark:bg-stone-800" } else { "" }
+                        )
+                        // mousedown, not click: it lands before the input's blur.
+                        on:mousedown=move |ev: web_sys::MouseEvent| { ev.prevent_default(); choose(i); }
+                    >
+                        {o}
+                    </div>
+                }).collect_view())}
+            </div>
+        </div>
         <textarea rows="2" class=INPUT_CLASS placeholder="Note about them on this node\u{2026}"
             aria-label="Note"
             prop:value=move || note.get() on:input=move |ev| note.set(event_target_value(&ev)) />
@@ -115,8 +214,14 @@ pub fn NodePeoplePanel(
             Vec::new()
         }
     });
-    // Copy, so the section's child closures can all use it.
-    let roles_list_id = StoredValue::new(format!("people-roles-{node_id}"));
+    let role_names = Signal::derive(move || {
+        roles
+            .get()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| r.role)
+            .collect::<Vec<_>>()
+    });
 
     let count = Signal::derive(move || members.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
     let actions: ChildrenFn = std::sync::Arc::new(move || {
@@ -148,7 +253,7 @@ pub fn NodePeoplePanel(
     let prefill = RwSignal::new(String::new());
     // The editor's "On this node" block: the membership, saved in the same
     // motion as the person (#162).
-    let new_membership = MembershipDraft::new(roles_list_id);
+    let new_membership = MembershipDraft::new(role_names);
     let on_create = Callback::new(move |name: String| {
         prefill.set(name);
         editor_open.set(true);
@@ -168,11 +273,6 @@ pub fn NodePeoplePanel(
             <PersonEditor open=editor_open target=EditorTarget::New
                 initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
                 membership=new_membership on_saved=on_created />
-            <datalist id=roles_list_id.get_value()>
-                {move || roles.get().unwrap_or_default().into_iter().map(|r| view! {
-                    <option value=r.role />
-                }).collect_view()}
-            </datalist>
             {move || adding.get().then(|| {
                 let taken: Vec<_> = members
                     .get()
@@ -181,7 +281,7 @@ pub fn NodePeoplePanel(
                     .into_iter()
                     .map(|m| m.person_id)
                     .collect();
-                view! { <PersonPicker node_id=node_id taken=taken roles_list_id=roles_list_id
+                view! { <PersonPicker node_id=node_id taken=taken roles=role_names
                     on_added=on_added on_create=on_create /> }
             })}
             <Suspense fallback=|| view! { <p class="text-xs text-stone-400">"Loading\u{2026}"</p> }>
@@ -196,7 +296,7 @@ pub fn NodePeoplePanel(
                             <ul class="divide-y divide-stone-100 dark:divide-stone-800" data-testid="node-people-list">
                                 {list.into_iter().map(|m| view! {
                                     <MemberRow node_id=node_id member=m can_edit=can_edit
-                                        roles_list_id=roles_list_id.get_value()
+                                        roles=role_names
                                         on_change=Callback::new(move |()| refresh.update(|n| *n += 1)) />
                                 }).collect_view()}
                             </ul>
@@ -214,7 +314,7 @@ fn MemberRow(
     node_id: NodeId,
     member: MembershipView,
     can_edit: bool,
-    roles_list_id: String,
+    roles: Signal<Vec<String>>,
     #[prop(into)] on_change: Callback<()>,
 ) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
@@ -223,7 +323,7 @@ fn MemberRow(
     let draft = MembershipDraft {
         role: RwSignal::new(member.role.clone().unwrap_or_default()),
         note: RwSignal::new(member.note.clone().unwrap_or_default()),
-        roles_list_id: StoredValue::new(roles_list_id),
+        roles,
     };
     let MembershipDraft { role, note, .. } = draft;
     let person_id = member.person_id;
@@ -238,8 +338,17 @@ fn MemberRow(
                 .join(" \u{b7} ")
         })
         .unwrap_or_default();
-    let email = card.as_ref().and_then(|p| primary(&p.emails).cloned());
-    let phone = card.as_ref().and_then(|p| primary(&p.phones).cloned());
+    // Every email and phone, preferred first, up to CARD_CONTACTS each; the
+    // rest are counted in a "+n more" link to the person page (#172).
+    let (emails, more_emails) = card
+        .as_ref()
+        .map(|p| card_contacts(&p.emails, CARD_CONTACTS))
+        .unwrap_or_default();
+    let (phones, more_phones) = card
+        .as_ref()
+        .map(|p| card_contacts(&p.phones, CARD_CONTACTS))
+        .unwrap_or_default();
+    let more = more_emails + more_phones;
     let owns_card = card.is_some();
 
     let save = move || {
@@ -291,8 +400,15 @@ fn MemberRow(
                 </div>
                 {(!subtitle.is_empty()).then(|| view! { <div class="text-xs text-stone-500">{subtitle}</div> })}
                 <div class="flex flex-wrap gap-x-3">
-                    {email.map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> })}
-                    {phone.map(|p| view! { <ContactAction kind=ContactKind::Phone point=p /> })}
+                    {emails.into_iter().map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> }).collect_view()}
+                    {phones.into_iter().map(|p| view! { <ContactAction kind=ContactKind::Phone point=p /> }).collect_view()}
+                    {(more > 0).then(|| view! {
+                        <button type="button" class="text-xs text-stone-500 hover:text-amber-700 hover:underline cursor-pointer"
+                            data-testid="member-more-contacts"
+                            on:click=move |_| navigate.get_value()(&format!("/people/{person_id}"), Default::default())>
+                            {format!("+{more} more")}
+                        </button>
+                    })}
                 </div>
                 {move || (!editing.get()).then(|| {
                     let n = note.get();
@@ -342,7 +458,7 @@ fn PersonPicker(
     node_id: NodeId,
     /// People already on the node (not offered again).
     taken: Vec<PersonId>,
-    roles_list_id: StoredValue<String>,
+    roles: Signal<Vec<String>>,
     #[prop(into)] on_added: Callback<()>,
     /// "Create “…”": open the person editor with this name.
     #[prop(into)]
@@ -384,7 +500,7 @@ fn PersonPicker(
     // An existing person, picked: the optional Role and Note come next,
     // before attaching (#162). Blank attaches exactly as before.
     let chosen = RwSignal::new(None::<Person>);
-    let membership = MembershipDraft::new(roles_list_id);
+    let membership = MembershipDraft::new(roles);
     let input_ref: NodeRef<leptos::html::Input> = NodeRef::new();
     Effect::new(move |_| {
         if let Some(el) = input_ref.get() {

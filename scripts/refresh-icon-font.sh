@@ -25,6 +25,9 @@ for f in glob.glob('ui/src/**/*.rs', recursive=True):
     # icon="name" / icon: "name" props and fields
     for m in re.finditer(r'icon\s*[:=]\s*"([a-z][a-z0-9_]+)"', t):
         names.add(m.group(1))
+    # icon consts: `const NOTES_ICON: &str = "name"` (sidebar.rs, #173)
+    for m in re.finditer(r'_ICON\s*:\s*&(?:\x27static\s+)?str\s*=\s*"([a-z][a-z0-9_]+)"', t):
+        names.add(m.group(1))
     # the glyph inside a material-symbols-outlined span: every literal
     # between the end of its opening tag and </span>, so `aria-hidden="true"`
     # or a style attribute is never mistaken for the name, and both arms of an
