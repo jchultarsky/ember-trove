@@ -318,20 +318,10 @@ fn PermRow(
         let id: PermissionId = perm_id;
         leptos::task::spawn_local(async move {
             // Use the standalone DELETE /permissions/{id} route.
-            let resp = gloo_net::http::Request::delete(&crate::api::api_url(&format!(
-                "/permissions/{}",
-                id.0
-            )))
-            .send()
-            .await;
-            match resp {
-                Ok(r) if r.ok() => {
+            match crate::api::delete_empty(&format!("/permissions/{}", id.0)).await {
+                Ok(()) => {
                     push_toast(ToastLevel::Success, "Permission revoked.");
                     refresh.update(|n| *n += 1);
-                }
-                Ok(r) => {
-                    let status = r.status();
-                    push_toast(ToastLevel::Error, format!("Revoke failed ({status})."));
                 }
                 Err(e) => push_toast(ToastLevel::Error, format!("Revoke failed: {e}")),
             }

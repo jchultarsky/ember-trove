@@ -517,9 +517,9 @@ release entries above and in git history.
   19 specs today; grow them alongside new UI surfaces, and keep pushing pure
   logic into `common/` for unit coverage.
 - **Known gaps after #161 (not yet scheduled):**
-  - On a 401, the API client reloads the page instead of retrying the
-    request (`api::handle_error_response`). Drafts and the give-up now make
-    this safe, but a retry would avoid the reload.
+  - ~~On a 401 the API client reloads the page instead of retrying~~:
+    fixed for the next release (`api::send_authed`, one shared refresh,
+    retry in place).
   - ~~Restore offer silent about a node changed since the draft; drafts
     never expire~~: fixed in v2.41.0.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,

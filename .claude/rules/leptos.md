@@ -54,11 +54,18 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   and a plain `get_untracked` on a disposed signal panics. Real example: the
   save watchdog in `node_editor.rs` (#161).
 - **A watchdog must not wait for the request it watches** (#161 follow-up).
-  `api::handle_error_response` parks a 401'd call forever (refresh, then
-  reload), so aborting it does nothing. Give-up timers set the failure state
+  A call whose 401 ends in the login redirect parks forever
+  (`api::send_authed`), so aborting it does nothing. Give-up timers set the failure state
   and release the lock themselves, and late responses act only through
   `common::save_watch::SaveWatch`. Any path that reloads or redirects must
   assume in-memory edits are lost: keep a draft first.
+- **Every API call goes through `api::send_authed`** (#161 gap). On a 401
+  it renews the session once, shared by all calls that got a 401 meanwhile
+  (`common::session_retry::RefreshGate`), and re-sends the call in place:
+  no page reload. A new request builder belongs in `api/`, takes a `build`
+  closure (it runs again for the retry; keep the abort signal on it), and
+  never calls `.send()` itself. Only `/auth/me`, `/auth/refresh`, logout,
+  `/health` and change-password stay outside, on purpose.
 - **Editor drafts live under `common::save_watch` prefixes** (#161 gaps).
   A new kind of local draft uses a key `is_draft_key` recognises, so logout
   wipes it and the startup sweep expires it (`DRAFT_TTL_MS`, 14 days), and
