@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.41.0] - 2026-10-27
+
 ### Fixed
 - **Restoring an unsaved draft says when the node changed since (#161
   follow-up).** A draft now records the server text it started from. If
