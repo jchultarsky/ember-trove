@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Migration 039 drops the duplicate index on `nodes.owner_id`.** Migration
+  001 (`idx_nodes_owner`) and 021 (`nodes_owner_id_idx`) indexed the same
+  column, so every node write maintained two identical btrees. The 001
+  index stays, so owner-scoped queries use the same plan as before.
+
+### Documentation
+- **Roadmap trimmed.** The finished 2026-07-17 plan of record is condensed
+  into a short closed summary, stale "in progress" markers are gone, and
+  the remaining refactors carry fresh counts. Further local-auth work and
+  the ontology session are recorded as deferred (owner decision
+  2026-10-26). Zero-AWS local login itself already ships (PR #43).
+
 ## [2.39.0] - 2026-10-26
 
 ### Changed — addresses are a list, like emails and phones (#155)
