@@ -6,9 +6,16 @@
 //! locally instead: written (debounced) on every change, restored on the
 //! next visit to `/nodes/new`, and cleared on successful create.
 //!
+//! Edit mode keeps a draft too, for the edits a save hasn't landed yet
+//! (#161): written when a save starts, fails or the page unloads, removed
+//! once the server has them, offered back when the node is opened again.
+//! It is keyed by user and node (`common::save_watch::edit_draft_key`) and
+//! wiped on logout, because it holds node content on the device.
+//!
 //! All operations are infallible — a missing `localStorage` (private
 //! browsing, SSR) degrades to "no draft", same as `recent.rs`.
 
+use common::save_watch::{EDIT_DRAFT_PREFIX, EditDraft, edit_draft_key};
 use serde::{Deserialize, Serialize};
 
 const LS_KEY: &str = "ember_trove_create_draft";
@@ -69,6 +76,61 @@ pub fn clear_draft() {
         return;
     };
     let _ = storage.remove_item(LS_KEY);
+}
+
+// ── Edit-mode drafts (#161) ─────────────────────────────────────────────
+
+/// Set by [`clear_all_edit_drafts`] at logout. The logout redirect fires the
+/// editor's `beforeunload`, which would write the draft straight back, so
+/// once the user has logged out this page writes no more drafts.
+static LOGGED_OUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+/// Read this user's draft of `node_id`, if any.
+pub fn read_edit_draft(subject: &str, node_id: &str) -> Option<EditDraft> {
+    let raw = storage()?
+        .get_item(&edit_draft_key(subject, node_id))
+        .ok()
+        .flatten()?;
+    EditDraft::parse(&raw)
+}
+
+/// Keep unsaved edits of `node_id`. Silently no-ops on any storage error.
+pub fn write_edit_draft(subject: &str, node_id: &str, draft: &EditDraft) {
+    if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(draft)) {
+        let _ = s.set_item(&edit_draft_key(subject, node_id), &json);
+    }
+}
+
+/// Drop this user's draft of `node_id` (its edits reached the server, or
+/// the user discarded them).
+pub fn clear_edit_draft(subject: &str, node_id: &str) {
+    if let Some(s) = storage() {
+        let _ = s.remove_item(&edit_draft_key(subject, node_id));
+    }
+}
+
+/// Remove every edit-mode draft on this device, for any user, and stop
+/// writing new ones. Called on logout so node content doesn't outlive the
+/// session in `localStorage`.
+pub fn clear_all_edit_drafts() {
+    LOGGED_OUT.store(true, std::sync::atomic::Ordering::Relaxed);
+    let Some(s) = storage() else { return };
+    let len = s.length().unwrap_or(0);
+    // Collect first: removing while indexing shifts the keys.
+    let keys: Vec<String> = (0..len)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| k.starts_with(EDIT_DRAFT_PREFIX))
+        .collect();
+    for k in keys {
+        let _ = s.remove_item(&k);
+    }
 }
 
 #[cfg(test)]

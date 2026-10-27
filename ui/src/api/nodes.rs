@@ -99,6 +99,24 @@ pub async fn update_node(id: NodeId, req: &UpdateNodeRequest) -> Result<Node, Ui
     put_json(&format!("/nodes/{id}"), req).await
 }
 
+/// [`update_node`] that the caller can cancel: the node editor aborts a
+/// save that hangs past `common::save_watch::GIVE_UP_AFTER_MS` (#161), so a
+/// stuck request can't land later over a newer retry.
+pub async fn update_node_abortable(
+    id: NodeId,
+    req: &UpdateNodeRequest,
+    signal: Option<&web_sys::AbortSignal>,
+) -> Result<Node, UiError> {
+    let resp = Request::put(&api_url(&format!("/nodes/{id}")))
+        .abort_signal(signal)
+        .json(req)
+        .map_err(|e| UiError::Parse(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| UiError::Network(e.to_string()))?;
+    parse_json(resp).await
+}
+
 /// `GET /api/nodes/:id/neighbors` — nodes this node links to (outgoing edges).
 pub async fn fetch_neighbors(id: NodeId) -> Result<Vec<Node>, UiError> {
     get_json(&format!("/nodes/{id}/neighbors")).await

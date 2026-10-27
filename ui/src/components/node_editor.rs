@@ -1,6 +1,7 @@
 use common::{
     id::{NodeId, TemplateId},
     node::{CreateNodeRequest, NodeStatus, NodeType, UpdateNodeRequest},
+    save_watch::{DraftRecovery, EditDraft, GIVE_UP_AFTER_MS, STALL_AFTER_MS},
     template::{
         CreateBodySource, NodeTemplate, default_for_type, may_replace_body, picker_order,
         resolve_create_body,
@@ -40,6 +41,8 @@ enum SaveState {
     Dirty,
     /// A save is in flight.
     Saving,
+    /// A save has been in flight longer than `STALL_AFTER_MS` (#161).
+    Stalled,
     /// Persisted — server-side in edit mode, localStorage draft in create mode.
     Saved,
     /// Last save attempt failed; the edits are still held locally.
@@ -56,6 +59,7 @@ impl SaveState {
             (SaveState::Idle, _) => String::new(),
             (SaveState::Dirty, _) => "Unsaved changes\u{2026}".into(),
             (SaveState::Saving, _) => "Saving\u{2026}".into(),
+            (SaveState::Stalled, _) => "Still saving\u{2026}".into(),
             (SaveState::Saved, Some(at)) if edit_mode => format!("Saved \u{b7} {at}"),
             (SaveState::Saved, None) if edit_mode => "Saved".into(),
             (SaveState::Saved, _) => "Draft kept locally".into(),
@@ -65,7 +69,19 @@ impl SaveState {
 
     /// Pending states read a shade stronger than the settled "Saved".
     fn is_pending(self) -> bool {
-        matches!(self, SaveState::Dirty | SaveState::Saving)
+        matches!(
+            self,
+            SaveState::Dirty | SaveState::Saving | SaveState::Stalled
+        )
+    }
+}
+
+/// The editor snapshot as a storable edit-mode draft (#161).
+fn draft_of(snap: &Snapshot) -> EditDraft {
+    EditDraft {
+        title: snap.0.clone(),
+        body: snap.1.clone(),
+        status: snap.2.clone(),
     }
 }
 
@@ -184,6 +200,18 @@ mod tests {
         assert_eq!(SaveState::Saved.label(true, None), "Saved");
         assert_eq!(SaveState::Saved.label(false, None), "Draft kept locally");
         assert_eq!(SaveState::Idle.label(true, None), "");
+    }
+
+    #[test]
+    fn a_stalled_save_says_so_and_still_counts_as_pending() {
+        // #161: "saving", "saved" and "stuck" must read differently.
+        assert_eq!(SaveState::Stalled.label(true, None), "Still saving\u{2026}");
+        assert_ne!(
+            SaveState::Stalled.label(true, None),
+            SaveState::Saving.label(true, None)
+        );
+        assert!(SaveState::Stalled.is_pending());
+        assert!(!SaveState::Failed.is_pending());
     }
 
     #[test]
@@ -397,6 +425,60 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Captured directly (not via push_toast) so the unmount flush can report
     // its outcome after this component's reactive owner is gone.
     let toast_state = use_context::<ToastState>();
+    // ── Save watchdog & edit drafts (#161) ─────────────────────────────────
+    // Each edit-mode save bumps `save_gen`; its timers only act while it is
+    // still the current save. `gave_up` records the save the watchdog aborted.
+    let save_gen = RwSignal::new(0u32);
+    let gave_up = RwSignal::new(0u32);
+    // A local draft found on load that the server doesn't have.
+    let recovered = RwSignal::new(Option::<EditDraft>::None);
+    // Drafts are keyed by user and node; with no signed-in user (or in
+    // create mode, which has its own draft) they are off.
+    let draft_slot: Option<(String, String)> =
+        node.and_then(
+            |id| match use_context::<crate::auth::AuthState>()?.get_untracked() {
+                crate::auth::AuthStatus::Authenticated(u) => Some((u.sub, id.to_string())),
+                _ => None,
+            },
+        );
+    let draft_slot = StoredValue::new(draft_slot);
+    let keep_draft = move |snap: &Snapshot| {
+        if let Some(Some((sub, id))) = draft_slot.try_get_value() {
+            crate::draft::write_edit_draft(&sub, &id, &draft_of(snap));
+        }
+    };
+    let drop_draft = move || {
+        if let Some(Some((sub, id))) = draft_slot.try_get_value() {
+            crate::draft::clear_edit_draft(&sub, &id);
+        }
+    };
+    // Arm the watchdog for a save that just started: "Still saving…" after
+    // STALL_AFTER_MS, then abort at GIVE_UP_AFTER_MS so the request fails
+    // (and Retry appears) instead of hanging. The timers may outlive the
+    // editor, hence the `try_` accessors.
+    let arm_watchdog = move |abort: Option<web_sys::AbortController>| {
+        let g = save_gen.get_untracked().wrapping_add(1);
+        save_gen.set(g);
+        let current = move || save_gen.try_get_untracked() == Some(g);
+        Timeout::new(STALL_AFTER_MS, move || {
+            if current() && save_state.try_get_untracked() == Some(SaveState::Saving) {
+                save_state.try_set(SaveState::Stalled);
+            }
+        })
+        .forget();
+        Timeout::new(GIVE_UP_AFTER_MS, move || {
+            if let Some(a) = &abort
+                && current()
+                && saving.try_get_untracked() == Some(true)
+            {
+                gave_up.try_set(g);
+                a.abort();
+            }
+        })
+        .forget();
+        g
+    };
+
     // Current editor snapshot, untracked — shared by autosave, the unmount
     // flush, and the beforeunload guard.
     let snapshot_now = move || {
@@ -546,6 +628,15 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     body.set(snap.1.clone());
                     node_type.set(n.node_type.as_str().to_string());
                     status.set(snap.2.clone());
+                    // Edits this device kept but the server never got (#161).
+                    if let Some(Some((sub, nid))) = draft_slot.try_get_value()
+                        && let Some(d) = crate::draft::read_edit_draft(&sub, &nid)
+                    {
+                        match d.recovery((&snap.0, &snap.1, &snap.2)) {
+                            DraftRecovery::Discard => crate::draft::clear_edit_draft(&sub, &nid),
+                            DraftRecovery::Offer => recovered.set(Some(d)),
+                        }
+                    }
                     baseline.set(Some(snap));
                     fetching.set(false);
                 }
@@ -636,6 +727,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         }
         saving.set(true);
         save_state.set(SaveState::Saving);
+        // Until the server confirms, these edits live on the device too.
+        keep_draft(&snap);
+        let abort = web_sys::AbortController::new().ok();
+        let signal = abort.as_ref().map(web_sys::AbortController::signal);
+        arm_watchdog(abort);
         wasm_bindgen_futures::spawn_local(async move {
             let req = UpdateNodeRequest {
                 title: Some(snap.0.clone()),
@@ -644,8 +740,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
                 project_status: None,
             };
-            match crate::api::update_node(id, &req).await {
+            match crate::api::update_node_abortable(id, &req, signal.as_ref()).await {
                 Ok(_) => {
+                    if snapshot_now() == snap {
+                        drop_draft();
+                    }
                     baseline.set(Some(snap));
                     saved_at.set(
                         Some(crate::components::format_helpers::local_time_now())
@@ -654,9 +753,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     save_state.set(SaveState::Saved);
                 }
                 Err(_) => {
-                    // Keep the edits and don't auto-retry (an offline session
-                    // would hammer the API); the next keystroke schedules a
-                    // fresh attempt, and the unmount flush is a last resort.
+                    // Keep the edits (here and in the local draft) and don't
+                    // loop on retries (an offline session would hammer the
+                    // API). Retry, the next keystroke or coming back online
+                    // starts a fresh attempt; the unmount flush is a last resort.
+                    keep_draft(&snapshot_now());
                     save_state.set(SaveState::Failed);
                 }
             }
@@ -678,12 +779,22 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     .get_untracked()
                     .is_some_and(|base| base != snapshot_now());
                 if dirty || saving.get_untracked() {
+                    // A reload (update banner, the 401 refresh in api/mod.rs)
+                    // or a closed tab must not drop the edits (#161).
+                    keep_draft(&snapshot_now());
                     ev.prevent_default();
                     // Some browsers require a return value for the prompt.
                     ev.set_return_value("Unsaved changes");
                 }
             });
         on_cleanup(move || unload_handle.remove());
+        // Back online after a failed save: try once more by itself.
+        let online_handle = window_event_listener(ev::online, move |_| {
+            if save_state.try_get_untracked() == Some(SaveState::Failed) {
+                autosave_now.try_set(true);
+            }
+        });
+        on_cleanup(move || online_handle.remove());
     }
 
     // Last-chance flush: navigating away (Escape, sidebar link, browser back)
@@ -698,6 +809,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         if snap == base {
             return;
         }
+        // Read the draft slot now: the StoredValue goes with the owner.
+        let slot = draft_slot.try_get_value().flatten();
+        if let Some((sub, nid)) = &slot {
+            crate::draft::write_edit_draft(sub, nid, &draft_of(&snap));
+        }
         wasm_bindgen_futures::spawn_local(async move {
             let req = UpdateNodeRequest {
                 title: Some(snap.0),
@@ -708,7 +824,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             };
             match crate::api::update_node(id, &req).await {
                 Ok(_) => {
-                    refresh.update(|n| *n += 1);
+                    if let Some((sub, nid)) = &slot {
+                        crate::draft::clear_edit_draft(sub, nid);
+                    }
+                    refresh.try_update(|n| *n += 1);
                     if let Some(ts) = toast_state {
                         ts.push(ToastLevel::Success, "Unsaved edits saved.");
                     }
@@ -717,7 +836,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     if let Some(ts) = toast_state {
                         ts.push(
                             ToastLevel::Error,
-                            format!("Couldn't save your last edits: {e}"),
+                            format!(
+                                "Couldn't save your last edits: {e}. They're kept on this \
+                                 device and offered back when you reopen the node."
+                            ),
                         );
                     }
                 }
@@ -778,6 +900,15 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         let nt_str = node_type.get_untracked();
 
         let nav = nav_save.clone();
+        // Edit mode: same draft + watchdog as autosave (#161).
+        let (gen_, signal) = if node.is_some() {
+            keep_draft(&snap);
+            let abort = web_sys::AbortController::new().ok();
+            let signal = abort.as_ref().map(web_sys::AbortController::signal);
+            (arm_watchdog(abort), signal)
+        } else {
+            (arm_watchdog(None), None)
+        };
         wasm_bindgen_futures::spawn_local(async move {
             let result = if let Some(id) = node {
                 let req = UpdateNodeRequest {
@@ -787,7 +918,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     status: Some(NodeStatus::parse(&snap.2).unwrap_or(NodeStatus::Draft)),
                     project_status: None,
                 };
-                crate::api::update_node(id, &req).await
+                crate::api::update_node_abortable(id, &req, signal.as_ref()).await
             } else {
                 let nt = match nt_str.as_str() {
                     "project" => NodeType::Project,
@@ -816,6 +947,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         // node that now exists.
                         autosave_v.set(autosave_v.get_untracked() + 1);
                         crate::draft::clear_draft();
+                    } else if snapshot_now() == snap {
+                        drop_draft();
                     }
                     // Mark the saved snapshot as the baseline so the unmount
                     // flush (triggered by the navigation below) is a no-op.
@@ -830,7 +963,17 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 }
                 Err(e) => {
                     save_state.set(SaveState::Failed);
-                    error_msg.set(Some(format!("{e}")));
+                    if node.is_some() {
+                        keep_draft(&snapshot_now());
+                    }
+                    let msg = if gave_up.get_untracked() == gen_ {
+                        "The save took too long and was stopped. Your edits are kept on \
+                         this device; Retry to send them again."
+                            .to_string()
+                    } else {
+                        format!("{e}")
+                    };
+                    error_msg.set(Some(msg));
                 }
             }
             saving.set(false);
@@ -1044,6 +1187,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                             let base = "text-xs whitespace-nowrap";
                             if save_state.get() == SaveState::Failed {
                                 format!("{base} text-red-600 dark:text-red-400")
+                            } else if save_state.get() == SaveState::Stalled {
+                                format!("{base} text-amber-600 dark:text-amber-400")
                             } else if save_state.get().is_pending() {
                                 format!("{base} text-stone-500 dark:text-stone-400")
                             } else {
@@ -1054,6 +1199,24 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     >
                         {move || save_state.get().label(node.is_some(), saved_at.get().as_deref())}
                     </span>
+                    // Retry after a failed save (#161). Edit mode only: create
+                    // mode retries with its own Create button.
+                    {move || (node.is_some() && save_state.get() == SaveState::Failed).then(|| view! {
+                        <button
+                            type="button"
+                            data-testid="save-retry"
+                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium
+                                text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20
+                                hover:bg-red-100 dark:hover:bg-red-900/40"
+                            on:click=move |_| {
+                                error_msg.set(None);
+                                autosave_now.set(true);
+                            }
+                        >
+                            <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"refresh"</span>
+                            "Retry"
+                        </button>
+                    })}
                     // Preview toggle button
                     <button
                         class=move || {
@@ -1097,6 +1260,45 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 <div class="px-6 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
                     {msg}
                 </div>
+            })}
+            // Unsaved edits this device kept from an earlier visit (#161).
+            {move || recovered.get().map(|d| {
+                let d = StoredValue::new(d);
+                view! {
+                    <div
+                        data-testid="draft-recovery"
+                        role="status"
+                        class="flex flex-wrap items-center gap-3 px-6 py-2 text-sm
+                            bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200"
+                    >
+                        <span>"This device kept edits to this node that never reached the server."</span>
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium
+                                bg-ember hover:bg-ember-strong text-white"
+                            on:click=move |_| {
+                                let d = d.get_value();
+                                title.set(d.title);
+                                body.set(d.body);
+                                status.set(d.status);
+                                recovered.set(None);
+                            }
+                        >
+                            <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"refresh"</span>
+                            "Restore"
+                        </button>
+                        <button
+                            type="button"
+                            class="text-xs underline"
+                            on:click=move |_| {
+                                drop_draft();
+                                recovered.set(None);
+                            }
+                        >
+                            "Discard"
+                        </button>
+                    </div>
+                }
             })}
             // Split editor + preview
             <div class="flex flex-1 divide-x divide-stone-200 dark:divide-stone-700 min-h-0">
