@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling
+- **Deploys can no longer fill the production disk.** The release deploy
+  removed only untagged images, so every release's images, plus build cache,
+  piled up until the v2.41.0 pull failed on a full disk. It now prunes unused
+  images and build cache before pulling and again after a healthy deploy;
+  images the running containers use are kept.
+
 ## [2.41.0] - 2026-10-27
 
 ### Fixed

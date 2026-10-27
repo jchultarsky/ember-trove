@@ -146,6 +146,22 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 
 ## CI / tooling
 
+### Release deploy fails with `no space left on device` on prod
+- **Symptom:** the Release run's "Deploy via SSH" step fails while pulling the
+  new image (`failed to copy: … ingest/…/data: no space left on device`).
+  Prod keeps serving the previous version, since the pull fails before any
+  container restarts.
+- **Cause:** the deploy's cleanup was `docker image prune -f --filter
+  until=24h`. Without `-a` that only removes untagged images, so every
+  release's tagged api/ui images (~300 MB a release) stayed, along with
+  58 GB of build cache: 77 GB disk, 100% full at v2.41.0. And the cleanup ran
+  only *after* a healthy deploy, so once the disk was full no deploy reached it.
+- **Fix:** `release.yml` prunes (`image prune -a`, `builder prune -a`) before
+  the pull, keeping only images the running containers use, and again after a
+  healthy deploy. To unstick a deploy that already failed: `ssh trove`, run
+  those two prunes (**never** `volume prune`, which holds the database), then
+  `gh run rerun <id> --failed`. — 2026-10-27
+
 ### `cargo fmt --check` fails across the whole repo
 - **Symptom:** the new fmt gate fails on hundreds of pre-existing lines.
 - **Cause:** the codebase was hand-formatted and never run through default rustfmt.
