@@ -199,7 +199,7 @@ pub fn StatusPicker(
                 aria-label="Status"
                 aria-autocomplete="list"
                 aria-controls=list_id_attr
-                aria-expanded="true"
+                aria-expanded=move || if options.with(Vec::is_empty) { "false" } else { "true" }
                 aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
                 placeholder="Type a status\u{2026}"
                 maxlength=common::project_status::MAX_LEN.to_string()
@@ -229,7 +229,15 @@ pub fn StatusPicker(
                             // mousedown keeps focus in the input.
                             on:mousedown=move |ev: web_sys::MouseEvent| {
                                 ev.prevent_default();
-                                commit(i);
+                                if common::picker::is_pointer_press(ev.detail()) {
+                                    commit(i);
+                                }
+                            }
+                            // An accessibility press is a bare click (#174).
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                if !common::picker::is_pointer_press(ev.detail()) {
+                                    commit(i);
+                                }
                             }
                         >
                             <span class="material-symbols-outlined text-stone-400" style="font-size: 14px;"

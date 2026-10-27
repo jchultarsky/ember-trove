@@ -23,6 +23,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   only), so raw HTML, `style`, links and images in a body can't reach the
   list page. Tests cover script, event-handler and `style` payloads.
 
+### Fixed
+- **Picker options answer an accessibility press (#174).** The person,
+  Role, node and project-status pickers committed an option only on
+  `mousedown`, which VoiceOver, AXPress and `element.click()` never send:
+  they send a bare `click` (click count 0). An option now commits on a
+  pointer's `mousedown` or on a synthetic `click`, exactly once either way
+  (`common::picker::is_pointer_press`). The person and status pickers'
+  `aria-expanded` now says `false` when the list is empty, instead of
+  always `true`.
+
 ## [2.42.0] - 2026-10-27
 
 ### Changed
