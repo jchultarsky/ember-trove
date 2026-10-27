@@ -3,8 +3,8 @@ use common::{
     id::{NodeId, TemplateId},
     node::{CreateNodeRequest, Node, NodeStatus, NodeType, UpdateNodeRequest},
     save_watch::{
-        Conflict, DraftRecovery, EditDraft, GIVE_UP_AFTER_MS, STALL_AFTER_MS, SaveWatch, Settled,
-        classify_conflict, fingerprint,
+        Conflict, DraftBase, DraftRecovery, EditDraft, GIVE_UP_AFTER_MS, STALL_AFTER_MS, SaveWatch,
+        Settled, classify_conflict, fingerprint,
     },
     template::{
         CreateBodySource, NodeTemplate, default_for_type, may_replace_body, picker_order,
@@ -152,12 +152,33 @@ const CHANGED_ELSEWHERE_MSG: &str = "This node was changed somewhere else since 
      it. Your edits are kept on this device. Retry saves them over that change (it stays \
      in History).";
 
-/// The editor snapshot as a storable edit-mode draft (#161).
-fn draft_of(snap: &Snapshot) -> EditDraft {
+/// The editor snapshot as a storable edit-mode draft (#161), with the
+/// fingerprints of the server text it started from (`own_fps`), so a later
+/// visit can tell whether the node changed since.
+fn draft_of(snap: &Snapshot, base_fps: Vec<u64>) -> EditDraft {
     EditDraft {
         title: snap.0.clone(),
         body: snap.1.clone(),
         status: snap.2.clone(),
+        base_fps,
+        saved_at: None, // stamped by crate::draft on write
+    }
+}
+
+/// The draft-recovery banner text for a draft whose base is `base`.
+fn recovery_message(base: DraftBase) -> &'static str {
+    match base {
+        DraftBase::Unchanged => {
+            "This device kept edits to this node that never reached the server."
+        }
+        DraftBase::Changed => {
+            "This device kept edits to this node that never reached the server, and the \
+             node has changed since. Restoring replaces that change (it stays in History)."
+        }
+        DraftBase::Unknown => {
+            "This device kept edits to this node that never reached the server. The node \
+             may have changed since; restoring replaces it (it stays in History)."
+        }
     }
 }
 
@@ -530,14 +551,16 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     let conflict_version: RwSignal<Option<DateTime<Utc>>> = RwSignal::new(None);
     // The Save button asked to leave the editor once its save lands.
     let nav_after_save = RwSignal::new(false);
-    // A local draft found on load that the server doesn't have.
-    let recovered = RwSignal::new(Option::<EditDraft>::None);
+    // A local draft found on load that the server doesn't have, and whether
+    // the node changed since it was taken.
+    let recovered = RwSignal::new(Option::<(EditDraft, DraftBase)>::None);
     // Drafts are keyed by user and node; with no signed-in user (or in
     // create mode, which has its own draft) they are off.
     let draft_slot = StoredValue::new(node.and_then(|id| Some((subject.clone()?, id.to_string()))));
     let keep_draft = move |snap: &Snapshot| {
         if let Some(Some((sub, id))) = draft_slot.try_get_value() {
-            crate::draft::write_edit_draft(&sub, &id, &draft_of(snap));
+            let base = own_fps.try_get_value().unwrap_or_default();
+            crate::draft::write_edit_draft(&sub, &id, &draft_of(snap, base));
         }
     };
     let drop_draft = move || {
@@ -586,7 +609,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 body.try_get_untracked(),
                 status.try_get_untracked(),
             ) {
-                crate::draft::write_edit_draft(&sub, &id, &draft_of(&(t, b, st)));
+                let base = own_fps.try_get_value().unwrap_or_default();
+                crate::draft::write_edit_draft(&sub, &id, &draft_of(&(t, b, st), base));
             }
         })
         .forget();
@@ -748,7 +772,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     {
                         match d.recovery((&snap.0, &snap.1, &snap.2)) {
                             DraftRecovery::Discard => crate::draft::clear_edit_draft(&sub, &nid),
-                            DraftRecovery::Offer => recovered.set(Some(d)),
+                            DraftRecovery::Offer(base) => recovered.set(Some((d, base))),
                         }
                     }
                     base_version.set(Some(n.updated_at));
@@ -795,6 +819,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 body: snap.1,
                 node_type: node_type.get(),
                 status: snap.2,
+                saved_at: None, // stamped on write
             };
             // Skip the mount-time run: writing here would clobber a stored
             // draft just by opening /nodes/new with a template prefill.
@@ -979,11 +1004,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         }
         // Read the draft slot and versions now: they go with the owner.
         let slot = draft_slot.try_get_value().flatten();
+        let mut own = own_fps.try_get_value().unwrap_or_default();
         if let Some((sub, nid)) = &slot {
-            crate::draft::write_edit_draft(sub, nid, &draft_of(&snap));
+            crate::draft::write_edit_draft(sub, nid, &draft_of(&snap, own.clone()));
         }
         let expected = base_version.try_get_untracked().flatten();
-        let mut own = own_fps.try_get_value().unwrap_or_default();
         own.push(fp(&snap));
         wasm_bindgen_futures::spawn_local(async move {
             // A save still in flight may land first; the precondition then
@@ -1415,7 +1440,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                 </div>
             })}
             // Unsaved edits this device kept from an earlier visit (#161).
-            {move || recovered.get().map(|d| {
+            {move || recovered.get().map(|(d, base)| {
                 let d = StoredValue::new(d);
                 view! {
                     <div
@@ -1424,7 +1449,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         class="flex flex-wrap items-center gap-3 px-6 py-2 text-sm
                             bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200"
                     >
-                        <span>"This device kept edits to this node that never reached the server."</span>
+                        <span>{recovery_message(base)}</span>
                         <button
                             type="button"
                             class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium

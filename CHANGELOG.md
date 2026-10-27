@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Restoring an unsaved draft says when the node changed since (#161
+  follow-up).** A draft now records the server text it started from. If
+  the node was changed somewhere else after the draft was taken, the
+  restore offer warns that restoring replaces that change (it stays in
+  History). Before, Restore overwrote it with no hint. Drafts kept by
+  v2.40.0 didn't record this, so their offer says the node *may* have
+  changed.
+
+### Security
+- **Editor drafts expire after 14 days.** Unsaved node text kept in
+  `localStorage` used to stay on the device until logout, even for nodes
+  never opened again. Every draft (edit and new-node) is now stamped when
+  written; an expired draft is never offered, and a sweep at app start
+  removes expired drafts of every account on the device. Drafts from
+  v2.40.0 get their first stamp on that sweep, so they expire 14 days
+  after the upgrade rather than being lost on it.
+
 ## [2.40.0] - 2026-10-27
 
 ### Added
