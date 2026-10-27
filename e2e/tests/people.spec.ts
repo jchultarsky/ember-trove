@@ -184,7 +184,7 @@ test('a node: add from the registry or create inline, with a role, remove', asyn
     await page.keyboard.press('Enter');
     const attach = section.getByTestId('person-attach');
     await expect(attach).toContainText(`e2e Grace ${stamp}`);
-    // An input with a datalist is a combobox, not a textbox.
+    // The Role field is a combobox (with suggestions), not a textbox.
     await expect(attach.getByRole('combobox', { name: 'Role' })).toBeFocused();
     await attach.getByRole('combobox', { name: 'Role' }).fill('Approver');
     await page.keyboard.press('Enter');
@@ -324,6 +324,64 @@ test('a node: the attach step and block left empty, Escape, and no block in the 
     await page.getByRole('button', { name: 'New person' }).click();
     await expect(editor(page).getByRole('textbox', { name: 'Name' })).toBeVisible();
     await expect(editor(page).getByTestId('membership-fields')).toHaveCount(0);
+  } finally {
+    await wipePeople(request, stamp);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('the Role combobox saves what was typed; a suggestion only when chosen (#171)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  const node = await createNode(request, `e2e people role ${stamp}`, { node_type: 'project' });
+  await wipePeople(request, stamp);
+  try {
+    const mk = async (name: string): Promise<Person> =>
+      (await request.post('/api/people', { data: { display_name: name } })).json();
+    const grace = await mk(`e2e Grace ${stamp}`);
+    await mk(`e2e Ada ${stamp}`);
+    // An existing role that differs from the one we'll type only in casing.
+    const seeded = await request.post(`/api/nodes/${node.id}/people`, {
+      data: { person_id: grace.id, role: `qa${stamp}` },
+    });
+    expect(seeded.ok()).toBeTruthy();
+
+    await page.goto(`/nodes/${node.id}`);
+    const section = page.getByTestId('node-people');
+    await section.getByRole('button', { name: /People/ }).first().click();
+    const rows = section.getByTestId('node-person');
+    await expect(rows).toHaveCount(1);
+
+    // Typed "QA…" with "qa…" suggested: Enter saves the typed casing.
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await section.getByRole('combobox', { name: 'Find or create a person' }).fill(`Ada ${stamp}`);
+    await expect(section.getByRole('option', { selected: true })).toContainText(`e2e Ada ${stamp}`);
+    await page.keyboard.press('Enter');
+    const attach = section.getByTestId('person-attach');
+    const role = attach.getByRole('combobox', { name: 'Role' });
+    await expect(role).toBeFocused();
+    await role.fill(`QA${stamp}`);
+    await expect(attach.getByRole('option', { name: `qa${stamp}` })).toBeVisible();
+    await expect(attach.getByRole('option', { selected: true })).toHaveCount(0);
+    await page.keyboard.press('Enter');
+    const ada = rows.filter({ hasText: `e2e Ada ${stamp}` });
+    await expect(ada.getByTestId('member-role')).toHaveText(`QA${stamp}`);
+
+    // Choosing the suggestion (↓ then Enter) shows it in the field first.
+    await ada.getByRole('button', { name: 'Edit role and note' }).click();
+    const edit = ada.getByRole('combobox', { name: 'Role' });
+    await edit.fill(`QA${stamp}`);
+    await page.keyboard.press('ArrowDown');
+    await expect(ada.getByRole('option', { selected: true })).toHaveText(`qa${stamp}`);
+    await page.keyboard.press('Enter');
+    await expect(edit).toHaveValue(`qa${stamp}`);
+    await expect(ada.getByRole('listbox')).toBeHidden();
+
+    // Select-all replaces the text instead of appending to it.
+    await page.keyboard.press('ControlOrMeta+a');
+    await page.keyboard.type(`Lead${stamp}`);
+    await expect(edit).toHaveValue(`Lead${stamp}`);
+    await ada.getByRole('button', { name: 'Save' }).click();
+    await expect(ada.getByTestId('member-role')).toHaveText(`Lead${stamp}`);
   } finally {
     await wipePeople(request, stamp);
     await request.delete(`/api/nodes/${node.id}`);
