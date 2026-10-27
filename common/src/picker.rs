@@ -114,6 +114,18 @@ pub fn free_text_commit<'a>(
         .map_or(typed, String::as_str)
 }
 
+/// Whether a combobox option's mouse event comes from a real pointer (#174).
+///
+/// Pointer users commit on `mousedown`, so focus stays in the input. An
+/// accessibility "press" (VoiceOver, AXPress, `element.click()`) is a
+/// synthetic `click`, sometimes preceded by a synthetic `mousedown`, and
+/// synthetic events carry `detail` (the click count) 0. So an option commits
+/// on a `mousedown` from a pointer, or on a `click` that isn't from one:
+/// exactly once either way.
+pub fn is_pointer_press(detail: i32) -> bool {
+    detail > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +200,18 @@ mod tests {
         assert_eq!(free_text_commit("ABC", None, &options), "ABC");
         assert_eq!(free_text_commit("ABC", Some(0), &options), "abc");
         assert_eq!(free_text_commit("ABC", Some(5), &options), "ABC");
+    }
+
+    #[test]
+    fn pointer_presses_have_a_click_count() {
+        assert!(
+            !is_pointer_press(0),
+            "AX press / element.click(): commit on click"
+        );
+        assert!(
+            is_pointer_press(1),
+            "mouse: commit on mousedown, not again on click"
+        );
+        assert!(is_pointer_press(2), "double click");
     }
 }

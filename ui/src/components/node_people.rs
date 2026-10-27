@@ -181,7 +181,14 @@ pub fn MembershipFields(
                             if active.get() == Some(i) { "bg-amber-50 dark:bg-stone-800" } else { "" }
                         )
                         // mousedown, not click: it lands before the input's blur.
-                        on:mousedown=move |ev: web_sys::MouseEvent| { ev.prevent_default(); choose(i); }
+                        on:mousedown=move |ev: web_sys::MouseEvent| {
+                            ev.prevent_default();
+                            if common::picker::is_pointer_press(ev.detail()) { choose(i); }
+                        }
+                        // An accessibility press is a bare click (#174).
+                        on:click=move |ev: web_sys::MouseEvent| {
+                            if !common::picker::is_pointer_press(ev.detail()) { choose(i); }
+                        }
                     >
                         {o}
                     </div>
@@ -477,7 +484,6 @@ fn PersonPicker(
         NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let list_id = StoredValue::new(format!("{base}-list"));
-    let hint_id = StoredValue::new(format!("{base}-hint"));
     let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
     let query = RwSignal::new(String::new());
     let registry = LocalResource::new(|| crate::api::fetch_people(None));
@@ -629,8 +635,7 @@ fn PersonPicker(
                 aria-label="Find or create a person"
                 aria-autocomplete="list"
                 aria-controls=list_id.get_value()
-                aria-describedby=hint_id.get_value()
-                aria-expanded="true"
+                aria-expanded=move || if options.with(Vec::is_empty) { "false" } else { "true" }
                 aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
                 placeholder="Find or create a person\u{2026}"
                 class=INPUT_CLASS
@@ -659,7 +664,14 @@ fn PersonPicker(
                                 if active.get() == Some(i) { "bg-amber-50 dark:bg-stone-800" } else { "" }
                             )
                             on:mouseenter=move |_| active.set(Some(i))
-                            on:mousedown=move |ev: web_sys::MouseEvent| { ev.prevent_default(); pick(i); }
+                            on:mousedown=move |ev: web_sys::MouseEvent| {
+                                ev.prevent_default();
+                                if common::picker::is_pointer_press(ev.detail()) { pick(i); }
+                            }
+                            // An accessibility press is a bare click (#174).
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                if !common::picker::is_pointer_press(ev.detail()) { pick(i); }
+                            }
                         >
                             <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">{icon}</span>
                             <span class="truncate">{label}</span>

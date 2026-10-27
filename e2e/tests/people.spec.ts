@@ -252,6 +252,39 @@ test('a node: add from the registry or create inline, with a role, remove', asyn
   }
 });
 
+test('the person picker: an accessibility press picks an option, mouse picks once (#174)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  const node = await createNode(request, `e2e people ax ${stamp}`, { node_type: 'project' });
+  await wipePeople(request, stamp);
+  try {
+    await request.post('/api/people', { data: { display_name: `e2e Barbara ${stamp}` } });
+    await page.goto(`/nodes/${node.id}`);
+    const section = page.getByTestId('node-people');
+    await section.getByRole('button', { name: /People/ }).first().click();
+    await section.getByRole('button', { name: 'Add person' }).click();
+    const picker = section.getByRole('combobox', { name: 'Find or create a person' });
+    await picker.fill(`Barbara ${stamp}`);
+    await expect(picker).toHaveAttribute('aria-expanded', 'true');
+    const option = section.getByRole('option', { name: new RegExp(`e2e Barbara ${stamp}`) });
+    // VoiceOver / AXPress / element.click(): a bare click, detail 0, with
+    // no mousedown before it. It used to do nothing.
+    await option.evaluate((el) => (el as HTMLElement).click());
+    const attach = section.getByTestId('person-attach');
+    await expect(attach).toContainText(`e2e Barbara ${stamp}`);
+    await attach.getByRole('button', { name: 'Back' }).click();
+
+    // A real mouse click still commits on mousedown, and only once: the
+    // attach step shows, not the editor or a second step.
+    await expect(picker).toBeFocused();
+    await section.getByRole('option', { name: new RegExp(`e2e Barbara ${stamp}`) }).click();
+    await expect(attach).toContainText(`e2e Barbara ${stamp}`);
+    await expect(page.getByRole('dialog', { name: 'New person' })).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request, stamp);
+  }
+});
+
 test('a node: the attach step and block left empty, Escape, and no block in the registry (#162)', async ({ page, request }) => {
   const stamp = `${Date.now()}`;
   const node = await createNode(request, `e2e people blank ${stamp}`, { node_type: 'project' });
