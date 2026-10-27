@@ -22,7 +22,12 @@ mod templates;
 mod versions;
 mod webhooks;
 
-use gloo_net::http::Request;
+use common::session_retry::{
+    Next, REFRESH_TIMEOUT_MS, RefreshGate, RefreshOutcome, after_refresh, after_retry,
+    refresh_outcome,
+};
+use gloo_net::http::{Request, Response};
+use gloo_timers::callback::Timeout;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UiError;
@@ -76,45 +81,95 @@ pub async fn change_password(current: &str, proposed: &str) -> Result<(), UiErro
     }
 }
 
-// ── Shared JSON parser ──────────────────────────────────���────────────────
+// ── Session renewal ─────────────────────────────────────────────────────
+
+thread_local! {
+    /// One session refresh at a time for the whole app (`common::session_retry`).
+    static SESSION: RefreshGate = RefreshGate::default();
+}
+
+/// Send the request `build` makes. On a 401, renew the session (one refresh
+/// shared by every call that got a 401 meanwhile) and send it again, once,
+/// in place: no page reload (#161 follow-up). A refused refresh, or a 401
+/// on the retry, goes to the login page and never returns. A refresh that
+/// got no answer (offline, 5xx) is an ordinary error the caller can retry.
+///
+/// `build` runs again for the retry: a request (and its body) is consumed
+/// by sending it. The first attempt changed nothing, since the API rejects
+/// an unauthenticated call before any handler runs.
+pub(crate) async fn send_authed(
+    build: impl Fn() -> Result<Request, UiError>,
+) -> Result<Response, UiError> {
+    let gate = SESSION.with(RefreshGate::clone);
+    let sent = gate.generation();
+    let resp = send(build()?).await?;
+    if resp.status() != 401 {
+        return Ok(resp);
+    }
+    match after_refresh(gate.refresh(sent, renew_session).await) {
+        Next::Retry => {
+            let resp = send(build()?).await?;
+            match after_retry(resp.status()) {
+                Some(_) => to_login().await,
+                None => Ok(resp),
+            }
+        }
+        Next::Login => to_login().await,
+        Next::Fail => Err(UiError::Network(
+            "couldn't renew your session (offline?); try again".to_string(),
+        )),
+    }
+}
+
+async fn send(req: Request) -> Result<Response, UiError> {
+    req.send()
+        .await
+        .map_err(|e| UiError::Network(e.to_string()))
+}
+
+/// `POST /auth/refresh`, classified (only 401/403 ends the session), and
+/// abandoned after `REFRESH_TIMEOUT_MS`: every other 401 waits on it.
+async fn renew_session() -> RefreshOutcome {
+    let abort = web_sys::AbortController::new().ok();
+    let signal = abort.as_ref().map(web_sys::AbortController::signal);
+    // Dropping the Timeout at the end cancels it.
+    let _deadline = abort.map(|a| Timeout::new(REFRESH_TIMEOUT_MS, move || a.abort()));
+    match auth::refresh_session(signal.as_ref()).await {
+        Ok(()) => RefreshOutcome::Refreshed,
+        Err(UiError::Api { status, .. }) => refresh_outcome(Some(status)),
+        Err(_) => refresh_outcome(None),
+    }
+}
+
+/// Go to the login page. Parks until the navigation tears down the WASM
+/// runtime, so the caller never sees an error for a call it can't make.
+/// `spawn_local` avoids a recursive async fn (fetch_login_url calls
+/// `parse_json` internally).
+async fn to_login<T>() -> T {
+    wasm_bindgen_futures::spawn_local(async {
+        if let Ok(url) = auth::fetch_login_url().await
+            && let Some(win) = web_sys::window()
+        {
+            let _ = win.location().set_href(&url);
+        }
+    });
+    std::future::pending::<T>().await
+}
+
+// ── Shared JSON parser ──────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct RedirectResponse {
     pub redirect_url: String,
 }
 
-/// Convert a non-2xx response into a `UiError`, handling 401 centrally: try a
-/// silent token refresh + full-page reload, else redirect to login. Both 401
-/// branches park forever (the page navigation tears down the WASM runtime), so
-/// this never returns in the 401 case. Shared by `parse_json` and `parse_empty`
-/// so EVERY API call — body or no-body — gets the same auto-refresh behavior.
-async fn handle_error_response(response: gloo_net::http::Response) -> UiError {
+/// Convert a non-2xx response into a `UiError`. A 401 that reaches here
+/// already had its refresh and retry in [`send_authed`] (or comes from a
+/// call that doesn't renew, like logout), so it goes to the login page.
+async fn handle_error_response(response: Response) -> UiError {
     let status = response.status();
     if status == 401 {
-        // Try a silent token refresh first. If it succeeds, a full-page reload
-        // picks up the new access token and retries pending calls invisibly.
-        if auth::refresh_session().await.is_ok() {
-            if let Some(win) = web_sys::window() {
-                let _ = win.location().reload();
-            }
-            // Park until the reload destroys the WASM runtime. Without this the
-            // Err propagates to callers (e.g. on_save in NodeEditor) before the
-            // reload fires, causing the save to silently fail with no feedback.
-            std::future::pending::<()>().await;
-        } else {
-            // Refresh token also expired (long idle, server restart, etc.).
-            // Redirect to login rather than leaving a blank screen or a
-            // confusing "server error 401". spawn_local avoids a recursive
-            // async fn (fetch_login_url calls parse_json internally).
-            wasm_bindgen_futures::spawn_local(async {
-                if let Ok(url) = auth::fetch_login_url().await
-                    && let Some(win) = web_sys::window()
-                {
-                    let _ = win.location().set_href(&url);
-                }
-            });
-            std::future::pending::<()>().await;
-        }
+        return to_login().await;
     }
     let text = response
         .text()
@@ -130,10 +185,8 @@ async fn handle_error_response(response: gloo_net::http::Response) -> UiError {
 }
 
 /// Parse a JSON response body, or convert a non-2xx response via
-/// [`handle_error_response`] (including the 401 silent-refresh path).
-pub async fn parse_json<T: serde::de::DeserializeOwned>(
-    response: gloo_net::http::Response,
-) -> Result<T, UiError> {
+/// [`handle_error_response`].
+pub async fn parse_json<T: serde::de::DeserializeOwned>(response: Response) -> Result<T, UiError> {
     if response.ok() {
         response
             .json::<T>()
@@ -144,11 +197,8 @@ pub async fn parse_json<T: serde::de::DeserializeOwned>(
     }
 }
 
-/// Like [`parse_json`] but for endpoints that return no body. Routes 401 through
-/// the SAME silent-refresh path as `parse_json` — previously the hand-rolled
-/// `if resp.ok()` blocks in delete/reorder calls bypassed it, so an expired
-/// session errored instead of refreshing.
-pub async fn parse_empty(response: gloo_net::http::Response) -> Result<(), UiError> {
+/// Like [`parse_json`] but for endpoints that return no body.
+pub async fn parse_empty(response: Response) -> Result<(), UiError> {
     if response.ok() {
         Ok(())
     } else {
@@ -157,16 +207,22 @@ pub async fn parse_empty(response: gloo_net::http::Response) -> Result<(), UiErr
 }
 
 // ── HTTP verb helpers ─────────────────────────────────────────────────────
-// Fold the repeated `Request::X(&api_url(path))…send().map_err(Network)…parse`
-// boilerplate. All route 401 through the shared refresh path above.
+// Fold the repeated `Request::X(&api_url(path))…send…parse` boilerplate.
+// Every one goes through [`send_authed`], so a 401 renews and retries.
+
+fn built(r: Result<Request, gloo_net::Error>) -> Result<Request, UiError> {
+    r.map_err(|e| UiError::Parse(e.to_string()))
+}
+
+/// A GET of the full `url`, for [`send_authed`] callers that build a query.
+pub(crate) fn get_request(url: &str) -> Result<Request, UiError> {
+    built(Request::get(url).build())
+}
 
 /// GET `path`, parse a JSON body into `T`.
 pub async fn get_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, UiError> {
-    let resp = Request::get(&api_url(path))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::get(&url).build())).await?).await
 }
 
 /// POST `body` as JSON to `path`, parse a JSON response into `T`.
@@ -175,13 +231,8 @@ where
     T: serde::de::DeserializeOwned,
     B: Serialize,
 {
-    let resp = Request::post(&api_url(path))
-        .json(body)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::post(&url).json(body))).await?).await
 }
 
 /// PATCH `body` as JSON to `path`, parse a JSON response into `T`.
@@ -190,13 +241,8 @@ where
     T: serde::de::DeserializeOwned,
     B: Serialize,
 {
-    let resp = Request::patch(&api_url(path))
-        .json(body)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::patch(&url).json(body))).await?).await
 }
 
 /// PUT `body` as JSON to `path`, parse a JSON response into `T`.
@@ -205,72 +251,45 @@ where
     T: serde::de::DeserializeOwned,
     B: Serialize,
 {
-    let resp = Request::put(&api_url(path))
-        .json(body)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::put(&url).json(body))).await?).await
 }
 
 /// DELETE `path`, expecting no response body.
 pub async fn delete_empty(path: &str) -> Result<(), UiError> {
-    let resp = Request::delete(&api_url(path))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_empty(resp).await
+    let url = api_url(path);
+    parse_empty(send_authed(|| built(Request::delete(&url).build())).await?).await
 }
 
 /// PUT `body` as JSON to `path`, expecting no response body.
 pub async fn put_empty<B: Serialize>(path: &str, body: &B) -> Result<(), UiError> {
-    let resp = Request::put(&api_url(path))
-        .json(body)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_empty(resp).await
+    let url = api_url(path);
+    parse_empty(send_authed(|| built(Request::put(&url).json(body))).await?).await
 }
 
 /// POST `body` as JSON to `path`, expecting no response body.
 pub async fn post_empty<B: Serialize>(path: &str, body: &B) -> Result<(), UiError> {
-    let resp = Request::post(&api_url(path))
-        .json(body)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_empty(resp).await
+    let url = api_url(path);
+    parse_empty(send_authed(|| built(Request::post(&url).json(body))).await?).await
 }
 
 /// POST `path` with no request or response body — a pure action trigger
-/// (restore, attach). Routes 401 through the shared refresh path.
+/// (restore, attach).
 pub async fn post_action(path: &str) -> Result<(), UiError> {
-    let resp = Request::post(&api_url(path))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_empty(resp).await
+    let url = api_url(path);
+    parse_empty(send_authed(|| built(Request::post(&url).build())).await?).await
 }
 
 /// POST `path` with no request body, parse a JSON response into `T`.
 pub async fn post_action_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, UiError> {
-    let resp = Request::post(&api_url(path))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::post(&url).build())).await?).await
 }
 
 /// PUT `path` with no request body, parse a JSON response into `T`.
 pub async fn put_action_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, UiError> {
-    let resp = Request::put(&api_url(path))
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
-    parse_json(resp).await
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::put(&url).build())).await?).await
 }
 
 // ── Re-exports ───────────────────────────────────────────────────────────

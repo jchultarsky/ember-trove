@@ -7,7 +7,10 @@ use common::{
 };
 use gloo_net::http::Request;
 
-use super::{api_url, delete_empty, get_json, parse_json, post_action_json, post_json, put_json};
+use super::{
+    api_url, delete_empty, get_json, get_request, parse_json, post_action_json, post_json,
+    put_json, send_authed,
+};
 use crate::error::UiError;
 
 /// Fetch ALL nodes (every page) including archived. Used by the graph view,
@@ -25,10 +28,7 @@ pub async fn fetch_nodes() -> Result<Vec<Node>, UiError> {
             "{}?include_archived=true&page={page}&per_page={PAGE_SIZE}",
             api_url("/nodes"),
         );
-        let resp = Request::get(&url)
-            .send()
-            .await
-            .map_err(|e| UiError::Network(e.to_string()))?;
+        let resp = send_authed(|| get_request(&url)).await?;
         let list: common::node::NodeListResponse = parse_json(resp).await?;
         let returned = list.nodes.len();
         all.extend(list.nodes);
@@ -73,10 +73,7 @@ pub async fn fetch_nodes_filtered(
     } else {
         format!("{}?{}", api_url("/nodes"), params.join("&"))
     };
-    let resp = Request::get(&url)
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
+    let resp = send_authed(|| get_request(&url)).await?;
     let list: NodeListResponse = parse_json(resp).await?;
     Ok(list.nodes)
 }
@@ -107,13 +104,16 @@ pub async fn update_node_abortable(
     req: &UpdateNodeRequest,
     signal: Option<&web_sys::AbortSignal>,
 ) -> Result<Node, UiError> {
-    let resp = Request::put(&api_url(&format!("/nodes/{id}")))
-        .abort_signal(signal)
-        .json(req)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
+    // The retry after a session renewal carries the same signal, so a
+    // give-up still cancels it.
+    let url = api_url(&format!("/nodes/{id}"));
+    let resp = send_authed(|| {
+        Request::put(&url)
+            .abort_signal(signal)
+            .json(req)
+            .map_err(|e| UiError::Parse(e.to_string()))
+    })
+    .await?;
     parse_json(resp).await
 }
 
