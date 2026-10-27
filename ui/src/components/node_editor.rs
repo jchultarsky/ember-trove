@@ -571,9 +571,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Arm the watchdog for a save that just started: "Still saving…" after
     // STALL_AFTER_MS; at GIVE_UP_AFTER_MS the save is abandoned. Giving up
     // releases the lock and shows the failure by itself, without waiting
-    // for the request to fail: a save caught in the 401 refresh path never
-    // settles, so the editor used to sit on "Still saving…" forever. The
-    // timers may outlive the editor, hence the `try_` accessors.
+    // for the request to fail: a save that is sent to the login page never
+    // settles (`api::send_authed` parks it), so the editor used to sit on
+    // "Still saving…" forever. The timers may outlive the editor, hence the
+    // `try_` accessors.
     let arm_watchdog = move |abort: Option<web_sys::AbortController>| -> u32 {
         let g = watch.try_update_value(|w| w.begin()).unwrap_or_default();
         Timeout::new(STALL_AFTER_MS, move || {
@@ -976,8 +977,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     .get_untracked()
                     .is_some_and(|base| base != snapshot_now());
                 if dirty || saving.get_untracked() {
-                    // A reload (update banner, the 401 refresh in api/mod.rs)
-                    // or a closed tab must not drop the edits (#161).
+                    // A reload (the update banner), the login redirect after
+                    // a refused session refresh, or a closed tab must not
+                    // drop the edits (#161).
                     keep_draft(&snapshot_now());
                     ev.prevent_default();
                     // Some browsers require a return value for the prompt.

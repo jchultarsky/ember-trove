@@ -67,9 +67,10 @@ pub enum Settled {
 /// the save they belong to.
 ///
 /// The give-up timer does not wait for the request to fail (#161 follow-up):
-/// a save caught by the 401 refresh path in `api::handle_error_response`
-/// never settles, so aborting it changed nothing and the editor sat on
-/// "Still saving…" forever. Giving up now releases the lock by itself.
+/// a save whose 401 ends in the login redirect (`api::send_authed`) never
+/// settles, so aborting it changes nothing; before #161's follow-up the
+/// editor sat on "Still saving…" forever. Giving up releases the lock by
+/// itself.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SaveWatch {
     last: u32,
@@ -289,7 +290,7 @@ mod tests {
 
     #[test]
     fn a_save_that_never_settles_is_given_up_and_unlocks() {
-        // The 401 refresh path parks the request forever: no response ever
+        // A 401 sent to the login page parks the request forever: no response ever
         // arrives, so only the timer can release the lock.
         let mut w = SaveWatch::default();
         let a = w.begin();
