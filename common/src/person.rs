@@ -563,6 +563,28 @@ pub fn primary(points: &[ContactPoint]) -> Option<&ContactPoint> {
         .or_else(|| points.first())
 }
 
+/// How many entries of one kind a node member card shows before "+n more"
+/// (#172).
+pub const CARD_CONTACT_CAP: usize = 3;
+
+/// The entries of one contact kind a card shows, in display order (the
+/// preferred one first, then the rest as stored), with at most `cap` shown;
+/// the second value is how many were left out. A card must say what it
+/// hides, so callers render that count instead of truncating silently.
+pub fn card_contacts(points: &[ContactPoint], cap: usize) -> (Vec<&ContactPoint>, usize) {
+    let first = points.iter().position(|p| p.preferred).unwrap_or(0);
+    let ordered = points.get(first).into_iter().chain(
+        points
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != first)
+            .map(|(_, p)| p),
+    );
+    let shown: Vec<&ContactPoint> = ordered.take(cap).collect();
+    let hidden = points.len() - shown.len();
+    (shown, hidden)
+}
+
 /// Whether `p` matches the picker's text: name, company, any email or phone,
 /// case-insensitively. Blank text matches everyone.
 pub fn matches(p: &Person, q: &str) -> bool {
@@ -832,6 +854,42 @@ mod tests {
         assert_eq!(primary(&[a.clone(), b.clone()]), Some(&b));
         assert_eq!(primary(std::slice::from_ref(&a)), Some(&a));
         assert_eq!(primary(&[]), None);
+    }
+
+    #[test]
+    fn card_contacts_put_the_preferred_first_and_keep_the_rest_in_order() {
+        let a = cp("office", "1", false);
+        let b = cp("cell", "2", true);
+        let c = cp("home", "3", false);
+        let pts = [a.clone(), b.clone(), c.clone()];
+        let (shown, hidden) = card_contacts(&pts, CARD_CONTACT_CAP);
+        assert_eq!(shown, vec![&b, &a, &c]);
+        assert_eq!(hidden, 0);
+    }
+
+    #[test]
+    fn card_contacts_without_a_preferred_one_keep_stored_order() {
+        let a = cp("office", "1", false);
+        let b = cp("cell", "2", false);
+        let pts = [a.clone(), b.clone()];
+        assert_eq!(card_contacts(&pts, 3), (vec![&a, &b], 0));
+    }
+
+    #[test]
+    fn card_contacts_count_what_the_cap_hides() {
+        let pts: Vec<ContactPoint> = (0..5).map(|i| cp("", &i.to_string(), i == 4)).collect();
+        let (shown, hidden) = card_contacts(&pts, 3);
+        let values: Vec<&str> = shown.iter().map(|p| p.value.as_str()).collect();
+        assert_eq!(values, ["4", "0", "1"]);
+        assert_eq!(hidden, 2);
+        // The cap is a ceiling: the preferred entry always survives it.
+        assert_eq!(card_contacts(&pts, 1).0[0].value, "4");
+        assert_eq!(card_contacts(&pts, 0), (vec![], 5));
+    }
+
+    #[test]
+    fn card_contacts_of_nothing_is_nothing() {
+        assert_eq!(card_contacts(&[], 3), (vec![], 0));
     }
 
     #[test]

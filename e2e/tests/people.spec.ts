@@ -246,6 +246,42 @@ test('a node: add from the registry or create inline, with a role, remove', asyn
   }
 });
 
+test('a member card shows every phone and email, preferred first, and says what it hides (#172)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  const node = await createNode(request, `e2e member contacts ${stamp}`, { node_type: 'project' });
+  await wipePeople(request, stamp);
+  try {
+    const phones = [
+      { label: 'Office', value: '+1 555 0100', preferred: false },
+      { label: 'Cell', value: '+1 555 0101', preferred: true },
+      { label: 'Home', value: '+1 555 0102', preferred: false },
+      { label: 'Lab', value: '+1 555 0103', preferred: false },
+    ];
+    const person: Person = await (
+      await request.post('/api/people', {
+        data: { display_name: `e2e Katherine ${stamp}`, phones, emails: [{ label: 'work', value: `kj.${stamp}@example.com` }] },
+      })
+    ).json();
+    expect((await request.post(`/api/nodes/${node.id}/people`, { data: { person_id: person.id } })).ok()).toBe(true);
+
+    await page.goto(`/nodes/${node.id}`);
+    const section = page.getByTestId('node-people');
+    await section.getByRole('button', { name: /People/ }).first().click();
+    const contacts = section.getByTestId('node-person').getByTestId('member-contacts');
+    const calls = contacts.locator('a[href^="tel:"]');
+    // Three phones fit, the preferred one first; the fourth is announced.
+    await expect(calls).toHaveCount(3);
+    await expect(calls.first()).toHaveText('+1 555 0101');
+    await expect(contacts.locator('a[href^="mailto:"]')).toHaveCount(1);
+    await contacts.getByTestId('member-contacts-more').click();
+    await expect(calls).toHaveCount(4);
+    await expect(contacts.getByTestId('member-contacts-more')).toHaveCount(0);
+  } finally {
+    await wipePeople(request, stamp);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
 test('a node: the attach step and block left empty, Escape, and no block in the registry (#162)', async ({ page, request }) => {
   const stamp = `${Date.now()}`;
   const node = await createNode(request, `e2e people blank ${stamp}`, { node_type: 'project' });

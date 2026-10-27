@@ -2,14 +2,16 @@
 //! what role.
 //!
 //! What you see depends on whose person it is (the API redacts): the
-//! person's owner gets the card (company, position, preferred email/phone
-//! as actions) and the context note; a sharee gets name and role only.
+//! person's owner gets the card (company, position, emails and phones as
+//! actions, preferred first, up to `CARD_CONTACT_CAP` of each with a
+//! "+n more" that expands in place, #172) and the context note; a sharee gets name and role only.
 //! Only the node's own owner can add, edit or remove, and the picker offers
 //! only their own registry.
 
 use common::id::{NodeId, PersonId};
 use common::person::{
-    MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput, matches, primary,
+    CARD_CONTACT_CAP, ContactPoint, MembershipInput, MembershipUpdate, MembershipView, Person,
+    PersonInput, card_contacts, matches,
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -238,8 +240,28 @@ fn MemberRow(
                 .join(" \u{b7} ")
         })
         .unwrap_or_default();
-    let email = card.as_ref().and_then(|p| primary(&p.emails).cloned());
-    let phone = card.as_ref().and_then(|p| primary(&p.phones).cloned());
+    // Every email and phone, preferred first; past the cap they hide behind
+    // "+n more" so the card never truncates silently (#172).
+    let ordered = |points: &[ContactPoint]| -> Vec<ContactPoint> {
+        card_contacts(points, usize::MAX)
+            .0
+            .into_iter()
+            .cloned()
+            .collect()
+    };
+    let emails = card
+        .as_ref()
+        .map(|p| ordered(&p.emails))
+        .unwrap_or_default();
+    let phones = card
+        .as_ref()
+        .map(|p| ordered(&p.phones))
+        .unwrap_or_default();
+    let hidden = card.as_ref().map_or(0, |p| {
+        card_contacts(&p.emails, CARD_CONTACT_CAP).1 + card_contacts(&p.phones, CARD_CONTACT_CAP).1
+    });
+    let contacts_open = RwSignal::new(false);
+    let contacts = StoredValue::new((emails, phones));
     let owns_card = card.is_some();
 
     let save = move || {
@@ -290,9 +312,26 @@ fn MemberRow(
                     })}
                 </div>
                 {(!subtitle.is_empty()).then(|| view! { <div class="text-xs text-stone-500">{subtitle}</div> })}
-                <div class="flex flex-wrap gap-x-3">
-                    {email.map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> })}
-                    {phone.map(|p| view! { <ContactAction kind=ContactKind::Phone point=p /> })}
+                <div class="flex flex-wrap items-center gap-x-3" data-testid="member-contacts">
+                    {move || {
+                        let take = if contacts_open.get() { usize::MAX } else { CARD_CONTACT_CAP };
+                        contacts.with_value(|(emails, phones)| {
+                            let emails = emails.iter().take(take).cloned().map(|e| view! {
+                                <ContactAction kind=ContactKind::Email point=e />
+                            });
+                            let phones = phones.iter().take(take).cloned().map(|p| view! {
+                                <ContactAction kind=ContactKind::Phone point=p />
+                            });
+                            emails.chain(phones).collect_view()
+                        })
+                    }}
+                    {move || (hidden > 0 && !contacts_open.get()).then(|| view! {
+                        <button type="button" data-testid="member-contacts-more"
+                            class="text-xs text-stone-500 hover:text-amber-700 hover:underline cursor-pointer"
+                            on:click=move |_| contacts_open.set(true)>
+                            {format!("+{hidden} more")}
+                        </button>
+                    })}
                 </div>
                 {move || (!editing.get()).then(|| {
                     let n = note.get();

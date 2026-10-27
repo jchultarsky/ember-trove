@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **A node's People card shows every phone and email, not just the
+  preferred one (#172).** The preferred entry still comes first, each with
+  its label. Up to three of each kind show; past that a "+n more" expands
+  the card in place, so the card never hides a contact silently. Before, a
+  second number existed only on the Person page, with nothing on the card
+  to say so.
+
 ### Tooling
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,
