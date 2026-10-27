@@ -19,10 +19,10 @@ pub fn Sidebar(
     let show_change_pw = RwSignal::new(false);
 
     let on_logout = move |_| {
-        // Unsaved edit drafts hold node content; don't leave them on the
-        // device after logout (#161). Logging out with a save still pending
-        // loses that edit: confidentiality over convenience.
-        crate::draft::clear_all_edit_drafts();
+        // Editor drafts (edit and create) hold node content; don't leave
+        // them on the device after logout (#161). Logging out with a save
+        // still pending loses that edit: confidentiality over convenience.
+        crate::draft::clear_all_drafts();
         wasm_bindgen_futures::spawn_local(async move {
             if let Ok(url) = crate::api::fetch_logout_url().await
                 && let Some(window) = web_sys::window()

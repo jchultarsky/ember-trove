@@ -1246,6 +1246,7 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
         metadata: None,
         status: None,
         project_status: ps,
+        expected_updated_at: None,
     };
     let n = repo.update(p1.id, upd(None)).await.expect("noop");
     assert_eq!(n.project_status.as_deref(), Some("Active"));
@@ -1260,6 +1261,63 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
     // The database refuses what normalize would (defence in depth).
     let too_long = repo.update(p1.id, upd(Some(Some("x".repeat(41))))).await;
     assert!(too_long.is_err());
+}
+
+// ── Node save precondition (#161) ────────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn node_update_with_a_stale_version_is_refused_and_changes_nothing(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let n = create_node(&pool, "owner-a", "Versioned").await;
+    let upd = |body: &str, v| common::node::UpdateNodeRequest {
+        title: None,
+        body: Some(body.into()),
+        metadata: None,
+        status: None,
+        project_status: None,
+        expected_updated_at: v,
+    };
+
+    // The version the client saw applies, and moves the version on.
+    let first = repo
+        .update(n.id, upd("first", Some(n.updated_at)))
+        .await
+        .expect("current version applies");
+    assert_ne!(first.updated_at, n.updated_at);
+
+    // A save still carrying the old version (one the editor gave up on that
+    // lands late) is refused and writes nothing.
+    let stale = repo.update(n.id, upd("stale", Some(n.updated_at))).await;
+    assert!(
+        matches!(stale, Err(EmberTroveError::PreconditionFailed(_))),
+        "{stale:?}"
+    );
+    let now = repo.get(n.id).await.expect("get");
+    assert_eq!(now.body.as_deref(), Some("first"));
+    assert_eq!(now.updated_at, first.updated_at);
+
+    // The version survives the JSON round trip the UI makes.
+    let wire: Node = serde_json::from_str(&serde_json::to_string(&now).expect("ser")).expect("de");
+    repo.update(n.id, upd("via json", Some(wire.updated_at)))
+        .await
+        .expect("a version read back from JSON still matches");
+
+    // No precondition keeps last-write-wins for every other caller.
+    repo.update(n.id, upd("free", None))
+        .await
+        .expect("unconditional update");
+
+    // A missing node is still "not found", precondition or not.
+    let missing = repo
+        .update(
+            common::id::NodeId(uuid::Uuid::new_v4()),
+            upd("x", Some(n.updated_at)),
+        )
+        .await;
+    assert!(
+        matches!(missing, Err(EmberTroveError::NotFound(_))),
+        "{missing:?}"
+    );
 }
 
 // ── People (#147) ─────────────────────────────────────────────────────────────

@@ -55,6 +55,7 @@ pub fn ProjectStatusChip(
             metadata: None,
             status: None,
             project_status: Some(next),
+            expected_updated_at: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(e) = crate::api::update_node(node_id, &req).await {

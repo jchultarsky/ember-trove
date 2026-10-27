@@ -774,6 +774,7 @@ fn BacklinksPanel(node_id: NodeId, title: String) -> impl IntoView {
                             metadata: None,
                             status: None,
                             project_status: None,
+                            expected_updated_at: None,
                         };
                         crate::api::update_node(mention_id, &req).await.map(Some)
                     }

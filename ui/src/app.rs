@@ -64,6 +64,9 @@ pub struct TemplatePrefill {
 #[component]
 pub fn App() -> impl IntoView {
     let auth_state = provide_auth_state();
+    // The pre-#161 create draft was shared by every account in this
+    // browser; delete it unread (crate::draft).
+    crate::draft::purge_legacy_create_draft();
 
     // Persist theme in localStorage; with no stored preference, follow the
     // OS (`prefers-color-scheme`) — matches the static loading screen, which
