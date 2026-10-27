@@ -17,6 +17,11 @@ pub enum EmberTroveError {
     #[error("validation error: {0}")]
     Validation(String),
 
+    /// A write's precondition no longer holds (the resource changed since
+    /// the client read it); nothing was written. HTTP 412.
+    #[error("precondition failed: {0}")]
+    PreconditionFailed(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }

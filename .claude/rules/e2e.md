@@ -86,6 +86,20 @@ CI job is too slow a feedback loop for selector work.
   the registry loads after the picker opens, so `fill` then `Enter` can land
   on "Create “…”" and open the editor. Assert
   `getByRole('option', { selected: true })` contains the person first.
+- **Node saves are `PUT /api/nodes/:id`, not PATCH** (#161). A `page.route`
+  filter on `PATCH` matches nothing, and the save goes through.
+- **Faking stuck and late requests** (#161 follow-up, save_state.spec.ts):
+  - A route handler that never answers holds a request. `page.unroute`
+    releases held routes to the network itself, so settle them first.
+  - To make a request that **landed late**, call `route.fetch()` (the
+    server commits it) and withhold the answer.
+  - To make a call that **never settles**, answer the PUT with 401 and
+    hold `**/api/auth/refresh`. That is the path that parks it.
+- **The second identity in the browser** (#161 follow-up):
+  `page.setExtraHTTPHeaders({ 'x-e2e-subject': 'other' })` makes the
+  *page* run as `e2e-other-user` and keeps the same localStorage.
+  `setExtraHTTPHeaders({})` switches back. Use it for per-user client state
+  such as drafts.
 - **Duplicate titles can't be made with one user** (the API returns 409). To
   test same-titled search results, intercept `/api/search` with
   `page.route` (`node_picker.spec.ts`).

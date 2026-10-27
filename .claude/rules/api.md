@@ -32,6 +32,21 @@ cargo check && cargo clippy -- -D warnings
     `touch_updated_at` trigger leaves `updated_at` alone.
   - Test it in `pg_tests` with nodes inserted by raw SQL.
 
+## Optimistic concurrency (#161 follow-up)
+
+- `PUT /nodes/:id` takes an optional `expected_updated_at`. When it is set, the
+  `UPDATE` adds `AND ($8::timestamptz IS NULL OR updated_at = $8)`. No row
+  means a missing node or a stale version: the repo checks `EXISTS` and
+  returns `EmberTroveError::PreconditionFailed`, which the API sends as
+  **412**. 409 stays reserved for duplicate titles.
+- The version check runs **after** `require_editor`, so a viewer or a
+  stranger can't use 412 vs 403/404 to probe a node. The stub repo in
+  `tests.rs` 412s on any precondition; it proves authZ comes first.
+- `updated_at` is the version (the `touch_updated_at` trigger). Only node
+  writes bump it (`update`, `set_pinned`). Anything new that writes `nodes`
+  moves the version too: the editor then sees its own text at a new version
+  and re-sends, at one extra round trip.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.

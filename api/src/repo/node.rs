@@ -467,7 +467,11 @@ impl NodeRepo for PgNodeRepo {
                 -- Three states (#143): $6 false = leave it; true = set to $7,
                 -- where NULL clears.
                 project_status = CASE WHEN $6 THEN $7 ELSE project_status END
-            WHERE id = $1
+            -- #161: with a precondition, apply only to the version the
+            -- client saw. Under READ COMMITTED a concurrent writer's commit
+            -- is re-checked here, so of two saves sent on one version only
+            -- the first to commit applies.
+            WHERE id = $1 AND ($8::timestamptz IS NULL OR updated_at = $8)
             RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
                       status::text, project_status, pinned, created_at, updated_at
             "#,
@@ -479,6 +483,7 @@ impl NodeRepo for PgNodeRepo {
         .bind(status_str)
         .bind(req.project_status.is_some())
         .bind(req.project_status.clone().flatten())
+        .bind(req.expected_updated_at)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| match &e {
@@ -491,8 +496,26 @@ impl NodeRepo for PgNodeRepo {
                 ))
             }
             _ => EmberTroveError::Internal(format!("update node failed: {e}")),
-        })?
-        .ok_or_else(|| EmberTroveError::NotFound(format!("node {id} not found")))?;
+        })?;
+        let Some(row) = row else {
+            // No row: either the node is gone or the precondition failed.
+            // Only a caller that passed authorization reaches here, so
+            // telling the two apart leaks nothing.
+            if req.expected_updated_at.is_some()
+                && sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1)",
+                )
+                .bind(id.0)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| EmberTroveError::Internal(format!("update node failed: {e}")))?
+            {
+                return Err(EmberTroveError::PreconditionFailed(
+                    "the node changed since it was loaded".to_string(),
+                ));
+            }
+            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
+        };
 
         row.into_node()
     }

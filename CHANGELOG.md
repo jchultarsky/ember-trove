@@ -41,6 +41,60 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   the ontology session are recorded as deferred (owner decision
   2026-10-26). Zero-AWS local login itself already ships (PR #43).
 
+### Fixed
+- **The node editor no longer hides a stuck save, or drops its edit on
+  reload (#161).** A save in flight for 5 s now reads "Still saving…". At
+  15 s the request is aborted, so it can't land later over a newer save, and
+  the editor shows a failure with **Retry**. A failed save also retries once
+  by itself when the browser comes back online. Until a save lands, the
+  edit is also kept in a local draft (written when the save starts, when it
+  fails, and on `beforeunload`, which covers the update banner's reload and
+  the 401 refresh reload behind #161's lost edit). Opening the node again
+  offers **Restore / Discard**, and a draft the server already has is
+  dropped without asking. The thresholds and the restore rule live in
+  `common::save_watch`.
+- **A save caught in the session-refresh path no longer hangs on "Still
+  saving…" (#161 follow-up).** After a 401 the API client refreshes the
+  session and reloads the page, and the save never finishes. If the
+  reload was held up (the user chose "Stay" on the leave-page prompt), the
+  editor used to wait forever, with no Retry and autosave stopped. The
+  15 s give-up now shows the failure and re-enables saving by itself,
+  whatever the request does. Responses that arrive after a save was given
+  up on no longer touch the editor's state.
+- **A save that lands late can no longer overwrite a newer one (#161
+  follow-up).** Aborting a request does not stop a server that already
+  received it, so a save the editor gave up on could still commit after
+  the retry and leave older text behind. Edit-mode saves now carry the
+  node version they were based on (`expected_updated_at`), and
+  `PUT /api/nodes/{id}` refuses a stale version with **412** and writes
+  nothing. If the server holds text this editor sent (its own late save,
+  or only the version moved, e.g. a pin elsewhere), the editor re-sends on
+  top. If the text was changed somewhere else, the editor says so, keeps
+  the edits, and overwrites only on an explicit Retry or Save; the other
+  version stays in History. Requests without the field keep
+  last-write-wins.
+
+### Security
+- **Edit drafts are scoped to the user and wiped on logout (#161).** The
+  new drafts hold node content in `localStorage`, so the key includes the
+  user's subject: another account in the same browser is never offered
+  someone else's text. Logout removes every edit draft and stops new ones
+  being written for the rest of that page. The tradeoff: a save still
+  pending at logout is lost.
+- **New-node drafts are scoped to the user and wiped on logout too (#161
+  follow-up).** The create-mode draft used a single `localStorage` key
+  shared by every account in the browser, so the next person to open
+  `/nodes/new` got the previous user's unsaved text restored. It is now
+  keyed by the user's subject and removed at logout with the edit drafts.
+  The old shared key is deleted at startup and never read: nothing says
+  whose draft it was, so migrating it could hand it to the wrong account.
+  Upgrading discards a pending pre-upgrade new-node draft.
+- **The save precondition stays behind authorization.** `PUT
+  /api/nodes/{id}` checks editor permission before the version, so a viewer
+  or a stranger gets the same 403/404 as before and can't use the 412 to
+  probe a node. The check is a bound parameter in the `UPDATE`'s `WHERE`
+  clause.
+
 ## [2.39.0] - 2026-10-26
 
 ### Changed — addresses are a list, like emails and phones (#155)
