@@ -176,8 +176,11 @@ pub fn MembershipFields(
                              dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 {}",
                             if active.get() == Some(i) { "bg-amber-50 dark:bg-stone-800" } else { "" }
                         )
-                        // mousedown, not click: it lands before the input's blur.
-                        on:mousedown=move |ev: web_sys::MouseEvent| { ev.prevent_default(); choose(i); }
+                        // mousedown only keeps focus in the input (no blur closes
+                        // the list mid-press); click picks, so an accessibility
+                        // "press", which sends a bare click, picks too (#174).
+                        on:mousedown=move |ev: web_sys::MouseEvent| ev.prevent_default()
+                        on:click=move |_| choose(i)
                     >
                         {o}
                     </div>
@@ -620,7 +623,8 @@ fn PersonPicker(
                 aria-label="Find or create a person"
                 aria-autocomplete="list"
                 aria-controls=list_id.get_value()
-                aria-expanded="true"
+                // The list shows whenever it has rows: say so only then (#174).
+                aria-expanded=move || if options.with(Vec::is_empty) { "false" } else { "true" }
                 aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
                 placeholder="Find or create a person\u{2026}"
                 class=INPUT_CLASS
@@ -649,7 +653,10 @@ fn PersonPicker(
                                 if active.get() == Some(i) { "bg-amber-50 dark:bg-stone-800" } else { "" }
                             )
                             on:mouseenter=move |_| active.set(Some(i))
-                            on:mousedown=move |ev: web_sys::MouseEvent| { ev.prevent_default(); pick(i); }
+                            // Focus stays in the input; click picks, so an
+                            // accessibility "press" picks too (#174).
+                            on:mousedown=move |ev: web_sys::MouseEvent| ev.prevent_default()
+                            on:click=move |_| pick(i)
                         >
                             <span class="material-symbols-outlined text-stone-400" style="font-size:14px;" aria-hidden="true">{icon}</span>
                             <span class="truncate">{label}</span>

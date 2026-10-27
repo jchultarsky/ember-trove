@@ -330,6 +330,54 @@ test('a node: the attach step and block left empty, Escape, and no block in the 
   }
 });
 
+test('the pickers answer an accessibility press: a bare click picks (#174)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  const node = await createNode(request, `e2e people ax ${stamp}`, { node_type: 'project' });
+  await wipePeople(request, stamp);
+  try {
+    const mk = async (name: string): Promise<Person> =>
+      (await request.post('/api/people', { data: { display_name: name } })).json();
+    const grace = await mk(`e2e Grace ${stamp}`);
+    await mk(`e2e Barbara ${stamp}`);
+    // A role of the owner's, so the Role field has a suggestion to press.
+    const roleName = `sponsor${stamp}`;
+    const seeded = await request.post(`/api/nodes/${node.id}/people`, {
+      data: { person_id: grace.id, role: roleName },
+    });
+    expect(seeded.ok()).toBeTruthy();
+
+    await page.goto(`/nodes/${node.id}`);
+    const section = page.getByTestId('node-people');
+    await section.getByRole('button', { name: /People/ }).first().click();
+    const rows = section.getByTestId('node-person');
+    await expect(rows).toHaveCount(1);
+    await section.getByRole('button', { name: 'Add person' }).click();
+    const picker = section.getByRole('combobox', { name: 'Find or create a person' });
+    await picker.fill(`Barbara ${stamp}`);
+    const option = section.getByRole('option', { name: new RegExp(`e2e Barbara ${stamp}`) });
+    await expect(option).toBeVisible();
+    await expect(picker).toHaveAttribute('aria-expanded', 'true');
+
+    // AT and AX automation "press" an option with a click event and no
+    // mousedown first: dispatchEvent sends exactly that.
+    await option.dispatchEvent('click');
+    const attach = section.getByTestId('person-attach');
+    const role = attach.getByRole('combobox', { name: 'Role' });
+    await expect(role).toBeFocused();
+
+    // The Role suggestions answer the same press.
+    await role.fill(roleName.slice(0, -1));
+    await attach.getByRole('option', { name: roleName }).dispatchEvent('click');
+    await expect(role).toHaveValue(roleName);
+    await attach.getByRole('button', { name: 'Add' }).click();
+    const barbara = rows.filter({ hasText: `e2e Barbara ${stamp}` });
+    await expect(barbara.getByTestId('member-role')).toHaveText(roleName);
+  } finally {
+    await wipePeople(request, stamp);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
 test('the Role combobox saves what was typed; a suggestion only when chosen (#171)', async ({ page, request }) => {
   const stamp = `${Date.now()}`;
   const node = await createNode(request, `e2e people role ${stamp}`, { node_type: 'project' });

@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Picker options answer an accessibility "press" (#174).** The person
+  picker, the node picker and the Role suggestions picked an option on
+  `mousedown`. Screen readers and accessibility automation activate an
+  option with a bare `click` (no `mousedown` first), so their press did
+  nothing. `mousedown` now only keeps focus in the input and `click` picks,
+  which works the same for the mouse. The person picker also stops claiming
+  `aria-expanded="true"` when its list is empty. An e2e test presses the
+  options with a bare click.
+
 ## [2.42.0] - 2026-10-27
 
 ### Changed

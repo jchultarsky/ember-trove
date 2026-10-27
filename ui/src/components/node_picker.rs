@@ -356,12 +356,12 @@ pub fn NodePicker(
                                         active.set(Some(i));
                                         chosen.set(true);
                                     }
-                                    // mousedown, not click: keep focus in the input so
-                                    // its blur doesn't close the list mid-press.
-                                    on:mousedown=move |ev: web_sys::MouseEvent| {
-                                        ev.prevent_default();
-                                        commit(i);
-                                    }
+                                    // mousedown only keeps focus in the input, so its
+                                    // blur doesn't close the list mid-press; click
+                                    // commits, so an accessibility "press" (a bare
+                                    // click, no mousedown) commits too (#174).
+                                    on:mousedown=move |ev: web_sys::MouseEvent| ev.prevent_default()
+                                    on:click=move |_| commit(i)
                                 >
                                     <span class="material-symbols-outlined text-stone-400 flex-shrink-0"
                                         style="font-size: 14px;" title=type_label
