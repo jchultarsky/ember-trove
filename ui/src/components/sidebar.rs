@@ -9,6 +9,13 @@ use crate::{
     },
 };
 
+// Icons of the global entries whose labels a node page reuses for its own
+// sections. `NodeSection::icon` must differ from these, so the two don't read
+// as the same control (#173; tested in `node_section`).
+pub const TASKS_ICON: &str = "task_alt";
+pub const NOTES_ICON: &str = "sticky_note_2";
+pub const PEOPLE_ICON: &str = "group";
+
 #[component]
 pub fn Sidebar(
     auth_state: AuthState,
@@ -73,9 +80,18 @@ pub fn Sidebar(
             // view itself exposes the three via a tab bar for clearer IA.
             // (The morning-ritual /plan entry was removed in v2.6.1 — the
             // Kanban surface made it redundant.)
-            <SidebarLink icon="task_alt"       label="Tasks"     on_click=nav!("/tasks/my-day") collapsed=collapsed />
-            <SidebarLink icon="sticky_note_2"  label="Notes"     on_click=nav!("/notes")     collapsed=collapsed />
-            <SidebarLink icon="group"          label="People"    on_click=nav!("/people")    collapsed=collapsed />
+            // The caption marks these entries as app-wide: a node page has
+            // its own Tasks / Notes / People sections (#173).
+            {move || (!collapsed.get()).then(|| view! {
+                <p class="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest
+                           text-stone-400 dark:text-stone-500 select-none"
+                    data-testid="sidebar-caption-workspace">
+                    "Workspace"
+                </p>
+            })}
+            <SidebarLink icon=TASKS_ICON       label="Tasks"     on_click=nav!("/tasks/my-day") collapsed=collapsed />
+            <SidebarLink icon=NOTES_ICON       label="Notes"     on_click=nav!("/notes")     collapsed=collapsed />
+            <SidebarLink icon=PEOPLE_ICON      label="People"    on_click=nav!("/people")    collapsed=collapsed />
             <SidebarLink icon="dashboard"      label="Dashboard" on_click=nav!("/dashboard") collapsed=collapsed />
             <SidebarLink icon="share"          label="Graph"     on_click=nav!("/graph")     collapsed=collapsed />
             <div class="border-t border-stone-200 dark:border-stone-700 my-3" />

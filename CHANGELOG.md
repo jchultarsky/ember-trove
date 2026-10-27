@@ -6,7 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The sidebar's Tasks, Notes and People no longer look like a node's own
+  sections (#173).** The sidebar stays global. A node page's Notes section
+  now shows `notes` instead of the sidebar's `sticky_note_2`, and its People
+  section shows `person` instead of `group` (Tasks already differed). A small
+  "Workspace" caption sits above the sidebar's global entries and is hidden
+  when the sidebar is collapsed. A unit test keeps the icons apart.
+
 ### Tooling
+- **`refresh-icon-font.sh` also collects `*_ICON` consts** (#173), so a glyph
+  named only in a const still lands in the font subset.
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,
   piled up until the v2.41.0 pull failed on a full disk. It now prunes unused

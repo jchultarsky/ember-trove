@@ -60,11 +60,13 @@ impl NodeSection {
         }
     }
 
+    /// Tasks, Notes and People share their titles with the sidebar's global
+    /// entries, so their icons must differ from the sidebar's (#173).
     pub fn icon(self) -> &'static str {
         match self {
             NodeSection::Tasks => "check_box",
-            NodeSection::Notes => "sticky_note_2",
-            NodeSection::People => "group",
+            NodeSection::Notes => "notes",
+            NodeSection::People => "person",
             NodeSection::Links => "open_in_new",
             NodeSection::Connections => "hub",
             NodeSection::LocalGraph => "hub",
@@ -304,5 +306,20 @@ mod tests {
         titles.dedup();
         assert_eq!(slugs.len(), NodeSection::ALL.len());
         assert_eq!(titles.len(), NodeSection::ALL.len());
+    }
+
+    /// #173: the same glyph next to the same word reads as the same control,
+    /// so a node's own Tasks / Notes / People must not look like the
+    /// sidebar's global entries.
+    #[test]
+    fn sections_named_like_global_entries_use_their_own_icons() {
+        use crate::components::sidebar::{NOTES_ICON, PEOPLE_ICON, TASKS_ICON};
+        for (section, global_icon) in [
+            (NodeSection::Tasks, TASKS_ICON),
+            (NodeSection::Notes, NOTES_ICON),
+            (NodeSection::People, PEOPLE_ICON),
+        ] {
+            assert_ne!(section.icon(), global_icon, "{section:?}");
+        }
     }
 }
