@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Node list excerpts render as formatted Markdown, and show more (#175).**
+  The All Nodes rows printed the body's raw source (`##`, `-`, `[[…]]`, link
+  URLs, table pipes) in three lines. They now show up to five lines of
+  rendered text: paragraphs, lists, emphasis and inline code render;
+  headings appear as bold lines at body size; links and wiki-links show
+  their text, styled but inert, so the row stays the only click target;
+  task-list items keep their state as ☐ / ☑; a table shows its header cells
+  joined by " · ". Images, code blocks, rules and raw HTML are left out.
+  Rendering is client-side (`markdown::render_excerpt`), with unit tests.
+
+### Security
+- The excerpt (#175) goes through its own strict ammonia allow-list (`p`,
+  `strong`, `em`, `del`, `code`, lists, `br`, and `span` with one class
+  only), so raw HTML, `style`, links and images in a body can't reach the
+  list page. Tests cover script, event-handler and `style` payloads.
+
 ## [2.42.0] - 2026-10-27
 
 ### Changed
