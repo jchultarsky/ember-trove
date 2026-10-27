@@ -82,6 +82,10 @@ CI job is too slow a feedback loop for selector work.
   the People section's Role field has `role="combobox"`, so
   `getByRole('textbox', { name: 'Role' })` never matches. Use
   `getByRole('combobox', { name: 'Role' })`.
+- **Wait for the person picker's option before Enter** (2026-10-26, #162):
+  the registry loads after the picker opens, so `fill` then `Enter` can land
+  on "Create “…”" and open the editor. Assert
+  `getByRole('option', { selected: true })` contains the person first.
 - **Node saves are `PUT /api/nodes/:id`, not PATCH** (#161). A `page.route`
   filter on `PATCH` matches nothing, and the save goes through.
 - **Faking stuck and late requests** (#161 follow-up, save_state.spec.ts):

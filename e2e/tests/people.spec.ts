@@ -246,6 +246,90 @@ test('a node: add from the registry or create inline, with a role, remove', asyn
   }
 });
 
+test('a node: the attach step and block left empty, Escape, and no block in the registry (#162)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  const node = await createNode(request, `e2e people blank ${stamp}`, { node_type: 'project' });
+  await wipePeople(request, stamp);
+  try {
+    for (const name of [`e2e Grace ${stamp}`, `e2e Ada ${stamp}`]) {
+      expect((await request.post('/api/people', { data: { display_name: name } })).status()).toBe(201);
+    }
+    await page.goto(`/nodes/${node.id}`);
+    const section = page.getByTestId('node-people');
+    await section.getByRole('button', { name: /People/ }).first().click();
+    const rows = section.getByTestId('node-person');
+    const picker = section.getByRole('combobox', { name: 'Find or create a person' });
+
+    // Pick existing, step left empty: Enter attaches exactly as before #162.
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await picker.fill(`Grace ${stamp}`);
+    await expect(section.getByRole('option', { selected: true })).toContainText(`e2e Grace ${stamp}`);
+    await page.keyboard.press('Enter');
+    const attach = section.getByTestId('person-attach');
+    await expect(attach.getByRole('combobox', { name: 'Role' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.getByTestId('member-role')).toHaveCount(0);
+
+    // Escape steps back to the search, with the query kept; nothing attached.
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await picker.fill(`Ada ${stamp}`);
+    await expect(section.getByRole('option', { selected: true })).toContainText(`e2e Ada ${stamp}`);
+    await page.keyboard.press('Enter');
+    await expect(attach.getByRole('combobox', { name: 'Role' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(picker).toBeFocused();
+    await expect(picker).toHaveValue(`Ada ${stamp}`);
+    await expect(rows).toHaveCount(1);
+    await section.getByRole('button', { name: 'Cancel' }).click();
+
+    // Create from the section, "On this node" left empty: no role either.
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await picker.fill(`e2e Linus ${stamp}`);
+    await expect(section.getByRole('option', { selected: true })).toContainText('Create');
+    await page.keyboard.press('Enter');
+    const dlg = page.getByRole('dialog', { name: 'New person' });
+    await expect(dlg.getByRole('group', { name: 'On this node' })).toBeVisible();
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(dlg).toHaveCount(0);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.getByTestId('member-role')).toHaveCount(0);
+
+    // Both memberships are role- and note-less in the API too.
+    const members: Member[] = await (await request.get(`/api/nodes/${node.id}/people`)).json();
+    expect(members.map((m) => [m.display_name, m.role, m.note ?? null]).sort()).toEqual([
+      [`e2e Grace ${stamp}`, null, null],
+      [`e2e Linus ${stamp}`, null, null],
+    ]);
+
+    // What was typed in the block doesn't carry over to the next opening.
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await picker.fill(`e2e Edsger ${stamp}`);
+    await expect(section.getByRole('option', { selected: true })).toContainText('Create');
+    await page.keyboard.press('Enter');
+    const onNode = dlg.getByRole('group', { name: 'On this node' });
+    await onNode.getByRole('combobox', { name: 'Role' }).fill('Reviewer');
+    await dlg.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dlg).toHaveCount(0);
+    // Cancelling the editor leaves the picker open, query and all.
+    await expect(picker).toHaveValue(`e2e Edsger ${stamp}`);
+    await picker.click();
+    await expect(section.getByRole('option', { selected: true })).toContainText('Create');
+    await page.keyboard.press('Enter');
+    await expect(onNode.getByRole('combobox', { name: 'Role' })).toHaveValue('');
+    await dlg.getByRole('button', { name: 'Cancel' }).click();
+
+    // The registry's own editor isn't attaching to a node: no block.
+    await page.goto('/people');
+    await page.getByRole('button', { name: 'New person' }).click();
+    await expect(editor(page).getByRole('textbox', { name: 'Name' })).toBeVisible();
+    await expect(editor(page).getByTestId('membership-fields')).toHaveCount(0);
+  } finally {
+    await wipePeople(request, stamp);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
 test('privacy: a sharee sees name and role only; another user\'s person is a 404', async ({ request, otherRequest }) => {
   const stamp = `${Date.now()}`;
   const node = await createNode(request, `e2e people privacy ${stamp}`, { node_type: 'project' });

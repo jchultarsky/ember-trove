@@ -2438,3 +2438,36 @@ async fn only_the_nodes_owner_can_change_its_people() {
         assert_eq!(status, StatusCode::FORBIDDEN, "node {node:#x}");
     }
 }
+
+#[tokio::test]
+async fn a_role_and_note_on_attach_are_validated_and_still_owner_only() {
+    // #162 sends Role and Note with the attach. A bad one is refused before
+    // any write (the stub's add_membership would panic)...
+    let person = Uuid::from_u128(AZ_PERSON);
+    for bad in [
+        serde_json::json!({ "person_id": person, "role": "lead\nreviewer" }),
+        serde_json::json!({ "person_id": person, "role": "x".repeat(101) }),
+        serde_json::json!({ "person_id": person, "note": "n".repeat(2001) }),
+    ] {
+        let (status, _) = people_call(
+            "POST",
+            &format!("/nodes/{}/people", Uuid::from_u128(AZ_OWNED_NODE)),
+            bad,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    // ...and a valid one doesn't widen who may attach: a viewer, an editor
+    // who isn't the canonical owner, and a stranger are all still refused.
+    let body =
+        serde_json::json!({ "person_id": person, "role": "Sponsor", "note": "met at kickoff" });
+    for node in [AZ_VIEW_NODE, AZ_EDIT_NODE, AZ_FOREIGN_NODE, AZ_OWNED_NODE] {
+        let (status, _) = people_call(
+            "POST",
+            &format!("/nodes/{}/people", Uuid::from_u128(node)),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "node {node:#x}");
+    }
+}
