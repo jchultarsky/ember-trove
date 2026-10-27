@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-27)
 
+- **v2.43.0 shipped: person-dialog drafts (#170; PR #178), picker
+  accessibility press (#174; PR #187), rendered node-list excerpts (#175;
+  PR #188), Position vs Role hints (#182; PR #189).**
+  - **Person dialogs keep their input across a reload or navigation**
+    (`common::form_draft`). Owner-approved tradeoff: third parties'
+    contacts sit in `localStorage` while a dialog is dirty, under the
+    editor-draft rules (per user, wiped on logout, 14-day TTL).
+  - **Card excerpts are rendered Markdown** behind their own strict ammonia
+    allow-list (`markdown::render_excerpt`); no links or images, cut at a
+    block or list item past 400 characters.
+  - **Duplicate routine PRs again** (#186 vs #187, 12 s apart, for #174):
+    #186 closed as superseded.
+
 - **v2.42.0 shipped: session renewal in place (#161 gap; PR #176), member
   card contacts (#172; PR #177), Role combobox (#171; PR #179), sidebar vs
   section labels (#173; PR #181), deploy image cleanup (PR #169).**

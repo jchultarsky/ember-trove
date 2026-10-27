@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.43.0] - 2026-10-27
+
 ### Changed
 - **Node list excerpts render as formatted Markdown, and show more (#175).**
   The All Nodes rows printed the body's raw source (`##`, `-`, `[[…]]`, link
