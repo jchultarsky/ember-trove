@@ -3,7 +3,28 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-26)
+## Current state (2026-10-27)
+
+- **v2.40.0 shipped: honest saves (#161; PRs #164, #167), Role and Note at
+  attach (#162; PRs #163, #165), and migration 039 (#160).**
+  - **Node saves can't stall silently.** "Still saving…" at 5 s; at 15 s
+    the save is given up on, with Retry, even when the request never
+    settles (the 401 refresh path). Unsaved edits are kept as a local draft
+    until a save lands, with Restore / Discard on return.
+  - **No late overwrite.** Edit-mode saves send `expected_updated_at`;
+    `PUT /api/nodes/{id}` answers 412 for a stale version and writes
+    nothing (checked after authorization). The editor re-sends on top of
+    its own text and otherwise says "changed elsewhere"; it overwrites only
+    on an explicit Retry or Save.
+  - **Drafts are per user and wiped at logout**, edit and new-node drafts
+    alike; the old shared new-node key is deleted unread (it used to leak
+    a draft to the next account in the browser).
+  - **People:** picking or creating someone from a node's People section
+    can set the membership's Role and Note in the same step.
+  - **Process lesson:** issue-monitor PRs (#163, #164) and manually proposed
+    sessions duplicated each other on #161/#162. A `claude:handled` /
+    `state: in-progress` label means the routine already owns the issue —
+    check for its PR before starting a session.
 
 - **v2.39.0 shipped: People follow-ups (#154, #155, #156; PRs #157–#159).**
   - **Addresses are a list**, like emails and phones: zero or more, each
@@ -51,8 +72,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
     - an unmount-after-await panic on the search page.
   - **Architecture decision:** documents vs entities. People are the first
     owned entity that isn't anchored to a node, so their authorization is
-    owner-based rather than following node permissions. The planned ontology
-    session can build on that without unpicking it.
+    owner-based rather than following node permissions. A later ontology
+    session can build on that without unpicking it (deferred, owner decision
+    2026-10-26; see Backlog).
 
 - **v2.36.0 shipped: a project's status is a field (#143, PR #144).**
   - **The field:** `nodes.project_status`, an open-valued token of at most
@@ -334,12 +356,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   three security fixes (rate-limit `/share/{token}`, node-scoped token revoke,
   webhook-dispatch DNS re-vet + pinning — `api/src/ssrf.rs`) and the
   community-health set (SECURITY.md, CoC, issue/PR templates, `license = MIT`).
-- **v3 groundwork (post-2.23.0, on `feature/jc/local-auth`):** zero-AWS local
-  login via a bundled Keycloak issuer (`./scripts/dev-local.sh`) whose
+- **Zero-AWS local login (PR #43, merged 2026-07-17):** a bundled Keycloak issuer (`./scripts/dev-local.sh`) whose
   `cognito:groups` protocol mapper leaves the token path unchanged; only API
   change is a Cognito-only guard on `/auth/change-password`. Verified
-  end-to-end (login → `/api/auth/me` roles:["admin"]). Known follow-up: the
-  Keycloak login page renders unstyled through the proxy (cosmetic).
+  end-to-end (login → `/api/auth/me` roles:["admin"]). The README quickstart
+  documents it; the unstyled login page was fixed later (theme assets served).
 - **v2.22.3 shipped** — first release under the personal `jchultarsky` account
   (repo transferred from `jchultarsky101`, 2026-07). Patched RUSTSEC-2026-0193
   (ammonia mXSS — the user-markdown sanitizer, a stored-XSS vector here) and
@@ -354,91 +375,39 @@ Keep it current as part of each change (see `POLICY.md` §10).
   reporting enabled on the repo), Contributor Covenant 2.1, issue/PR
   templates, `license = "MIT"` in all crate manifests.
 - **2026-07-17 full-codebase review** (backend + frontend + test-infra survey)
-  produced the plan of record below. Three concrete security findings are in
-  progress on `feature/jc/security-hardening` (target v2.22.4).
+  produced the plan of record below. Its three security findings shipped in
+  v2.23.0 (the planned v2.22.4 patch was folded into it).
 
-## Plan of record (2026-07-17 review)
+## Plan of record (2026-07-17 review) — closed
 
-- **v2.24.0 — "keyboard & a11y" (planned 2026-07-18):** unify the ad-hoc
-  keyboard handling into one model. Current state (inventory): no central
-  dispatcher — 3 window-level keydown listeners (layout, my_day, inbox_triage)
-  + ~15 element-scoped handlers, the editable-guard copy-pasted 3× with the
-  triage copy diverging (omits BUTTON/contenteditable), the `help.rs` shortcut
-  table display-only and free to drift from real dispatch, a leaked Cmd-K
-  listener (`layout.rs:131`, no `on_cleanup`), and the graph with zero keyboard
-  support. Target: one global dispatcher owned by `Layout`; a shortcut registry
-  whose match logic is a pure `common/` fn (host-testable) that also generates
-  the help table (no drift); a `KeyboardScope` context replacing "which
-  component is mounted" (Global/MyDay/Graph + exclusive Triage/Palette/Modal);
-  one shared `is_editable_target()`. Phases, each a shippable PR:
-  0. Extract `is_editable_target()` + reconcile the 3 copies; fix the Cmd-K
-     leak. Two bug fixes, no UX change. *(in progress)*
-  1. Registry + pure match fn in `common/`; help table generated from it;
-     collapse the two `layout.rs` listeners into one.
-  2. Overlay-scope suppression: `in_overlay` flag per registry row +
-     `overlay_active` arg to `match_global`, so navigating keys don't leak
-     through the palette/help (fixed a real bug — `g` navigated through the
-     open help modal). *Reframed from the original "full KeyboardScope + view
-     registration": that was mostly redundant with the phase-0 editable-guard,
-     and the view-scope abstraction's real consumer is phase 3 — so it folds
-     there rather than shipping as unused infrastructure.*
-  3. Graph keyboard/a11y baseline (shipped): each node is a focusable
-     `button` (tabindex/role/aria-label) with a focus ring and Enter/Space
-     activation — the graph is Tab-navigable and screen-reader-legible, done
-     with **native focus** (no custom cursor). *Finding: this is the THIRD
-     phase where the `KeyboardScope` model proved unnecessary (0 used the
-     editable-guard, 1 the registry, 2 overlay flags, 3 native focus). The
-     scope model was a solution without a problem — **dropped from the plan.**
-     The only thing that would want it is optional arrow-key SPATIAL graph
-     navigation (a "3b" UX enhancement, not an a11y requirement); revisit only
-     if that's wanted.*
-  4. a11y sweep on touched surfaces (`aria-selected`/`aria-activedescendant`).
-  Boundary: do NOT centralize the palette/triage internal state machines —
-  centralize guard/registry/dispatch/scope only. Risk to watch: a panic in the
-  dispatcher poisons ALL keyboard handling (the v2.21.1 lesson), so its core
-  is a pure fn and every e2e collects `pageerror`. Only destructive shortcut is
-  `d`=delete, and both paths are reversible (soft-delete/undo) — no new
-  security surface.
+Every item of that plan has shipped or been re-filed; details are in the
+release entries above and in git history.
 
-- **v2.22.4 — security patch (in progress):**
-  1. `/share/{token}` joins the rate-limited router group — it was the only
-     unauthenticated, ungoverned endpoint, and it performs a token lookup.
-  2. `revoke_share_token` scopes the DELETE to the node in the path
-     (`WHERE id = $1 AND node_id = $2`) — previously any node owner could
-     revoke any share token by id (cross-node).
-  3. Webhook dispatch re-resolves and re-vets the target host, then pins the
-     HTTP client to the vetted addresses (`resolve_to_addrs`) — closes the
-     DNS-rebinding TOCTOU left by create/update-time-only SSRF validation.
-  Plus: clear the Dependabot backlog (incl. the month-old tower-http 0.6→0.7
-  semver-major, which needs a real review).
-- **v2.23.0 — "trust the suite":** the review found coverage inverted vs risk.
-  Registration + behavior tests for the six untested route groups (admin,
-  backup, metrics, export, attachments, editor_prefs — the privileged
-  surfaces); e2e specs for the knowledge-graph half (graph_view.rs 2.4k lines,
-  node_editor, node_view have none today); repo-layer tests against real
-  Postgres (reuse the CI migration-validation container); raise the coverage
-  floor above 17% as this lands. Product decisions due: **webhooks** —
-  DECIDED 2026-07-17: shipped the UI (`/webhooks`; building it surfaced and
-  fixed the secret-wiping update semantics). **`/search` view** — DECIDED
-  2026-07-17: KEEP. The "orphaned" claim was overstated (the sidebar search
-  box navigates there on Enter / "View all"); the real gap was palette
-  parity, closed with `Go to Search` (+ `Go to Webhooks`) commands. Do not
-  fold the full search page into the palette — presets/filters/full results
-  are a different job than quick-jump.
-- **v3 candidates — OSS launch:** self-contained local auth (Keycloak/dex with
-  a `cognito:groups` claim mapper) to restore zero-AWS clone-and-run —
-  **promoted from deferred**: it is the main adoption barrier now the repo is
-  public by intent. A11y systematization beyond modals (~44 aria occurrences
-  crate-wide; keyboard dispatch hand-rolled in 23 files).
-- **Opportunistic refactors** (do while touching the area, never big-bang):
-  consolidate the three parallel task-row components (task_row / task_panel /
-  inbox_view); extract a shared debounce helper (pattern re-derived in 6
-  files); merge the three `repo/search.rs` query builders (kills the
-  `too_many_arguments` allows); adopt `#[from] sqlx::Error` in repos (~146
-  `Internal(format!)` sites); split `graph_view.rs` (move pure layout
-  algorithms out) and `routes/nodes.rs` (27 handlers); route node export
-  through the UI API client (raw `<a href>` today); drop the duplicate
-  `nodes(owner_id)` index (migration 021 duplicates 001).
+- **v2.22.4 security patch:** folded into v2.23.0 (rate-limited
+  `/share/{token}`, node-scoped token revoke, webhook DNS re-vet + pinning).
+  The share-token surface itself was removed in v2.37.0.
+- **v2.23.0 "trust the suite":** shipped (route-group tests, graph e2e,
+  Postgres repo tests, coverage gate). Webhooks UI kept; `/search` kept.
+- **v2.24.0 keyboard & a11y:** phases 0–3 shipped (PRs #47–#50: one
+  editable-guard, the `common::keyboard` registry driving dispatch and help,
+  overlay suppression, a focusable graph). `KeyboardScope` was dropped as
+  unnecessary. Phase 4 (a11y sweep) continued piecemeal: named icon
+  buttons and the unnamed-button e2e scan (v2.35.0), APG comboboxes
+  (v2.34.0).
+- **v3 / OSS launch:** zero-AWS local login shipped in PR #43 (Keycloak,
+  `./scripts/dev-local.sh`). Anything beyond it is deferred; see Backlog.
+- **Opportunistic refactors** (do while touching the area, never big-bang).
+  Done: one task-row scaffold (v2.25.0), the duplicate `nodes(owner_id)`
+  index dropped (migration 039). Still open (counted 2026-10-26):
+  - merge the three `repo/search.rs` query builders (3
+    `too_many_arguments` allows);
+  - adopt `#[from] sqlx::Error` in repos (203 `Internal(format!)` sites,
+    up from ~146);
+  - split `graph_view.rs` (2,171 lines; move pure layout out) and
+    `routes/nodes.rs` (1,309 lines);
+  - route node export through the UI API client (three raw `<a href>`
+    links in `node_list.rs` / `node_view.rs`);
+  - a shared debounce helper (the pattern is still re-derived per view).
 
 ## Prior state (2026-06-10)
 
@@ -536,15 +505,27 @@ Keep it current as part of each change (see `POLICY.md` §10).
   transclusion demand materializes.
 - ~~UI test strategy~~ **Decided 2026-06-10: Playwright** (`e2e/`, CI job
   `e2e`) after v2.21.1 proved host-side gates can't see WASM runtime bugs.
-  Smoke-level today (5 specs); grow specs alongside new UI surfaces, and keep
-  pushing pure logic into `common/` for unit coverage.
+  19 specs today; grow them alongside new UI surfaces, and keep pushing pure
+  logic into `common/` for unit coverage.
+- **Known gaps after #161 (not yet scheduled):**
+  - On a 401, the API client reloads the page instead of retrying the
+    request (`api::handle_error_response`). Drafts and the give-up now make
+    this safe, but a retry would avoid the reload.
+  - An edit draft's restore offer doesn't say if the node changed since the
+    draft was taken (no base fingerprint), and drafts never expire.
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
   not a repo deliverable).
-- **Self-contained local auth (deferred):** local login needs a Cognito pool — there's no
-  bundled IdP since the Keycloak→Cognito migration. README now documents "bring your own
-  Cognito". A local OIDC container (Keycloak/dex with a `cognito:groups` claim mapper) would
-  restore zero-AWS clone-and-run, but partially reverses that migration for local — revisit
-  only if the cloner experience needs it.
+- **Deferred by owner decision (2026-10-26), not critical:**
+  - **Further local-auth work.** Zero-AWS login already ships (Keycloak via
+    `./scripts/dev-local.sh`, PR #43). Anything more, such as running e2e
+    against Keycloak instead of the bypass, waits.
+  - **The ontology session** (typed relations / entities beyond People).
+    People's owner-based authorization model is the starting point when it
+    resumes.
+- **Blocked upstream:** tower-http 0.7 (#101) waits for reqwest to move off
+  0.6, or the bump duplicates the crate.
+- **Kept deferred:** block references / transclusion; arrow-key spatial
+  graph navigation (keyboard "3b").
 
 ## Architecture decisions (ADR-lite)
 

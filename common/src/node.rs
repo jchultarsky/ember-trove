@@ -111,6 +111,14 @@ pub struct UpdateNodeRequest {
         deserialize_with = "crate::task::deser_double_opt"
     )]
     pub project_status: Option<Option<String>>,
+    /// Optimistic-concurrency precondition (#161): the node's `updated_at`
+    /// as the client last saw it. When set, the update applies only if the
+    /// node is still at that version; otherwise the API answers 412 and
+    /// writes nothing, so a save that lands late can never overwrite a newer
+    /// one. `None` keeps last-write-wins (every caller but the node editor).
+    #[garde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -110,7 +110,12 @@ impl NodeRepo for StubNodeRepo {
     async fn list(&self, _: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
         unimplemented!()
     }
-    async fn update(&self, _: NodeId, _: UpdateNodeRequest) -> Result<Node, EmberTroveError> {
+    async fn update(&self, _: NodeId, req: UpdateNodeRequest) -> Result<Node, EmberTroveError> {
+        // A precondition always "fails" here, so a 412 proves the handler
+        // got past authorization; anything else must not reach the repo.
+        if req.expected_updated_at.is_some() {
+            return Err(EmberTroveError::PreconditionFailed("stub".into()));
+        }
         unimplemented!()
     }
     async fn delete(&self, _: NodeId) -> Result<(), EmberTroveError> {
@@ -2196,6 +2201,36 @@ async fn a_viewer_cannot_set_a_project_status() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+// ── Save precondition (#161) ──────────────────────────────────────────────────
+
+fn versioned_put() -> serde_json::Value {
+    serde_json::json!({ "body": "x", "expected_updated_at": "2026-10-26T12:00:00Z" })
+}
+
+#[tokio::test]
+async fn a_stale_save_version_is_a_412_for_an_editor() {
+    assert_eq!(
+        node_put(AZ_EDIT_NODE, versioned_put()).await,
+        StatusCode::PRECONDITION_FAILED
+    );
+}
+
+#[tokio::test]
+async fn the_version_check_never_runs_for_a_viewer_or_a_stranger() {
+    // Authorization comes first: a viewer or a stranger gets the same
+    // answer as without a precondition, so the version check can't be used
+    // to probe a node they may not edit (the stub 412s if it is reached).
+    assert_eq!(
+        node_put(AZ_VIEW_NODE, versioned_put()).await,
+        StatusCode::FORBIDDEN
+    );
+    let stranger = node_put(AZ_FOREIGN_NODE, versioned_put()).await;
+    assert!(
+        stranger == StatusCode::FORBIDDEN || stranger == StatusCode::NOT_FOUND,
+        "{stranger}"
+    );
+}
+
 #[tokio::test]
 async fn an_invalid_project_status_is_rejected_before_any_write() {
     // The stub's `update` is unimplemented: reaching it would panic, so a
@@ -2393,6 +2428,39 @@ async fn only_the_nodes_owner_can_change_its_people() {
     let body = serde_json::json!({ "person_id": Uuid::from_u128(AZ_PERSON) });
     // A viewer, an editor who isn't the owner, and a stranger: all refused
     // before anything is written (the stub's add_membership would panic).
+    for node in [AZ_VIEW_NODE, AZ_EDIT_NODE, AZ_FOREIGN_NODE, AZ_OWNED_NODE] {
+        let (status, _) = people_call(
+            "POST",
+            &format!("/nodes/{}/people", Uuid::from_u128(node)),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "node {node:#x}");
+    }
+}
+
+#[tokio::test]
+async fn a_role_and_note_on_attach_are_validated_and_still_owner_only() {
+    // #162 sends Role and Note with the attach. A bad one is refused before
+    // any write (the stub's add_membership would panic)...
+    let person = Uuid::from_u128(AZ_PERSON);
+    for bad in [
+        serde_json::json!({ "person_id": person, "role": "lead\nreviewer" }),
+        serde_json::json!({ "person_id": person, "role": "x".repeat(101) }),
+        serde_json::json!({ "person_id": person, "note": "n".repeat(2001) }),
+    ] {
+        let (status, _) = people_call(
+            "POST",
+            &format!("/nodes/{}/people", Uuid::from_u128(AZ_OWNED_NODE)),
+            bad,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    // ...and a valid one doesn't widen who may attach: a viewer, an editor
+    // who isn't the canonical owner, and a stranger are all still refused.
+    let body =
+        serde_json::json!({ "person_id": person, "role": "Sponsor", "note": "met at kickoff" });
     for node in [AZ_VIEW_NODE, AZ_EDIT_NODE, AZ_FOREIGN_NODE, AZ_OWNED_NODE] {
         let (status, _) = people_call(
             "POST",
