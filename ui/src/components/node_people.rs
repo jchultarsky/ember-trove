@@ -7,6 +7,7 @@
 //! Only the node's own owner can add, edit or remove, and the picker offers
 //! only their own registry.
 
+use common::form_draft::PersonForm;
 use common::id::{NodeId, PersonId};
 use common::person::{
     CARD_CONTACTS, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
@@ -17,9 +18,7 @@ use leptos_router::hooks::use_navigate;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::node_section::{NodeSection, SectionShell};
-use crate::components::people_view::{
-    ContactAction, ContactKind, EditorTarget, HINT_CLASS, PersonEditor,
-};
+use crate::components::people_view::{ContactAction, ContactKind, HINT_CLASS, PersonEditor};
 use crate::components::toast::{ToastLevel, push_toast};
 
 const INPUT_CLASS: &str = "w-full text-xs bg-stone-100 dark:bg-stone-800 text-stone-800 \
@@ -285,7 +284,7 @@ pub fn NodePeoplePanel(
 
     view! {
         <SectionShell section=NodeSection::People open=open count=count actions=actions>
-            <PersonEditor open=editor_open target=EditorTarget::New
+            <PersonEditor open=editor_open form=PersonForm::NewOnNode(node_id)
                 initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
                 membership=new_membership on_saved=on_created />
             {move || adding.get().then(|| {

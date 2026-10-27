@@ -15,6 +15,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   Text only: no schema or behavior change.
 
 ### Fixed
+- **A reload no longer loses what you typed in the person dialog (#170).**
+  The New person and Edit person dialogs held their input only in memory,
+  so a reload (the very action the new-version banner invites), a closed
+  tab or a navigation away dropped it silently. What's typed is now kept
+  on this device while the dialog is open, and the next time its page
+  loads the dialog reopens with it and a notice offering Discard. An edit
+  warns when the person was changed since. Save, Cancel and Escape (which
+  still has Undo) drop the draft, and a dialog nobody typed in keeps
+  nothing. While such a dialog is open, the update banner says the form
+  comes back after the reload.
 - **Picker options answer an accessibility press (#174).** The person,
   Role, node and project-status pickers committed an option only on
   `mousedown`, which VoiceOver, AXPress and `element.click()` never send:
@@ -23,6 +33,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   (`common::picker::is_pointer_press`). The person and status pickers'
   `aria-expanded` now says `false` when the list is empty, instead of
   always `true`.
+
+### Security
+- **Person-dialog drafts follow the editor-draft rules (#170).** They hold
+  third parties' contact details in `localStorage`, so they are keyed by
+  user (another account in the browser never sees them), wiped on logout,
+  and expire 14 days after their last write, like node drafts. They never
+  leave the device.
 
 ## [2.42.0] - 2026-10-27
 
