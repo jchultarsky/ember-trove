@@ -82,6 +82,10 @@ CI job is too slow a feedback loop for selector work.
   the People section's Role field has `role="combobox"`, so
   `getByRole('textbox', { name: 'Role' })` never matches. Use
   `getByRole('combobox', { name: 'Role' })`.
+- **Wait for the person picker's option before Enter** (2026-10-26, #162):
+  the registry loads after the picker opens, so `fill` then `Enter` can land
+  on "Create “…”" and open the editor. Assert
+  `getByRole('option', { selected: true })` contains the person first.
 - **Duplicate titles can't be made with one user** (the API returns 409). To
   test same-titled search results, intercept `/api/search` with
   `page.route` (`node_picker.spec.ts`).

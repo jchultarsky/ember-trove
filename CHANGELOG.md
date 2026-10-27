@@ -18,6 +18,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   travel in the existing `POST /api/nodes/{id}/people` body, so the API is
   unchanged.
 
+### Tooling
+- **More test coverage for #162.** A route test pins two things about
+  `POST /api/nodes/{id}/people`. A bad Role or Note is refused before any
+  write. A valid Role/Note body still doesn't let a viewer, a non-owner
+  editor, a stranger or a non-canonical Owner attach. A new e2e test
+  covers the empty paths: an empty attach step and an empty "On this
+  node" block both make the same role-less membership as before. It also
+  covers Escape back to the search, the block clearing between openings,
+  and no block in the registry editor.
+
 ### Changed
 - **Migration 039 drops the duplicate index on `nodes.owner_id`.** Migration
   001 (`idx_nodes_owner`) and 021 (`nodes_owner_id_idx`) indexed the same
