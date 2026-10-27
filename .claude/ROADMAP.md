@@ -3,7 +3,28 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-26)
+## Current state (2026-10-27)
+
+- **v2.40.0 shipped: honest saves (#161; PRs #164, #167), Role and Note at
+  attach (#162; PRs #163, #165), and migration 039 (#160).**
+  - **Node saves can't stall silently.** "Still saving…" at 5 s; at 15 s
+    the save is given up on, with Retry, even when the request never
+    settles (the 401 refresh path). Unsaved edits are kept as a local draft
+    until a save lands, with Restore / Discard on return.
+  - **No late overwrite.** Edit-mode saves send `expected_updated_at`;
+    `PUT /api/nodes/{id}` answers 412 for a stale version and writes
+    nothing (checked after authorization). The editor re-sends on top of
+    its own text and otherwise says "changed elsewhere"; it overwrites only
+    on an explicit Retry or Save.
+  - **Drafts are per user and wiped at logout**, edit and new-node drafts
+    alike; the old shared new-node key is deleted unread (it used to leak
+    a draft to the next account in the browser).
+  - **People:** picking or creating someone from a node's People section
+    can set the membership's Role and Note in the same step.
+  - **Process lesson:** issue-monitor PRs (#163, #164) and manually proposed
+    sessions duplicated each other on #161/#162. A `claude:handled` /
+    `state: in-progress` label means the routine already owns the issue —
+    check for its PR before starting a session.
 
 - **v2.39.0 shipped: People follow-ups (#154, #155, #156; PRs #157–#159).**
   - **Addresses are a list**, like emails and phones: zero or more, each
