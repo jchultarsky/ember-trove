@@ -360,7 +360,15 @@ pub fn NodePicker(
                                     // its blur doesn't close the list mid-press.
                                     on:mousedown=move |ev: web_sys::MouseEvent| {
                                         ev.prevent_default();
-                                        commit(i);
+                                        if common::picker::is_pointer_press(ev.detail()) {
+                                            commit(i);
+                                        }
+                                    }
+                                    // An accessibility press is a bare click (#174).
+                                    on:click=move |ev: web_sys::MouseEvent| {
+                                        if !common::picker::is_pointer_press(ev.detail()) {
+                                            commit(i);
+                                        }
                                     }
                                 >
                                     <span class="material-symbols-outlined text-stone-400 flex-shrink-0"
