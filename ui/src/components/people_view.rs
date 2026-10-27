@@ -16,6 +16,7 @@ use crate::components::empty_state::EmptyState;
 use crate::components::format_helpers::copy_to_clipboard;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::modals::{ModalPlacement, ModalShell};
+use crate::components::node_people::{MembershipDraft, MembershipFields};
 use crate::components::page_header::PageHeader;
 use crate::components::toast::{ToastLevel, push_toast, push_undo_toast};
 
@@ -300,6 +301,11 @@ pub fn PersonEditor(
     /// already closed.
     #[prop(into)]
     on_saved: Callback<Person>,
+    /// Creating from a node's People section (#162): the membership's Role
+    /// and Note, under an "On this node" heading. The caller saves them
+    /// with the attach; a blank block attaches as before.
+    #[prop(optional)]
+    membership: Option<MembershipDraft>,
 ) -> impl IntoView {
     let draft = PersonDraft::new();
     let baseline = StoredValue::new(PersonInput::default());
@@ -328,6 +334,9 @@ pub fn PersonEditor(
             } else {
                 draft.load(initial.get_untracked());
                 baseline.set_value(draft.read());
+                if let Some(m) = membership {
+                    m.clear();
+                }
             }
         }
         is_open
@@ -365,7 +374,10 @@ pub fn PersonEditor(
     let dismiss = Callback::new(move |()| {
         let typed = draft.read();
         open.set(false);
-        if typed != baseline.get_value() {
+        // Undo keeps the membership fields too: they aren't cleared until
+        // the next fresh opening.
+        let membership_typed = membership.is_some_and(|m| !m.is_blank());
+        if typed != baseline.get_value() || membership_typed {
             push_undo_toast(
                 "Changes discarded",
                 std::sync::Arc::new(move || {
@@ -445,6 +457,19 @@ pub fn PersonEditor(
                     <textarea rows="4" class=INPUT_CLASS prop:value=move || draft.notes.get()
                         on:input=move |ev| draft.notes.set(event_target_value(&ev)) />
                 </label>
+                // The membership's fields, set apart from the person's: the
+                // heading says they belong to this node, not to the card.
+                {membership.map(|m| view! {
+                    <div role="group" aria-label="On this node"
+                        class="space-y-1.5 pt-4 border-t border-stone-200 dark:border-stone-800"
+                        data-testid="membership-fields">
+                        <h3 class="text-sm font-medium text-stone-800 dark:text-stone-200">"On this node"</h3>
+                        <p class="text-xs text-stone-500 dark:text-stone-400">
+                            "Optional. Their role and a note here; Position stays on their card."
+                        </p>
+                        <MembershipFields draft=m />
+                    </div>
+                })}
             </form>
             // Pinned, so Save stays reachable on a phone however long the form.
             <div class="flex items-center justify-end gap-2 px-4 pt-3 border-t border-stone-200 dark:border-stone-800"
