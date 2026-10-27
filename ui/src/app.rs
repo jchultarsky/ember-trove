@@ -69,6 +69,7 @@ pub fn App() -> impl IntoView {
     // 14-day TTL, whoever's they are.
     crate::draft::purge_legacy_create_draft();
     crate::draft::sweep_expired_drafts();
+    provide_context(crate::draft::OpenForms(RwSignal::new(0)));
 
     // Persist theme in localStorage; with no stored preference, follow the
     // OS (`prefers-color-scheme`) — matches the static loading screen, which

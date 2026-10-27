@@ -181,6 +181,20 @@ mark {
 .prose em { font-style: italic; }
 .prose > :first-child { margin-top: 0; }
 
+/* Node-list card excerpts (#175): rendered Markdown at body size, compact.
+   Headings arrive demoted to bold paragraphs; links are inert spans. */
+.node-excerpt { line-height: 1.45; }
+.node-excerpt p, .node-excerpt ul, .node-excerpt ol, .node-excerpt li { margin: 0; }
+.node-excerpt ul, .node-excerpt ol { padding-left: 1.1em; }
+.node-excerpt ul { list-style-type: disc; }
+.node-excerpt ol { list-style-type: decimal; }
+.node-excerpt strong { font-weight: 600; color: #57534e; } /* stone-600 */
+.node-excerpt code { font-size: 0.95em; background: #f5f5f4; border-radius: 0.25em; padding: 0 0.25em; } /* stone-100 */
+.node-excerpt .excerpt-link { color: #b45309; } /* amber-700 */
+.dark .node-excerpt strong { color: #d6d3d1; } /* stone-300 */
+.dark .node-excerpt code { background: #292524; } /* stone-800 */
+.dark .node-excerpt .excerpt-link { color: #fbbf24; } /* amber-400 */
+
 /* Dark mode — prose */
 .dark .prose h1, .dark .prose h2, .dark .prose h3,
 .dark .prose h4, .dark .prose h5, .dark .prose h6 { color: #e7e5e4; } /* stone-200 */

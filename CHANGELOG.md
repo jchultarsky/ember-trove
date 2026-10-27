@@ -6,6 +6,57 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.43.0] - 2026-10-27
+
+### Changed
+- **Node list excerpts render as formatted Markdown, and show more (#175).**
+  The All Nodes rows printed the body's raw source (`##`, `-`, `[[…]]`, link
+  URLs, table pipes) in three lines. They now show up to five lines of
+  rendered text: paragraphs, lists, emphasis and inline code render;
+  headings appear as bold lines at body size; links and wiki-links show
+  their text, styled but inert, so the row stays the only click target;
+  task-list items keep their state as ☐ / ☑; a table shows its header cells
+  joined by " · ". Images, code blocks, rules and raw HTML are left out.
+  Rendering is client-side (`markdown::render_excerpt`) and stops early for
+  long bodies, a body that is one long list included, with unit tests.
+- **The person editor explains Position vs Role (#182).** Position now has
+  the hint "Their job title — stays with the person on every node.", and
+  every Role field (the attach step, "On this node" in the editor, and Edit
+  role and note) has "Their part in this node only." Both hints are tied to
+  their field with `aria-describedby`, so screen readers announce them too.
+  Text only: no schema or behavior change.
+
+### Fixed
+- **A reload no longer loses what you typed in the person dialog (#170).**
+  The New person and Edit person dialogs held their input only in memory,
+  so a reload (the very action the new-version banner invites), a closed
+  tab or a navigation away dropped it silently. What's typed is now kept
+  on this device while the dialog is open, and the next time its page
+  loads the dialog reopens with it and a notice offering Discard. An edit
+  warns when the person was changed since. Save, Cancel and Escape (which
+  still has Undo) drop the draft, and a dialog nobody typed in keeps
+  nothing. While such a dialog is open, the update banner says the form
+  comes back after the reload.
+- **Picker options answer an accessibility press (#174).** The person,
+  Role, node and project-status pickers committed an option only on
+  `mousedown`, which VoiceOver, AXPress and `element.click()` never send:
+  they send a bare `click` (click count 0). An option now commits on a
+  pointer's `mousedown` or on a synthetic `click`, exactly once either way
+  (`common::picker::is_pointer_press`). The person and status pickers'
+  `aria-expanded` now says `false` when the list is empty, instead of
+  always `true`.
+
+### Security
+- **Person-dialog drafts follow the editor-draft rules (#170).** They hold
+  third parties' contact details in `localStorage`, so they are keyed by
+  user (another account in the browser never sees them), wiped on logout,
+  and expire 14 days after their last write, like node drafts. They never
+  leave the device.
+- The excerpt (#175) goes through its own strict ammonia allow-list (`p`,
+  `strong`, `em`, `del`, `code`, lists, `br`, and `span` with one class
+  only), so raw HTML, `style`, links and images in a body can't reach the
+  list page. Tests cover script, event-handler and `style` payloads.
+
 ## [2.42.0] - 2026-10-27
 
 ### Changed

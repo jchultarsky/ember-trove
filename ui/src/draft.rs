@@ -25,10 +25,12 @@
 //! All operations are infallible — a missing `localStorage` (private
 //! browsing, SSR) degrades to "no draft", same as `recent.rs`.
 
+use common::form_draft::PersonFormDraft;
 use common::save_watch::{
     EditDraft, LEGACY_CREATE_DRAFT_KEY, Sweep, create_draft_key, edit_draft_key, is_draft_key,
     is_expired, sweep,
 };
+use leptos::prelude::RwSignal;
 use serde::{Deserialize, Serialize};
 
 /// Unsaved create-mode editor state.
@@ -154,6 +156,47 @@ pub fn clear_edit_draft(subject: &str, node_id: &str) {
     }
 }
 
+// ── Modal-form drafts (#170) ───────────────────────────────────────────
+
+/// Read the draft stored under `key` (a `common::form_draft::PersonForm`
+/// key), if any. An expired one is removed.
+pub fn read_person_draft(key: &str) -> Option<PersonFormDraft> {
+    let s = storage()?;
+    let d = PersonFormDraft::parse(&s.get_item(key).ok().flatten()?)?;
+    if is_expired(d.saved_at, now_ms()) {
+        let _ = s.remove_item(key);
+        return None;
+    }
+    Some(d)
+}
+
+/// Keep what a person dialog holds. Silently no-ops on any storage error,
+/// and after logout.
+pub fn write_person_draft(key: &str, draft: &PersonFormDraft) {
+    if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let draft = PersonFormDraft {
+        saved_at: Some(now_ms()),
+        ..draft.clone()
+    };
+    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(&draft)) {
+        let _ = s.set_item(key, &json);
+    }
+}
+
+/// Drop a form draft (saved, cancelled, dismissed or discarded).
+pub fn clear_form_draft(key: &str) {
+    if let Some(s) = storage() {
+        let _ = s.remove_item(key);
+    }
+}
+
+/// How many dialogs that keep a draft are open, so the update banner can
+/// say that reloading keeps their input (#170). Provided at the app root.
+#[derive(Clone, Copy)]
+pub struct OpenForms(pub RwSignal<u32>);
+
 /// Remove expired drafts and date unstamped ones (v2.40.0), for every user
 /// on this device. Run once at startup: a draft of a node nobody reopens is
 /// never read, so read-time expiry alone would keep it forever.
@@ -182,7 +225,7 @@ pub fn sweep_expired_drafts() {
     }
 }
 
-/// Remove every editor draft on this device (edit and create drafts of
+/// Remove every draft on this device (edit, create and form drafts of
 /// every user, and the legacy key) and stop writing new ones. Called on
 /// logout so node content doesn't outlive the session in `localStorage`.
 pub fn clear_all_drafts() {
