@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.42.0] - 2026-10-27
+
 ### Changed
 - **The sidebar's Tasks, Notes and People no longer look like a node's own
   sections (#173).** The sidebar stays global. A node page's Notes section
