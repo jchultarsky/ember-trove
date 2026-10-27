@@ -1,6 +1,6 @@
 use gloo_net::http::Request;
 
-use super::{api_url, delete_empty, get_json, parse_json, post_action};
+use super::{api_url, delete_empty, get_json, parse_json, post_action, send_authed};
 use crate::error::UiError;
 
 pub async fn list_backups() -> Result<Vec<common::backup::BackupJob>, UiError> {
@@ -10,21 +10,18 @@ pub async fn list_backups() -> Result<Vec<common::backup::BackupJob>, UiError> {
 pub async fn create_backup_api(
     comment: Option<String>,
 ) -> Result<common::backup::BackupJob, UiError> {
-    let builder = Request::post(&api_url("/admin/backups"));
-    let resp = if let Some(ref c) = comment {
-        builder
-            .header("Content-Type", "application/json")
-            .body(serde_json::json!({ "comment": c }).to_string())
-            .map_err(|e| UiError::Network(e.to_string()))?
-            .send()
-            .await
-            .map_err(|e| UiError::Network(e.to_string()))?
-    } else {
-        builder
-            .send()
-            .await
-            .map_err(|e| UiError::Network(e.to_string()))?
-    };
+    let url = api_url("/admin/backups");
+    let resp = send_authed(|| {
+        let builder = Request::post(&url);
+        match &comment {
+            Some(c) => builder
+                .header("Content-Type", "application/json")
+                .body(serde_json::json!({ "comment": c }).to_string()),
+            None => builder.build(),
+        }
+        .map_err(|e| UiError::Parse(e.to_string()))
+    })
+    .await?;
     parse_json(resp).await
 }
 

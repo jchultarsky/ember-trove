@@ -2,9 +2,8 @@ use common::{
     id::SearchPresetId,
     search::{CreateSearchPresetRequest, SearchPreset, SearchResponse},
 };
-use gloo_net::http::Request;
 
-use super::{api_url, delete_empty, get_json, parse_json, post_json};
+use super::{api_url, delete_empty, get_json, get_request, parse_json, post_json, send_authed};
 use crate::error::UiError;
 
 /// Search nodes.
@@ -58,10 +57,7 @@ pub async fn search_nodes(
     if let Some(d) = updated_before {
         url.push_str(&format!("&updated_before={d}"));
     }
-    let resp = Request::get(&url)
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
+    let resp = send_authed(|| get_request(&url)).await?;
     parse_json(resp).await
 }
 

@@ -9,7 +9,7 @@ use common::{
 };
 use gloo_net::http::Request;
 
-use super::{api_url, delete_empty, get_json, parse_json, post_json, put_json};
+use super::{api_url, delete_empty, get_json, parse_json, post_json, put_json, send_authed};
 use crate::error::UiError;
 
 /// The caller's people; `q` filters on name, company, email and phone.
@@ -52,12 +52,13 @@ pub async fn create_person(input: &PersonInput, confirm: bool) -> Result<SavePer
     } else {
         "/people"
     };
-    let resp = Request::post(&api_url(path))
-        .json(input)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
+    let url = api_url(path);
+    let resp = send_authed(|| {
+        Request::post(&url)
+            .json(input)
+            .map_err(|e| UiError::Parse(e.to_string()))
+    })
+    .await?;
     if resp.status() == 409 {
         let warning = resp
             .json::<DuplicateWarning>()
@@ -80,12 +81,13 @@ pub async fn update_person(
     } else {
         format!("/people/{id}")
     };
-    let resp = Request::put(&api_url(&path))
-        .json(input)
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
+    let url = api_url(&path);
+    let resp = send_authed(|| {
+        Request::put(&url)
+            .json(input)
+            .map_err(|e| UiError::Parse(e.to_string()))
+    })
+    .await?;
     if resp.status() == 409 {
         let warning = resp
             .json::<DuplicateWarning>()

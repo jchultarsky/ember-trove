@@ -56,6 +56,7 @@ pub mod project_status;
 pub mod quickadd;
 pub mod save_watch;
 pub mod search;
+pub mod session_retry;
 pub mod slug;
 pub mod tag;
 pub mod task;

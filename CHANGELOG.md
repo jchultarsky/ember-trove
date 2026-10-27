@@ -17,6 +17,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   still has Undo) drop the draft, and a dialog nobody typed in keeps
   nothing. While such a dialog is open, the update banner says the form
   comes back after the reload.
+- **An expired session no longer reloads the page.** When a call got a 401,
+  the app refreshed the session and then reloaded the whole page, losing
+  scroll position, open dialogs and anything not yet saved. It now renews the
+  session and re-sends the call in place (`api::send_authed`). A refresh
+  that gets no answer (offline, 5xx, or no reply within 10 s) is an ordinary
+  error with Retry, not a trip to the login page. Only a refused refresh, or
+  a second 401 on the new session, goes to login.
 
 ### Security
 - **Person-dialog drafts follow the editor-draft rules (#170).** They hold
@@ -24,6 +31,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   user (another account in the browser never sees them), wiped on logout,
   and expire 14 days after their last write, like node drafts. They never
   leave the device.
+- **Concurrent 401s share one session refresh.** Every call that got a 401
+  at the same moment used to start its own refresh. The server rotates the
+  refresh token, so the second of two racing refreshes could be refused and
+  log the user out. One refresh is now shared (`common::session_retry`), and
+  a call sent before a finished refresh just re-sends. Re-sending is safe for
+  writes because the API rejects an unauthenticated call before any handler
+  runs; no token is ever handled by the UI (the cookies stay httpOnly).
 
 ### Tooling
 - **Deploys can no longer fill the production disk.** The release deploy
