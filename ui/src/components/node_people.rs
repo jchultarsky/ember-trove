@@ -9,7 +9,8 @@
 
 use common::id::{NodeId, PersonId};
 use common::person::{
-    MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput, matches, primary,
+    CARD_CONTACTS, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
+    card_contacts, matches,
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -337,8 +338,17 @@ fn MemberRow(
                 .join(" \u{b7} ")
         })
         .unwrap_or_default();
-    let email = card.as_ref().and_then(|p| primary(&p.emails).cloned());
-    let phone = card.as_ref().and_then(|p| primary(&p.phones).cloned());
+    // Every email and phone, preferred first, up to CARD_CONTACTS each; the
+    // rest are counted in a "+n more" link to the person page (#172).
+    let (emails, more_emails) = card
+        .as_ref()
+        .map(|p| card_contacts(&p.emails, CARD_CONTACTS))
+        .unwrap_or_default();
+    let (phones, more_phones) = card
+        .as_ref()
+        .map(|p| card_contacts(&p.phones, CARD_CONTACTS))
+        .unwrap_or_default();
+    let more = more_emails + more_phones;
     let owns_card = card.is_some();
 
     let save = move || {
@@ -390,8 +400,15 @@ fn MemberRow(
                 </div>
                 {(!subtitle.is_empty()).then(|| view! { <div class="text-xs text-stone-500">{subtitle}</div> })}
                 <div class="flex flex-wrap gap-x-3">
-                    {email.map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> })}
-                    {phone.map(|p| view! { <ContactAction kind=ContactKind::Phone point=p /> })}
+                    {emails.into_iter().map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> }).collect_view()}
+                    {phones.into_iter().map(|p| view! { <ContactAction kind=ContactKind::Phone point=p /> }).collect_view()}
+                    {(more > 0).then(|| view! {
+                        <button type="button" class="text-xs text-stone-500 hover:text-amber-700 hover:underline cursor-pointer"
+                            data-testid="member-more-contacts"
+                            on:click=move |_| navigate.get_value()(&format!("/people/{person_id}"), Default::default())>
+                            {format!("+{more} more")}
+                        </button>
+                    })}
                 </div>
                 {move || (!editing.get()).then(|| {
                     let n = note.get();

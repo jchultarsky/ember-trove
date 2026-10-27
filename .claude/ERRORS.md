@@ -17,6 +17,17 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   For this lint, prefer `sort_by_key(|n| key)` / `sort_by_key(|n| Reverse(key))`.
   Real fix: `ui/src/components/node_list.rs::sort_nodes`. — 2026-06-05
 
+### Tests fail on code you already reverted (stale build after `cp`/`mv`)
+- **Symptom:** after a quick "make it red" check (`cp f f.bak`, edit `f`, test,
+  `mv f.bak f`), the test still fails with the reverted value in its message.
+- **Cause:** cargo rebuilds by mtime. `f.bak` has the time of the `cp`, which
+  is older than the artifact built from the edited file, so cargo thinks the
+  restored file is already built.
+- **Fix:** `touch` the restored file (or revert with `git checkout -- f`, which
+  writes a new mtime). Also, `( set -e; a && echo ok; b && echo ok )` does not
+  stop on a failed `a`: `set -e` ignores commands in `&&` lists. Read the log,
+  not the exit code. — 2026-10-27 (#173)
+
 ### AWS SDK pulls advisory-laden rustls 0.21 chain
 - **Symptom:** `cargo audit` flags RUSTSEC-2026-0049/0098/0099/0104 (rustls 0.21 /
   rustls-webpki 0.101.7).
