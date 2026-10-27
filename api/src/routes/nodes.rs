@@ -1024,6 +1024,7 @@ async fn restore_version(
         metadata: None,
         status: None,
         project_status: None,
+        expected_updated_at: None,
     };
     let node = state.nodes.update(NodeId(id), req).await?;
     sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;

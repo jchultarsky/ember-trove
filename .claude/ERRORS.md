@@ -286,6 +286,23 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   HashMap indexing in the layout layer as a panic risk; prefer `.get().copied().unwrap_or(d)`.
   — 2026 (v2.10.5)
 
+### Editor stuck on "Still saving…", or a late save overwrites a newer one (#161)
+- **Symptom:** after a 401 the editor shows "Still saving…" forever, with no
+  Retry and no autosave. Or a save that was given up on commits after the
+  retry, and older text comes back.
+- **Cause:** (1) `api::handle_error_response` handles a 401 by refreshing,
+  calling `location.reload()`, then `std::future::pending()`. The save's
+  future never settles. The fetch has already resolved, so
+  `AbortController::abort()` does nothing, and a watchdog that only aborts
+  never fires the failure. (2) Aborting a fetch doesn't stop a server that
+  already received it.
+- **Fix:** the give-up timer sets Failed and releases the lock itself
+  (`common::save_watch::SaveWatch`). Edit saves carry `expected_updated_at`,
+  and the API answers 412 for a stale version. On a 412 the editor re-sends
+  only when the server holds its own text. Rule: **never treat a reload as a
+  retry for writes, and never trust abort to cancel a write.**
+  — 2026-10-27
+
 ### Multi-line code blocks render as a stack of per-line boxes
 - **Symptom:** a fenced code block renders each line in its own bordered/background box
   instead of one clean block (worse in dark mode).

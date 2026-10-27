@@ -24,6 +24,9 @@ pub enum ApiError {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("precondition failed: {0}")]
+    PreconditionFailed(String),
+
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -42,6 +45,7 @@ impl From<EmberTroveError> for ApiError {
             EmberTroveError::Unauthorized(msg) => Self::Unauthorized(msg),
             EmberTroveError::Forbidden(msg) => Self::Forbidden(msg),
             EmberTroveError::Validation(msg) => Self::Validation(msg),
+            EmberTroveError::PreconditionFailed(msg) => Self::PreconditionFailed(msg),
             EmberTroveError::Internal(msg) => Self::Internal(msg),
         }
     }
@@ -55,6 +59,7 @@ impl IntoResponse for ApiError {
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             Self::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             Self::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
+            Self::PreconditionFailed(msg) => (StatusCode::PRECONDITION_FAILED, msg.clone()),
             Self::Database(err) => {
                 tracing::error!(%err, "database error");
                 (
