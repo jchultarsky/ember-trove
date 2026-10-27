@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **A membership's Role saves what you typed (#171).** The Role field used
+  the browser's datalist, which could save a suggestion's spelling ("abc")
+  over the typed text ("ABC") without a sign, and kept Cmd/Ctrl+A from
+  selecting the field. It is now the app's own combobox: suggestions are
+  only offered (a different casing included), a suggestion is committed
+  only when chosen by click or by ↑/↓ then Enter, and it shows in the field
+  before saving. Every other key, select-all included, is the input's.
+
 ### Tooling
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,
