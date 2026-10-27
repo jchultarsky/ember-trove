@@ -14,6 +14,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   second number existed only on the Person page, with nothing on the card
   to say so.
 
+### Fixed
+- **An expired session no longer reloads the page.** When a call got a 401,
+  the app refreshed the session and then reloaded the whole page, losing
+  scroll position, open dialogs and anything not yet saved. It now renews the
+  session and re-sends the call in place (`api::send_authed`). A refresh
+  that gets no answer (offline, 5xx, or no reply within 10 s) is an ordinary
+  error with Retry, not a trip to the login page. Only a refused refresh, or
+  a second 401 on the new session, goes to login.
+
+### Security
+- **Concurrent 401s share one session refresh.** Every call that got a 401
+  at the same moment used to start its own refresh. The server rotates the
+  refresh token, so the second of two racing refreshes could be refused and
+  log the user out. One refresh is now shared (`common::session_retry`), and
+  a call sent before a finished refresh just re-sends. Re-sending is safe for
+  writes because the API rejects an unauthenticated call before any handler
+  runs; no token is ever handled by the UI (the cookies stay httpOnly).
+
 ### Tooling
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,

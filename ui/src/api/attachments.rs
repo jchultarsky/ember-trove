@@ -4,7 +4,7 @@ use common::{
 };
 use gloo_net::http::Request;
 
-use super::{api_url, delete_empty, get_json, parse_json};
+use super::{api_url, delete_empty, get_json, parse_json, send_authed};
 use crate::error::UiError;
 
 pub async fn fetch_attachments(node_id: NodeId) -> Result<Vec<Attachment>, UiError> {
@@ -18,12 +18,13 @@ pub async fn upload_attachment(
     form_data: web_sys::FormData,
 ) -> Result<Attachment, UiError> {
     use wasm_bindgen::JsValue;
-    let resp = Request::post(&api_url(&format!("/nodes/{node_id}/attachments")))
-        .body(JsValue::from(form_data))
-        .map_err(|e| UiError::Parse(e.to_string()))?
-        .send()
-        .await
-        .map_err(|e| UiError::Network(e.to_string()))?;
+    let url = api_url(&format!("/nodes/{node_id}/attachments"));
+    let resp = send_authed(|| {
+        Request::post(&url)
+            .body(JsValue::from(form_data.clone()))
+            .map_err(|e| UiError::Parse(e.to_string()))
+    })
+    .await?;
     parse_json(resp).await
 }
 

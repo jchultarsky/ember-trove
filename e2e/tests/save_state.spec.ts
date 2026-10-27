@@ -92,16 +92,17 @@ test('edits that never reached the server are offered back', async ({ page, requ
 // ── #161 follow-up ────────────────────────────────────────────────────────────
 
 test.describe('save follow-up (#161)', () => {
-  test('a save stuck in the 401 refresh path is given up and Retry works', async ({
+  test('a save whose session refresh hangs fails with Retry, and Retry works', async ({
     page,
     request,
   }) => {
     test.setTimeout(60_000);
     const node = await createNode(request, `e2e save parked ${Date.now()}`, { body: 'before' });
     // The PUT gets a 401, so the API client calls /api/auth/refresh, which
-    // never answers: the save's future never settles (the path that left
-    // the editor on "Still saving…" forever). The refresh route stays held
-    // for the rest of the test (unrouting would release it to the network).
+    // never answers (the path that once left the editor on "Still saving…"
+    // forever). The client abandons it after REFRESH_TIMEOUT_MS (10 s), so
+    // the save fails with Retry before the 15 s give-up. The refresh route
+    // stays held for the rest of the test (unrouting would release it).
     await page.route('**/api/auth/refresh', () => {});
     await page.route(`**/api/nodes/${node.id}`, (route) =>
       route.request().method() === 'PUT'
@@ -114,7 +115,8 @@ test.describe('save follow-up (#161)', () => {
       await expect(page.getByText('Still saving…')).toBeVisible({ timeout: 10_000 });
       const retry = page.getByTestId('save-retry');
       await expect(retry).toBeVisible({ timeout: 15_000 });
-      await expect(page.getByText(/took too long and was stopped/)).toBeVisible();
+      // An unanswered refresh is not a logout.
+      expect(new URL(page.url()).pathname).toBe(`/nodes/${node.id}/edit`);
 
       await page.unroute(`**/api/nodes/${node.id}`);
       await retry.click();
@@ -297,6 +299,72 @@ test.describe('draft staleness and expiry', () => {
       expect(Math.abs(stamped.saved_at - Date.now())).toBeLessThan(day);
     } finally {
       await page.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), keys);
+    }
+  });
+});
+
+// ── Session renewal without a reload (#161 gap) ──────────────────────────────
+
+test.describe('session renewal', () => {
+  test('a 401 renews the session and re-sends the save in place', async ({ page, request }) => {
+    const node = await createNode(request, `e2e renew ${Date.now()}`, { body: 'before' });
+    let refreshes = 0;
+    let puts = 0;
+    // The e2e stack has no OIDC, so the refresh is faked as a success.
+    await page.route('**/api/auth/refresh', (route) => {
+      refreshes += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
+    });
+    await page.route(`**/api/nodes/${node.id}`, (route) => {
+      if (route.request().method() !== 'PUT') return route.fallback();
+      puts += 1;
+      return puts === 1
+        ? route.fulfill({ status: 401, body: '{"error":"expired"}' })
+        : route.fallback();
+    });
+    try {
+      const editor = await openEditor(page, node.id);
+      // A marker that a page reload would wipe.
+      await page.evaluate(() => ((window as unknown as { e2eNoReload: boolean }).e2eNoReload = true));
+      await editor.fill('renewed');
+      await expect(page.getByText(/^Saved/)).toBeVisible({ timeout: 10_000 });
+      expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe('renewed');
+      expect(
+        await page.evaluate(() => (window as unknown as { e2eNoReload?: boolean }).e2eNoReload),
+      ).toBe(true);
+      expect(refreshes).toBe(1);
+      expect(puts).toBe(2);
+      await expect(editor).toHaveValue('renewed');
+    } finally {
+      await request.delete(`/api/nodes/${node.id}`);
+    }
+  });
+
+  test('a refresh that gets no answer is an error, not a logout', async ({ page, request }) => {
+    const node = await createNode(request, `e2e renew down ${Date.now()}`, { body: 'before' });
+    await page.route('**/api/auth/refresh', (route) =>
+      route.fulfill({ status: 503, body: '{"error":"unavailable"}' }),
+    );
+    await page.route(`**/api/nodes/${node.id}`, (route) =>
+      route.request().method() === 'PUT'
+        ? route.fulfill({ status: 401, body: '{"error":"expired"}' })
+        : route.fallback(),
+    );
+    try {
+      const editor = await openEditor(page, node.id);
+      await editor.fill('kept');
+      const retry = page.getByTestId('save-retry');
+      await expect(retry).toBeVisible({ timeout: 10_000 });
+      expect(new URL(page.url()).pathname).toBe(`/nodes/${node.id}/edit`);
+      await expect(editor).toHaveValue('kept');
+
+      // The session is fine again: Retry saves.
+      await page.unroute(`**/api/nodes/${node.id}`);
+      await retry.click();
+      await expect(page.getByText(/^Saved/)).toBeVisible({ timeout: 10_000 });
+      expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe('kept');
+    } finally {
+      await request.delete(`/api/nodes/${node.id}`);
     }
   });
 });

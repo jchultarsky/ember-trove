@@ -9,9 +9,9 @@ pub async fn fetch_me() -> Result<UserInfo, UiError> {
         .send()
         .await
         .map_err(|e| UiError::Network(e.to_string()))?;
-    // Do NOT use parse_json here — parse_json retries via refresh+reload on
-    // 401, which would loop infinitely because fetch_me IS the auth check.
-    // A plain 401 here just means "not logged in"; AuthGate handles the redirect.
+    // Do NOT use send_authed/parse_json here: they renew the session (or go
+    // to the login page) on a 401, and fetch_me IS the auth check. A plain
+    // 401 here just means "not logged in"; AuthGate handles the redirect.
     if resp.ok() {
         resp.json::<UserInfo>()
             .await
@@ -31,10 +31,12 @@ pub async fn fetch_login_url() -> Result<String, UiError> {
     Ok(data.redirect_url)
 }
 
-/// Call the backend refresh endpoint. On success the server sets a new
-/// session cookie. The UI then reloads to pick it up.
-pub async fn refresh_session() -> Result<(), UiError> {
+/// Call the backend refresh endpoint. On success the server sets new
+/// session cookies, which the browser sends with the retried call
+/// (`api::send_authed`). `signal` lets the caller abandon a hung refresh.
+pub async fn refresh_session(signal: Option<&web_sys::AbortSignal>) -> Result<(), UiError> {
     let resp = Request::post(&api_url("/auth/refresh"))
+        .abort_signal(signal)
         .send()
         .await
         .map_err(|e| UiError::Network(e.to_string()))?;
