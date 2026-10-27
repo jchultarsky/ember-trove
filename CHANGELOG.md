@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **A reload no longer loses what you typed in the person dialog (#170).**
+  The New person and Edit person dialogs held their input only in memory,
+  so a reload (the very action the new-version banner invites), a closed
+  tab or a navigation away dropped it silently. What's typed is now kept
+  on this device while the dialog is open, and the next time its page
+  loads the dialog reopens with it and a notice offering Discard. An edit
+  warns when the person was changed since. Save, Cancel and Escape (which
+  still has Undo) drop the draft, and a dialog nobody typed in keeps
+  nothing. While such a dialog is open, the update banner says the form
+  comes back after the reload.
+
+### Security
+- **Person-dialog drafts follow the editor-draft rules (#170).** They hold
+  third parties' contact details in `localStorage`, so they are keyed by
+  user (another account in the browser never sees them), wiped on logout,
+  and expire 14 days after their last write, like node drafts. They never
+  leave the device.
+
 ### Tooling
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,

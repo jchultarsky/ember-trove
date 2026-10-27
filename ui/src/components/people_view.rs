@@ -6,6 +6,7 @@
 //! caller's own people, so nothing here has to filter. Contact values render
 //! as text (never HTML) and as mailto:/tel: links; addresses as plain text.
 
+use common::form_draft::{FormRecovery, PersonForm, PersonFormDraft};
 use common::id::PersonId;
 use common::person::{ContactPoint, DuplicateMatch, Person, PersonInput, PersonUsage, primary};
 use leptos::prelude::*;
@@ -253,29 +254,45 @@ impl PersonDraft {
     /// The current values. Untouched contact rows are left out; the server
     /// drops them anyway, and they mustn't make a draft look edited.
     fn read(&self) -> PersonInput {
+        self.try_read().unwrap_or_default()
+    }
+
+    /// [`Self::read`], or `None` once the editor's signals are gone (the
+    /// page is unmounting it, #170).
+    fn try_read(&self) -> Option<PersonInput> {
         let opt = |s: String| (!s.trim().is_empty()).then_some(s);
         let rows = |v: Vec<ContactPoint>| {
             v.into_iter()
                 .filter(|c| !(c.label.trim().is_empty() && c.value.trim().is_empty()))
                 .collect()
         };
-        PersonInput {
-            display_name: self.name.get_untracked(),
-            company: opt(self.company.get_untracked()),
-            position: opt(self.position.get_untracked()),
-            emails: rows(self.emails.get_untracked()),
-            phones: rows(self.phones.get_untracked()),
-            addresses: rows(self.addresses.get_untracked()),
-            notes: opt(self.notes.get_untracked()),
-        }
+        Some(PersonInput {
+            display_name: self.name.try_get_untracked()?,
+            company: opt(self.company.try_get_untracked()?),
+            position: opt(self.position.try_get_untracked()?),
+            emails: rows(self.emails.try_get_untracked()?),
+            phones: rows(self.phones.try_get_untracked()?),
+            addresses: rows(self.addresses.try_get_untracked()?),
+            notes: opt(self.notes.try_get_untracked()?),
+        })
     }
 }
 
 /// What the [`PersonEditor`] saves: a new person, or an existing one.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum EditorTarget {
+enum EditorTarget {
     New,
     Existing(PersonId),
+}
+
+/// The notice over a person dialog the app reopened from its draft (#170).
+fn recovery_message(changed: bool) -> &'static str {
+    if changed {
+        "This device kept what you'd typed here. The person has been changed \
+         since; saving replaces that change."
+    } else {
+        "This device kept what you'd typed here."
+    }
 }
 
 /// The one person editor (create and edit look the same): a centred dialog
@@ -288,11 +305,16 @@ pub enum EditorTarget {
 /// - Ctrl/⌘+Enter saves.
 /// - The duplicate-email warning and the server's validation messages show
 ///   inside the dialog.
+/// - What's typed is kept on this device while the dialog is open (#170):
+///   a reload, a closed tab or a navigation away doesn't lose it. The next
+///   time this dialog's page loads, it reopens with the input and a notice
+///   offering Discard. Closing the dialog any other way drops the draft.
 #[component]
 pub fn PersonEditor(
     /// Open state, owned by the caller (it opens the editor).
     open: RwSignal<bool>,
-    target: EditorTarget,
+    /// Which dialog this is; it names the draft and decides create or edit.
+    form: PersonForm,
     /// The values to start from, read each time the editor opens: the
     /// person being edited, or a prefilled name.
     #[prop(into)]
@@ -306,12 +328,32 @@ pub fn PersonEditor(
     /// with the attach; a blank block attaches as before.
     #[prop(optional)]
     membership: Option<MembershipDraft>,
+    /// False while `initial` is still loading (an edit's person). A stored
+    /// draft is only weighed against the loaded values.
+    #[prop(optional, into)]
+    ready: Option<Signal<bool>>,
 ) -> impl IntoView {
+    let target = match form {
+        PersonForm::Edit(id) => EditorTarget::Existing(id),
+        PersonForm::New | PersonForm::NewOnNode(_) => EditorTarget::New,
+    };
     let draft = PersonDraft::new();
     let baseline = StoredValue::new(PersonInput::default());
     // Set by Undo, so reopening keeps the restored values.
     let restoring = StoredValue::new(false);
     let saving = RwSignal::new(false);
+    // Some(changed) while the dialog shows input restored from a draft.
+    let recovered = RwSignal::new(None::<bool>);
+    // The draft's storage key: per user, so another account in this browser
+    // is never offered someone else's contacts. None (never expected inside
+    // AuthGate) turns drafts off rather than sharing them.
+    let draft_key = StoredValue::new(use_context::<crate::auth::AuthState>().and_then(|a| {
+        match a.get_untracked() {
+            crate::auth::AuthStatus::Authenticated(u) => Some(form.key(&u.sub)),
+            _ => None,
+        }
+    }));
+    let open_forms = use_context::<crate::draft::OpenForms>();
     let duplicate = RwSignal::new(None::<Vec<DuplicateMatch>>);
     let error = RwSignal::new(None::<String>);
     let form_id = match target {
@@ -323,9 +365,105 @@ pub fn PersonEditor(
         EditorTarget::Existing(_) => "Edit person",
     };
 
-    // Each opening starts from `initial`, except right after an Undo.
+    // Keep the open dialog's input on this device, or drop the draft once
+    // it holds nothing beyond what the dialog opened with. `try_` access:
+    // this also runs while the page unmounts the editor.
+    let keep = move || {
+        if open.try_get_untracked() != Some(true) {
+            return;
+        }
+        let Some(Some(key)) = draft_key.try_get_value() else {
+            return;
+        };
+        let (Some(person), Some(base)) = (draft.try_read(), baseline.try_get_value()) else {
+            return;
+        };
+        let typed = |f: fn(&MembershipDraft) -> RwSignal<String>| {
+            membership
+                .and_then(|m| f(&m).try_get_untracked())
+                .unwrap_or_default()
+        };
+        let d = PersonFormDraft {
+            person,
+            role: typed(|m| m.role),
+            note: typed(|m| m.note),
+            base,
+            saved_at: None,
+        };
+        if d.is_dirty() {
+            crate::draft::write_person_draft(&key, &d);
+        } else {
+            crate::draft::clear_form_draft(&key);
+        }
+    };
+    // The page going away: reload (the update banner's), tab close, or a
+    // phone backgrounding it for good. Typing already wrote the draft; this
+    // catches row removals and the radio, which fire no `input`.
+    let unload = window_event_listener(leptos::ev::beforeunload, move |_| keep());
+    let pagehide = window_event_listener(leptos::ev::pagehide, move |_| keep());
+    // An in-app navigation unmounts the dialog with it.
+    on_cleanup(move || {
+        unload.remove();
+        pagehide.remove();
+        keep();
+        if open.try_get_untracked() == Some(true)
+            && let Some(f) = open_forms
+        {
+            f.0.try_update(|n| *n = n.saturating_sub(1));
+        }
+    });
+
+    // A draft left by an earlier page: reopen with it, once, as soon as the
+    // values it is weighed against have loaded.
+    let checked = StoredValue::new(false);
+    Effect::new(move |_| {
+        if checked.get_value() || !ready.is_none_or(|r| r.get()) {
+            return;
+        }
+        checked.set_value(true);
+        let Some(key) = draft_key.get_value() else {
+            return;
+        };
+        let Some(d) = crate::draft::read_person_draft(&key) else {
+            return;
+        };
+        match d.recovery(&initial.get_untracked()) {
+            FormRecovery::Discard => crate::draft::clear_form_draft(&key),
+            FormRecovery::Offer { changed } => {
+                draft.load(d.person);
+                baseline.set_value(d.base);
+                if let Some(m) = membership {
+                    m.role.set(d.role);
+                    m.note.set(d.note);
+                }
+                restoring.set_value(true);
+                recovered.set(Some(changed));
+                open.set(true);
+            }
+        }
+    });
+
+    // Each opening starts from `initial`, except right after an Undo or a
+    // draft restore. Every closing (Save, Cancel, Escape) drops the draft.
     Effect::new(move |was_open: Option<bool>| {
         let is_open = open.get();
+        if is_open != was_open.unwrap_or(false)
+            && let Some(f) = open_forms
+        {
+            f.0.update(|n| {
+                *n = if is_open {
+                    n.saturating_add(1)
+                } else {
+                    n.saturating_sub(1)
+                }
+            });
+        }
+        if !is_open && was_open == Some(true) {
+            recovered.set(None);
+            if let Some(key) = draft_key.get_value() {
+                crate::draft::clear_form_draft(&key);
+            }
+        }
         if is_open && was_open != Some(true) {
             duplicate.set(None);
             error.set(None);
@@ -431,7 +569,23 @@ pub fn PersonEditor(
                 class="flex-1 overflow-y-auto px-4 py-4 space-y-4"
                 data-testid="person-form"
                 on:submit=move |ev| { ev.prevent_default(); save(false); }
+                // Every field's `input` and the radios' `change` bubble here.
+                on:input=move |_| keep()
+                on:change=move |_| keep()
             >
+                {move || recovered.get().map(|changed| view! {
+                    <div data-testid="form-draft-recovery" role="status"
+                        class="flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 text-sm
+                            bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200">
+                        <span>{recovery_message(changed)}</span>
+                        // Discard ends the dialog, like Cancel: the app opened
+                        // it only to give the input back.
+                        <button type="button" class="text-xs underline cursor-pointer"
+                            on:click=move |_| open.set(false)>
+                            "Discard"
+                        </button>
+                    </div>
+                })}
                 {move || error.get().map(|e| view! {
                     <p class="text-sm text-red-600 dark:text-red-400" role="alert">{e}</p>
                 })}
@@ -578,7 +732,7 @@ pub fn PeopleView() -> impl IntoView {
             </PageHeader>
             // Full width, like the node list: a registry is scanned (#156).
             <div class="flex-1 overflow-auto p-4 md:p-6 space-y-4">
-                <PersonEditor open=editor_open target=EditorTarget::New
+                <PersonEditor open=editor_open form=PersonForm::New
                     initial=Signal::derive(PersonInput::default) on_saved=on_created />
                 <input
                     type="search"
@@ -722,8 +876,9 @@ fn PersonView(id: PersonId) -> impl IntoView {
                 </button>
             </PageHeader>
             <div class="flex-1 overflow-auto p-4 md:p-6 max-w-3xl space-y-6">
-                <PersonEditor open=editor_open target=EditorTarget::Existing(id)
-                    initial=current on_saved=on_saved />
+                <PersonEditor open=editor_open form=PersonForm::Edit(id)
+                    initial=current on_saved=on_saved
+                    ready=Signal::derive(move || person.get().is_some_and(|r| r.is_ok())) />
                 <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading\u{2026}"</p> }>
                     {move || person.get().map(|r| match r {
                         Err(e) => view! { <p class="text-sm text-red-500">{format!("Error: {e}")}</p> }.into_any(),

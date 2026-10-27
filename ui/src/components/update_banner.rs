@@ -6,6 +6,10 @@
 //! startup, every 10 minutes, and whenever the window regains focus, and
 //! offers a reload when they differ. Navigations are network-first in the
 //! service worker, so the reload really loads the new release.
+//!
+//! The reload must not cost an open dialog its input (#170): the person
+//! editor keeps a draft and reopens with it, and while such a dialog is
+//! open the banner says so, so following its prompt is safe.
 
 use leptos::prelude::*;
 
@@ -35,6 +39,8 @@ pub fn UpdateBanner() -> impl IntoView {
 
     let bundle = crate::version::bundle();
     let available = move || common::version::update_available(bundle, &server.get());
+    let open_forms = use_context::<crate::draft::OpenForms>();
+    let form_open = move || open_forms.is_some_and(|f| f.0.get() > 0);
 
     view! {
         {move || available().then(|| view! {
@@ -54,6 +60,7 @@ pub fn UpdateBanner() -> impl IntoView {
                 </span>
                 <span>
                     {move || format!("A new version of Ember Trove (v{}) is available.", server.get())}
+                    {move || form_open().then_some(" The open form is kept and comes back after the reload.")}
                 </span>
                 <button
                     type="button"
