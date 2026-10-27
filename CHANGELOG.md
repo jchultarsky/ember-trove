@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The person editor explains Position vs Role (#182).** Position now has
+  the hint "Their job title — stays with the person on every node.", and
+  every Role field (the attach step, "On this node" in the editor, and Edit
+  role and note) has "Their part in this node only." Both hints are tied to
+  their field with `aria-describedby`, so screen readers announce them too.
+  Text only: no schema or behavior change.
+
 ### Fixed
 - **A reload no longer loses what you typed in the person dialog (#170).**
   The New person and Edit person dialogs held their input only in memory,
@@ -17,6 +25,45 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   still has Undo) drop the draft, and a dialog nobody typed in keeps
   nothing. While such a dialog is open, the update banner says the form
   comes back after the reload.
+- **Picker options answer an accessibility press (#174).** The person,
+  Role, node and project-status pickers committed an option only on
+  `mousedown`, which VoiceOver, AXPress and `element.click()` never send:
+  they send a bare `click` (click count 0). An option now commits on a
+  pointer's `mousedown` or on a synthetic `click`, exactly once either way
+  (`common::picker::is_pointer_press`). The person and status pickers'
+  `aria-expanded` now says `false` when the list is empty, instead of
+  always `true`.
+
+### Security
+- **Person-dialog drafts follow the editor-draft rules (#170).** They hold
+  third parties' contact details in `localStorage`, so they are keyed by
+  user (another account in the browser never sees them), wiped on logout,
+  and expire 14 days after their last write, like node drafts. They never
+  leave the device.
+
+## [2.42.0] - 2026-10-27
+
+### Changed
+- **The sidebar's Tasks, Notes and People no longer look like a node's own
+  sections (#173).** The sidebar stays global. A node page's Notes section
+  now shows `notes` instead of the sidebar's `sticky_note_2`, and its People
+  section shows `person` instead of `group` (Tasks already differed). A small
+  "Workspace" caption sits above the sidebar's global entries and is hidden
+  when the sidebar is collapsed. A unit test keeps the icons apart.
+- **Member cards show every email and phone (#172).** A node's People list
+  showed only the preferred email and phone, so a second number looked like
+  it was never recorded. Cards now list up to three of each, preferred
+  first, and a "+n more" link to the person page counts the rest
+  (`common::person::card_contacts`).
+
+### Fixed
+- **A membership's Role saves what you typed (#171).** The Role field used
+  the browser's datalist, which could save a suggestion's spelling ("abc")
+  over the typed text ("ABC") without a sign, and kept Cmd/Ctrl+A from
+  selecting the field. It is now the app's own combobox: suggestions are
+  only offered (a different casing included), a suggestion is committed
+  only when chosen by click or by ↑/↓ then Enter, and it shows in the field
+  before saving. Every other key, select-all included, is the input's.
 - **An expired session no longer reloads the page.** When a call got a 401,
   the app refreshed the session and then reloaded the whole page, losing
   scroll position, open dialogs and anything not yet saved. It now renews the
@@ -26,11 +73,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   a second 401 on the new session, goes to login.
 
 ### Security
-- **Person-dialog drafts follow the editor-draft rules (#170).** They hold
-  third parties' contact details in `localStorage`, so they are keyed by
-  user (another account in the browser never sees them), wiped on logout,
-  and expire 14 days after their last write, like node drafts. They never
-  leave the device.
 - **Concurrent 401s share one session refresh.** Every call that got a 401
   at the same moment used to start its own refresh. The server rotates the
   refresh token, so the second of two racing refreshes could be refused and
@@ -40,6 +82,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   runs; no token is ever handled by the UI (the cookies stay httpOnly).
 
 ### Tooling
+- **`refresh-icon-font.sh` also collects `*_ICON` consts** (#173), so a glyph
+  named only in a const still lands in the font subset.
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,
   piled up until the v2.41.0 pull failed on a full disk. It now prunes unused

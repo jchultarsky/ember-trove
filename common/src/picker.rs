@@ -75,6 +75,57 @@ pub fn step(active: Option<usize>, len: usize, down: bool) -> Option<usize> {
     })
 }
 
+/// Suggestions for a free-text field such as a membership's Role (#171):
+/// up to `limit` of `choices` (kept in their order, prefix matches first)
+/// that contain `query`, ignoring case. A choice spelled exactly as typed is
+/// left out, so the list never offers what's already in the field, while a
+/// different casing ("abc" for "ABC") is still offered, as an option to
+/// choose, never as a replacement.
+pub fn free_text_suggestions<S: AsRef<str>>(
+    query: &str,
+    choices: &[S],
+    limit: usize,
+) -> Vec<String> {
+    let typed = query.trim();
+    let q = norm(query);
+    let (prefix, rest): (Vec<&str>, Vec<&str>) = choices
+        .iter()
+        .map(AsRef::as_ref)
+        .filter(|c| c.trim() != typed && norm(c).contains(&q))
+        .partition(|c| norm(c).starts_with(&q));
+    prefix
+        .into_iter()
+        .chain(rest)
+        .take(limit)
+        .map(str::to_string)
+        .collect()
+}
+
+/// What a free-text combobox saves: the typed text, unless the user has
+/// explicitly made an option active (arrow keys) before committing. Filtering
+/// never stands in for a choice; that substituted "abc" for a typed "ABC".
+pub fn free_text_commit<'a>(
+    typed: &'a str,
+    active: Option<usize>,
+    options: &'a [String],
+) -> &'a str {
+    active
+        .and_then(|i| options.get(i))
+        .map_or(typed, String::as_str)
+}
+
+/// Whether a combobox option's mouse event comes from a real pointer (#174).
+///
+/// Pointer users commit on `mousedown`, so focus stays in the input. An
+/// accessibility "press" (VoiceOver, AXPress, `element.click()`) is a
+/// synthetic `click`, sometimes preceded by a synthetic `mousedown`, and
+/// synthetic events carry `detail` (the click count) 0. So an option commits
+/// on a `mousedown` from a pointer, or on a `click` that isn't from one:
+/// exactly once either way.
+pub fn is_pointer_press(detail: i32) -> bool {
+    detail > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +174,44 @@ mod tests {
         assert_eq!(step(Some(0), 3, false), Some(2));
         assert_eq!(step(Some(1), 3, true), Some(2));
         assert_eq!(step(Some(0), 0, true), None);
+    }
+
+    #[test]
+    fn free_text_suggestions_never_hide_the_typed_spelling() {
+        let roles = ["abc", "Approver", "Sponsor", "lab lead"];
+        // Case-insensitive match, prefix first, the typed casing kept apart.
+        assert_eq!(
+            free_text_suggestions("ABC", &roles, 8),
+            vec!["abc".to_string()]
+        );
+        assert_eq!(
+            free_text_suggestions("ab", &roles, 8),
+            vec!["abc".to_string(), "lab lead".to_string()]
+        );
+        // Typed exactly as a suggestion: nothing left to offer.
+        assert!(free_text_suggestions("abc", &roles, 8).is_empty());
+        assert!(free_text_suggestions(" Sponsor ", &roles, 8).is_empty());
+        assert_eq!(free_text_suggestions("", &roles, 2).len(), 2, "limit");
+    }
+
+    #[test]
+    fn free_text_commit_keeps_typed_text_unless_an_option_is_chosen() {
+        let options = vec!["abc".to_string()];
+        assert_eq!(free_text_commit("ABC", None, &options), "ABC");
+        assert_eq!(free_text_commit("ABC", Some(0), &options), "abc");
+        assert_eq!(free_text_commit("ABC", Some(5), &options), "ABC");
+    }
+
+    #[test]
+    fn pointer_presses_have_a_click_count() {
+        assert!(
+            !is_pointer_press(0),
+            "AX press / element.click(): commit on click"
+        );
+        assert!(
+            is_pointer_press(1),
+            "mouse: commit on mousedown, not again on click"
+        );
+        assert!(is_pointer_press(2), "double click");
     }
 }
