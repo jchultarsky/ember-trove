@@ -75,6 +75,9 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await expect(editor(page).getByRole('heading', { name: 'Edit person' })).toBeVisible();
     await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue(name);
     await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Analytical Engines');
+    // Position says it's the person's, everywhere (#182).
+    await expect(editor(page).getByRole('textbox', { name: 'Position' }))
+      .toHaveAccessibleDescription('Their job title \u2014 stays with the person on every node.');
     await editor(page).getByRole('textbox', { name: 'Position' }).fill('Analyst');
     // Ctrl/⌘+Enter saves from any field. The person keeps their own email,
     // which matches the original's, so this is a confirmed duplicate: the
@@ -124,6 +127,55 @@ test('the editor: Cancel discards, Escape discards with Undo', async ({ page, re
     await card.getByRole('button', { name: 'Edit' }).click();
     await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('');
     expect(new URL(page.url()).pathname).toBe(`/people/${p.id}`);
+  } finally {
+    await wipePeople(request, stamp);
+  }
+});
+
+test('a reload keeps the open dialog\'s input, and only a dirty one (#170)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  await wipePeople(request, stamp);
+  try {
+    // New person: typed, then the page reloads (what the update banner does).
+    await page.goto('/people');
+    await page.getByRole('button', { name: 'New person' }).click();
+    await editor(page).getByRole('textbox', { name: 'Name' }).fill(`e2e Grace ${stamp}`);
+    await editor(page).getByRole('textbox', { name: 'Company' }).fill('Navy');
+    await page.reload();
+    await expect(editor(page).getByTestId('form-draft-recovery')).toBeVisible();
+    await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue(`e2e Grace ${stamp}`);
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Navy');
+    // Discard ends it: the next load opens nothing.
+    await editor(page).getByRole('button', { name: 'Discard' }).click();
+    await expect(editor(page)).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('main')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'New person' })).toBeVisible();
+    await expect(editor(page)).toHaveCount(0);
+
+    // Edit: the draft survives, and says so when the card changed since.
+    const p: Person = await (await request.post('/api/people', { data: { display_name: `e2e Hopper ${stamp}` } })).json();
+    await page.goto(`/people/${p.id}`);
+    const card = page.getByTestId('person-card');
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await editor(page).getByRole('textbox', { name: 'Position' }).fill('Rear Admiral');
+    await request.put(`/api/people/${p.id}`, { data: { display_name: `e2e Hopper ${stamp}`, company: 'Harvard' } });
+    await page.reload();
+    await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('changed since');
+    await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('Rear Admiral');
+    // Saving drops the draft: a reload opens nothing.
+    await editor(page).getByRole('button', { name: 'Save' }).click();
+    await expect(editor(page)).toHaveCount(0);
+    await page.reload();
+    await expect(card).toBeVisible();
+    await expect(editor(page)).toHaveCount(0);
+
+    // A dialog nobody typed in keeps nothing.
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await expect(editor(page)).toBeVisible();
+    await page.reload();
+    await expect(card).toBeVisible();
+    await expect(editor(page)).toHaveCount(0);
   } finally {
     await wipePeople(request, stamp);
   }
@@ -203,6 +255,9 @@ test('a node: add from the registry or create inline, with a role, remove', asyn
     await dlg.getByRole('textbox', { name: 'Company' }).fill('Kernel');
     // The membership's own block, apart from the person's fields.
     const onNode = dlg.getByRole('group', { name: 'On this node' });
+    // Role says it's this node's only (#182).
+    await expect(onNode.getByRole('combobox', { name: 'Role' }))
+      .toHaveAccessibleDescription('Their part in this node only.');
     await onNode.getByRole('combobox', { name: 'Role' }).fill('Maintainer');
     await onNode.getByRole('textbox', { name: 'Note' }).fill('owns the kernel');
     await dlg.getByRole('button', { name: 'Save' }).click();

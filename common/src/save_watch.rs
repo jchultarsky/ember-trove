@@ -45,12 +45,13 @@ pub const CREATE_DRAFT_PREFIX: &str = "ember_trove_create_draft:";
 /// It is deleted, never migrated: nothing says whose draft it was.
 pub const LEGACY_CREATE_DRAFT_KEY: &str = "ember_trove_create_draft";
 
-/// Whether `key` is an editor draft that logout must wipe: any user's edit
-/// or create draft, or the legacy unscoped create draft.
+/// Whether `key` is a draft that logout must wipe: any user's edit, create
+/// or modal-form draft (#170), or the legacy unscoped create draft.
 pub fn is_draft_key(key: &str) -> bool {
     key == LEGACY_CREATE_DRAFT_KEY
         || key.starts_with(CREATE_DRAFT_PREFIX)
         || key.starts_with(EDIT_DRAFT_PREFIX)
+        || key.starts_with(crate::form_draft::FORM_DRAFT_PREFIX)
 }
 
 /// Which save a settled response belongs to (see [`SaveWatch`]).
