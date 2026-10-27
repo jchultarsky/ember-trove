@@ -75,6 +75,9 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await expect(editor(page).getByRole('heading', { name: 'Edit person' })).toBeVisible();
     await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue(name);
     await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Analytical Engines');
+    // Position says it's the person's, everywhere (#182).
+    await expect(editor(page).getByRole('textbox', { name: 'Position' }))
+      .toHaveAccessibleDescription('Their job title \u2014 stays with the person on every node.');
     await editor(page).getByRole('textbox', { name: 'Position' }).fill('Analyst');
     // Ctrl/⌘+Enter saves from any field. The person keeps their own email,
     // which matches the original's, so this is a confirmed duplicate: the
@@ -203,6 +206,9 @@ test('a node: add from the registry or create inline, with a role, remove', asyn
     await dlg.getByRole('textbox', { name: 'Company' }).fill('Kernel');
     // The membership's own block, apart from the person's fields.
     const onNode = dlg.getByRole('group', { name: 'On this node' });
+    // Role says it's this node's only (#182).
+    await expect(onNode.getByRole('combobox', { name: 'Role' }))
+      .toHaveAccessibleDescription('Their part in this node only.');
     await onNode.getByRole('combobox', { name: 'Role' }).fill('Maintainer');
     await onNode.getByRole('textbox', { name: 'Note' }).fill('owns the kernel');
     await dlg.getByRole('button', { name: 'Save' }).click();
