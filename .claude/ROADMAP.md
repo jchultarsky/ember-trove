@@ -511,8 +511,9 @@ release entries above and in git history.
   - On a 401, the API client reloads the page instead of retrying the
     request (`api::handle_error_response`). Drafts and the give-up now make
     this safe, but a retry would avoid the reload.
-  - An edit draft's restore offer doesn't say if the node changed since the
-    draft was taken (no base fingerprint), and drafts never expire.
+  - ~~Restore offer silent about a node changed since the draft; drafts
+    never expire~~: fixed for the next release (drafts carry `base_fps` +
+    `saved_at`; 14-day TTL, startup sweep).
 - Optional: `lldb-dap` for editor step-debugging (not installed; editor-local tooling,
   not a repo deliverable).
 - **Deferred by owner decision (2026-10-26), not critical:**

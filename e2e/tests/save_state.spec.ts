@@ -71,6 +71,8 @@ test('edits that never reached the server are offered back', async ({ page, requ
     await expect(editor2).toHaveValue('before');
     const offer = again.getByTestId('draft-recovery');
     await expect(offer).toBeVisible();
+    // Nobody touched the node since: no overwrite warning.
+    await expect(offer).not.toContainText('changed since');
     await offer.getByRole('button', { name: 'Restore' }).click();
     await expect(editor2).toHaveValue('kept on this device');
     await expect(again.getByText(/^Saved/)).toBeVisible({ timeout: 10_000 });
@@ -222,5 +224,79 @@ test.describe('save follow-up (#161)', () => {
     await page.setExtraHTTPHeaders({});
     await openNew();
     await expect(titleInput()).toHaveValue(title);
+  });
+});
+
+// ── Draft base and expiry (#161 gaps) ────────────────────────────────────────
+
+test.describe('draft staleness and expiry', () => {
+  test('the offer warns when the node changed after the draft was taken', async ({
+    page,
+    request,
+  }) => {
+    const node = await createNode(request, `e2e draft stale ${Date.now()}`, { body: 'before' });
+    try {
+      await routeSaves(page, node.id, 'fail');
+      const editor = await openEditor(page, node.id);
+      await editor.fill('kept on this device');
+      await expect(page.getByTestId('save-retry')).toBeVisible({ timeout: 10_000 });
+
+      // Another device changes the node after the draft was taken.
+      const other = await request.put(`/api/nodes/${node.id}`, { data: { body: 'elsewhere' } });
+      expect(other.ok()).toBeTruthy();
+
+      const again = await page.context().newPage();
+      const editor2 = await openEditor(again, node.id);
+      await expect(editor2).toHaveValue('elsewhere');
+      const offer = again.getByTestId('draft-recovery');
+      await expect(offer).toContainText('has changed since');
+      await expect(offer).toContainText('stays in History');
+
+      // Restoring is still the user's call, and it saves.
+      await offer.getByRole('button', { name: 'Restore' }).click();
+      await expect(editor2).toHaveValue('kept on this device');
+      await expect(again.getByText(/^Saved/)).toBeVisible({ timeout: 10_000 });
+      expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(
+        'kept on this device',
+      );
+    } finally {
+      await request.delete(`/api/nodes/${node.id}`);
+    }
+  });
+
+  test('startup drops expired drafts and dates unstamped ones', async ({ page }) => {
+    const day = 24 * 60 * 60 * 1000;
+    const keys = {
+      old: 'ember_trove_edit_draft:e2e-sweep:old',
+      fresh: 'ember_trove_edit_draft:e2e-sweep:fresh',
+      unstamped: 'ember_trove_create_draft:e2e-sweep',
+    };
+    await page.goto('/');
+    await expect(page.locator('main')).toBeVisible();
+    await page.evaluate(
+      ({ keys, day }) => {
+        const draft = { title: 't', body: 'b', status: 'draft' };
+        localStorage.setItem(keys.old, JSON.stringify({ ...draft, saved_at: Date.now() - 15 * day }));
+        localStorage.setItem(keys.fresh, JSON.stringify({ ...draft, saved_at: Date.now() - 13 * day }));
+        localStorage.setItem(keys.unstamped, JSON.stringify({ ...draft, node_type: 'article' }));
+      },
+      { keys, day },
+    );
+    try {
+      await page.reload();
+      await expect(page.locator('main')).toBeVisible();
+      const after = await page.evaluate(
+        (keys) => Object.fromEntries(Object.entries(keys).map(([k, v]) => [k, localStorage.getItem(v)])),
+        keys,
+      );
+      expect(after.old).toBeNull();
+      expect(after.fresh).not.toBeNull();
+      // A v2.40.0 draft is kept and gets its first stamp.
+      const stamped = JSON.parse(after.unstamped ?? 'null');
+      expect(stamped?.node_type).toBe('article');
+      expect(Math.abs(stamped.saved_at - Date.now())).toBeLessThan(day);
+    } finally {
+      await page.evaluate((keys) => Object.values(keys).forEach((k) => localStorage.removeItem(k)), keys);
+    }
   });
 });

@@ -156,13 +156,67 @@ pub fn fingerprint(title: &str, body: &str, status: &str) -> u64 {
     .fold(OFFSET, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME))
 }
 
+/// How long an editor draft stays on the device after its last write
+/// (owner decision, 2026-10-27). Drafts hold node content in
+/// `localStorage`, so one for a node never reopened must not stay forever;
+/// two weeks still covers a laptop left shut over a holiday.
+pub const DRAFT_TTL_MS: i64 = 14 * 24 * 60 * 60 * 1000;
+
+/// Whether a draft written at `saved_at` (ms since the epoch) is past
+/// [`DRAFT_TTL_MS`] at `now_ms`. An unstamped draft (written before
+/// expiry existed) is not: [`sweep`] dates it first. A stamp in the future
+/// (the clock was set back) counts as fresh.
+pub fn is_expired(saved_at: Option<i64>, now_ms: i64) -> bool {
+    saved_at.is_some_and(|t| now_ms.saturating_sub(t) > DRAFT_TTL_MS)
+}
+
+/// What the startup sweep does with one stored draft, see [`sweep`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sweep {
+    Keep,
+    /// Past the TTL, or unreadable: remove it.
+    Expire,
+    /// No stamp yet (a v2.40.0 draft): store this stamped JSON instead, so
+    /// it expires one TTL from now rather than never, or right away.
+    Stamp(String),
+}
+
+/// Decide the fate of a stored draft (edit or create) at app start. Works
+/// on the raw JSON so one rule covers both draft kinds and keeps every
+/// field it doesn't know.
+pub fn sweep(raw: &str, now_ms: i64) -> Sweep {
+    let Ok(serde_json::Value::Object(mut draft)) = serde_json::from_str(raw) else {
+        return Sweep::Expire;
+    };
+    match draft.get("saved_at").and_then(serde_json::Value::as_i64) {
+        Some(t) if is_expired(Some(t), now_ms) => Sweep::Expire,
+        Some(_) => Sweep::Keep,
+        None => {
+            draft.insert("saved_at".into(), now_ms.into());
+            match serde_json::to_string(&draft) {
+                Ok(json) => Sweep::Stamp(json),
+                Err(_) => Sweep::Expire,
+            }
+        }
+    }
+}
+
 /// Unsaved edits of an existing node, kept on this device until a save
-/// lands. The fields match the editor's (title, body, status) snapshot.
+/// lands. The text fields match the editor's (title, body, status) snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EditDraft {
     pub title: String,
     pub body: String,
     pub status: String,
+    /// Fingerprints of the server text these edits started from: the
+    /// editor's baseline plus every snapshot it sent (the editor's
+    /// `own_fps`). Empty for drafts written before v2.41.0.
+    #[serde(default)]
+    pub base_fps: Vec<u64>,
+    /// When the draft was last written (ms since the epoch), for
+    /// [`DRAFT_TTL_MS`]. The storage layer stamps it on every write.
+    #[serde(default)]
+    pub saved_at: Option<i64>,
 }
 
 impl EditDraft {
@@ -181,9 +235,16 @@ impl EditDraft {
         ) == server
         {
             // The save landed after all (#161 sighting 2): nothing to offer.
-            DraftRecovery::Discard
-        } else {
-            DraftRecovery::Offer
+            return DraftRecovery::Discard;
+        }
+        if self.base_fps.is_empty() {
+            return DraftRecovery::Offer(DraftBase::Unknown);
+        }
+        // The same test a 412 uses: our baseline or our own late save on
+        // the server means no one else touched the node.
+        match classify_conflict(fingerprint(server.0, server.1, server.2), &self.base_fps) {
+            Conflict::OwnWrite => DraftRecovery::Offer(DraftBase::Unchanged),
+            Conflict::Foreign => DraftRecovery::Offer(DraftBase::Changed),
         }
     }
 }
@@ -194,7 +255,20 @@ pub enum DraftRecovery {
     /// The server already has these edits; drop the draft silently.
     Discard,
     /// The draft differs from the server; offer Restore / Discard.
-    Offer,
+    Offer(DraftBase),
+}
+
+/// Whether the node changed since the draft was taken. Restore replaces
+/// the server text either way, so the offer must say when that throws
+/// away someone else's change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DraftBase {
+    /// The server still holds what the draft started from.
+    Unchanged,
+    /// The node was changed elsewhere after the draft was taken.
+    Changed,
+    /// A draft from before v2.41.0, which didn't record its base.
+    Unknown,
 }
 
 #[cfg(test)]
@@ -272,6 +346,8 @@ mod tests {
             title: "Plan".into(),
             body: body.into(),
             status: "draft".into(),
+            base_fps: Vec::new(),
+            saved_at: None,
         }
     }
 
@@ -311,14 +387,126 @@ mod tests {
     fn a_draft_that_differs_in_any_field_is_offered() {
         let d = draft("text\n");
         // The lost Enter keystroke of #161 sighting 1.
-        assert_eq!(d.recovery(("Plan", "text", "draft")), DraftRecovery::Offer);
+        let offer = DraftRecovery::Offer(DraftBase::Unknown);
+        assert_eq!(d.recovery(("Plan", "text", "draft")), offer);
+        assert_eq!(d.recovery(("Other", "text\n", "draft")), offer);
+        assert_eq!(d.recovery(("Plan", "text\n", "published")), offer);
+    }
+
+    // ── Base version and expiry (#161 gaps) ──────────────────────────────
+
+    fn based_on(body: &str, base: &[(&str, &str, &str)]) -> EditDraft {
+        EditDraft {
+            base_fps: base.iter().map(|(t, b, s)| fingerprint(t, b, s)).collect(),
+            ..draft(body)
+        }
+    }
+
+    #[test]
+    fn a_draft_on_an_unchanged_node_is_offered_as_unchanged() {
+        let d = based_on("mine", &[("Plan", "before", "draft")]);
         assert_eq!(
-            d.recovery(("Other", "text\n", "draft")),
-            DraftRecovery::Offer
+            d.recovery(("Plan", "before", "draft")),
+            DraftRecovery::Offer(DraftBase::Unchanged)
+        );
+    }
+
+    #[test]
+    fn a_node_holding_our_own_earlier_save_counts_as_unchanged() {
+        // A save of "mi" landed late; the draft holds "mine" on top of it.
+        let d = based_on(
+            "mine",
+            &[("Plan", "before", "draft"), ("Plan", "mi", "draft")],
         );
         assert_eq!(
-            d.recovery(("Plan", "text\n", "published")),
-            DraftRecovery::Offer
+            d.recovery(("Plan", "mi", "draft")),
+            DraftRecovery::Offer(DraftBase::Unchanged)
         );
+    }
+
+    #[test]
+    fn a_node_changed_elsewhere_since_the_draft_is_flagged() {
+        let d = based_on("mine", &[("Plan", "before", "draft")]);
+        assert_eq!(
+            d.recovery(("Plan", "elsewhere", "draft")),
+            DraftRecovery::Offer(DraftBase::Changed)
+        );
+        // The draft matching the server still wins: nothing to offer.
+        assert_eq!(
+            d.recovery(("Plan", "mine", "draft")),
+            DraftRecovery::Discard
+        );
+    }
+
+    #[test]
+    fn a_v2_40_draft_without_a_base_or_stamp_still_parses() {
+        let d = EditDraft::parse(r#"{"title":"Plan","body":"b","status":"draft"}"#)
+            .expect("v2.40.0 drafts stay readable");
+        assert!(d.base_fps.is_empty());
+        assert_eq!(d.saved_at, None);
+        assert_eq!(
+            d.recovery(("Plan", "other", "draft")),
+            DraftRecovery::Offer(DraftBase::Unknown)
+        );
+    }
+
+    #[test]
+    fn base_and_stamp_round_trip() {
+        let d = EditDraft {
+            saved_at: Some(1_700_000_000_000),
+            ..based_on("mine", &[("Plan", "before", "draft")])
+        };
+        let json = serde_json::to_string(&d).expect("serialize");
+        assert_eq!(EditDraft::parse(&json), Some(d));
+    }
+
+    const NOW: i64 = 1_800_000_000_000;
+
+    #[test]
+    fn drafts_expire_after_the_ttl_and_not_before() {
+        assert_eq!(DRAFT_TTL_MS, 14 * 24 * 60 * 60 * 1000);
+        assert!(!is_expired(Some(NOW), NOW));
+        assert!(!is_expired(Some(NOW - DRAFT_TTL_MS), NOW));
+        assert!(is_expired(Some(NOW - DRAFT_TTL_MS - 1), NOW));
+        // Unstamped (pre-expiry) drafts are dated by the sweep, not dropped.
+        assert!(!is_expired(None, NOW));
+        // A clock set back makes a draft look newer: keep it.
+        assert!(!is_expired(Some(NOW + DRAFT_TTL_MS * 3), NOW));
+        // Extreme stamps don't overflow.
+        assert!(is_expired(Some(i64::MIN), i64::MAX));
+    }
+
+    #[test]
+    fn the_sweep_keeps_fresh_drafts_and_expires_old_ones() {
+        let fresh = format!(r#"{{"title":"t","body":"b","status":"draft","saved_at":{NOW}}}"#);
+        assert_eq!(sweep(&fresh, NOW + 1), Sweep::Keep);
+        let old = format!(r#"{{"title":"t","saved_at":{}}}"#, NOW - DRAFT_TTL_MS - 1);
+        assert_eq!(sweep(&old, NOW), Sweep::Expire);
+    }
+
+    #[test]
+    fn the_sweep_dates_an_unstamped_draft_without_losing_it() {
+        let raw = r#"{"title":"Plan","body":"b","status":"draft"}"#;
+        let Sweep::Stamp(stamped) = sweep(raw, NOW) else {
+            panic!("an unstamped draft is stamped, not kept or dropped");
+        };
+        let d = EditDraft::parse(&stamped).expect("still a draft");
+        assert_eq!(d.saved_at, Some(NOW));
+        assert_eq!(d.body, "b");
+        // Create drafts carry other fields; those survive the stamp too.
+        let create =
+            r#"{"title":"t","body":"b","node_type":"project","status":"draft","saved_at":null}"#;
+        let Sweep::Stamp(stamped) = sweep(create, NOW) else {
+            panic!("a null stamp is stamped too");
+        };
+        let v: serde_json::Value = serde_json::from_str(&stamped).expect("json");
+        assert_eq!(v["node_type"], "project");
+        assert_eq!(v["saved_at"], NOW);
+    }
+
+    #[test]
+    fn the_sweep_drops_unreadable_drafts() {
+        assert_eq!(sweep("{not json", NOW), Sweep::Expire);
+        assert_eq!(sweep("[1,2]", NOW), Sweep::Expire);
     }
 }

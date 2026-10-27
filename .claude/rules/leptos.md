@@ -59,6 +59,12 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   and release the lock themselves, and late responses act only through
   `common::save_watch::SaveWatch`. Any path that reloads or redirects must
   assume in-memory edits are lost: keep a draft first.
+- **Editor drafts live under `common::save_watch` prefixes** (#161 gaps).
+  A new kind of local draft uses a key `is_draft_key` recognises, so logout
+  wipes it and the startup sweep expires it (`DRAFT_TTL_MS`, 14 days), and
+  it carries `saved_at`, stamped by `crate::draft` on write. Edit drafts also
+  carry `base_fps` (the editor's `own_fps`) so the restore offer can say
+  whether the node changed since (`EditDraft::recovery`).
 - **Static `style=` / `title=` must be closures** — `style=move || ...` — for reactive attrs.
 - **Moving a non-`Copy` value into an inner closure makes it `FnOnce` and breaks
   reactivity.** Clone signals/`navigate` before the inner `move ||` in each `map` iteration.

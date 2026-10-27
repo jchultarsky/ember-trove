@@ -17,11 +17,17 @@
 //! wiped on logout, because it holds node content on the device. Logout
 //! wipes create drafts too ([`clear_all_drafts`]).
 //!
+//! Every draft is stamped when written and expires
+//! [`common::save_watch::DRAFT_TTL_MS`] (14 days) after its last write: an
+//! expired draft is never offered, and [`sweep_expired_drafts`] removes
+//! them at startup, including drafts of nodes that are never reopened.
+//!
 //! All operations are infallible — a missing `localStorage` (private
 //! browsing, SSR) degrades to "no draft", same as `recent.rs`.
 
 use common::save_watch::{
-    EditDraft, LEGACY_CREATE_DRAFT_KEY, create_draft_key, edit_draft_key, is_draft_key,
+    EditDraft, LEGACY_CREATE_DRAFT_KEY, Sweep, create_draft_key, edit_draft_key, is_draft_key,
+    is_expired, sweep,
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +38,10 @@ pub struct CreateDraft {
     pub body: String,
     pub node_type: String,
     pub status: String,
+    /// When the draft was last written (ms since the epoch); stamped by
+    /// [`write_draft`]. Absent in drafts from before v2.41.0.
+    #[serde(default)]
+    pub saved_at: Option<i64>,
 }
 
 impl CreateDraft {
@@ -51,13 +61,16 @@ impl CreateDraft {
     }
 }
 
-/// Read `subject`'s create draft, if any.
+/// Read `subject`'s create draft, if any. An expired one is removed.
 pub fn read_draft(subject: &str) -> Option<CreateDraft> {
-    let raw = storage()?
-        .get_item(&create_draft_key(subject))
-        .ok()
-        .flatten()?;
-    CreateDraft::parse(&raw)
+    let key = create_draft_key(subject);
+    let s = storage()?;
+    let d = CreateDraft::parse(&s.get_item(&key).ok().flatten()?)?;
+    if is_expired(d.saved_at, now_ms()) {
+        let _ = s.remove_item(&key);
+        return None;
+    }
+    Some(d)
 }
 
 /// Persist `subject`'s create draft. Silently no-ops on any storage error,
@@ -66,7 +79,11 @@ pub fn write_draft(subject: &str, draft: &CreateDraft) {
     if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(draft)) {
+    let draft = CreateDraft {
+        saved_at: Some(now_ms()),
+        ..draft.clone()
+    };
+    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(&draft)) {
         let _ = s.set_item(&create_draft_key(subject), &json);
     }
 }
@@ -98,13 +115,21 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
 }
 
-/// Read this user's draft of `node_id`, if any.
+/// Milliseconds since the epoch, the unit of draft stamps.
+fn now_ms() -> i64 {
+    js_sys::Date::now() as i64
+}
+
+/// Read this user's draft of `node_id`, if any. An expired one is removed.
 pub fn read_edit_draft(subject: &str, node_id: &str) -> Option<EditDraft> {
-    let raw = storage()?
-        .get_item(&edit_draft_key(subject, node_id))
-        .ok()
-        .flatten()?;
-    EditDraft::parse(&raw)
+    let key = edit_draft_key(subject, node_id);
+    let s = storage()?;
+    let d = EditDraft::parse(&s.get_item(&key).ok().flatten()?)?;
+    if is_expired(d.saved_at, now_ms()) {
+        let _ = s.remove_item(&key);
+        return None;
+    }
+    Some(d)
 }
 
 /// Keep unsaved edits of `node_id`. Silently no-ops on any storage error.
@@ -112,7 +137,11 @@ pub fn write_edit_draft(subject: &str, node_id: &str, draft: &EditDraft) {
     if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(draft)) {
+    let draft = EditDraft {
+        saved_at: Some(now_ms()),
+        ..draft.clone()
+    };
+    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(&draft)) {
         let _ = s.set_item(&edit_draft_key(subject, node_id), &json);
     }
 }
@@ -122,6 +151,34 @@ pub fn write_edit_draft(subject: &str, node_id: &str, draft: &EditDraft) {
 pub fn clear_edit_draft(subject: &str, node_id: &str) {
     if let Some(s) = storage() {
         let _ = s.remove_item(&edit_draft_key(subject, node_id));
+    }
+}
+
+/// Remove expired drafts and date unstamped ones (v2.40.0), for every user
+/// on this device. Run once at startup: a draft of a node nobody reopens is
+/// never read, so read-time expiry alone would keep it forever.
+pub fn sweep_expired_drafts() {
+    let Some(s) = storage() else { return };
+    let now = now_ms();
+    let len = s.length().unwrap_or(0);
+    // Collect first: removing while indexing shifts the keys.
+    let keys: Vec<String> = (0..len)
+        .filter_map(|i| s.key(i).ok().flatten())
+        .filter(|k| is_draft_key(k))
+        .collect();
+    for k in keys {
+        let Some(raw) = s.get_item(&k).ok().flatten() else {
+            continue;
+        };
+        match sweep(&raw, now) {
+            Sweep::Keep => {}
+            Sweep::Expire => {
+                let _ = s.remove_item(&k);
+            }
+            Sweep::Stamp(json) => {
+                let _ = s.set_item(&k, &json);
+            }
+        }
     }
 }
 
@@ -152,6 +209,7 @@ mod tests {
             body: body.to_string(),
             node_type: "project".to_string(),
             status: "draft".to_string(),
+            saved_at: None,
         }
     }
 
@@ -166,6 +224,21 @@ mod tests {
     fn parse_rejects_corrupt_json() {
         assert_eq!(CreateDraft::parse("{not json"), None);
         assert_eq!(CreateDraft::parse(r#"{"title":"x"}"#), None); // missing fields
+    }
+
+    #[test]
+    fn a_v2_40_draft_without_a_stamp_still_parses() {
+        let d = CreateDraft::parse(
+            r#"{"title":"t","body":"b","node_type":"article","status":"draft"}"#,
+        )
+        .expect("v2.40.0 drafts stay readable");
+        assert_eq!(d.saved_at, None);
+        let stamped = CreateDraft {
+            saved_at: Some(1_800_000_000_000),
+            ..d
+        };
+        let json = serde_json::to_string(&stamped).expect("serialize");
+        assert_eq!(CreateDraft::parse(&json), Some(stamped));
     }
 
     #[test]
