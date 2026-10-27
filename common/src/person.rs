@@ -563,6 +563,22 @@ pub fn primary(points: &[ContactPoint]) -> Option<&ContactPoint> {
         .or_else(|| points.first())
 }
 
+/// How many entries of one kind a member card shows before "+n more" (#172).
+pub const CARD_CONTACTS: usize = 3;
+
+/// The entries a member card shows, preferred first then in stored order,
+/// capped at `cap`, and how many were left out. The card says "+n more"
+/// for those, so a list is never silently cut short (#172).
+pub fn card_contacts(points: &[ContactPoint], cap: usize) -> (Vec<ContactPoint>, usize) {
+    let ordered = points
+        .iter()
+        .filter(|p| p.preferred)
+        .chain(points.iter().filter(|p| !p.preferred));
+    let shown: Vec<ContactPoint> = ordered.take(cap).cloned().collect();
+    let hidden = points.len().saturating_sub(shown.len());
+    (shown, hidden)
+}
+
 /// Whether `p` matches the picker's text: name, company, any email or phone,
 /// case-insensitively. Blank text matches everyone.
 pub fn matches(p: &Person, q: &str) -> bool {
@@ -832,6 +848,28 @@ mod tests {
         assert_eq!(primary(&[a.clone(), b.clone()]), Some(&b));
         assert_eq!(primary(std::slice::from_ref(&a)), Some(&a));
         assert_eq!(primary(&[]), None);
+    }
+
+    #[test]
+    fn a_card_shows_every_entry_preferred_first() {
+        let office = cp("Office", "+1 555 0100", false);
+        let cell = cp("Cell", "+1 555 0101", true);
+        let (shown, hidden) = card_contacts(&[office.clone(), cell.clone()], CARD_CONTACTS);
+        assert_eq!(shown, vec![cell, office]);
+        assert_eq!(hidden, 0);
+    }
+
+    #[test]
+    fn a_card_caps_the_list_and_counts_the_rest() {
+        let points: Vec<_> = (0..5)
+            .map(|i| cp("", &format!("p{i}@x.test"), i == 4))
+            .collect();
+        let (shown, hidden) = card_contacts(&points, 3);
+        let values: Vec<_> = shown.iter().map(|p| p.value.as_str()).collect();
+        assert_eq!(values, ["p4@x.test", "p0@x.test", "p1@x.test"]);
+        assert_eq!(hidden, 2);
+        assert_eq!(card_contacts(&[], 3), (Vec::new(), 0));
+        assert_eq!(card_contacts(&points, 0), (Vec::new(), 5));
     }
 
     #[test]

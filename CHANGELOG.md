@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Member cards show every email and phone (#172).** A node's People list
+  showed only the preferred email and phone, so a second number looked like
+  it was never recorded. Cards now list up to three of each, preferred
+  first, and a "+n more" link to the person page counts the rest
+  (`common::person::card_contacts`).
+
 ### Tooling
 - **Deploys can no longer fill the production disk.** The release deploy
   removed only untagged images, so every release's images, plus build cache,
