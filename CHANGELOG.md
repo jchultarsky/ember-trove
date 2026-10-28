@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Long node bodies get a contents list (#185).** When a body has three or
+  more `##` / `###` headings, a compact "Contents" list sits above it; a
+  click scrolls to that heading. The list and the rendered body come from the
+  same Markdown parse (`markdown::render_body`), so the outline can't drift
+  from the headings. Bodies with fewer headings look as before.
+
+### Security
+- The body sanitiser now keeps an `id` on h2/h3 only in the generated
+  `ember-h-N` form (#185). Any other id in a body, including one written in
+  raw HTML, is still stripped, so a body can't shadow an app element id or a
+  `window` global.
+
 ## [2.44.1] - 2026-10-28
 
 ### Security
