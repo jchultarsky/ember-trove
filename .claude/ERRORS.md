@@ -330,6 +330,18 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   retry for writes, and never trust abort to cancel a write.**
   — 2026-10-27
 
+### e2e: "relation \"nodes\" does not exist" on a second KEEP_STACK run
+- **Symptom:** after `KEEP_STACK=1 ./scripts/e2e.sh …`, a second run fails
+  at the first fixture (`createNode` → `resp.ok()` false); the API logs
+  `relation "nodes" does not exist`.
+- **Cause:** the second run's `up -d --build` recreated the (ephemeral)
+  database container but kept the running API, whose migrations ran only at
+  its own startup. The API then talks to an empty schema.
+- **Fix:** start from a clean stack: `docker compose -p ember-e2e -f
+  deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml down -v`
+  (export the script's `COOKIE_KEY` first), then run again; or
+  `--force-recreate api` after the database comes back. — 2026-10-28 (#184)
+
 ### Multi-line code blocks render as a stack of per-line boxes
 - **Symptom:** a fenced code block renders each line in its own bordered/background box
   instead of one clean block (worse in dark mode).

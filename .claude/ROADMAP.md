@@ -3,7 +3,15 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-27)
+## Current state (2026-10-28)
+
+- **v2.43.1 shipped: person forms keep browser autofill out (#184; PR
+  #191).** Every person-dialog field and the node page's person picker are
+  `autocomplete="off"`; email/phone values are text inputs with
+  `inputmode`. Real Chrome autofill still needs the owner's manual check.
+- **Owner policy (2026-10-28):** merge PRs to develop when green and cut
+  releases when ready without asking; ask only real product/security
+  decisions.
 
 - **v2.43.0 shipped: person-dialog drafts (#170; PR #178), picker
   accessibility press (#174; PR #187), rendered node-list excerpts (#175;

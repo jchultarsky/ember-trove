@@ -114,7 +114,10 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
 #[component]
 fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> impl IntoView {
     let redraw = RwSignal::new(0u32);
-    let (noun, heading, placeholder, input_type) = match kind {
+    // A text input with `inputmode`, not `type="email"`/`type="tel"`: those
+    // types tell the browser this is the user's own address, and it offers
+    // their details for someone else's card (#184).
+    let (noun, heading, placeholder, input_mode) = match kind {
         ContactKind::Email => ("email", "Emails", "name@example.com", "email"),
         ContactKind::Phone => ("phone", "Phones", "+1 555 010 0000", "tel"),
         ContactKind::Address => ("address", "Addresses", "1 Main St\nSpringfield", "text"),
@@ -179,6 +182,7 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                             view! {
                                 <textarea
                                     rows="2"
+                                    autocomplete="off"
                                     class=INPUT_CLASS
                                     placeholder=placeholder
                                     aria-label=noun
@@ -192,7 +196,11 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                         } else {
                             view! {
                                 <input
-                                    type=input_type
+                                    type="text"
+                                    inputmode=input_mode
+                                    autocomplete="off"
+                                    autocapitalize="off"
+                                    spellcheck="false"
                                     class=INPUT_CLASS
                                     placeholder=placeholder
                                     aria-label=noun
@@ -550,7 +558,7 @@ pub fn PersonEditor(
         view! {
             <label class="block">
                 <span class=LABEL_CLASS>{label}</span>
-                <input type="text" class=INPUT_CLASS prop:value=move || sig.get()
+                <input type="text" autocomplete="off" class=INPUT_CLASS prop:value=move || sig.get()
                     on:input=move |ev| sig.set(event_target_value(&ev)) />
             </label>
         }
@@ -578,8 +586,11 @@ pub fn PersonEditor(
                 <h2 class="font-display text-lg text-stone-900 dark:text-stone-100">{title}</h2>
                 <IconButton icon="close" label="Close" on_click=dismiss />
             </div>
+            // Every field describes a third party, never the signed-in
+            // user: browser autofill stays out of all of them (#184).
             <form
                 id=form_id
+                autocomplete="off"
                 class="flex-1 overflow-y-auto px-4 py-4 space-y-4"
                 data-testid="person-form"
                 on:submit=move |ev| { ev.prevent_default(); save(false); }
@@ -609,7 +620,7 @@ pub fn PersonEditor(
                 })}
                 <label class="block">
                     <span class=LABEL_CLASS>"Name"</span>
-                    <input type="text" node_ref=name_ref class=INPUT_CLASS required=true
+                    <input type="text" node_ref=name_ref class=INPUT_CLASS required=true autocomplete="off"
                         prop:value=move || draft.name.get()
                         on:input=move |ev| draft.name.set(event_target_value(&ev)) />
                 </label>
@@ -619,7 +630,7 @@ pub fn PersonEditor(
                     // hint says so while typing, which a placeholder can't (#182).
                     <label class="block">
                         <span class=LABEL_CLASS>"Position"</span>
-                        <input type="text" class=INPUT_CLASS
+                        <input type="text" class=INPUT_CLASS autocomplete="off"
                             aria-describedby=position_hint_id.get_value()
                             prop:value=move || draft.position.get()
                             on:input=move |ev| draft.position.set(event_target_value(&ev)) />
@@ -633,7 +644,7 @@ pub fn PersonEditor(
                 <ContactListEditor kind=ContactKind::Address points=draft.addresses />
                 <label class="block">
                     <span class=LABEL_CLASS>"Notes"</span>
-                    <textarea rows="4" class=INPUT_CLASS prop:value=move || draft.notes.get()
+                    <textarea rows="4" class=INPUT_CLASS autocomplete="off" prop:value=move || draft.notes.get()
                         on:input=move |ev| draft.notes.set(event_target_value(&ev)) />
                 </label>
                 // The membership's fields, set apart from the person's: the
