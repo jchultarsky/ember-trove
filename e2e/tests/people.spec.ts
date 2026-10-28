@@ -195,7 +195,7 @@ test('on a phone the editor is a full-screen sheet with Save in reach', async ({
     expect(box).toMatchObject({ x: 0, y: 0, width: 375, height: 812 });
     // Contact rows stack: the label sits above the value, not beside it.
     await dlg.getByRole('button', { name: 'Add phone' }).click();
-    const label = await dlg.getByRole('textbox', { name: 'phone label' }).boundingBox();
+    const label = await dlg.getByRole('combobox', { name: 'phone label' }).boundingBox();
     const value = await dlg.getByRole('textbox', { name: 'phone', exact: true }).boundingBox();
     expect(label!.y + label!.height).toBeLessThanOrEqual(value!.y);
     // Nothing scrolls sideways, and Save is on screen.
@@ -476,6 +476,44 @@ test('the Role combobox saves what was typed; a suggestion only when chosen (#17
   }
 });
 
+test('contact labels suggest common values; a custom label saves as typed (#183)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  await wipePeople(request, stamp);
+  try {
+    await page.goto('/people');
+    await expect(page.locator('main')).toBeVisible();
+    await page.getByRole('button', { name: 'New person' }).click();
+    const dlg = editor(page);
+    await expect(dlg).toBeVisible();
+    await dlg.getByRole('textbox', { name: 'Name' }).fill(`e2e Labels ${stamp}`);
+
+    // Phone: "o" offers the starter labels; ↓ then Enter picks one.
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
+    const label = dlg.getByRole('combobox', { name: 'phone label' });
+    await label.fill('o');
+    const options = dlg.getByRole('listbox', { name: 'phone label suggestions' }).getByRole('option');
+    await expect(options).toHaveText(['office', 'mobile', 'home']);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await expect(label).toHaveValue('office');
+    await dlg.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0001');
+
+    // Email: a custom label is kept verbatim, nothing chosen for it.
+    await dlg.getByRole('button', { name: 'Add email' }).click();
+    await dlg.getByRole('combobox', { name: 'email label' }).fill('Work');
+    await dlg.getByRole('textbox', { name: 'email', exact: true }).fill(`labels.${stamp}@example.com`);
+
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(dlg).toHaveCount(0);
+    const [saved]: { phones: { label: string }[]; emails: { label: string }[] }[] =
+      await (await request.get(`/api/people?q=${encodeURIComponent(stamp)}`)).json();
+    expect(saved.phones.map((p) => p.label)).toEqual(['office']);
+    expect(saved.emails.map((e) => e.label)).toEqual(['Work']);
+  } finally {
+    await wipePeople(request, stamp);
+  }
+});
+
 test('privacy: a sharee sees name and role only; another user\'s person is a 404', async ({ request, otherRequest }) => {
   const stamp = `${Date.now()}`;
   const node = await createNode(request, `e2e people privacy ${stamp}`, { node_type: 'project' });
@@ -572,14 +610,18 @@ test('person forms keep browser autofill out of a third party\'s fields (#184)',
     await dlg.getByRole('button', { name: 'Add address' }).click();
     const form = dlg.getByTestId('person-form');
     await expect(form).toHaveAttribute('autocomplete', 'off');
-    const fields = form.locator('input:not([type="radio"]), textarea');
-    expect(await fields.count()).toBeGreaterThanOrEqual(10);
+    // The email value is the exception: Chrome ignored `off` there, so it
+    // carries a token Chrome doesn't recognise, which turns autofill off.
+    const email = dlg.getByRole('textbox', { name: 'email', exact: true });
+    await expect(email).toHaveAttribute('autocomplete', 'ember-contact-email');
+    const fields = form.locator('input:not([type="radio"]):not([inputmode="email"]), textarea');
+    expect(await fields.count()).toBeGreaterThanOrEqual(9);
     for (const f of await fields.all()) {
       await expect(f).toHaveAttribute('autocomplete', 'off');
     }
     // No identity input types: the keyboard comes from `inputmode` instead.
     await expect(form.locator('input[type="email"], input[type="tel"]')).toHaveCount(0);
-    await expect(dlg.getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute('inputmode', 'email');
+    await expect(email).toHaveAttribute('inputmode', 'email');
     await expect(dlg.getByRole('textbox', { name: 'phone', exact: true })).toHaveAttribute('inputmode', 'tel');
     await dlg.getByRole('button', { name: 'Cancel' }).click();
 

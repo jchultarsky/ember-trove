@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.44.0] - 2026-10-28
+
+### Added
+- **Contact labels suggest common values (#183).** The label of an email
+  (work, personal), phone (mobile, office, home) or address (office, home)
+  is now a combobox: typing filters the suggestions, ↓/↑ then Enter or a
+  click picks one, and anything else is saved exactly as typed. Existing
+  labels are untouched. The phone label's placeholder is now "mobile" to
+  match. The combobox is the Role field's (#171), extracted into a shared
+  `FreeTextCombo` component; the starter sets are
+  `common::person::label_suggestions`, with unit tests.
+
+### Security
+- **Chrome no longer offers your own email on a person's email row (#184).**
+  A manual check of v2.43.1 found Chrome ignored `autocomplete="off"` on
+  an added email value (name, phone and the person picker obeyed it). The
+  email value now carries an autocomplete token Chrome doesn't recognise,
+  which turns its autofill off for the field.
+
 ## [2.43.1] - 2026-10-28
 
 ### Security
