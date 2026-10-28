@@ -5,6 +5,13 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-28)
 
+- **v2.44.0 shipped: contact label suggestions (#183; PR #192) and the
+  email-row autofill fix (#184; PR #193).** Contact labels use the shared
+  `FreeTextCombo` (extracted from the #171 Role field) with starter sets
+  in `common::person::label_suggestions`. Chrome ignored `off` on the
+  email value in the v2.43.1 check, so that field now carries the
+  unrecognised token `ember-contact-email`. A Chrome re-test is requested
+  on #184 (Muse).
 - **v2.43.1 shipped: person forms keep browser autofill out (#184; PR
   #191).** Every person-dialog field and the node page's person picker are
   `autocomplete="off"`; email/phone values are text inputs with
