@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.43.1] - 2026-10-28
+
 ### Security
 - **Browser autofill no longer offers your own details in person forms
   (#184).** The New/Edit person dialog and the node page's "Find or create
