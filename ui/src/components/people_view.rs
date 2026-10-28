@@ -122,6 +122,15 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
         ContactKind::Phone => ("phone", "Phones", "+1 555 010 0000", "tel"),
         ContactKind::Address => ("address", "Addresses", "1 Main St\nSpringfield", "text"),
     };
+    // Chrome still offered the owner's own email on an added email row with
+    // `off` (manual check on v2.43.1, #184); name and phone obeyed it. It
+    // skips autofill for an autocomplete token it doesn't recognise, so the
+    // email value carries one. The token must stay a single word that isn't
+    // a standard autofill name.
+    let value_autocomplete = match kind {
+        ContactKind::Email => "ember-contact-email",
+        ContactKind::Phone | ContactKind::Address => "off",
+    };
     let add = Callback::new(move |()| {
         points.update_untracked(|ps| {
             ps.push(ContactPoint {
@@ -198,7 +207,7 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                                 <input
                                     type="text"
                                     inputmode=input_mode
-                                    autocomplete="off"
+                                    autocomplete=value_autocomplete
                                     autocapitalize="off"
                                     spellcheck="false"
                                     class=INPUT_CLASS
