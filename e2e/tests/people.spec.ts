@@ -610,14 +610,18 @@ test('person forms keep browser autofill out of a third party\'s fields (#184)',
     await dlg.getByRole('button', { name: 'Add address' }).click();
     const form = dlg.getByTestId('person-form');
     await expect(form).toHaveAttribute('autocomplete', 'off');
-    const fields = form.locator('input:not([type="radio"]), textarea');
-    expect(await fields.count()).toBeGreaterThanOrEqual(10);
+    // The email value is the exception: Chrome ignored `off` there, so it
+    // carries a token Chrome doesn't recognise, which turns autofill off.
+    const email = dlg.getByRole('textbox', { name: 'email', exact: true });
+    await expect(email).toHaveAttribute('autocomplete', 'ember-contact-email');
+    const fields = form.locator('input:not([type="radio"]):not([inputmode="email"]), textarea');
+    expect(await fields.count()).toBeGreaterThanOrEqual(9);
     for (const f of await fields.all()) {
       await expect(f).toHaveAttribute('autocomplete', 'off');
     }
     // No identity input types: the keyboard comes from `inputmode` instead.
     await expect(form.locator('input[type="email"], input[type="tel"]')).toHaveCount(0);
-    await expect(dlg.getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute('inputmode', 'email');
+    await expect(email).toHaveAttribute('inputmode', 'email');
     await expect(dlg.getByRole('textbox', { name: 'phone', exact: true })).toHaveAttribute('inputmode', 'tel');
     await dlg.getByRole('button', { name: 'Cancel' }).click();
 

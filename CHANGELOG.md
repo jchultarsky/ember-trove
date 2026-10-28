@@ -16,6 +16,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `FreeTextCombo` component; the starter sets are
   `common::person::label_suggestions`, with unit tests.
 
+### Security
+- **Chrome no longer offers your own email on a person's email row (#184).**
+  A manual check of v2.43.1 found Chrome ignored `autocomplete="off"` on
+  an added email value (name, phone and the person picker obeyed it). The
+  email value now carries an autocomplete token Chrome doesn't recognise,
+  which turns its autofill off for the field.
+
 ## [2.43.1] - 2026-10-28
 
 ### Security
