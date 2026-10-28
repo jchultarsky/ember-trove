@@ -195,7 +195,7 @@ test('on a phone the editor is a full-screen sheet with Save in reach', async ({
     expect(box).toMatchObject({ x: 0, y: 0, width: 375, height: 812 });
     // Contact rows stack: the label sits above the value, not beside it.
     await dlg.getByRole('button', { name: 'Add phone' }).click();
-    const label = await dlg.getByRole('textbox', { name: 'phone label' }).boundingBox();
+    const label = await dlg.getByRole('combobox', { name: 'phone label' }).boundingBox();
     const value = await dlg.getByRole('textbox', { name: 'phone', exact: true }).boundingBox();
     expect(label!.y + label!.height).toBeLessThanOrEqual(value!.y);
     // Nothing scrolls sideways, and Save is on screen.
@@ -473,6 +473,44 @@ test('the Role combobox saves what was typed; a suggestion only when chosen (#17
   } finally {
     await wipePeople(request, stamp);
     await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('contact labels suggest common values; a custom label saves as typed (#183)', async ({ page, request }) => {
+  const stamp = `${Date.now()}`;
+  await wipePeople(request, stamp);
+  try {
+    await page.goto('/people');
+    await expect(page.locator('main')).toBeVisible();
+    await page.getByRole('button', { name: 'New person' }).click();
+    const dlg = editor(page);
+    await expect(dlg).toBeVisible();
+    await dlg.getByRole('textbox', { name: 'Name' }).fill(`e2e Labels ${stamp}`);
+
+    // Phone: "o" offers the starter labels; ↓ then Enter picks one.
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
+    const label = dlg.getByRole('combobox', { name: 'phone label' });
+    await label.fill('o');
+    const options = dlg.getByRole('listbox', { name: 'phone label suggestions' }).getByRole('option');
+    await expect(options).toHaveText(['office', 'mobile', 'home']);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await expect(label).toHaveValue('office');
+    await dlg.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0001');
+
+    // Email: a custom label is kept verbatim, nothing chosen for it.
+    await dlg.getByRole('button', { name: 'Add email' }).click();
+    await dlg.getByRole('combobox', { name: 'email label' }).fill('Work');
+    await dlg.getByRole('textbox', { name: 'email', exact: true }).fill(`labels.${stamp}@example.com`);
+
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(dlg).toHaveCount(0);
+    const [saved]: { phones: { label: string }[]; emails: { label: string }[] }[] =
+      await (await request.get(`/api/people?q=${encodeURIComponent(stamp)}`)).json();
+    expect(saved.phones.map((p) => p.label)).toEqual(['office']);
+    expect(saved.emails.map((e) => e.label)).toEqual(['Work']);
+  } finally {
+    await wipePeople(request, stamp);
   }
 });
 

@@ -10,6 +10,7 @@ pub mod due_date_field;
 pub mod empty_state;
 pub mod favorites_section;
 pub mod format_helpers;
+pub mod free_text_combo;
 pub mod graph_view;
 pub mod icon_button;
 pub mod inbox_triage;
