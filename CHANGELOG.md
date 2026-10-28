@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.44.1] - 2026-10-28
+
 ### Security
 - **Chrome no longer offers your own name or details anywhere in a person's
   form (#184).** The v2.44.0 re-test found Chrome offering the owner's name

@@ -5,6 +5,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-28)
 
+- **v2.44.1 shipped: every identity field in the person form gets its own
+  autofill token (#184; PR #194).** The v2.44.0 re-test found Chrome
+  offering the owner's name on the Name field, which still used `off`.
+  Name, company and the email/phone/address values now carry tokens from
+  `common::person::autofill_token`; position and notes keep `off`.
+  Another Chrome re-test is requested on #184 (Muse); if a field still
+  leaks, the pre-approved fallback is de-classifying it (placeholder +
+  accessible name).
 - **v2.44.0 shipped: contact label suggestions (#183; PR #192) and the
   email-row autofill fix (#184; PR #193).** Contact labels use the shared
   `FreeTextCombo` (extracted from the #171 Role field) with starter sets
