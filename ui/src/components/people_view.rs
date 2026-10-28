@@ -8,7 +8,10 @@
 
 use common::form_draft::{FormRecovery, PersonForm, PersonFormDraft};
 use common::id::PersonId;
-use common::person::{ContactPoint, DuplicateMatch, Person, PersonInput, PersonUsage, primary};
+use common::person::{
+    ContactPoint, DuplicateMatch, Person, PersonField, PersonInput, PersonUsage, autofill_token,
+    primary,
+};
 use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
@@ -122,15 +125,8 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
         ContactKind::Phone => ("phone", "Phones", "+1 555 010 0000", "tel"),
         ContactKind::Address => ("address", "Addresses", "1 Main St\nSpringfield", "text"),
     };
-    // Chrome still offered the owner's own email on an added email row with
-    // `off` (manual check on v2.43.1, #184); name and phone obeyed it. It
-    // skips autofill for an autocomplete token it doesn't recognise, so the
-    // email value carries one. The token must stay a single word that isn't
-    // a standard autofill name.
-    let value_autocomplete = match kind {
-        ContactKind::Email => "ember-contact-email",
-        ContactKind::Phone | ContactKind::Address => "off",
-    };
+    // Chrome ignores `off` on identity fields (#184): see `autofill_token`.
+    let value_autocomplete = autofill_token(PersonField::Contact(kind));
     let add = Callback::new(move |()| {
         points.update_untracked(|ps| {
             ps.push(ContactPoint {
@@ -191,7 +187,7 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                             view! {
                                 <textarea
                                     rows="2"
-                                    autocomplete="off"
+                                    autocomplete=value_autocomplete
                                     class=INPUT_CLASS
                                     placeholder=placeholder
                                     aria-label=noun
@@ -563,15 +559,6 @@ pub fn PersonEditor(
             save(false);
         }
     });
-    let field = move |label: &'static str, sig: RwSignal<String>| {
-        view! {
-            <label class="block">
-                <span class=LABEL_CLASS>{label}</span>
-                <input type="text" autocomplete="off" class=INPUT_CLASS prop:value=move || sig.get()
-                    on:input=move |ev| sig.set(event_target_value(&ev)) />
-            </label>
-        }
-    };
     let name_ref: NodeRef<leptos::html::Input> = NodeRef::new();
     Effect::new(move |_| {
         if open.get()
@@ -596,7 +583,9 @@ pub fn PersonEditor(
                 <IconButton icon="close" label="Close" on_click=dismiss />
             </div>
             // Every field describes a third party, never the signed-in
-            // user: browser autofill stays out of all of them (#184).
+            // user: browser autofill stays out of all of them (#184). Fields
+            // the browser takes for identity fields carry an `autofill_token`,
+            // because Chrome ignores `off` on them; the rest inherit `off`.
             <form
                 id=form_id
                 autocomplete="off"
@@ -629,12 +618,19 @@ pub fn PersonEditor(
                 })}
                 <label class="block">
                     <span class=LABEL_CLASS>"Name"</span>
-                    <input type="text" node_ref=name_ref class=INPUT_CLASS required=true autocomplete="off"
+                    <input type="text" node_ref=name_ref class=INPUT_CLASS required=true
+                        autocomplete=autofill_token(PersonField::Name)
                         prop:value=move || draft.name.get()
                         on:input=move |ev| draft.name.set(event_target_value(&ev)) />
                 </label>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {field("Company", draft.company)}
+                    <label class="block">
+                        <span class=LABEL_CLASS>"Company"</span>
+                        <input type="text" class=INPUT_CLASS
+                            autocomplete=autofill_token(PersonField::Company)
+                            prop:value=move || draft.company.get()
+                            on:input=move |ev| draft.company.set(event_target_value(&ev)) />
+                    </label>
                     // Position is the person's, Role the membership's (#147); the
                     // hint says so while typing, which a placeholder can't (#182).
                     <label class="block">
