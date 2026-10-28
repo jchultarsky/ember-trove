@@ -556,3 +556,42 @@ test('global search finds people: the search page, the header dropdown and the p
   }
 });
 
+
+test('person forms keep browser autofill out of a third party\'s fields (#184)', async ({ page, request }) => {
+  // Real autofill suggestions can't be seen from Playwright; this guards the
+  // attributes that keep the owner's own details out of these fields.
+  const stamp = `${Date.now()}`;
+  const node = await createNode(request, `e2e people autofill ${stamp}`, { node_type: 'project' });
+  try {
+    await page.goto('/people');
+    await page.getByRole('button', { name: 'New person' }).click();
+    const dlg = editor(page);
+    // Rows added after opening must carry the attributes too.
+    await dlg.getByRole('button', { name: 'Add email' }).click();
+    await dlg.getByRole('button', { name: 'Add phone' }).click();
+    await dlg.getByRole('button', { name: 'Add address' }).click();
+    const form = dlg.getByTestId('person-form');
+    await expect(form).toHaveAttribute('autocomplete', 'off');
+    const fields = form.locator('input:not([type="radio"]), textarea');
+    expect(await fields.count()).toBeGreaterThanOrEqual(10);
+    for (const f of await fields.all()) {
+      await expect(f).toHaveAttribute('autocomplete', 'off');
+    }
+    // No identity input types: the keyboard comes from `inputmode` instead.
+    await expect(form.locator('input[type="email"], input[type="tel"]')).toHaveCount(0);
+    await expect(dlg.getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute('inputmode', 'email');
+    await expect(dlg.getByRole('textbox', { name: 'phone', exact: true })).toHaveAttribute('inputmode', 'tel');
+    await dlg.getByRole('button', { name: 'Cancel' }).click();
+
+    // The node page's picker names a person too.
+    await page.goto(`/nodes/${node.id}`);
+    const section = page.getByTestId('node-people');
+    await section.getByRole('button', { name: /People/ }).first().click();
+    await section.getByRole('button', { name: 'Add person' }).click();
+    await expect(section.getByRole('combobox', { name: 'Find or create a person' }))
+      .toHaveAttribute('autocomplete', 'off');
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request, stamp);
+  }
+});

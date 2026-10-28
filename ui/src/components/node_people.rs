@@ -632,6 +632,8 @@ fn PersonPicker(
                 type="text"
                 role="combobox"
                 aria-label="Find or create a person"
+                // A person's name, not the user's: no autofill (#184).
+                autocomplete="off"
                 aria-autocomplete="list"
                 aria-controls=list_id.get_value()
                 aria-expanded=move || if options.with(Vec::is_empty) { "false" } else { "true" }

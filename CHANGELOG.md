@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.43.1] - 2026-10-28
+
+### Security
+- **Browser autofill no longer offers your own details in person forms
+  (#184).** The New/Edit person dialog and the node page's "Find or create
+  a person" picker describe someone else, but the browser treated their
+  fields as yours: one accepted suggestion could save your own email,
+  phone or name onto another person's card, and a wrong name shows on
+  every shared node they're on. Every field, rows added later included,
+  is now `autocomplete="off"`, and email and phone values are text fields
+  with `inputmode` instead of `type="email"`/`type="tel"` (same phone
+  keyboards; the server already validates emails).
+
 ## [2.43.0] - 2026-10-27
 
 ### Changed
