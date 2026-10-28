@@ -18,6 +18,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `ember-h-N` form (#185). Any other id in a body, including one written in
   raw HTML, is still stripped, so a body can't shadow an app element id or a
   `window` global.
+- Bumped `pulldown-cmark` 0.13.4 → 0.13.5 for RUSTSEC-2026-0414 (exponential
+  event growth with `ENABLE_WIKILINKS`). Ember Trove never enables that
+  option, so it wasn't reachable here, but the bump keeps `cargo audit` clean.
 
 ## [2.44.1] - 2026-10-28
 
