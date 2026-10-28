@@ -16,6 +16,7 @@ use common::person::{
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
+use crate::components::free_text_combo::FreeTextCombo;
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::node_section::{NodeSection, SectionShell};
 use crate::components::people_view::{ContactAction, ContactKind, HINT_CLASS, PersonEditor};
@@ -65,12 +66,8 @@ impl MembershipDraft {
 
 /// The Role (with suggestions) and Note fields of a membership.
 ///
-/// The Role is an APG combobox of our own, not an `<input list>` (#171):
-/// the browser's datalist could commit a suggestion's spelling ("abc") over
-/// what was typed ("ABC") and swallowed select-all. Here the typed text is
-/// what's saved; a suggestion is committed only when it's chosen, by click
-/// or by ↑/↓ then Enter, and it then shows in the field before any save.
-/// Every other key is left to the input.
+/// The Role is a [`FreeTextCombo`] (#171): the typed text is what's saved,
+/// and a suggestion is committed only when it's chosen.
 #[component]
 pub fn MembershipFields(
     draft: MembershipDraft,
@@ -85,116 +82,18 @@ pub fn MembershipFields(
         }
     });
     let MembershipDraft { role, note, roles } = draft;
-    let base = format!(
-        "role-combo-{}",
+    let hint_id = format!(
+        "role-hint-{}",
         NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
-    let list_id = StoredValue::new(format!("{base}-list"));
-    let hint_id = StoredValue::new(format!("{base}-hint"));
-    let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
-    // Shown while typing; closed by a choice, Escape or leaving the field.
-    let listing = RwSignal::new(false);
-    // Only the arrow keys set this, never typing or hover: Enter commits an
-    // option only when the user moved onto it.
-    let active = RwSignal::new(None::<usize>);
-    let options = Memo::new(move |_| {
-        roles.with(|r| common::picker::free_text_suggestions(&role.get(), r, 8))
-    });
-    let expanded = move || listing.get() && options.with(|o| !o.is_empty());
-    let close = move || {
-        listing.set(false);
-        active.set(None);
-    };
-    let choose = move |i: usize| {
-        let picked = options.with_untracked(|o| {
-            common::picker::free_text_commit(&role.get_untracked(), Some(i), o).to_string()
-        });
-        role.set(picked);
-        close();
-    };
-    let on_keydown = move |ev: leptos::ev::KeyboardEvent| match ev.key().as_str() {
-        "ArrowDown" | "ArrowUp" => {
-            let len = options.with_untracked(Vec::len);
-            if len > 0 {
-                ev.prevent_default();
-                listing.set(true);
-                active.set(common::picker::step(
-                    active.get_untracked(),
-                    len,
-                    ev.key() == "ArrowDown",
-                ));
-            }
-        }
-        // Plain Enter on a chosen option picks it; otherwise it falls through
-        // to the form (attach / save) with the typed text.
-        "Enter" if !(ev.ctrl_key() || ev.meta_key()) => {
-            if listing.get_untracked()
-                && let Some(i) = active.get_untracked()
-            {
-                ev.prevent_default();
-                ev.stop_propagation();
-                choose(i);
-            }
-        }
-        // Closing the list is this Escape's whole job: stopped, so the
-        // form, dialog or page doesn't also act on it.
-        "Escape" if listing.get_untracked() && options.with_untracked(|o| !o.is_empty()) => {
-            ev.prevent_default();
-            ev.stop_propagation();
-            close();
-        }
-        _ => {}
-    };
     view! {
         <div>
-            <input type="text" node_ref=role_ref class=INPUT_CLASS
+            <FreeTextCombo value=role choices=roles input_ref=role_ref
+                label="Role" list_label="Role suggestions"
                 placeholder="Role here (sponsor, approver\u{2026})"
-                role="combobox" aria-label="Role" aria-autocomplete="list"
-                aria-controls=list_id.get_value()
-                aria-describedby=hint_id.get_value()
-                aria-expanded=move || if expanded() { "true" } else { "false" }
-                aria-activedescendant=move || active.get().map(|i| opt_id.get_value()(i))
-                autocomplete="off"
-                prop:value=move || role.get()
-                on:input=move |ev| {
-                    role.set(event_target_value(&ev));
-                    active.set(None);
-                    listing.set(true);
-                }
-                on:click=move |_| listing.set(true)
-                on:blur=move |_| close()
-                on:keydown=on_keydown />
-            // In the flow, not floating: an open list never covers the
-            // fields below it.
-            <div id=list_id.get_value() role="listbox" aria-label="Role suggestions"
-                class="mt-1 max-h-40 overflow-y-auto"
-                class:hidden=move || !expanded()>
-                {move || expanded().then(|| options.get().into_iter().enumerate().map(|(i, o)| view! {
-                    <div
-                        id=opt_id.get_value()(i)
-                        role="option"
-                        aria-selected=move || if active.get() == Some(i) { "true" } else { "false" }
-                        class=move || format!(
-                            "px-2 py-1 rounded-lg text-xs cursor-pointer text-stone-700 \
-                             dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800 {}",
-                            if active.get() == Some(i) { "bg-amber-50 dark:bg-stone-800" } else { "" }
-                        )
-                        // mousedown, not click: it lands before the input's blur.
-                        on:mousedown=move |ev: web_sys::MouseEvent| {
-                            ev.prevent_default();
-                            if common::picker::is_pointer_press(ev.detail()) { choose(i); }
-                        }
-                        // An accessibility press is a bare click (#174).
-                        on:click=move |ev: web_sys::MouseEvent| {
-                            if !common::picker::is_pointer_press(ev.detail()) { choose(i); }
-                        }
-                    >
-                        {o}
-                    </div>
-                }).collect_view())}
-            </div>
+                class=INPUT_CLASS describedby=hint_id.clone() />
             // The membership's half of Position vs Role (#147, #182).
-            <span id=hint_id.get_value() class=HINT_CLASS>
+            <span id=hint_id class=HINT_CLASS>
                 "Their part in this node only."
             </span>
         </div>

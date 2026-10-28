@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Contact labels suggest common values (#183).** The label of an email
+  (work, personal), phone (mobile, office, home) or address (office, home)
+  is now a combobox: typing filters the suggestions, ↓/↑ then Enter or a
+  click picks one, and anything else is saved exactly as typed. Existing
+  labels are untouched. The phone label's placeholder is now "mobile" to
+  match. The combobox is the Role field's (#171), extracted into a shared
+  `FreeTextCombo` component; the starter sets are
+  `common::person::label_suggestions`, with unit tests.
+
 ## [2.43.0] - 2026-10-27
 
 ### Changed

@@ -15,6 +15,7 @@ use leptos_router::hooks::{use_navigate, use_params_map};
 use crate::api::SavePerson;
 use crate::components::empty_state::EmptyState;
 use crate::components::format_helpers::copy_to_clipboard;
+use crate::components::free_text_combo::FreeTextCombo;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::modals::{ModalPlacement, ModalShell};
 use crate::components::node_people::{MembershipDraft, MembershipFields};
@@ -44,12 +45,7 @@ fn contact_href(kind: ContactKind, value: &str) -> Option<String> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ContactKind {
-    Email,
-    Phone,
-    Address,
-}
+pub use common::person::ContactKind;
 
 /// One email, phone or address as actions: an email or phone is a
 /// mailto:/tel: link, an address is multi-line text, and a button copies it.
@@ -135,8 +131,29 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
     });
     let label_placeholder = match kind {
         ContactKind::Email => "work",
-        ContactKind::Phone => "cell",
+        ContactKind::Phone => "mobile",
         ContactKind::Address => "home",
+    };
+    // Starter labels (#183): offered, never forced; the label saves as typed.
+    let label_choices = Signal::stored(
+        common::person::label_suggestions(kind)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    );
+    // The row's label as a signal for the combobox, written through to the
+    // list untracked like the other fields, so the list never redraws.
+    let row_label = move |i: usize, initial: String| {
+        let label = RwSignal::new(initial);
+        Effect::new(move |_| {
+            let v = label.get();
+            points.update_untracked(|ps| {
+                if let Some(x) = ps.get_mut(i) {
+                    x.label = v;
+                }
+            });
+        });
+        label
     };
     view! {
         <div class="space-y-1.5">
@@ -152,17 +169,11 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                     // preferred + remove, instead of four controls on one line.
                     <div class="grid grid-cols-[1fr_auto_auto] sm:grid-cols-[7rem_1fr_auto_auto] gap-x-1.5 gap-y-1 items-center"
                         data-testid=format!("{noun}-row")>
-                        <input
-                            type="text"
-                            class=format!("{INPUT_CLASS} col-span-3 sm:col-span-1")
-                            placeholder=label_placeholder
-                            aria-label=format!("{noun} label")
-                            prop:value=p.label.clone()
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.label = v; });
-                            }
-                        />
+                        <div class="col-span-3 sm:col-span-1">
+                            <FreeTextCombo value=row_label(i, p.label.clone()) choices=label_choices
+                                label=format!("{noun} label") list_label=format!("{noun} label suggestions")
+                                placeholder=label_placeholder class=INPUT_CLASS />
+                        </div>
                         {if kind == ContactKind::Address {
                             // Freeform and multi-line, like the old single field.
                             view! {

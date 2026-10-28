@@ -592,9 +592,68 @@ pub fn matches(p: &Person, q: &str) -> bool {
         || p.emails.iter().chain(&p.phones).any(|c| hit(&c.value))
 }
 
+/// Which contact list a [`ContactPoint`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContactKind {
+    Email,
+    Phone,
+    Address,
+}
+
+/// Starter labels offered for a contact entry (#183), most common first.
+///
+/// Suggestions only: the label stays free text and is saved as typed, so
+/// a custom label ("Ana's line") or another spelling is never rewritten.
+pub fn label_suggestions(kind: ContactKind) -> &'static [&'static str] {
+    match kind {
+        ContactKind::Email => &["work", "personal"],
+        ContactKind::Phone => &["mobile", "office", "home"],
+        ContactKind::Address => &["office", "home"],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn label_suggestions_per_kind() {
+        assert_eq!(label_suggestions(ContactKind::Email), ["work", "personal"]);
+        assert_eq!(
+            label_suggestions(ContactKind::Phone),
+            ["mobile", "office", "home"]
+        );
+        assert_eq!(label_suggestions(ContactKind::Address), ["office", "home"]);
+    }
+
+    #[test]
+    fn label_suggestions_fit_the_label_limit() {
+        for kind in [ContactKind::Email, ContactKind::Phone, ContactKind::Address] {
+            assert!(
+                label_suggestions(kind)
+                    .iter()
+                    .all(|l| !l.is_empty() && l.chars().count() <= MAX_LABEL)
+            );
+        }
+    }
+
+    #[test]
+    fn label_suggestions_filter_as_typed_and_never_echo_the_typed_text() {
+        let phone = label_suggestions(ContactKind::Phone);
+        // Typing narrows the list; the typed text itself is not offered back.
+        assert_eq!(
+            crate::picker::free_text_suggestions("o", phone, 8),
+            ["office", "mobile", "home"]
+        );
+        assert!(crate::picker::free_text_suggestions("home", phone, 8).is_empty());
+        // A custom label is kept verbatim: nothing is committed unless chosen.
+        let options = crate::picker::free_text_suggestions("Off", phone, 8);
+        assert_eq!(options, ["office"]);
+        assert_eq!(
+            crate::picker::free_text_commit("Off", None, &options),
+            "Off"
+        );
+    }
 
     #[test]
     fn membership_from_typed_blank_is_todays_attach() {
