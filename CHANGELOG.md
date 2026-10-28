@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.44.1] - 2026-10-28
+
+### Security
+- **Chrome no longer offers your own name or details anywhere in a person's
+  form (#184).** The v2.44.0 re-test found Chrome offering the owner's name
+  and phone on the Name field, which still relied on `autocomplete="off"`.
+  Every field Chrome's address profile can fill now carries its own token
+  Chrome doesn't recognise: name, company, and the email, phone and address
+  values. Position and notes keep `off`. The tokens live in
+  `common::person::autofill_token`, and a test checks that none is a
+  standard autofill name.
+
 ## [2.44.0] - 2026-10-28
 
 ### Added

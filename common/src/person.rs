@@ -612,9 +612,146 @@ pub fn label_suggestions(kind: ContactKind) -> &'static [&'static str] {
     }
 }
 
+/// A person-form field the browser could take for the user's own details:
+/// one its address profile (name, company, email, phone, street) can fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonField {
+    Name,
+    Company,
+    Contact(ContactKind),
+}
+
+/// The `autocomplete` value for a person-form field (#184).
+///
+/// These fields describe someone else, so the owner's own details must
+/// never be offered. Chrome ignores `autocomplete="off"` on fields it
+/// takes for identity fields: the email row leaked on v2.43.1, the name on
+/// v2.44.0. Chrome does skip a token it doesn't recognise, as the email
+/// row proved on v2.44.0, so each such field gets its own. A token must
+/// stay one word that is not a standard autofill name. Fields with no
+/// profile type (position, notes) keep `off`.
+pub fn autofill_token(field: PersonField) -> &'static str {
+    match field {
+        PersonField::Name => "ember-person-name",
+        PersonField::Company => "ember-person-company",
+        PersonField::Contact(ContactKind::Email) => "ember-contact-email",
+        PersonField::Contact(ContactKind::Phone) => "ember-contact-phone",
+        PersonField::Contact(ContactKind::Address) => "ember-contact-address",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ALL_FIELDS: [PersonField; 5] = [
+        PersonField::Name,
+        PersonField::Company,
+        PersonField::Contact(ContactKind::Email),
+        PersonField::Contact(ContactKind::Phone),
+        PersonField::Contact(ContactKind::Address),
+    ];
+
+    /// The HTML autofill field names and modifiers (WHATWG "autofill
+    /// detail tokens"). A token from this list would turn autofill ON.
+    const STANDARD_AUTOFILL: &[&str] = &[
+        "on",
+        "off",
+        "name",
+        "honorific-prefix",
+        "given-name",
+        "additional-name",
+        "family-name",
+        "honorific-suffix",
+        "nickname",
+        "username",
+        "new-password",
+        "current-password",
+        "one-time-code",
+        "organization-title",
+        "organization",
+        "street-address",
+        "address-line1",
+        "address-line2",
+        "address-line3",
+        "address-level4",
+        "address-level3",
+        "address-level2",
+        "address-level1",
+        "country",
+        "country-name",
+        "postal-code",
+        "cc-name",
+        "cc-given-name",
+        "cc-additional-name",
+        "cc-family-name",
+        "cc-number",
+        "cc-exp",
+        "cc-exp-month",
+        "cc-exp-year",
+        "cc-csc",
+        "cc-type",
+        "transaction-currency",
+        "transaction-amount",
+        "language",
+        "bday",
+        "bday-day",
+        "bday-month",
+        "bday-year",
+        "sex",
+        "url",
+        "photo",
+        "tel",
+        "tel-country-code",
+        "tel-national",
+        "tel-area-code",
+        "tel-local",
+        "tel-local-prefix",
+        "tel-local-suffix",
+        "tel-extension",
+        "email",
+        "impp",
+        "webauthn",
+        "shipping",
+        "billing",
+        "home",
+        "work",
+        "mobile",
+        "fax",
+        "pager",
+    ];
+
+    #[test]
+    fn autofill_tokens_are_ones_the_browser_does_not_recognise() {
+        for field in ALL_FIELDS {
+            let t = autofill_token(field);
+            assert!(
+                !t.is_empty() && !t.contains(char::is_whitespace),
+                "{field:?}: one word, or the browser parses it as several tokens"
+            );
+            assert!(
+                !STANDARD_AUTOFILL.contains(&t) && !t.starts_with("section-"),
+                "{field:?}: {t:?} is a standard autofill name and would turn autofill on"
+            );
+        }
+    }
+
+    #[test]
+    fn autofill_tokens_are_distinct_per_field() {
+        let mut tokens: Vec<_> = ALL_FIELDS.iter().map(|f| autofill_token(*f)).collect();
+        tokens.sort_unstable();
+        tokens.dedup();
+        assert_eq!(tokens.len(), ALL_FIELDS.len());
+    }
+
+    #[test]
+    fn email_keeps_the_token_v2_44_0_shipped() {
+        // The real-Chrome re-test passed with this exact value (#184).
+        assert_eq!(
+            autofill_token(PersonField::Contact(ContactKind::Email)),
+            "ember-contact-email"
+        );
+    }
 
     #[test]
     fn label_suggestions_per_kind() {

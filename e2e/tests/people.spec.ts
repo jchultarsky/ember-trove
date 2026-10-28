@@ -1,4 +1,4 @@
-import { test, expect, createNode, shareNode, type APIRequestContext, type Page } from './fixtures';
+import { test, expect, createNode, shareNode, type APIRequestContext, type Locator, type Page } from './fixtures';
 
 /**
  * People (#147): the registry and a person's card, the People section on a
@@ -610,13 +610,26 @@ test('person forms keep browser autofill out of a third party\'s fields (#184)',
     await dlg.getByRole('button', { name: 'Add address' }).click();
     const form = dlg.getByTestId('person-form');
     await expect(form).toHaveAttribute('autocomplete', 'off');
-    // The email value is the exception: Chrome ignored `off` there, so it
-    // carries a token Chrome doesn't recognise, which turns autofill off.
+    // Chrome ignores `off` on fields it takes for identity fields (the email
+    // row leaked on v2.43.1, the name on v2.44.0). Those carry a token Chrome
+    // doesn't recognise, which turns autofill off: `common::person::autofill_token`.
     const email = dlg.getByRole('textbox', { name: 'email', exact: true });
-    await expect(email).toHaveAttribute('autocomplete', 'ember-contact-email');
-    const fields = form.locator('input:not([type="radio"]):not([inputmode="email"]), textarea');
-    expect(await fields.count()).toBeGreaterThanOrEqual(9);
-    for (const f of await fields.all()) {
+    const tokens: [Locator, string][] = [
+      [dlg.getByRole('textbox', { name: 'Name', exact: true }), 'ember-person-name'],
+      [dlg.getByRole('textbox', { name: 'Company', exact: true }), 'ember-person-company'],
+      [email, 'ember-contact-email'],
+      [dlg.getByRole('textbox', { name: 'phone', exact: true }), 'ember-contact-phone'],
+      [dlg.getByRole('textbox', { name: 'address', exact: true }), 'ember-contact-address'],
+    ];
+    for (const [f, token] of tokens) {
+      await expect(f).toHaveAttribute('autocomplete', token);
+    }
+    // Every other field (position, the label comboboxes, notes) keeps `off`.
+    const rest = form.locator(
+      'input:not([type="radio"]):not([autocomplete^="ember-"]), textarea:not([autocomplete^="ember-"])',
+    );
+    expect(await rest.count()).toBeGreaterThanOrEqual(5);
+    for (const f of await rest.all()) {
       await expect(f).toHaveAttribute('autocomplete', 'off');
     }
     // No identity input types: the keyboard comes from `inputmode` instead.
