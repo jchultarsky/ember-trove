@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.44.0] - 2026-10-28
+
 ### Added
 - **Contact labels suggest common values (#183).** The label of an email
   (work, personal), phone (mobile, office, home) or address (office, home)
