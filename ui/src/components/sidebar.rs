@@ -140,11 +140,7 @@ pub fn Sidebar(
                             <SidebarLink
                                 icon="download"
                                 label="Export ZIP"
-                                on_click=move || {
-                                    if let Some(window) = web_sys::window() {
-                                        let _ = window.open_with_url("/api/export");
-                                    }
-                                }
+                                on_click=move || crate::api::start_download("/api/export".to_string())
                                 collapsed=collapsed
                             />
                         </div>

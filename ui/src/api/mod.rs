@@ -121,6 +121,14 @@ pub(crate) async fn send_authed(
     }
 }
 
+/// Renew the session through the shared gate, for a caller that saw a 401
+/// outside [`send_authed`]: AuthGate's startup `/auth/me` probe (#190).
+pub(crate) async fn renew_shared() -> Next {
+    let gate = SESSION.with(RefreshGate::clone);
+    let sent = gate.generation();
+    after_refresh(gate.refresh(sent, renew_session).await)
+}
+
 async fn send(req: Request) -> Result<Response, UiError> {
     req.send()
         .await
@@ -154,6 +162,54 @@ async fn to_login<T>() -> T {
         }
     });
     std::future::pending::<T>().await
+}
+
+// ── Downloads ────────────────────────────────────────────────────────────
+
+/// Check the session, renewing it in place if the access token expired
+/// (#190). A cheap authed `GET /auth/me` through [`send_authed`]: a 401
+/// refreshes once, and a refused refresh goes to the login page, as for any
+/// other call.
+pub async fn ensure_session() -> Result<(), UiError> {
+    let url = api_url("/auth/me");
+    parse_empty(send_authed(|| built(Request::get(&url).build())).await?).await
+}
+
+/// Download `url`, an API endpoint that answers with
+/// `Content-Disposition: attachment` (#190).
+///
+/// A bare `<a href>` or `window.open` is a browser navigation, so it skips
+/// [`send_authed`]: in a tab left open past the access token's lifetime it
+/// fails with 401 ("Failed - Needs authorization") while every fetch still
+/// renews. So renew first, then start the download through a detached
+/// anchor with `download`, which keeps the page and lets the browser stream
+/// the file (no buffering in WASM memory). The anchor also keeps a late 401
+/// a failed download instead of a navigation to an error page.
+pub async fn download(url: &str) -> Result<(), UiError> {
+    use wasm_bindgen::JsCast;
+    ensure_session().await?;
+    let no_dom = || UiError::Network("couldn't start the download".to_string());
+    let anchor = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.create_element("a").ok())
+        .ok_or_else(no_dom)?;
+    anchor.set_attribute("href", url).map_err(|_| no_dom())?;
+    anchor.set_attribute("download", "").map_err(|_| no_dom())?;
+    let anchor: web_sys::HtmlElement = anchor.dyn_into().map_err(|_| no_dom())?;
+    anchor.click();
+    Ok(())
+}
+
+/// [`download`] from an event handler; a failure becomes an error toast.
+pub fn start_download(url: String) {
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Err(e) = download(&url).await {
+            crate::components::toast::push_toast(
+                crate::components::toast::ToastLevel::Error,
+                format!("Download failed: {e}"),
+            );
+        }
+    });
 }
 
 // ── Shared JSON parser ──────────────────────────────────────────────────

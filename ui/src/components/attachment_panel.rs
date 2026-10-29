@@ -323,6 +323,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                             let preview_open = RwSignal::new(false);
                                             let url_for_preview = download_url.clone();
                                             let url_for_copy = download_url.clone();
+                                            let url_for_download = download_url.clone();
                                             view! {
                                                 <div class="rounded-lg border border-stone-200 dark:border-stone-700
                                                             bg-stone-50 dark:bg-stone-800/30">
@@ -349,7 +350,19 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                                        dark:hover:text-amber-400 cursor-pointer
                                                                        transition-colors"
                                                                 title=move || if preview_open.get() { "Hide preview" } else { "Show preview" }
-                                                                on:click=move |_| preview_open.update(|v| *v = !*v)
+                                                                on:click=move |_| {
+                                                                    if preview_open.get_untracked() {
+                                                                        preview_open.set(false);
+                                                                        return;
+                                                                    }
+                                                                    // The preview loads from the API as an
+                                                                    // <img>/<iframe>, which can't renew a
+                                                                    // session: renew first (#190).
+                                                                    wasm_bindgen_futures::spawn_local(async move {
+                                                                        let _ = api::ensure_session().await;
+                                                                        let _ = preview_open.try_set(true);
+                                                                    });
+                                                                }
                                                             >
                                                                 <span aria-hidden="true" class="material-symbols-outlined"
                                                                       style="font-size: 16px;">
@@ -390,7 +403,12 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                         // Download link
                                                         <a
                                                             href=download_url
-                                                            target="_blank"
+                                                            download=true
+                                                            // Renew the session first (#190).
+                                                            on:click=move |ev| {
+                                                                ev.prevent_default();
+                                                                api::start_download(url_for_download.clone());
+                                                            }
                                                             class="p-0.5 text-stone-400 hover:text-amber-500
                                                                    dark:hover:text-amber-400 transition-colors"
                                                             title="Download"

@@ -3,8 +3,16 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-28)
+## Current state (2026-10-29)
 
+- **v2.45.0 shipped: body contents list (#185; PR #195), session renewal
+  before downloads and at startup (#190; PR #198), and Done/Revert in the
+  autosaving editor (#197; PR #201).** #201 also fixed a WASM panic from
+  the editor's forgotten debounce timers. Plus pulldown-cmark 0.13.5
+  (RUSTSEC-2026-0414, PR #199) and a release job that closes the issues a
+  release ships (`Fixes #n`; PR #200, first live run on this tag). The
+  issue monitor's redesign (drain up to 3 issues per run, 👀-reaction claim
+  lock) is written and waits for Julian to paste it into the routine.
 - **v2.44.1 shipped: every identity field in the person form gets its own
   autofill token (#184; PR #194).** The v2.44.0 re-test found Chrome
   offering the owner's name on the Name field, which still used `off`.
