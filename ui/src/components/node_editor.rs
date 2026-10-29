@@ -342,9 +342,9 @@ fn is_wide_viewport() -> bool {
 #[component]
 pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     let navigate = use_navigate();
-    let nav_save = navigate.clone(); // clone for on_save spawn_local
     let nav_back1 = navigate.clone(); // clone for back button in header
-    // For the edit-mode save path, which navigates after its save lands
+    // For the save paths (Done, Revert, Create), which navigate after their
+    // save lands; stored so `on_save` stays Copy for two buttons
     // (NavigateFn is Clone, not Copy: leptos.md).
     let nav_store = StoredValue::new(navigate.clone());
     let refresh = expect_context::<RwSignal<u32>>();
@@ -549,8 +549,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Set when a save was refused because the node changed elsewhere: the
     // server's version, adopted only by an explicit Retry.
     let conflict_version: RwSignal<Option<DateTime<Utc>>> = RwSignal::new(None);
-    // The Save button asked to leave the editor once its save lands.
+    // Done or Revert asked to leave the editor once its save lands.
     let nav_after_save = RwSignal::new(false);
+    // The node as the editor opened it (edit mode): Revert's target (#197).
+    let opened = RwSignal::new(Option::<Snapshot>::None);
     // A local draft found on load that the server doesn't have, and whether
     // the node changed since it was taken.
     let recovered = RwSignal::new(Option::<(EditDraft, DraftBase)>::None);
@@ -778,6 +780,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     }
                     base_version.set(Some(n.updated_at));
                     own_fps.set_value(vec![fp(&snap)]);
+                    opened.set(Some(snap.clone()));
                     baseline.set(Some(snap));
                     fetching.set(false);
                 }
@@ -808,9 +811,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             save_state.set(SaveState::Dirty);
             let v = autosave_v.get_untracked() + 1;
             autosave_v.set(v);
+            // A forgotten timer outlives the editor (Done, Revert or a link
+            // within the debounce): `try_`, or it panics on disposed signals.
+            // The unmount flush has already saved those edits.
             Timeout::new(AUTOSAVE_DEBOUNCE_MS, move || {
-                if autosave_v.get_untracked() == v {
-                    autosave_now.set(true);
+                if autosave_v.try_get_untracked() == Some(v) {
+                    autosave_now.try_set(true);
                 }
             })
             .forget();
@@ -829,25 +835,28 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             }
             let v = autosave_v.get_untracked() + 1;
             autosave_v.set(v);
+            // `try_` throughout: Cancel or a link within the debounce leaves
+            // this timer running after the editor is gone.
             Timeout::new(AUTOSAVE_DEBOUNCE_MS, move || {
-                if autosave_v.get_untracked() != v {
+                if autosave_v.try_get_untracked() != Some(v) {
                     return;
                 }
                 // Untouched system body (scaffold OR the applied default
                 // template) is not worth rescuing as a draft.
                 let pristine_body = last_system_body
-                    .get_untracked()
+                    .try_get_untracked()
+                    .flatten()
                     .unwrap_or_else(|| template_for_type(&d.node_type).to_string());
                 let Some(Some(sub)) = create_subject.try_get_value() else {
                     return; // no user, no draft (never shared)
                 };
                 if d.is_meaningful(&pristine_body) {
                     crate::draft::write_draft(&sub, &d);
-                    save_state.set(SaveState::Saved);
+                    save_state.try_set(SaveState::Saved);
                 } else {
                     // Reverted to pristine — leave nothing behind.
                     crate::draft::clear_draft(&sub);
-                    save_state.set(SaveState::Idle);
+                    save_state.try_set(SaveState::Idle);
                 }
             })
             .forget();
@@ -1091,14 +1100,23 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         }
     };
 
-    let on_save = move |_: web_sys::MouseEvent| {
+    // Edit mode autosaves, so leaving never discards (#197): Done keeps the
+    // edits, Revert first puts back the node as it was opened. Either way the
+    // last state goes through the save executor, then the editor leaves. The
+    // text it replaces stays in History (each body save records a version).
+    let on_save = move |revert: bool| {
         error_msg.set(None);
+        if revert && let Some(o) = opened.get_untracked() {
+            title.set(o.0);
+            body.set(o.1);
+            status.set(o.2);
+        }
         let snap = snapshot_now();
         if let Some(id) = node {
             // Edit mode goes through the autosave executor, so a manual Save
             // gets the same precondition, watchdog and late-response rules.
             if baseline.get_untracked().as_ref() == Some(&snap) {
-                nav_save(&format!("/nodes/{id}"), Default::default());
+                nav_store.get_value()(&format!("/nodes/{id}"), Default::default());
                 return;
             }
             nav_after_save.set(true);
@@ -1114,7 +1132,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         saving.set(true);
         save_state.set(SaveState::Saving);
         let nt_str = node_type.get_untracked();
-        let nav = nav_save.clone();
+        let nav = nav_store.get_value();
         let g = arm_watchdog(None);
         wasm_bindgen_futures::spawn_local(async move {
             let nt = match nt_str.as_str() {
@@ -1414,25 +1432,64 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                             {move || if show_preview.get() { "visibility" } else { "visibility_off" }}
                         </span>
                     </button>
+                    // Edit mode: no Cancel, because autosave has already kept
+                    // the edits (#197). Revert shows once something changed.
+                    {move || {
+                        let changed = node.is_some()
+                            && opened.get().is_some_and(|o| o != (title.get(), body.get(), status.get()));
+                        changed.then(|| view! {
+                            <button
+                                type="button"
+                                class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium
+                                    text-stone-600 dark:text-stone-300 bg-stone-100 dark:bg-stone-800
+                                    hover:text-stone-900 dark:hover:text-stone-100 transition-colors"
+                                title="Back to the node as you opened it. The edited text stays in History."
+                                on:click=move |_| on_save(true)
+                                disabled=move || saving.get() || fetching.get()
+                            >
+                                <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"history"</span>
+                                "Revert"
+                            </button>
+                        })
+                    }}
+                    // The commit button names its action (leptos.md: icon + word).
                     <button
-                        class="p-1.5 rounded-lg text-stone-400 hover:text-green-600 dark:hover:text-green-400
-                            hover:bg-green-50 dark:hover:bg-green-900/30 transition-colors"
-                        on:click=on_save
+                        type="button"
+                        class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium
+                            bg-ember hover:bg-ember-strong text-white transition-colors
+                            disabled:opacity-60"
+                        on:click=move |_| on_save(false)
                         disabled=move || saving.get() || fetching.get()
-                        title=move || if saving.get() { "Saving\u{2026}" } else if fetching.get() { "Loading\u{2026}" } else { "Save" }
+                        title=move || {
+                            if saving.get() {
+                                "Saving\u{2026}"
+                            } else if fetching.get() {
+                                "Loading\u{2026}"
+                            } else if node.is_some() {
+                                "Changes save automatically. Done returns to the node."
+                            } else {
+                                "Create the node"
+                            }
+                        }
                     >
-                        <span aria-hidden="true" class="material-symbols-outlined">
-                            {move || if saving.get() { "hourglass_empty" } else if fetching.get() { "hourglass_top" } else { "check" }}
+                        <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">
+                            {move || if saving.get() { "hourglass_empty" } else if fetching.get() { "hourglass_top" } else if node.is_some() { "check" } else { "add" }}
                         </span>
+                        {if node.is_some() { "Done" } else { "Create" }}
                     </button>
-                    <button
-                        class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-                        on:click=move |_| navigate("/nodes", Default::default())
-                        title="Cancel"
-                    >
-                        <span aria-hidden="true" class="material-symbols-outlined">"close"</span>
-                    </button>
+                    // Create mode: nothing is on the server until Create, so
+                    // Cancel really leaves it out (the local draft is offered
+                    // back on the next /nodes/new).
+                    {node.is_none().then(|| view! {
+                        <button
+                            type="button"
+                            class="px-2 py-1 rounded-lg text-xs font-medium text-stone-500 dark:text-stone-400
+                                hover:text-stone-700 dark:hover:text-stone-200 transition-colors"
+                            on:click=move |_| navigate("/nodes", Default::default())
+                        >
+                            "Cancel"
+                        </button>
+                    })}
                 </div>
             </div>
             // Error banner

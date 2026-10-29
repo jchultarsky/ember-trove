@@ -13,6 +13,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   same Markdown parse (`markdown::render_body`), so the outline can't drift
   from the headings. Bodies with fewer headings look as before.
 
+### Changed
+- **The node editor's buttons say what they do under autosave (#197).**
+  Edit mode had ✓ Save and ✕ Cancel, but Cancel saved your edits anyway (the
+  editor flushes unsaved text when it closes) and dropped you on the node
+  list. Edit mode now has **Done**, which keeps the edits and returns to the
+  node, and **Revert**, shown once something changed, which puts back the
+  node as you opened it. The reverted text stays in History. Create mode
+  reads **Create** and **Cancel**: nothing is on the server until Create.
+
 ### Fixed
 - **Downloads no longer fail with "Needs authorization" in a tab left open
   (#190).** Node export, Export ZIP (sidebar and node list), backup and
@@ -25,6 +34,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   startup `/auth/me` check treated an expired access token as "logged out";
   it now refreshes the session once (shared with `send_authed`'s gate) and
   only goes to the hosted login if the refresh is refused.
+- **Leaving the node editor within 2 seconds of typing no longer panics the
+  app (#197).** The autosave and draft debounce timers read their signals
+  after the editor was gone. They now use `try_` access.
 
 ### Security
 - The body sanitiser now keeps an `id` on h2/h3 only in the generated
