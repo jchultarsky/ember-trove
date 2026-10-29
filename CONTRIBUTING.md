@@ -132,6 +132,13 @@ git branch -d release/1.1.0
 git push origin main develop --tags
 ```
 
+Pushing the tag runs `release.yml`. Besides the GitHub Release and the
+images, it closes the issues the release ships
+(`scripts/close-shipped-issues.sh`): each issue a merged PR names with
+`Fixes #n`, `Closes #n` or `Resolves #n` gets a "Shipped in vX.Y.Z."
+comment and is closed. GitHub doesn't do this itself, because PRs merge
+into `develop`. Preview it with `./scripts/close-shipped-issues.sh v1.1.0 --dry-run`.
+
 ### Example: applying a hotfix
 
 ```bash
@@ -165,6 +172,9 @@ git push origin main develop --tags
 - [ ] Formatted (`cargo fmt`)
 - [ ] CHANGELOG.md updated under `[Unreleased]`
 - [ ] New environment variables documented in README.md
+- [ ] The issue is linked with `Fixes #n` if this PR completes it (the release
+      closes it), or `Refs #n` if it should stay open (a partial fix, or one
+      still waiting for a manual re-test)
 
 ---
 
