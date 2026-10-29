@@ -5,6 +5,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-29)
 
+- **v2.46.0 shipped: the editor explains Draft / Published / Archived where
+  you pick one (#196; PR #202, from the issue monitor).** A radio group with
+  the chosen state's meaning shown under it. Owner decision on #196: Draft
+  stays a label (not private) while the instance has one user; revisit
+  Draft-as-private if it gains users.
 - **v2.45.0 shipped: body contents list (#185; PR #195), session renewal
   before downloads and at startup (#190; PR #198), and Done/Revert in the
   autosaving editor (#197; PR #201).** #201 also fixed a WASM panic from
