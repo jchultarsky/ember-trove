@@ -2,6 +2,7 @@ pub mod activity_panel;
 pub mod admin_view;
 pub mod attachment_panel;
 pub mod backup_view;
+pub mod body_outline;
 pub mod bulk_permissions_view;
 pub mod calendar_view;
 pub mod change_password_modal;

@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Long node bodies get a contents list (#185).** When a body has three or
+  more `##` / `###` headings, a compact "Contents" list sits above it; a
+  click scrolls to that heading. The list and the rendered body come from the
+  same Markdown parse (`markdown::render_body`), so the outline can't drift
+  from the headings. Bodies with fewer headings look as before.
+
 ### Fixed
 - **Downloads no longer fail with "Needs authorization" in a tab left open
   (#190).** Node export, Export ZIP (sidebar and node list), backup and
@@ -20,6 +27,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   only goes to the hosted login if the refresh is refused.
 
 ### Security
+- The body sanitiser now keeps an `id` on h2/h3 only in the generated
+  `ember-h-N` form (#185). Any other id in a body, including one written in
+  raw HTML, is still stripped, so a body can't shadow an app element id or a
+  `window` global.
 - **pulldown-cmark 0.13.4 → 0.13.5 (RUSTSEC-2026-0414).** The advisory
   covers `ENABLE_WIKILINKS`, which Ember Trove doesn't enable
   (`ui/src/markdown.rs`), but `cargo audit` gates CI. Lockfile-only bump.
