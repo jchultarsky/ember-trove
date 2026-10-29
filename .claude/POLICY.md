@@ -124,6 +124,10 @@ Branching model (also in `CONTRIBUTING.md`):
 
 - **NEVER commit directly to `main` or `develop`.** Never force-push them.
 - Conventional commits: `feat|fix|refactor|test|docs|chore|ci|build|style(scope): summary`.
+- **Link issues so the release can close them.** A PR body says `Fixes #n`
+  when it completes the issue: `release.yml` (`scripts/close-shipped-issues.sh`)
+  then posts "Shipped in vX.Y.Z." and closes it. Say `Refs #n` when the issue
+  must stay open: a partial fix, or one waiting for a manual re-test.
 - Use `./scripts/next-version.sh` to compute the next semver; `/release` for the flow.
 - **A release is not shipped until every GitHub Actions workflow on the pushed ref is
   green** (`Release` *and* `CI`). After `git push origin main develop --tags`, poll
