@@ -330,6 +330,20 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   retry for writes, and never trust abort to cancel a write.**
   — 2026-10-27
 
+### Leaving the editor within 2 s of typing panics the WASM app (#197)
+- **Symptom:** a `pageerror` ("tried to access a reactive value that has
+  already been disposed") about 2 s after Save/Done, Cancel or a link out of
+  the node editor, but only when the last keystroke was under 2 s earlier.
+- **Cause:** the autosave and draft debounces are `Timeout::new(..).forget()`
+  closures that read `autosave_v` with `get_untracked()` and write with
+  `set()`. A forgotten timer outlives the component, so it touches disposed
+  signals. The existing e2e specs ended before the timer fired.
+- **Fix:** `try_get_untracked()` / `try_set()` in every forgotten timer, as
+  leptos.md says. The edit-mode unmount flush already saves those edits. To
+  catch it, an e2e test must **wait past the debounce after leaving**
+  (`editor_exit.spec.ts`): a test that stops at the navigation never sees
+  the panic. — 2026-10-29
+
 ### e2e: "relation \"nodes\" does not exist" on a second KEEP_STACK run
 - **Symptom:** after `KEEP_STACK=1 ./scripts/e2e.sh …`, a second run fails
   at the first fixture (`createNode` → `resp.ok()` false); the API logs

@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The node editor's buttons say what they do under autosave (#197).**
+  Edit mode had ✓ Save and ✕ Cancel, but Cancel saved your edits anyway (the
+  editor flushes unsaved text when it closes) and dropped you on the node
+  list. Edit mode now has **Done**, which keeps the edits and returns to the
+  node, and **Revert**, shown once something changed, which puts back the
+  node as you opened it. The reverted text stays in History. Create mode
+  reads **Create** and **Cancel**: nothing is on the server until Create.
+
+### Fixed
+- **Leaving the node editor within 2 seconds of typing no longer panics the
+  app (#197).** The autosave and draft debounce timers read their signals
+  after the editor was gone. They now use `try_` access.
+
 ### Security
 - **pulldown-cmark 0.13.4 → 0.13.5 (RUSTSEC-2026-0414).** The advisory
   covers `ENABLE_WIKILINKS`, which Ember Trove doesn't enable
