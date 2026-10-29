@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.46.0] - 2026-10-29
+
 ### Changed
 - **The node editor explains the lifecycle states where you pick one (#196).**
   The bare Draft / Published / Archived dropdown is now a radio group with the
