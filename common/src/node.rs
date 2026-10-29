@@ -38,6 +38,37 @@ wire_enum!(NodeStatus {
     Archived => "archived",
 });
 
+impl NodeStatus {
+    /// The user-facing name, shared by the editor's state picker (#196).
+    pub fn label(&self) -> &'static str {
+        match self {
+            NodeStatus::Draft => "Draft",
+            NodeStatus::Published => "Published",
+            NodeStatus::Archived => "Archived",
+        }
+    }
+
+    /// One line on what the state does, shown at the point of choice
+    /// (#196). Worded from the implementation, not the wish: Draft and
+    /// Published are labels only (no permission or sharing check reads
+    /// `status`); Archived is dropped from node lists unless the caller
+    /// asks for `include_archived` (`repo::node::list`), but search still
+    /// returns it.
+    pub fn description(&self) -> &'static str {
+        match self {
+            NodeStatus::Draft => {
+                "Work in progress. A label only: it doesn't change who can see the node."
+            }
+            NodeStatus::Published => {
+                "Finished and ready to use. Also a label only: sharing decides who can see it."
+            }
+            NodeStatus::Archived => {
+                "Retired. Hidden from node lists unless you show archived; search still finds it."
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Node {
     pub id: NodeId,
@@ -188,4 +219,44 @@ pub struct NodeListResponse {
     pub page: u32,
     pub per_page: u32,
     pub has_more: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NodeStatus;
+
+    #[test]
+    fn every_status_has_a_label_and_a_one_line_description() {
+        for s in NodeStatus::ALL {
+            assert!(!s.label().is_empty());
+            let d = s.description();
+            assert!(!d.is_empty() && !d.contains('\n'), "{d:?}");
+        }
+    }
+
+    #[test]
+    fn labels_are_distinct_and_match_the_wire_names() {
+        let labels: Vec<_> = NodeStatus::ALL.iter().map(|s| s.label()).collect();
+        assert_eq!(labels, ["Draft", "Published", "Archived"]);
+        for s in NodeStatus::ALL {
+            assert_eq!(s.label().to_lowercase(), s.as_str());
+        }
+    }
+
+    #[test]
+    fn descriptions_state_the_real_semantics() {
+        // Draft/Published don't gate access; only Archived changes listing.
+        assert!(NodeStatus::Draft.description().contains("label only"));
+        assert!(NodeStatus::Published.description().contains("sharing"));
+        assert!(
+            NodeStatus::Archived
+                .description()
+                .contains("Hidden from node lists")
+        );
+        assert!(
+            NodeStatus::Archived
+                .description()
+                .contains("search still finds it")
+        );
+    }
 }
