@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The node editor explains the lifecycle states where you pick one (#196).**
+  The bare Draft / Published / Archived dropdown is now a radio group with the
+  chosen state's meaning shown under it, and each option's meaning as its
+  tooltip. The wording follows the code: Draft and Published are labels only
+  and don't change who can see a node (sharing does); Archived hides a node
+  from node lists unless you show archived, and search still finds it.
+  Arrow keys move the selection (one tab stop), as in the priority picker.
+
 ## [2.45.0] - 2026-10-29
 
 ### Added

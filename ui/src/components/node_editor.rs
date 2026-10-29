@@ -1372,16 +1372,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                             }
                         })
                     }}
-                    <select
-                        class="text-sm bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300
-                            rounded-lg px-2 py-1.5 focus:outline-none"
-                        prop:value=move || status.get()
-                        on:change=move |ev| status.set(event_target_value(&ev))
-                    >
-                        <option value="draft">"Draft"</option>
-                        <option value="published">"Published"</option>
-                        <option value="archived">"Archived"</option>
-                    </select>
+                    // Lifecycle state, explained at the point of choice (#196).
+                    <crate::components::status_picker::StatusPicker value=status />
                     // Save-state indicator (autosave / local draft).
                     <span
                         class=move || {
