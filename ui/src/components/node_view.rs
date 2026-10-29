@@ -222,6 +222,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                         <a
                                                             href=format!("/api/nodes/{id}/export")
                                                             download=true
+                                                            // Renew the session first (#190).
+                                                            on:click=move |ev| {
+                                                                ev.prevent_default();
+                                                                crate::api::start_download(format!("/api/nodes/{id}/export"));
+                                                            }
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                                                                 dark:hover:text-stone-300 hover:bg-stone-100
                                                                 dark:hover:bg-stone-800 transition-colors"
@@ -302,7 +307,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                         text-stone-700 dark:text-stone-200
                                                                         hover:bg-stone-100 dark:hover:bg-stone-800"
                                                                     role="menuitem"
-                                                                    on:click=move |_| menu_open.set(false)
+                                                                    on:click=move |ev| {
+                                                                        ev.prevent_default();
+                                                                        menu_open.set(false);
+                                                                        crate::api::start_download(format!("/api/nodes/{id}/export"));
+                                                                    }
                                                                 >
                                                                     <span class="material-symbols-outlined" style="font-size:18px;">"download"</span>
                                                                     "Export as Markdown"
