@@ -45,6 +45,29 @@ jobs:
             --title "v${{ steps.notes.outputs.version }}" \
             --notes-file /tmp/release-notes.txt
 
+  # ── 1b. Close the issues this release ships ────────────────────────────────
+  # PRs merge into develop, where GitHub doesn't auto-close issues, and one
+  # was missed by hand (#183, v2.44.0). Closes what merged PRs name with
+  # `Fixes #n`; `Refs #n` stays open. Independent of build/deploy.
+  close-issues:
+    name: Close shipped issues
+    runs-on: ubuntu-latest
+    needs: release
+    permissions:
+      contents: read        # history and tags for the PR range
+      pull-requests: read   # PR bodies
+      issues: write         # "Shipped in vX.Y.Z." comment + close
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # every tag, for the previous-release lookup
+
+      - name: Comment on and close the issues this release fixes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/close-shipped-issues.sh "$GITHUB_REF_NAME"
+
   # ── 2. Build Docker images on GitHub runners and push to GHCR ──────────────
   build:
     name: Build & push images

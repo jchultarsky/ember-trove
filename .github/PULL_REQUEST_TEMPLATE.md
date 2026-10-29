@@ -15,6 +15,7 @@ Proposal: #<!-- issue number, if this implements a proposal; else delete this li
 - [ ] New code lands with tests; bug fixes include a regression test
 - [ ] No `.unwrap()` / `.expect()` / `panic!` in non-test code
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] Issue linked with `Fixes #n` (the release closes it) or `Refs #n` (it stays open: partial fix or awaiting a manual re-test)
 - [ ] New env vars / endpoints / commands documented in `README.md`
 
 ## Security

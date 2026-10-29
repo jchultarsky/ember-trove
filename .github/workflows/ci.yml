@@ -83,6 +83,10 @@ jobs:
       - name: service worker unit tests
         run: node --test ui/public/sw.test.mjs
 
+      # Release tooling: which issues a release closes (release.yml).
+      - name: close-shipped-issues unit tests
+        run: bash scripts/close-shipped-issues.test.sh
+
   check-wasm:
     name: check (wasm32-unknown-unknown)
     runs-on: ubuntu-latest

@@ -18,9 +18,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `ember-h-N` form (#185). Any other id in a body, including one written in
   raw HTML, is still stripped, so a body can't shadow an app element id or a
   `window` global.
-- Bumped `pulldown-cmark` 0.13.4 → 0.13.5 for RUSTSEC-2026-0414 (exponential
-  event growth with `ENABLE_WIKILINKS`). Ember Trove never enables that
-  option, so it wasn't reachable here, but the bump keeps `cargo audit` clean.
+- **pulldown-cmark 0.13.4 → 0.13.5 (RUSTSEC-2026-0414).** The advisory
+  covers `ENABLE_WIKILINKS`, which Ember Trove doesn't enable
+  (`ui/src/markdown.rs`), but `cargo audit` gates CI. Lockfile-only bump.
+
+### Tooling
+- **A release closes the issues it ships.** A new `release.yml` job runs
+  `scripts/close-shipped-issues.sh` after the GitHub Release is created. It
+  finds the PRs merged since the previous tag, and for each issue they name
+  with `Fixes`/`Closes`/`Resolves #n` it posts "Shipped in vX.Y.Z." and
+  closes it as completed. `Refs #n` leaves an issue open. Issues used to be
+  closed by hand, because PRs merge into `develop` and GitHub only
+  auto-closes on the default branch; #183 stayed open after v2.44.0. The
+  job has `issues: write` only, and only reads `#<digits>` from PR bodies.
+  Unit tests (`scripts/close-shipped-issues.test.sh`) run in CI.
 
 ## [2.44.1] - 2026-10-28
 
