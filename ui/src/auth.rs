@@ -2,6 +2,8 @@
 use common::auth::UserInfo;
 use leptos::prelude::*;
 
+use common::session_retry::Next;
+
 use crate::error::UiError;
 
 /// Tri-state auth status: still loading, authenticated, or unauthenticated.
@@ -54,11 +56,13 @@ fn init_auth(auth_state: AuthState) {
     wasm_bindgen_futures::spawn_local(async move {
         let delays_ms: [u32; 6] = [0, 1_000, 2_000, 4_000, 8_000, 8_000];
         let attempts = delays_ms.len();
+        // Whether a refresh already got a verdict this boot: at most one.
+        let mut renewed = false;
         for (i, delay) in delays_ms.into_iter().enumerate() {
             if delay > 0 {
                 gloo_timers::future::TimeoutFuture::new(delay).await;
             }
-            match crate::api::fetch_me().await {
+            match probe(&mut renewed).await {
                 Ok(user_info) => {
                     auth_state.set(AuthStatus::Authenticated(user_info));
                     return;
@@ -71,9 +75,60 @@ fn init_auth(auth_state: AuthState) {
     });
 }
 
+/// Whether the startup probe should renew the session before giving up on
+/// `result` (#190). An expired access token answers 401, but the refresh
+/// token may still be good: a reload of a tab left open overnight used to go
+/// straight to the hosted login. One refresh per boot.
+fn needs_renewal<T>(result: &Result<T, UiError>, renewed: bool) -> bool {
+    !renewed && matches!(result, Err(UiError::Api { status: 401, .. }))
+}
+
+/// One `/auth/me` probe; on a 401, renew the session once and ask again.
+async fn probe(renewed: &mut bool) -> Result<UserInfo, UiError> {
+    let first = crate::api::fetch_me().await;
+    if !needs_renewal(&first, *renewed) {
+        return first;
+    }
+    match crate::api::renew_shared().await {
+        Next::Retry => {
+            *renewed = true;
+            crate::api::fetch_me().await
+        }
+        // Refused: the session is over, and the 401 stands.
+        Next::Login => {
+            *renewed = true;
+            first
+        }
+        // No answer (API restarting, offline): transient, so the backoff
+        // loop probes again and may try the refresh again.
+        Next::Fail => Err(UiError::Network("couldn't renew the session".to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_401_at_startup_renews_once_before_login() {
+        let expired: Result<(), UiError> = Err(UiError::api(401, "expired"));
+        assert!(needs_renewal(&expired, false));
+        assert!(!needs_renewal(&expired, true), "one refresh per boot");
+        // A live session, a 403 (a verdict, not an expiry) and a blip don't.
+        assert!(!needs_renewal(&Ok::<(), UiError>(()), false));
+        assert!(!needs_renewal(
+            &Err::<(), _>(UiError::api(403, "no")),
+            false
+        ));
+        assert!(!needs_renewal(
+            &Err::<(), _>(UiError::api(502, "bad")),
+            false
+        ));
+        assert!(!needs_renewal(
+            &Err::<(), _>(UiError::Network("x".to_string())),
+            false
+        ));
+    }
 
     #[test]
     fn only_authoritative_auth_failures_are_terminal() {

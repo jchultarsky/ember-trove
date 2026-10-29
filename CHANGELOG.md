@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Downloads no longer fail with "Needs authorization" in a tab left open
+  (#190).** Node export, Export ZIP (sidebar and node list), backup and
+  attachment downloads were plain browser navigations, so they skipped the
+  v2.42.0 renew-in-place path and hit a 401 once the access token expired.
+  They now renew the session first (`api::download`, through
+  `send_authed`), then start the download without leaving the page.
+  Opening an attachment preview renews first too.
+- **Reloading such a tab no longer forces a full sign-in (#190).** The
+  startup `/auth/me` check treated an expired access token as "logged out";
+  it now refreshes the session once (shared with `send_authed`'s gate) and
+  only goes to the hosted login if the refresh is refused.
+
 ## [2.44.1] - 2026-10-28
 
 ### Security
