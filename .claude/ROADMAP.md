@@ -15,17 +15,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
   autosaving editor (#197; PR #201).** #201 also fixed a WASM panic from
   the editor's forgotten debounce timers. Plus pulldown-cmark 0.13.5
   (RUSTSEC-2026-0414, PR #199) and a release job that closes the issues a
-  release ships (`Fixes #n`; PR #200, first live run on this tag). The
-  issue monitor's redesign (drain up to 3 issues per run, 👀-reaction claim
-  lock) is written and waits for Julian to paste it into the routine.
+  release ships (`Fixes #n`; PR #200, first live run on this tag).
+- **Issue monitor redesign live (2026-10-29):** each run drains up to 3
+  issues, and a 👀 reaction claims each one. A race probe (5 rounds of 3
+  concurrent claims) gave exactly one 201 per round. This fixes the #190
+  double-take. The daily `7 13 * * *` fallback, cleared by a UI save, is
+  restored. How to re-queue an issue: `COLLABORATION.md`.
 - **v2.44.1 shipped: every identity field in the person form gets its own
   autofill token (#184; PR #194).** The v2.44.0 re-test found Chrome
   offering the owner's name on the Name field, which still used `off`.
   Name, company and the email/phone/address values now carry tokens from
   `common::person::autofill_token`; position and notes keep `off`.
-  Another Chrome re-test is requested on #184 (Muse); if a field still
-  leaks, the pre-approved fallback is de-classifying it (placeholder +
-  accessible name).
+  Muse's Chrome re-test passed on 2026-10-29, and #184 is closed.
 - **v2.44.0 shipped: contact label suggestions (#183; PR #192) and the
   email-row autofill fix (#184; PR #193).** Contact labels use the shared
   `FreeTextCombo` (extracted from the #171 Role field) with starter sets

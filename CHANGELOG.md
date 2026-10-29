@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+- **How the issue monitor claims issues, and how to send one back.**
+  `COLLABORATION.md` now covers the 👀-reaction claim that lets monitor runs
+  started together split issues rather than take the same one, and the stale
+  rule that frees a dead run's claim. To re-queue an issue, remove its
+  `claude:` label.
+
 ## [2.46.0] - 2026-10-29
 
 ### Changed
