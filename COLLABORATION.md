@@ -52,6 +52,15 @@ only stop it from picking up an issue twice, and they don't replace the
 state labels: when the monitor sets `claude:needs-decision`, the issue
 should also be at `state: decision-needed`.
 
+Several monitor runs can start together (two issues filed seconds apart), so
+each run claims an issue with a 👀 reaction from the developer account before
+labelling it. GitHub answers 201 to the one run that adds the reaction and 200
+to the others, which then skip the issue. A 👀 with no `claude:handled` label
+that is over 30 minutes old is a dead run's claim, and the next run takes it
+over. **To send an issue back to the monitor** (after answering a
+`DECISION NEEDED:`, or to release one a run gave up on), remove its `claude:`
+label and leave the 👀 alone. The next run reclaims it.
+
 ## Standing rules
 
 1. **Review before implementation.** The developer posts a critical review
