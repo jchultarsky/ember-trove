@@ -442,7 +442,12 @@ pub fn NodeList() -> impl IntoView {
                         // Bulk export (uses existing full-export endpoint)
                         <a
                             href="/api/export"
-                            target="_blank"
+                            download=true
+                            // Renew the session first (#190).
+                            on:click=move |ev| {
+                                ev.prevent_default();
+                                crate::api::start_download("/api/export".to_string());
+                            }
                             class="flex items-center gap-1 px-2 py-1 text-xs rounded-lg
                                 bg-stone-100 dark:bg-stone-800
                                 text-stone-600 dark:text-stone-400
