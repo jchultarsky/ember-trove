@@ -19,6 +19,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   it now refreshes the session once (shared with `send_authed`'s gate) and
   only goes to the hosted login if the refresh is refused.
 
+### Security
+- **pulldown-cmark 0.13.4 → 0.13.5 (RUSTSEC-2026-0414).** The advisory
+  covers `ENABLE_WIKILINKS`, which Ember Trove doesn't enable
+  (`ui/src/markdown.rs`), but `cargo audit` gates CI. Lockfile-only bump.
+
 ## [2.44.1] - 2026-10-28
 
 ### Security
