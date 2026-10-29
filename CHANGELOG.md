@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.45.0] - 2026-10-29
+
 ### Added
 - **Long node bodies get a contents list (#185).** When a body has three or
   more `##` / `###` headings, a compact "Contents" list sits above it; a
