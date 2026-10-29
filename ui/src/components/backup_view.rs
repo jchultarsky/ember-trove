@@ -344,17 +344,14 @@ fn BackupRow(
 
             // Actions
             <div class="flex items-center gap-1 flex-shrink-0">
-                // Download — open the streaming API endpoint directly; the session
-                // cookie is sent automatically so no presigned URL is needed.
+                // Download — the streaming API endpoint, after renewing the
+                // session (#190); the cookie is sent, so no presigned URL.
                 <button
                     class="p-1.5 rounded-lg text-stone-400 hover:text-amber-600 dark:hover:text-amber-400
                         hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
                     title="Download backup"
                     on:click=move |_| {
-                        if let Some(win) = web_sys::window() {
-                            let url = format!("/api/admin/backups/{job_id}/download");
-                            let _ = win.open_with_url_and_target(&url, "_blank");
-                        }
+                        crate::api::start_download(format!("/api/admin/backups/{job_id}/download"));
                     }
                 >
                     <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">

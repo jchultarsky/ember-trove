@@ -17,7 +17,7 @@ use crate::components::task_panel::TaskPanel;
 use crate::components::toast::{ToastLevel, push_toast};
 use crate::components::version_panel::VersionPanel;
 use crate::focus_task::schedule_focus_task;
-use crate::markdown::render_markdown;
+use crate::markdown::render_body;
 use leptos_router::hooks::use_navigate;
 
 #[component]
@@ -117,7 +117,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // the body re-renders when they do: reading the map here, in
                             // the page closure, would rebuild every section (#134).
                             let body_src = n.body.clone().unwrap_or_default();
-                            let body_html = move || render_markdown(&body_src, &title_map.get());
+                            // Body HTML and its heading outline come from one parse
+                            // (#185), so the outline can't point at a missing heading.
+                            let rendered =
+                                Memo::new(move |_| render_body(&body_src, &title_map.get()));
+                            let body_html = move || rendered.with(|r| r.html.clone());
+                            let outline = Signal::derive(move || {
+                                rendered.with(|r| r.visible_outline().map(<[_]>::to_vec))
+                                    .unwrap_or_default()
+                            });
                             let node_type = n.node_type.as_str().to_string();
                             let status = n.status.as_str().to_string();
                             let edit_id = n.id;
@@ -222,6 +230,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                         <a
                                                             href=format!("/api/nodes/{id}/export")
                                                             download=true
+                                                            // Renew the session first (#190).
+                                                            on:click=move |ev| {
+                                                                ev.prevent_default();
+                                                                crate::api::start_download(format!("/api/nodes/{id}/export"));
+                                                            }
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                                                                 dark:hover:text-stone-300 hover:bg-stone-100
                                                                 dark:hover:bg-stone-800 transition-colors"
@@ -302,7 +315,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                         text-stone-700 dark:text-stone-200
                                                                         hover:bg-stone-100 dark:hover:bg-stone-800"
                                                                     role="menuitem"
-                                                                    on:click=move |_| menu_open.set(false)
+                                                                    on:click=move |ev| {
+                                                                        ev.prevent_default();
+                                                                        menu_open.set(false);
+                                                                        crate::api::start_download(format!("/api/nodes/{id}/export"));
+                                                                    }
                                                                 >
                                                                     <span class="material-symbols-outlined" style="font-size:18px;">"download"</span>
                                                                     "Export as Markdown"
@@ -365,6 +382,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <TagBar node_id=id />
                                     </div>
                                     <div class="flex-1 overflow-auto p-6">
+                                        <crate::components::body_outline::BodyOutline entries=outline />
                                         <div
                                             class="prose max-w-none dark:prose-invert"
                                             inner_html=body_html

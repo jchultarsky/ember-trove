@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Long node bodies get a contents list (#185).** When a body has three or
+  more `##` / `###` headings, a compact "Contents" list sits above it; a
+  click scrolls to that heading. The list and the rendered body come from the
+  same Markdown parse (`markdown::render_body`), so the outline can't drift
+  from the headings. Bodies with fewer headings look as before.
+
 ### Changed
 - **The node editor's buttons say what they do under autosave (#197).**
   Edit mode had ✓ Save and ✕ Cancel, but Cancel saved your edits anyway (the
@@ -16,11 +23,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   reads **Create** and **Cancel**: nothing is on the server until Create.
 
 ### Fixed
+- **Downloads no longer fail with "Needs authorization" in a tab left open
+  (#190).** Node export, Export ZIP (sidebar and node list), backup and
+  attachment downloads were plain browser navigations, so they skipped the
+  v2.42.0 renew-in-place path and hit a 401 once the access token expired.
+  They now renew the session first (`api::download`, through
+  `send_authed`), then start the download without leaving the page.
+  Opening an attachment preview renews first too.
+- **Reloading such a tab no longer forces a full sign-in (#190).** The
+  startup `/auth/me` check treated an expired access token as "logged out";
+  it now refreshes the session once (shared with `send_authed`'s gate) and
+  only goes to the hosted login if the refresh is refused.
 - **Leaving the node editor within 2 seconds of typing no longer panics the
   app (#197).** The autosave and draft debounce timers read their signals
   after the editor was gone. They now use `try_` access.
 
 ### Security
+- The body sanitiser now keeps an `id` on h2/h3 only in the generated
+  `ember-h-N` form (#185). Any other id in a body, including one written in
+  raw HTML, is still stripped, so a body can't shadow an app element id or a
+  `window` global.
 - **pulldown-cmark 0.13.4 → 0.13.5 (RUSTSEC-2026-0414).** The advisory
   covers `ENABLE_WIKILINKS`, which Ember Trove doesn't enable
   (`ui/src/markdown.rs`), but `cargo audit` gates CI. Lockfile-only bump.

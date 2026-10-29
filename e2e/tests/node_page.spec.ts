@@ -162,3 +162,29 @@ test('Escape in the note editor offers Undo for a changed edit', async ({ page, 
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+test('a long body gets a contents list that jumps to its headings (#185)', async ({ page, request }) => {
+  const filler = Array.from({ length: 30 }, (_, i) => `Filler ${i}.`).join('\n\n');
+  const body = `## Alpha part\n\n${filler}\n\n### Beta detail\n\n${filler}\n\n## Omega part\n\n${filler}`;
+  const long = await createNode(request, `e2e body outline ${Date.now()}`, { body });
+  const short = await createNode(request, `e2e short outline ${Date.now()}`, {
+    body: '## One\n\ntext\n\n## Two\n\ntext',
+  });
+  try {
+    await gotoNode(page, long.id);
+    const contents = page.getByRole('navigation', { name: 'Contents' });
+    await expect(contents.getByRole('button')).toHaveText(['Alpha part', 'Beta detail', 'Omega part']);
+    const omega = page.getByRole('heading', { name: 'Omega part', level: 2 });
+    await expect(omega).not.toBeInViewport();
+    await contents.getByRole('button', { name: 'Omega part' }).click();
+    await expect(omega).toBeInViewport();
+
+    // Two headings: no outline.
+    await gotoNode(page, short.id);
+    await expect(page.getByRole('heading', { name: 'Two', level: 2 })).toBeVisible();
+    await expect(page.getByTestId('body-outline')).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/nodes/${long.id}`);
+    await request.delete(`/api/nodes/${short.id}`);
+  }
+});
