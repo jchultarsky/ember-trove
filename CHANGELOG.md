@@ -7,6 +7,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Documentation
+- **Data-model ontology** (#204). `docs/ONTOLOGY.md` records the decided
+  data model: the four node kinds and their feature gates, the meaning of each
+  edge type, People, Companies, captures vs Project notes, Tasks, Project Plan
+  vs History, and Events. It is normative; where the code differs, follow-on
+  issues change the code. Docs only: no code or schema changes.
 - **How the issue monitor claims issues, and how to send one back.**
   `COLLABORATION.md` now covers the 👀-reaction claim that lets monitor runs
   started together split issues rather than take the same one, and the stale
