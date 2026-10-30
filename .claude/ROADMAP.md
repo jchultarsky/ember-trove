@@ -3,7 +3,36 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-29)
+## Current state (2026-10-30)
+
+- **The ontology rewrite has started (#204).** `docs/ONTOLOGY.md` (PR #205)
+  is the normative data model, and every question in it is settled. The code
+  converges on it in slices, each with its own plan, issue, PR and release:
+  - **S0:** the document (PR #205).
+  - **S1:** the violations report, plus logging of status changes.
+  - **S2a–c:** what each kind may carry, enforced; Resource merged into
+    Reference (3.0.0).
+  - **S3a–c:** edge integrity: one home, the containment table, cycles,
+    `related_to` stored once.
+  - **S4a–c:** captures and convert-to-one.
+  - **S5a–d:** task states (`waiting`, `completed_at`), recurrence removed,
+    tasks need a Project, task dependencies.
+  - **S6a–d:** the closed terminal state, the cascade, History.
+  - **S7a–b:** reverse indexes and blockers.
+  - **S8–S9:** email identity, the merge tool, @-mentions.
+  - **S10:** Companies.
+  - **S11:** Events and the Calendar.
+  - **S12:** Project Plan.
+  - **S13:** the mixed graph.
+
+  Process rules:
+  - Each slice issue is claimed by the developer when its work starts, so
+    the issue monitor doesn't build it twice.
+  - A release that contains a migration waits until the owner has taken a
+    Lightsail snapshot.
+  - Data that breaks the ontology goes to a per-user report and is never
+    fixed silently. Database constraints are added only once their rule's
+    report is at zero.
 
 - **v2.46.0 shipped: the editor explains Draft / Published / Archived where
   you pick one (#196; PR #202, from the issue monitor).** A radio group with
