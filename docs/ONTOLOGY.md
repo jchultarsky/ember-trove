@@ -12,6 +12,10 @@ model: **the ontology judges the data, not the reverse.** A re-typing /
 cleanup pass over existing content follows the ontology; it does not precede
 or shape it.
 
+The owner's rulings on the review of this document (issue #204, 2026-10-30)
+are folded into the text below; §15 logs what changed and why. Nothing is
+left open: §13 records how each formerly undecided question was settled.
+
 ## 1. Philosophy
 
 - **One pane of glass for one life.** Trove does not divide its owner's life
@@ -72,7 +76,8 @@ glance. Its anatomy is defined in §4.
 responsibility, a career, a customer engagement). An Area is a standard to
 maintain, not an outcome to complete; it has no tasks, people, or status of
 its own. Areas may nest — a broad Area can hold sub-Areas as well as
-Projects, Articles, and References.
+Projects and Articles. It reaches References by links, never by
+containment (§3.3, §6.3).
 
 **Article** — a long-form authored document. No people, no tasks. An Article
 cites the resources used to write it (§6, `references`); once complete it
@@ -91,10 +96,10 @@ Reference may hold material directly or be a *pointer* to an outside source
 |---|---|---|---|---|
 | Free-Markdown body | ✓ | ✓ | ✓ | ✓ |
 | External Links (§5) | ✓ | ✓ | ✓ | ✓ |
-| History (§10) | ✓ | ✓ | ✓ | ✓ |
+| History (§10), including notes (§9.2) | ✓ | ✓ | ✓ | ✓ |
 | Tasks | ✓ | — | — | — |
 | People (membership) | ✓ | — | — | — |
-| Status (`project_status`) | ✓ | — | — | — |
+| Status label (`project_status`) and terminal state (§4.1) | ✓ | — | — | — |
 | Project Plan (§10) | ✓ | — | — | — |
 
 ### 3.3 Rules that apply to all kinds
@@ -105,12 +110,24 @@ Reference may hold material directly or be a *pointer* to an outside source
 - **Type permanence.** A node's type, once assigned, stays. There is no
   in-place mutation (a Reference does not become a Project). Flexibility
   comes from the free-Markdown body, not from reclassifying kinds.
-- **Single home.** A node has at most one `contains` parent (§6). A Project
-  in particular has exactly one Area home, never shared across Areas; an
+- **Single home.** A node has at most one `contains` parent (§6.1), never
+  shared. Which kinds may be a home is fixed:
+
+  | Home (parent) | May contain |
+  |---|---|
+  | Area | Areas, Projects, Articles |
+  | Project | sub-Projects only (decomposition, §4.2) |
+  | Article | nothing |
+  | Reference | nothing |
+
+  A Reference is never contained. A Project's home is an Area or a parent
+  Project; a Project may also **stand alone**, with no home at all. An
   Area holds many Projects.
-- **Lifecycle.** Draft vs Published is a label only (finished vs not — most
-  meaningful for Articles). Archived is the one lifecycle state with an
-  effect: an archived node is hidden from lists and navigation.
+- **Lifecycle.** Draft vs Published is a label (finished vs not — most
+  meaningful for Articles) with one effect: a `depends_on` on an Article is
+  satisfied once the Article is Published (§6.4). Archived hides a node from
+  lists and navigation, and an archived Reference no longer satisfies a
+  `depends_on`.
 
 ## 4. Anatomy of a Project
 
@@ -122,7 +139,9 @@ A Project assembles nine elements:
    values are **open**: the possible values cannot be known ahead of time,
    so the picker suggests values already in use rather than enforcing a
    closed enum. Narrative status stays in the body or notes. Status is
-   distinct from the Draft/Published/Archived lifecycle.
+   distinct from the Draft/Published/Archived lifecycle. Beside the open
+   label sits a small **closed terminal state** — *active*, *complete*, or
+   *cancelled* — which is the machine-readable declaration of §4.1.
 3. **Tasks** — owned by the Project (§9).
 4. **People** — memberships carrying a Role and an optional context note
    (§7). Text may additionally *mention* People (§7.3).
@@ -133,7 +152,8 @@ A Project assembles nine elements:
 7. **Sources** — two halves: outgoing `references` edges to material inside
    Trove, and the Project's own External Links to material outside Trove
    (§5).
-8. **Position and relations** — exactly one Area home via `contains`;
+8. **Position and relations** — at most one home via `contains` (an Area
+   or a parent Project), or none;
    `derived_from`, `depends_on`, `related_to`, and wiki-links to other
    nodes (§6).
 9. **The goal** — the outcome the Project exists to achieve, stated in the
@@ -141,20 +161,47 @@ A Project assembles nine elements:
 
 ### 4.1 Completion is declared, not derived
 
-A Project is complete when its status **declares** it — never computed from
-the state of its Tasks or sub-Projects. A master Project may be suddenly
-cancelled (for example, a customer withdraws funding); that decision does
-not depend on the state of anything beneath it.
+A Project is complete when its **terminal state** (§4, element 2)
+**declares** it — never computed from the state of its Tasks or
+sub-Projects, and never inferred from the wording of its open status label.
+A master Project may be suddenly cancelled (for example, a customer
+withdraws funding); that decision does not depend on the state of anything
+beneath it.
 
-- A Project can itself be **Cancelled** — terminal and declared, parallel
-  to a Task's Cancelled state (§9).
+- The terminal state is *active*, *complete*, or *cancelled*. A cancelled
+  Project is terminal and declared, parallel to a Task's Cancelled state
+  (§9.3).
 - The declaration is made independently of the children (never derived
-  *upward*), and once declared it **cascades *downward***: sub-Projects take
-  the same terminal state (Complete or Cancelled as the master), and their
-  open or Waiting Tasks close correspondingly (Done under completion,
-  Cancelled under cancellation), transitively down the `contains` tree.
+  *upward*), and once declared it **cascades *downward***, transitively
+  down the `contains` tree:
+  - sub-Projects take the master's terminal state (complete or cancelled);
+  - their open or Waiting Tasks become **Cancelled** — under completion as
+    well as cancellation. A Task closed by a cascade was not done, so it
+    never receives a completion date it did not earn.
+- **The cascade changes state only.** It never deletes, archives, or hides
+  a sub-Project; closing a master closes its sub-Projects, it does not
+  remove them.
+- **Cascade safeguards:**
+  - *Confirmation first.* Before a cascade runs, the owner is shown the
+    sub-Projects and Tasks it will close — and any child it cannot touch
+    (below) — and confirms.
+  - *Recorded in History.* A cascade writes a History entry (§10): who
+    declared it, when, and exactly which sub-Projects and Tasks it closed.
+  - *Master-only reopening.* Setting a closed Project back to *active*
+    affects that Project alone. Children closed by the cascade stay closed,
+    and a sub-Project that was closed on its own before the cascade is never
+    silently reopened. Once the master is active again, any child can be
+    reopened deliberately, one by one.
+  - *No active child under a closed master.* A sub-Project cannot be made
+    active while its master is closed.
+- **The cascade stays inside the actor's rights** (§14). It closes only
+  sub-Projects and Tasks the declaring person may edit through their own
+  ownership or sharing grants; the admin role does not extend it. A child
+  the actor cannot edit is skipped, listed in the confirmation, and shown
+  afterwards as open under a closed master — the "no active child" rule
+  above applies only to children the actor can edit.
 - A `depends_on` edge targeting a Project is satisfied exactly when that
-  Project's status declares completion. A cancelled target can never
+  Project's terminal state is *complete*. A cancelled target can never
   satisfy a dependency.
 
 ### 4.2 Worked rule: hubs are Areas
@@ -207,9 +254,13 @@ and the parent is where the child is found.
 
 - At most **one** `contains` parent per node — a home is singular. Other
   pointers to the same node use other edge types.
+- Only the pairs in the containment table of §3.3 are allowed (Area →
+  Area / Project / Article; Project → sub-Project).
 - **No cycles**: the structure is a forest.
 - A **Reference is never a `contains` child** — it is shared, and reached by
   links.
+- Because it claims the child's single home, creating a `contains` edge
+  requires edit rights on **both** ends (§14).
 - `contains` governs structure, navigation, and filing only. Deleting a
   container does **not** cascade-delete its children. (Project completion
   and cancellation *do* cascade state downward — §4.1 — which is a state
@@ -223,6 +274,8 @@ meaning to it.
 
 - Stored **once, unordered**: creating B→A when A→B exists is the same edge,
   not a second one.
+- Because it has no direction, a `related_to` edge may be deleted by anyone
+  with edit rights on either end (§14).
 
 ### 6.3 `references` — "A draws on B as source material"
 
@@ -252,8 +305,17 @@ are `references` or `related_to`.
   its own.
 - **Cycles are rejected**: a dependency cycle is a deadlock — a modeling
   error, not a storable state.
-- A dependency on a Project is satisfied when the target's status declares
-  completion (§4.1). Task-to-task dependencies mirror this definition (§9).
+- When a dependency is satisfied depends on the target's kind:
+
+  | Target | Satisfied when |
+  |---|---|
+  | Project | its terminal state is *complete* (§4.1); never when cancelled |
+  | Article | it is Published (§3.3) |
+  | Reference | it exists and is not archived — the material is available |
+  | Task | it is Done (§9.3); never when Cancelled |
+
+  An Area is a standard to maintain and never completes (§3.1), so it is
+  not a valid `depends_on` target. Task-to-task dependencies mirror this definition (§9.3).
 
 ### 6.5 `derived_from` — provenance
 
@@ -300,10 +362,15 @@ in shape to Company (§8).
 Names may collide and are **not** unique. **Email is the identity rule:
 the same email means the same person.** Duplicates are prevented or healed
 at the email. A merge tool is the fallback for the cases the rule cannot
-reach (a person with no email, or an email that changed). What happens at
-the exact moment of an email collision (block, prompt, auto-merge) is an
-implementation detail, not ontology. Shared or role mailboxes are a noted
-edge case, not yet decided.
+reach (a person with no email, or an email that changed).
+
+- **A collision blocks the save.** Saving a Person with an email that
+  already belongs to another Person is refused, with a way to open the
+  existing record or merge into it. Records are never merged
+  automatically.
+- **A Person's email belongs to that individual.** Shared and role
+  mailboxes (support@, a team or family inbox) are not People: they are
+  contact points on a Company (§8.1). This keeps the identity rule strict.
 
 ### 7.2 Membership
 
@@ -398,7 +465,7 @@ orphan is played by a capture).
 - Process captures as soon as possible; **Inbox Zero is the goal**.
 - Processing converts a capture into **exactly one** destination, by
   copying or rewording its text: a new node (Project, Article, Reference,
-  …), a Project note, a Task, an Event, etc.
+  …), a note on a Project or another node (§9.2), a Task, an Event, etc.
 - Or the capture is **deliberately deleted as useless**, resulting in
   nothing. Deletion must always be a deliberate act, never an accidental
   drop — the point of capture is that a good idea is not lost.
@@ -408,7 +475,7 @@ orphan is played by a capture).
 - Converting a capture into a Task requires naming the owning Project
   (§9.3).
 
-### 9.2 Project notes
+### 9.2 Project notes (and notes on other kinds)
 
 A **Project note** is a timestamped, project-bound record of events and
 developments — meeting notes, a microblog-like log entry.
@@ -417,9 +484,14 @@ developments — meeting notes, a microblog-like log entry.
   the project's chronology — who said what, when.
 - Project notes are one element of the Project's History (§10), alongside
   occurred events and status changes.
+- **Every document kind may carry notes**, as entries in its History
+  (§3.2, §10). A "Project note" is simply a note on a Project.
+- **Notes are editable; their timestamp is not.** Editing a note keeps its
+  original timestamp — its place in the chronology — and the note shows
+  that it was edited. Note colours carry no meaning in the model.
 - When a Project note gets promoted to something bigger is a matter of
-  judgment in practice; the ontology deliberately does not define a
-  promotion trigger.
+  the owner's judgment, **by design**: the ontology defines no promotion
+  trigger.
 
 ### 9.3 Tasks
 
@@ -437,7 +509,8 @@ Project (or a sub-Project) — the mirror image of the Project definition.
   - *Done* means completed successfully, and carries the completion date.
   - *Cancelled* is terminal with a specific meaning: something **prevented**
     the task from being completed, permanently. It carries no completion
-    date.
+    date. Closing a Task's Project closes it this way (§4.1): once the
+    Project is closed, the Task can no longer be done within it.
 - **Dates:** a Task may carry a **due date** and a **completion date**, and
   the two may differ — lateness is the derived comparison. A Task's due
   date is *rendered* as an event in Calendar and Project Plan views; the
@@ -448,8 +521,9 @@ Project (or a sub-Project) — the mirror image of the Project definition.
   `depends_on` definition (§6.4) — hard prerequisites, surfaced as
   blockers, never enforced, cycles rejected.
 - **No recurring Tasks.** A Task is a one-time action; recurrence implies
-  scheduling beyond the task itself. (This may be revisited in the future;
-  any shipped repeat behavior is outside this ontology.)
+  scheduling beyond the task itself. The repeat behaviour shipped before
+  this ontology is removed, and existing repeating Tasks become one-time
+  Tasks. Recurrence may come back only as a new, explicit decision.
 
 ## 10. Project Plan and History
 
@@ -463,8 +537,10 @@ Two distinct concepts that are easily confused:
   **general**: it applies to a Project, an Area, a Reference — any
   document-based node we may want a history of what occurred about it. For
   a Project, History is its notes plus occurred events plus status changes
-  (§9.2). A milestone is planned in the Project Plan; its actual date and
-  outcome land in History.
+  (§9.2), plus the record of any completion cascade (§4.1). A milestone is
+  planned in the Project Plan; its actual date and outcome land in History.
+- **A Milestone is an Event** (§11) labelled `milestone` that belongs to a
+  Project Plan — not a separate subtype.
 
 History is distinct from a node's body *version history* — version
 snapshots are a text mechanism, not the semantic record of what occurred.
@@ -501,33 +577,96 @@ doing lives in Tasks and Projects). An Event is not completable.
 ## 12. Cross-cutting rules
 
 - **Declared, not derived** — completion, cancellation, and identity are
-  stated by the owner (a status, an email), not computed from other
+  stated by the owner (a terminal state, an email), not computed from other
   objects' states. The one derived direction is *downward*: a declared
   Project completion/cancellation cascades state to sub-Projects and their
   Tasks (§4.1).
 - **Surfacing, never enforcement** — the model's semantics inform display
   (blockers, indexes, lineage, warnings). They do not prevent work, reorder
-  queues, or mutate other objects' state, beyond the single cascade rule
-  of §4.1.
+  queues, or mutate other objects' state. There are exactly two exceptions,
+  both in §4.1: the downward cascade, and that a sub-Project cannot be made
+  active while its master is closed (for children the actor can edit).
+  Structural rules — one home, the containment table, no cycles, email
+  identity — are integrity rules of the data, not enforcement on work.
 - **Labels over enums** — where practice cannot enumerate values in advance
   (project status, event type, industry, relationship-to-me), the model
-  uses open labels with suggestions from actual usage.
+  uses open labels with suggestions from actual usage. Where a value must
+  drive behaviour, a small closed set sits beside the label (a Project's
+  terminal state, §4.1).
 - **The graph shows everything once** — memberships and task ownership are
   stored relations projected into the graph; mentions and wiki-links are
   text-derived relations mirrored by sync. No relation is stored twice in
   two forms.
 
-## 13. Deliberately undecided
+## 13. Formerly undecided — now settled
 
-Recorded as open, so future work does not mistake silence for a decision:
+The first draft recorded these as open. Each is now settled (2026-10-30),
+so no question in this document is open:
 
-- Shared or role mailboxes under the email-identity rule (§7.1).
-- Project-note editing: edit-in-place vs append-only; note color semantics,
-  if any (§9.2).
-- What exactly triggers promoting a Project note to something bigger
-  (§9.2) — currently judgment, deliberately.
-- Milestone: a label on an Event vs its own subtype (§10).
-- A create-node shortcut from an unresolved wiki link (§6.6) — an
-  implementation option, not ontology.
-- The exact UI behavior at the moment of an email collision (§7.1) —
-  implementation detail for the follow-on work.
+| Question | Settled as |
+|---|---|
+| Shared or role mailboxes under the email-identity rule | Company contact points, never People (§7.1) |
+| Project-note editing; note colour semantics | Editable, timestamp fixed, shown as edited; colours carry no meaning (§9.2) |
+| What triggers promoting a Project note | The owner's judgment, by design — no trigger is defined (§9.2) |
+| Milestone: label on an Event or its own subtype | An Event labelled `milestone` in a Project Plan (§10) |
+| A create-node shortcut from an unresolved wiki link | An implementation option outside the ontology; kept in the product backlog |
+| UI behaviour at an email collision | The save is blocked, with open-existing or merge; never auto-merge (§7.1) |
+
+## 14. Ownership and visibility
+
+Trove is one person's view of their life (§1), but an installation serves
+more than one account: every object has an owner, a node can be shared with
+another account as a viewer or an editor, and an admin role exists. The
+model's semantics never widen what anyone can see or change.
+
+- **Owner scope.** A node is visible to its owner and to the accounts it is
+  shared with; the admin role may manage nodes across owners. **Person and
+  Company records are owner-only:** never shared, and the admin role does
+  not reach them.
+- **Edges need rights on both ends.** Creating an edge requires edit rights
+  on the source and at least view rights on the target. `contains`
+  requires edit rights on **both** ends, because it claims the child's one
+  home (§6.1). An unordered `related_to` may be deleted with edit rights on
+  either end (§6.2). Errors from the structural rules (one home, the
+  containment table, cycles) never name a node the actor cannot see.
+- **Reverse indexes and warnings show only what the viewer can read.**
+  "Used in", "Mentioned in", Descendants, an Article's bibliography,
+  transitive blockers, and deletion or archive warnings list only nodes the
+  viewer may read. They never show a count of hidden items: a warning may
+  understate rather than reveal that a hidden node exists.
+- **Mentions** (§7.3). The `@` picker lists only the author's own People.
+  Anyone other than the Person's owner sees a mention as the name at most —
+  never contact details, and never a way into the owner's registry. A
+  mention of a deleted Person renders as unresolved.
+- **Memberships** (§7.2). Accounts a Project is shared with see a member's
+  name and Role only, never contact details.
+- **Company personal-operations data** (§8.1). Account numbers, key links,
+  and contact details are shown only to the owner. They are never logged,
+  never indexed for search, never sent in webhooks or exports, and are
+  encrypted at rest.
+- **The cascade** (§4.1) acts only through the declaring person's own
+  ownership or sharing grants; the admin role does not extend it. Children
+  it may not touch are skipped, listed in the confirmation, and surfaced.
+- **Wiki links** (§6.6) resolve only among titles visible to the
+  mentioning node's owner; titles are unique per owner, not globally.
+- **Data-health reports** (the cleanup pass in the preamble) are per
+  account. An admin sees counts per rule across the installation — never
+  titles, ids, or content.
+
+## 15. Decision log
+
+| Date | Decision | Source |
+|---|---|---|
+| 2026-10 | The ontology as first written (§1–§13) | Owner's ontology working session |
+| 2026-10-30 | A closed terminal state (*active / complete / cancelled*) beside the open status label drives the cascade and `depends_on` | Owner ruling 1 on the #204 review |
+| 2026-10-30 | A Project has at most one home — an Area or a parent Project — and may stand alone | Owner ruling 2 |
+| 2026-10-30 | `depends_on` on an Article is satisfied when Published; on a Reference when it exists and is not archived | Owner ruling 3 |
+| 2026-10-30 | Recurring Tasks are removed; existing ones become one-time Tasks | Owner ruling 4 |
+| 2026-10-30 | §14 Ownership and visibility adopted | Owner ruling 5 |
+| 2026-10-30 | Cascade safeguards: confirmation, History record, master-only reopening; the cascade changes state only, never deletes; no active child under a closed master | Owner rulings on concern B and the cascade clarification |
+| 2026-10-30 | A cascade closes open Tasks as **Cancelled**, under completion too — no unearned completion dates (supersedes "Done under completion") | Owner, developer session |
+| 2026-10-30 | The cascade skips children the actor may not edit and surfaces them; the "no active child" rule applies to editable children only; the admin role does not extend the cascade | Owner, developer session |
+| 2026-10-30 | Containment table: Area → Area / Project / Article; Project → sub-Project; Article and Reference contain nothing | Owner, developer session |
+| 2026-10-30 | Notes stay on every document kind, as History entries | Owner, developer session |
+| 2026-10-30 | §13 questions settled (mailboxes, note editing, promotion, Milestone, wiki-link shortcut, email collision) | Owner, developer session |
+| 2026-10-30 | `contains` needs edit rights on both ends; `related_to` deletable from either end; an Area is not a `depends_on` target | Developer review; confirmed by the owner |

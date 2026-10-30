@@ -12,6 +12,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   edge type, People, Companies, captures vs Project notes, Tasks, Project Plan
   vs History, and Events. It is normative; where the code differs, follow-on
   issues change the code. Docs only: no code or schema changes.
+  - It folds in the owner's rulings on the review: a closed *active /
+    complete / cancelled* terminal state beside the open status label; a
+    containment table with at most one home; when a `depends_on` is satisfied
+    for each kind; recurring tasks removed; and the cascade's safeguards. A
+    cascade closes open tasks as Cancelled, never Done.
+  - A new §14, *Ownership and visibility*, sets the access rules every
+    follow-on change inherits. Reverse indexes and mentions show only what
+    the viewer can read. People and Companies are owner-only. `contains`
+    needs edit rights on both ends. The cascade never acts beyond the actor's
+    own grants.
+  - No question is left open: §13 now records how each one was settled, and
+    §15 is a decision log.
 - **How the issue monitor claims issues, and how to send one back.**
   `COLLABORATION.md` now covers the 👀-reaction claim that lets monitor runs
   started together split issues rather than take the same one, and the stale
