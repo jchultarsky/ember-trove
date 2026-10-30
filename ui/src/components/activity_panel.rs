@@ -69,7 +69,6 @@ fn action_colour(action: &ActivityAction) -> &'static str {
         ActivityAction::Edited => {
             "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300"
         }
-        ActivityAction::Deleted => "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
         ActivityAction::TagAdded | ActivityAction::TagRemoved => {
             "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300"
         }

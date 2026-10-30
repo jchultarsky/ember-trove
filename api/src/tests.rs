@@ -118,8 +118,13 @@ impl NodeRepo for StubNodeRepo {
         }
         unimplemented!()
     }
-    async fn delete(&self, _: NodeId) -> Result<(), EmberTroveError> {
-        unimplemented!()
+    async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
+        // Only the node test-sub owns may be deleted; reaching here for any
+        // other node is an authorization bypass.
+        match id.0.as_u128() {
+            AZ_OWNED_NODE => Ok(()),
+            _ => panic!("authorization bypass: node delete reached the repo for {id}"),
+        }
     }
     async fn neighbors(&self, _: NodeId, _: Option<&str>) -> Result<Vec<Node>, EmberTroveError> {
         unimplemented!()
@@ -864,6 +869,9 @@ impl ActivityRepo for StubActivityRepo {
         _: i64,
     ) -> Result<Vec<common::activity::RecentActivityEntry>, EmberTroveError> {
         unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<common::activity::ActivityRecord>, EmberTroveError> {
+        Ok(vec![])
     }
 }
 
@@ -2470,4 +2478,63 @@ async fn a_role_and_note_on_attach_are_validated_and_still_owner_only() {
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "node {node:#x}");
     }
+}
+
+/// Records every activity write, so a test can assert what a handler logged.
+#[derive(Default)]
+struct RecordingActivityRepo(std::sync::Mutex<Vec<ActivityAction>>);
+#[async_trait]
+impl ActivityRepo for RecordingActivityRepo {
+    async fn record(
+        &self,
+        _: NodeId,
+        _: &str,
+        action: ActivityAction,
+        _: serde_json::Value,
+    ) -> Result<(), EmberTroveError> {
+        self.0.lock().expect("lock").push(action);
+        Ok(())
+    }
+    async fn list(&self, _: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn list_recent_for_owner(
+        &self,
+        _: &str,
+        _: chrono::DateTime<chrono::Utc>,
+        _: i64,
+    ) -> Result<Vec<common::activity::RecentActivityEntry>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn list_all(&self) -> Result<Vec<common::activity::ActivityRecord>, EmberTroveError> {
+        Ok(vec![])
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_node_writes_no_activity_entry() {
+    // Regression (#208): the handler logged "deleted" after the delete, when
+    // the per-node log (FK, ON DELETE CASCADE) could no longer take the row,
+    // so every delete failed that write and logged an FK warning.
+    let activity = Arc::new(RecordingActivityRepo::default());
+    let mut state = test_state();
+    state.activity = activity.clone();
+    let app = Router::new()
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::Extension(fake_claims()))
+        .with_state(state);
+
+    let resp = app
+        .oneshot(
+            Request::delete(format!("/nodes/{}", Uuid::from_u128(AZ_OWNED_NODE)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert!(
+        activity.0.lock().expect("lock").is_empty(),
+        "no activity write after the node is gone"
+    );
 }

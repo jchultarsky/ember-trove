@@ -452,22 +452,14 @@ async fn delete_node(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    // Capture title + owner before deletion (cascade removes the row after, and
-    // the webhook fan-out needs the owner to scope delivery to their endpoints).
+    // Capture the owner before deletion: the webhook fan-out needs it to
+    // scope delivery to their endpoints.
+    //
+    // No activity entry (#208): the log is per node and cascades with it,
+    // so a "deleted" row written after the delete always failed its FK and
+    // only produced a warning.
     let existing = state.nodes.get(NodeId(id)).await.ok();
-    let title = existing
-        .as_ref()
-        .map(|n| n.title.clone())
-        .unwrap_or_default();
     state.nodes.delete(NodeId(id)).await?;
-    log_activity(
-        &state,
-        NodeId(id),
-        &claims,
-        ActivityAction::Deleted,
-        json!({ "title": title }),
-    )
-    .await;
     if let Some(owner_id) = existing.map(|n| n.owner_id) {
         dispatch(
             state.webhooks.clone(),

@@ -152,9 +152,12 @@ pub fn BackupView() -> impl IntoView {
                                     <p class="text-sm text-stone-700 dark:text-stone-300">
                                         {format!(
                                             "This backup contains {} node(s), {} edge(s), \
-                                             {} tag(s), {} note(s), {} task(s), {} attachment(s).",
+                                             {} tag(s), {} note(s), {} task(s), {} attachment(s), \
+                                             {} person(s) and {} activity entr{}.",
                                             counts.nodes, counts.edges, counts.tags,
-                                            counts.notes, counts.tasks, counts.attachments
+                                            counts.notes, counts.tasks, counts.attachments,
+                                            counts.people, counts.activity,
+                                            if counts.activity == 1 { "y" } else { "ies" }
                                         )}
                                     </p>
                                     {preview.warnings.into_iter().map(|w| view! {
