@@ -400,7 +400,7 @@ details.
 | GET | `/api/people/{id}/usages` | "Used in": the nodes a person appears on, with their role |
 | GET | `/api/people/roles` | The caller's roles with counts (suggestions) |
 | GET | `/api/nodes/{id}/people` | A node's people, redacted per viewer |
-| POST | `/api/nodes/{id}/people` | Add one of the caller's people to a node (the node's owner only) |
+| POST | `/api/nodes/{id}/people` | Add one of the caller's people to a node (the node's owner only; the node must be a Project, else **422**) |
 | PUT / DELETE | `/api/nodes/{id}/people/{membership_id}` | Change a membership's role/note, or remove it (the node's owner only) |
 
 ### Edges
@@ -457,7 +457,7 @@ details.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
-| POST | `/api/nodes/{id}/tasks` | Create task |
+| POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
 | PUT | `/api/tasks/{id}` | Update task (toggle, rename, set focus date) |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |

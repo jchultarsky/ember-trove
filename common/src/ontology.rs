@@ -29,6 +29,30 @@ impl Capability {
     pub const ALL: [Self; 4] = [Self::Tasks, Self::People, Self::ProjectStatus, Self::Plan];
 }
 
+impl Capability {
+    /// Why a write is refused (#216): the API's 422 text, matching the
+    /// Data health page's wording for the same rule.
+    #[must_use]
+    pub fn refusal(self) -> &'static str {
+        match self {
+            Self::Tasks => "only Projects have tasks",
+            Self::People => "only Projects have people",
+            Self::ProjectStatus => "only Projects have a project status",
+            Self::Plan => "only Projects have a project plan",
+        }
+    }
+}
+
+/// `Ok` when a node of `kind` may carry `capability`, else the refusal
+/// text. The API's write gates (#216) call this.
+pub fn require(kind: &NodeType, capability: Capability) -> Result<(), &'static str> {
+    if allows(kind, capability) {
+        Ok(())
+    } else {
+        Err(capability.refusal())
+    }
+}
+
 /// Whether a node of `kind` may carry `capability` (§3.2). Every gated
 /// capability is Project-only; body, External Links and History (notes
 /// included) belong to every kind and aren't gated.
@@ -344,6 +368,21 @@ mod tests {
                     expected,
                     "{parent:?} contains {child:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn require_refuses_with_the_capabilitys_reason() {
+        assert_eq!(require(&NodeType::Project, Capability::Tasks), Ok(()));
+        assert_eq!(
+            require(&NodeType::Article, Capability::Tasks),
+            Err("only Projects have tasks")
+        );
+        for kind in &KINDS {
+            for cap in Capability::ALL {
+                assert_eq!(require(kind, cap).is_ok(), allows(kind, cap));
+                assert!(cap.refusal().starts_with("only Projects have"));
             }
         }
     }

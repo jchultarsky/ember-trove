@@ -325,6 +325,22 @@ mod tests {
     }
 
     #[test]
+    fn the_page_and_the_api_refusal_say_the_same_thing() {
+        // #216: a 422 and the Data health card for the same rule must not
+        // drift apart.
+        use crate::ontology::Capability;
+        for (rule, cap) in [
+            (RuleId::TaskOnNonProject, Capability::Tasks),
+            (RuleId::MembershipOnNonProject, Capability::People),
+            (RuleId::StatusOnNonProject, Capability::ProjectStatus),
+        ] {
+            let refusal = cap.refusal();
+            let sentence = format!("O{}.", &refusal[1..]);
+            assert_eq!(rule.explanation(), sentence, "{}", rule.as_str());
+        }
+    }
+
+    #[test]
     fn a_long_report_keeps_the_exact_count_and_the_first_items() {
         let items: Vec<Violation> = (0..(ITEM_CAP as u128 + 37)).map(item).collect();
         let report = RuleReport::new(RuleId::OrphanTask, items);
