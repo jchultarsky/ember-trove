@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use uuid::Uuid;
 
+use crate::edge::EdgeType;
 use crate::node::NodeType;
 
 /// A feature that only some node kinds carry (§3.2).
@@ -101,6 +102,95 @@ pub enum ContainmentRule {
     ContainedReference,
     /// The pair isn't in the containment table (§3.3).
     NotAllowed,
+}
+
+/// Why `POST /edges` refuses a new edge (#224, §6). The kind rules come
+/// from [`edge_kind_violation`]. A second home and a loop depend on the
+/// stored graph, so the API checks those in one locked transaction.
+///
+/// No message names a node: the other end of an existing link may be one
+/// the actor can't see (§14).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeRefusal {
+    /// `wiki_link` is machine-owned (§6.6).
+    MachineOwned,
+    /// A Reference is never a `contains` child (§6.1).
+    ContainedReference,
+    /// The pair isn't in the containment table (§3.3).
+    ContainmentNotAllowed { parent: NodeType, child: NodeType },
+    /// An Area never completes, so it isn't a prerequisite (§6.4).
+    DependsOnArea,
+    /// The child already has its one home (§6.1).
+    SecondHome,
+    /// The edge would close a loop of its type (§6.1, §6.4, §6.5).
+    Loop(EdgeType),
+}
+
+impl EdgeRefusal {
+    /// The API's 422 text. Lowercase, like [`Capability::refusal`]; the
+    /// edge forms capitalise it.
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::MachineOwned => {
+                "wiki links come from [[Title]] in a node's text; they can't be added by hand"
+                    .to_string()
+            }
+            Self::ContainedReference => {
+                "a Reference is never contained; link it with \u{201c}references\u{201d} instead"
+                    .to_string()
+            }
+            Self::ContainmentNotAllowed { parent, child } => format!(
+                "{} can't contain {}: an Area holds Areas, Projects and Articles, \
+                 and a Project holds sub-Projects",
+                with_article(parent),
+                with_article(child)
+            ),
+            Self::DependsOnArea => {
+                "an Area is never finished, so nothing can depend on it".to_string()
+            }
+            Self::SecondHome => "this node already has a home; remove that link first".to_string(),
+            Self::Loop(t) => format!(
+                "this would make a loop of \u{201c}{}\u{201d} links",
+                t.label()
+            ),
+        }
+    }
+}
+
+fn with_article(kind: &NodeType) -> &'static str {
+    match kind {
+        NodeType::Article => "an Article",
+        NodeType::Project => "a Project",
+        NodeType::Area => "an Area",
+        NodeType::Reference => "a Reference",
+    }
+}
+
+/// The rule, if any, that a new `source -[edge_type]-> target` edge breaks
+/// because of the two kinds alone. For `contains` the source is the home
+/// and the target the child.
+#[must_use]
+pub fn edge_kind_violation(
+    edge_type: &EdgeType,
+    source: &NodeType,
+    target: &NodeType,
+) -> Option<EdgeRefusal> {
+    match edge_type {
+        EdgeType::WikiLink => Some(EdgeRefusal::MachineOwned),
+        EdgeType::Contains => containment_violation(source, target).map(|rule| match rule {
+            ContainmentRule::ContainedReference => EdgeRefusal::ContainedReference,
+            ContainmentRule::NotAllowed => EdgeRefusal::ContainmentNotAllowed {
+                parent: source.clone(),
+                child: target.clone(),
+            },
+        }),
+        EdgeType::DependsOn if *target == NodeType::Area => Some(EdgeRefusal::DependsOnArea),
+        EdgeType::DependsOn
+        | EdgeType::References
+        | EdgeType::RelatedTo
+        | EdgeType::DerivedFrom => None,
+    }
 }
 
 /// A set of nodes that reach each other through edges of one type: a
@@ -346,6 +436,84 @@ mod tests {
                     "{kind:?} / {cap:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn edge_kind_rules_match_the_ontology_for_every_pair() {
+        for edge_type in EdgeType::ALL {
+            for source in &KINDS {
+                for target in &KINDS {
+                    let got = edge_kind_violation(edge_type, source, target);
+                    let expected = match edge_type {
+                        EdgeType::WikiLink => Some(EdgeRefusal::MachineOwned),
+                        EdgeType::Contains if *target == NodeType::Reference => {
+                            Some(EdgeRefusal::ContainedReference)
+                        }
+                        EdgeType::Contains if !may_contain(source, target) => {
+                            Some(EdgeRefusal::ContainmentNotAllowed {
+                                parent: source.clone(),
+                                child: target.clone(),
+                            })
+                        }
+                        EdgeType::DependsOn if *target == NodeType::Area => {
+                            Some(EdgeRefusal::DependsOnArea)
+                        }
+                        _ => None,
+                    };
+                    assert_eq!(got, expected, "{source:?} {edge_type:?} {target:?}");
+                }
+            }
+        }
+        // Spot checks against the text of §3.3 and §6.4.
+        use NodeType::*;
+        assert_eq!(
+            edge_kind_violation(&EdgeType::Contains, &Area, &Article),
+            None
+        );
+        assert_eq!(
+            edge_kind_violation(&EdgeType::Contains, &Project, &Project),
+            None
+        );
+        assert_eq!(
+            edge_kind_violation(&EdgeType::DependsOn, &Project, &Reference),
+            None
+        );
+        assert_eq!(
+            edge_kind_violation(&EdgeType::DependsOn, &Area, &Project),
+            None
+        );
+    }
+
+    #[test]
+    fn refusal_messages_read_well_and_name_no_node() {
+        use NodeType::*;
+        let not_allowed = EdgeRefusal::ContainmentNotAllowed {
+            parent: Article,
+            child: Area,
+        };
+        assert!(
+            not_allowed
+                .message()
+                .starts_with("an Article can't contain an Area: "),
+            "{}",
+            not_allowed.message()
+        );
+        assert_eq!(
+            EdgeRefusal::Loop(EdgeType::DependsOn).message(),
+            "this would make a loop of \u{201c}depends on\u{201d} links"
+        );
+        for r in [
+            EdgeRefusal::MachineOwned,
+            EdgeRefusal::ContainedReference,
+            not_allowed,
+            EdgeRefusal::DependsOnArea,
+            EdgeRefusal::SecondHome,
+            EdgeRefusal::Loop(EdgeType::Contains),
+        ] {
+            let m = r.message();
+            assert!(m.starts_with(char::is_lowercase), "{m}");
+            assert!(!m.contains('{'), "no unfilled placeholder: {m}");
         }
     }
 

@@ -6,6 +6,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Connections follow the data model's rules** (#224, ONTOLOGY §6). Adding
+  a connection that breaks one is refused with the reason, in the node's
+  Connections form or the graph's New Edge dialog:
+  - a node has one home (`contains`);
+  - an Area holds Areas, Projects and Articles, and a Project holds
+    sub-Projects;
+  - a Reference is never contained: link it with "references";
+  - nothing depends on an Area;
+  - `contains`, `depends_on` and `derived_from` can't loop back;
+  - wiki links come only from `[[Title]]` in the text.
+
+  Existing data isn't touched; Data health lists anything that breaks a
+  rule. The help panel explains the rules. The checks run under a lock per
+  edge type, so two people saving at once can't break a rule together.
+- **The restore preview warns about broken links** in a backup, as counts
+  per Data health rule. The restore still runs, and Data health then lists
+  the items.
+
+### Security
+- **A home needs edit rights on both nodes** (#224, ONTOLOGY §14). Adding
+  `contains` used to need only view rights on the child, so a viewer could
+  claim another person's node as the child of their Area. The edge rules
+  run only after the access check, so their 422 can't tell a stranger a
+  node's kind. "Already has a home" and "would make a loop" can reveal that
+  a link exists through a node the actor can't see; no message names it.
+
 ## [3.0.0] - 2026-10-31
 
 ### Changed

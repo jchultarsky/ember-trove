@@ -2299,15 +2299,23 @@ async fn node_lookup_rejects_an_oversized_query() {
 // ── POST /edges duplicate (#129) ─────────────────────────────────────────────
 
 async fn post_edge(target: u128) -> (StatusCode, serde_json::Value) {
+    post_typed_edge(AZ_EDIT_NODE, target, "references").await
+}
+
+async fn post_typed_edge(
+    source: u128,
+    target: u128,
+    edge_type: &str,
+) -> (StatusCode, serde_json::Value) {
     let resp = claims_app("/edges", crate::routes::edges::router())
         .oneshot(
             Request::post("/edges")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "source_id": Uuid::from_u128(AZ_EDIT_NODE),
+                        "source_id": Uuid::from_u128(source),
                         "target_id": Uuid::from_u128(target),
-                        "edge_type": "references",
+                        "edge_type": edge_type,
                     })
                     .to_string(),
                 ))
@@ -2330,6 +2338,54 @@ async fn create_edge_reports_a_duplicate_as_409() {
     let (status, body) = post_edge(AZ_VIEW_NODE).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "already linked as references");
+}
+
+// ── POST /edges ontology rules (#224) ────────────────────────────────────────
+
+#[tokio::test]
+async fn contains_needs_edit_rights_on_the_child_too() {
+    // §14: a home claims the child, so viewing it isn't enough. The pair
+    // (an Article as a home) breaks the containment table as well: the 403
+    // comes first, so the kinds stay hidden.
+    let (status, _) = post_typed_edge(AZ_EDIT_NODE, AZ_VIEW_NODE, "contains").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn edge_rules_never_answer_a_stranger() {
+    // No access to the target: the authZ answer, never the rule's 422.
+    for edge_type in ["contains", "wiki_link", "depends_on"] {
+        let (status, _) = post_typed_edge(AZ_EDIT_NODE, AZ_FOREIGN_NODE, edge_type).await;
+        assert!(
+            status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+            "{edge_type}: {status}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn edge_kind_rules_refuse_with_the_reason() {
+    let (status, body) = post_typed_edge(AZ_EDIT_NODE, AZ_OWNED_NODE, "wiki_link").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("wiki links come from"),
+        "{body}"
+    );
+    let (status, body) = post_typed_edge(AZ_MY_PROJECT, AZ_MY_ARTICLE, "contains").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("a Project can't contain an Article"),
+        "{body}"
+    );
+    // Allowed kinds reach the repo.
+    let (status, _) = post_typed_edge(AZ_MY_ARTICLE, AZ_MY_PROJECT, "references").await;
+    assert_eq!(status, StatusCode::CREATED);
 }
 
 // ── e2e test-identity header is inert outside e2e builds (#135) ──────────────

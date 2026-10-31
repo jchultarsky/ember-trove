@@ -6,8 +6,9 @@ use axum::{
 };
 use common::{
     auth::AuthClaims,
-    edge::{CreateEdgeRequest, Edge},
+    edge::{CreateEdgeRequest, Edge, EdgeType},
     id::EdgeId,
+    ontology::edge_kind_violation,
 };
 use garde::Validate;
 use uuid::Uuid;
@@ -49,9 +50,24 @@ async fn create_edge(
         .map_err(|e| ApiError::Validation(e.to_string()))?;
     // Caller must have editor access on the source node AND be able to see
     // the target — otherwise an edge (and `neighbors`) would reach into a
-    // node they have no access to.
+    // node they have no access to. `contains` claims the child's one home,
+    // so it needs edit rights on the child too (§14, #224).
     require_editor(state.permissions.as_ref(), &claims, req.source_id).await?;
-    require_viewer(state.permissions.as_ref(), &claims, req.target_id).await?;
+    if req.edge_type == EdgeType::Contains {
+        require_editor(state.permissions.as_ref(), &claims, req.target_id).await?;
+    } else {
+        require_viewer(state.permissions.as_ref(), &claims, req.target_id).await?;
+    }
+    // The ontology's rules (#224) only after authZ, so a 422 can't tell a
+    // stranger a node's kind. A missing node is a 404 here (an admin passes
+    // authZ without a permission row).
+    let source = state.nodes.get(req.source_id).await?;
+    let target = state.nodes.get(req.target_id).await?;
+    if let Some(refusal) = edge_kind_violation(&req.edge_type, &source.node_type, &target.node_type)
+    {
+        return Err(ApiError::Validation(refusal.message()));
+    }
+    // A second home and a loop are checked by the repo, under a lock.
     let edge = state.edges.create(req).await?;
     Ok((StatusCode::CREATED, Json(edge)))
 }

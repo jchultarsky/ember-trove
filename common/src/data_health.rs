@@ -305,6 +305,81 @@ pub struct RuleCount {
     pub count: u64,
 }
 
+/// What a whole graph breaks, as counts per rule in [`RuleId::ALL`] order,
+/// zero counts left out: the restore preview's warning (#224). It holds
+/// counts only, never ids or titles. `kinds` maps each node to its kind;
+/// an edge with an end missing from it is skipped.
+///
+/// It counts the way the report does: a node with two homes is one item,
+/// a pair linked both ways is one, and a loop is one per tangle of edges.
+#[must_use]
+pub fn graph_rule_counts(
+    kinds: &std::collections::HashMap<Uuid, crate::node::NodeType>,
+    edges: &[(Uuid, Uuid, crate::edge::EdgeType)],
+) -> Vec<(RuleId, usize)> {
+    use crate::edge::EdgeType;
+    use crate::node::NodeType;
+    use crate::ontology::{ContainmentRule, containment_violation, cyclic_components};
+    use std::collections::{HashMap, HashSet};
+
+    let known: Vec<_> = edges
+        .iter()
+        .filter_map(|(s, t, e)| Some((*s, *t, e, kinds.get(s)?, kinds.get(t)?)))
+        .collect();
+    let of_type = |want: &EdgeType| -> Vec<(Uuid, Uuid)> {
+        known
+            .iter()
+            .filter(|k| k.2 == want)
+            .map(|k| (k.0, k.1))
+            .collect()
+    };
+    let mut counts: HashMap<RuleId, usize> = HashMap::new();
+    let mut bump = |rule: RuleId, n: usize| *counts.entry(rule).or_default() += n;
+
+    let mut homes: HashMap<Uuid, usize> = HashMap::new();
+    for (_, child, _, parent_kind, child_kind) in
+        known.iter().filter(|k| *k.2 == EdgeType::Contains)
+    {
+        *homes.entry(*child).or_default() += 1;
+        match containment_violation(parent_kind, child_kind) {
+            Some(ContainmentRule::ContainedReference) => bump(RuleId::ContainedReference, 1),
+            Some(ContainmentRule::NotAllowed) => bump(RuleId::ContainmentNotAllowed, 1),
+            None => {}
+        }
+    }
+    bump(
+        RuleId::MultipleHomes,
+        homes.values().filter(|&&n| n > 1).count(),
+    );
+    bump(
+        RuleId::DependsOnArea,
+        known
+            .iter()
+            .filter(|k| *k.2 == EdgeType::DependsOn && *k.4 == NodeType::Area)
+            .count(),
+    );
+    let related: HashSet<(Uuid, Uuid)> = of_type(&EdgeType::RelatedTo).into_iter().collect();
+    bump(
+        RuleId::RelatedToBothWays,
+        related
+            .iter()
+            .filter(|(a, b)| a < b && related.contains(&(*b, *a)))
+            .count(),
+    );
+    for (edge_type, rule) in [
+        (EdgeType::Contains, RuleId::ContainsCycle),
+        (EdgeType::DependsOn, RuleId::DependsOnCycle),
+        (EdgeType::DerivedFrom, RuleId::DerivedFromCycle),
+    ] {
+        bump(rule, cyclic_components(&of_type(&edge_type)).len());
+    }
+
+    RuleId::ALL
+        .iter()
+        .filter_map(|r| counts.get(r).filter(|&&n| n > 0).map(|&n| (*r, n)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +459,48 @@ mod tests {
         let node = serde_json::to_value(Ref::node(Uuid::from_u128(3), "n", true)).expect("ser");
         assert!(node.get("node_id").is_none());
         assert_eq!(node["archived"], true);
+    }
+
+    #[test]
+    fn graph_rule_counts_counts_each_rule_like_the_report() {
+        use crate::edge::EdgeType::*;
+        use crate::node::NodeType::{self, *};
+        let id = Uuid::from_u128;
+        let kinds: std::collections::HashMap<Uuid, NodeType> = [
+            (id(1), Area),
+            (id(2), Area),
+            (id(3), Project),
+            (id(4), Reference),
+            (id(5), Article),
+            (id(6), Project),
+        ]
+        .into_iter()
+        .collect();
+        let edges = vec![
+            (id(1), id(3), Contains),  // fine
+            (id(2), id(3), Contains),  // project 3 has two homes
+            (id(1), id(4), Contains),  // a contained Reference
+            (id(5), id(6), Contains),  // an Article can't be a home
+            (id(3), id(1), DependsOn), // on an Area
+            (id(3), id(6), DependsOn), // fine
+            (id(6), id(3), DependsOn), // closes a loop with the line above
+            (id(3), id(6), RelatedTo),
+            (id(6), id(3), RelatedTo),   // both ways
+            (id(5), id(4), DerivedFrom), // fine
+            (id(1), id(9), Contains),    // unknown end: skipped
+            (id(4), id(5), WikiLink),    // mentions are never a violation
+        ];
+        assert_eq!(
+            graph_rule_counts(&kinds, &edges),
+            vec![
+                (RuleId::MultipleHomes, 1),
+                (RuleId::ContainedReference, 1),
+                (RuleId::ContainmentNotAllowed, 1),
+                (RuleId::DependsOnArea, 1),
+                (RuleId::RelatedToBothWays, 1),
+                (RuleId::DependsOnCycle, 1),
+            ]
+        );
+        assert!(graph_rule_counts(&kinds, &[]).is_empty());
     }
 }

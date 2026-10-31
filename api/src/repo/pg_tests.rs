@@ -2470,3 +2470,160 @@ async fn migration_040_makes_every_resource_a_reference_and_keeps_the_rest(pool:
     .await;
     assert!(tpl.is_err(), "templates refuse 'resource'");
 }
+
+// ── Edge write rules (#224) ──────────────────────────────────────────────────
+
+fn edge(
+    source: uuid::Uuid,
+    target: uuid::Uuid,
+    t: common::edge::EdgeType,
+) -> common::edge::CreateEdgeRequest {
+    common::edge::CreateEdgeRequest {
+        source_id: common::id::NodeId(source),
+        target_id: common::id::NodeId(target),
+        edge_type: t,
+        label: None,
+    }
+}
+
+// Fixture helper: a refusal it didn't get must fail the calling test.
+#[allow(clippy::panic)]
+fn refusal(r: Result<common::edge::Edge, EmberTroveError>) -> String {
+    match r {
+        Err(EmberTroveError::Validation(m)) => m,
+        other => panic!("expected a 422 refusal, got {other:?}"),
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_second_home_is_refused_but_the_same_home_is_a_duplicate(pool: PgPool) {
+    use common::edge::EdgeType::Contains;
+    let edges = PgEdgeRepo::new(pool.clone());
+    let a1 = insert_raw_node(&pool, "alice", "area", "home one", "").await;
+    let a2 = insert_raw_node(&pool, "alice", "area", "home two", "").await;
+    let p = insert_raw_node(&pool, "alice", "project", "a project", "").await;
+
+    edges
+        .create(edge(a1, p, Contains))
+        .await
+        .expect("first home");
+    let m = refusal(edges.create(edge(a2, p, Contains)).await);
+    assert_eq!(m, "this node already has a home; remove that link first");
+    assert!(
+        matches!(
+            edges.create(edge(a1, p, Contains)).await,
+            Err(EmberTroveError::AlreadyExists(_))
+        ),
+        "the same parent again stays a 409 duplicate"
+    );
+    // Another child of the same home is fine.
+    let q = insert_raw_node(&pool, "alice", "project", "another project", "").await;
+    edges.create(edge(a1, q, Contains)).await.expect("siblings");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn loops_are_refused_for_acyclic_types_only(pool: PgPool) {
+    use common::edge::EdgeType::{self, *};
+    let edges = PgEdgeRepo::new(pool.clone());
+    let chain = |kind: &'static str, tag: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let mut ids = Vec::new();
+            for i in 0..3 {
+                let title = format!("{tag} {kind} {i}");
+                ids.push(insert_raw_node(&pool, "alice", kind, &title, "").await);
+            }
+            ids
+        }
+    };
+    let cases: [(EdgeType, &str); 5] = [
+        (Contains, "area"),
+        (DependsOn, "project"),
+        (DerivedFrom, "article"),
+        (References, "reference"),
+        (RelatedTo, "article"),
+    ];
+    for (t, kind) in cases {
+        let n = chain(kind, t.as_str()).await;
+        edges
+            .create(edge(n[0], n[1], t.clone()))
+            .await
+            .expect("a → b");
+        edges
+            .create(edge(n[1], n[2], t.clone()))
+            .await
+            .expect("b → c");
+        let closing = edges.create(edge(n[2], n[0], t.clone())).await;
+        if t.is_acyclic() {
+            assert_eq!(
+                refusal(closing),
+                format!(
+                    "this would make a loop of \u{201c}{}\u{201d} links",
+                    t.label()
+                )
+            );
+        } else {
+            closing.expect("links and relations may loop");
+        }
+    }
+
+    // A diamond is no loop: two paths may meet.
+    let d = chain("project", "diamond").await;
+    let top = insert_raw_node(&pool, "alice", "project", "diamond top", "").await;
+    edges
+        .create(edge(top, d[0], DependsOn))
+        .await
+        .expect("top → a");
+    edges
+        .create(edge(top, d[1], DependsOn))
+        .await
+        .expect("top → b");
+    edges
+        .create(edge(d[0], d[2], DependsOn))
+        .await
+        .expect("a → c");
+    edges
+        .create(edge(d[1], d[2], DependsOn))
+        .await
+        .expect("b → c");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_legacy_loop_does_not_hang_the_check(pool: PgPool) {
+    use common::edge::EdgeType::DependsOn;
+    let edges = PgEdgeRepo::new(pool.clone());
+    let x = insert_raw_node(&pool, "alice", "project", "x", "").await;
+    let y = insert_raw_node(&pool, "alice", "project", "y", "").await;
+    let z = insert_raw_node(&pool, "alice", "project", "z", "").await;
+    raw_edge(&pool, x, y, "depends_on").await;
+    raw_edge(&pool, y, x, "depends_on").await;
+    edges
+        .create(edge(z, x, DependsOn))
+        .await
+        .expect("into the old loop");
+    let m = refusal(edges.create(edge(y, z, DependsOn)).await);
+    assert!(m.contains("loop"), "{m}");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_inserts_cannot_close_a_loop_together(pool: PgPool) {
+    use common::edge::EdgeType::DependsOn;
+    let a = insert_raw_node(&pool, "alice", "project", "a", "").await;
+    let b = insert_raw_node(&pool, "alice", "project", "b", "").await;
+    for _ in 0..10 {
+        sqlx::query("DELETE FROM edges")
+            .execute(&pool)
+            .await
+            .expect("reset");
+        let (one, two) = (PgEdgeRepo::new(pool.clone()), PgEdgeRepo::new(pool.clone()));
+        let (r1, r2) = tokio::join!(
+            one.create(edge(a, b, DependsOn)),
+            two.create(edge(b, a, DependsOn))
+        );
+        assert_eq!(
+            usize::from(r1.is_ok()) + usize::from(r2.is_ok()),
+            1,
+            "exactly one of a → b and b → a: {r1:?} / {r2:?}"
+        );
+    }
+}
