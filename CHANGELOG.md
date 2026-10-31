@@ -6,6 +6,35 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Breaking
+- **Backups from before 3.0 can't be restored** (#222). A backup now
+  carries format 3, and restore accepts format 3 only. An older archive is
+  refused with "This backup was made by an older version of Ember Trove",
+  both in the preview and before the pre-restore snapshot, so nothing is
+  changed. **Take a fresh backup after upgrading.** Rolling back to 2.x
+  means restoring a server snapshot taken before the upgrade.
+
+### Changed
+- **Resource merges into Reference** (#222, ONTOLOGY §3.1). There are now
+  four node kinds: Article, Project, Area and Reference.
+  - Migration 040 turns every Resource node and template into a Reference.
+    It keeps `updated_at`, so an editor left open on one still saves.
+  - A user with a default template for both kinds keeps the Reference one.
+    The Resource template stays as an ordinary Reference template.
+  - The database now refuses `resource` (a CHECK on `nodes` and
+    `node_templates`), and the API answers 400 to `node_type=resource`.
+  - The UI drops Resource from the sidebar, palette, create forms, search
+    chips, templates page and graph legend (with its hexagon). An old
+    `/nodes/new?type=resource` link and an unsaved draft of a Resource both
+    open as a Reference.
+  - The service worker's cache moves to v8, dropping offline copies that
+    still say `resource`.
+
+### Tooling
+- `scripts/next-version.sh` now reads full commit messages: `type(scope)!:`
+  and a `BREAKING CHANGE:` footer both mean a major release. It has tests
+  (`scripts/next-version.test.sh`), run by CI and `verify.sh`.
+
 ## [2.49.0] - 2026-10-31
 
 ### Changed

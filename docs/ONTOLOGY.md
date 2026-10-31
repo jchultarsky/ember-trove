@@ -670,3 +670,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-30 | Notes stay on every document kind, as History entries | Owner, developer session |
 | 2026-10-30 | §13 questions settled (mailboxes, note editing, promotion, Milestone, wiki-link shortcut, email collision) | Owner, developer session |
 | 2026-10-30 | `contains` needs edit rights on both ends; `related_to` deletable from either end; an Area is not a `depends_on` target | Developer review; confirmed by the owner |
+| 2026-10-31 | Resource merges into Reference in 3.0.0 (migration 040); backups made before 3.0 are refused rather than converted | Owner, S2c planning (#222) |

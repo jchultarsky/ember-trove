@@ -12,7 +12,7 @@
 
 ## Overview
 
-Ember Trove is a web-based personal knowledge management (PKM) application where **nodes** (articles, projects, areas, resources, references) are linked by **typed edges**, tagged with flexible metadata, and searchable via full-text + fuzzy search. Markdown is the primary authoring format. Files can be attached to any node and stored in S3-compatible object storage.
+Ember Trove is a web-based personal knowledge management (PKM) application where **nodes** (articles, projects, areas, references) are linked by **typed edges**, tagged with flexible metadata, and searchable via full-text + fuzzy search. Markdown is the primary authoring format. Files can be attached to any node and stored in S3-compatible object storage.
 
 ### Key Features
 
@@ -530,8 +530,7 @@ details.
 | `article` | Blog post, essay, or atomic note |
 | `project` | Active initiative with tasks and references |
 | `area` | Sphere of responsibility (ongoing) |
-| `resource` | Reference material, bookmark, or asset |
-| `reference` | Citation, paper, or external source |
+| `reference` | Material you keep and cite: a paper, bookmark, asset or external source. (Resource merged into it in 3.0.0.) |
 
 ### Edge Types
 

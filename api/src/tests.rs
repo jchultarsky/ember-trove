@@ -2156,6 +2156,9 @@ async fn node_lookup_passes_a_kind_and_rejects_an_unknown_one() {
     assert_eq!(json[0]["node_type"], "project");
     let (status, _) = lookup(fake_claims(), "q=Phy&node_type=nonsense").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "not a node kind");
+    // #222: Resource merged into Reference; the API no longer knows it.
+    let (status, _) = lookup(fake_claims(), "q=Phy&node_type=resource").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "resource is retired");
 }
 
 #[tokio::test]

@@ -126,7 +126,6 @@ pub fn CreateNodeModal(
         let node_type = match node_type_str.get_untracked().as_str() {
             "project" => NodeType::Project,
             "area" => NodeType::Area,
-            "resource" => NodeType::Resource,
             "reference" => NodeType::Reference,
             _ => NodeType::Article,
         };
@@ -237,7 +236,6 @@ pub fn CreateNodeModal(
                         <option value="article">"Article"</option>
                         <option value="project">"Project"</option>
                         <option value="area">"Area"</option>
-                        <option value="resource">"Resource"</option>
                         <option value="reference">"Reference"</option>
                     </select>
                 </div>
@@ -267,7 +265,6 @@ pub fn CreateNodeModal(
                                     let type_str = match t.node_type {
                                         NodeType::Project   => "project",
                                         NodeType::Area      => "area",
-                                        NodeType::Resource  => "resource",
                                         NodeType::Reference => "reference",
                                         NodeType::Article   => "article",
                                     };

@@ -112,7 +112,6 @@ pub fn NodeList() -> impl IntoView {
             <PageHeader title=Signal::derive(move || match node_type_filter.get().as_deref() {
                 Some("project") => "Projects",
                 Some("area") => "Areas",
-                Some("resource") => "Resources",
                 Some("reference") => "References",
                 Some("article") | Some(_) => "Articles",
                 None => "All Nodes",

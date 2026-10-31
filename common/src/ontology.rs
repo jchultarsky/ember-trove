@@ -68,7 +68,6 @@ pub fn allows(kind: &NodeType, capability: Capability) -> bool {
 /// Whether `parent` may be the `contains` home of `child` (§3.3): an Area
 /// holds Areas, Projects and Articles; a Project holds only sub-Projects;
 /// Articles and References hold nothing, and a Reference is never held.
-/// `Resource` is the pre-merge spelling of Reference (§3.1) and follows it.
 #[must_use]
 pub fn may_contain(parent: &NodeType, child: &NodeType) -> bool {
     match parent {
@@ -77,7 +76,7 @@ pub fn may_contain(parent: &NodeType, child: &NodeType) -> bool {
             NodeType::Area | NodeType::Project | NodeType::Article
         ),
         NodeType::Project => *child == NodeType::Project,
-        NodeType::Article | NodeType::Reference | NodeType::Resource => false,
+        NodeType::Article | NodeType::Reference => false,
     }
 }
 
@@ -86,7 +85,7 @@ pub fn may_contain(parent: &NodeType, child: &NodeType) -> bool {
 /// disallowed pair (§3.3), so one bad edge is never reported twice.
 #[must_use]
 pub fn containment_violation(parent: &NodeType, child: &NodeType) -> Option<ContainmentRule> {
-    if matches!(child, NodeType::Reference | NodeType::Resource) {
+    if *child == NodeType::Reference {
         Some(ContainmentRule::ContainedReference)
     } else if !may_contain(parent, child) {
         Some(ContainmentRule::NotAllowed)
@@ -304,11 +303,10 @@ impl Graph {
 mod tests {
     use super::*;
 
-    const KINDS: [NodeType; 5] = [
+    const KINDS: [NodeType; 4] = [
         NodeType::Article,
         NodeType::Project,
         NodeType::Area,
-        NodeType::Resource,
         NodeType::Reference,
     ];
 
@@ -410,7 +408,7 @@ mod tests {
         for parent in &KINDS {
             for child in &KINDS {
                 let got = containment_violation(parent, child);
-                let expected = if matches!(child, Reference | Resource) {
+                let expected = if *child == Reference {
                     Some(ContainmentRule::ContainedReference)
                 } else if may_contain(parent, child) {
                     None
@@ -423,10 +421,9 @@ mod tests {
     }
 
     #[test]
-    fn a_reference_or_resource_is_never_contained() {
+    fn a_reference_is_never_contained() {
         for parent in &KINDS {
             assert!(!may_contain(parent, &NodeType::Reference));
-            assert!(!may_contain(parent, &NodeType::Resource));
         }
     }
 

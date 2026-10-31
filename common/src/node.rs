@@ -12,7 +12,8 @@ pub enum NodeType {
     Article,
     Project,
     Area,
-    Resource,
+    // `Resource` was here. It merged into `Reference` (ONTOLOGY §3.1,
+    // migration 040, #222); see `NodeType::parse_compat`.
     Reference,
 }
 
@@ -20,9 +21,22 @@ wire_enum!(NodeType {
     Article => "article",
     Project => "project",
     Area => "area",
-    Resource => "resource",
     Reference => "reference",
 });
+
+impl NodeType {
+    /// [`NodeType::parse`], also reading the retired `"resource"` as
+    /// [`NodeType::Reference`] (#222). Only for data the browser kept from
+    /// before the merge: a saved create draft, an old `?type=` link. The
+    /// API stays strict and refuses `resource`.
+    #[must_use]
+    pub fn parse_compat(s: &str) -> Option<NodeType> {
+        match s {
+            "resource" => Some(NodeType::Reference),
+            other => NodeType::parse(other),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -227,6 +241,19 @@ pub struct NodeListResponse {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_resource_reads_as_a_reference_only_through_parse_compat() {
+        use super::NodeType;
+        assert_eq!(NodeType::parse("resource"), None, "the API stays strict");
+        assert_eq!(
+            NodeType::parse_compat("resource"),
+            Some(NodeType::Reference)
+        );
+        assert_eq!(NodeType::parse_compat("project"), Some(NodeType::Project));
+        assert_eq!(NodeType::parse_compat("nonsense"), None);
+        assert!(serde_json::from_str::<NodeType>("\"resource\"").is_err());
+    }
+
     use super::NodeStatus;
 
     #[test]

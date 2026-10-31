@@ -51,6 +51,24 @@ fn activity_warning(counts: &EntityCounts) -> Option<String> {
     })
 }
 
+/// Only archives in this release's format restore (#222). Checked before
+/// anything else, so an older archive costs no pre-restore snapshot and
+/// never reaches the parser, which would fail on its data with a 500.
+fn check_format(manifest: &BackupManifest) -> Result<(), ApiError> {
+    let wanted = common::backup::SCHEMA_VERSION;
+    match manifest.schema_version {
+        v if v == wanted => Ok(()),
+        v if v < wanted => Err(ApiError::Validation(format!(
+            "This backup was made by an older version of Ember Trove (format {v}). \
+             This release restores format {wanted} only."
+        ))),
+        v => Err(ApiError::Validation(format!(
+            "This backup was made by a newer version of Ember Trove (format {v}). \
+             This release restores format {wanted} only."
+        ))),
+    }
+}
+
 fn add_bytes_to_archive<W: Write>(
     builder: &mut Builder<W>,
     path: &str,
@@ -126,7 +144,7 @@ pub async fn create_backup(
     let job_id = Uuid::new_v4();
 
     let manifest = BackupManifest {
-        schema_version: 2,
+        schema_version: common::backup::SCHEMA_VERSION,
         created_at: now,
         created_by: owner_id.to_string(),
         entity_counts: entity_counts.clone(),
@@ -237,6 +255,8 @@ pub async fn preview_restore(
         .map_err(|e| ApiError::Storage(format!("download backup failed: {e}")))?;
 
     let manifest = extract_manifest(&archive_bytes)?;
+    // Say so before the admin ever reaches Confirm.
+    check_format(&manifest)?;
 
     let mut warnings = Vec::new();
 
@@ -287,23 +307,20 @@ pub async fn execute_restore(
 ) -> Result<(), ApiError> {
     let job = state.backup.get(job_id).await.map_err(ApiError::from)?;
 
-    // Auto snapshot before restore, attributed to the admin who triggered it.
-    create_backup(state, owner_id, Some("auto: pre-restore snapshot")).await?;
-
     let archive_bytes = state
         .object_store
         .get(&job.s3_key)
         .await
         .map_err(|e| ApiError::Storage(format!("download backup failed: {e}")))?;
 
-    let (manifest, data, attachment_files) = extract_full(&archive_bytes)?;
+    // The format first (#222): an archive this release can't restore costs
+    // no snapshot and never reaches the data parser.
+    check_format(&extract_manifest(&archive_bytes)?)?;
 
-    if manifest.schema_version > 2 {
-        return Err(ApiError::Internal(format!(
-            "unsupported backup schema version: {} (max supported: 2)",
-            manifest.schema_version
-        )));
-    }
+    // Auto snapshot before restore, attributed to the admin who triggered it.
+    create_backup(state, owner_id, Some("auto: pre-restore snapshot")).await?;
+
+    let (_manifest, data, attachment_files) = extract_full(&archive_bytes)?;
 
     // Run all DB changes in a single transaction.
     let mut tx = state
@@ -958,5 +975,33 @@ mod tests {
         );
         counts.activity = 12;
         assert_eq!(activity_warning(&counts), None, "one with it doesn't");
+    }
+
+    #[test]
+    fn only_this_releases_backup_format_restores() {
+        let manifest = |v: u32| BackupManifest {
+            schema_version: v,
+            created_at: chrono::Utc::now(),
+            created_by: "admin".into(),
+            entity_counts: EntityCounts {
+                nodes: 0,
+                edges: 0,
+                tags: 0,
+                notes: 0,
+                tasks: 0,
+                attachments: 0,
+                people: 0,
+                activity: 0,
+            },
+        };
+        assert!(check_format(&manifest(common::backup::SCHEMA_VERSION)).is_ok());
+        let old = check_format(&manifest(2));
+        assert!(
+            matches!(&old, Err(ApiError::Validation(m)) if m.contains("older version") && m.contains("format 2")),
+            "got {old:?}"
+        );
+        assert!(
+            matches!(check_format(&manifest(9)), Err(ApiError::Validation(m)) if m.contains("newer"))
+        );
     }
 }
