@@ -410,6 +410,8 @@ details.
 | GET | `/api/edges` | List all edges |
 | POST | `/api/edges` | Create edge |
 | DELETE | `/api/edges/{id}` | Delete edge |
+| GET | `/api/nodes/{id}/home` | The node's one home; one the caller can't see is shown unnamed, and only to the node's editors |
+| PUT | `/api/nodes/{id}/home` | Set the home (`parent_id`), or remove it (`null`) |
 | POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |
 
 ### Tags
@@ -548,8 +550,9 @@ details.
 §6, §14). Each refusal is a 422 with the reason, and no message names a
 node:
 - `wiki_link` is never created by hand;
-- a node has at most one `contains` home, and adding one needs edit rights
-  on both nodes;
+- a node has at most one `contains` home (the database enforces it since
+  migration 042), and adding one needs edit rights on both nodes. A node's
+  page sets its home directly (`PUT /api/nodes/{id}/home`);
 - an Area holds Areas, Projects and Articles, a Project holds
   sub-Projects, and a Reference is never contained;
 - nothing `depends_on` an Area;
