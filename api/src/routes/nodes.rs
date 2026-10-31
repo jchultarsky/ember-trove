@@ -155,7 +155,7 @@ const LOOKUP_DEFAULT_LIMIT: u32 = 8;
 const LOOKUP_MAX_LIMIT: u32 = 20;
 const LOOKUP_MAX_QUERY_CHARS: usize = 200;
 
-/// `GET /nodes/lookup?q=&limit=` — title matches for the node pickers.
+/// `GET /nodes/lookup?q=&limit=&node_type=` — title matches for the node pickers.
 /// Same visibility as `/nodes/titles` (own + shared; admins everything).
 async fn lookup_titles(
     State(state): State<AppState>,
@@ -172,7 +172,12 @@ async fn lookup_titles(
         .clamp(1, LOOKUP_MAX_LIMIT);
     let hits = state
         .nodes
-        .lookup_titles(subject_scope(&claims), q, i64::from(limit))
+        .lookup_titles(
+            subject_scope(&claims),
+            q,
+            i64::from(limit),
+            params.node_type.as_ref(),
+        )
         .await?;
     Ok(Json(hits))
 }

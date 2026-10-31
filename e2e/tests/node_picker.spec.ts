@@ -235,7 +235,7 @@ test('the Inbox add-task picker attaches by the same rules', async ({ page, requ
     await page.goto('/tasks/inbox');
     const form = page.getByTestId('new-task-form');
     await form.getByPlaceholder('Task title…').fill(title);
-    const combo = form.getByRole('combobox', { name: 'Link to a node (optional)…' });
+    const combo = form.getByRole('combobox', { name: 'Link to a Project (optional)…' });
     await combo.fill(`e2e attach node ${stamp}`);
     await combo.press('Enter');
     await expect(form.getByTestId('node-picker-chip')).toContainText(`e2e attach node ${stamp}`);
@@ -333,7 +333,7 @@ test('Add to Favorites picks a node with the shared picker', async ({ page, requ
   }
 });
 
-test('Inbox "Assign to node" commits with the shared picker', async ({ page, request }) => {
+test('Inbox "Assign to a Project" commits with the shared picker', async ({ page, request }) => {
   const stamp = Date.now();
   const node = await createNode(request, `e2e assign node ${stamp}`, { node_type: 'project' });
   const created = await request.post('/api/tasks', { data: { title: `e2e assign task ${stamp}` } });
@@ -342,8 +342,8 @@ test('Inbox "Assign to node" commits with the shared picker', async ({ page, req
   try {
     await page.goto('/tasks/inbox');
     const row = page.locator(`[data-task-id="${task.id}"]`);
-    await row.locator('button[title="Assign to node"]').click();
-    const combo = row.getByRole('combobox', { name: 'Search nodes…' });
+    await row.locator('button[title="Assign to a Project"]').click();
+    const combo = row.getByRole('combobox', { name: 'Search Projects…' });
     await expect(combo).toBeFocused();
     await combo.fill(`e2e assign node ${stamp}`);
     await combo.press('Enter');
@@ -356,5 +356,23 @@ test('Inbox "Assign to node" commits with the shared picker', async ({ page, req
   } finally {
     await request.delete(`/api/tasks/${task.id}`);
     await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
+test('the task pickers offer Projects only (#216)', async ({ page, request }) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e kind pick project ${stamp}`, {
+    node_type: 'project',
+  });
+  const article = await createNode(request, `e2e kind pick article ${stamp}`);
+  try {
+    await page.goto('/tasks/inbox');
+    const form = page.getByTestId('new-task-form');
+    const combo = form.getByRole('combobox', { name: 'Link to a Project (optional)…' });
+    await combo.fill(`e2e kind pick`);
+    await expect(page.getByRole('option', { name: new RegExp(`project ${stamp}`) })).toBeVisible();
+    await expect(page.getByRole('option', { name: new RegExp(`article ${stamp}`) })).toHaveCount(0);
+  } finally {
+    for (const n of [project, article]) await request.delete(`/api/nodes/${n.id}`);
   }
 });

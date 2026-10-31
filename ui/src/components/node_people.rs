@@ -18,9 +18,10 @@ use leptos_router::hooks::use_navigate;
 
 use crate::components::free_text_combo::FreeTextCombo;
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
-use crate::components::node_section::{NodeSection, SectionShell};
+use crate::components::node_section::{NodeSection, NotOnThisKind, SectionShell, section_shown};
 use crate::components::people_view::{ContactAction, ContactKind, HINT_CLASS, PersonEditor};
 use crate::components::toast::{ToastLevel, push_toast};
+use common::ontology::Capability;
 
 const INPUT_CLASS: &str = "w-full text-xs bg-stone-100 dark:bg-stone-800 text-stone-800 \
      dark:text-stone-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500";
@@ -109,6 +110,11 @@ pub fn NodePeoplePanel(
     /// The node's canonical owner (not an editor, not the admin): the only
     /// one the API lets change its people.
     can_edit: bool,
+    /// The node's kind may carry people (§3.2, #216). When it may not, the
+    /// section shows only while it holds older memberships, which stay
+    /// editable and removable, and nothing can be added. Required, so a
+    /// new caller can't leave the add control on by omission.
+    allowed: bool,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     let refresh = RwSignal::new(0u32);
@@ -137,9 +143,15 @@ pub fn NodePeoplePanel(
     });
 
     let count = Signal::derive(move || members.with(|r| r.as_ref()?.as_ref().ok().map(Vec::len)));
+    // A failed load counts as "has items", so the section shows its error.
+    let total = Signal::derive(move || {
+        members.with(|r| r.as_ref().map(|r| r.as_ref().map_or(1, Vec::len)))
+    });
+    let shown = Memo::new(move |_| section_shown(allowed, total.get()));
+    let can_add = can_edit && allowed;
     let actions: ChildrenFn = std::sync::Arc::new(move || {
         view! {
-            {move || (open.get() && can_edit).then(|| view! {
+            {move || (open.get() && can_add).then(|| view! {
                 <button
                     type="button"
                     class=icon_button_class(IconButtonVariant::Neutral)
@@ -182,7 +194,9 @@ pub fn NodePeoplePanel(
     });
 
     view! {
-        <SectionShell section=NodeSection::People open=open count=count actions=actions>
+        {move || shown.get().then(|| view! {
+        <SectionShell section=NodeSection::People open=open count=count actions=actions.clone()>
+            {(!allowed).then(|| view! { <NotOnThisKind capability=Capability::People can_fix=can_edit /> })}
             <PersonEditor open=editor_open form=PersonForm::NewOnNode(node_id)
                 initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
                 membership=new_membership on_saved=on_created />
@@ -219,6 +233,7 @@ pub fn NodePeoplePanel(
                 }}
             </Suspense>
         </SectionShell>
+        })}
     }
 }
 

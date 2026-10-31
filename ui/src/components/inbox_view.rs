@@ -231,7 +231,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                 ..Default::default()
             },
             PatchOpts {
-                err_prefix: "Couldn't attach to node",
+                err_prefix: "Couldn't assign to a Project",
                 refresh: Some(refresh),
                 ..Default::default()
             },
@@ -358,7 +358,7 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                         {move || (!editing.get()).then(|| view! {
                             <button
                                 class=action_btn_class("hover:text-amber-600 dark:hover:text-amber-500")
-                                title="Assign to node"
+                                title="Assign to a Project"
                                 on:click=move |_| assigning.set(true)
                             >
                                 <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">
@@ -410,7 +410,8 @@ fn InboxTaskRow(task: Task, refresh: RwSignal<u32>) -> impl IntoView {
                         <div class="flex-1 min-w-0">
                             <crate::components::node_picker::NodePicker
                                 selected=attach_target
-                                placeholder="Search nodes…"
+                                placeholder="Search Projects…"
+                                only_type=common::node::NodeType::Project
                                 autofocus=true
                                 on_commit=Callback::new(move |()| {
                                     if let Some((id, _)) = attach_target.get_untracked() {

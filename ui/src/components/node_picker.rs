@@ -3,6 +3,7 @@
 //! shows a removable chip once picked. Used by the new-task form, the Notes
 //! compose box and the Connections "add edge" form.
 
+use common::node::NodeType;
 use common::{id::NodeId, node::NodeLookupHit, search::SearchResult};
 use leptos::prelude::*;
 
@@ -35,7 +36,7 @@ pub fn use_people_search(query: RwSignal<String>) -> RwSignal<Vec<common::person
 /// Fields that choose a node use [`NodePicker`] (#130). Same lookup, same
 /// debounce, so suggestions match the pickers'.
 pub fn use_title_suggestions(query: RwSignal<String>) -> RwSignal<Vec<NodeLookupHit>> {
-    use_node_lookup_answering(query).0
+    use_node_lookup_answering(query, None).0
 }
 
 /// Title lookup behind [`NodePicker`] — the only node picker (#130): every
@@ -45,9 +46,10 @@ pub fn use_title_suggestions(query: RwSignal<String>) -> RwSignal<Vec<NodeLookup
 /// Physna, and "Phy" matched nothing (#126 follow-up).
 fn use_node_lookup_answering(
     query: RwSignal<String>,
+    only_type: Option<&'static str>,
 ) -> (RwSignal<Vec<NodeLookupHit>>, RwSignal<String>) {
-    use_debounced(query, |q: String| async move {
-        crate::api::lookup_nodes(&q).await
+    use_debounced(query, move |q: String| async move {
+        crate::api::lookup_nodes(&q, only_type).await
     })
 }
 
@@ -125,7 +127,14 @@ pub fn NodePicker(
     /// straight into a search: Inbox and triage attach, Add to Favorites).
     #[prop(optional)]
     autofocus: bool,
+    /// Offer only nodes of this kind. The task pickers pass Project: only
+    /// Projects take tasks (§3.2, #216).
+    #[prop(optional)]
+    only_type: Option<NodeType>,
 ) -> impl IntoView {
+    // The wire string is `&'static str`, so the debounced lookup can capture
+    // it (`use_debounced` needs a `Copy` closure; `NodeType` isn't `Copy`).
+    let only_type = only_type.as_ref().map(NodeType::as_str);
     let placeholder = placeholder.unwrap_or_else(|| "Link to a node (optional)…".to_string());
     let base = format!(
         "node-picker-{}",
@@ -135,7 +144,7 @@ pub fn NodePicker(
     let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
 
     let query = RwSignal::new(String::new());
-    let (results, answers) = use_node_lookup_answering(query);
+    let (results, answers) = use_node_lookup_answering(query, only_type);
     let options = Signal::derive(move || {
         results
             .get()

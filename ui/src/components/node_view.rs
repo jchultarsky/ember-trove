@@ -1,5 +1,6 @@
 use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
+use common::ontology::{Capability, allows};
 use leptos::prelude::*;
 
 use crate::auth::{AuthStatus, use_auth_state};
@@ -208,7 +209,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 {status_icon(&status)}
                                             </span>
                                             // Project status (#143): the chip, editable by editors.
-                                            {(n.node_type == common::node::NodeType::Project).then(|| view! {
+                                            {allows(&n.node_type, Capability::ProjectStatus).then(|| view! {
                                                 <crate::components::project_status::ProjectStatusChip
                                                     node_id=id
                                                     initial=n.project_status.clone()
@@ -388,12 +389,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             inner_html=body_html
                                             on:click=handle_wikilink_click
                                         />
-                                        // Task panel — shown for all node types
-                                        <TaskPanel node_id=id />
+                                        // Tasks and People belong to Projects (§3.2, #216);
+                                        // elsewhere they show only while older items remain.
+                                        <TaskPanel node_id=id allowed=allows(&n.node_type, Capability::Tasks)
+                                            can_fix=is_canonical_owner />
                                         // Note panel — append-only; owner can add, everyone can read
                                         <NotePanel node_id=id is_owner=is_owner />
                                         // People (#147): only the node's own owner may change them.
-                                        <crate::components::node_people::NodePeoplePanel node_id=id can_edit=is_canonical_owner />
+                                        <crate::components::node_people::NodePeoplePanel node_id=id can_edit=is_canonical_owner
+                                            allowed=allows(&n.node_type, Capability::People) />
                                         // External links panel — grouped with other collapsible sections
                                         <LinksPanel node_id=id is_editor=is_owner />
                                         <EdgePanel node_id=id />
