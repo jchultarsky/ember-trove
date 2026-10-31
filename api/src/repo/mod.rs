@@ -58,23 +58,22 @@ pub(crate) fn parse_wire<T>(
     parse(s).ok_or_else(|| EmberTroveError::Internal(format!("unknown {kind}: {s}")))
 }
 
-/// Whether this session is inside a transaction block. There, the
-/// transaction began before the current statement; outside one, each
-/// statement is its own transaction and the two start times are equal.
-/// Sent as a bare `&str`, so over the simple query protocol: through the
-/// extended protocol (Parse/Bind/Execute, what `sqlx::query` uses) the two
-/// times differ even outside a block, which would read every connection as
-/// stuck. The pg test checks both directions.
+/// Whether this session is inside a transaction block: `now()` is the
+/// transaction's start and `statement_timestamp()` this statement's. Outside
+/// a block each statement is its own transaction, so the two are equal;
+/// inside one, the transaction began earlier. (Unlike `pg_stat_activity`,
+/// this keeps working with `track_activities` off, and reads nothing
+/// shared.) Sent as a bare `&str`, so over the simple query protocol:
+/// through the extended protocol (Parse/Bind/Execute, what `sqlx::query`
+/// uses) the two times differ even outside a block, which would read every
+/// connection as stuck. The pg test checks both directions.
 pub(crate) async fn in_transaction_block(
     conn: &mut sqlx::PgConnection,
 ) -> Result<bool, sqlx::Error> {
     use sqlx::{Executor, Row};
-    conn.fetch_one(
-        "SELECT xact_start IS DISTINCT FROM query_start \
-         FROM pg_stat_activity WHERE pid = pg_backend_pid()",
-    )
-    .await?
-    .try_get(0)
+    conn.fetch_one("SELECT now() <> statement_timestamp()")
+        .await?
+        .try_get(0)
 }
 
 /// The API's connection pool settings (#234).
