@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.48.0] - 2026-10-31
+
 ### Added
 - **Data-health report API** (#208). `GET /api/data-health` lists the
   caller's data that breaks the data model (`docs/ONTOLOGY.md`), rule by
