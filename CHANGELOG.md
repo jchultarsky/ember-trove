@@ -14,9 +14,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - The link shows as ↔ from both nodes, and the graph draws it without
     an arrowhead.
   - Migration 041 merges any pair stored both ways. It keeps the oldest; if
-    that one has no label, it takes the other's. The removed copy is kept in
-    `edges_removed_041`. A unique index keeps pairs from coming back.
-  - Restoring a backup merges such pairs by the same rule.
+    that one has no label, it takes the other's. The removed copy, with its
+    label, is kept in `edges_removed_041`. A unique index keeps pairs from
+    coming back.
+  - Restoring a backup merges such pairs by the same rule and archives the
+    copy the same way.
+  - The node's neighbours and "linked from" lists count a related link
+    from both ends, so a merged pair never turns up as an unlinked
+    mention.
 
 ### Security
 - **Either end may delete a "related to" link** (#226, ONTOLOGY §14). It

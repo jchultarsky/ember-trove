@@ -5,11 +5,16 @@
 -- `edges` stored them as two (`edges_unique_source_target_type` is
 -- directed). Same rule as migration 034, per unordered pair:
 --   * The OLDEST edge of each pair is kept. If it has no label, it takes the
---     oldest non-empty label of the rest, so no annotation leaves the live
---     graph. `common::edge::fold_related_pairs` is this rule in Rust, used
---     by restore.
+--     oldest non-empty label of the rest. When both have labels, the kept
+--     one keeps its own and the other's survives only in the archive.
+--     `common::edge::fold_related_pairs` is this rule in Rust, used by
+--     restore, which archives the same way.
 --   * Every removed row is first copied into `edges_removed_041`.
+--   * `edges` is locked first, so no insert can slip a reverse pair in
+--     between the dedupe and the index build.
 -- Idempotent: safe to re-run (the pg test re-runs it on seeded pairs).
+
+LOCK TABLE edges IN SHARE ROW EXCLUSIVE MODE;
 
 CREATE TABLE IF NOT EXISTS edges_removed_041 (
     LIKE edges INCLUDING DEFAULTS,
@@ -45,8 +50,7 @@ WHERE e.id = carried.id;
 INSERT INTO edges_removed_041 (id, source_id, target_id, edge_type, label, created_at)
 SELECT id, source_id, target_id, 'related_to', label, created_at
 FROM related_ranked_041
-WHERE rn > 1
-ON CONFLICT DO NOTHING;
+WHERE rn > 1;
 
 DELETE FROM edges e
 USING related_ranked_041 r

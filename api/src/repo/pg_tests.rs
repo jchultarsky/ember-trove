@@ -2865,3 +2865,104 @@ async fn the_reverse_of_a_related_link_is_a_duplicate(pool: PgPool) {
     edges.create(edge(a, b, References)).await.expect("a → b");
     edges.create(edge(b, a, References)).await.expect("b → a");
 }
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_related_link_is_a_neighbour_and_a_backlink_from_both_ends(pool: PgPool) {
+    use common::edge::EdgeType::{References, RelatedTo};
+    let nodes = PgNodeRepo::new(pool.clone());
+    let edges = PgEdgeRepo::new(pool.clone());
+    let a = create_node(&pool, "alice", "rel a").await;
+    let b = create_node(&pool, "alice", "rel b").await;
+    let c = create_node(&pool, "alice", "ref c").await;
+    edges
+        .create(edge(a.id.0, b.id.0, RelatedTo))
+        .await
+        .expect("a ↔ b");
+    edges
+        .create(edge(a.id.0, c.id.0, References))
+        .await
+        .expect("a → c");
+    let ids = |v: Vec<common::node::Node>| v.into_iter().map(|n| n.id).collect::<Vec<_>>();
+    let me = Some("alice");
+    assert_eq!(
+        ids(nodes.neighbors(b.id, me).await.unwrap()),
+        vec![a.id],
+        "b reaches a"
+    );
+    assert_eq!(
+        ids(nodes.backlinks(a.id, me).await.unwrap()),
+        vec![b.id],
+        "a is linked from b"
+    );
+    // A directed link keeps its direction.
+    assert!(ids(nodes.neighbors(c.id, me).await.unwrap()).is_empty());
+    assert_eq!(ids(nodes.neighbors(a.id, me).await.unwrap()).len(), 2);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
+    use chrono::TimeZone;
+    use common::backup::BackupData;
+    use common::edge::{Edge, EdgeType::RelatedTo};
+    use common::id::EdgeId;
+
+    let a = create_node(&pool, "alice", "restore rel a").await;
+    let b = create_node(&pool, "alice", "restore rel b").await;
+    let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
+    // An archive from before 041: the pair both ways, both labelled.
+    let at = |s: i64| Utc.timestamp_opt(1_800_000_000 + s, 0).unwrap();
+    let older = Edge {
+        id: EdgeId(uuid::Uuid::new_v4()),
+        source_id: a.id,
+        target_id: b.id,
+        edge_type: RelatedTo,
+        label: Some("mine".into()),
+        created_at: at(0),
+    };
+    let newer = Edge {
+        id: EdgeId(uuid::Uuid::new_v4()),
+        source_id: b.id,
+        target_id: a.id,
+        edge_type: RelatedTo,
+        label: Some("theirs".into()),
+        created_at: at(60),
+    };
+    let data = BackupData {
+        nodes,
+        edges: vec![newer.clone(), older.clone()],
+        tags: vec![],
+        notes: vec![],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: vec![],
+    };
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("a both-ways archive restores");
+    tx.commit().await.unwrap();
+
+    let live: Vec<(uuid::Uuid, Option<String>)> = sqlx::query_as("SELECT id, label FROM edges")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(live, vec![(older.id.0, Some("mine".to_string()))]);
+    let archived: Vec<(uuid::Uuid, Option<String>)> =
+        sqlx::query_as("SELECT id, label FROM edges_removed_041")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        archived,
+        vec![(newer.id.0, Some("theirs".to_string()))],
+        "the other label is kept, as the migration keeps it"
+    );
+}

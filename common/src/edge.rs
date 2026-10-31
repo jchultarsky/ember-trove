@@ -297,7 +297,7 @@ mod fold_tests {
     fn the_oldest_label_wins_and_a_tie_on_time_goes_by_id() {
         use EdgeType::RelatedTo;
         let edges = vec![
-            edge(9, 1, 2, RelatedTo, 100, Some(" ")), // blank (whitespace): kept, same time, lower id below
+            edge(9, 1, 2, RelatedTo, 100, Some(" ")), // same time, higher id: dropped; its label is blank
             edge(8, 2, 1, RelatedTo, 100, None),      // same time, lower id: kept
             edge(7, 1, 2, RelatedTo, 300, Some("late")),
             edge(6, 2, 1, RelatedTo, 200, Some("early")),

@@ -523,7 +523,23 @@ pub(crate) async fn restore_into(
     // Insert edges. `related_to` is unordered (#226): an archive from before
     // migration 041 may hold both directions, which the unique index
     // refuses, so they are merged by the migration's rule first.
-    let (edges, _merged) = common::edge::fold_related_pairs(data.edges.clone());
+    let (edges, merged) = common::edge::fold_related_pairs(data.edges.clone());
+    for edge in &merged {
+        // Archived like the migration's copies, so no label is lost.
+        sqlx::query(
+            "INSERT INTO edges_removed_041 (id, source_id, target_id, edge_type, label, created_at) \
+             VALUES ($1, $2, $3, $4::edge_type, $5, $6)",
+        )
+        .bind(edge.id.0)
+        .bind(edge.source_id.0)
+        .bind(edge.target_id.0)
+        .bind(edge.edge_type.as_str())
+        .bind(&edge.label)
+        .bind(edge.created_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("archive merged edge failed: {e}")))?;
+    }
     for edge in &edges {
         let edge_type_str = edge.edge_type.as_str();
         sqlx::query(
