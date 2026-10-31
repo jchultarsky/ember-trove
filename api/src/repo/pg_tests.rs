@@ -1934,6 +1934,17 @@ async fn raw_exec(pool: &PgPool, sql: &str, ids: &[uuid::Uuid]) {
     q.execute(pool).await.expect("fixture sql");
 }
 
+/// Recreate the pre-041 state, where a `related_to` could be stored both
+/// ways (#226), so tests of legacy data can seed such a pair.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn allow_legacy_related_pairs(pool: &PgPool) {
+    sqlx::query("DROP INDEX edges_related_to_once")
+        .execute(pool)
+        .await
+        .expect("drop the related_to index");
+}
+
 // Fixture helper; see `create_node`.
 #[allow(clippy::expect_used)]
 async fn raw_edge(pool: &PgPool, source: uuid::Uuid, target: uuid::Uuid, edge_type: &str) {
@@ -2149,6 +2160,7 @@ async fn data_health_finds_area_dependencies_and_doubled_related_links(pool: PgP
     let other = insert_raw_node(&pool, "alice", "project", "another project", "").await;
     raw_edge(&pool, project, area, "depends_on").await;
     raw_edge(&pool, project, other, "depends_on").await; // fine
+    allow_legacy_related_pairs(&pool).await;
     raw_edge(&pool, project, other, "related_to").await;
     raw_edge(&pool, other, project, "related_to").await;
 
@@ -2233,6 +2245,7 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
     // A cross-owner related_to pair and loop count once, not once per owner.
     let a = insert_raw_node(&pool, "alice", "project", "a", "").await;
     let b = insert_raw_node(&pool, "bob", "project", "b", "").await;
+    allow_legacy_related_pairs(&pool).await;
     raw_edge(&pool, a, b, "related_to").await;
     raw_edge(&pool, b, a, "related_to").await;
     raw_edge(&pool, a, b, "depends_on").await;
@@ -2639,6 +2652,7 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
     let (a1, a2) = (n("area", "area 1").await, n("area", "area 2").await);
     let (p, q) = (n("project", "p").await, n("project", "q").await);
     let (art, r) = (n("article", "art").await, n("reference", "ref").await);
+    allow_legacy_related_pairs(&pool).await;
     for (s, t, e) in [
         (a1, p, "contains"),
         (a2, p, "contains"),   // two homes
@@ -2713,4 +2727,141 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
         Some(&1),
         "the seed has one"
     );
+}
+
+// ── related_to stored once (#226) ────────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_041_merges_related_pairs_and_keeps_everything_else(pool: PgPool) {
+    allow_legacy_related_pairs(&pool).await;
+    let n = |title: &'static str| insert_raw_node(&pool, "alice", "article", title, "");
+    let (a, b, c, d) = (n("a").await, n("b").await, n("c").await, n("d").await);
+    let edge_at = |s: uuid::Uuid,
+                   t: uuid::Uuid,
+                   ty: &'static str,
+                   label: Option<&'static str>,
+                   at: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
+                 VALUES ($1, $2, $3::edge_type, $4, $5::timestamptz) RETURNING id",
+            )
+            .bind(s)
+            .bind(t)
+            .bind(ty)
+            .bind(label)
+            .bind(at)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // a↔b: the older is blank, so it takes the newer's label.
+    let ab_old = edge_at(a, b, "related_to", None, "2026-01-01T00:00:00Z").await;
+    let ba_new = edge_at(
+        b,
+        a,
+        "related_to",
+        Some("kept label"),
+        "2026-02-01T00:00:00Z",
+    )
+    .await;
+    // c↔d: the older keeps its own label.
+    let cd_old = edge_at(c, d, "related_to", Some("own"), "2026-01-02T00:00:00Z").await;
+    let dc_new = edge_at(d, c, "related_to", Some("other"), "2026-02-02T00:00:00Z").await;
+    // Other types and a lone pair are untouched.
+    let refs = edge_at(b, a, "references", None, "2026-03-01T00:00:00Z").await;
+    let lone = edge_at(a, c, "related_to", None, "2026-03-02T00:00:00Z").await;
+
+    // Restore's Rust rule, on the same edges, must agree with the SQL.
+    let before: Vec<common::edge::Edge> =
+        sqlx::query_as::<
+            _,
+            (
+                uuid::Uuid,
+                uuid::Uuid,
+                uuid::Uuid,
+                String,
+                Option<String>,
+                chrono::DateTime<Utc>,
+            ),
+        >("SELECT id, source_id, target_id, edge_type::text, label, created_at FROM edges")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(id, s, t, ty, label, created_at)| common::edge::Edge {
+            id: common::id::EdgeId(id),
+            source_id: common::id::NodeId(s),
+            target_id: common::id::NodeId(t),
+            edge_type: common::edge::EdgeType::parse(&ty).unwrap(),
+            label,
+            created_at,
+        })
+        .collect();
+    let (mut folded, _) = common::edge::fold_related_pairs(before);
+    folded.sort_by_key(|e| (e.created_at, e.id.0));
+    let folded: Vec<_> = folded.into_iter().map(|e| (e.id.0, e.label)).collect();
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql(include_str!("../../../migrations/041_related_to_once.sql"))
+        .execute(&mut *tx)
+        .await
+        .expect("migration 041");
+    tx.commit().await.unwrap();
+
+    let live: Vec<(uuid::Uuid, Option<String>)> =
+        sqlx::query_as("SELECT id, label FROM edges ORDER BY created_at, id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(live, folded, "fold_related_pairs is the migration's rule");
+    let ids: Vec<_> = live.iter().map(|r| r.0).collect();
+    assert_eq!(ids, vec![ab_old, cd_old, refs, lone]);
+    assert_eq!(
+        live[0].1.as_deref(),
+        Some("kept label"),
+        "carried into the blank"
+    );
+    assert_eq!(live[1].1.as_deref(), Some("own"));
+    let archived: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM edges_removed_041 ORDER BY created_at, id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(archived, vec![ba_new, dc_new]);
+
+    // Idempotent; and the index now refuses the reverse.
+    sqlx::raw_sql(include_str!("../../../migrations/041_related_to_once.sql"))
+        .execute(&pool)
+        .await
+        .expect("re-run");
+    let again = sqlx::query(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, 'related_to')",
+    )
+    .bind(b)
+    .bind(a)
+    .execute(&pool)
+    .await;
+    assert!(again.is_err(), "b → a is a→b again");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_reverse_of_a_related_link_is_a_duplicate(pool: PgPool) {
+    use common::edge::EdgeType::{References, RelatedTo};
+    let edges = PgEdgeRepo::new(pool.clone());
+    let a = insert_raw_node(&pool, "alice", "article", "a", "").await;
+    let b = insert_raw_node(&pool, "alice", "article", "b", "").await;
+    edges.create(edge(a, b, RelatedTo)).await.expect("a ↔ b");
+    assert!(
+        matches!(
+            edges.create(edge(b, a, RelatedTo)).await,
+            Err(EmberTroveError::AlreadyExists(m)) if m == "already linked as related to"
+        ),
+        "b → a is the same edge"
+    );
+    // Directed types keep both directions.
+    edges.create(edge(a, b, References)).await.expect("a → b");
+    edges.create(edge(b, a, References)).await.expect("b → a");
 }

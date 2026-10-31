@@ -80,6 +80,8 @@ struct EdgeHover {
     tgt_title: String,
     src_id: Uuid,
     tgt_id: Uuid,
+    /// `related_to`: shown as ↔, drawn without an arrowhead (#226).
+    symmetric: bool,
 }
 
 // ── Node-type helpers ────────────────────────────────────────────────────────
@@ -1121,6 +1123,7 @@ pub fn GraphView() -> impl IntoView {
                             tgt_title: title_map.get(&tgt).cloned().unwrap_or_default(),
                             src_id: src,
                             tgt_id: tgt,
+                            symmetric: edge.edge_type.is_symmetric(),
                         };
                         let hover_info_out = hover_info.clone();
 
@@ -1129,9 +1132,15 @@ pub fn GraphView() -> impl IntoView {
                         } else {
                             format!(" stroke-dasharray: {dash};")
                         };
+                        // `related_to` has no direction (#226): no arrowhead.
+                        let marker = if edge.edge_type.is_symmetric() {
+                            String::new()
+                        } else {
+                            format!(" marker-end: url(#{marker_id});")
+                        };
                         let path_style = format!(
                             "stroke: {color}; stroke-width: {sw}; stroke-opacity: 0.85; \
-                             fill: none; marker-end: url(#{marker_id});{dash_part}"
+                             fill: none;{marker}{dash_part}"
                         );
 
                         // Borrow the positions map (`.with`) and read only the two
@@ -1656,8 +1665,9 @@ pub fn GraphView() -> impl IntoView {
 
                         let relation = h.type_label.to_string();
                         let arrow_line = format!(
-                            "{} \u{2192} {}",
+                            "{} {} {}",
                             truncate(&h.src_title, 20),
+                            if h.symmetric { "\u{2194}" } else { "\u{2192}" },
                             truncate(&h.tgt_title, 20)
                         );
                         let custom_lbl = h

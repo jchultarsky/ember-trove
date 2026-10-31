@@ -233,6 +233,7 @@ impl EdgeRepo for StubEdgeRepo {
         let edge_type = match id.0.as_u128() {
             AZ_FOREIGN_HOME_EDGE => common::edge::EdgeType::Contains,
             AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
+            AZ_FOREIGN_RELATED_EDGE => common::edge::EdgeType::RelatedTo,
             _ => return Err(EmberTroveError::NotFound(format!("edge {id}"))),
         };
         Ok(Edge {
@@ -321,6 +322,7 @@ const AZ_MY_ARTICLE: u128 = 0xa2_0006;
 /// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
 const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
 const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
+const AZ_FOREIGN_RELATED_EDGE: u128 = 0xa2_0e32;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -2395,6 +2397,11 @@ async fn a_home_can_be_released_from_the_childs_side() {
     };
     // The caller edits the child (their Project) but not the home.
     assert_eq!(delete(AZ_FOREIGN_HOME_EDGE).await, StatusCode::NO_CONTENT);
+    // `related_to` has no direction: either end's editor (§14, #226).
+    assert_eq!(
+        delete(AZ_FOREIGN_RELATED_EDGE).await,
+        StatusCode::NO_CONTENT
+    );
     // Any other link still belongs to its source's editors.
     assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
 }
