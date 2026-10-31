@@ -131,7 +131,18 @@ pub fn NodePicker(
     /// Projects take tasks (§3.2, #216).
     #[prop(optional)]
     only_type: Option<NodeType>,
+    /// Offer only nodes of these kinds (the home picker, #228:
+    /// `ontology::allowed_homes`). The lookup filters by one kind only, so
+    /// several are filtered here, from the lookup's top matches: a longer
+    /// query finds a match the first page missed.
+    #[prop(optional)]
+    only_types: Option<&'static [NodeType]>,
 ) -> impl IntoView {
+    // One kind narrows the lookup itself.
+    let only_type = only_type.or_else(|| match only_types {
+        Some([one]) => Some(one.clone()),
+        _ => None,
+    });
     // The wire string is `&'static str`, so the debounced lookup can capture
     // it (`use_debounced` needs a `Copy` closure; `NodeType` isn't `Copy`).
     let only_type = only_type.as_ref().map(NodeType::as_str);
@@ -150,6 +161,7 @@ pub fn NodePicker(
             .get()
             .into_iter()
             .filter(|r| Some(r.id) != exclude)
+            .filter(|r| only_types.is_none_or(|kinds| kinds.contains(&r.node_type)))
             .collect::<Vec<NodeLookupHit>>()
     });
     let fresh = move || answers.get_untracked() == query.get_untracked();

@@ -924,7 +924,7 @@ mod tests {
             "no node to name in the call: no button"
         );
         // Loops are broken hop by hop (`LoopLinks`), not by item fixes.
-        for rule in [RuleId::MultipleHomes, RuleId::ContainsCycle] {
+        for rule in [RuleId::ContainsCycle, RuleId::DependsOnCycle] {
             assert!(
                 fixes_for(rule, &node).is_empty(),
                 "{} has no item fix",

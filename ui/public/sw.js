@@ -31,7 +31,8 @@
 //       JSON that still says "resource", which the new bundle can't read.
 //   v9: Data health drops the related_to_both_ways rule and adds links
 //       (#228) — evicts cached reports the new bundle can't read.
-const CACHE_NAME = "ember-trove-v9";
+//   v10: Data health drops the multiple_homes rule (#228, migration 042).
+const CACHE_NAME = "ember-trove-v10";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

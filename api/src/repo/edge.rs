@@ -28,6 +28,18 @@ pub trait EdgeRepo: Send + Sync {
         swap: bool,
     ) -> Result<(), EmberTroveError>;
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Edge>, EmberTroveError>;
+    /// The node's one home (#228): its `contains` link, if any. Whatever
+    /// the caller may see; the route decides what to tell them.
+    async fn home_of(&self, child: NodeId) -> Result<Option<Edge>, EmberTroveError>;
+    /// Make `parent` the node's one home, or let it stand alone (`None`),
+    /// under the `contains` lock (#228). Every other home goes, including
+    /// one the caller can't see (§6.1: the child's editor may free it).
+    /// A loop is refused (422). The route has checked the rights and kinds.
+    async fn set_home(
+        &self,
+        child: NodeId,
+        parent: Option<NodeId>,
+    ) -> Result<Option<Edge>, EmberTroveError>;
     /// Edges touching `node_id`, with both endpoint titles. SECURITY: only
     /// edges whose endpoints are both visible to `subject` (`None` = admin) —
     /// the route checks access to `node_id` alone.
@@ -140,9 +152,20 @@ async fn structural_refusal(
             return Ok(Some(EdgeRefusal::SecondHome));
         }
     }
-    // Would the edge close a loop: is the source reachable from the target?
+    Ok(closes_loop(tx, req)
+        .await?
+        .then(|| EdgeRefusal::Loop(req.edge_type.clone())))
+}
+
+/// Would the edge close a loop: is its source reachable from its target
+/// through edges of its type? The caller holds the type's lock.
+async fn closes_loop(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    req: &CreateEdgeRequest,
+) -> Result<bool, EmberTroveError> {
+    let failed = |e: sqlx::Error| EmberTroveError::Internal(format!("edge check failed: {e}"));
     // UNION (not UNION ALL) keeps a legacy loop from recursing forever.
-    let closes_loop: bool = sqlx::query_scalar(
+    sqlx::query_scalar(
         r#"
         WITH RECURSIVE reach(id) AS (
             SELECT target_id FROM edges WHERE source_id = $2 AND edge_type = $3::edge_type
@@ -158,8 +181,21 @@ async fn structural_refusal(
     .bind(req.edge_type.as_str())
     .fetch_one(&mut **tx)
     .await
-    .map_err(failed)?;
-    Ok(closes_loop.then(|| EdgeRefusal::Loop(req.edge_type.clone())))
+    .map_err(failed)
+}
+
+/// Takes the advisory lock for `edge_type` (#224): edges of that type are
+/// checked and written one transaction at a time.
+async fn lock_type(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    edge_type: &EdgeType,
+) -> Result<(), EmberTroveError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.edges.' || $1))")
+        .bind(edge_type.as_str())
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("edge lock failed: {e}")))?;
+    Ok(())
 }
 
 #[async_trait]
@@ -199,11 +235,7 @@ impl EdgeRepo for PgEdgeRepo {
             // One lock per edge type (#224): without it, two inserts could
             // each pass the checks below and together add a second home or
             // close a loop. Edges of other types don't wait.
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.edges.' || $1))")
-                .bind(edge_type_str)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| EmberTroveError::Internal(format!("edge lock failed: {e}")))?;
+            lock_type(&mut tx, &req.edge_type).await?;
             if let Some(refusal) = structural_refusal(&mut tx, &req).await? {
                 return Err(EmberTroveError::Validation(refusal.message()));
             }
@@ -236,6 +268,10 @@ impl EdgeRepo for PgEdgeRepo {
                         "already linked as {}",
                         req.edge_type.label()
                     ))
+                } else if db_err.constraint() == Some("edges_one_home") {
+                    // Migration 042 (#228): the database behind the locked
+                    // check above, should any path ever miss it.
+                    EmberTroveError::Validation(EdgeRefusal::SecondHome.message())
                 } else if db_err.is_foreign_key_violation() {
                     EmberTroveError::NotFound("source or target node not found".to_string())
                 } else {
@@ -329,6 +365,85 @@ impl EdgeRepo for PgEdgeRepo {
             .map_err(fail)?;
         }
         tx.commit().await.map_err(fail)
+    }
+
+    async fn home_of(&self, child: NodeId) -> Result<Option<Edge>, EmberTroveError> {
+        sqlx::query_as::<_, EdgeRow>(
+            "SELECT id, source_id, target_id, edge_type::text, label, created_at \
+             FROM edges WHERE edge_type = 'contains' AND target_id = $1",
+        )
+        .bind(child.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("home lookup failed: {e}")))?
+        .map(EdgeRow::into_edge)
+        .transpose()
+    }
+
+    async fn set_home(
+        &self,
+        child: NodeId,
+        parent: Option<NodeId>,
+    ) -> Result<Option<Edge>, EmberTroveError> {
+        let fail = |e: sqlx::Error| EmberTroveError::Internal(format!("set home failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(fail)?;
+        lock_type(&mut tx, &EdgeType::Contains).await?;
+        if let Some(parent) = parent {
+            let req = CreateEdgeRequest {
+                source_id: parent,
+                target_id: child,
+                edge_type: EdgeType::Contains,
+                label: None,
+            };
+            // Freeing the old home can't open a way back from the child,
+            // so the check needn't wait for it.
+            if closes_loop(&mut tx, &req).await? {
+                return Err(EmberTroveError::Validation(
+                    EdgeRefusal::Loop(EdgeType::Contains).message(),
+                ));
+            }
+        }
+        // Every other home goes; the same parent stays as it is.
+        sqlx::query(
+            "DELETE FROM edges WHERE edge_type = 'contains' AND target_id = $1 \
+             AND source_id IS DISTINCT FROM $2",
+        )
+        .bind(child.0)
+        .bind(parent.map(|p| p.0))
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?;
+        let home = match parent {
+            None => None,
+            Some(parent) => {
+                sqlx::query(
+                    "INSERT INTO edges (source_id, target_id, edge_type) \
+                     VALUES ($1, $2, 'contains') ON CONFLICT DO NOTHING",
+                )
+                .bind(parent.0)
+                .bind(child.0)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| match &e {
+                    sqlx::Error::Database(d) if d.is_foreign_key_violation() => {
+                        EmberTroveError::NotFound("node not found".to_string())
+                    }
+                    _ => fail(e),
+                })?;
+                sqlx::query_as::<_, EdgeRow>(
+                    "SELECT id, source_id, target_id, edge_type::text, label, created_at \
+                     FROM edges WHERE edge_type = 'contains' AND target_id = $1",
+                )
+                .bind(child.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(fail)?
+                .map(EdgeRow::into_edge)
+                .transpose()?
+            }
+        };
+        tx.commit().await.map_err(fail)?;
+        Ok(home)
     }
 
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Edge>, EmberTroveError> {

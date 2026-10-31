@@ -81,6 +81,18 @@ pub fn may_contain(parent: &NodeType, child: &NodeType) -> bool {
     }
 }
 
+/// The kinds that may be `child`'s home (§3.3), in picker order: the home
+/// picker offers only these. A Reference has none: it is never contained.
+/// The inverse of [`may_contain`], checked against it by a test.
+#[must_use]
+pub fn allowed_homes(child: &NodeType) -> &'static [NodeType] {
+    match child {
+        NodeType::Area | NodeType::Article => &[NodeType::Area],
+        NodeType::Project => &[NodeType::Area, NodeType::Project],
+        NodeType::Reference => &[],
+    }
+}
+
 /// Which containment rule, if any, a `parent contains child` edge breaks.
 /// Exactly one: a contained Reference is that rule (§6.1), not also a
 /// disallowed pair (§3.3), so one bad edge is never reported twice.
@@ -386,6 +398,25 @@ impl Graph {
         // Unreachable for a real component (every member reaches every
         // other), but never panic: the members alone still name the loop.
         members.to_vec()
+    }
+}
+
+#[cfg(test)]
+mod home_tests {
+    use super::*;
+
+    #[test]
+    fn the_allowed_homes_are_exactly_the_containment_table() {
+        for child in NodeType::ALL {
+            for parent in NodeType::ALL {
+                assert_eq!(
+                    allowed_homes(child).contains(parent),
+                    may_contain(parent, child),
+                    "{parent:?} → {child:?}"
+                );
+            }
+        }
+        assert!(allowed_homes(&NodeType::Reference).is_empty());
     }
 }
 

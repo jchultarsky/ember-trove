@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **A node's home is shown and set on its own page** (#228, ONTOLOGY §3.3,
+  §6.1). Connections now starts with a Home row: the parent as a link, or
+  "None: it stands alone".
+  - Editors can choose, change or remove the home there.
+  - The picker offers only the kinds that may be the home: an Area for an
+    Area or an Article, an Area or a Project for a Project. A Reference has
+    no home.
+- `GET` / `PUT /api/nodes/{id}/home`. Setting a home needs edit rights on
+  both nodes, and the containment table and loop rule apply. Removing one
+  needs only the node's.
+
+### Changed
+- **The database now holds at most one home per node** (migration 042).
+  Before the index is added, any node that still has several homes keeps
+  its oldest; the others are copied to `edges_removed_042`, then removed.
+  A restore folds an older backup's homes the same way, and its preview
+  says how many.
+- **The "More than one home" rule is gone from Data health.** It can no
+  longer happen. Its planned "Keep this home" fix had nothing left to act
+  on, so it was dropped.
+
+### Security
+- **A home you can't see is never named** (§14, owner decision).
+  - A node's editors see "A home you can't see" with Remove, so they can
+    free their node; the API sends no title, id or owner for it. Before,
+    such a home was invisible, and adding a new one failed with "already
+    has a home".
+  - Someone who can only view the node isn't told it exists.
+
 ## [3.3.0] - 2026-10-31
 
 ### Added

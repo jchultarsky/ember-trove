@@ -101,20 +101,33 @@ fn rules_warning(counts: &[(common::data_health::RuleId, usize)]) -> Option<Stri
     ))
 }
 
-/// The restore preview's note on related links stored both ways (#226):
-/// restore merges each pair, as migration 041 did, and keeps the copy in
-/// `edges_removed_041`. Only a count. `None` when there are none.
-fn related_pairs_warning(data: &BackupData) -> Option<String> {
-    let (_, merged) = common::edge::fold_related_pairs(data.edges.clone());
-    match merged.len() {
-        0 => None,
-        n => Some(format!(
-            "{n} related link{s} in this backup {are} stored both ways; \
+/// The restore preview's notes on what restore folds (#226, #228): related
+/// links stored both ways become one (041's rule), and a node with several
+/// homes keeps its oldest (042's). Folded links are kept aside in
+/// `edges_removed_041` / `_042`. Counts only.
+fn folded_links_warnings(data: &BackupData) -> Vec<String> {
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let (edges, merged) = common::edge::fold_related_pairs(data.edges.clone());
+    let (_, extra_homes) = common::edge::fold_homes(edges);
+    let mut out = Vec::new();
+    if !merged.is_empty() {
+        let n = merged.len();
+        out.push(format!(
+            "{n} related link{} in this backup {} stored both ways; \
              each pair is restored as one link.",
-            s = if n == 1 { "" } else { "s" },
-            are = if n == 1 { "is" } else { "are" },
-        )),
+            plural(n),
+            if n == 1 { "is" } else { "are" },
+        ));
     }
+    if !extra_homes.is_empty() {
+        let n = extra_homes.len();
+        out.push(format!(
+            "{n} home link{} in this backup would give a node a second home; \
+             each node keeps its oldest home.",
+            plural(n),
+        ));
+    }
+    out
 }
 
 fn add_bytes_to_archive<W: Write>(
@@ -327,7 +340,7 @@ pub async fn preview_restore(
     match extract_data(&archive_bytes) {
         Ok(data) => {
             warnings.extend(edge_rules_warning(&data));
-            warnings.extend(related_pairs_warning(&data));
+            warnings.extend(folded_links_warnings(&data));
         }
         Err(e) => {
             tracing::warn!("restore preview couldn't read data.json: {e:?}");
@@ -541,13 +554,22 @@ pub(crate) async fn restore_into(
     // Insert edges. `related_to` is unordered (#226): an archive from before
     // migration 041 may hold both directions, which the unique index
     // refuses, so they are merged by the migration's rule first.
+    // The database holds one related link per pair (041) and one home per
+    // node (042); an archive from before may hold more. Fold them by the
+    // migrations' own rules and archive the rest the same way, so no label
+    // or link is lost (#226, #228).
     let (edges, merged) = common::edge::fold_related_pairs(data.edges.clone());
-    for edge in &merged {
-        // Archived like the migration's copies, so no label is lost.
-        sqlx::query(
-            "INSERT INTO edges_removed_041 (id, source_id, target_id, edge_type, label, created_at) \
-             VALUES ($1, $2, $3, $4::edge_type, $5, $6)",
-        )
+    let (edges, extra_homes) = common::edge::fold_homes(edges);
+    for (table, edge) in merged
+        .iter()
+        .map(|e| ("edges_removed_041", e))
+        .chain(extra_homes.iter().map(|e| ("edges_removed_042", e)))
+    {
+        // `table` is one of the two literals above, never input.
+        sqlx::query(&format!(
+            "INSERT INTO {table} (id, source_id, target_id, edge_type, label, created_at) \
+             VALUES ($1, $2, $3, $4::edge_type, $5, $6)"
+        ))
         .bind(edge.id.0)
         .bind(edge.source_id.0)
         .bind(edge.target_id.0)
@@ -556,7 +578,7 @@ pub(crate) async fn restore_into(
         .bind(edge.created_at)
         .execute(&mut *conn)
         .await
-        .map_err(|e| ApiError::Internal(format!("archive merged edge failed: {e}")))?;
+        .map_err(|e| ApiError::Internal(format!("archive folded edge failed: {e}")))?;
     }
     for edge in &edges {
         let edge_type_str = edge.edge_type.as_str();
@@ -1088,11 +1110,11 @@ mod tests {
     }
 
     #[test]
-    fn a_related_pair_stored_both_ways_is_counted_not_named() {
-        let edge = |n: u128, s: u128, t: u128| {
+    fn folded_pairs_and_homes_are_counted_not_named() {
+        let edge = |n: u128, s: u128, t: u128, edge_type: &str| {
             serde_json::json!({
                 "id": Uuid::from_u128(n), "source_id": Uuid::from_u128(s),
-                "target_id": Uuid::from_u128(t), "edge_type": "related_to",
+                "target_id": Uuid::from_u128(t), "edge_type": edge_type,
                 "label": null, "created_at": "2026-01-01T00:00:00Z",
             })
         };
@@ -1103,12 +1125,23 @@ mod tests {
             }))
             .expect("backup data")
         };
-        assert_eq!(related_pairs_warning(&data(vec![edge(1, 7, 8)])), None);
+        assert!(folded_links_warnings(&data(vec![edge(1, 7, 8, "related_to")])).is_empty());
         assert_eq!(
-            related_pairs_warning(&data(vec![edge(1, 7, 8), edge(2, 8, 7)])).as_deref(),
-            Some(
-                "1 related link in this backup is stored both ways; each pair is restored as one link."
-            )
+            folded_links_warnings(&data(vec![
+                edge(1, 7, 8, "related_to"),
+                edge(2, 8, 7, "related_to"),
+                edge(3, 5, 9, "contains"),
+                edge(4, 6, 9, "contains"),
+                edge(5, 7, 9, "contains"),
+            ])),
+            vec![
+                "1 related link in this backup is stored both ways; \
+                 each pair is restored as one link."
+                    .to_string(),
+                "2 home links in this backup would give a node a second home; \
+                 each node keeps its oldest home."
+                    .to_string(),
+            ]
         );
     }
 
@@ -1116,14 +1149,14 @@ mod tests {
     fn the_edge_rules_warning_carries_rule_names_and_counts_only() {
         use common::data_health::RuleId;
         assert_eq!(rules_warning(&[]), None, "a clean graph says nothing");
-        let w = rules_warning(&[(RuleId::MultipleHomes, 2), (RuleId::ContainsCycle, 1)])
+        let w = rules_warning(&[(RuleId::DependsOnArea, 2), (RuleId::ContainsCycle, 1)])
             .expect("a warning");
         assert_eq!(
             w,
             format!(
                 "Some links in this backup break the data model: {} (2), {} (1). \
                  They are restored as they are, and the Data health page lists them.",
-                RuleId::MultipleHomes.title(),
+                RuleId::DependsOnArea.title(),
                 RuleId::ContainsCycle.title()
             )
         );

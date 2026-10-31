@@ -1,5 +1,6 @@
 use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
+use common::node::NodeType;
 use common::ontology::{Capability, allows};
 use leptos::prelude::*;
 
@@ -400,7 +401,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             allowed=allows(&n.node_type, Capability::People) />
                                         // External links panel — grouped with other collapsible sections
                                         <LinksPanel node_id=id is_editor=is_owner />
-                                        <EdgePanel node_id=id />
+                                        <EdgePanel node_id=id node_type=n.node_type.clone() can_edit=is_owner />
                                         <crate::components::local_graph::LocalGraphPanel node_id=id title=n.title.clone() />
                                         <BacklinksPanel node_id=id title=n.title.clone() />
                                         <AttachmentPanel node_id=id />
@@ -433,8 +434,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
 }
 
 /// Shows edges (incoming + outgoing) for a node, with ability to add/remove.
+/// Its home comes first (#228): `node_home::HomeRow`.
 #[component]
-fn EdgePanel(node_id: NodeId) -> impl IntoView {
+fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let open = RwSignal::new(false);
     let refresh_edges = RwSignal::new(0u32);
@@ -566,6 +568,13 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
     });
     view! {
         <crate::components::node_section::SectionShell section=crate::components::node_section::NodeSection::Connections open=open count=section_count actions=section_actions>
+            <crate::components::node_home::HomeRow
+                node_id=node_id
+                node_type=node_type.clone()
+                can_edit=can_edit
+                open=open
+                refresh=refresh_edges
+            />
 
             // Add edge form
             {move || show_add.get().then(|| view! {

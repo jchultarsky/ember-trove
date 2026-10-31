@@ -43,7 +43,7 @@ function loadWorker(network) {
     caches: {
       open: async () => cache,
       match: (req) => cache.match(req),
-      keys: async () => ['ember-trove-v9'],
+      keys: async () => ['ember-trove-v10'],
       delete: async () => true,
     },
     fetch: async (req) => {

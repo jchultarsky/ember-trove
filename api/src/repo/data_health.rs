@@ -75,7 +75,6 @@ impl DataHealthRepo for PgDataHealthRepo {
             orphan_tasks(&mut tx, owner).await?,
             memberships_on_non_projects(&mut tx, owner).await?,
             statuses_on_non_projects(&mut tx, owner).await?,
-            multiple_homes(&contains),
             contained_reference,
             not_allowed,
             depends_on_areas(&depends_on)?,
@@ -390,49 +389,6 @@ fn node_type(s: &str) -> Result<NodeType, EmberTroveError> {
     parse_wire(s, "node type", NodeType::parse)
 }
 
-/// Nodes of mine with more than one home I can see. Counted over visible
-/// parents only, so a hidden parent can neither be named nor hide two
-/// visible ones. Only my own children: a node of someone else's with two
-/// homes is theirs to fix, even when one home is mine.
-fn multiple_homes(contains: &[EdgeRow]) -> RuleReport {
-    // Rows come ordered by child title, then parent title: group runs.
-    // Each home's link goes with its parent, in the same order.
-    type Homes = (Ref, Vec<Ref>, Vec<LinkRef>);
-    let mut items: Vec<Violation> = Vec::new();
-    let mut current: Option<Homes> = None;
-    for r in contains.iter().filter(|r| r.target_owned) {
-        match &mut current {
-            Some((child, parents, links)) if child.id == r.target_id => {
-                parents.push(r.source());
-                links.push(r.link(EdgeType::Contains));
-            }
-            _ => {
-                if let Some(homes) = current.take() {
-                    push_if_several(&mut items, homes);
-                }
-                current = Some((
-                    r.target(),
-                    vec![r.source()],
-                    vec![r.link(EdgeType::Contains)],
-                ));
-            }
-        }
-    }
-    if let Some(homes) = current {
-        push_if_several(&mut items, homes);
-    }
-    RuleReport::new(RuleId::MultipleHomes, items)
-}
-
-fn push_if_several(
-    items: &mut Vec<Violation>,
-    (child, parents, links): (Ref, Vec<Ref>, Vec<LinkRef>),
-) {
-    if parents.len() > 1 {
-        items.push(Violation::new(child, parents).with_links(links));
-    }
-}
-
 /// `contains` edges of mine that break the containment table, classified by
 /// the same function the write gates will use
 /// (`ontology::containment_violation`), so the report and the enforcement
@@ -527,7 +483,6 @@ struct SqlCounts {
     orphan_task: i64,
     membership_on_non_project: i64,
     status_on_non_project: i64,
-    multiple_homes: i64,
     depends_on_area: i64,
 }
 
@@ -550,9 +505,6 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
             WHERE n.node_type <> 'project') AS membership_on_non_project,
           (SELECT count(*) FROM nodes
             WHERE node_type <> 'project' AND project_status IS NOT NULL) AS status_on_non_project,
-          (SELECT count(*) FROM (
-             SELECT target_id FROM edges WHERE edge_type = 'contains'
-             GROUP BY target_id HAVING count(*) > 1) homes) AS multiple_homes,
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
             WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area
         "#,
@@ -603,10 +555,6 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::StatusOnNonProject,
             count: n(sql.status_on_non_project),
-        },
-        RuleCount {
-            rule: RuleId::MultipleHomes,
-            count: n(sql.multiple_homes),
         },
         RuleCount {
             rule: RuleId::ContainedReference,
