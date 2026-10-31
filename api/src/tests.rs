@@ -233,12 +233,20 @@ impl EdgeRepo for StubEdgeRepo {
         let edge_type = match id.0.as_u128() {
             AZ_FOREIGN_HOME_EDGE => common::edge::EdgeType::Contains,
             AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
+            AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
+                common::edge::EdgeType::RelatedTo
+            }
             _ => return Err(EmberTroveError::NotFound(format!("edge {id}"))),
+        };
+        let target = if id.0.as_u128() == AZ_STRANGERS_RELATED_EDGE {
+            AZ_VIEW_NODE
+        } else {
+            AZ_MY_PROJECT
         };
         Ok(Edge {
             id,
             source_id: az_node(AZ_FOREIGN_NODE),
-            target_id: az_node(AZ_MY_PROJECT),
+            target_id: az_node(target),
             edge_type,
             label: None,
             created_at: chrono::Utc::now(),
@@ -321,6 +329,9 @@ const AZ_MY_ARTICLE: u128 = 0xa2_0006;
 /// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
 const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
 const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
+const AZ_FOREIGN_RELATED_EDGE: u128 = 0xa2_0e32;
+/// A related link between two nodes the caller can't edit.
+const AZ_STRANGERS_RELATED_EDGE: u128 = 0xa2_0e33;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -2395,6 +2406,17 @@ async fn a_home_can_be_released_from_the_childs_side() {
     };
     // The caller edits the child (their Project) but not the home.
     assert_eq!(delete(AZ_FOREIGN_HOME_EDGE).await, StatusCode::NO_CONTENT);
+    // `related_to` has no direction: either end's editor (§14, #226).
+    assert_eq!(
+        delete(AZ_FOREIGN_RELATED_EDGE).await,
+        StatusCode::NO_CONTENT
+    );
+    // An editor of neither end (a stranger to one, a viewer of the other)
+    // still may not.
+    assert_eq!(
+        delete(AZ_STRANGERS_RELATED_EDGE).await,
+        StatusCode::FORBIDDEN
+    );
     // Any other link still belongs to its source's editors.
     assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
 }

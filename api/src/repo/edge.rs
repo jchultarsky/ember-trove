@@ -214,7 +214,11 @@ impl EdgeRepo for PgEdgeRepo {
             sqlx::Error::Database(db_err) => {
                 if db_err.constraint() == Some("edges_no_self_loop") {
                     EmberTroveError::Validation("self-loops are not allowed".to_string())
-                } else if db_err.constraint() == Some("edges_unique_source_target_type") {
+                } else if db_err.constraint() == Some("edges_unique_source_target_type")
+                    // `related_to` is unordered (#226): B→A after A→B is
+                    // the same edge.
+                    || db_err.constraint() == Some("edges_related_to_once")
+                {
                     // One edge per (source, target, type) — migration 034 (#129).
                     EmberTroveError::AlreadyExists(format!(
                         "already linked as {}",

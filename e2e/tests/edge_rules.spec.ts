@@ -134,3 +134,65 @@ test('a node shared for viewing can be linked but not given a home', async ({
     await otherRequest.delete(`/api/nodes/${theirs.id}`);
   }
 });
+
+// ── related_to is stored once (#226, ONTOLOGY §6.2) ──────────────────────────
+
+test('a related link is one link: the reverse is flagged and both ends show ↔', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const a = await createNode(request, `e2e rules rel a ${stamp}`);
+  const b = await createNode(request, `e2e rules rel b ${stamp}`);
+  try {
+    const made = await request.post('/api/edges', {
+      data: { source_id: a.id, target_id: b.id, edge_type: 'related_to' },
+    });
+    expect(made.status()).toBe(201);
+
+    // From b, linking back to a is the same link.
+    const form = await openAddEdge(page, b.id);
+    await form.combo.fill(`e2e rules rel a ${stamp}`);
+    await form.combo.press('Enter');
+    await expect(form.chip).toContainText(`e2e rules rel a ${stamp}`);
+    await form.type.selectOption('related_to');
+    await expect(page.getByTestId('edge-already-linked')).toHaveText('Already linked as related to');
+    await expect(form.confirm).toBeDisabled();
+    // The list shows it as ↔ with the other end, from b ...
+    const row = (title: string) =>
+      page.getByRole('button', { name: new RegExp(`↔.*related to.*${title}`) });
+    await expect(row(`e2e rules rel a ${stamp}`)).toBeVisible();
+    // ... and from a.
+    await page.goto(`/nodes/${a.id}`);
+    await page.getByRole('button', { name: /Connections/ }).click();
+    await expect(row(`e2e rules rel b ${stamp}`)).toBeVisible();
+  } finally {
+    for (const n of [a, b]) await request.delete(`/api/nodes/${n.id}`);
+  }
+});
+
+test('either end of a related link may delete it', async ({ request, otherRequest }) => {
+  const stamp = Date.now();
+  const mine = await createNode(request, `e2e rules rel mine ${stamp}`);
+  const theirs = await createNode(otherRequest, `e2e rules rel theirs ${stamp}`);
+  try {
+    await shareNode(otherRequest, theirs.id, E2E_SUBJECT, 'viewer');
+    const link = async (edge_type: string) => {
+      const r = await request.post('/api/edges', {
+        data: { source_id: mine.id, target_id: theirs.id, edge_type },
+      });
+      expect(r.status()).toBe(201);
+      return (await r.json()).id as string;
+    };
+    const related = await link('related_to');
+    const reference = await link('references');
+    // The other identity edits only the target: a related link has no
+    // direction, so it may remove it (§14) ...
+    expect((await otherRequest.delete(`/api/edges/${related}`)).status()).toBe(204);
+    // ... but a directed link belongs to its source's editors.
+    expect((await otherRequest.delete(`/api/edges/${reference}`)).status()).toBe(403);
+  } finally {
+    await request.delete(`/api/nodes/${mine.id}`);
+    await otherRequest.delete(`/api/nodes/${theirs.id}`);
+  }
+});

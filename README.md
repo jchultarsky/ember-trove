@@ -552,7 +552,9 @@ node:
 - an Area holds Areas, Projects and Articles, a Project holds
   sub-Projects, and a Reference is never contained;
 - nothing `depends_on` an Area;
-- `contains`, `depends_on` and `derived_from` can't form a loop.
+- `contains`, `depends_on` and `derived_from` can't form a loop;
+- `related_to` has no direction: it is stored once per pair (the reverse
+  is a 409 duplicate), and an editor of either end may delete it.
 
 Data from before these rules stays as it is; the Data health page lists it.
 

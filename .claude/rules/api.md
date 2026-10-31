@@ -63,9 +63,15 @@ cargo check && cargo clippy -- -D warnings
 - The loop check is a recursive CTE with `UNION`, so a legacy loop
   terminates. The home check skips the same parent, so a repeat stays a
   409 duplicate.
-- `DELETE /edges/:id` for `contains` accepts an editor of **either** end
-  (one home must never trap a child). Other types stay source-editor only;
-  `related_to` either-end comes with S3b.
+- `DELETE /edges/:id` for `contains` and `related_to` accepts an editor of
+  **either** end (one home must never trap a child; `related_to` has no
+  direction). Other types stay source-editor only.
+- `related_to` is stored once per unordered pair (#226): the partial
+  unique index `edges_related_to_once` on `LEAST/GREATEST(source, target)`
+  answers a reverse insert with the same 409 as a duplicate. Restore folds
+  pairs with `common::edge::fold_related_pairs`, migration 041's rule; the
+  041 pg test asserts the two agree. Tests that need a legacy both-ways
+  pair call `allow_legacy_related_pairs` (drops the index).
 - The restore preview counts rule breaks with
   `common::data_health::graph_rule_counts` and warns; it never refuses
   (owner decision).
