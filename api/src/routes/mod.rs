@@ -2,6 +2,7 @@ pub mod admin;
 pub mod attachments;
 pub mod auth;
 pub mod backup;
+pub mod data_health;
 pub mod edges;
 pub mod editor_prefs;
 pub mod export;
@@ -172,6 +173,7 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/admin/backups", backup::router())
         .nest("/metrics", metrics::router())
         .nest("/editor-prefs", editor_prefs::router())
+        .nest("/data-health", data_health::router())
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Rate-limited public routes (auth callbacks) + protected routes. Every

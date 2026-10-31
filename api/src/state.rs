@@ -10,12 +10,12 @@ use crate::{
     notify::SesNotifier,
     object_store::ObjectStore,
     repo::{
-        activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo, edge::EdgeRepo,
-        editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
-        node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
-        permission::PermissionRepo, person::PersonRepo, pkce::PkceRepo, search::SearchRepo,
-        search_presets::SearchPresetRepo, tag::TagRepo, task::TaskRepo, template::TemplateRepo,
-        webhook::WebhookRepo,
+        activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo,
+        data_health::DataHealthRepo, edge::EdgeRepo, editor_pref::EditorPrefRepo,
+        favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_link::NodeLinkRepo,
+        node_version::NodeVersionRepo, note::NoteRepo, permission::PermissionRepo,
+        person::PersonRepo, pkce::PkceRepo, search::SearchRepo, search_presets::SearchPresetRepo,
+        tag::TagRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
     },
 };
 
@@ -36,6 +36,8 @@ pub struct AppState {
     pub backup: Arc<dyn BackupRepo>,
     pub favorites: Arc<dyn FavoriteRepo>,
     pub activity: Arc<dyn ActivityRepo>,
+    /// The data-health report (#208). Owner-scoped, no admin bypass.
+    pub data_health: Arc<dyn DataHealthRepo>,
     pub node_versions: Arc<dyn NodeVersionRepo>,
     pub templates: Arc<dyn TemplateRepo>,
     pub search_presets: Arc<dyn SearchPresetRepo>,

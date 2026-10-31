@@ -1921,3 +1921,249 @@ async fn latest_of_finds_the_last_edit_past_a_status_change(pool: PgPool) {
         .expect("none");
     assert!(none.is_none());
 }
+
+// ── Data health report (S1b-2, #208) ──────────────────────────────────────────
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_exec(pool: &PgPool, sql: &str, ids: &[uuid::Uuid]) {
+    let mut q = sqlx::query(sql);
+    for id in ids {
+        q = q.bind(id);
+    }
+    q.execute(pool).await.expect("fixture sql");
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_edge(pool: &PgPool, source: uuid::Uuid, target: uuid::Uuid, edge_type: &str) {
+    sqlx::query(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, $3::edge_type)",
+    )
+    .bind(source)
+    .bind(target)
+    .bind(edge_type)
+    .execute(pool)
+    .await
+    .expect("raw edge");
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn share(pool: &PgPool, node: uuid::Uuid, with: &str) {
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) \
+         VALUES ($1, $2, 'viewer', 'test')",
+    )
+    .bind(node)
+    .bind(with)
+    .execute(pool)
+    .await
+    .expect("share");
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_task(pool: &PgPool, owner: &str, node: Option<uuid::Uuid>, title: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO node_tasks (owner_id, node_id, title) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(owner)
+    .bind(node)
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .expect("raw task")
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn health(
+    pool: &PgPool,
+    owner: &str,
+) -> std::collections::HashMap<common::data_health::RuleId, common::data_health::RuleReport> {
+    use super::data_health::{DataHealthRepo, PgDataHealthRepo};
+    PgDataHealthRepo::new(pool.clone())
+        .report_for(owner)
+        .await
+        .expect("report")
+        .into_iter()
+        .map(|r| (r.rule, r))
+        .collect()
+}
+
+fn subjects(
+    report: &std::collections::HashMap<
+        common::data_health::RuleId,
+        common::data_health::RuleReport,
+    >,
+    rule: common::data_health::RuleId,
+) -> Vec<uuid::Uuid> {
+    report
+        .get(&rule)
+        .map(|r| r.items.iter().map(|v| v.subject.id).collect())
+        .unwrap_or_default()
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
+    let on_article = raw_task(&pool, "alice", Some(article), "task on an article").await;
+    raw_task(&pool, "alice", Some(project), "task on a project").await;
+    let orphan = raw_task(&pool, "alice", None, "inbox task").await;
+    let bobs_orphan = raw_task(&pool, "bob", None, "bob's inbox task").await;
+    raw_exec(
+        &pool,
+        "UPDATE nodes SET project_status = 'Active', status = 'archived' WHERE id = $1",
+        &[article],
+    )
+    .await;
+    let person: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO people (owner_id, display_name) VALUES ('alice', 'Ada') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("person");
+    raw_exec(
+        &pool,
+        "INSERT INTO node_people (node_id, person_id) VALUES ($1, $2)",
+        &[article, person],
+    )
+    .await;
+
+    let alice = health(&pool, "alice").await;
+    assert_eq!(subjects(&alice, RuleId::TaskOnNonProject), vec![on_article]);
+    let item = &alice[&RuleId::TaskOnNonProject].items[0];
+    assert_eq!(item.subject.node_id, Some(article), "links to its node");
+    assert!(item.subject.archived, "its node is archived");
+    assert_eq!(item.related[0].id, article);
+    assert_eq!(subjects(&alice, RuleId::OrphanTask), vec![orphan]);
+    assert_eq!(subjects(&alice, RuleId::StatusOnNonProject), vec![article]);
+    assert!(alice[&RuleId::StatusOnNonProject].items[0].subject.archived);
+    assert_eq!(
+        subjects(&alice, RuleId::MembershipOnNonProject),
+        vec![person]
+    );
+
+    let bob = health(&pool, "bob").await;
+    assert_eq!(subjects(&bob, RuleId::OrphanTask), vec![bobs_orphan]);
+    for rule in [
+        RuleId::TaskOnNonProject,
+        RuleId::StatusOnNonProject,
+        RuleId::MembershipOnNonProject,
+    ] {
+        assert!(
+            subjects(&bob, rule).is_empty(),
+            "bob sees none of alice's {rule:?}"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_counts_homes_over_visible_parents_only(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    let a1 = insert_raw_node(&pool, "alice", "area", "area one", "").await;
+    let a2 = insert_raw_node(&pool, "alice", "area", "area two", "").await;
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
+    let two_homes = insert_raw_node(&pool, "alice", "article", "two visible homes", "").await;
+    let one_visible = insert_raw_node(&pool, "alice", "article", "one visible home", "").await;
+    for parent in [a1, a2, hidden] {
+        raw_edge(&pool, parent, two_homes, "contains").await;
+    }
+    raw_edge(&pool, a1, one_visible, "contains").await;
+    raw_edge(&pool, hidden, one_visible, "contains").await;
+
+    let alice = health(&pool, "alice").await;
+    let homes = &alice[&RuleId::MultipleHomes];
+    assert_eq!(subjects(&alice, RuleId::MultipleHomes), vec![two_homes]);
+    let parents: Vec<_> = homes.items[0].related.iter().map(|r| r.id).collect();
+    assert_eq!(
+        parents.len(),
+        2,
+        "two visible homes; the hidden one isn't named"
+    );
+    assert!(!parents.contains(&hidden));
+    assert_eq!(homes.count, 1, "a hidden parent is never counted either");
+
+    // Bob owns none of the children: their homes are alice's to fix.
+    assert!(subjects(&health(&pool, "bob").await, RuleId::MultipleHomes).is_empty());
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let reference = insert_raw_node(&pool, "alice", "reference", "a reference", "").await;
+    let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
+    let sub_area = insert_raw_node(&pool, "alice", "area", "an area in a project", "").await;
+    raw_edge(&pool, area, reference, "contains").await; // a contained Reference
+    raw_edge(&pool, project, sub_area, "contains").await; // not in the table
+    raw_edge(&pool, area, project, "contains").await; // fine
+
+    // Bob's Area, shared with alice, holding alice's Resource: alice sees
+    // both ends; bob can't see the Resource, so it's never named to him.
+    let bobs = insert_raw_node(&pool, "bob", "area", "bob's shared area", "").await;
+    share(&pool, bobs, "alice").await;
+    let resource = insert_raw_node(&pool, "alice", "resource", "a resource", "").await;
+    raw_edge(&pool, bobs, resource, "contains").await;
+
+    let alice = health(&pool, "alice").await;
+    let mut contained = subjects(&alice, RuleId::ContainedReference);
+    contained.sort();
+    let mut expected = vec![reference, resource];
+    expected.sort();
+    assert_eq!(contained, expected);
+    assert_eq!(
+        subjects(&alice, RuleId::ContainmentNotAllowed),
+        vec![sub_area]
+    );
+
+    let bob = health(&pool, "bob").await;
+    assert!(
+        subjects(&bob, RuleId::ContainedReference).is_empty(),
+        "bob can't see alice's Resource, so the edge isn't his to see"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_finds_area_dependencies_and_doubled_related_links(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let other = insert_raw_node(&pool, "alice", "project", "another project", "").await;
+    raw_edge(&pool, project, area, "depends_on").await;
+    raw_edge(&pool, project, other, "depends_on").await; // fine
+    raw_edge(&pool, project, other, "related_to").await;
+    raw_edge(&pool, other, project, "related_to").await;
+
+    let alice = health(&pool, "alice").await;
+    assert_eq!(subjects(&alice, RuleId::DependsOnArea), vec![project]);
+    let pairs = &alice[&RuleId::RelatedToBothWays];
+    assert_eq!(pairs.count, 1, "one pair, listed once");
+    let pair = [pairs.items[0].subject.id, pairs.items[0].related[0].id];
+    assert!(pair.contains(&project) && pair.contains(&other));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_keeps_an_exact_count_past_the_item_cap(pool: PgPool) {
+    use common::data_health::{ITEM_CAP, RuleId};
+
+    for i in 0..(ITEM_CAP + 5) {
+        raw_task(&pool, "alice", None, &format!("inbox {i}")).await;
+    }
+    let alice = health(&pool, "alice").await;
+    let orphans = &alice[&RuleId::OrphanTask];
+    assert_eq!(orphans.count, (ITEM_CAP + 5) as u64);
+    assert_eq!(orphans.items.len(), ITEM_CAP);
+    assert_eq!(
+        alice.len(),
+        9,
+        "every SQL rule reports, clean or not (the loops come in S1b-3)"
+    );
+}
