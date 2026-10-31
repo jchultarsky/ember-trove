@@ -13,6 +13,7 @@ use crate::{
         backup_view::BackupView,
         bulk_permissions_view::BulkPermissionsView,
         dark_mode_toggle::DarkModeToggle,
+        data_health_view::DataHealthView,
         graph_view::GraphView,
         modals::{
             command_palette::CommandPalette, create_node::CreateNodeModal,
@@ -377,6 +378,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/people")         view=crate::components::people_view::PeopleView />
                         <Route path=path!("/people/:id")     view=crate::components::people_view::PersonRoute />
                         <Route path=path!("/templates")      view=TemplatesView />
+                        <Route path=path!("/data-health")    view=DataHealthView />
                                 <Route path=path!("/webhooks")       view=WebhooksView />
                         <Route path=path!("/admin/users")       view=AdminView />
                         <Route path=path!("/admin/permissions") view=BulkPermissionsView />
@@ -549,6 +551,8 @@ fn section_title(path: &str) -> &'static str {
         "Tags"
     } else if path.starts_with("/templates") {
         "Templates"
+    } else if path.starts_with("/data-health") {
+        "Data health"
     } else if path.starts_with("/webhooks") {
         "Webhooks"
     } else if path.starts_with("/admin") {

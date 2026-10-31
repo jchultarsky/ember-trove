@@ -134,7 +134,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                 auth_state.get_untracked()
                             {
                                 user.sub == n.owner_id
-                                    || user.roles.contains(&"admin".to_string())
+                                    || user.is_admin()
                             } else {
                                 false
                             };

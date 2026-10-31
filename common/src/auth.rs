@@ -33,6 +33,15 @@ pub struct UserInfo {
     pub roles: Vec<String>,
 }
 
+impl UserInfo {
+    /// Holds the admin role. The UI uses it only to show admin views; the
+    /// API enforces admin rights itself (`require_admin`).
+    #[must_use]
+    pub fn is_admin(&self) -> bool {
+        self.roles.iter().any(|r| r == "admin")
+    }
+}
+
 impl From<AuthClaims> for UserInfo {
     fn from(claims: AuthClaims) -> Self {
         Self {

@@ -281,10 +281,7 @@ pub fn KanbanTaskRow(
         if let Some(f) = focused_ctx {
             f.0.set(Some(task_id));
         }
-        let target = match node_id {
-            Some(nid) => format!("/nodes/{nid}?task={task_id}"),
-            None => format!("/tasks/inbox?task={task_id}"),
-        };
+        let target = crate::components::task_common::task_href(task_id.0, node_id.map(|n| n.0));
         navigate.get_value()(&target, Default::default());
     };
 

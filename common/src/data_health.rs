@@ -66,6 +66,25 @@ impl RuleId {
         }
     }
 
+    /// A short heading for the rule.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::TaskOnNonProject => "Tasks outside a Project",
+            Self::OrphanTask => "Tasks with no Project",
+            Self::MembershipOnNonProject => "People outside a Project",
+            Self::StatusOnNonProject => "A project status outside a Project",
+            Self::MultipleHomes => "More than one home",
+            Self::ContainedReference => "A Reference inside a home",
+            Self::ContainmentNotAllowed => "A home that isn't allowed",
+            Self::DependsOnArea => "A dependency on an Area",
+            Self::RelatedToBothWays => "A link stored both ways",
+            Self::ContainsCycle => "Homes in a loop",
+            Self::DependsOnCycle => "Dependencies in a loop",
+            Self::DerivedFromCycle => "Derivations in a loop",
+        }
+    }
+
     /// The rule, in one sentence.
     #[must_use]
     pub fn explanation(self) -> &'static str {
@@ -74,7 +93,7 @@ impl RuleId {
             Self::OrphanTask => "A task belongs to exactly one Project.",
             Self::MembershipOnNonProject => "Only Projects have people.",
             Self::StatusOnNonProject => "Only Projects have a project status.",
-            Self::MultipleHomes => "A node has at most one home (one `contains` parent).",
+            Self::MultipleHomes => "A node has at most one home (one contains parent).",
             Self::ContainedReference => {
                 "A Reference is never contained: it's shared, and reached by links."
             }
@@ -83,7 +102,7 @@ impl RuleId {
             }
             Self::DependsOnArea => "An Area never completes, so nothing can depend on it.",
             Self::RelatedToBothWays => {
-                "`related_to` has no direction, so one pair needs it only once."
+                "A related-to link has no direction, so one pair needs it only once."
             }
             Self::ContainsCycle => "Homes can't loop: no node may contain itself, even indirectly.",
             Self::DependsOnCycle => "A dependency loop is a deadlock: nothing in it could finish.",
@@ -102,8 +121,8 @@ impl RuleId {
                 "Add the person to a related Project, then remove them here."
             }
             Self::StatusOnNonProject => "Clear the status, or keep the note in the body.",
-            Self::MultipleHomes => "Keep one home; turn the others into `related_to` links.",
-            Self::ContainedReference => "Turn the `contains` edge into a `references` edge.",
+            Self::MultipleHomes => "Keep one home; turn the others into related-to links.",
+            Self::ContainedReference => "Turn the contains link into a references link.",
             Self::ContainmentNotAllowed => "Move it to an allowed home, or link it instead.",
             Self::DependsOnArea => "Depend on a Project in the Area instead.",
             Self::RelatedToBothWays => "Delete one of the two links.",
@@ -142,6 +161,10 @@ pub struct Ref {
     /// nodes and people.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<Uuid>,
+    /// A task that is done or cancelled: lists keep those in a collapsed
+    /// "completed" section, where a link to the task itself can't land.
+    #[serde(default)]
+    pub closed: bool,
 }
 
 impl Ref {
@@ -153,6 +176,7 @@ impl Ref {
             label: label.into(),
             archived,
             node_id: None,
+            closed: false,
         }
     }
 
@@ -165,7 +189,15 @@ impl Ref {
             label: label.into(),
             archived,
             node_id,
+            closed: false,
         }
+    }
+
+    /// Marks a task as done or cancelled (see [`Ref::closed`]).
+    #[must_use]
+    pub fn with_closed(mut self, closed: bool) -> Self {
+        self.closed = closed;
+        self
     }
 
     #[must_use]
@@ -176,6 +208,7 @@ impl Ref {
             label: label.into(),
             archived: false,
             node_id: None,
+            closed: false,
         }
     }
 }
@@ -284,6 +317,7 @@ mod tests {
     #[test]
     fn every_rule_is_explained_with_its_section_and_a_hint() {
         for rule in RuleId::ALL {
+            assert!(!rule.title().is_empty(), "{}", rule.as_str());
             assert!(rule.section().starts_with('§'), "{}", rule.as_str());
             assert!(rule.explanation().ends_with('.'), "{}", rule.as_str());
             assert!(rule.fix_hint().ends_with('.'), "{}", rule.as_str());
