@@ -6,6 +6,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Activity survives a restore** (#208). Backups now carry the activity
+  log, and a restore brings it back. Before, a restore wiped every node's
+  Activity, and that History can't be rebuilt.
+  - Rows come back exactly as written, including actions this release
+    doesn't know.
+  - Rows whose node isn't in the archive are skipped instead of aborting
+    the restore.
+  - The restore preview now shows the archive's people and activity counts.
+  - Archives made before this change restore with an empty log, as they
+    always did, and the preview warns before you confirm.
+  - An older release restoring a newer archive still ignores the log.
+- **One unknown activity row no longer breaks Activity** (#208). An action
+  this build doesn't recognise used to fail the whole list and the
+  dashboard recap. Reads now filter it out in SQL, before the page limit,
+  so rolling back past a release that adds an action leaves Activity
+  readable.
+- **Deleting a node no longer logs an FK warning** (#208). The "deleted"
+  activity entry was written after the node, and its log, were gone, so
+  the write always failed. The write and the never-stored `deleted` action
+  are removed.
+
 ### Documentation
 - **Data-model ontology** (#204). `docs/ONTOLOGY.md` records the decided
   data model: the four node kinds and their feature gates, the meaning of each

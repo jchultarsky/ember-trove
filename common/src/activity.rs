@@ -28,13 +28,31 @@ pub struct RecentActivityEntry {
     pub node_title: String,
 }
 
+/// An `activity_log` row as stored in a backup archive.
+///
+/// `action` is the raw database string, not [`ActivityAction`]: a backup
+/// may hold an action that the restoring build doesn't know (a newer
+/// release wrote it), and that must not make the whole archive unreadable.
+/// Unknown actions restore as they are and are skipped when read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivityRecord {
+    pub id: ActivityId,
+    pub node_id: NodeId,
+    pub subject_id: String,
+    pub action: String,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Enumeration of actions recorded in the activity log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityAction {
     Created,
     Edited,
-    Deleted,
+    // `Deleted` was here. It was written after the node was deleted, so the
+    // FK on the per-node log always rejected it and no row ever existed
+    // (#208); its database string "deleted" stays unused.
     TagAdded,
     TagRemoved,
     AttachmentUploaded,
@@ -46,13 +64,34 @@ pub enum ActivityAction {
 }
 
 impl ActivityAction {
+    /// Every action this build knows, in declaration order.
+    pub const ALL: [Self; 10] = [
+        Self::Created,
+        Self::Edited,
+        Self::TagAdded,
+        Self::TagRemoved,
+        Self::AttachmentUploaded,
+        Self::PermissionGranted,
+        Self::PermissionRevoked,
+        Self::Shared,
+        Self::Exported,
+        Self::CreatedFromTemplate,
+    ];
+
+    /// The database strings of [`Self::ALL`]. Reads filter on these in SQL
+    /// (#208), so a row from a newer release neither fails a list nor uses
+    /// up its `LIMIT`.
+    #[must_use]
+    pub fn known_db_strs() -> Vec<&'static str> {
+        Self::ALL.iter().map(Self::as_str).collect()
+    }
+
     /// Stable string used when writing to / reading from the database.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Created => "created",
             Self::Edited => "edited",
-            Self::Deleted => "deleted",
             Self::TagAdded => "tag_added",
             Self::TagRemoved => "tag_removed",
             Self::AttachmentUploaded => "attachment_uploaded",
@@ -68,7 +107,6 @@ impl ActivityAction {
         match s {
             "created" => Some(Self::Created),
             "edited" => Some(Self::Edited),
-            "deleted" => Some(Self::Deleted),
             "tag_added" => Some(Self::TagAdded),
             "tag_removed" => Some(Self::TagRemoved),
             "attachment_uploaded" => Some(Self::AttachmentUploaded),
@@ -87,7 +125,6 @@ impl ActivityAction {
         match self {
             Self::Created => "add_circle",
             Self::Edited => "edit",
-            Self::Deleted => "delete",
             Self::TagAdded => "label",
             Self::TagRemoved => "label_off",
             Self::AttachmentUploaded => "attach_file",
@@ -105,7 +142,6 @@ impl ActivityAction {
         match self {
             Self::Created => "created",
             Self::Edited => "edited",
-            Self::Deleted => "deleted",
             Self::TagAdded => "added tag",
             Self::TagRemoved => "removed tag",
             Self::AttachmentUploaded => "uploaded attachment",
@@ -126,24 +162,45 @@ mod tests {
 
     #[test]
     fn round_trip_all_actions() {
-        let actions = [
-            ActivityAction::Created,
-            ActivityAction::Edited,
-            ActivityAction::Deleted,
-            ActivityAction::TagAdded,
-            ActivityAction::TagRemoved,
-            ActivityAction::AttachmentUploaded,
-            ActivityAction::PermissionGranted,
-            ActivityAction::PermissionRevoked,
-            ActivityAction::Shared,
-            ActivityAction::Exported,
-            ActivityAction::CreatedFromTemplate,
-        ];
-        for action in &actions {
+        for action in &ActivityAction::ALL {
             let s = action.as_str();
             let back = ActivityAction::from_db_str(s).expect("round-trip must succeed");
             assert_eq!(&back, action, "action {s} did not round-trip");
         }
+        assert_eq!(
+            ActivityAction::known_db_strs().len(),
+            ActivityAction::ALL.len()
+        );
+    }
+
+    #[test]
+    fn all_lists_every_variant_once() {
+        // Exhaustive on purpose: a new variant fails to compile here until
+        // it's given an ordinal and added to `ALL`.
+        fn ordinal(a: &ActivityAction) -> usize {
+            match a {
+                ActivityAction::Created => 0,
+                ActivityAction::Edited => 1,
+                ActivityAction::TagAdded => 2,
+                ActivityAction::TagRemoved => 3,
+                ActivityAction::AttachmentUploaded => 4,
+                ActivityAction::PermissionGranted => 5,
+                ActivityAction::PermissionRevoked => 6,
+                ActivityAction::Shared => 7,
+                ActivityAction::Exported => 8,
+                ActivityAction::CreatedFromTemplate => 9,
+            }
+        }
+        for (i, a) in ActivityAction::ALL.iter().enumerate() {
+            assert_eq!(ordinal(a), i, "{} out of place in ALL", a.as_str());
+        }
+    }
+
+    #[test]
+    fn the_never_stored_deleted_action_is_no_longer_known() {
+        // #208: it could never be written, so it's not in the vocabulary.
+        assert!(ActivityAction::from_db_str("deleted").is_none());
+        assert!(!ActivityAction::known_db_strs().contains(&"deleted"));
     }
 
     #[test]

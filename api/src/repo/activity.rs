@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
-    activity::{ActivityAction, ActivityEntry, RecentActivityEntry},
+    activity::{ActivityAction, ActivityEntry, ActivityRecord, RecentActivityEntry},
     id::{ActivityId, NodeId},
 };
 use sqlx::PgPool;
@@ -36,6 +36,10 @@ pub trait ActivityRepo: Send + Sync {
         since: DateTime<Utc>,
         limit: i64,
     ) -> Result<Vec<RecentActivityEntry>, EmberTroveError>;
+
+    /// Every row, all owners, oldest first, with the action as its raw
+    /// string. Admin backup only (#208): History must survive a restore.
+    async fn list_all(&self) -> Result<Vec<ActivityRecord>, EmberTroveError>;
 }
 
 pub struct PgActivityRepo {
@@ -60,11 +64,16 @@ struct ActivityRow {
 }
 
 impl ActivityRow {
-    fn into_entry(self) -> Result<ActivityEntry, EmberTroveError> {
-        let action = ActivityAction::from_db_str(&self.action).ok_or_else(|| {
-            EmberTroveError::Internal(format!("unknown activity action: {}", self.action))
-        })?;
-        Ok(ActivityEntry {
+    /// `None` for an action this build doesn't know. The reads below
+    /// already filter unknown actions out in SQL (#208); this is the
+    /// backstop, so one stray row can never fail a whole list again.
+    fn into_entry(self) -> Option<ActivityEntry> {
+        let Some(action) = ActivityAction::from_db_str(&self.action) else {
+            // The action name only — never the row's metadata (actor PII).
+            tracing::warn!(action = %self.action, "skipping activity row with an unknown action");
+            return None;
+        };
+        Some(ActivityEntry {
             id: ActivityId(self.id),
             node_id: NodeId(self.node_id),
             subject_id: self.subject_id,
@@ -72,6 +81,17 @@ impl ActivityRow {
             metadata: self.metadata,
             created_at: self.created_at,
         })
+    }
+
+    fn into_record(self) -> ActivityRecord {
+        ActivityRecord {
+            id: ActivityId(self.id),
+            node_id: NodeId(self.node_id),
+            subject_id: self.subject_id,
+            action: self.action,
+            metadata: self.metadata,
+            created_at: self.created_at,
+        }
     }
 }
 
@@ -105,22 +125,29 @@ impl ActivityRepo for PgActivityRepo {
         node_id: NodeId,
         limit: i64,
     ) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+        // Unknown actions are filtered in SQL, before the LIMIT, so rows a
+        // newer release wrote can't take the page's slots (#208).
         let rows = sqlx::query_as::<_, ActivityRow>(
             r#"
             SELECT id, node_id, subject_id, action, metadata, created_at
             FROM activity_log
             WHERE node_id = $1
+              AND action = ANY($3)
             ORDER BY created_at DESC
             LIMIT $2
             "#,
         )
         .bind(node_id.inner())
         .bind(limit)
+        .bind(ActivityAction::known_db_strs())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list activity failed: {e}")))?;
 
-        rows.into_iter().map(|r| r.into_entry()).collect()
+        Ok(rows
+            .into_iter()
+            .filter_map(ActivityRow::into_entry)
+            .collect())
     }
 
     async fn list_recent_for_owner(
@@ -135,12 +162,8 @@ impl ActivityRepo for PgActivityRepo {
         // lookup.
         #[derive(sqlx::FromRow)]
         struct Row {
-            id: Uuid,
-            node_id: Uuid,
-            subject_id: String,
-            action: String,
-            metadata: serde_json::Value,
-            created_at: DateTime<Utc>,
+            #[sqlx(flatten)]
+            activity: ActivityRow,
             node_title: String,
         }
         let rows = sqlx::query_as::<_, Row>(
@@ -151,6 +174,7 @@ impl ActivityRepo for PgActivityRepo {
             JOIN nodes n ON n.id = a.node_id
             WHERE n.owner_id = $1
               AND a.created_at >= $2
+              AND a.action = ANY($4)
             ORDER BY a.created_at DESC
             LIMIT $3
             "#,
@@ -158,27 +182,34 @@ impl ActivityRepo for PgActivityRepo {
         .bind(owner_id)
         .bind(since)
         .bind(limit)
+        .bind(ActivityAction::known_db_strs())
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list_recent_for_owner failed: {e}")))?;
 
-        rows.into_iter()
-            .map(|r| {
-                let action = ActivityAction::from_db_str(&r.action).ok_or_else(|| {
-                    EmberTroveError::Internal(format!("unknown activity action: {}", r.action))
-                })?;
-                Ok(RecentActivityEntry {
-                    entry: ActivityEntry {
-                        id: ActivityId(r.id),
-                        node_id: NodeId(r.node_id),
-                        subject_id: r.subject_id,
-                        action,
-                        metadata: r.metadata,
-                        created_at: r.created_at,
-                    },
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some(RecentActivityEntry {
+                    entry: r.activity.into_entry()?,
                     node_title: r.node_title,
                 })
             })
-            .collect()
+            .collect())
+    }
+
+    async fn list_all(&self) -> Result<Vec<ActivityRecord>, EmberTroveError> {
+        let rows = sqlx::query_as::<_, ActivityRow>(
+            r#"
+            SELECT id, node_id, subject_id, action, metadata, created_at
+            FROM activity_log
+            ORDER BY created_at, id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("list_all activity failed: {e}")))?;
+
+        Ok(rows.into_iter().map(ActivityRow::into_record).collect())
     }
 }

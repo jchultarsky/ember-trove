@@ -4,6 +4,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
+    activity::ActivityRecord,
     attachment::Attachment,
     edge::Edge,
     favorite::Favorite,
@@ -30,6 +31,10 @@ pub struct EntityCounts {
     /// People in the registry (#147). 0 for archives made before them.
     #[serde(default)]
     pub people: u32,
+    /// Activity-log rows (#208). 0 for archives made before backups
+    /// carried the log; restoring one of those leaves Activity empty.
+    #[serde(default)]
+    pub activity: u32,
 }
 
 /// Top-level manifest written as `manifest.json` inside the archive.
@@ -98,6 +103,12 @@ pub struct BackupData {
     /// Memberships: a person in a node's context.
     #[serde(default)]
     pub node_people: Vec<MembershipRecord>,
+    // ── Activity (S1, #208) ───────────────────────────────────────────────
+    /// The activity log: History (ONTOLOGY §10) can't be rebuilt, so a
+    /// restore must bring it back. Archives made before this have none and
+    /// restore with an empty log, as they always did.
+    #[serde(default)]
+    pub activity: Vec<ActivityRecord>,
 }
 
 /// Returned by the preview endpoint before a restore is confirmed.
@@ -132,5 +143,27 @@ mod tests {
         }"#;
         let data: BackupData = serde_json::from_str(json).expect("old archive must parse");
         assert!(data.nodes.is_empty() && data.permissions.is_empty());
+        assert!(data.activity.is_empty(), "no activity in an old archive");
+    }
+
+    #[test]
+    fn an_activity_action_this_build_does_not_know_still_parses() {
+        // A newer release may have written an action this build has never
+        // heard of; the archive must stay readable and keep it verbatim.
+        let json = r#"{
+            "nodes": [], "edges": [], "tags": [], "notes": [], "tasks": [],
+            "attachments": [],
+            "activity": [{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "subject_id": "someone",
+                "action": "an_action_from_the_future",
+                "metadata": {"k": "v"},
+                "created_at": "2026-01-01T00:00:00Z"
+            }]
+        }"#;
+        let data: BackupData = serde_json::from_str(json).expect("archive must parse");
+        assert_eq!(data.activity.len(), 1);
+        assert_eq!(data.activity[0].action, "an_action_from_the_future");
     }
 }

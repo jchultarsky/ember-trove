@@ -8,10 +8,12 @@
 
 use bytes::Bytes;
 use common::{
+    activity::ActivityRecord,
     backup::{BackupData, BackupJob, BackupManifest, BackupPreview, EntityCounts},
     id::NodeId,
 };
 use flate2::{Compression, write::GzEncoder};
+use std::collections::HashSet;
 use std::io::Write;
 use tar::Builder;
 use uuid::Uuid;
@@ -36,6 +38,17 @@ fn restored_project_status(node: &common::node::Node) -> (Option<String>, Option
         return (Some(split.body), Some(split.status));
     }
     (node.body.clone(), None)
+}
+
+/// Restoring replaces the whole activity log (#208). An archive without one
+/// (made before backups carried it, or from an empty log) would leave every
+/// node's Activity empty, and the owner should know before confirming.
+fn activity_warning(counts: &EntityCounts) -> Option<String> {
+    (counts.activity == 0).then(|| {
+        "This backup has no activity history: after the restore, every node's Activity \
+         list will be empty."
+            .to_string()
+    })
 }
 
 fn add_bytes_to_archive<W: Write>(
@@ -95,6 +108,9 @@ pub async fn create_backup(
     // People (#147): third-party contact details, all owners (admin backup).
     let (people, node_people) = state.people.list_all().await.map_err(ApiError::from)?;
 
+    // Activity (#208): the History record (ONTOLOGY §10), all owners.
+    let activity = state.activity.list_all().await.map_err(ApiError::from)?;
+
     let entity_counts = EntityCounts {
         nodes: nodes.len() as u32,
         edges: edges.len() as u32,
@@ -103,6 +119,7 @@ pub async fn create_backup(
         tasks: tasks.len() as u32,
         attachments: attachments.len() as u32,
         people: people.len() as u32,
+        activity: activity.len() as u32,
     };
 
     let now = chrono::Utc::now();
@@ -129,6 +146,7 @@ pub async fn create_backup(
         node_positions,
         people,
         node_people,
+        activity,
     };
 
     // Build the tar.gz archive in memory.
@@ -231,6 +249,10 @@ pub async fn preview_restore(
         ));
     }
 
+    if let Some(w) = activity_warning(&manifest.entity_counts) {
+        warnings.push(w);
+    }
+
     warnings.push(
         "A pre-restore snapshot backup will be created automatically before any changes are made."
             .to_string(),
@@ -290,21 +312,68 @@ pub async fn execute_restore(
         .await
         .map_err(|e| ApiError::Internal(format!("begin transaction failed: {e}")))?;
 
+    restore_into(&mut tx, &data).await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("commit restore transaction failed: {e}")))?;
+
+    // Re-upload attachment files to S3 (best-effort — non-fatal).
+    for (archive_path, file_bytes) in &attachment_files {
+        // Determine the s3_key from the matching attachment metadata.
+        let s3_key = data
+            .attachments
+            .iter()
+            .find(|a| archive_path == &format!("attachments/{}/{}", a.node_id.0, a.filename))
+            .map(|a| a.s3_key.clone());
+
+        if let Some(key) = s3_key {
+            let content_type = data
+                .attachments
+                .iter()
+                .find(|a| a.s3_key == key)
+                .map(|a| a.content_type.as_str())
+                .unwrap_or("application/octet-stream");
+
+            if let Err(e) = state
+                .object_store
+                .put(&key, Bytes::copy_from_slice(file_bytes), content_type)
+                .await
+            {
+                tracing::warn!(
+                    key = %key,
+                    "re-upload attachment to S3 failed (non-fatal): {e}"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Replaces every user's data with an archive's, on the caller's
+/// transaction: nothing is visible until it commits, and any failure rolls
+/// the whole restore back. Split out of [`execute_restore`] (#208) so the
+/// database half of a restore can be tested end to end.
+pub(crate) async fn restore_into(
+    conn: &mut sqlx::PgConnection,
+    data: &BackupData,
+) -> Result<(), ApiError> {
     // Delete all nodes (CASCADE removes edges, notes, tasks, attachments, permissions).
     sqlx::query("DELETE FROM nodes")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("delete nodes failed: {e}")))?;
 
     // Delete all tags.
     sqlx::query("DELETE FROM tags")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("delete tags failed: {e}")))?;
 
     // Delete user favorites (both node-based and URL-based — we'll restore all).
     sqlx::query("DELETE FROM user_favorites")
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("delete favorites failed: {e}")))?;
 
@@ -324,7 +393,7 @@ pub async fn execute_restore(
         .bind(&tag.name)
         .bind(&tag.color)
         .bind(tag.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert tag failed: {e}")))?;
     }
@@ -362,7 +431,7 @@ pub async fn execute_restore(
         .bind(node.created_at)
         .bind(node.updated_at)
         .bind(&project_status)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node failed: {e}")))?;
 
@@ -373,7 +442,7 @@ pub async fn execute_restore(
             )
             .bind(node.id.0)
             .bind(tag.id.0)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(|e| ApiError::Internal(format!("insert node_tag failed: {e}")))?;
         }
@@ -395,7 +464,7 @@ pub async fn execute_restore(
         .bind(edge_type_str)
         .bind(&edge.label)
         .bind(edge.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert edge failed: {e}")))?;
     }
@@ -418,7 +487,7 @@ pub async fn execute_restore(
         .bind(&note.color)
         .bind(note.created_at)
         .bind(note.updated_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert note failed: {e}")))?;
     }
@@ -450,7 +519,7 @@ pub async fn execute_restore(
         .bind(task.sort_order)
         .bind(task.created_at)
         .bind(task.updated_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert task failed: {e}")))?;
     }
@@ -472,7 +541,7 @@ pub async fn execute_restore(
         .bind(att.size_bytes)
         .bind(&att.s3_key)
         .bind(att.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert attachment metadata failed: {e}")))?;
     }
@@ -493,7 +562,7 @@ pub async fn execute_restore(
         .bind(&link.name)
         .bind(&link.url)
         .bind(link.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node_link failed: {e}")))?;
     }
@@ -514,7 +583,7 @@ pub async fn execute_restore(
         .bind(&fav.label)
         .bind(fav.position)
         .bind(fav.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert favorite failed: {e}")))?;
     }
@@ -535,7 +604,7 @@ pub async fn execute_restore(
         .bind(role_str)
         .bind(&perm.granted_by)
         .bind(perm.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert permission failed: {e}")))?;
     }
@@ -554,7 +623,7 @@ pub async fn execute_restore(
         .bind(&ver.body)
         .bind(&ver.created_by)
         .bind(ver.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node_version failed: {e}")))?;
     }
@@ -571,7 +640,7 @@ pub async fn execute_restore(
         .bind(pos.node_id.0)
         .bind(pos.x)
         .bind(pos.y)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node_position failed: {e}")))?;
     }
@@ -603,7 +672,7 @@ pub async fn execute_restore(
         .bind(&p.notes)
         .bind(p.created_at)
         .bind(p.updated_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         // Never include the row: it's someone's contact details.
         .map_err(|e| ApiError::Internal(format!("insert person failed: {e}")))?;
@@ -622,46 +691,69 @@ pub async fn execute_restore(
         .bind(&m.role)
         .bind(&m.note)
         .bind(m.created_at)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert membership failed: {e}")))?;
     }
 
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::Internal(format!("commit restore transaction failed: {e}")))?;
-
-    // Re-upload attachment files to S3 (best-effort — non-fatal).
-    for (archive_path, file_bytes) in &attachment_files {
-        // Determine the s3_key from the matching attachment metadata.
-        let s3_key = data
-            .attachments
-            .iter()
-            .find(|a| archive_path == &format!("attachments/{}/{}", a.node_id.0, a.filename))
-            .map(|a| a.s3_key.clone());
-
-        if let Some(key) = s3_key {
-            let content_type = data
-                .attachments
-                .iter()
-                .find(|a| a.s3_key == key)
-                .map(|a| a.content_type.as_str())
-                .unwrap_or("application/octet-stream");
-
-            if let Err(e) = state
-                .object_store
-                .put(&key, Bytes::copy_from_slice(file_bytes), content_type)
-                .await
-            {
-                tracing::warn!(
-                    key = %key,
-                    "re-upload attachment to S3 failed (non-fatal): {e}"
-                );
-            }
-        }
-    }
+    // Activity last (#208): every row needs its node. Deleting the nodes
+    // above cascaded the old log away, so this brings History back.
+    let restored_nodes: HashSet<Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
+    restore_activity(conn, &data.activity, &restored_nodes).await?;
 
     Ok(())
+}
+
+/// Re-inserts a backup's activity rows in one statement (the log only
+/// grows, so it's batched rather than one INSERT per row). Rows whose node
+/// isn't being restored are skipped: `create_backup` reads each table in its
+/// own query, so a node created mid-backup can leave activity behind
+/// without its node, and that row would fail the FK and abort the whole
+/// restore. Actions are inserted verbatim, known to this build or not.
+/// Returns how many rows were inserted.
+pub(crate) async fn restore_activity(
+    conn: &mut sqlx::PgConnection,
+    records: &[ActivityRecord],
+    restored_nodes: &HashSet<Uuid>,
+) -> Result<u64, ApiError> {
+    let kept: Vec<&ActivityRecord> = records
+        .iter()
+        .filter(|r| restored_nodes.contains(&r.node_id.0))
+        .collect();
+    let skipped = records.len() - kept.len();
+    if skipped > 0 {
+        tracing::warn!(
+            skipped,
+            "restore: skipping activity rows whose node is not in the backup"
+        );
+    }
+    if kept.is_empty() {
+        return Ok(0);
+    }
+    let ids: Vec<Uuid> = kept.iter().map(|r| r.id.0).collect();
+    let node_ids: Vec<Uuid> = kept.iter().map(|r| r.node_id.0).collect();
+    let subjects: Vec<&str> = kept.iter().map(|r| r.subject_id.as_str()).collect();
+    let actions: Vec<&str> = kept.iter().map(|r| r.action.as_str()).collect();
+    let metadata: Vec<&serde_json::Value> = kept.iter().map(|r| &r.metadata).collect();
+    let created: Vec<chrono::DateTime<chrono::Utc>> = kept.iter().map(|r| r.created_at).collect();
+    let done = sqlx::query(
+        r#"
+        INSERT INTO activity_log (id, node_id, subject_id, action, metadata, created_at)
+        SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::jsonb[],
+                             $6::timestamptz[])
+        ON CONFLICT (id) DO NOTHING
+        "#,
+    )
+    .bind(&ids)
+    .bind(&node_ids)
+    .bind(&subjects)
+    .bind(&actions)
+    .bind(&metadata)
+    .bind(&created)
+    .execute(&mut *conn)
+    .await
+    .map_err(|e| ApiError::Internal(format!("insert activity failed: {e}")))?;
+    Ok(done.rows_affected())
 }
 
 // ── Archive parsing helpers ────────────────────────────────────────────────────
@@ -846,5 +938,25 @@ mod tests {
             restored_project_status(&n),
             (Some("## Status\n\nActive\n".into()), None)
         );
+    }
+
+    #[test]
+    fn the_preview_warns_when_a_backup_has_no_activity_history() {
+        let mut counts = EntityCounts {
+            nodes: 3,
+            edges: 0,
+            tags: 0,
+            notes: 0,
+            tasks: 0,
+            attachments: 0,
+            people: 0,
+            activity: 0,
+        };
+        assert!(
+            activity_warning(&counts).is_some_and(|w| w.contains("Activity")),
+            "an archive without the log warns"
+        );
+        counts.activity = 12;
+        assert_eq!(activity_warning(&counts), None, "one with it doesn't");
     }
 }
