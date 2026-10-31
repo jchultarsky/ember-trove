@@ -61,11 +61,14 @@ pub enum ActivityAction {
     Shared,
     Exported,
     CreatedFromTemplate,
+    /// A node's project status changed (#208): History, ONTOLOGY §10.
+    /// Metadata carries `from` and `to` (labels, either may be null).
+    StatusChanged,
 }
 
 impl ActivityAction {
     /// Every action this build knows, in declaration order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Created,
         Self::Edited,
         Self::TagAdded,
@@ -76,6 +79,7 @@ impl ActivityAction {
         Self::Shared,
         Self::Exported,
         Self::CreatedFromTemplate,
+        Self::StatusChanged,
     ];
 
     /// The database strings of [`Self::ALL`]. Reads filter on these in SQL
@@ -100,6 +104,7 @@ impl ActivityAction {
             Self::Shared => "shared",
             Self::Exported => "exported",
             Self::CreatedFromTemplate => "created_from_template",
+            Self::StatusChanged => "status_changed",
         }
     }
 
@@ -115,6 +120,7 @@ impl ActivityAction {
             "shared" => Some(Self::Shared),
             "exported" => Some(Self::Exported),
             "created_from_template" => Some(Self::CreatedFromTemplate),
+            "status_changed" => Some(Self::StatusChanged),
             _ => None,
         }
     }
@@ -133,6 +139,7 @@ impl ActivityAction {
             Self::Shared => "link",
             Self::Exported => "download",
             Self::CreatedFromTemplate => "content_copy",
+            Self::StatusChanged => "flag",
         }
     }
 
@@ -150,7 +157,21 @@ impl ActivityAction {
             Self::Shared => "created share link",
             Self::Exported => "exported",
             Self::CreatedFromTemplate => "created from template",
+            // Lowercase like the rest: the dashboard recap prints it inline.
+            Self::StatusChanged => "changed status",
         }
+    }
+}
+
+/// One line describing a project-status change, from a `status_changed`
+/// entry's `from` / `to` labels (#208).
+#[must_use]
+pub fn status_change_summary(from: Option<&str>, to: Option<&str>) -> String {
+    match (from, to) {
+        (Some(a), Some(b)) => format!("{a} \u{2192} {b}"),
+        (None, Some(b)) => format!("set to {b}"),
+        (Some(a), None) => format!("{a} cleared"),
+        (None, None) => "cleared".to_string(),
     }
 }
 
@@ -189,6 +210,7 @@ mod tests {
                 ActivityAction::Shared => 7,
                 ActivityAction::Exported => 8,
                 ActivityAction::CreatedFromTemplate => 9,
+                ActivityAction::StatusChanged => 10,
             }
         }
         for (i, a) in ActivityAction::ALL.iter().enumerate() {
@@ -207,5 +229,25 @@ mod tests {
     fn from_str_unknown_returns_none() {
         assert!(ActivityAction::from_db_str("viewed").is_none());
         assert!(ActivityAction::from_db_str("").is_none());
+    }
+
+    #[test]
+    fn a_status_change_reads_as_from_arrow_to() {
+        assert_eq!(
+            status_change_summary(Some("Active"), Some("Blocked")),
+            "Active \u{2192} Blocked"
+        );
+        assert_eq!(status_change_summary(None, Some("Active")), "set to Active");
+        assert_eq!(
+            status_change_summary(Some("Active"), None),
+            "Active cleared"
+        );
+        assert_eq!(status_change_summary(None, None), "cleared");
+    }
+
+    #[test]
+    fn status_changed_is_stored_as_status_changed() {
+        assert_eq!(ActivityAction::StatusChanged.as_str(), "status_changed");
+        assert_eq!(ActivityAction::StatusChanged.label(), "changed status");
     }
 }

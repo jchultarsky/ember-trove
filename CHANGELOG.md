@@ -16,6 +16,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `common::data_health` holds the report's types. Nothing uses them yet;
   the report and later write checks are built on them.
 
+## [2.47.0] - 2026-10-31
+
+### Added
+- **Project status changes are recorded in Activity** (#208). Every change
+  of a node's project status writes a `status_changed` entry, shown as
+  "Active → Blocked", "set to Active" or "Active cleared". This is the start
+  of History (ONTOLOGY §10), which can't be backfilled.
+  - The entry is written in the same transaction as the change, so neither
+    lands without the other. It's stamped once the node is locked, so
+    concurrent changes are listed in the order they were made.
+  - A node created with a status records it on its `created` entry.
+  - A status-only save (the chip) is no longer also logged as "Edited".
+  - Edits are now grouped from the last *Edited* entry, so a status change
+    in between doesn't split an editing session.
+
+### Changed
+- **Node saves lock the node row for their transaction** (#208). Responses
+  are unchanged: a concurrent save on the same version still gets 412 and a
+  missing node 404, but telling them apart no longer needs a second query.
+
 ## [2.46.1] - 2026-10-31
 
 ### Fixed

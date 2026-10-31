@@ -1260,18 +1260,26 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
         project_status: ps,
         expected_updated_at: None,
     };
-    let n = repo.update(p1.id, upd(None)).await.expect("noop");
+    let n = repo
+        .update(p1.id, upd(None), &actor("a"))
+        .await
+        .expect("noop");
     assert_eq!(n.project_status.as_deref(), Some("Active"));
     let n = repo
-        .update(p1.id, upd(Some(Some("Done".into()))))
+        .update(p1.id, upd(Some(Some("Done".into()))), &actor("a"))
         .await
         .expect("set");
     assert_eq!(n.project_status.as_deref(), Some("Done"));
-    let n = repo.update(p1.id, upd(Some(None))).await.expect("clear");
+    let n = repo
+        .update(p1.id, upd(Some(None)), &actor("a"))
+        .await
+        .expect("clear");
     assert_eq!(n.project_status, None);
 
     // The database refuses what normalize would (defence in depth).
-    let too_long = repo.update(p1.id, upd(Some(Some("x".repeat(41))))).await;
+    let too_long = repo
+        .update(p1.id, upd(Some(Some("x".repeat(41)))), &actor("a"))
+        .await;
     assert!(too_long.is_err());
 }
 
@@ -1292,14 +1300,16 @@ async fn node_update_with_a_stale_version_is_refused_and_changes_nothing(pool: P
 
     // The version the client saw applies, and moves the version on.
     let first = repo
-        .update(n.id, upd("first", Some(n.updated_at)))
+        .update(n.id, upd("first", Some(n.updated_at)), &actor("a"))
         .await
         .expect("current version applies");
     assert_ne!(first.updated_at, n.updated_at);
 
     // A save still carrying the old version (one the editor gave up on that
     // lands late) is refused and writes nothing.
-    let stale = repo.update(n.id, upd("stale", Some(n.updated_at))).await;
+    let stale = repo
+        .update(n.id, upd("stale", Some(n.updated_at)), &actor("a"))
+        .await;
     assert!(
         matches!(stale, Err(EmberTroveError::PreconditionFailed(_))),
         "{stale:?}"
@@ -1310,12 +1320,12 @@ async fn node_update_with_a_stale_version_is_refused_and_changes_nothing(pool: P
 
     // The version survives the JSON round trip the UI makes.
     let wire: Node = serde_json::from_str(&serde_json::to_string(&now).expect("ser")).expect("de");
-    repo.update(n.id, upd("via json", Some(wire.updated_at)))
+    repo.update(n.id, upd("via json", Some(wire.updated_at)), &actor("a"))
         .await
         .expect("a version read back from JSON still matches");
 
     // No precondition keeps last-write-wins for every other caller.
-    repo.update(n.id, upd("free", None))
+    repo.update(n.id, upd("free", None), &actor("a"))
         .await
         .expect("unconditional update");
 
@@ -1324,6 +1334,7 @@ async fn node_update_with_a_stale_version_is_refused_and_changes_nothing(pool: P
         .update(
             common::id::NodeId(uuid::Uuid::new_v4()),
             upd("x", Some(n.updated_at)),
+            &actor("a"),
         )
         .await;
     assert!(
@@ -1721,4 +1732,192 @@ async fn a_restore_brings_the_activity_log_back(pool: PgPool) {
         after, activity,
         "every row back, verbatim, unknown action too"
     );
+}
+
+// ── Status-change history (S1a-2, #208) ───────────────────────────────────────
+
+fn actor(sub: &str) -> super::activity::ActivityActor {
+    super::activity::ActivityActor {
+        subject_id: sub.to_string(),
+        metadata: serde_json::json!({ "actor_name": "Alice" }),
+    }
+}
+
+fn status_upd(
+    ps: Option<Option<&str>>,
+    expected: Option<chrono::DateTime<Utc>>,
+) -> common::node::UpdateNodeRequest {
+    common::node::UpdateNodeRequest {
+        title: None,
+        body: None,
+        metadata: None,
+        status: None,
+        project_status: ps.map(|o| o.map(str::to_string)),
+        expected_updated_at: expected,
+    }
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn status_rows(
+    pool: &PgPool,
+    node: uuid::Uuid,
+) -> Vec<(serde_json::Value, chrono::DateTime<Utc>)> {
+    sqlx::query_as(
+        "SELECT metadata, created_at FROM activity_log \
+         WHERE node_id = $1 AND action = 'status_changed' ORDER BY created_at",
+    )
+    .bind(node)
+    .fetch_all(pool)
+    .await
+    .expect("status rows")
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_status_change_is_logged_once_with_from_to_and_the_nodes_time(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let mut req = node_req("status history");
+    req.node_type = NodeType::Project;
+    req.project_status = Some("Active".to_string());
+    let n = repo.create("alice", req).await.expect("create");
+
+    let changed = repo
+        .update(
+            n.id,
+            status_upd(Some(Some("Blocked")), None),
+            &actor("alice"),
+        )
+        .await
+        .expect("change");
+    let rows = status_rows(&pool, n.id.0).await;
+    assert_eq!(rows.len(), 1, "one entry per change");
+    assert_eq!(rows[0].0["from"], "Active");
+    assert_eq!(rows[0].0["to"], "Blocked");
+    assert_eq!(rows[0].0["actor_name"], "Alice", "actor metadata kept");
+    assert!(
+        rows[0].1 >= changed.updated_at,
+        "stamped after the lock, never before the change"
+    );
+
+    // No change, or a change to something else, logs nothing.
+    repo.update(
+        n.id,
+        status_upd(Some(Some("Blocked")), None),
+        &actor("alice"),
+    )
+    .await
+    .expect("same status");
+    let mut title_only = status_upd(None, None);
+    title_only.title = Some("status history renamed".to_string());
+    repo.update(n.id, title_only, &actor("alice"))
+        .await
+        .expect("title");
+    assert_eq!(status_rows(&pool, n.id.0).await.len(), 1);
+
+    // Clearing is a change too.
+    repo.update(n.id, status_upd(Some(None), None), &actor("alice"))
+        .await
+        .expect("clear");
+    let rows = status_rows(&pool, n.id.0).await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].0["from"], "Blocked");
+    assert!(rows[1].0["to"].is_null());
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_refused_update_logs_no_status_change(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let mut req = node_req("status refused");
+    req.node_type = NodeType::Project;
+    req.project_status = Some("Active".to_string());
+    let n = repo.create("alice", req).await.expect("create");
+
+    let stale = n.updated_at - Duration::seconds(5);
+    let r = repo
+        .update(
+            n.id,
+            status_upd(Some(Some("Done")), Some(stale)),
+            &actor("alice"),
+        )
+        .await;
+    assert!(
+        matches!(r, Err(EmberTroveError::PreconditionFailed(_))),
+        "stale version is a 412, got {r:?}"
+    );
+    let missing = repo
+        .update(
+            common::id::NodeId(uuid::Uuid::new_v4()),
+            status_upd(Some(Some("Done")), None),
+            &actor("alice"),
+        )
+        .await;
+    assert!(matches!(missing, Err(EmberTroveError::NotFound(_))));
+    assert!(status_rows(&pool, n.id.0).await.is_empty());
+    let still = repo.get(n.id).await.expect("get");
+    assert_eq!(still.project_status.as_deref(), Some("Active"));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_status_change_and_its_history_entry_commit_together(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let mut req = node_req("status atomic");
+    req.node_type = NodeType::Project;
+    req.project_status = Some("Active".to_string());
+    let n = repo.create("alice", req).await.expect("create");
+
+    // Make the history insert fail: the status change must not land alone.
+    sqlx::query(
+        "ALTER TABLE activity_log ADD CONSTRAINT no_status_rows \
+         CHECK (action <> 'status_changed')",
+    )
+    .execute(&pool)
+    .await
+    .expect("constraint");
+    let r = repo
+        .update(
+            n.id,
+            status_upd(Some(Some("Blocked")), None),
+            &actor("alice"),
+        )
+        .await;
+    assert!(r.is_err(), "the failed history write fails the update");
+    let still = repo.get(n.id).await.expect("get");
+    assert_eq!(
+        still.project_status.as_deref(),
+        Some("Active"),
+        "rolled back together"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn latest_of_finds_the_last_edit_past_a_status_change(pool: PgPool) {
+    use super::activity::{ActivityRepo, PgActivityRepo};
+    use common::activity::ActivityAction;
+
+    let n = create_node(&pool, "alice", "latest edit").await;
+    let first = insert_raw_activity(&pool, n.id.0, "edited").await;
+    insert_raw_activity(&pool, n.id.0, "status_changed").await;
+    sqlx::query(
+        "UPDATE activity_log SET created_at = created_at + interval '1 minute' \
+         WHERE action = 'status_changed'",
+    )
+    .execute(&pool)
+    .await
+    .expect("order");
+
+    let repo = PgActivityRepo::new(pool.clone());
+    let latest = repo
+        .latest_of(n.id, ActivityAction::Edited)
+        .await
+        .expect("latest");
+    assert_eq!(
+        latest.map(|e| e.id.0),
+        Some(first),
+        "a newer status change doesn't hide the last edit"
+    );
+    let none = repo
+        .latest_of(n.id, ActivityAction::TagAdded)
+        .await
+        .expect("none");
+    assert!(none.is_none());
 }

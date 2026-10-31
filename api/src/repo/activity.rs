@@ -3,10 +3,73 @@ use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
     activity::{ActivityAction, ActivityEntry, ActivityRecord, RecentActivityEntry},
+    auth::AuthClaims,
     id::{ActivityId, NodeId},
 };
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
+
+/// Who an activity entry is attributed to: the subject and the actor
+/// metadata (display name, email) every entry carries.
+#[derive(Debug, Clone)]
+pub struct ActivityActor {
+    pub subject_id: String,
+    pub metadata: serde_json::Value,
+}
+
+impl ActivityActor {
+    #[must_use]
+    pub fn from_claims(claims: &AuthClaims) -> Self {
+        Self {
+            subject_id: claims.sub.clone(),
+            metadata: serde_json::json!({
+                "actor_name": claims.name,
+                "actor_email": claims.email,
+            }),
+        }
+    }
+
+    /// The actor metadata with `extra`'s keys merged in (`extra` wins).
+    #[must_use]
+    pub fn metadata_with(&self, extra: serde_json::Value) -> serde_json::Value {
+        let mut meta = self.metadata.clone();
+        if let (Some(obj), Some(ext)) = (meta.as_object_mut(), extra.as_object()) {
+            for (k, v) in ext {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        meta
+    }
+}
+
+// `clock_timestamp()`, not the column default `now()`: `now()` is the
+// transaction's start, before any row-lock wait, so two concurrent status
+// changes could be stamped in the opposite order to the one they committed
+// in, and History would read out of order (#208).
+const INSERT_ACTIVITY: &str = r#"
+    INSERT INTO activity_log (node_id, subject_id, action, metadata, created_at)
+    VALUES ($1, $2, $3, $4, clock_timestamp())
+"#;
+
+/// Appends one entry on the caller's connection or transaction, so a write
+/// and its History entry can commit or roll back together (#208).
+pub(crate) async fn record_in(
+    conn: &mut PgConnection,
+    node_id: NodeId,
+    subject_id: &str,
+    action: ActivityAction,
+    metadata: serde_json::Value,
+) -> Result<(), EmberTroveError> {
+    sqlx::query(INSERT_ACTIVITY)
+        .bind(node_id.inner())
+        .bind(subject_id)
+        .bind(action.as_str())
+        .bind(metadata)
+        .execute(conn)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("record activity failed: {e}")))?;
+    Ok(())
+}
 
 #[async_trait]
 pub trait ActivityRepo: Send + Sync {
@@ -40,6 +103,15 @@ pub trait ActivityRepo: Send + Sync {
     /// Every row, all owners, oldest first, with the action as its raw
     /// string. Admin backup only (#208): History must survive a restore.
     async fn list_all(&self) -> Result<Vec<ActivityRecord>, EmberTroveError>;
+
+    /// The newest entry of one action on a node, if any. Edit coalescing
+    /// looks at the last *Edited* entry, so other entries in between (a
+    /// status change) don't split an editing session (#208).
+    async fn latest_of(
+        &self,
+        node_id: NodeId,
+        action: ActivityAction,
+    ) -> Result<Option<ActivityEntry>, EmberTroveError>;
 }
 
 pub struct PgActivityRepo {
@@ -104,20 +176,12 @@ impl ActivityRepo for PgActivityRepo {
         action: ActivityAction,
         metadata: serde_json::Value,
     ) -> Result<(), EmberTroveError> {
-        sqlx::query(
-            r#"
-            INSERT INTO activity_log (node_id, subject_id, action, metadata)
-            VALUES ($1, $2, $3, $4)
-            "#,
-        )
-        .bind(node_id.inner())
-        .bind(subject_id)
-        .bind(action.as_str())
-        .bind(metadata)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("record activity failed: {e}")))?;
-        Ok(())
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("record activity failed: {e}")))?;
+        record_in(&mut conn, node_id, subject_id, action, metadata).await
     }
 
     async fn list(
@@ -211,5 +275,27 @@ impl ActivityRepo for PgActivityRepo {
         .map_err(|e| EmberTroveError::Internal(format!("list_all activity failed: {e}")))?;
 
         Ok(rows.into_iter().map(ActivityRow::into_record).collect())
+    }
+
+    async fn latest_of(
+        &self,
+        node_id: NodeId,
+        action: ActivityAction,
+    ) -> Result<Option<ActivityEntry>, EmberTroveError> {
+        let row = sqlx::query_as::<_, ActivityRow>(
+            r#"
+            SELECT id, node_id, subject_id, action, metadata, created_at
+            FROM activity_log
+            WHERE node_id = $1 AND action = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(node_id.inner())
+        .bind(action.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("latest activity failed: {e}")))?;
+        Ok(row.and_then(ActivityRow::into_entry))
     }
 }
