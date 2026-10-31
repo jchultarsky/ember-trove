@@ -94,13 +94,16 @@ impl NodeRepo for StubNodeRepo {
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
         // Canonical owners for the authz world: the creator of AZ_OWNED_NODE is
         // "creator" (test-sub holds a *granted* Owner row there).
-        let owner = match id.0.as_u128() {
-            AZ_OWNED_NODE => "creator",
-            AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => "someone-else",
+        let (owner, node_type) = match id.0.as_u128() {
+            AZ_OWNED_NODE => ("creator", NodeType::Article),
+            AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => ("someone-else", NodeType::Article),
+            AZ_MY_PROJECT => ("test-sub", NodeType::Project),
+            AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
         };
         Ok(Node {
             id,
+            node_type,
             ..fake_node("authz-node", owner)
         })
     }
@@ -295,6 +298,11 @@ const AZ_OWNED_NODE: u128 = 0xa2_0001;
 const AZ_EDIT_NODE: u128 = 0xa2_0002;
 const AZ_VIEW_NODE: u128 = 0xa2_0003;
 const AZ_FOREIGN_NODE: u128 = 0xa2_0004;
+/// The caller's own Project and own Article (canonical owner "test-sub"),
+/// for the §3.2 capability gates (#216). Every other authz node is an
+/// Article (`fake_node`).
+const AZ_MY_PROJECT: u128 = 0xa2_0005;
+const AZ_MY_ARTICLE: u128 = 0xa2_0006;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -335,6 +343,8 @@ fn authz_permissions() -> Vec<Permission> {
             PermissionRole::Viewer,
         ),
         row(0xa2_0205, AZ_EDIT_NODE, "test-sub", PermissionRole::Editor),
+        row(0xa2_0207, AZ_MY_PROJECT, "test-sub", PermissionRole::Owner),
+        row(0xa2_0208, AZ_MY_ARTICLE, "test-sub", PermissionRole::Owner),
         row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
         row(
             AZ_PERM_FOREIGN,
@@ -383,11 +393,21 @@ struct StubTaskRepo;
 impl TaskRepo for StubTaskRepo {
     async fn create(
         &self,
-        _: Option<NodeId>,
-        _: &str,
-        _: CreateTaskRequest,
+        node: Option<NodeId>,
+        owner: &str,
+        req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError> {
-        unimplemented!()
+        // Only a standalone task or one on the caller's Project may get
+        // here; anything else is a gate the handler skipped (#216).
+        match node.map(|n| n.0.as_u128()) {
+            None | Some(AZ_MY_PROJECT) => Ok(Task {
+                owner_id: owner.to_string(),
+                node_id: node,
+                title: req.title,
+                ..stub_task(TaskId(Uuid::new_v4()))
+            }),
+            Some(other) => panic!("capability bypass: task created on node {other:#x}"),
+        }
     }
     async fn list_for_node(&self, _: NodeId, _: &str) -> Result<Vec<Task>, EmberTroveError> {
         unimplemented!()
@@ -414,6 +434,9 @@ impl TaskRepo for StubTaskRepo {
             || matches!(dest, Some(AZ_VIEW_NODE | AZ_FOREIGN_NODE))
         {
             panic!("authorization bypass: update reached the repo for task {id}");
+        }
+        if matches!(dest, Some(AZ_MY_ARTICLE | AZ_OWNED_NODE)) {
+            panic!("capability bypass: task {id} moved onto an Article");
         }
         let mut task = authz_task(id);
         if let Some(node) = req.node_id {
@@ -725,6 +748,8 @@ fn fake_node(slug: &str, owner: &str) -> Node {
 /// person, `AZ_PERSON`, owned by `test-sub`; any other id is a 404, the way
 /// another owner's person is.
 const AZ_PERSON: u128 = 0xa2_0e01;
+/// The membership `add_membership` writes on AZ_MY_PROJECT (#216).
+const AZ_NEW_MEMBERSHIP: u128 = 0xa2_0e10;
 
 struct StubPersonRepo;
 #[async_trait]
@@ -810,18 +835,34 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
     }
     async fn memberships_for_node(
         &self,
-        _: NodeId,
+        node: NodeId,
     ) -> Result<Vec<common::person::Membership>, EmberTroveError> {
-        Ok(vec![])
+        if node.0.as_u128() != AZ_MY_PROJECT {
+            return Ok(vec![]);
+        }
+        let person = self
+            .get("test-sub", common::id::PersonId(Uuid::from_u128(AZ_PERSON)))
+            .await?;
+        Ok(vec![common::person::Membership {
+            id: common::id::MembershipId(Uuid::from_u128(AZ_NEW_MEMBERSHIP)),
+            node_id: node,
+            person,
+            role: None,
+            note: None,
+            created_at: chrono::Utc::now(),
+        }])
     }
     async fn add_membership(
         &self,
-        _: NodeId,
+        node: NodeId,
         _: common::id::PersonId,
         _: Option<&str>,
         _: Option<&str>,
     ) -> Result<common::id::MembershipId, EmberTroveError> {
-        unimplemented!()
+        match node.0.as_u128() {
+            AZ_MY_PROJECT => Ok(common::id::MembershipId(Uuid::from_u128(AZ_NEW_MEMBERSHIP))),
+            other => panic!("capability bypass: membership added on node {other:#x}"),
+        }
     }
     async fn update_membership(
         &self,
@@ -1979,10 +2020,18 @@ async fn update_task_cannot_move_a_task_onto_a_view_only_node() {
 }
 
 #[tokio::test]
-async fn update_task_can_move_a_task_onto_an_editable_node() {
-    let dest = Uuid::from_u128(AZ_EDIT_NODE);
+async fn update_task_can_move_a_task_onto_an_editable_project() {
+    let dest = Uuid::from_u128(AZ_MY_PROJECT);
     let status = task_patch(0xa2_0199, serde_json::json!({ "node_id": dest })).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn update_task_refuses_a_move_onto_an_editable_non_project() {
+    // §3.2 (#216): editor access isn't enough; only a Project takes tasks.
+    let dest = Uuid::from_u128(AZ_EDIT_NODE);
+    let status = task_patch(0xa2_0199, serde_json::json!({ "node_id": dest })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -2633,5 +2682,175 @@ async fn admin_data_health_counts_are_admin_only_and_carry_no_content() {
     assert_eq!(
         body,
         serde_json::json!([{ "rule": "orphan_task", "count": 3 }])
+    );
+}
+
+// ── §3.2 capability gates (#216) ──────────────────────────────────────────────
+
+fn post_json(uri: &str, body: serde_json::Value) -> Request<Body> {
+    Request::post(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+async fn status_and_error(resp: axum::response::Response) -> (StatusCode, String) {
+    let status = resp.status();
+    let body = body_json(resp).await;
+    (
+        status,
+        body["error"].as_str().unwrap_or_default().to_string(),
+    )
+}
+
+async fn node_task_post(node: u128, claims: common::auth::AuthClaims) -> (StatusCode, String) {
+    let app = Router::new()
+        .nest(
+            "/nodes/{node_id}/tasks",
+            crate::routes::tasks::node_task_router(),
+        )
+        .layer(axum::Extension(claims))
+        .with_state(test_state());
+    let resp = app
+        .oneshot(post_json(
+            &format!("/nodes/{}/tasks", Uuid::from_u128(node)),
+            serde_json::json!({ "title": "t" }),
+        ))
+        .await
+        .unwrap();
+    status_and_error(resp).await
+}
+
+#[tokio::test]
+async fn a_task_can_be_added_only_to_a_project() {
+    let (ok, _) = node_task_post(AZ_MY_PROJECT, fake_claims()).await;
+    assert_eq!(ok, StatusCode::CREATED);
+    let (refused, why) = node_task_post(AZ_MY_ARTICLE, fake_claims()).await;
+    assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(why, "only Projects have tasks");
+}
+
+#[tokio::test]
+async fn the_task_gate_never_tells_a_stranger_a_nodes_kind() {
+    // Authorization runs first: a viewer and a stranger get 403, never 422.
+    assert_eq!(
+        node_task_post(AZ_VIEW_NODE, fake_claims()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        node_task_post(AZ_FOREIGN_NODE, fake_claims()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    // A missing node: 403 for anyone without a permission row, 404 for an
+    // admin (who passes authorization and used to reach the FK insert).
+    assert_eq!(
+        node_task_post(0xdead, fake_claims()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        node_task_post(0xdead, admin_claims()).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_standalone_task_can_name_only_a_project() {
+    let post = |node: Option<u128>| async move {
+        let mut body = serde_json::json!({ "title": "t" });
+        if let Some(n) = node {
+            body["node_id"] = serde_json::json!(Uuid::from_u128(n));
+        }
+        let resp = claims_app("/tasks", crate::routes::tasks::task_router())
+            .oneshot(post_json("/tasks", body))
+            .await
+            .unwrap();
+        resp.status()
+    };
+    assert_eq!(
+        post(None).await,
+        StatusCode::CREATED,
+        "no node: still allowed until S5c"
+    );
+    assert_eq!(post(Some(AZ_MY_PROJECT)).await, StatusCode::CREATED);
+    assert_eq!(
+        post(Some(AZ_MY_ARTICLE)).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn a_task_already_on_a_non_project_stays_editable() {
+    // AZ_EDIT_TASK sits on an Article: editing it isn't a move, so §3.2
+    // doesn't block it (it's listed on Data health instead).
+    let status = task_patch(AZ_EDIT_TASK, serde_json::json!({ "title": "renamed" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let same_node = Uuid::from_u128(AZ_EDIT_NODE);
+    let status = task_patch(AZ_EDIT_TASK, serde_json::json!({ "node_id": same_node })).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "naming its own node again isn't a move"
+    );
+}
+
+async fn member_post(node: u128) -> (StatusCode, String) {
+    let resp = people_app()
+        .oneshot(post_json(
+            &format!("/nodes/{}/people", Uuid::from_u128(node)),
+            serde_json::json!({ "person_id": Uuid::from_u128(AZ_PERSON) }),
+        ))
+        .await
+        .unwrap();
+    status_and_error(resp).await
+}
+
+#[tokio::test]
+async fn a_person_can_be_added_only_to_a_project() {
+    let (refused, why) = member_post(AZ_MY_ARTICLE).await;
+    assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(why, "only Projects have people");
+    // On the Project the membership is written (the stub panics on any
+    // other node) and read back.
+    assert_eq!(member_post(AZ_MY_PROJECT).await.0, StatusCode::CREATED);
+    // Not the node's owner: 403 before any kind check.
+    assert_eq!(member_post(AZ_EDIT_NODE).await.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_project_status_can_be_set_only_on_a_project_but_always_cleared() {
+    let stale = chrono::Utc::now().to_rfc3339();
+    // A precondition makes the stub answer 412, which proves the request got
+    // past the gate without needing a real update.
+    let set = |node: u128, value: serde_json::Value| {
+        let stale = stale.clone();
+        async move {
+            node_put(
+                node,
+                serde_json::json!({ "project_status": value, "expected_updated_at": stale }),
+            )
+            .await
+        }
+    };
+    assert_eq!(
+        set(AZ_MY_ARTICLE, "Active".into()).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        set(AZ_MY_PROJECT, "Active".into()).await,
+        StatusCode::PRECONDITION_FAILED
+    );
+    assert_eq!(
+        set(AZ_MY_ARTICLE, serde_json::Value::Null).await,
+        StatusCode::PRECONDITION_FAILED,
+        "clearing is the Data health fix: always allowed"
+    );
+    assert_eq!(
+        set(AZ_MY_ARTICLE, "  ".into()).await,
+        StatusCode::PRECONDITION_FAILED,
+        "blank is a clear"
+    );
+    assert_eq!(
+        set(AZ_VIEW_NODE, "Active".into()).await,
+        StatusCode::FORBIDDEN
     );
 }

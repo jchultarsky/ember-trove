@@ -2,6 +2,7 @@ pub mod admin;
 pub mod attachments;
 pub mod auth;
 pub mod backup;
+pub(crate) mod capability;
 pub mod data_health;
 pub mod edges;
 pub mod editor_prefs;

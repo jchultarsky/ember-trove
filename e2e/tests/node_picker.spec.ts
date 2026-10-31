@@ -228,7 +228,8 @@ test('Escape closes only the list, then clears the text; blur closes the list', 
 
 test('the Inbox add-task picker attaches by the same rules', async ({ page, request }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e attach node ${stamp}`);
+  // A Project: only Projects take tasks (§3.2, #216).
+  const node = await createNode(request, `e2e attach node ${stamp}`, { node_type: 'project' });
   const title = `e2e attach task ${stamp}`;
   try {
     await page.goto('/tasks/inbox');
@@ -334,7 +335,7 @@ test('Add to Favorites picks a node with the shared picker', async ({ page, requ
 
 test('Inbox "Assign to node" commits with the shared picker', async ({ page, request }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e assign node ${stamp}`);
+  const node = await createNode(request, `e2e assign node ${stamp}`, { node_type: 'project' });
   const created = await request.post('/api/tasks', { data: { title: `e2e assign task ${stamp}` } });
   expect(created.ok()).toBeTruthy();
   const task = await created.json();

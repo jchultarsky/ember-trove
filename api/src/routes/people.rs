@@ -22,6 +22,7 @@ use axum::{
 use common::{
     auth::AuthClaims,
     id::{MembershipId, NodeId, PersonId},
+    ontology::Capability,
     person::{
         DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView, Person, PersonBody,
         PersonUsage, RoleCount, email_keys, normalize, normalize_membership,
@@ -32,6 +33,7 @@ use uuid::Uuid;
 use crate::{
     auth::permissions::{require_editor, require_viewer},
     error::ApiError,
+    routes::capability::refuse_unless,
     state::AppState,
 };
 
@@ -215,7 +217,7 @@ async fn require_node_owner(
     state: &AppState,
     claims: &AuthClaims,
     node: NodeId,
-) -> Result<(), ApiError> {
+) -> Result<common::node::Node, ApiError> {
     require_editor(state.permissions.as_ref(), claims, node).await?;
     let n = state.nodes.get(node).await?;
     if n.owner_id != claims.sub {
@@ -223,7 +225,7 @@ async fn require_node_owner(
             "only the node's owner can change its people".into(),
         ));
     }
-    Ok(())
+    Ok(n)
 }
 
 async fn add_member(
@@ -234,7 +236,11 @@ async fn add_member(
 ) -> Result<(StatusCode, Json<MembershipView>), ApiError> {
     let node = NodeId(node_id);
     let (role, note) = normalize_membership(input.role, input.note).map_err(invalid)?;
-    require_node_owner(&state, &claims, node).await?;
+    let n = require_node_owner(&state, &claims, node).await?;
+    // §3.2 (#216): only Projects have people. After the owner check, so
+    // only the node's owner can learn its kind from this refusal. Existing
+    // memberships elsewhere stay editable and removable.
+    refuse_unless(&n.node_type, Capability::People)?;
     // The person must be the caller's own: another owner's id is a 404.
     state.people.get(&claims.sub, input.person_id).await?;
     let id = state

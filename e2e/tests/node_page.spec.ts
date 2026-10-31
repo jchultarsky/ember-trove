@@ -72,7 +72,11 @@ test('every section is in the outline and one shared look (#131)', async ({ page
 
 test('adding a task or a note keeps the scroll position', async ({ page, request }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e scroll node ${stamp}`, { body: LONG_BODY });
+  // A Project: only Projects take tasks (§3.2, #216).
+  const node = await createNode(request, `e2e scroll node ${stamp}`, {
+    body: LONG_BODY,
+    node_type: 'project',
+  });
   try {
     await gotoNode(page, node.id);
     await jumpTo(page, 'Tasks');

@@ -48,12 +48,14 @@ test('the page lists data that breaks the model, linked to where it lives', asyn
     const area = await createNode(request, `${PREFIX}area ${stamp}`, { node_type: 'area' });
     const a = await createNode(request, `${PREFIX}pair a ${stamp}`, { node_type: 'project' });
     const b = await createNode(request, `${PREFIX}pair b ${stamp}`, { node_type: 'project' });
-    // A task on an Area (only Projects have tasks).
+    // A task on an Area is refused now (§3.2, #216): it can no longer be
+    // made through the API, so that rule is covered by the pg tests, and
+    // here the refusal itself is checked.
     const onArea = await request.post(`/api/nodes/${area.id}/tasks`, {
       data: { title: `${PREFIX}task on area ${stamp}` },
     });
-    expect(onArea.ok()).toBeTruthy();
-    const areaTask = await onArea.json();
+    expect(onArea.status()).toBe(422);
+    expect((await onArea.json()).error).toBe('only Projects have tasks');
     // A task with no Project at all.
     const orphanResp = await request.post('/api/tasks', {
       data: { title: `${PREFIX}orphan ${stamp}` },
@@ -72,21 +74,17 @@ test('the page lists data that breaks the model, linked to where it lives', asyn
     }
 
     // The API reports each under its rule, to the owner only.
-    expect(await subjectsOf(request, 'task_on_non_project')).toContain(areaTask.id);
     expect(await subjectsOf(request, 'orphan_task')).toContain(orphan.id);
     const pair = await subjectsOf(request, 'related_to_both_ways');
     expect(pair.includes(a.id) || pair.includes(b.id)).toBeTruthy();
-    for (const rule of ['task_on_non_project', 'orphan_task', 'related_to_both_ways']) {
+    for (const rule of ['orphan_task', 'related_to_both_ways']) {
       const theirs = await subjectsOf(otherRequest, rule);
-      for (const id of [areaTask.id, orphan.id, a.id, b.id]) expect(theirs).not.toContain(id);
+      for (const id of [orphan.id, a.id, b.id]) expect(theirs).not.toContain(id);
     }
 
     // The page shows them, each in its rule's card, linking to the item.
     await page.goto('/data-health');
     await expect(page.getByRole('heading', { name: 'Data health' })).toBeVisible();
-    const onAreaCard = page.getByTestId('data-health-task_on_non_project');
-    const areaTaskLink = onAreaCard.locator(`a[href="/nodes/${area.id}?task=${areaTask.id}"]`);
-    await expect(areaTaskLink).toBeVisible();
     const orphanCard = page.getByTestId('data-health-orphan_task');
     await expect(orphanCard.locator(`a[href="/tasks/inbox?task=${orphan.id}"]`)).toBeVisible();
     // The pair this test made, by its own nodes.
@@ -98,10 +96,47 @@ test('the page lists data that breaks the model, linked to where it lives', asyn
     await expect(orphanCard).toContainText('To fix:');
 
     // A link opens the item where it lives.
-    await areaTaskLink.click();
-    await expect(page).toHaveURL(new RegExp(`/nodes/${area.id}`));
+    await pairCard.locator(`a[href="/nodes/${a.id}"]`).first().click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${a.id}`));
   } finally {
     await wipe(request);
+  }
+});
+
+test('a task outside a Project links into its node', async ({ page, request }) => {
+  // Since #216 the API refuses a task on a non-Project, so this card can only
+  // come from older data. Serve such a report to cover the card and its link.
+  const node = await createNode(request, `${PREFIX}legacy home ${Date.now()}`, {
+    node_type: 'project',
+  });
+  const taskId = '00000000-0000-4000-8000-000000000216';
+  try {
+    await page.route('**/api/data-health', (route) =>
+      route.fulfill({
+        json: {
+          rules: [
+            {
+              rule: 'task_on_non_project',
+              count: 1,
+              items: [
+                {
+                  subject: { kind: 'task', id: taskId, label: 'legacy task', node_id: node.id },
+                  related: [{ kind: 'node', id: node.id, label: 'legacy home' }],
+                  more: 0,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto('/data-health');
+    const card = page.getByTestId('data-health-task_on_non_project');
+    await expect(card).toContainText('Only Projects have tasks.');
+    await expect(card.locator(`a[href="/nodes/${node.id}?task=${taskId}"]`)).toBeVisible();
+    await expect(card.locator(`a[href="/nodes/${node.id}"]`)).toBeVisible();
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
   }
 });
 

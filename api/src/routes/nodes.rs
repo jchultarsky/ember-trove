@@ -14,9 +14,10 @@ use common::{
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
         CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeLookupHit, NodeLookupParams,
-        NodeTitleEntry, NodeType, ProjectStatusCount, UpdateNodeRequest,
+        NodeTitleEntry, ProjectStatusCount, UpdateNodeRequest,
     },
     node_version::NodeVersion,
+    ontology::{Capability, allows},
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
     project_status,
     tag::Tag,
@@ -34,6 +35,7 @@ use crate::{
     error::ApiError,
     notify::maybe_notify_invite,
     repo::activity::ActivityActor,
+    routes::capability::{refuse_unless, require_capability},
     state::AppState,
     webhook_dispatch::dispatch,
 };
@@ -253,13 +255,17 @@ fn status_error(e: project_status::StatusError) -> ApiError {
 /// Otherwise a project takes the status token from its starting body (a
 /// template's `## Status` section, moved out so there's one copy), or
 /// starts as "Active", which is what the old scaffold said. Other types
-/// get none.
+/// get none, and a status given for one is refused (§3.2, #216); a blank
+/// one is no status, so it passes.
 fn initial_project_status(req: &mut CreateNodeRequest) -> Result<(), ApiError> {
     if let Some(given) = req.project_status.take() {
         req.project_status = project_status::normalize(&given).map_err(status_error)?;
+        if req.project_status.is_some() {
+            refuse_unless(&req.node_type, Capability::ProjectStatus)?;
+        }
         return Ok(());
     }
-    if req.node_type != NodeType::Project {
+    if !allows(&req.node_type, Capability::ProjectStatus) {
         return Ok(());
     }
     match req
@@ -387,6 +393,14 @@ fn with_initial_status(meta: &mut serde_json::Value, status: Option<&str>) {
     }
 }
 
+/// The status a duplicate of `src` starts with: a copy never carries a
+/// status its kind may not have (§3.2, #216), even when the original does.
+fn copied_status(src: &Node) -> Option<String> {
+    src.project_status
+        .clone()
+        .filter(|_| allows(&src.node_type, Capability::ProjectStatus))
+}
+
 /// Whether an update changes the project status and nothing else: what the
 /// status chip sends.
 fn is_status_only(req: &UpdateNodeRequest) -> bool {
@@ -410,6 +424,12 @@ async fn update_node(
         req.project_status = Some(project_status::normalize(raw).map_err(status_error)?);
     }
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
+    // §3.2 (#216): only a Project's status may be *set*. Clearing is always
+    // allowed (it's the Data health fix), and saves that leave the status
+    // alone (every autosave) pay no extra lookup.
+    if matches!(req.project_status, Some(Some(_))) {
+        require_capability(&state, NodeId(id), Capability::ProjectStatus).await?;
+    }
     let status_only = is_status_only(&req);
     let node = state
         .nodes
@@ -1122,7 +1142,7 @@ async fn duplicate_node(
         node_type: src.node_type.clone(),
         status: Some(common::node::NodeStatus::Draft),
         metadata: src.metadata.clone(),
-        project_status: src.project_status.clone(),
+        project_status: copied_status(&src),
         template_id: None,
     };
     let dup = state.nodes.create(&claims.sub, req).await?;
@@ -1192,6 +1212,7 @@ mod tests {
     use super::*;
     use chrono::{TimeDelta, Utc};
     use common::id::ActivityId;
+    use common::node::NodeType;
 
     fn create(node_type: NodeType, body: &str, given: Option<&str>) -> CreateNodeRequest {
         CreateNodeRequest {
@@ -1243,6 +1264,45 @@ mod tests {
         initial_project_status(&mut req).unwrap();
         assert_eq!(req.project_status, None);
         assert_eq!(req.body.as_deref(), Some(body));
+    }
+
+    #[test]
+    fn a_duplicate_keeps_a_projects_status_but_drops_anyone_elses() {
+        let node = |node_type: NodeType| Node {
+            id: common::id::NodeId(uuid::Uuid::nil()),
+            owner_id: "o".into(),
+            node_type,
+            title: "t".into(),
+            slug: "t".into(),
+            body: None,
+            metadata: json!({}),
+            status: common::node::NodeStatus::Draft,
+            project_status: Some("Active".into()),
+            tags: vec![],
+            pinned: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            edge_count: 0,
+        };
+        assert_eq!(
+            copied_status(&node(NodeType::Project)).as_deref(),
+            Some("Active")
+        );
+        assert_eq!(copied_status(&node(NodeType::Article)), None);
+    }
+
+    #[test]
+    fn a_given_status_on_another_type_is_refused_but_blank_passes() {
+        // §3.2 (#216): only Projects have a project status.
+        let mut req = create(NodeType::Article, "", Some("Active"));
+        let refused = initial_project_status(&mut req);
+        assert!(
+            matches!(&refused, Err(ApiError::Validation(m)) if m == "only Projects have a project status"),
+            "got {refused:?}"
+        );
+        let mut blank = create(NodeType::Area, "", Some("   "));
+        initial_project_status(&mut blank).unwrap();
+        assert_eq!(blank.project_status, None, "blank is no status");
     }
 
     fn entry(action: ActivityAction, subject: &str, age_minutes: i64) -> ActivityEntry {
