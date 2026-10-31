@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.47.0] - 2026-10-31
+
 ### Added
 - **Project status changes are recorded in Activity** (#208). Every change
   of a node's project status writes a `status_changed` entry, shown as
