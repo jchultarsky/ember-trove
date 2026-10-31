@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Groundwork for the data-health report** (#208). `common::ontology`
+  holds the data model's rules as functions:
+  - what each node kind may carry (§3.2);
+  - which kind may be the home of which (§3.3);
+  - a loop finder that reports each loop once, with one short cycle.
+
+  `common::data_health` holds the report's types. Nothing uses them yet;
+  the report and later write checks are built on them.
+
 ## [2.46.1] - 2026-10-31
 
 ### Fixed

@@ -1,10 +1,11 @@
 //! The data model's rules as pure functions (`docs/ONTOLOGY.md`, #204).
 //!
-//! One source of truth for what each node kind may carry (§3.2), which kind
-//! may be the home of which (§3.3), and where a graph of edges loops back on
-//! itself (§6). The data-health report (#208) uses them to find existing
-//! data that breaks the model; the write gates of later slices reuse them so
-//! the report and the enforcement can never disagree.
+//! What each node kind may carry (§3.2), which kind may be the home of
+//! which (§3.3), and where a graph of edges loops back on itself (§6). The
+//! data-health report (#208) uses them to find existing data that breaks the
+//! model. The write gates of later slices (S2a, S3a) are to use them too,
+//! replacing today's hand-written `== NodeType::Project` checks, so the
+//! report and the enforcement can't disagree.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -24,6 +25,7 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// Every capability. `all_lists_every_capability` ties it to the enum.
     pub const ALL: [Self; 4] = [Self::Tasks, Self::People, Self::ProjectStatus, Self::Plan];
 }
 
@@ -55,6 +57,29 @@ pub fn may_contain(parent: &NodeType, child: &NodeType) -> bool {
     }
 }
 
+/// Which containment rule, if any, a `parent contains child` edge breaks.
+/// Exactly one: a contained Reference is that rule (§6.1), not also a
+/// disallowed pair (§3.3), so one bad edge is never reported twice.
+#[must_use]
+pub fn containment_violation(parent: &NodeType, child: &NodeType) -> Option<ContainmentRule> {
+    if matches!(child, NodeType::Reference | NodeType::Resource) {
+        Some(ContainmentRule::ContainedReference)
+    } else if !may_contain(parent, child) {
+        Some(ContainmentRule::NotAllowed)
+    } else {
+        None
+    }
+}
+
+/// The two ways a `contains` edge can break the containment rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainmentRule {
+    /// A Reference is never contained (§6.1).
+    ContainedReference,
+    /// The pair isn't in the containment table (§3.3).
+    NotAllowed,
+}
+
 /// A set of nodes that reach each other through edges of one type: a
 /// strongly connected component with a cycle in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +92,9 @@ pub struct CyclicComponent {
 }
 
 /// Every place where `edges` (source → target) loop back on themselves.
+///
+/// Visibility is the caller's job (§14): pass only edges whose two ends the
+/// reader may see, or a hidden node can turn up as a member.
 ///
 /// Each strongly connected component that contains a cycle is reported once,
 /// with one representative cycle. Listing every simple cycle instead would
@@ -260,7 +288,10 @@ mod tests {
         }
         let (last, first) = (c.cycle[c.cycle.len() - 1], c.cycle[0]);
         assert!(has(last, first), "the cycle closes");
-        // `members` is sorted.
+        assert!(
+            c.members.windows(2).all(|w| w[0] < w[1]),
+            "members sorted and unique"
+        );
         assert!(c.cycle.iter().all(|n| c.members.binary_search(n).is_ok()));
     }
 
@@ -294,6 +325,41 @@ mod tests {
                     expected,
                     "{parent:?} contains {child:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn all_lists_every_capability() {
+        // Exhaustive on purpose: a new capability fails to compile here
+        // until it's given a place in `ALL`.
+        fn ordinal(c: Capability) -> usize {
+            match c {
+                Capability::Tasks => 0,
+                Capability::People => 1,
+                Capability::ProjectStatus => 2,
+                Capability::Plan => 3,
+            }
+        }
+        for (i, c) in Capability::ALL.into_iter().enumerate() {
+            assert_eq!(ordinal(c), i);
+        }
+    }
+
+    #[test]
+    fn a_bad_contains_edge_breaks_exactly_one_rule() {
+        use NodeType::*;
+        for parent in &KINDS {
+            for child in &KINDS {
+                let got = containment_violation(parent, child);
+                let expected = if matches!(child, Reference | Resource) {
+                    Some(ContainmentRule::ContainedReference)
+                } else if may_contain(parent, child) {
+                    None
+                } else {
+                    Some(ContainmentRule::NotAllowed)
+                };
+                assert_eq!(got, expected, "{parent:?} contains {child:?}");
             }
         }
     }

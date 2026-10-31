@@ -13,6 +13,10 @@ use uuid::Uuid;
 /// At most this many items per rule are listed; the count stays exact.
 pub const ITEM_CAP: usize = 200;
 
+/// At most this many related things per item (a loop can be huge); the
+/// rest are counted in [`Violation::more`].
+pub const RELATED_CAP: usize = 20;
+
 /// One rule of the data model that existing data can break.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -131,7 +135,7 @@ pub struct Ref {
     pub kind: RefKind,
     pub id: Uuid,
     pub label: String,
-    /// The node is archived (hidden from lists); always false for others.
+    /// The node is archived (hidden from lists); for a task, its node is.
     #[serde(default)]
     pub archived: bool,
     /// A task's node, for the link; `None` for an orphan task and for
@@ -152,13 +156,14 @@ impl Ref {
         }
     }
 
+    /// `archived` is the task's node's: its link leads to a hidden node.
     #[must_use]
-    pub fn task(id: Uuid, label: impl Into<String>, node_id: Option<Uuid>) -> Self {
+    pub fn task(id: Uuid, label: impl Into<String>, node_id: Option<Uuid>, archived: bool) -> Self {
         Self {
             kind: RefKind::Task,
             id,
             label: label.into(),
-            archived: false,
+            archived,
             node_id,
         }
     }
@@ -181,8 +186,26 @@ impl Ref {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Violation {
     pub subject: Ref,
+    /// The first [`RELATED_CAP`] related things.
     #[serde(default)]
     pub related: Vec<Ref>,
+    /// How many more related things there are beyond `related`.
+    #[serde(default)]
+    pub more: u64,
+}
+
+impl Violation {
+    /// Keeps the first [`RELATED_CAP`] related things and counts the rest.
+    #[must_use]
+    pub fn new(subject: Ref, mut related: Vec<Ref>) -> Self {
+        let more = related.len().saturating_sub(RELATED_CAP) as u64;
+        related.truncate(RELATED_CAP);
+        Self {
+            subject,
+            related,
+            more,
+        }
+    }
 }
 
 /// One rule's findings for the caller.
@@ -196,10 +219,19 @@ pub struct RuleReport {
 }
 
 impl RuleReport {
-    /// Counts every item and keeps the first [`ITEM_CAP`].
+    /// Counts every item and keeps the first [`ITEM_CAP`]: for rules
+    /// computed in Rust, which hold every item anyway.
     #[must_use]
     pub fn new(rule: RuleId, mut items: Vec<Violation>) -> Self {
         let count = items.len() as u64;
+        items.truncate(ITEM_CAP);
+        Self { rule, count, items }
+    }
+
+    /// An exact `count` (a SQL `COUNT(*)`) with the items fetched under a
+    /// `LIMIT` of [`ITEM_CAP`], so a large rule never loads every row.
+    #[must_use]
+    pub fn with_count(rule: RuleId, count: u64, mut items: Vec<Violation>) -> Self {
         items.truncate(ITEM_CAP);
         Self { rule, count, items }
     }
@@ -223,10 +255,30 @@ mod tests {
     use super::*;
 
     fn item(n: u128) -> Violation {
-        Violation {
-            subject: Ref::node(Uuid::from_u128(n), format!("n{n}"), false),
-            related: vec![],
-        }
+        Violation::new(
+            Ref::node(Uuid::from_u128(n), format!("n{n}"), false),
+            vec![],
+        )
+    }
+
+    #[test]
+    fn a_huge_loop_lists_a_few_members_and_counts_the_rest() {
+        let members: Vec<Ref> = (0..(RELATED_CAP as u128 + 5))
+            .map(|n| Ref::node(Uuid::from_u128(n), "m", false))
+            .collect();
+        let v = Violation::new(Ref::node(Uuid::nil(), "s", false), members);
+        assert_eq!(v.related.len(), RELATED_CAP);
+        assert_eq!(v.more, 5);
+        let small = Violation::new(Ref::node(Uuid::nil(), "s", false), vec![]);
+        assert_eq!(small.more, 0);
+    }
+
+    #[test]
+    fn a_counted_report_keeps_the_sql_count_and_caps_items() {
+        let items: Vec<Violation> = (0..(ITEM_CAP as u128 + 1)).map(item).collect();
+        let r = RuleReport::with_count(RuleId::OrphanTask, 9_999, items);
+        assert_eq!(r.count, 9_999);
+        assert_eq!(r.items.len(), ITEM_CAP);
     }
 
     #[test]
@@ -252,9 +304,10 @@ mod tests {
 
     #[test]
     fn a_ref_round_trips_and_omits_an_empty_node_link() {
-        let task = Ref::task(Uuid::from_u128(1), "t", Some(Uuid::from_u128(2)));
+        let task = Ref::task(Uuid::from_u128(1), "t", Some(Uuid::from_u128(2)), true);
         let json = serde_json::to_value(&task).expect("ser");
         assert_eq!(json["kind"], "task");
+        assert_eq!(json["archived"], true, "the task's node is archived");
         assert_eq!(serde_json::from_value::<Ref>(json).expect("de"), task);
         let node = serde_json::to_value(Ref::node(Uuid::from_u128(3), "n", true)).expect("ser");
         assert!(node.get("node_id").is_none());
