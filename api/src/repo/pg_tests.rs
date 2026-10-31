@@ -3664,6 +3664,10 @@ async fn a_connection_left_inside_a_transaction_is_never_reused(pool: PgPool) {
         let mut conn = guarded.acquire().await.unwrap();
         sqlx::query("BEGIN").execute(&mut *conn).await.unwrap();
         sqlx::query("SELECT 1").execute(&mut *conn).await.unwrap();
+        assert!(
+            crate::repo::in_transaction_block(&mut conn).await.unwrap(),
+            "the check sees the leaked transaction"
+        );
     }
     // One connection allowed: this waits for the release check above.
     let mut conn = guarded.acquire().await.unwrap();
@@ -3687,4 +3691,6 @@ async fn a_connection_left_inside_a_transaction_is_never_reused(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(pid, pid_again, "a clean connection is reused, not closed");
+    drop(again);
+    guarded.close().await;
 }
