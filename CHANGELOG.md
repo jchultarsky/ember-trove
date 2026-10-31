@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-31
+
 ### Added
 - **Connections follow the data model's rules** (#224, ONTOLOGY §6). Adding
   a connection that breaks one is refused with the reason, in the node's
