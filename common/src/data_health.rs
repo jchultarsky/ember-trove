@@ -66,6 +66,25 @@ impl RuleId {
         }
     }
 
+    /// A short heading for the rule.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::TaskOnNonProject => "Tasks outside a Project",
+            Self::OrphanTask => "Tasks with no Project",
+            Self::MembershipOnNonProject => "People outside a Project",
+            Self::StatusOnNonProject => "A project status outside a Project",
+            Self::MultipleHomes => "More than one home",
+            Self::ContainedReference => "A Reference inside a home",
+            Self::ContainmentNotAllowed => "A home that isn't allowed",
+            Self::DependsOnArea => "A dependency on an Area",
+            Self::RelatedToBothWays => "A link stored both ways",
+            Self::ContainsCycle => "Homes in a loop",
+            Self::DependsOnCycle => "Dependencies in a loop",
+            Self::DerivedFromCycle => "Derivations in a loop",
+        }
+    }
+
     /// The rule, in one sentence.
     #[must_use]
     pub fn explanation(self) -> &'static str {
@@ -284,6 +303,7 @@ mod tests {
     #[test]
     fn every_rule_is_explained_with_its_section_and_a_hint() {
         for rule in RuleId::ALL {
+            assert!(!rule.title().is_empty(), "{}", rule.as_str());
             assert!(rule.section().starts_with('§'), "{}", rule.as_str());
             assert!(rule.explanation().ends_with('.'), "{}", rule.as_str());
             assert!(rule.fix_hint().ends_with('.'), "{}", rule.as_str());

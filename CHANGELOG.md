@@ -26,7 +26,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     the database-wide figure that later database constraints wait on, so
     it can exceed the accounts' reports combined: for example, a second
     home that the child's owner can't see.
-  - The page follows in a later release.
+- **Data health page** (#208): sidebar **Data health**, or Cmd-K "Go to
+  Data health".
+  - One card per rule that has items: the rule, its section of the data
+    model, how to fix it, and the items, each linking to where it lives
+    (an orphan task opens in the Inbox).
+  - Archived nodes are marked, and a long list says how many it shows.
+  - Admins also see each rule's count across every account.
+  - The page only reads. Fix buttons come with the releases that enforce
+    each rule.
 
 ### Security
 - **The data-health report shows only the caller's own data** (#208,

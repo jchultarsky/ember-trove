@@ -7,6 +7,7 @@ pub mod bulk_permissions_view;
 pub mod calendar_view;
 pub mod change_password_modal;
 pub mod dark_mode_toggle;
+pub mod data_health_view;
 pub mod due_date_field;
 pub mod empty_state;
 pub mod favorites_section;
