@@ -899,6 +899,12 @@ impl crate::repo::data_health::DataHealthRepo for StubDataHealthRepo {
         self.0.lock().expect("lock").push(owner.to_string());
         Ok(vec![])
     }
+    async fn counts_all(&self) -> Result<Vec<common::data_health::RuleCount>, EmberTroveError> {
+        Ok(vec![common::data_health::RuleCount {
+            rule: common::data_health::RuleId::OrphanTask,
+            count: 3,
+        }])
+    }
 }
 
 struct StubNodeVersionRepo;
@@ -2594,4 +2600,38 @@ async fn the_data_health_report_is_the_callers_own_even_for_an_admin() {
     let body = body_json(resp).await;
     assert!(body["rules"].is_array());
     assert_eq!(*repo.0.lock().expect("lock"), vec![admin_claims().sub]);
+}
+
+#[tokio::test]
+async fn admin_data_health_counts_are_admin_only_and_carry_no_content() {
+    let app = |claims: common::auth::AuthClaims| {
+        Router::new()
+            .nest("/admin", crate::routes::admin::router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+    };
+    let denied = app(fake_claims())
+        .oneshot(
+            Request::get("/admin/data-health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    let ok = app(admin_claims())
+        .oneshot(
+            Request::get("/admin/data-health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    let body = body_json(ok).await;
+    assert_eq!(
+        body,
+        serde_json::json!([{ "rule": "orphan_task", "count": 3 }])
+    );
 }

@@ -86,7 +86,8 @@ pub enum ContainmentRule {
 pub struct CyclicComponent {
     /// Every node in the component, sorted.
     pub members: Vec<Uuid>,
-    /// One cycle through the component, starting at its smallest member:
+    /// One cycle through the component, starting at its smallest preferred
+    /// member (see [`cyclic_components_preferring`]), else its smallest:
     /// `[a, b, c]` means `a → b → c → a`. A self-loop is `[a]`.
     pub cycle: Vec<Uuid>,
 }
@@ -104,13 +105,31 @@ pub struct CyclicComponent {
 /// smallest member, whatever order the edges came in.
 #[must_use]
 pub fn cyclic_components(edges: &[(Uuid, Uuid)]) -> Vec<CyclicComponent> {
+    cyclic_components_preferring(edges, |_| false)
+}
+
+/// [`cyclic_components`], with each representative cycle running through a
+/// `prefer`red member when the component has one: the data-health report
+/// prefers the reader's own nodes, so the loop it shows is one they can
+/// break, not a path through other people's shared nodes.
+#[must_use]
+pub fn cyclic_components_preferring(
+    edges: &[(Uuid, Uuid)],
+    prefer: impl Fn(&Uuid) -> bool,
+) -> Vec<CyclicComponent> {
     let graph = Graph::new(edges);
     let mut out: Vec<CyclicComponent> = graph
         .strongly_connected()
         .into_iter()
         .filter(|members| members.len() > 1 || graph.has_self_loop(members[0]))
         .map(|members| {
-            let cycle = graph.cycle_within(&members);
+            // Members are sorted, so this is the smallest preferred one.
+            let start = members
+                .iter()
+                .copied()
+                .find(|&i| prefer(&graph.ids[i]))
+                .unwrap_or(members[0]);
+            let cycle = graph.cycle_within(&members, start);
             CyclicComponent {
                 members: members.iter().map(|&i| graph.ids[i]).collect(),
                 cycle: cycle.iter().map(|&i| graph.ids[i]).collect(),
@@ -222,12 +241,9 @@ impl Graph {
         components
     }
 
-    /// A shortest cycle through the smallest member, staying inside the
-    /// component: breadth-first from it until an edge leads back to it.
-    fn cycle_within(&self, members: &[usize]) -> Vec<usize> {
-        let Some(&start) = members.first() else {
-            return Vec::new();
-        };
+    /// A shortest cycle through `start`, staying inside the component:
+    /// breadth-first from it until an edge leads back to it.
+    fn cycle_within(&self, members: &[usize], start: usize) -> Vec<usize> {
         if self.has_self_loop(start) {
             return vec![start];
         }
@@ -282,7 +298,10 @@ mod tests {
         let set: std::collections::HashSet<_> = edges.iter().copied().collect();
         let has = |a: Uuid, b: Uuid| set.contains(&(a, b));
         assert!(!c.cycle.is_empty());
-        assert_eq!(c.cycle[0], c.members[0], "starts at the smallest member");
+        assert!(
+            c.members.contains(&c.cycle[0]),
+            "starts inside the component"
+        );
         for pair in c.cycle.windows(2) {
             assert!(has(pair[0], pair[1]), "{:?} is not an edge", pair);
         }
@@ -475,5 +494,23 @@ mod tests {
         shuffled.push((id(8), id(9)));
         shuffled.swap(0, 3);
         assert_eq!(cyclic_components(&edges), cyclic_components(&shuffled));
+    }
+
+    #[test]
+    fn a_preferred_member_gets_the_cycle_through_it() {
+        // {1, 2, 3}: 1 ↔ 2 is the short loop from the smallest member, but
+        // the reader owns 3, so the loop shown must run through 3.
+        let edges = [
+            (id(1), id(2)),
+            (id(2), id(1)),
+            (id(1), id(3)),
+            (id(3), id(1)),
+        ];
+        let plain = cyclic_components(&edges);
+        assert_eq!(plain[0].cycle, vec![id(1), id(2)]);
+        let mine = cyclic_components_preferring(&edges, |n| *n == id(3));
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].cycle, vec![id(3), id(1)]);
+        assert_valid_cycle(&mine[0], &edges);
     }
 }

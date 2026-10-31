@@ -26,6 +26,18 @@ pub fn router() -> Router<AppState> {
         .route("/users/roles", get(list_roles))
         .route("/users/{id}", delete(delete_user))
         .route("/users/{id}/roles", put(set_user_roles))
+        .route("/data-health", get(data_health_counts))
+}
+
+/// `GET /api/admin/data-health` (#208): each data-health rule's count across
+/// the installation. Counts only, never titles, ids or content (§14): an
+/// admin sees how much cleanup is left, not anyone's data.
+async fn data_health_counts(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<Vec<common::data_health::RuleCount>>, ApiError> {
+    require_admin(&claims)?;
+    Ok(Json(state.data_health.counts_all().await?))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
