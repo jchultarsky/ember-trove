@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-31
+
 ### Changed
 - **BREAKING: backups from before 3.0 can't be restored** (#222). A
   backup now carries format 3, and restore accepts format 3 only. An older archive is

@@ -5,6 +5,17 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v3.0.0 shipped: Resource merges into Reference (S2c of #222; PR #223).**
+  Four node kinds (§3.1).
+  - Migration 040 converts nodes and templates, keeping `updated_at`.
+    CHECKs keep `resource` out, since Postgres can't drop an enum value.
+  - `NodeType::parse_compat` exists for client leftovers only; the API
+    stays strict.
+  - Backups are format 3, and older archives are refused before the
+    snapshot (owner decision).
+  - The prod rehearsal converted 26 nodes and 0 templates in under 10 ms.
+    Deployed behind the owner's Lightsail snapshot.
+  - Next: S3a (edge write rules).
 - **v2.50.0 shipped: delete tasks from Data health (#220, PR #221).**
   Delete per task and "Delete finished" per card, soft with Undo; long bulk
   deletes are paced under the rate limit. The owner cleared prod's report
