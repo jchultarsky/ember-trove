@@ -5,6 +5,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v2.47.0 shipped: project-status changes are recorded in History (S1a-2
+  of #208; PR #210).** A `status_changed` entry (from → to) is written in
+  the same transaction as the change (`PgNodeRepo::update` with `FOR NO
+  KEY UPDATE`), stamped with `clock_timestamp()` after the lock. A chip
+  save no longer also logs "Edited". The panel and dashboard recap show
+  "A → B".
 - **v2.46.1 shipped: activity hardening (S1a-1 of #208; PR #209).**
   History survives a restore: backups carry `activity_log`, rows for
   missing nodes are skipped. An unknown action no longer breaks Activity,
