@@ -168,7 +168,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     // Exact first, then prefix, then any other title match; never a body
     // match, never another owner's unshared node.
     let hits = nodes
-        .lookup_titles(Some("owner-a"), "physna", 8)
+        .lookup_titles(Some("owner-a"), "physna", 8, None)
         .await
         .expect("lookup");
     assert_eq!(
@@ -177,7 +177,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     );
     // Partial words match (full-text search returned nothing for these).
     let hits = nodes
-        .lookup_titles(Some("owner-a"), " Phy ", 8)
+        .lookup_titles(Some("owner-a"), " Phy ", 8, None)
         .await
         .expect("lookup");
     assert_eq!(
@@ -186,7 +186,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     );
     assert_eq!(
         nodes
-            .lookup_titles(Some("owner-a"), "physna", 2)
+            .lookup_titles(Some("owner-a"), "physna", 2, None)
             .await
             .expect("lookup")
             .len(),
@@ -196,7 +196,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     assert_eq!(
         titles(
             nodes
-                .lookup_titles(Some("owner-a"), "%", 8)
+                .lookup_titles(Some("owner-a"), "%", 8, None)
                 .await
                 .expect("lookup")
         ),
@@ -205,7 +205,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     assert_eq!(
         titles(
             nodes
-                .lookup_titles(Some("owner-a"), "e_l", 8)
+                .lookup_titles(Some("owner-a"), "e_l", 8, None)
                 .await
                 .expect("lookup")
         ),
@@ -213,7 +213,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     );
     assert!(
         nodes
-            .lookup_titles(Some("owner-a"), "   ", 8)
+            .lookup_titles(Some("owner-a"), "   ", 8, None)
             .await
             .expect("lookup")
             .is_empty()
@@ -221,7 +221,7 @@ async fn node_title_lookup_matches_titles_ranked_and_stays_scoped(pool: PgPool) 
     // Admin (no subject) sees every owner's titles.
     let all = titles(
         nodes
-            .lookup_titles(None, "physna", 8)
+            .lookup_titles(None, "physna", 8, None)
             .await
             .expect("lookup"),
     );
@@ -2048,6 +2048,14 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
         subjects(&alice, RuleId::MembershipOnNonProject),
         vec![person]
     );
+    let membership = alice[&RuleId::MembershipOnNonProject].items[0]
+        .membership
+        .clone()
+        .expect("its Remove fix needs the membership");
+    assert!(
+        membership.node_owned,
+        "alice owns the article: she may remove it"
+    );
 
     let bob = health(&pool, "bob").await;
     assert_eq!(subjects(&bob, RuleId::OrphanTask), vec![bobs_orphan]);
@@ -2294,4 +2302,55 @@ async fn data_health_marks_closed_tasks_and_lists_the_newest_first(pool: PgPool)
     assert_eq!(subjects(&alice, RuleId::OrphanTask), vec![newer, older]);
     assert!(!orphans.items[0].subject.closed);
     assert!(orphans.items[1].subject.closed, "done: links to its list");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn lookup_can_keep_to_one_kind_and_stays_scoped(pool: PgPool) {
+    // #216: the task pickers ask for Projects only, server-side.
+    let project = insert_raw_node(&pool, "owner-a", "project", "Kind plan", "").await;
+    insert_raw_node(&pool, "owner-a", "article", "Kind notes", "").await;
+    insert_raw_node(&pool, "owner-b", "project", "Kind elsewhere", "").await;
+    let repo = PgNodeRepo::new(pool.clone());
+
+    let all = repo
+        .lookup_titles(Some("owner-a"), "kind", 8, None)
+        .await
+        .expect("all kinds");
+    assert_eq!(all.len(), 2, "both of owner-a's, none of owner-b's");
+    let projects = repo
+        .lookup_titles(Some("owner-a"), "kind", 8, Some(&NodeType::Project))
+        .await
+        .expect("projects");
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id.0, project);
+    assert_eq!(projects[0].node_type, NodeType::Project);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_says_when_a_membership_is_on_someone_elses_node(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    // Not makeable through the API (only the node's owner adds people), but
+    // a restore can bring it back: alice's person on bob's Article, shared
+    // with her. She sees the item, and that she can't remove it.
+    let bobs = insert_raw_node(&pool, "bob", "article", "bob's article", "").await;
+    share(&pool, bobs, "alice").await;
+    let person: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO people (owner_id, display_name) VALUES ('alice', 'Ada') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("person");
+    raw_exec(
+        &pool,
+        "INSERT INTO node_people (node_id, person_id) VALUES ($1, $2)",
+        &[bobs, person],
+    )
+    .await;
+
+    let alice = health(&pool, "alice").await;
+    let item = &alice[&RuleId::MembershipOnNonProject].items[0];
+    assert_eq!(item.subject.id, person);
+    let membership = item.membership.clone().expect("membership");
+    assert!(!membership.node_owned, "bob's node: alice gets no Remove");
 }

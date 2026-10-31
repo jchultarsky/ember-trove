@@ -9,12 +9,13 @@ import { test, expect, createNode, createNote, type Page } from './fixtures';
 
 const LONG_BODY = Array.from({ length: 80 }, (_, i) => `Paragraph ${i} of a long node.`).join('\n\n');
 
-/** The node page's scroll container. */
-const scroller = (page: Page) => page.getByTestId('node-tasks').locator('xpath=..');
+/** The node page's scroll container. Notes are on every kind (§3.2): Tasks
+ * and People are only on Projects (#216). */
+const scroller = (page: Page) => page.getByTestId('node-notes').locator('xpath=..');
 
 async function gotoNode(page: Page, id: string) {
   await page.goto(`/nodes/${id}`);
-  await expect(page.getByTestId('node-tasks')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('node-notes')).toBeVisible({ timeout: 15_000 });
 }
 
 /** Open the header's section outline and jump to `name`. */
@@ -24,7 +25,10 @@ async function jumpTo(page: Page, name: string) {
 }
 
 test('the section outline reveals and focuses this node’s sections', async ({ page, request }) => {
-  const node = await createNode(request, `e2e jump node ${Date.now()}`, { body: LONG_BODY });
+  const node = await createNode(request, `e2e jump node ${Date.now()}`, {
+    body: LONG_BODY,
+    node_type: 'project',
+  });
   try {
     await gotoNode(page, node.id);
     const tasks = page.getByTestId('node-tasks');
@@ -48,7 +52,10 @@ test('the section outline reveals and focuses this node’s sections', async ({ 
 });
 
 test('every section is in the outline and one shared look (#131)', async ({ page, request }) => {
-  const node = await createNode(request, `e2e outline node ${Date.now()}`, { body: LONG_BODY });
+  const node = await createNode(request, `e2e outline node ${Date.now()}`, {
+    body: LONG_BODY,
+    node_type: 'project',
+  });
   try {
     await gotoNode(page, node.id);
     await page.getByRole('button', { name: 'Sections', exact: true }).click();
@@ -70,9 +77,34 @@ test('every section is in the outline and one shared look (#131)', async ({ page
   }
 });
 
+test('an Article has no Tasks or People section, and the outline follows (#216)', async ({
+  page,
+  request,
+}) => {
+  const node = await createNode(request, `e2e article sections ${Date.now()}`);
+  try {
+    await gotoNode(page, node.id);
+    await expect(page.getByTestId('node-tasks')).toHaveCount(0);
+    await expect(page.getByTestId('node-people')).toHaveCount(0);
+    await expect(page.locator('button[title="Add task"]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Sections', exact: true }).click();
+    const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
+    await expect(items).toHaveText([
+      /Notes/, /External Links/, /Connections/, /Local Graph/,
+      /Linked Here/, /Attachments/, /Sharing/, /Version History/, /Activity/,
+    ]);
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
 test('adding a task or a note keeps the scroll position', async ({ page, request }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e scroll node ${stamp}`, { body: LONG_BODY });
+  // A Project: only Projects take tasks (§3.2, #216).
+  const node = await createNode(request, `e2e scroll node ${stamp}`, {
+    body: LONG_BODY,
+    node_type: 'project',
+  });
   try {
     await gotoNode(page, node.id);
     await jumpTo(page, 'Tasks');

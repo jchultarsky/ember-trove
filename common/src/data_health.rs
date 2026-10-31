@@ -225,6 +225,19 @@ pub struct Violation {
     /// How many more related things there are beyond `related`.
     #[serde(default)]
     pub more: u64,
+    /// The membership behind a person-on-a-non-Project item, which its
+    /// "Remove" fix deletes (#216). `None` for every other rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membership: Option<MembershipRef>,
+}
+
+/// The membership a person item stands for (#216).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MembershipRef {
+    pub id: Uuid,
+    /// The reader owns the node. Removing a membership needs the node's
+    /// owner, so the fix is offered only then.
+    pub node_owned: bool,
 }
 
 impl Violation {
@@ -237,7 +250,16 @@ impl Violation {
             subject,
             related,
             more,
+            membership: None,
         }
+    }
+
+    /// Names the membership behind a person item and whether the reader
+    /// owns its node (see [`Violation::membership`]).
+    #[must_use]
+    pub fn with_membership(mut self, id: Uuid, node_owned: bool) -> Self {
+        self.membership = Some(MembershipRef { id, node_owned });
+        self
     }
 }
 
@@ -321,6 +343,22 @@ mod tests {
             assert!(rule.section().starts_with('§'), "{}", rule.as_str());
             assert!(rule.explanation().ends_with('.'), "{}", rule.as_str());
             assert!(rule.fix_hint().ends_with('.'), "{}", rule.as_str());
+        }
+    }
+
+    #[test]
+    fn the_page_and_the_api_refusal_say_the_same_thing() {
+        // #216: a 422 and the Data health card for the same rule must not
+        // drift apart.
+        use crate::ontology::Capability;
+        for (rule, cap) in [
+            (RuleId::TaskOnNonProject, Capability::Tasks),
+            (RuleId::MembershipOnNonProject, Capability::People),
+            (RuleId::StatusOnNonProject, Capability::ProjectStatus),
+        ] {
+            let refusal = cap.refusal();
+            let sentence = format!("O{}.", &refusal[1..]);
+            assert_eq!(rule.explanation(), sentence, "{}", rule.as_str());
         }
     }
 

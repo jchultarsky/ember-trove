@@ -10,6 +10,7 @@ use common::{
     id::{NodeId, TaskId},
     markdown::extract_section,
     node::{NodeListParams, NodeType},
+    ontology::Capability,
     task::{
         CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTasksRequest, Task, TaskCounts,
         TaskStatus, UpdateTaskRequest,
@@ -23,6 +24,7 @@ use uuid::Uuid;
 use crate::{
     auth::permissions::{is_admin, require_editor, require_viewer},
     error::ApiError,
+    routes::capability::require_capability,
     state::AppState,
     webhook_dispatch::dispatch,
 };
@@ -116,6 +118,17 @@ fn series_effect(pre: &Task, new_status: Option<&TaskStatus>, today: NaiveDate) 
     }
 }
 
+/// The next occurrence goes on the task's node as it is *after* the
+/// update, so a task completed and moved in one request takes its series
+/// with it (#216). Otherwise it would land on the node the task just left.
+fn scheduled_on(
+    mut req: CreateTaskRequest,
+    node_after_update: Option<NodeId>,
+) -> CreateTaskRequest {
+    req.node_id = node_after_update;
+    req
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 async fn list_tasks(
@@ -140,6 +153,7 @@ async fn create_task(
     require_editor(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
+    require_capability(&state, NodeId(node_id), Capability::Tasks).await?;
     let task = state
         .tasks
         .create(Some(NodeId(node_id)), &claims.sub, req)
@@ -165,6 +179,7 @@ async fn create_standalone_task(
     // If a parent node is specified, verify the caller has editor access.
     if let Some(nid) = req.node_id {
         require_editor(state.permissions.as_ref(), &claims, nid).await?;
+        require_capability(&state, nid, Capability::Tasks).await?;
     }
     let node_id = req.node_id;
     let task = state.tasks.create(node_id, &claims.sub, req).await?;
@@ -220,6 +235,11 @@ async fn update_task(
     // task's current node. Mirrors create_standalone_task.
     if let Some(Some(dest)) = req.node_id {
         require_editor(state.permissions.as_ref(), &claims, dest).await?;
+        // §3.2 (#216): only onto a Project. Staying on the current node is
+        // not a move, so a task already on a non-Project stays editable.
+        if existing.node_id != Some(dest) {
+            require_capability(&state, dest, Capability::Tasks).await?;
+        }
     }
 
     let effect = series_effect(
@@ -234,6 +254,7 @@ async fn update_task(
     match effect {
         SeriesEffect::Unchanged => {}
         SeriesEffect::ScheduleNext { owner_id, req } => {
+            let req = scheduled_on(req, updated.node_id);
             if let Err(e) = state
                 .tasks
                 .create_occurrence(TaskId(id), &owner_id, req)
@@ -525,6 +546,24 @@ mod tests {
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 3, 12).unwrap()
+    }
+
+    #[test]
+    fn the_next_occurrence_follows_the_task_to_its_node_after_the_update() {
+        // #216: complete and move in one request, and the series moves too.
+        let pre = task(TaskStatus::Open, Some(RecurrenceRule::Weekly));
+        let SeriesEffect::ScheduleNext { req, .. } =
+            series_effect(&pre, Some(&TaskStatus::Done), today())
+        else {
+            panic!("expected ScheduleNext");
+        };
+        assert_eq!(req.node_id, None, "built from the task before the update");
+        let project = NodeId(Uuid::from_u128(7));
+        assert_eq!(
+            scheduled_on(req.clone(), Some(project)).node_id,
+            Some(project)
+        );
+        assert_eq!(scheduled_on(req, None).node_id, None);
     }
 
     #[test]

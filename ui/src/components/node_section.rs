@@ -8,8 +8,9 @@
 //! section one look, a labelled region and a jump target, and publishes its
 //! count for the outline.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use common::ontology::Capability;
 use leptos::prelude::*;
 
 /// A section of the node page, in page order.
@@ -97,12 +98,47 @@ impl NodeSection {
     }
 }
 
+/// Whether a section shows on a node page (#216). One its kind may carry
+/// always shows; one it may not (Tasks or People on an Article) shows only
+/// while it still holds items from before the rule, so they stay visible
+/// and fixable. `total` counts every item, done ones too; `None` (still
+/// loading) hides it, so it never flashes up and away.
+#[must_use]
+pub fn section_shown(allowed: bool, total: Option<usize>) -> bool {
+    allowed || total.is_some_and(|n| n > 0)
+}
+
+/// The note inside a Tasks or People section on a node whose kind may not
+/// carry them (#216): the rule, in the API's own words, and, for the node's
+/// owner, where to fix the older items. Data health lists only the reader's
+/// own data, so a viewer of someone else's node isn't sent there.
+#[component]
+pub fn NotOnThisKind(capability: Capability, can_fix: bool) -> impl IntoView {
+    let refusal = capability.refusal();
+    let sentence = format!("O{}.", refusal.get(1..).unwrap_or_default());
+    view! {
+        <p class="mb-3 text-xs text-stone-500 dark:text-stone-400" data-testid="not-on-this-kind">
+            {sentence}
+            {can_fix.then(|| view! {
+                " Move these to a Project from "
+                <a href="/data-health" class="underline underline-offset-2 hover:text-amber-700 dark:hover:text-amber-400">
+                    "Data health"
+                </a>
+                "."
+            })}
+        </p>
+    }
+}
+
 /// Provided by `NodeView`: the pending "jump to" request, and each
 /// section's current count (for the outline).
 #[derive(Clone, Copy)]
 pub struct NodeSections {
     pub jump: RwSignal<Option<NodeSection>>,
     pub counts: RwSignal<HashMap<NodeSection, usize>>,
+    /// The sections on the page right now (#216): a section a node's kind
+    /// may not carry is left out, so the outline lists only what's there.
+    pub present: RwSignal<HashSet<NodeSection>>,
 }
 
 impl NodeSections {
@@ -110,6 +146,7 @@ impl NodeSections {
         let sections = NodeSections {
             jump: RwSignal::new(None),
             counts: RwSignal::new(HashMap::new()),
+            present: RwSignal::new(HashSet::new()),
         };
         provide_context(sections);
         sections
@@ -138,6 +175,19 @@ pub fn SectionShell(
     let body_id = move || format!("node-{}-body", section.slug());
 
     if let Some(sections) = use_context::<NodeSections>() {
+        // Register for the outline while mounted (#216); `try_` because the
+        // page's context may be gone first when the whole page unmounts.
+        sections.present.update(|p| {
+            p.insert(section);
+        });
+        on_cleanup(move || {
+            sections.present.try_update(|p| {
+                p.remove(&section);
+            });
+            sections.counts.try_update(|m| {
+                m.remove(&section);
+            });
+        });
         // Publish the count for the outline.
         if let Some(count) = count {
             Effect::new(move |_| {
@@ -263,7 +313,10 @@ pub fn SectionOutline() -> impl IntoView {
                         role="menu"
                         aria-label="Sections"
                     >
-                        {NodeSection::ALL.iter().map(|&s| view! {
+                        {NodeSection::ALL
+                            .iter()
+                            .filter(|s| sections.present.with(|p| p.contains(s)))
+                            .map(|&s| view! {
                             <button
                                 type="button"
                                 role="menuitem"
@@ -294,7 +347,22 @@ pub fn SectionOutline() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::NodeSection;
+    use super::{NodeSection, section_shown};
+
+    #[test]
+    fn a_section_shows_when_allowed_or_while_it_holds_items() {
+        assert!(section_shown(true, None), "allowed: no flash while loading");
+        assert!(section_shown(true, Some(0)));
+        assert!(
+            !section_shown(false, None),
+            "not allowed: hidden while loading"
+        );
+        assert!(
+            !section_shown(false, Some(0)),
+            "not allowed and empty: hidden"
+        );
+        assert!(section_shown(false, Some(1)), "older items stay visible");
+    }
 
     #[test]
     fn every_section_has_a_unique_slug_and_title() {

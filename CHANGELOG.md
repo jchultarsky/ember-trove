@@ -6,6 +6,49 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.49.0] - 2026-10-31
+
+### Changed
+- **Only Projects take tasks, people and a project status** (#216,
+  ONTOLOGY §3.2). The API now refuses, with 422 and the reason ("only
+  Projects have tasks" / "… people" / "… a project status"):
+  - a new task on a node that isn't a Project, or moving a task onto one;
+  - adding a person to one;
+  - setting a project status on one, when creating or updating a node.
+
+  What already exists stays readable and editable: a task already on an
+  Article can still be edited, completed or moved to a Project, and
+  clearing a status is always allowed. The Data health page lists these
+  items.
+  - A duplicate of a non-Project no longer copies a project status.
+  - A repeating task's next occurrence follows the task's node after the
+    update, so completing and moving a task in one step moves its series.
+
+- **The UI offers tasks and people only where they belong** (#216).
+  - On any node that isn't a Project, the Tasks and People sections appear
+    only while older items remain, with no add. They show the rule, and the
+    node's owner also gets a pointer to Data health.
+  - The node page's section outline lists only the sections that are there.
+  - The task pickers (Inbox add and assign, triage `a`) offer Projects only,
+    filtered server-side through the new `node_type` parameter on
+    `/api/nodes/lookup`, and say "Project".
+
+- **One-click fixes on the Data health page** (#216).
+  - A task outside a Project, or with no Project at all: **Move to a
+    Project…** opens a picker that offers Projects only.
+  - A project status on a non-Project: **Clear status**.
+  - A person on a non-Project: **Remove**, after a confirmation. It's
+    offered only to the node's owner, who is the only one the API allows.
+
+  Each fix calls the same endpoint as the rest of the app, so the same
+  checks apply. The item then leaves its card.
+
+### Security
+- **The new 422s come after the authorization checks** (#216). A viewer or
+  stranger still gets 403 and never learns what kind a node is.
+  - An admin acting on a missing node now gets 404. Before, the write fell
+    through to a foreign-key error.
+
 ## [2.48.0] - 2026-10-31
 
 ### Added

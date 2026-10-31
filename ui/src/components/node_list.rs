@@ -614,7 +614,7 @@ fn NodeCards(
                 let node_tags_stored = StoredValue::new(node.tags.clone());
                 let pinned  = node.pinned;
                 let project_status = node.project_status.clone()
-                    .filter(|_| node.node_type == common::node::NodeType::Project);
+                    .filter(|_| common::ontology::allows(&node.node_type, common::ontology::Capability::ProjectStatus));
 
                 // Per-card picker visibility signal.
                 let show_picker = RwSignal::new(false);

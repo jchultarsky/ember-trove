@@ -6,7 +6,7 @@ use leptos::prelude::*;
 
 use crate::app::TaskRefresh;
 use crate::components::new_task_form::NewTaskForm;
-use crate::components::node_section::{NodeSection, SectionShell};
+use crate::components::node_section::{NodeSection, NotOnThisKind, SectionShell, section_shown};
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
     toggle_my_day,
@@ -20,11 +20,21 @@ use crate::components::task_row_scaffold::{
     due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
+use common::ontology::Capability;
 
 // ── TaskPanel ─────────────────────────────────────────────────────────────────
 
 #[component]
-pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
+pub fn TaskPanel(
+    node_id: NodeId,
+    /// The node's kind may carry tasks (§3.2, #216). When it may not, the
+    /// section shows only while it holds older tasks, with no add form.
+    /// Required, so a new caller can't leave the add form on by omission.
+    allowed: bool,
+    /// The reader owns the node, so its older tasks are on their Data
+    /// health page to fix.
+    can_fix: bool,
+) -> impl IntoView {
     let task_refresh = expect_context::<TaskRefresh>().0;
     // Captured at setup for the undo closures, which outlive the deleted rows.
     let toast_state = use_context::<ToastState>();
@@ -66,7 +76,18 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     // One section primitive for the node page (#131): open by default.
     let open = RwSignal::new(true);
     let count = Signal::derive(move || Some(open_tasks.with(Vec::len)));
+    // Every task, done ones too: a done task on an Article still needs
+    // moving, so it keeps the section up.
+    // A failed load counts as "has items": the section then shows, error
+    // and all, instead of vanishing on a node whose kind takes no tasks.
+    let total = Signal::derive(move || {
+        tasks_resource.with(|r| r.as_ref().map(|r| r.as_ref().map_or(1, Vec::len)))
+    });
+    let shown = Memo::new(move |_| section_shown(allowed, total.get()));
     let add_button: ChildrenFn = std::sync::Arc::new(move || {
+        if !allowed {
+            return ().into_any();
+        }
         view! {
             <button
                 class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
@@ -86,7 +107,9 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
     });
 
     view! {
-        <SectionShell section=NodeSection::Tasks open=open count=count actions=add_button>
+        {move || shown.get().then(|| view! {
+        <SectionShell section=NodeSection::Tasks open=open count=count actions=add_button.clone()>
+            {(!allowed).then(|| view! { <NotOnThisKind capability=Capability::Tasks can_fix=can_fix /> })}
             // Add-task form — shared with the Inbox capture surface.
             {move || show_form.get().then(|| view! {
                 <div class="mb-4">
@@ -255,6 +278,7 @@ pub fn TaskPanel(node_id: NodeId) -> impl IntoView {
                 }.into_any()
             }}
         </SectionShell>
+        })}
     }
 }
 
