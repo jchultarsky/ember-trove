@@ -58,6 +58,16 @@ impl EdgeType {
         )
     }
 
+    /// Whether an editor of the target alone may delete a link of this
+    /// type (§14). True for a home, so one home never traps a child (#224),
+    /// and for `related_to`, which has no direction (#226). Every other
+    /// type belongs to its source's editors. `DELETE /edges/{id}`, the
+    /// convert fix and the Data health buttons all use this one rule.
+    #[must_use]
+    pub fn deletable_from_target(&self) -> bool {
+        *self == EdgeType::Contains || self.is_symmetric()
+    }
+
     /// The label as an option shows it: "Related to".
     pub fn option_label(&self) -> String {
         let label = self.label();
@@ -115,6 +125,77 @@ pub struct CreateEdgeRequest {
     pub edge_type: EdgeType,
     #[garde(inner(length(max = 200)))]
     pub label: Option<String>,
+}
+
+/// Turns a link into another type in one step (#228): a Data health fix.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ConvertEdgeRequest {
+    pub edge_type: EdgeType,
+}
+
+/// What the caller may do to one end of a link. `edit` implies `view`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EndRights {
+    pub edit: bool,
+    pub view: bool,
+}
+
+/// Why a link can't be converted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertRefusal {
+    /// The caller may not delete the old link or create the new one (403).
+    Forbidden,
+    /// Not a conversion the fixes offer (422).
+    NotConvertible,
+}
+
+impl ConvertRefusal {
+    #[must_use]
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Forbidden => "you can't change this link",
+            Self::NotConvertible => {
+                "a link can only become a references or a related-to link, \
+                 and a wiki link never changes"
+            }
+        }
+    }
+}
+
+/// Whether a link of type `from` may become `to`, and if so whether its
+/// ends swap (#228). The checks run in this order:
+/// 1. **Delete the old link.** The caller must be allowed to delete it
+///    ([`EdgeType::deletable_from_target`]); this comes first, so nothing
+///    about the link is judged for a caller who has no say over it.
+/// 2. **Allowed conversions only.** `to` is `references` or `related_to`:
+///    neither has a structural rule (one home, loops) to re-check. It must
+///    differ from `from`, and a machine-owned wiki link never converts.
+/// 3. **Create the new one.** The caller needs edit rights on its source
+///    and view rights on its target. A `related_to` has no direction, so
+///    it may run from whichever end the caller edits: `Ok(true)` means the
+///    new link's source is the old target.
+pub fn convert_ends(
+    from: &EdgeType,
+    to: &EdgeType,
+    source: EndRights,
+    target: EndRights,
+) -> Result<bool, ConvertRefusal> {
+    if !(source.edit || (from.deletable_from_target() && target.edit)) {
+        return Err(ConvertRefusal::Forbidden);
+    }
+    if from == to
+        || *from == EdgeType::WikiLink
+        || !matches!(to, EdgeType::References | EdgeType::RelatedTo)
+    {
+        return Err(ConvertRefusal::NotConvertible);
+    }
+    if source.edit && target.view {
+        Ok(false)
+    } else if to.is_symmetric() && target.edit && source.view {
+        Ok(true)
+    } else {
+        Err(ConvertRefusal::Forbidden)
+    }
 }
 
 /// Merge `related_to` edges that link the same two nodes (#226, §6.2):
@@ -240,6 +321,105 @@ mod option_tests {
         assert_eq!(EdgeType::RelatedTo.option_label(), "Related to");
         assert_eq!(EdgeType::References.option_label(), "References");
         assert_eq!(EdgeType::DerivedFrom.option_label(), "Derived from");
+    }
+}
+
+#[cfg(test)]
+mod convert_tests {
+    use super::*;
+    use EdgeType::*;
+
+    const NONE: EndRights = EndRights {
+        edit: false,
+        view: false,
+    };
+    const VIEW: EndRights = EndRights {
+        edit: false,
+        view: true,
+    };
+    const EDIT: EndRights = EndRights {
+        edit: true,
+        view: true,
+    };
+
+    #[test]
+    fn only_a_home_and_a_related_link_may_be_deleted_from_the_target() {
+        for t in [
+            References,
+            Contains,
+            RelatedTo,
+            DependsOn,
+            DerivedFrom,
+            WikiLink,
+        ] {
+            assert_eq!(
+                t.deletable_from_target(),
+                matches!(t, Contains | RelatedTo),
+                "{t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_contained_reference_becomes_a_reference_link_from_its_parent() {
+        assert_eq!(convert_ends(&Contains, &References, EDIT, VIEW), Ok(false));
+        // The Reference's editor may free it, but can't speak for the parent.
+        assert_eq!(
+            convert_ends(&Contains, &References, VIEW, EDIT),
+            Err(ConvertRefusal::Forbidden)
+        );
+    }
+
+    #[test]
+    fn a_related_link_runs_from_whichever_end_the_caller_edits() {
+        assert_eq!(convert_ends(&Contains, &RelatedTo, EDIT, VIEW), Ok(false));
+        assert_eq!(convert_ends(&Contains, &RelatedTo, VIEW, EDIT), Ok(true));
+        // A depends_on is its source's: the target's editor can't touch it.
+        assert_eq!(
+            convert_ends(&DependsOn, &RelatedTo, VIEW, EDIT),
+            Err(ConvertRefusal::Forbidden)
+        );
+        assert_eq!(convert_ends(&DependsOn, &RelatedTo, EDIT, VIEW), Ok(false));
+    }
+
+    #[test]
+    fn rights_are_judged_before_the_conversion() {
+        // A stranger learns nothing about what the link could become.
+        assert_eq!(
+            convert_ends(&WikiLink, &Contains, NONE, NONE),
+            Err(ConvertRefusal::Forbidden)
+        );
+        assert_eq!(
+            convert_ends(&Contains, &RelatedTo, VIEW, VIEW),
+            Err(ConvertRefusal::Forbidden)
+        );
+    }
+
+    #[test]
+    fn only_unstructured_targets_and_never_a_wiki_link() {
+        for to in [Contains, DependsOn, DerivedFrom, WikiLink] {
+            assert_eq!(
+                convert_ends(&References, &to, EDIT, EDIT),
+                Err(ConvertRefusal::NotConvertible),
+                "{to:?}"
+            );
+        }
+        assert_eq!(
+            convert_ends(&References, &References, EDIT, EDIT),
+            Err(ConvertRefusal::NotConvertible)
+        );
+        assert_eq!(
+            convert_ends(&WikiLink, &References, EDIT, EDIT),
+            Err(ConvertRefusal::NotConvertible)
+        );
+    }
+
+    #[test]
+    fn the_new_link_needs_a_visible_target() {
+        assert_eq!(
+            convert_ends(&DependsOn, &References, EDIT, NONE),
+            Err(ConvertRefusal::Forbidden)
+        );
     }
 }
 

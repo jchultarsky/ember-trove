@@ -315,3 +315,103 @@ test('the palette opens Data health', async ({ page }) => {
   await expect(page).toHaveURL(/\/data-health$/);
   await expect(page.getByRole('heading', { name: 'Data health' })).toBeVisible();
 });
+
+// ── Edge fixes (#228) ────────────────────────────────────────────────────────
+// The API has refused contained References and loops since v3.1.0, so the
+// spec can't create them: the report is stubbed with fake ids, and the fix
+// calls are caught and answered, to check exactly what each button sends.
+
+const node = (id: string, label: string) => ({ kind: 'node', id, label });
+const link = (id: string, edge_type: string, source: string, target: string, source_owned: boolean) => ({
+  id,
+  edge_type,
+  source,
+  target,
+  source_owned,
+  target_owned: true,
+});
+const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+
+test('edge items convert, convert in bulk, and break a loop one link at a time', async ({ page }) => {
+  const [area, refA, refB, p, q] = [1, 2, 3, 4, 5].map(uuid);
+  const [linkA, linkB, hopPQ, hopQP] = [11, 12, 13, 14].map(uuid);
+  await page.route('**/api/data-health', (route) =>
+    route.fulfill({
+      json: {
+        rules: [
+          {
+            rule: 'contained_reference',
+            count: 2,
+            items: [
+              {
+                subject: node(refA, 'ref a'),
+                related: [node(area, 'the area')],
+                more: 0,
+                links: [link(linkA, 'contains', area, refA, true)],
+              },
+              {
+                subject: node(refB, 'ref b'),
+                related: [node(area, 'the area')],
+                more: 0,
+                links: [link(linkB, 'contains', area, refB, true)],
+              },
+            ],
+          },
+          {
+            rule: 'depends_on_cycle',
+            count: 1,
+            items: [
+              {
+                subject: node(p, 'proj p'),
+                related: [node(q, 'proj q')],
+                more: 0,
+                // The second hop is someone else's: no button for it.
+                links: [
+                  link(hopPQ, 'depends_on', p, q, true),
+                  link(hopQP, 'depends_on', q, p, false),
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  const converts: { id: string; body: unknown }[] = [];
+  await page.route('**/api/edges/*/convert', (route) => {
+    converts.push({ id: route.request().url().split('/').at(-2)!, body: route.request().postDataJSON() });
+    return route.fulfill({ status: 204 });
+  });
+  const deletes: string[] = [];
+  await page.route('**/api/edges/*', (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    deletes.push(route.request().url().split('/').at(-1)!);
+    return route.fulfill({ status: 204 });
+  });
+
+  await page.goto('/data-health');
+  const refs = page.getByTestId('data-health-contained_reference');
+  await expect(refs).toBeVisible();
+
+  // One item.
+  await refs
+    .getByTestId('data-health-item')
+    .first()
+    .getByRole('button', { name: 'Make it a reference link' })
+    .click();
+  await expect.poll(() => converts.length).toBe(1);
+  expect(converts[0]).toEqual({ id: linkA, body: { edge_type: 'references' } });
+
+  // All of them, after one confirmation.
+  await refs.getByTestId('convert-all').getByRole('button', { name: 'Convert all 2' }).click();
+  await refs.getByRole('group', { name: 'Confirm convert' }).getByRole('button', { name: 'Convert' }).click();
+  await expect.poll(() => converts.length).toBe(3);
+  expect(converts.slice(1).map((c) => c.id).sort()).toEqual([linkA, linkB].sort());
+
+  // A loop: only the reader's own link can go.
+  const loop = page.getByTestId('data-health-depends_on_cycle').getByTestId('loop-links');
+  await expect(loop.getByRole('button', { name: /Remove the link/ })).toHaveCount(1);
+  await loop.getByRole('button', { name: 'Remove the link proj p → proj q' }).click();
+  await loop.getByRole('group', { name: 'Confirm remove' }).getByRole('button', { name: 'Remove' }).click();
+  await expect.poll(() => deletes).toEqual([hopPQ]);
+});

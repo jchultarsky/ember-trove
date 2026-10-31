@@ -6,6 +6,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Data health can fix link problems** (#228, ONTOLOGY §3.3, §6).
+  - A Reference inside a home: "Make it a reference link" turns the
+    `contains` into a `references` link, keeping its label. "Convert all"
+    does every listed one after a single confirmation.
+  - A home that isn't allowed, or a dependency on an Area: "Link instead"
+    turns it into a related link; Remove deletes it.
+  - A loop lists its links ("A → B"). Removing any one of yours breaks it.
+  - Buttons appear only where the call would pass: the item carries each
+    link's id, and the page applies the API's own rules to what you own.
+- `POST /api/edges/{id}/convert` turns a link into a `references` or
+  `related_to` link in one transaction. It needs rights to delete the old
+  link and to create the new one. A `related_to` runs from whichever end
+  you can edit. If an identical link is already there, it absorbs the
+  converted one and takes its label when it has none.
+- "Convert all" sends its calls at a pace the write limit allows, like the
+  bulk task delete, and says how many failed.
+
+### Changed
+- **The "A link stored both ways" rule is gone from Data health.** Since
+  3.2.0 the database stores a related link once, so the rule could never
+  fire. A backup that still holds such a pair says so in the restore
+  preview, as a count, and restores each pair as one link.
+
 ## [3.2.1] - 2026-10-31
 
 ### Security

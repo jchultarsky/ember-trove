@@ -238,8 +238,10 @@ const CONCEPTS: &[Concept] = &[
         title: "Data health",
         body: "Data health (sidebar, or Cmd-K \"Go to Data health\") lists your \
                data that doesn't fit the data model yet: tasks outside a Project, \
-               a node with two homes, links in a loop. It only reads: each item \
-               links to where it lives, with how to fix it there.",
+               a node with two homes, links in a loop. Each item links to where \
+               it lives and says how to fix it; most have fix buttons, such as \
+               turning a contained Reference into a reference link, or removing \
+               one link of a loop.",
     },
     Concept {
         title: "Recent + Search",

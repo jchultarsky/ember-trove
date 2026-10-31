@@ -65,7 +65,19 @@ cargo check && cargo clippy -- -D warnings
   409 duplicate.
 - `DELETE /edges/:id` for `contains` and `related_to` accepts an editor of
   **either** end (one home must never trap a child; `related_to` has no
-  direction). Other types stay source-editor only.
+  direction). Other types stay source-editor only. The rule is
+  `EdgeType::deletable_from_target`, shared with convert and Data health.
+- `POST /edges/:id/convert` (#228) is decided by `common::edge::convert_ends`:
+  rights to delete the old link come first, then the conversion is checked
+  (only to `references` / `related_to`, never from a wiki link), then the
+  rights to create the new one. The route reads each end's rights with
+  `end_rights`: only a 403 means "no", and any other error propagates. The
+  repo deletes by id **and** type, so a link changed since the checks is a
+  404, and inserts with a bare `ON CONFLICT DO NOTHING`, so an existing
+  link absorbs it.
+- Data health edge items carry `links: Vec<LinkRef>`, judged by ownership
+  like #216's memberships. `LinkRef::removable` and `convertible_to` reuse
+  the API's rules, so a button is only offered when the call would pass.
 - `related_to` is stored once per unordered pair (#226): the partial
   unique index `edges_related_to_once` on `LEAST/GREATEST(source, target)`
   answers a reverse insert with the same 409 as a duplicate. Restore folds

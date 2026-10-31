@@ -97,9 +97,24 @@ fn rules_warning(counts: &[(common::data_health::RuleId, usize)]) -> Option<Stri
         .join(", ");
     Some(format!(
         "Some links in this backup break the data model: {list}. \
-         They are restored as they are (a link stored both ways becomes one), \
-         and the Data health page lists the rest."
+         They are restored as they are, and the Data health page lists them."
     ))
+}
+
+/// The restore preview's note on related links stored both ways (#226):
+/// restore merges each pair, as migration 041 did, and keeps the copy in
+/// `edges_removed_041`. Only a count. `None` when there are none.
+fn related_pairs_warning(data: &BackupData) -> Option<String> {
+    let (_, merged) = common::edge::fold_related_pairs(data.edges.clone());
+    match merged.len() {
+        0 => None,
+        n => Some(format!(
+            "{n} related link{s} in this backup {are} stored both ways; \
+             each pair is restored as one link.",
+            s = if n == 1 { "" } else { "s" },
+            are = if n == 1 { "is" } else { "are" },
+        )),
+    }
 }
 
 fn add_bytes_to_archive<W: Write>(
@@ -310,7 +325,10 @@ pub async fn preview_restore(
     // An unreadable data.json fails the restore itself later; the preview
     // still shows, saying it couldn't check.
     match extract_data(&archive_bytes) {
-        Ok(data) => warnings.extend(edge_rules_warning(&data)),
+        Ok(data) => {
+            warnings.extend(edge_rules_warning(&data));
+            warnings.extend(related_pairs_warning(&data));
+        }
         Err(e) => {
             tracing::warn!("restore preview couldn't read data.json: {e:?}");
             warnings.push(
@@ -1070,6 +1088,31 @@ mod tests {
     }
 
     #[test]
+    fn a_related_pair_stored_both_ways_is_counted_not_named() {
+        let edge = |n: u128, s: u128, t: u128| {
+            serde_json::json!({
+                "id": Uuid::from_u128(n), "source_id": Uuid::from_u128(s),
+                "target_id": Uuid::from_u128(t), "edge_type": "related_to",
+                "label": null, "created_at": "2026-01-01T00:00:00Z",
+            })
+        };
+        let data = |edges: Vec<serde_json::Value>| -> BackupData {
+            serde_json::from_value(serde_json::json!({
+                "nodes": [], "edges": edges, "tags": [], "notes": [],
+                "tasks": [], "attachments": [],
+            }))
+            .expect("backup data")
+        };
+        assert_eq!(related_pairs_warning(&data(vec![edge(1, 7, 8)])), None);
+        assert_eq!(
+            related_pairs_warning(&data(vec![edge(1, 7, 8), edge(2, 8, 7)])).as_deref(),
+            Some(
+                "1 related link in this backup is stored both ways; each pair is restored as one link."
+            )
+        );
+    }
+
+    #[test]
     fn the_edge_rules_warning_carries_rule_names_and_counts_only() {
         use common::data_health::RuleId;
         assert_eq!(rules_warning(&[]), None, "a clean graph says nothing");
@@ -1079,8 +1122,7 @@ mod tests {
             w,
             format!(
                 "Some links in this backup break the data model: {} (2), {} (1). \
-                 They are restored as they are (a link stored both ways becomes one), \
-                 and the Data health page lists the rest.",
+                 They are restored as they are, and the Data health page lists them.",
                 RuleId::MultipleHomes.title(),
                 RuleId::ContainsCycle.title()
             )
