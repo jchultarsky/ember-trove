@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.46.1] - 2026-10-31
+
 ### Fixed
 - **Activity survives a restore** (#208). Backups now carry the activity
   log, and a restore brings it back. Before, a restore wiped every node's
