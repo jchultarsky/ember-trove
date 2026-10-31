@@ -40,6 +40,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **A share that fails now says so,** for example "sign in, then share it
   again", instead of landing on a blank page.
 
+## [3.4.1] - 2026-10-31
+
+### Fixed
+- **A cancelled request could leave a database connection stuck in a
+  transaction, and later saves on it were silently lost.** If a page was
+  closed or left at the moment a request began a transaction (for example
+  while Data health was loading), the database library returned that
+  connection to the pool without rolling the transaction back. Any later
+  request handed that connection ran inside a transaction no one commits:
+  its writes were lost when the connection closed, and its locks held up
+  other saves for up to 30 seconds.
+  - Each connection is now checked when it returns to the pool, and closed
+    if it is still inside a transaction; the database rolls it back.
+  - Found by the e2e suite while building captures (#234). Nothing points
+    to it having hit the reference instance, which has a single user.
+
 ## [3.4.0] - 2026-10-31
 
 ### Added
