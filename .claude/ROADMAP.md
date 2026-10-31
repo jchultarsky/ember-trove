@@ -3,8 +3,17 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-30)
+## Current state (2026-10-31)
 
+- **v3.2.1 shipped: security patch, S3c PR 1 of #228 (PR #229).**
+  - The project dashboard names only Area homes the reader can see
+    (`area_for_nodes` takes the subject).
+  - `POST /favorites` needs view rights on a node, and the list shows a
+    node's live title only while it's visible.
+  - Review finding left for later: task views keep a revoked node's
+    title (#230, probably S5c).
+  - Next: S3c PR 2 (edge fixes on Data health, `POST /edges/{id}/convert`,
+    retiring the both-ways rule), then PR 3 (homes and migration 042).
 - **v3.2.0 shipped: `related_to` stored once (S3b of #226; PR #227).**
   - Migration 041 merges pairs stored both ways (the oldest kept, copies
     archived in `edges_removed_041`) and adds a LEAST/GREATEST unique

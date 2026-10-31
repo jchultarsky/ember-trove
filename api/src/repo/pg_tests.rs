@@ -2966,3 +2966,121 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         "the other label is kept, as the migration keeps it"
     );
 }
+
+// ── The dashboard names only Areas the reader can see (#228) ─────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_dashboard_area_is_one_the_reader_can_see(pool: PgPool) {
+    use common::id::NodeId;
+
+    let mine = insert_raw_node(&pool, "alice", "project", "alice's project", "").await;
+    // Bob, an editor of alice's project, filed it in his private Area.
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
+    raw_edge(&pool, hidden, mine, "contains").await;
+    let repo = PgNodeRepo::new(pool.clone());
+    let area_of = |rows: Vec<(NodeId, NodeId, String)>| {
+        rows.into_iter()
+            .find(|(project, _, _)| project.0 == mine)
+            .map(|(_, area, title)| (area.0, title))
+    };
+
+    let as_alice = repo
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    assert_eq!(area_of(as_alice), None, "a hidden Area is never named");
+
+    // Once bob shares the Area, alice sees where her project lives.
+    share(&pool, hidden, "alice").await;
+    let shared = repo
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    assert_eq!(
+        area_of(shared),
+        Some((hidden, "bob's private area".to_string()))
+    );
+
+    // The admin scope (no subject) sees every Area, as elsewhere.
+    let admin = repo
+        .area_for_nodes(&[NodeId(mine)], None)
+        .await
+        .expect("areas");
+    assert_eq!(
+        area_of(admin),
+        Some((hidden, "bob's private area".to_string()))
+    );
+}
+
+/// A hidden older home must not shadow a visible newer one: the filter is
+/// applied before the oldest is picked (legacy data can hold two homes).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_hidden_older_area_does_not_hide_a_visible_one(pool: PgPool) {
+    use common::id::NodeId;
+
+    let mine = insert_raw_node(&pool, "alice", "project", "alice's project", "").await;
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
+    let own = insert_raw_node(&pool, "alice", "area", "alice's area", "").await;
+    for (parent, age) in [(hidden, 2), (own, 1)] {
+        sqlx::query(
+            "INSERT INTO edges (source_id, target_id, edge_type, created_at) \
+             VALUES ($1, $2, 'contains', now() - make_interval(hours => $3))",
+        )
+        .bind(parent)
+        .bind(mine)
+        .bind(age)
+        .execute(&pool)
+        .await
+        .expect("home");
+    }
+
+    let rows = PgNodeRepo::new(pool.clone())
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    let named: Vec<_> = rows.into_iter().map(|(_, a, t)| (a.0, t)).collect();
+    assert_eq!(named, vec![(own, "alice's area".to_string())]);
+}
+
+/// A favorite shows a node's live title only while its owner may read the
+/// node (#228); otherwise the label stored when it was added.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_favorite_names_only_a_node_its_owner_can_see(pool: PgPool) {
+    use super::favorite::{FavoriteRepo, PgFavoriteRepo};
+    use common::favorite::CreateFavoriteRequest;
+
+    let node = insert_raw_node(&pool, "alice", "article", "alice's secret plan", "").await;
+    let repo = PgFavoriteRepo::new(pool.clone());
+    // Written straight to the repo: the route would refuse it (403).
+    repo.create(
+        "bob",
+        CreateFavoriteRequest {
+            node_id: Some(node),
+            url: None,
+            label: "a label bob typed".to_string(),
+        },
+    )
+    .await
+    .expect("favorite");
+    let label = |favs: Vec<common::favorite::Favorite>| favs[0].label.clone();
+
+    assert_eq!(
+        label(repo.list("bob").await.expect("list")),
+        "a label bob typed"
+    );
+    share(&pool, node, "bob").await;
+    assert_eq!(
+        label(repo.list("bob").await.expect("list")),
+        "alice's secret plan"
+    );
+    // Revoked again: back to the stored label, never the live title.
+    sqlx::query("DELETE FROM permissions WHERE node_id = $1 AND subject_id = 'bob'")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .expect("revoke");
+    assert_eq!(
+        label(repo.list("bob").await.expect("list")),
+        "a label bob typed"
+    );
+}

@@ -22,7 +22,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_viewer},
+    auth::permissions::{is_admin, require_editor, require_viewer, subject_scope},
     error::ApiError,
     routes::capability::require_capability,
     state::AppState,
@@ -424,7 +424,9 @@ async fn project_dashboard(
             .tasks
             .list_open_for_nodes(&node_ids, DASHBOARD_TASK_LIMIT),
         state.tasks.max_task_updated_for_nodes(&node_ids),
-        state.nodes.area_for_nodes(&node_ids),
+        state
+            .nodes
+            .area_for_nodes(&node_ids, subject_scope(&claims)),
     );
 
     let counts_map: std::collections::HashMap<NodeId, TaskCounts> =
