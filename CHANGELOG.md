@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-10-31
+
 ### Added
 - **Data health can fix link problems** (#228, ONTOLOGY §3.3, §6).
   - A Reference inside a home: "Make it a reference link" turns the
