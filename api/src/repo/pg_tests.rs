@@ -2041,6 +2041,7 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
     assert!(item.subject.archived, "its node is archived");
     assert_eq!(item.related[0].id, article);
     assert_eq!(subjects(&alice, RuleId::OrphanTask), vec![orphan]);
+    assert!(!alice[&RuleId::OrphanTask].items[0].subject.closed);
     assert_eq!(subjects(&alice, RuleId::StatusOnNonProject), vec![article]);
     assert!(alice[&RuleId::StatusOnNonProject].items[0].subject.archived);
     assert_eq!(
@@ -2272,4 +2273,25 @@ async fn a_loop_is_shown_through_the_readers_own_node(pool: PgPool) {
     assert_eq!(loops.items[0].subject.id, mine);
     assert_eq!(loops.items[0].related.len(), 1, "mine → b1 → mine");
     assert_eq!(loops.items[0].related[0].id, b1);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_marks_closed_tasks_and_lists_the_newest_first(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    let older = raw_task(&pool, "alice", None, "older").await;
+    let newer = raw_task(&pool, "alice", None, "newer").await;
+    raw_exec(
+        &pool,
+        "UPDATE node_tasks SET created_at = now() - interval '1 day', status = 'done' \
+         WHERE id = $1",
+        &[older],
+    )
+    .await;
+
+    let alice = health(&pool, "alice").await;
+    let orphans = &alice[&RuleId::OrphanTask];
+    assert_eq!(subjects(&alice, RuleId::OrphanTask), vec![newer, older]);
+    assert!(!orphans.items[0].subject.closed);
+    assert!(orphans.items[1].subject.closed, "done: links to its list");
 }

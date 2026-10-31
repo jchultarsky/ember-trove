@@ -112,6 +112,7 @@ struct TaskRow {
     node_id: Option<Uuid>,
     node_title: Option<String>,
     node_archived: Option<bool>,
+    closed: bool,
     total: i64,
 }
 
@@ -130,7 +131,8 @@ async fn tasks_on_non_projects(
     let rows: Vec<TaskRow> = sqlx::query_as(
         r#"
         SELECT t.id, t.title, n.id AS node_id, n.title AS node_title,
-               n.status = 'archived' AS node_archived, count(*) OVER () AS total
+               n.status = 'archived' AS node_archived,
+               t.status IN ('done', 'cancelled') AS closed, count(*) OVER () AS total
         FROM node_tasks t
         JOIN nodes n ON n.id = t.node_id
         WHERE n.owner_id = $1
@@ -160,7 +162,10 @@ fn task_violation(r: TaskRow) -> Violation {
         (Some(id), Some(title)) => vec![Ref::node(id, title, archived)],
         _ => vec![],
     };
-    Violation::new(Ref::task(r.id, r.title, r.node_id, archived), related)
+    Violation::new(
+        Ref::task(r.id, r.title, r.node_id, archived).with_closed(r.closed),
+        related,
+    )
 }
 
 /// My tasks that belong to no node at all (today's Inbox), any status.
@@ -168,12 +173,14 @@ async fn orphan_tasks(conn: &mut PgConnection, owner: &str) -> Result<RuleReport
     let rows: Vec<TaskRow> = sqlx::query_as(
         r#"
         SELECT t.id, t.title, NULL::uuid AS node_id, NULL::text AS node_title,
-               NULL::bool AS node_archived, count(*) OVER () AS total
+               NULL::bool AS node_archived,
+               t.status IN ('done', 'cancelled') AS closed, count(*) OVER () AS total
         FROM node_tasks t
         WHERE t.owner_id = $1
           AND t.node_id IS NULL
           AND t.deleted_at IS NULL
-        ORDER BY t.created_at, t.id
+        -- Newest first: a long list shows what was just captured.
+        ORDER BY t.created_at DESC, t.id
         LIMIT $2
         "#,
     )

@@ -42,6 +42,15 @@ pub fn undo_restore_task(
 // ── Status ──────────────────────────────────────────────────────────────────
 
 /// Returns `true` for terminal statuses (Done, Cancelled).
+/// Where a task opens: on its node's page, or in the Inbox when it has no
+/// node. `?task=` scrolls to and highlights it there.
+pub fn task_href(task: uuid::Uuid, node: Option<uuid::Uuid>) -> String {
+    match node {
+        Some(nid) => format!("/nodes/{nid}?task={task}"),
+        None => format!("/tasks/inbox?task={task}"),
+    }
+}
+
 pub fn status_done(s: &TaskStatus) -> bool {
     s.is_terminal()
 }

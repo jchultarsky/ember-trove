@@ -130,7 +130,7 @@ pub fn Sidebar(
             // ── Section 4: Admin (only visible to admins) ─────────────────────
             {move || {
                 if let AuthStatus::Authenticated(ref u) = auth_state.get()
-                    && u.roles.contains(&"admin".to_string())
+                    && u.is_admin()
                 {
                     Some(view! {
                         <div>

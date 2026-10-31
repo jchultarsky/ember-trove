@@ -12,15 +12,19 @@ use crate::api;
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::empty_state::EmptyState;
 use crate::components::page_header::PageHeader;
+use crate::components::task_common::task_href;
 
-/// Where an item lives in the app.
+/// Where an item lives in the app. A done or cancelled task sits in its
+/// list's collapsed "completed" section, where `?task=` can't land, so it
+/// links to the list itself.
 fn ref_href(r: &Ref) -> String {
     match r.kind {
         RefKind::Node => format!("/nodes/{}", r.id),
-        RefKind::Task => match r.node_id {
-            Some(node) => format!("/nodes/{node}?task={}", r.id),
-            None => format!("/tasks/inbox?task={}", r.id),
+        RefKind::Task if r.closed => match r.node_id {
+            Some(node) => format!("/nodes/{node}"),
+            None => "/tasks/inbox".to_string(),
         },
+        RefKind::Task => task_href(r.id, r.node_id),
         RefKind::Person => format!("/people/{}", r.id),
     }
 }
@@ -35,7 +39,9 @@ fn shown_of(report: &RuleReport) -> Option<String> {
 pub fn DataHealthView() -> impl IntoView {
     let report = LocalResource::new(api::fetch_data_health);
     let auth = use_auth_state();
-    let is_admin = move || matches!(auth.get(), AuthStatus::Authenticated(ref u) if u.roles.iter().any(|r| r == "admin"));
+    // Memoized: auth refreshes don't remount (and refetch) the admin counts.
+    let is_admin =
+        Memo::new(move |_| matches!(auth.get(), AuthStatus::Authenticated(ref u) if u.is_admin()));
 
     view! {
         <div class="flex flex-col h-full">
@@ -55,7 +61,7 @@ pub fn DataHealthView() -> impl IntoView {
                         Ok(r) => report_view(r).into_any(),
                     })}
                 </Transition>
-                {move || is_admin().then(|| view! { <AdminCounts /> })}
+                {move || is_admin.get().then(|| view! { <AdminCounts /> })}
             </div>
         </div>
     }
@@ -136,17 +142,25 @@ fn rule_card(report: RuleReport) -> impl IntoView {
 #[component]
 fn RefLink(r: Ref) -> impl IntoView {
     let href = ref_href(&r);
-    let archived = r.archived;
+    // A task's `archived` is its node's: the badge belongs on the node.
+    let archived = r.archived && r.kind == RefKind::Node;
+    let closed = r.closed;
     view! {
         <a href=href
            class="text-stone-800 dark:text-stone-200 hover:text-amber-700 dark:hover:text-amber-400 underline-offset-2 hover:underline">
             {r.label}
         </a>
-        {archived.then(|| view! {
-            <span class="text-[10px] uppercase tracking-wide rounded px-1 bg-stone-100 dark:bg-stone-800 text-stone-500">
-                "archived"
-            </span>
-        })}
+        {archived.then(|| view! { <Badge text="archived" /> })}
+        {closed.then(|| view! { <Badge text="completed" /> })}
+    }
+}
+
+#[component]
+fn Badge(text: &'static str) -> impl IntoView {
+    view! {
+        <span class="text-[10px] uppercase tracking-wide rounded px-1 bg-stone-100 dark:bg-stone-800 text-stone-500">
+            {text}
+        </span>
     }
 }
 
@@ -211,6 +225,16 @@ mod tests {
             "an orphan task opens in the Inbox"
         );
         assert_eq!(ref_href(&Ref::person(id, "p")), format!("/people/{id}"));
+    }
+
+    #[test]
+    fn a_closed_task_links_to_its_list_not_into_the_collapsed_section() {
+        let id = Uuid::from_u128(1);
+        let node = Uuid::from_u128(2);
+        let done = Ref::task(id, "t", Some(node), false).with_closed(true);
+        assert_eq!(ref_href(&done), format!("/nodes/{node}"));
+        let done_orphan = Ref::task(id, "t", None, false).with_closed(true);
+        assert_eq!(ref_href(&done_orphan), "/tasks/inbox");
     }
 
     #[test]

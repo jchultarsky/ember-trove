@@ -32,6 +32,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     model, how to fix it, and the items, each linking to where it lives
     (an orphan task opens in the Inbox).
   - Archived nodes are marked, and a long list says how many it shows.
+  - Done or cancelled tasks are marked "completed" and open their list.
+  - Tasks with no Project are listed newest first.
   - Admins also see each rule's count across every account.
   - The page only reads. Fix buttons come with the releases that enforce
     each rule.
