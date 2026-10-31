@@ -5,6 +5,13 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-31)
 
+- **v3.4.1 shipped: pooled connections are never reused inside a
+  transaction (PR #235).** sqlx 0.8.6 leaks one when a request is cancelled
+  during `BEGIN` (the depth counter isn't incremented yet, so no rollback is
+  queued). Later requests then ran in a transaction no one commits: lost
+  writes and 30 s lock waits. `repo::pool_options` closes such a connection
+  on release (`now() <> statement_timestamp()`, simple protocol). Found by
+  the S4a e2e run.
 - **v3.4.0 shipped: one home per node (S3c PR 3 of #228, PR #233). S3c done.**
   - Migration 042: oldest home kept, extras to `edges_removed_042`,
     `edges_one_home` unique index. Prod rehearsal: 0 homes, ~2 ms.
