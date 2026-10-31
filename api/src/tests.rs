@@ -1745,6 +1745,134 @@ async fn backup_list_and_restore_reject_non_admin() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
+/// One stored backup job (#222 restore-order test).
+struct OneJobBackupRepo(BackupJob);
+
+#[async_trait]
+impl BackupRepo for OneJobBackupRepo {
+    async fn create(
+        &self,
+        _: &str,
+        _: &str,
+        _: i64,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: Option<&str>,
+    ) -> Result<BackupJob, EmberTroveError> {
+        panic!("the pre-restore snapshot ran for an archive restore refuses")
+    }
+    async fn list_for_owner(&self, _: &str) -> Result<Vec<BackupJob>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<BackupJob>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: Uuid) -> Result<BackupJob, EmberTroveError> {
+        Ok(self.0.clone())
+    }
+    async fn delete(&self, _: Uuid) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+}
+
+/// Serves one archive for every key and records every upload.
+struct ArchiveStore {
+    archive: bytes::Bytes,
+    puts: std::sync::Mutex<Vec<String>>,
+}
+
+#[async_trait]
+impl crate::object_store::ObjectStore for ArchiveStore {
+    async fn put(&self, key: &str, _: bytes::Bytes, _: &str) -> Result<(), EmberTroveError> {
+        self.puts.lock().unwrap().push(key.to_string());
+        Ok(())
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, EmberTroveError> {
+        Ok(self.archive.clone())
+    }
+    async fn delete(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, EmberTroveError> {
+        unimplemented!()
+    }
+}
+
+/// A tar.gz holding `manifest.json` at `version` and a `data.json` that
+/// isn't JSON, so reaching the parser would fail differently.
+fn archive_at(version: u32) -> bytes::Bytes {
+    let manifest = serde_json::json!({
+        "schema_version": version,
+        "created_at": "2026-10-01T00:00:00Z",
+        "created_by": "admin",
+        "entity_counts": {"nodes": 1, "edges": 0, "tags": 0, "notes": 0, "tasks": 0, "attachments": 0}
+    })
+    .to_string();
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::default(),
+    ));
+    for (path, data) in [
+        ("manifest.json", manifest.as_bytes()),
+        ("data.json", b"not json".as_slice()),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, path, data).unwrap();
+    }
+    bytes::Bytes::from(builder.into_inner().unwrap().finish().unwrap())
+}
+
+#[tokio::test]
+async fn restore_refuses_an_old_backup_before_the_snapshot() {
+    // #222: a format-2 archive is refused with a 422 before the pre-restore
+    // snapshot (the repo's create panics, the store records no upload) and
+    // before data.json is parsed (it isn't JSON here).
+    let store = Arc::new(ArchiveStore {
+        archive: archive_at(2),
+        puts: std::sync::Mutex::new(Vec::new()),
+    });
+    let job = BackupJob {
+        id: Uuid::new_v4(),
+        created_by: "admin".into(),
+        created_at: chrono::Utc::now(),
+        size_bytes: 0,
+        s3_key: "backups/old.tar.gz".into(),
+        node_count: 1,
+        edge_count: 0,
+        tag_count: 0,
+        note_count: 0,
+        task_count: 0,
+        attachment_count: 0,
+        comment: None,
+    };
+    let state = AppState {
+        backup: Arc::new(OneJobBackupRepo(job.clone())),
+        object_store: store.clone(),
+        ..test_state()
+    };
+    let res = crate::backup::execute_restore(&state, job.id, "admin").await;
+    assert!(
+        matches!(&res, Err(crate::error::ApiError::Validation(m)) if m.contains("older version")),
+        "got {res:?}"
+    );
+    let preview = crate::backup::preview_restore(&state, job.id, "admin").await;
+    assert!(
+        matches!(&preview, Err(crate::error::ApiError::Validation(m)) if m.contains("format 2")),
+        "the preview says so up front: {preview:?}"
+    );
+    assert!(
+        store.puts.lock().unwrap().is_empty(),
+        "no snapshot uploaded"
+    );
+}
+
 #[tokio::test]
 async fn metrics_rejects_non_admin() {
     let resp = claims_app("/metrics", crate::routes::metrics::router())
