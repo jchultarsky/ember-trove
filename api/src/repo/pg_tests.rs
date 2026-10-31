@@ -2152,7 +2152,7 @@ async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
-async fn data_health_finds_area_dependencies_and_doubled_related_links(pool: PgPool) {
+async fn data_health_finds_area_dependencies_with_their_link(pool: PgPool) {
     use common::data_health::RuleId;
 
     let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
@@ -2160,16 +2160,14 @@ async fn data_health_finds_area_dependencies_and_doubled_related_links(pool: PgP
     let other = insert_raw_node(&pool, "alice", "project", "another project", "").await;
     raw_edge(&pool, project, area, "depends_on").await;
     raw_edge(&pool, project, other, "depends_on").await; // fine
-    allow_legacy_related_pairs(&pool).await;
-    raw_edge(&pool, project, other, "related_to").await;
-    raw_edge(&pool, other, project, "related_to").await;
 
     let alice = health(&pool, "alice").await;
     assert_eq!(subjects(&alice, RuleId::DependsOnArea), vec![project]);
-    let pairs = &alice[&RuleId::RelatedToBothWays];
-    assert_eq!(pairs.count, 1, "one pair, listed once");
-    let pair = [pairs.items[0].subject.id, pairs.items[0].related[0].id];
-    assert!(pair.contains(&project) && pair.contains(&other));
+    // The item names the link its fixes act on (#228).
+    let links = &alice[&RuleId::DependsOnArea].items[0].links;
+    assert_eq!(links.len(), 1);
+    assert_eq!((links[0].source, links[0].target), (project, area));
+    assert!(links[0].removable());
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -2183,7 +2181,11 @@ async fn data_health_keeps_an_exact_count_past_the_item_cap(pool: PgPool) {
     let orphans = &alice[&RuleId::OrphanTask];
     assert_eq!(orphans.count, (ITEM_CAP + 5) as u64);
     assert_eq!(orphans.items.len(), ITEM_CAP);
-    assert_eq!(alice.len(), 12, "every rule reports, clean or not");
+    assert_eq!(
+        alice.len(),
+        RuleId::ALL.len(),
+        "every rule reports, clean or not"
+    );
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -2242,12 +2244,9 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
 
     raw_task(&pool, "alice", None, "alice inbox").await;
     raw_task(&pool, "bob", None, "bob inbox").await;
-    // A cross-owner related_to pair and loop count once, not once per owner.
+    // A cross-owner loop counts once, not once per owner.
     let a = insert_raw_node(&pool, "alice", "project", "a", "").await;
     let b = insert_raw_node(&pool, "bob", "project", "b", "").await;
-    allow_legacy_related_pairs(&pool).await;
-    raw_edge(&pool, a, b, "related_to").await;
-    raw_edge(&pool, b, a, "related_to").await;
     raw_edge(&pool, a, b, "depends_on").await;
     raw_edge(&pool, b, a, "depends_on").await;
     let area = insert_raw_node(&pool, "bob", "area", "an area", "").await;
@@ -2263,7 +2262,6 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
         .collect();
     assert_eq!(counts.len(), RuleId::ALL.len(), "every rule counted");
     assert_eq!(counts[&RuleId::OrphanTask], 2, "both accounts");
-    assert_eq!(counts[&RuleId::RelatedToBothWays], 1, "one pair, once");
     assert_eq!(counts[&RuleId::DependsOnCycle], 1, "one loop, once");
     assert_eq!(counts[&RuleId::ContainedReference], 1);
     assert_eq!(
@@ -2662,7 +2660,7 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
         (p, q, "depends_on"),
         (q, p, "depends_on"), // a loop
         (p, q, "related_to"),
-        (q, p, "related_to"), // both ways
+        (q, p, "related_to"), // both ways: no rule any more (#228)
         (art, r, "derived_from"),
         (r, art, "derived_from"), // a loop
     ] {
@@ -2700,7 +2698,6 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
         RuleId::ContainedReference,
         RuleId::ContainmentNotAllowed,
         RuleId::DependsOnArea,
-        RuleId::RelatedToBothWays,
         RuleId::ContainsCycle,
         RuleId::DependsOnCycle,
         RuleId::DerivedFromCycle,
@@ -3082,5 +3079,162 @@ async fn a_favorite_names_only_a_node_its_owner_can_see(pool: PgPool) {
     assert_eq!(
         label(repo.list("bob").await.expect("list")),
         "a label bob typed"
+    );
+}
+
+// ── Data health fixes (#228) ──────────────────────────────────────────────────
+
+/// Each edge item names the links its fixes act on: a home per parent (in
+/// the parents' order), the one bad link, a loop's links in order. Whether
+/// the reader may remove each follows the API's rule.
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_items_carry_the_links_their_fixes_need(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    allow_legacy_homes(&pool).await;
+    let a1 = insert_raw_node(&pool, "alice", "area", "area one", "").await;
+    let a2 = insert_raw_node(&pool, "alice", "area", "area two", "").await;
+    let child = insert_raw_node(&pool, "alice", "project", "two homes", "").await;
+    raw_edge(&pool, a1, child, "contains").await;
+    raw_edge(&pool, a2, child, "contains").await;
+    let r = insert_raw_node(&pool, "alice", "reference", "a ref", "").await;
+    raw_edge(&pool, a1, r, "contains").await;
+    // A loop through bob's node, shared with alice.
+    let mine = insert_raw_node(&pool, "alice", "project", "mine", "").await;
+    let theirs = insert_raw_node(&pool, "bob", "project", "theirs", "").await;
+    share(&pool, theirs, "alice").await;
+    raw_edge(&pool, mine, theirs, "depends_on").await;
+    raw_edge(&pool, theirs, mine, "depends_on").await;
+
+    let alice = health(&pool, "alice").await;
+
+    let homes = &alice[&RuleId::MultipleHomes].items[0];
+    let parents: Vec<_> = homes.related.iter().map(|p| p.id).collect();
+    let link_parents: Vec<_> = homes.links.iter().map(|l| l.source).collect();
+    assert_eq!(link_parents, parents, "a link per parent, in order");
+    assert!(
+        homes
+            .links
+            .iter()
+            .all(|l| l.target == child && l.removable())
+    );
+
+    let contained = &alice[&RuleId::ContainedReference].items[0].links;
+    assert_eq!((contained[0].source, contained[0].target), (a1, r));
+    assert!(contained[0].convertible_to(&common::edge::EdgeType::References));
+
+    let lp = &alice[&RuleId::DependsOnCycle].items[0];
+    let hops: Vec<_> = lp.links.iter().map(|l| (l.source, l.target)).collect();
+    assert_eq!(
+        hops,
+        vec![(mine, theirs), (theirs, mine)],
+        "from alice's node"
+    );
+    // Her link she may remove; bob's link into her node is his.
+    assert_eq!(
+        lp.links.iter().map(|l| l.removable()).collect::<Vec<_>>(),
+        vec![true, false]
+    );
+}
+
+/// Recreate the pre-042 state, where a node could have two homes, so
+/// tests of legacy data can seed them. A no-op until 042 exists.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn allow_legacy_homes(pool: &PgPool) {
+    sqlx::query("DROP INDEX IF EXISTS edges_one_home")
+        .execute(pool)
+        .await
+        .expect("drop the one-home index");
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn edges_between(
+    pool: &PgPool,
+    a: uuid::Uuid,
+    b: uuid::Uuid,
+) -> Vec<(uuid::Uuid, uuid::Uuid, String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT source_id, target_id, edge_type::text, label FROM edges \
+         WHERE (source_id = $1 AND target_id = $2) OR (source_id = $2 AND target_id = $1) \
+         ORDER BY edge_type::text",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_all(pool)
+    .await
+    .expect("edges")
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn converting_a_link_keeps_its_label_and_age_in_one_step(pool: PgPool) {
+    use common::{edge::EdgeType, id::EdgeId};
+
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let r = insert_raw_node(&pool, "alice", "reference", "a ref", "").await;
+    let (id, created): (uuid::Uuid, chrono::DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
+         VALUES ($1, $2, 'contains', 'kept', now() - interval '3 days') RETURNING id, created_at",
+    )
+    .bind(area)
+    .bind(r)
+    .fetch_one(&pool)
+    .await
+    .expect("edge");
+    let repo = PgEdgeRepo::new(pool.clone());
+
+    repo.convert(EdgeId(id), EdgeType::Contains, EdgeType::References, false)
+        .await
+        .expect("convert");
+    assert_eq!(
+        edges_between(&pool, area, r).await,
+        vec![(area, r, "references".to_string(), Some("kept".to_string()))]
+    );
+    let age: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT created_at FROM edges WHERE source_id = $1 AND target_id = $2")
+            .bind(area)
+            .bind(r)
+            .fetch_one(&pool)
+            .await
+            .expect("age");
+    assert_eq!(age, created);
+
+    // The old link is gone, so a second attempt is a 404, not a conversion
+    // the route's checks never saw.
+    let again = repo
+        .convert(EdgeId(id), EdgeType::Contains, EdgeType::References, false)
+        .await;
+    assert!(
+        matches!(again, Err(EmberTroveError::NotFound(_))),
+        "{again:?}"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_converted_link_merges_into_one_already_there(pool: PgPool) {
+    use common::{edge::EdgeType, id::EdgeId};
+
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
+    // Legacy: an Article as a home, and the two already related the other way.
+    raw_edge(&pool, project, article, "related_to").await;
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, 'contains') RETURNING id",
+    )
+    .bind(article)
+    .bind(project)
+    .fetch_one(&pool)
+    .await
+    .expect("edge");
+
+    // From the child's end (swap): the reverse related link absorbs it.
+    PgEdgeRepo::new(pool.clone())
+        .convert(EdgeId(id), EdgeType::Contains, EdgeType::RelatedTo, true)
+        .await
+        .expect("convert");
+    assert_eq!(
+        edges_between(&pool, article, project).await,
+        vec![(project, article, "related_to".to_string(), None)]
     );
 }

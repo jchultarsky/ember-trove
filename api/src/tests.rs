@@ -238,7 +238,7 @@ impl EdgeRepo for StubEdgeRepo {
         // Two edges from a node the caller can't touch into their own
         // Project (#224): a home and a plain link.
         let edge_type = match id.0.as_u128() {
-            AZ_FOREIGN_HOME_EDGE => common::edge::EdgeType::Contains,
+            AZ_FOREIGN_HOME_EDGE | AZ_VISIBLE_HOME_EDGE => common::edge::EdgeType::Contains,
             AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
             AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
                 common::edge::EdgeType::RelatedTo
@@ -250,9 +250,14 @@ impl EdgeRepo for StubEdgeRepo {
         } else {
             AZ_MY_PROJECT
         };
+        let source = if id.0.as_u128() == AZ_VISIBLE_HOME_EDGE {
+            AZ_VIEW_NODE
+        } else {
+            AZ_FOREIGN_NODE
+        };
         Ok(Edge {
             id,
-            source_id: az_node(AZ_FOREIGN_NODE),
+            source_id: az_node(source),
             target_id: az_node(target),
             edge_type,
             label: None,
@@ -260,6 +265,18 @@ impl EdgeRepo for StubEdgeRepo {
         })
     }
     async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn convert(
+        &self,
+        _: EdgeId,
+        _: common::edge::EdgeType,
+        _: common::edge::EdgeType,
+        swap: bool,
+    ) -> Result<(), EmberTroveError> {
+        // The only allowed conversion in this world runs from the child's
+        // side (the caller edits the target only), so the ends must swap.
+        assert!(swap, "a related link runs from the end the caller edits");
         Ok(())
     }
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> {
@@ -339,6 +356,8 @@ const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
 const AZ_FOREIGN_RELATED_EDGE: u128 = 0xa2_0e32;
 /// A related link between two nodes the caller can't edit.
 const AZ_STRANGERS_RELATED_EDGE: u128 = 0xa2_0e33;
+/// A home from AZ_VIEW_NODE (seen, not edited) into AZ_MY_PROJECT (#228).
+const AZ_VISIBLE_HOME_EDGE: u128 = 0xa2_0e34;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -2438,6 +2457,58 @@ async fn a_home_can_be_released_from_the_childs_side() {
     );
     // Any other link still belongs to its source's editors.
     assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
+}
+
+/// `POST /edges/{id}/convert` (#228): rights first (to delete the old link
+/// and create the new one), then which conversions exist.
+#[tokio::test]
+async fn a_link_converts_only_for_someone_who_could_delete_and_recreate_it() {
+    let convert = |edge: u128, to: &'static str| async move {
+        claims_app("/edges", crate::routes::edges::router())
+            .oneshot(
+                Request::post(format!("/edges/{}/convert", Uuid::from_u128(edge)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "edge_type": to }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // The child's editor may turn a home they can see into a related link,
+    // which then runs from their own node (the stub asserts the swap).
+    assert_eq!(
+        convert(AZ_VISIBLE_HOME_EDGE, "related_to").await,
+        StatusCode::NO_CONTENT
+    );
+    // ... but not into a references link, which belongs to the parent.
+    assert_eq!(
+        convert(AZ_VISIBLE_HOME_EDGE, "references").await,
+        StatusCode::FORBIDDEN
+    );
+    // A related link needs a parent they can see.
+    assert_eq!(
+        convert(AZ_FOREIGN_HOME_EDGE, "related_to").await,
+        StatusCode::FORBIDDEN
+    );
+    // Only after the rights: a structural target is no conversion.
+    assert_eq!(
+        convert(AZ_VISIBLE_HOME_EDGE, "depends_on").await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // A stranger is refused before anything is judged, and a directed link
+    // belongs to its source's editors.
+    assert_eq!(
+        convert(AZ_STRANGERS_RELATED_EDGE, "wiki_link").await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        convert(AZ_FOREIGN_LINK_EDGE, "related_to").await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(convert(0xdead, "related_to").await, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
