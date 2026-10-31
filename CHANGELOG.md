@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.50.0] - 2026-10-31
+
 ### Added
 - **Delete tasks from the Data health page** (#220). A task outside a
   Project, or with no Project at all, can now be deleted as well as moved:

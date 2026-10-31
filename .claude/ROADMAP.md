@@ -5,6 +5,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v2.50.0 shipped: delete tasks from Data health (#220, PR #221).**
+  Delete per task and "Delete finished" per card, soft with Undo; long bulk
+  deletes are paced under the rate limit. The owner cleared prod's report
+  to zero with it.
 - **v2.49.0 shipped: capability gates (S2 of #216; PRs #217–#219).**
   Only Projects take tasks, people and a project status (§3.2).
   - The API refuses new writes with 422, and every gate runs after authZ,
