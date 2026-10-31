@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Groundwork for the data-health report** (#208). `common::ontology`
+  holds the data model's rules as functions:
+  - what each node kind may carry (§3.2);
+  - which kind may be the home of which (§3.3);
+  - a loop finder that reports each loop once, with one short cycle.
+
+  `common::data_health` holds the report's types. Nothing uses them yet;
+  the report and later write checks are built on them.
+
 ## [2.47.0] - 2026-10-31
 
 ### Added
@@ -14,7 +24,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   "Active → Blocked", "set to Active" or "Active cleared". This is the start
   of History (ONTOLOGY §10), which can't be backfilled.
   - The entry is written in the same transaction as the change, so neither
-    lands without the other. Its time is the node's new `updated_at`.
+    lands without the other. It's stamped once the node is locked, so
+    concurrent changes are listed in the order they were made.
   - A node created with a status records it on its `created` entry.
   - A status-only save (the chip) is no longer also logged as "Edited".
   - Edits are now grouped from the last *Edited* entry, so a status change
