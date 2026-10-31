@@ -94,20 +94,25 @@ impl FavoriteRepo for PgFavoriteRepo {
     }
 
     async fn list(&self, owner_id: &str) -> Result<Vec<Favorite>, EmberTroveError> {
-        // COALESCE(n.title, f.label): node favorites show the node's live title;
-        // URL favorites fall back to the stored label.
-        let rows = sqlx::query_as::<_, FavoriteRow>(
+        // A node favorite shows the node's live title, but only while the
+        // owner may read the node (ONTOLOGY §14): after a share is revoked
+        // it falls back to the label stored when it was added. URL
+        // favorites always use the stored label. The favorite's owner is
+        // the reader here, admin included: a sidebar label needs no bypass.
+        let rows = sqlx::query_as::<_, FavoriteRow>(&format!(
             r#"
             SELECT
                 f.id, f.owner_id, f.node_id, f.url,
-                COALESCE(n.title, f.label) AS label,
+                CASE WHEN n.id IS NOT NULL AND {n_visible} THEN n.title ELSE f.label END
+                    AS label,
                 f.position, f.created_at
             FROM user_favorites f
             LEFT JOIN nodes n ON n.id = f.node_id
             WHERE f.owner_id = $1
             ORDER BY f.position ASC, f.created_at ASC
             "#,
-        )
+            n_visible = super::visible_to("n", 1),
+        ))
         .bind(owner_id)
         .fetch_all(&self.pool)
         .await

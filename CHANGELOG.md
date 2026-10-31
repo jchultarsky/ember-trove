@@ -16,6 +16,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - A Project whose only Area is hidden is listed as ungrouped.
   - Nothing was exposed on the reference instance: it has a single owner
     and no homes.
+- **A favorite shows a node's title only while you can read the node**
+  (#228, found in review). A favorite holds a node id and showed that
+  node's current title, renames included.
+  - Adding a favorite never checked access, so anyone who knew a node's id
+    (for example from a share later revoked) could read its title. The
+    answer also told an existing id from a made-up one.
+  - Adding a node favorite now needs view rights; a node you can't see and
+    one that doesn't exist both get 403.
+  - A favorite whose node you can no longer read shows the label it was
+    saved with, not the live title.
 
 ## [3.2.0] - 2026-10-31
 
