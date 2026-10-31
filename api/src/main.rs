@@ -18,7 +18,6 @@ mod tests;
 use std::{net::SocketAddr, sync::Arc};
 
 use axum_extra::extract::cookie::Key;
-use sqlx::postgres::PgPoolOptions;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use admin::CognitoAdminClient;
@@ -47,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
 
-    let pool = PgPoolOptions::new()
+    let pool = repo::pool_options()
         .max_connections(10)
         .connect(&config.database_url)
         .await?;
