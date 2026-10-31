@@ -10,14 +10,14 @@ use common::{
     activity::{ActivityAction, ActivityEntry},
     attachment::Attachment,
     auth::AuthClaims,
-    edge::EdgeWithTitles,
+    edge::{EdgeType, EdgeWithTitles, Home, HomeNode, NodeHome, SetHomeRequest},
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
         CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeLookupHit, NodeLookupParams,
         NodeTitleEntry, ProjectStatusCount, UpdateNodeRequest,
     },
     node_version::NodeVersion,
-    ontology::{Capability, allows},
+    ontology::{Capability, allows, edge_kind_violation},
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
     project_status,
     tag::Tag,
@@ -53,6 +53,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/neighbors", get(neighbors))
         .route("/{id}/backlinks", get(backlinks))
         .route("/{id}/edges", get(list_edges_for_node))
+        .route("/{id}/home", get(get_home).put(set_home))
         .route("/{id}/tags", get(list_tags_for_node))
         .route("/{id}/tags/{tag_id}", post(attach_tag).delete(detach_tag))
         .route(
@@ -570,6 +571,91 @@ async fn list_edges_for_node(
         .list_for_node_with_titles(NodeId(id), subject_scope(&claims))
         .await?;
     Ok(Json(edges))
+}
+
+/// GET /nodes/{id}/home — the node's one home (#228, §6.1).
+///
+/// A home the caller can't see is never named (§14). Its editors are told
+/// one exists, with its link id and nothing else, so they can free the
+/// slot (owner decision): a new home would be refused anyway. A viewer
+/// isn't told.
+async fn get_home(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<NodeHome>, ApiError> {
+    let child = NodeId(id);
+    require_viewer(state.permissions.as_ref(), &claims, child).await?;
+    Ok(Json(home_for(&state, &claims, child).await?))
+}
+
+/// What the caller may know of `child`'s home (see [`get_home`]).
+async fn home_for(
+    state: &AppState,
+    claims: &AuthClaims,
+    child: NodeId,
+) -> Result<NodeHome, ApiError> {
+    let Some(edge) = state.edges.home_of(child).await? else {
+        return Ok(NodeHome { home: None });
+    };
+    let may = |r: Result<(), ApiError>| match r {
+        Ok(()) => Ok(true),
+        Err(ApiError::Forbidden(_)) => Ok(false),
+        Err(e) => Err(e),
+    };
+    if may(require_viewer(state.permissions.as_ref(), claims, edge.source_id).await)? {
+        let parent = state.nodes.get(edge.source_id).await?;
+        return Ok(NodeHome {
+            home: Some(Home {
+                edge_id: edge.id,
+                node: Some(HomeNode {
+                    id: parent.id,
+                    title: parent.title,
+                    node_type: parent.node_type,
+                }),
+            }),
+        });
+    }
+    let editor = may(require_editor(state.permissions.as_ref(), claims, child).await)?;
+    Ok(NodeHome {
+        home: editor.then_some(Home {
+            edge_id: edge.id,
+            node: None,
+        }),
+    })
+}
+
+/// PUT /nodes/{id}/home — set the node's one home, or let it stand alone
+/// (#228). A home claims the child, so it needs edit rights on both nodes
+/// (§14); freeing one needs only the child's. Rights first, then the
+/// kinds; the repo checks for a loop under the `contains` lock.
+async fn set_home(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<SetHomeRequest>,
+) -> Result<Json<NodeHome>, ApiError> {
+    let child = NodeId(id);
+    require_editor(state.permissions.as_ref(), &claims, child).await?;
+    if let Some(parent) = req.parent_id {
+        require_editor(state.permissions.as_ref(), &claims, parent).await?;
+        if parent == child {
+            return Err(ApiError::Validation(
+                "a node can't be its own home".to_string(),
+            ));
+        }
+        let parent_node = state.nodes.get(parent).await?;
+        let child_node = state.nodes.get(child).await?;
+        if let Some(refusal) = edge_kind_violation(
+            &EdgeType::Contains,
+            &parent_node.node_type,
+            &child_node.node_type,
+        ) {
+            return Err(ApiError::Validation(refusal.message()));
+        }
+    }
+    state.edges.set_home(child, req.parent_id).await?;
+    Ok(Json(home_for(&state, &claims, child).await?))
 }
 
 async fn list_tags_for_node(

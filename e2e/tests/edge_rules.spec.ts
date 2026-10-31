@@ -231,3 +231,113 @@ test('a link converts in one step, only for someone who may change it', async ({
     for (const n of [area, project]) await request.delete(`/api/nodes/${n.id}`);
   }
 });
+
+// ── A node's one home, from its own page (#228) ──────────────────────────────
+
+const homeOf = async (request: APIRequestContext, id: string) =>
+  (await (await request.get(`/api/nodes/${id}/home`)).json()) as {
+    home: { edge_id: string; node: { id: string; title: string } | null } | null;
+  };
+
+async function openHome(page: Page, nodeId: string) {
+  await page.goto(`/nodes/${nodeId}`);
+  await page.getByRole('button', { name: /Connections/ }).click();
+  return page.getByTestId('node-home');
+}
+
+test('a home is chosen, changed and removed from the child', async ({ page, request }) => {
+  const stamp = Date.now();
+  const a1 = await createNode(request, `e2e rules home one ${stamp}`, { node_type: 'area' });
+  const a2 = await createNode(request, `e2e rules home two ${stamp}`, { node_type: 'area' });
+  const project = await createNode(request, `e2e rules homed ${stamp}`, { node_type: 'project' });
+  try {
+    const row = await openHome(page, project.id);
+    await expect(row).toContainText('None: it stands alone');
+
+    const pick = async (title: string) => {
+      const combo = row.getByRole('combobox', { name: 'Choose a home (Area or Project)…' });
+      await combo.fill(title);
+      await expect(page.getByRole('option', { selected: true })).toContainText(title);
+      await combo.press('Enter');
+    };
+    await row.getByRole('button', { name: 'Choose a home' }).click();
+    await pick(`e2e rules home one ${stamp}`);
+    await expect(row.getByRole('link', { name: `e2e rules home one ${stamp}` })).toBeVisible();
+    expect((await homeOf(request, project.id)).home?.node?.id).toBe(a1.id);
+
+    // Changing it moves the one home; there is never a second.
+    await row.getByRole('button', { name: 'Change home' }).click();
+    await pick(`e2e rules home two ${stamp}`);
+    await expect(row.getByRole('link', { name: `e2e rules home two ${stamp}` })).toBeVisible();
+    expect((await homeOf(request, project.id)).home?.node?.id).toBe(a2.id);
+    const fromA1 = await (await request.get(`/api/nodes/${a1.id}/edges`)).json();
+    expect(fromA1).toEqual([]);
+
+    await row.getByRole('button', { name: 'Remove home' }).click();
+    await expect(row).toContainText('None: it stands alone');
+    expect((await homeOf(request, project.id)).home).toBeNull();
+  } finally {
+    for (const n of [a1, a2, project]) await request.delete(`/api/nodes/${n.id}`);
+  }
+});
+
+test('the home picker offers only kinds that may be the home', async ({ page, request }) => {
+  const stamp = Date.now();
+  const area = await createNode(request, `e2e rules kind area ${stamp}`, { node_type: 'area' });
+  const project = await createNode(request, `e2e rules kind project ${stamp}`, { node_type: 'project' });
+  const article = await createNode(request, `e2e rules kind article ${stamp}`);
+  try {
+    // An Article's home can only be an Area.
+    const row = await openHome(page, article.id);
+    await row.getByRole('button', { name: 'Choose a home' }).click();
+    await row.getByRole('combobox', { name: 'Choose a home (Area)…' }).fill(`e2e rules kind`);
+    await expect(page.getByRole('option', { name: new RegExp(`kind area ${stamp}`) })).toBeVisible();
+    await expect(page.getByRole('option', { name: new RegExp(`kind project ${stamp}`) })).toHaveCount(0);
+    // A Reference has none at all.
+    const reference = await createNode(request, `e2e rules kind ref ${stamp}`, { node_type: 'reference' });
+    try {
+      const refRow = await openHome(page, reference.id);
+      await expect(refRow).toContainText('A Reference has no home');
+      await expect(refRow.getByRole('button')).toHaveCount(0);
+    } finally {
+      await request.delete(`/api/nodes/${reference.id}`);
+    }
+  } finally {
+    for (const n of [area, project, article]) await request.delete(`/api/nodes/${n.id}`);
+  }
+});
+
+test("a home I can't see is shown to me unnamed, and I can free my node from it", async ({
+  page,
+  request,
+  otherRequest,
+}) => {
+  const stamp = Date.now();
+  const mine = await createNode(request, `e2e rules held ${stamp}`, { node_type: 'project' });
+  const theirs = await createNode(otherRequest, `e2e rules their private area ${stamp}`, {
+    node_type: 'area',
+  });
+  try {
+    // The other identity edits my Project and files it in their own Area.
+    await shareNode(request, mine.id, 'e2e-other-user', 'editor');
+    const filed = await otherRequest.put(`/api/nodes/${mine.id}/home`, {
+      data: { parent_id: theirs.id },
+    });
+    expect(filed.status()).toBe(200);
+
+    // The API tells me a home exists, and nothing about it (§14).
+    const seen = await homeOf(request, mine.id);
+    expect(seen.home?.node).toBeNull();
+    expect(JSON.stringify(seen)).not.toContain('private area');
+
+    const row = await openHome(page, mine.id);
+    await expect(row).toContainText('A home you can’t see');
+    await expect(page.getByText(`e2e rules their private area ${stamp}`)).toHaveCount(0);
+    await row.getByRole('button', { name: 'Remove home' }).click();
+    await expect(row).toContainText('None: it stands alone');
+    expect((await homeOf(otherRequest, mine.id)).home).toBeNull();
+  } finally {
+    await request.delete(`/api/nodes/${mine.id}`);
+    await otherRequest.delete(`/api/nodes/${theirs.id}`);
+  }
+});
