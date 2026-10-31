@@ -57,3 +57,52 @@ pub(crate) fn parse_wire<T>(
 ) -> Result<T, EmberTroveError> {
     parse(s).ok_or_else(|| EmberTroveError::Internal(format!("unknown {kind}: {s}")))
 }
+
+/// Whether this session is inside a transaction block. There, the
+/// transaction began before the current statement; outside one, each
+/// statement is its own transaction and the two start times are equal.
+/// Sent as a bare `&str`, so over the simple query protocol: through the
+/// extended protocol (Parse/Bind/Execute, what `sqlx::query` uses) the two
+/// times differ even outside a block, which would read every connection as
+/// stuck. The pg test checks both directions.
+pub(crate) async fn in_transaction_block(
+    conn: &mut sqlx::PgConnection,
+) -> Result<bool, sqlx::Error> {
+    use sqlx::{Executor, Row};
+    conn.fetch_one(
+        "SELECT xact_start IS DISTINCT FROM query_start \
+         FROM pg_stat_activity WHERE pid = pg_backend_pid()",
+    )
+    .await?
+    .try_get(0)
+}
+
+/// The API's connection pool settings (#234).
+///
+/// A connection must never return to the pool inside a transaction. sqlx
+/// 0.8 leaves it there when a request is cancelled (the client went away)
+/// while `BEGIN` is in flight: its rollback guard checks a depth counter
+/// that isn't incremented yet, so no `ROLLBACK` is queued. Every later
+/// request handed that connection would then run inside a transaction no
+/// one commits: its writes vanish, and its row locks block other writers.
+/// The e2e suite hit exactly this (a node created but never committed).
+/// So each release asks the server, and a connection still in a
+/// transaction is closed instead of reused; the server then rolls that
+/// transaction back. One small query per release is the cost.
+#[must_use]
+pub fn pool_options() -> sqlx::postgres::PgPoolOptions {
+    sqlx::postgres::PgPoolOptions::new().after_release(|conn, _meta| release_check(conn))
+}
+
+/// `after_release`: keep the connection unless it's inside a transaction.
+fn release_check(
+    conn: &mut sqlx::PgConnection,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, sqlx::Error>> + Send + '_>> {
+    Box::pin(async move {
+        let in_block = in_transaction_block(conn).await?;
+        if in_block {
+            tracing::warn!("closing a pooled connection left inside a transaction");
+        }
+        Ok(!in_block)
+    })
+}
