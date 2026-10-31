@@ -119,6 +119,81 @@ fn undo_toggle(
     })
 }
 
+/// Calls `call` for each task, one at a time. Past the first `PACE_AFTER`
+/// calls it waits `PACE_MS` between them: the API's write limiter allows a
+/// burst of 100, then one call per 100 ms, so a long bulk delete (or its
+/// Undo) slows down instead of failing halfway with 429s. Returns the tasks
+/// it succeeded on and how many failed.
+async fn paced<F, Fut, T, E>(ids: Vec<TaskId>, call: F) -> (Vec<TaskId>, usize)
+where
+    F: Fn(TaskId) -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    const PACE_AFTER: usize = 80;
+    const PACE_MS: u32 = 110;
+    let mut ok = Vec::with_capacity(ids.len());
+    let mut failed = 0usize;
+    for (i, id) in ids.into_iter().enumerate() {
+        if i >= PACE_AFTER {
+            gloo_timers::future::TimeoutFuture::new(PACE_MS).await;
+        }
+        match call(id).await {
+            Ok(_) => ok.push(id),
+            Err(_) => failed += 1,
+        }
+    }
+    (ok, failed)
+}
+
+fn tasks_noun(n: usize) -> &'static str {
+    if n == 1 { "task" } else { "tasks" }
+}
+
+/// Soft-delete many tasks and offer one Undo that restores them all: the
+/// Tasks panel's "Delete all completed" and Data health's "Delete
+/// finished". `adjective` names them in the toast ("completed",
+/// "finished"). `refresh` is bumped after the deletes and after an Undo;
+/// it's an app-root signal, so the Undo still works once the page is gone
+/// (`ToastAction` must not hold page-owned state).
+pub fn delete_tasks_with_undo(
+    ids: Vec<TaskId>,
+    adjective: &'static str,
+    refresh: RwSignal<u32>,
+    toast_state: Option<ToastState>,
+) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let (deleted, failed) = paced(ids, crate::api::delete_task).await;
+        if failed > 0 {
+            push_toast(
+                ToastLevel::Error,
+                format!("Couldn't delete {failed} {}", tasks_noun(failed)),
+            );
+        }
+        // Refetch regardless: some deletes may have landed before a failure.
+        refresh.try_update(|n| *n += 1);
+        if deleted.is_empty() {
+            return;
+        }
+        let n = deleted.len();
+        let undo = Arc::new(move || {
+            let deleted = deleted.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let (_, restore_failed) = paced(deleted, crate::api::restore_task).await;
+                refresh.try_update(|n| *n += 1);
+                if restore_failed > 0
+                    && let Some(ts) = toast_state
+                {
+                    ts.push(
+                        ToastLevel::Error,
+                        format!("Couldn't restore {restore_failed} of them"),
+                    );
+                }
+            });
+        });
+        push_undo_toast(format!("Deleted {n} {adjective} {}", tasks_noun(n)), undo);
+    });
+}
+
 /// Soft-delete a task and offer Undo (which restores it).
 ///
 /// `busy` is the row's in-flight guard, if it has one (a second click while a

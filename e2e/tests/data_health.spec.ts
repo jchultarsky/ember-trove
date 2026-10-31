@@ -37,6 +37,9 @@ async function wipe(request: APIRequestContext) {
   }
 }
 
+const inboxIds = async (request: APIRequestContext): Promise<string[]> =>
+  ((await (await request.get('/api/tasks/inbox')).json()) as { id: string }[]).map((t) => t.id);
+
 test('the page lists data that breaks the model, linked to where it lives', async ({
   page,
   request,
@@ -175,6 +178,96 @@ test('"Move to a Project" fixes an orphan task in one step (#216)', async ({ pag
     await expect
       .poll(async () => (await (await request.get(`/api/nodes/${project.id}/tasks`)).json()).length)
       .toBe(1);
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('a task can be deleted from Data health, and Undo brings it back', async ({
+  page,
+  request,
+}) => {
+  await wipe(request);
+  try {
+    const stamp = Date.now();
+    const title = `${PREFIX}delete one ${stamp}`;
+    const task = await (await request.post('/api/tasks', { data: { title } })).json();
+    await page.goto('/data-health');
+    const card = page.getByTestId('data-health-orphan_task');
+    const row = card.getByTestId('data-health-item').filter({ hasText: title });
+    await row.getByRole('button', { name: 'Delete task' }).click();
+    const confirm = row.getByRole('group', { name: 'Confirm delete' });
+    await expect(confirm).toContainText(title);
+    await confirm.getByRole('button', { name: 'Delete' }).click();
+    await expect(card.getByText(title)).toHaveCount(0);
+    expect(await inboxIds(request)).not.toContain(task.id);
+
+    // Undo restores it, and the report shows it again.
+    await page.locator('[role="status"]').getByRole('button', { name: 'Undo' }).click();
+    await expect(card.getByText(title)).toBeVisible();
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('"Delete finished" clears the done and cancelled orphan tasks, with Undo', async ({
+  page,
+  request,
+}) => {
+  await wipe(request);
+  try {
+    const stamp = Date.now();
+    const make = async (title: string, status?: string) => {
+      const t = await (await request.post('/api/tasks', { data: { title } })).json();
+      if (status) {
+        const r = await request.patch(`/api/tasks/${t.id}`, { data: { status } });
+        expect(r.ok()).toBeTruthy();
+      }
+      return t;
+    };
+    const done = await make(`${PREFIX}done ${stamp}`, 'done');
+    const cancelled = await make(`${PREFIX}cancelled ${stamp}`, 'cancelled');
+    const open = await make(`${PREFIX}still open ${stamp}`);
+    const ours = new Set([done.id, cancelled.id, open.id]);
+
+    // The bulk button acts on what its card lists. Show only this test's
+    // tasks, so it can never delete another spec's data in the shared DB.
+    await page.route('**/api/data-health', async (route) => {
+      const real = await (await route.fetch()).json();
+      for (const r of real.rules) {
+        if (r.rule === 'orphan_task') {
+          r.items = r.items.filter((i: { subject: { id: string } }) => ours.has(i.subject.id));
+          r.count = r.items.length;
+        }
+      }
+      await route.fulfill({ json: real });
+    });
+
+    await page.goto('/data-health');
+    const card = page.getByTestId('data-health-orphan_task');
+    await card
+      .getByTestId('delete-finished')
+      .getByRole('button', { name: 'Delete the 2 finished tasks (done or cancelled)' })
+      .click();
+    const confirm = card.getByRole('group', { name: 'Confirm delete' });
+    await expect(confirm).toContainText('Delete 2 finished tasks');
+    await confirm.getByRole('button', { name: 'Delete' }).click();
+
+    await expect(card.getByText(`${PREFIX}done ${stamp}`)).toHaveCount(0);
+    await expect(card.getByText(`${PREFIX}cancelled ${stamp}`)).toHaveCount(0);
+    await expect(card.getByText(`${PREFIX}still open ${stamp}`)).toBeVisible();
+    let left = await inboxIds(request);
+    expect(left).not.toContain(done.id);
+    expect(left).not.toContain(cancelled.id);
+    expect(left).toContain(open.id);
+
+    // One Undo brings both back.
+    await page.locator('[role="status"]').getByRole('button', { name: 'Undo' }).click();
+    await expect(card.getByText(`${PREFIX}done ${stamp}`)).toBeVisible();
+    await expect(card.getByText(`${PREFIX}cancelled ${stamp}`)).toBeVisible();
+    left = await inboxIds(request);
+    expect(left).toContain(done.id);
+    expect(left).toContain(cancelled.id);
   } finally {
     await wipe(request);
   }

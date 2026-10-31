@@ -19,7 +19,7 @@ use crate::components::task_row_scaffold::{
     MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, action_btn_class,
     due_badge_view, priority_dot_view,
 };
-use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
+use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use common::ontology::Capability;
 
 // ── TaskPanel ─────────────────────────────────────────────────────────────────
@@ -223,53 +223,12 @@ pub fn TaskPanel(
                     )
                             title="Delete all completed tasks"
                             on:click=move |_| {
-                                let ids = ids_for_clear.clone();
-                                wasm_bindgen_futures::spawn_local(async move {
-                                    let mut deleted: Vec<TaskId> = Vec::new();
-                                    let mut failed = 0usize;
-                                    for id in ids {
-                                        if crate::api::delete_task(id).await.is_ok() {
-                                            deleted.push(id);
-                                        } else {
-                                            failed += 1;
-                                        }
-                                    }
-                                    if failed > 0 {
-                                        let noun = if failed == 1 { "task" } else { "tasks" };
-                                        push_toast(
-                                            ToastLevel::Error,
-                                            format!("Couldn't delete {failed} {noun}"),
-                                        );
-                                    }
-                                    // Refetch regardless — some deletes may
-                                    // have succeeded before a failure.
-                                    task_refresh.update(|n| *n += 1);
-                                    if !deleted.is_empty() {
-                                        let n = deleted.len();
-                                        let noun = if n == 1 { "task" } else { "tasks" };
-                                        let undo = std::sync::Arc::new(move || {
-                                            let deleted = deleted.clone();
-                                            wasm_bindgen_futures::spawn_local(async move {
-                                                let mut restore_failed = 0usize;
-                                                for id in deleted {
-                                                    if crate::api::restore_task(id).await.is_err() {
-                                                        restore_failed += 1;
-                                                    }
-                                                }
-                                                task_refresh.update(|n| *n += 1);
-                                                if restore_failed > 0
-                                                    && let Some(ts) = toast_state
-                                                {
-                                                    ts.push(
-                                                        ToastLevel::Error,
-                                                        format!("Couldn't restore {restore_failed} of them"),
-                                                    );
-                                                }
-                                            });
-                                        });
-                                        push_undo_toast(format!("Deleted {n} completed {noun}"), undo);
-                                    }
-                                });
+                                crate::components::task_actions::delete_tasks_with_undo(
+                                    ids_for_clear.clone(),
+                                    "completed",
+                                    task_refresh,
+                                    toast_state,
+                                );
                             }
                         >
                             <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"delete_sweep"</span>
