@@ -119,14 +119,15 @@ fn undo_toggle(
     })
 }
 
-/// Calls `call` for each task, one at a time. Past the first `PACE_AFTER`
+/// Calls `call` for each id, one at a time. Past the first `PACE_AFTER`
 /// calls it waits `PACE_MS` between them: the API's write limiter allows a
-/// burst of 100, then one call per 100 ms, so a long bulk delete (or its
-/// Undo) slows down instead of failing halfway with 429s. Returns the tasks
-/// it succeeded on and how many failed.
-async fn paced<F, Fut, T, E>(ids: Vec<TaskId>, call: F) -> (Vec<TaskId>, usize)
+/// burst of 100, then one call per 100 ms, so a long bulk action (a delete,
+/// its Undo, Data health's "Convert all") slows down instead of failing
+/// halfway with 429s. Returns the ids it succeeded on and how many failed.
+pub(crate) async fn paced<I, F, Fut, T, E>(ids: Vec<I>, call: F) -> (Vec<I>, usize)
 where
-    F: Fn(TaskId) -> Fut,
+    I: Copy,
+    F: Fn(I) -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
 {
     const PACE_AFTER: usize = 80;

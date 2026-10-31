@@ -22,7 +22,7 @@ use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::delete_tasks_with_undo;
+use crate::components::task_actions::{delete_tasks_with_undo, paced};
 use crate::components::task_common::task_href;
 use crate::components::task_common::undo_restore_task;
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
@@ -746,20 +746,21 @@ fn ConvertAll(
         busy.set(true);
         let links = links.get_value();
         wasm_bindgen_futures::spawn_local(async move {
-            let mut done = 0usize;
-            let mut failed = None;
-            for id in &links {
-                match api::convert_edge(*id, EdgeType::References).await {
-                    Ok(()) => done += 1,
-                    Err(e) => failed = Some(e.to_string()),
-                }
-            }
-            match failed {
-                None => push_toast(ToastLevel::Success, format!("Converted {done} links")),
-                Some(e) => push_toast(
+            let total = links.len();
+            // Paced like the bulk task delete, so a long card can't trip
+            // the write limiter halfway (429s).
+            let (done, failed) =
+                paced(links, |id| api::convert_edge(id, EdgeType::References)).await;
+            if failed == 0 {
+                push_toast(
+                    ToastLevel::Success,
+                    format!("Converted {} links", done.len()),
+                );
+            } else {
+                push_toast(
                     ToastLevel::Error,
-                    format!("Converted {done} of {}; one failed: {e}", links.len()),
-                ),
+                    format!("Converted {} of {total}; {failed} failed", done.len()),
+                );
             }
             // Reload either way: what did convert leaves the card.
             on_fixed.try_run(());

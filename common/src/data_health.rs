@@ -295,12 +295,17 @@ impl Violation {
         }
     }
 
-    /// Names the links behind an edge item (see [`Violation::links`]). A
-    /// loop has one more link than related nodes, so the cap is one more.
+    /// Names the links behind an edge item (see [`Violation::links`]).
+    /// Only links whose two ends the item names are kept, so every link
+    /// can be shown and acted on: past [`RELATED_CAP`], a long loop's
+    /// unnamed hops and a node's unlisted homes drop out with their nodes.
     #[must_use]
-    pub fn with_links(mut self, mut links: Vec<LinkRef>) -> Self {
-        links.truncate(RELATED_CAP + 1);
-        self.links = links;
+    pub fn with_links(mut self, links: Vec<LinkRef>) -> Self {
+        let named = |id: Uuid| id == self.subject.id || self.related.iter().any(|r| r.id == id);
+        self.links = links
+            .into_iter()
+            .filter(|l| named(l.source) && named(l.target))
+            .collect();
         self
     }
 
@@ -532,19 +537,45 @@ mod tests {
     }
 
     #[test]
-    fn links_are_capped_one_past_related_and_omitted_when_empty() {
-        let l = |n: u128| LinkRef {
-            id: Uuid::from_u128(n),
-            edge_type: crate::edge::EdgeType::Contains,
-            source: Uuid::nil(),
-            target: Uuid::nil(),
+    fn an_item_keeps_only_links_whose_ends_it_names() {
+        // A loop 0 → 1 → … → n → 0 longer than the cap: the hops past the
+        // last listed node can't be named, so they aren't listed either.
+        let n = RELATED_CAP as u128 + 3;
+        let hop = |i: u128| LinkRef {
+            id: Uuid::from_u128(1000 + i),
+            edge_type: crate::edge::EdgeType::DependsOn,
+            source: Uuid::from_u128(i),
+            target: Uuid::from_u128((i + 1) % (n + 1)),
             source_owned: true,
             target_owned: true,
         };
-        let v = item(1).with_links((0..(RELATED_CAP as u128 + 9)).map(l).collect());
-        assert_eq!(v.links.len(), RELATED_CAP + 1);
+        let members = (1..=n)
+            .map(|i| Ref::node(Uuid::from_u128(i), "m", false))
+            .collect();
+        let v = Violation::new(Ref::node(Uuid::from_u128(0), "s", false), members)
+            .with_links((0..=n).map(hop).collect());
+        assert_eq!(v.links.len(), RELATED_CAP, "0→1 … 19→20, all named");
+        assert!(v.links.iter().all(|l| l.target != Uuid::from_u128(0)));
+        // A short loop keeps every hop, the one back included.
+        let short = Violation::new(
+            Ref::node(Uuid::from_u128(0), "s", false),
+            vec![Ref::node(Uuid::from_u128(1), "m", false)],
+        )
+        .with_links(vec![
+            LinkRef {
+                target: Uuid::from_u128(1),
+                source: Uuid::from_u128(0),
+                ..hop(0)
+            },
+            LinkRef {
+                source: Uuid::from_u128(1),
+                target: Uuid::from_u128(0),
+                ..hop(1)
+            },
+        ]);
+        assert_eq!(short.links.len(), 2);
         let json = serde_json::to_value(item(2)).expect("ser");
-        assert!(json.get("links").is_none());
+        assert!(json.get("links").is_none(), "omitted when empty");
     }
 
     #[test]

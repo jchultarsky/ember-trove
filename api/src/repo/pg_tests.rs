@@ -3217,10 +3217,12 @@ async fn a_converted_link_merges_into_one_already_there(pool: PgPool) {
 
     let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
     let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
-    // Legacy: an Article as a home, and the two already related the other way.
+    // Legacy: an Article as a home, and the two already related the other
+    // way, without a label.
     raw_edge(&pool, project, article, "related_to").await;
     let id: uuid::Uuid = sqlx::query_scalar(
-        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, 'contains') RETURNING id",
+        "INSERT INTO edges (source_id, target_id, edge_type, label) \
+         VALUES ($1, $2, 'contains', 'why') RETURNING id",
     )
     .bind(article)
     .bind(project)
@@ -3228,13 +3230,19 @@ async fn a_converted_link_merges_into_one_already_there(pool: PgPool) {
     .await
     .expect("edge");
 
-    // From the child's end (swap): the reverse related link absorbs it.
+    // Unswapped, so only `edges_related_to_once` (the reverse) can absorb
+    // it; the blank label left behind takes the converted one's.
     PgEdgeRepo::new(pool.clone())
-        .convert(EdgeId(id), EdgeType::Contains, EdgeType::RelatedTo, true)
+        .convert(EdgeId(id), EdgeType::Contains, EdgeType::RelatedTo, false)
         .await
         .expect("convert");
     assert_eq!(
         edges_between(&pool, article, project).await,
-        vec![(project, article, "related_to".to_string(), None)]
+        vec![(
+            project,
+            article,
+            "related_to".to_string(),
+            Some("why".to_string())
+        )]
     );
 }

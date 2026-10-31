@@ -296,18 +296,38 @@ impl EdgeRepo for PgEdgeRepo {
         };
         // No conflict target: covers both the per-type unique index and
         // `edges_related_to_once`, so an existing link absorbs this one.
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
              VALUES ($1, $2, $3::edge_type, $4, $5) ON CONFLICT DO NOTHING",
         )
         .bind(source)
         .bind(target)
         .bind(to.as_str())
-        .bind(label)
+        .bind(&label)
         .bind(created_at)
         .execute(&mut *tx)
         .await
-        .map_err(fail)?;
+        .map_err(fail)?
+        .rows_affected();
+        if inserted == 0 {
+            // Absorbed: a blank label on the link that stays takes this
+            // one's, the merge rule of migrations 034 and 041.
+            sqlx::query(
+                "UPDATE edges SET label = $4 \
+                 WHERE edge_type = $3::edge_type \
+                   AND ((source_id = $1 AND target_id = $2) \
+                        OR ($3 = 'related_to' AND source_id = $2 AND target_id = $1)) \
+                   AND (label IS NULL OR btrim(label) = '') \
+                   AND $4 IS NOT NULL AND btrim($4) <> ''",
+            )
+            .bind(source)
+            .bind(target)
+            .bind(to.as_str())
+            .bind(&label)
+            .execute(&mut *tx)
+            .await
+            .map_err(fail)?;
+        }
         tx.commit().await.map_err(fail)
     }
 

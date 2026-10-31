@@ -19,7 +19,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - `POST /api/edges/{id}/convert` turns a link into a `references` or
   `related_to` link in one transaction. It needs rights to delete the old
   link and to create the new one. A `related_to` runs from whichever end
-  you can edit, and an identical link already there absorbs it.
+  you can edit. If an identical link is already there, it absorbs the
+  converted one and takes its label when it has none.
+- "Convert all" sends its calls at a pace the write limit allows, like the
+  bulk task delete, and says how many failed.
 
 ### Changed
 - **The "A link stored both ways" rule is gone from Data health.** Since
