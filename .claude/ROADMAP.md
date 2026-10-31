@@ -5,6 +5,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v2.46.1 shipped: activity hardening (S1a-1 of #208; PR #209).**
+  History survives a restore: backups carry `activity_log`, rows for
+  missing nodes are skipped. An unknown action no longer breaks Activity,
+  because reads filter in SQL before the LIMIT. The dead `deleted` write
+  is gone. This had to ship before S1a-2 writes `status_changed`.
 - **The ontology rewrite has started (#204).** `docs/ONTOLOGY.md` (PR #205)
   is the normative data model, and every question in it is settled. The code
   converges on it in slices, each with its own plan, issue, PR and release:
