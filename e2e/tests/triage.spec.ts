@@ -90,14 +90,14 @@ test('s schedules a due date; a attaches to a node', async ({ page, request }) =
     // Next task slides in: attach via the picker.
     await expect(card.getByText(attachTitle)).toBeVisible();
     await page.keyboard.press('a');
-    const picker = page.getByPlaceholder('Attach to node…');
+    const picker = page.getByPlaceholder('Attach to a Project…');
     await expect(picker).toBeVisible();
     await picker.fill(nodeTitle);
     // Debounced search → the highlighted (exact) option is committed by Enter.
     // The picker is the shared NodePicker (#130): options, not buttons.
     await expect(page.getByRole('option', { name: new RegExp(nodeTitle) })).toBeVisible();
     await picker.press('Enter');
-    await expect(page.locator('[role="status"]').getByText('Attached to node')).toBeVisible();
+    await expect(page.locator('[role="status"]').getByText('Attached to a Project')).toBeVisible();
     await expect(page.locator('[role="status"]').getByText(/Inbox processed/)).toBeVisible();
 
     // Server state for both decisions.
@@ -161,7 +161,7 @@ test('Escape in the attach picker closes the list, then clears, then leaves atta
     await page.getByRole('button', { name: /Process/ }).click();
     await expect(page.getByTestId('triage-card').getByText(title)).toBeVisible();
     await page.keyboard.press('a');
-    const picker = page.getByPlaceholder('Attach to node…');
+    const picker = page.getByPlaceholder('Attach to a Project…');
     await expect(picker).toBeFocused();
     await picker.fill(`e2e triage-esc node ${stamp}`);
     const listbox = page.getByRole('listbox');

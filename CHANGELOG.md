@@ -22,6 +22,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - A repeating task's next occurrence follows the task's node after the
     update, so completing and moving a task in one step moves its series.
 
+- **The UI offers tasks and people only where they belong** (#216).
+  - On any node that isn't a Project, the Tasks and People sections appear
+    only while older items remain, with no add. They show the rule, and the
+    node's owner also gets a pointer to Data health.
+  - The node page's section outline lists only the sections that are there.
+  - The task pickers (Inbox add and assign, triage `a`) offer Projects only,
+    filtered server-side through the new `node_type` parameter on
+    `/api/nodes/lookup`, and say "Project".
+
 ### Security
 - **The new 422s come after the authorization checks** (#216). A viewer or
   stranger still gets 403 and never learns what kind a node is.

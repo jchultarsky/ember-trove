@@ -73,6 +73,7 @@ pub trait NodeRepo: Send + Sync {
         subject: Option<&str>,
         q: &str,
         limit: i64,
+        node_type: Option<&NodeType>,
     ) -> Result<Vec<common::node::NodeLookupHit>, EmberTroveError>;
 
     /// Resolve many already-lowercased wiki-link titles in one query, among
@@ -637,6 +638,7 @@ impl NodeRepo for PgNodeRepo {
         subject: Option<&str>,
         q: &str,
         limit: i64,
+        node_type: Option<&NodeType>,
     ) -> Result<Vec<common::node::NodeLookupHit>, EmberTroveError> {
         #[derive(sqlx::FromRow)]
         struct HitRow {
@@ -658,6 +660,7 @@ impl NodeRepo for PgNodeRepo {
             FROM nodes n
             WHERE {visible}
               AND lower(n.title) LIKE ('%' || $2 || '%') ESCAPE '\'
+              AND ($5::text IS NULL OR n.node_type = $5::node_type)
             ORDER BY (lower(n.title) = lower($3)) DESC,
                      (lower(n.title) LIKE ($2 || '%') ESCAPE '\') DESC,
                      lower(n.title), n.id
@@ -670,6 +673,7 @@ impl NodeRepo for PgNodeRepo {
             .bind(&pattern)
             .bind(q)
             .bind(limit)
+            .bind(node_type.map(NodeType::as_str))
             .fetch_all(&self.pool)
             .await
             .map_err(|e| EmberTroveError::Internal(format!("lookup_titles failed: {e}")))?;

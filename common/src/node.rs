@@ -192,6 +192,10 @@ pub struct NodeLookupParams {
     pub q: String,
     /// Default 8, at most 20.
     pub limit: Option<u32>,
+    /// Only nodes of this kind (#216): the task pickers ask for Projects,
+    /// filtered server-side so a Project is never cut off by the limit.
+    #[serde(default)]
+    pub node_type: Option<NodeType>,
 }
 
 /// One suggestion for the project status picker (#143): a status the caller

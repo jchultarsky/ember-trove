@@ -165,13 +165,14 @@ impl NodeRepo for StubNodeRepo {
         subject: Option<&str>,
         q: &str,
         limit: i64,
+        node_type: Option<&NodeType>,
     ) -> Result<Vec<common::node::NodeLookupHit>, EmberTroveError> {
-        // Echo the scope and limit back so the handler test can see what it
-        // passed (the SQL itself is covered in repo::pg_tests).
+        // Echo the scope, limit and kind back so the handler test can see
+        // what it passed (the SQL itself is covered in repo::pg_tests).
         Ok(vec![common::node::NodeLookupHit {
             id: NodeId(Uuid::nil()),
             title: format!("{}|{q}|{limit}", subject.unwrap_or("<admin>")),
-            node_type: NodeType::Article,
+            node_type: node_type.cloned().unwrap_or(NodeType::Article),
         }])
     }
     async fn list_all_for_owner(&self, owner: &str) -> Result<Vec<Node>, EmberTroveError> {
@@ -2145,6 +2146,16 @@ async fn node_lookup_scopes_to_the_caller_and_clamps_the_limit() {
     assert_eq!(json[0]["title"], "test-sub|Phy|20", "limit clamped");
     let (_, json) = lookup(admin_claims(), "q=Phy").await;
     assert_eq!(json[0]["title"], "<admin>|Phy|8", "admin: every node");
+}
+
+#[tokio::test]
+async fn node_lookup_passes_a_kind_and_rejects_an_unknown_one() {
+    // #216: the task pickers ask for Projects only.
+    let (status, json) = lookup(fake_claims(), "q=Phy&node_type=project").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json[0]["node_type"], "project");
+    let (status, _) = lookup(fake_claims(), "q=Phy&node_type=nonsense").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "not a node kind");
 }
 
 #[tokio::test]

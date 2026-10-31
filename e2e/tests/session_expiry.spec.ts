@@ -41,7 +41,7 @@ test('the node export renews an expired session before downloading', async ({ pa
   const node = await createNode(request, `e2e export renew ${Date.now()}`, { body: 'hello' });
   try {
     await page.goto(`/nodes/${node.id}`);
-    await expect(page.getByTestId('node-tasks')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('node-notes')).toBeVisible({ timeout: 15_000 });
     const refreshes = await fakeRefresh(page);
     // The token expires while the page sits open.
     await expireOnce(page);

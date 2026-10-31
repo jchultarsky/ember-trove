@@ -1,7 +1,7 @@
 //! Keyboard-driven inbox triage ("Process" mode).
 //!
 //! One open inbox task at a time, single-key decisions:
-//! `t` add to My Day · `s` schedule a due date · `a` attach to a node ·
+//! `t` add to My Day · `s` schedule a due date · `a` attach to a Project ·
 //! `d` delete (undoable) · `j` skip · `k` back · `Esc` exit.
 //!
 //! The component snapshots the open inbox tasks once on mount — actions fire
@@ -172,7 +172,7 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
             node_id: Some(Some(node_id)),
             ..Default::default()
         };
-        patch_current(req, "Attached to node");
+        patch_current(req, "Attached to a Project");
     };
 
     // Focus helper for the submode inputs (next frame, post-render — the
@@ -357,7 +357,8 @@ pub fn InboxTriage(on_exit: Callback<()>, refresh: RwSignal<u32>) -> impl IntoVi
                                 <div class="space-y-1">
                                     <crate::components::node_picker::NodePicker
                                         selected=attach_target
-                                        placeholder="Attach to node…"
+                                        placeholder="Attach to a Project…"
+                                        only_type=common::node::NodeType::Project
                                         autofocus=true
                                         on_commit=Callback::new(move |()| {
                                             if let Some((id, _)) = attach_target.get_untracked() {

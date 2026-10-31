@@ -176,7 +176,11 @@ pub fn NewTaskForm(
             </div>
 
             // Optional node picker — only for standalone (inbox) capture.
-            {show_picker.then(|| view! { <NodePicker selected=selected_node /> })}
+            {show_picker.then(|| view! {
+                // Only Projects take tasks (§3.2, #216).
+                <NodePicker selected=selected_node only_type=common::node::NodeType::Project
+                    placeholder="Link to a Project (optional)\u{2026}" />
+            })}
 
             {move || add_error.get().map(|msg| view! {
                 <p class="text-xs text-red-500">{msg}</p>
