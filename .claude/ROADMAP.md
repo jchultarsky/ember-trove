@@ -5,6 +5,15 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-31)
 
+- **v3.3.0 shipped: Data health fixes link problems (S3c PR 2 of #228, PR #232).**
+  - Edge items carry `LinkRef`s; contained References convert (one or
+    all, paced), bad homes and Area dependencies link instead or go,
+    loops lose one link at a time.
+  - `POST /edges/{id}/convert` (`common::edge::convert_ends`: delete
+    rights, then the conversion, then create rights).
+  - The both-ways rule is retired (index 041). Service-worker cache v9.
+  - Next: S3c PR 3 (Home row + picker, `GET`/`PUT /nodes/{id}/home`,
+    migration 042 one-home index; snapshot gate).
 - **v3.2.1 shipped: security patch, S3c PR 1 of #228 (PR #229).**
   - The project dashboard names only Area homes the reader can see
     (`area_for_nodes` takes the subject).
