@@ -3644,3 +3644,47 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         .unwrap();
     assert_eq!(inbox, 0, "the live inbox task didn't survive the restore");
 }
+
+// ── The pool never hands out a connection inside a transaction ───────────────
+
+/// sqlx 0.8 leaves a connection inside a transaction when a request is
+/// cancelled while `BEGIN` is in flight: its rollback guard checks a depth
+/// counter that isn't incremented yet. A raw `BEGIN` reproduces the same
+/// state (the server in a transaction, sqlx's depth 0). The pool's release
+/// check must close such a connection; reused, it would run later requests
+/// inside a transaction no one commits (found by the #234 e2e run).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_connection_left_inside_a_transaction_is_never_reused(pool: PgPool) {
+    let guarded = crate::repo::pool_options()
+        .max_connections(1)
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    {
+        let mut conn = guarded.acquire().await.unwrap();
+        sqlx::query("BEGIN").execute(&mut *conn).await.unwrap();
+        sqlx::query("SELECT 1").execute(&mut *conn).await.unwrap();
+    }
+    // One connection allowed: this waits for the release check above.
+    let mut conn = guarded.acquire().await.unwrap();
+    assert!(
+        !crate::repo::in_transaction_block(&mut conn).await.unwrap(),
+        "a pooled connection came back inside a transaction"
+    );
+    // And the check itself doesn't mistake an ordinary connection for one
+    // in a transaction (the extended protocol's timestamps would), or the
+    // pool would close every connection on release.
+    drop(conn);
+    let mut first = guarded.acquire().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *first)
+        .await
+        .unwrap();
+    drop(first);
+    let mut again = guarded.acquire().await.unwrap();
+    let pid_again: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *again)
+        .await
+        .unwrap();
+    assert_eq!(pid, pid_again, "a clean connection is reused, not closed");
+}
