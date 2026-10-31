@@ -33,6 +33,7 @@ use crate::{
     },
     error::ApiError,
     notify::maybe_notify_invite,
+    repo::activity::ActivityActor,
     state::AppState,
     webhook_dispatch::dispatch,
 };
@@ -308,7 +309,7 @@ async fn create_node(
         node.body.as_deref().unwrap_or(""),
     )
     .await?;
-    let (action, meta) = if let Some(tid) = template_id {
+    let (action, mut meta) = if let Some(tid) = template_id {
         (
             ActivityAction::CreatedFromTemplate,
             json!({ "title": node.title, "template_id": tid }),
@@ -316,6 +317,7 @@ async fn create_node(
     } else {
         (ActivityAction::Created, json!({ "title": node.title }))
     };
+    with_initial_status(&mut meta, node.project_status.as_deref());
     log_activity(&state, node.id, &claims, action, meta).await;
     dispatch(
         state.webhooks.clone(),
@@ -364,16 +366,35 @@ fn version_snapshot_needed(latest_body: Option<&str>, new_body: &str) -> bool {
 }
 
 /// Whether an `Edited` activity entry should be logged, or coalesced into
-/// the previous one (same subject, still inside the coalescing window).
+/// `latest`, the node's last *Edited* entry (same subject, still inside the
+/// coalescing window).
 fn edit_activity_needed(
     latest: Option<&ActivityEntry>,
     subject: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     let Some(e) = latest else { return true };
-    e.action != ActivityAction::Edited
-        || e.subject_id != subject
+    e.subject_id != subject
         || now - e.created_at >= chrono::TimeDelta::minutes(EDIT_ACTIVITY_COALESCE_MINUTES)
+}
+
+/// History starts at creation (#208): a node created with a project status
+/// records it on its `created` entry, so the first `status_changed` has a
+/// visible "from".
+fn with_initial_status(meta: &mut serde_json::Value, status: Option<&str>) {
+    if let (Some(obj), Some(s)) = (meta.as_object_mut(), status) {
+        obj.insert("project_status".to_string(), json!(s));
+    }
+}
+
+/// Whether an update changes the project status and nothing else: what the
+/// status chip sends.
+fn is_status_only(req: &UpdateNodeRequest) -> bool {
+    req.project_status.is_some()
+        && req.title.is_none()
+        && req.body.is_none()
+        && req.metadata.is_none()
+        && req.status.is_none()
 }
 
 async fn update_node(
@@ -389,7 +410,11 @@ async fn update_node(
         req.project_status = Some(project_status::normalize(raw).map_err(status_error)?);
     }
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    let node = state.nodes.update(NodeId(id), req).await?;
+    let status_only = is_status_only(&req);
+    let node = state
+        .nodes
+        .update(NodeId(id), req, &ActivityActor::from_claims(&claims))
+        .await?;
     sync_wikilinks(
         &state,
         node.id,
@@ -417,15 +442,24 @@ async fn update_node(
     {
         tracing::warn!("node version snapshot failed (non-fatal): {e}");
     }
-    // Coalesce rapid consecutive edits by the same user into one activity
-    // entry so autosave doesn't flood the dashboard recap.
-    let log_edit = match state.activity.list(node.id, 1).await {
-        Ok(entries) => edit_activity_needed(entries.first(), &claims.sub, chrono::Utc::now()),
-        Err(e) => {
-            tracing::warn!("latest activity lookup failed (non-fatal): {e}");
-            true
-        }
-    };
+    // A status-only save (the status chip) is already in History as
+    // `status_changed`; an "Edited" line beside it would say it twice (#208).
+    // Otherwise coalesce rapid consecutive edits by the same user into one
+    // entry so autosave doesn't flood the dashboard recap. The window is
+    // measured from the last *Edited* entry, so a status change in between
+    // doesn't split an editing session.
+    let log_edit = !status_only
+        && match state
+            .activity
+            .latest_of(node.id, ActivityAction::Edited)
+            .await
+        {
+            Ok(latest) => edit_activity_needed(latest.as_ref(), &claims.sub, chrono::Utc::now()),
+            Err(e) => {
+                tracing::warn!("latest activity lookup failed (non-fatal): {e}");
+                true
+            }
+        };
     if log_edit {
         log_activity(
             &state,
@@ -847,19 +881,15 @@ pub(crate) async fn log_activity(
     action: ActivityAction,
     extra: serde_json::Value,
 ) {
-    let mut meta = json!({
-        "actor_name": claims.name,
-        "actor_email": claims.email,
-    });
-    // Merge in caller-supplied extra fields.
-    if let (Some(obj), Some(ext)) = (meta.as_object_mut(), extra.as_object()) {
-        for (k, v) in ext {
-            obj.insert(k.clone(), v.clone());
-        }
-    }
+    let actor = ActivityActor::from_claims(claims);
     if let Err(e) = state
         .activity
-        .record(node_id, &claims.sub, action, meta)
+        .record(
+            node_id,
+            &actor.subject_id,
+            action,
+            actor.metadata_with(extra),
+        )
         .await
     {
         tracing::warn!("activity log write failed (non-fatal): {e}");
@@ -1018,7 +1048,10 @@ async fn restore_version(
         project_status: None,
         expected_updated_at: None,
     };
-    let node = state.nodes.update(NodeId(id), req).await?;
+    let node = state
+        .nodes
+        .update(NodeId(id), req, &ActivityActor::from_claims(&claims))
+        .await?;
     sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;
     // Snapshot the restored body.
     let sub = claims.sub.clone();
@@ -1119,14 +1152,9 @@ async fn duplicate_node(
         sync_wikilinks(&state, dup.id, &dup.owner_id, body).await?;
     }
 
-    log_activity(
-        &state,
-        dup.id,
-        &claims,
-        ActivityAction::Created,
-        json!({ "title": dup.title, "duplicated_from": id }),
-    )
-    .await;
+    let mut meta = json!({ "title": dup.title, "duplicated_from": id });
+    with_initial_status(&mut meta, dup.project_status.as_deref());
+    log_activity(&state, dup.id, &claims, ActivityAction::Created, meta).await;
 
     Ok((StatusCode::CREATED, Json(dup)))
 }
@@ -1271,6 +1299,56 @@ mod tests {
         assert!(version_snapshot_needed(Some("old"), "new"));
     }
 
+    fn upd() -> UpdateNodeRequest {
+        UpdateNodeRequest {
+            title: None,
+            body: None,
+            metadata: None,
+            status: None,
+            project_status: None,
+            expected_updated_at: None,
+        }
+    }
+
+    #[test]
+    fn only_a_bare_status_change_is_status_only() {
+        // #208: the status chip's save is logged as status_changed alone.
+        let chip = UpdateNodeRequest {
+            project_status: Some(Some("Blocked".into())),
+            ..upd()
+        };
+        assert!(is_status_only(&chip));
+        let clear = UpdateNodeRequest {
+            project_status: Some(None),
+            ..upd()
+        };
+        assert!(is_status_only(&clear), "clearing is a status change too");
+        let precondition = UpdateNodeRequest {
+            expected_updated_at: Some(chrono::Utc::now()),
+            ..chip.clone()
+        };
+        assert!(
+            is_status_only(&precondition),
+            "a version check isn't an edit"
+        );
+        let with_body = UpdateNodeRequest {
+            body: Some("x".into()),
+            ..chip.clone()
+        };
+        assert!(!is_status_only(&with_body), "an edit still logs Edited");
+        assert!(!is_status_only(&upd()), "no status, not status-only");
+    }
+
+    #[test]
+    fn a_created_entry_records_the_initial_status_when_there_is_one() {
+        let mut meta = json!({ "title": "p" });
+        with_initial_status(&mut meta, Some("Active"));
+        assert_eq!(meta, json!({ "title": "p", "project_status": "Active" }));
+        let mut none = json!({ "title": "a" });
+        with_initial_status(&mut none, None);
+        assert_eq!(none, json!({ "title": "a" }));
+    }
+
     #[test]
     fn edit_log_needed_when_no_prior_activity() {
         assert!(edit_activity_needed(None, "sub-a", Utc::now()));
@@ -1291,12 +1369,6 @@ mod tests {
     #[test]
     fn edit_log_needed_for_different_subject() {
         let e = entry(ActivityAction::Edited, "sub-b", 5);
-        assert!(edit_activity_needed(Some(&e), "sub-a", Utc::now()));
-    }
-
-    #[test]
-    fn edit_log_needed_when_latest_is_not_an_edit() {
-        let e = entry(ActivityAction::TagAdded, "sub-a", 5);
         assert!(edit_activity_needed(Some(&e), "sub-a", Utc::now()));
     }
 }

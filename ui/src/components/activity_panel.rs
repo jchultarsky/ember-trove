@@ -1,5 +1,5 @@
 //! Activity / audit-log panel — shows who did what on a node.
-use common::activity::{ActivityAction, ActivityEntry};
+use common::activity::{ActivityAction, ActivityEntry, status_change_summary};
 use common::id::NodeId;
 use leptos::prelude::*;
 
@@ -56,6 +56,10 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
             .get("format")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        ActivityAction::StatusChanged => {
+            let label = |k: &str| entry.metadata.get(k).and_then(|v| v.as_str());
+            Some(status_change_summary(label("from"), label("to")))
+        }
         _ => None,
     }
 }
@@ -84,6 +88,9 @@ fn action_colour(action: &ActivityAction) -> &'static str {
         }
         ActivityAction::CreatedFromTemplate => {
             "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+        }
+        ActivityAction::StatusChanged => {
+            "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300"
         }
     }
 }
@@ -149,5 +156,43 @@ pub fn ActivityPanel(node_id: NodeId) -> impl IntoView {
                         })}
                     </Suspense>
         </crate::components::node_section::SectionShell>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(action: ActivityAction, metadata: serde_json::Value) -> ActivityEntry {
+        ActivityEntry {
+            id: common::id::ActivityId(uuid::Uuid::nil()),
+            node_id: NodeId(uuid::Uuid::nil()),
+            subject_id: "sub".to_string(),
+            action,
+            metadata,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn a_status_change_shows_from_and_to() {
+        let e = entry(
+            ActivityAction::StatusChanged,
+            serde_json::json!({ "from": "Active", "to": "Blocked" }),
+        );
+        assert_eq!(
+            action_detail(&e).as_deref(),
+            Some("Active \u{2192} Blocked")
+        );
+        let set = entry(
+            ActivityAction::StatusChanged,
+            serde_json::json!({ "from": null, "to": "Active" }),
+        );
+        assert_eq!(action_detail(&set).as_deref(), Some("set to Active"));
+        let cleared = entry(
+            ActivityAction::StatusChanged,
+            serde_json::json!({ "from": "Done", "to": null }),
+        );
+        assert_eq!(action_detail(&cleared).as_deref(), Some("Done cleared"));
     }
 }
