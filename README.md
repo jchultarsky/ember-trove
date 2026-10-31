@@ -410,6 +410,7 @@ details.
 | GET | `/api/edges` | List all edges |
 | POST | `/api/edges` | Create edge |
 | DELETE | `/api/edges/{id}` | Delete edge |
+| POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |
 
 ### Tags
 
@@ -556,7 +557,11 @@ node:
 - `related_to` has no direction: it is stored once per pair (the reverse
   is a 409 duplicate), and an editor of either end may delete it.
 
-Data from before these rules stays as it is; the Data health page lists it.
+Data from before these rules stays as it is; the Data health page lists it,
+with fix buttons. `POST /api/edges/{id}/convert` turns a link into a
+`references` or `related_to` link in one step. The caller must be allowed
+to delete the old link and to create the new one; a `related_to` runs from
+whichever end they edit.
 
 ### Node Statuses
 

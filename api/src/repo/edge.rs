@@ -15,6 +15,18 @@ pub trait EdgeRepo: Send + Sync {
     async fn create(&self, req: CreateEdgeRequest) -> Result<Edge, EmberTroveError>;
     async fn get(&self, id: EdgeId) -> Result<Edge, EmberTroveError>;
     async fn delete(&self, id: EdgeId) -> Result<(), EmberTroveError>;
+    /// Replace the `from` link `id` with a `to` link between the same two
+    /// nodes (#228), keeping its label and age, in one transaction. With
+    /// `swap` the new link runs target → source (a symmetric type, from
+    /// the end the caller edits). An identical link already there absorbs
+    /// it. The caller has checked rights and `to` (`convert_ends`).
+    async fn convert(
+        &self,
+        id: EdgeId,
+        from: EdgeType,
+        to: EdgeType,
+        swap: bool,
+    ) -> Result<(), EmberTroveError>;
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Edge>, EmberTroveError>;
     /// Edges touching `node_id`, with both endpoint titles. SECURITY: only
     /// edges whose endpoints are both visible to `subject` (`None` = admin) —
@@ -251,6 +263,72 @@ impl EdgeRepo for PgEdgeRepo {
         }
 
         Ok(())
+    }
+
+    async fn convert(
+        &self,
+        id: EdgeId,
+        from: EdgeType,
+        to: EdgeType,
+        swap: bool,
+    ) -> Result<(), EmberTroveError> {
+        let fail = |e: sqlx::Error| EmberTroveError::Internal(format!("convert edge failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(fail)?;
+        // The type is part of the match: if the link changed since the
+        // caller's checks, nothing happens (404) rather than a conversion
+        // the checks never saw.
+        let old: Option<(Uuid, Uuid, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+            "DELETE FROM edges WHERE id = $1 AND edge_type = $2::edge_type \
+             RETURNING source_id, target_id, label, created_at",
+        )
+        .bind(id.0)
+        .bind(from.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(fail)?;
+        let Some((source, target, label, created_at)) = old else {
+            return Err(EmberTroveError::NotFound(format!("edge {id} not found")));
+        };
+        let (source, target) = if swap {
+            (target, source)
+        } else {
+            (source, target)
+        };
+        // No conflict target: covers both the per-type unique index and
+        // `edges_related_to_once`, so an existing link absorbs this one.
+        let inserted = sqlx::query(
+            "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
+             VALUES ($1, $2, $3::edge_type, $4, $5) ON CONFLICT DO NOTHING",
+        )
+        .bind(source)
+        .bind(target)
+        .bind(to.as_str())
+        .bind(&label)
+        .bind(created_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(fail)?
+        .rows_affected();
+        if inserted == 0 {
+            // Absorbed: a blank label on the link that stays takes this
+            // one's, the merge rule of migrations 034 and 041.
+            sqlx::query(
+                "UPDATE edges SET label = $4 \
+                 WHERE edge_type = $3::edge_type \
+                   AND ((source_id = $1 AND target_id = $2) \
+                        OR ($3 = 'related_to' AND source_id = $2 AND target_id = $1)) \
+                   AND (label IS NULL OR btrim(label) = '') \
+                   AND $4 IS NOT NULL AND btrim($4) <> ''",
+            )
+            .bind(source)
+            .bind(target)
+            .bind(to.as_str())
+            .bind(&label)
+            .execute(&mut *tx)
+            .await
+            .map_err(fail)?;
+        }
+        tx.commit().await.map_err(fail)
     }
 
     async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Edge>, EmberTroveError> {

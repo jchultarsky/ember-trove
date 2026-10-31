@@ -12,7 +12,8 @@ use std::collections::HashMap;
 
 use common::{
     EmberTroveError,
-    data_health::{ITEM_CAP, Ref, RuleCount, RuleId, RuleReport, Violation},
+    data_health::{ITEM_CAP, LinkRef, Ref, RuleCount, RuleId, RuleReport, Violation},
+    edge::EdgeType,
     node::NodeType,
     ontology::{
         ContainmentRule, containment_violation, cyclic_components, cyclic_components_preferring,
@@ -68,7 +69,6 @@ impl DataHealthRepo for PgDataHealthRepo {
         let contains = edges_in_view(&mut tx, owner, "contains").await?;
         let depends_on = edges_in_view(&mut tx, owner, "depends_on").await?;
         let derived_from = edges_in_view(&mut tx, owner, "derived_from").await?;
-        let related_to = edges_in_view(&mut tx, owner, "related_to").await?;
         let [contained_reference, not_allowed] = containment(&contains)?;
         let reports = vec![
             tasks_on_non_projects(&mut tx, owner).await?,
@@ -79,10 +79,13 @@ impl DataHealthRepo for PgDataHealthRepo {
             contained_reference,
             not_allowed,
             depends_on_areas(&depends_on)?,
-            related_both_ways(&related_to),
-            loops(&contains, RuleId::ContainsCycle),
-            loops(&depends_on, RuleId::DependsOnCycle),
-            loops(&derived_from, RuleId::DerivedFromCycle),
+            loops(&contains, EdgeType::Contains, RuleId::ContainsCycle),
+            loops(&depends_on, EdgeType::DependsOn, RuleId::DependsOnCycle),
+            loops(
+                &derived_from,
+                EdgeType::DerivedFrom,
+                RuleId::DerivedFromCycle,
+            ),
         ];
         tx.commit().await.map_err(db)?;
 
@@ -300,6 +303,7 @@ async fn statuses_on_non_projects(
 /// each end.
 #[derive(FromRow)]
 struct EdgeRow {
+    edge_id: Uuid,
     source_id: Uuid,
     source_title: String,
     source_type: String,
@@ -331,6 +335,17 @@ impl EdgeRow {
     fn has_stake(&self) -> bool {
         self.source_owned || self.target_owned
     }
+    /// The edge itself, for the item's fixes (#228).
+    fn link(&self, edge_type: EdgeType) -> LinkRef {
+        LinkRef {
+            id: self.edge_id,
+            edge_type,
+            source: self.source_id,
+            target: self.target_id,
+            source_owned: self.source_owned,
+            target_owned: self.target_owned,
+        }
+    }
 }
 
 /// Every edge of `edge_type` whose two ends the caller can see, ordered by
@@ -345,7 +360,8 @@ async fn edges_in_view(
 ) -> Result<Vec<EdgeRow>, EmberTroveError> {
     let sql = format!(
         r#"
-        SELECT s.id AS source_id, s.title AS source_title,
+        SELECT e.id AS edge_id,
+               s.id AS source_id, s.title AS source_title,
                s.node_type::text AS source_type, s.status = 'archived' AS source_archived,
                s.owner_id = $1 AS source_owned,
                t.id AS target_id, t.title AS target_title,
@@ -380,28 +396,40 @@ fn node_type(s: &str) -> Result<NodeType, EmberTroveError> {
 /// homes is theirs to fix, even when one home is mine.
 fn multiple_homes(contains: &[EdgeRow]) -> RuleReport {
     // Rows come ordered by child title, then parent title: group runs.
+    // Each home's link goes with its parent, in the same order.
+    type Homes = (Ref, Vec<Ref>, Vec<LinkRef>);
     let mut items: Vec<Violation> = Vec::new();
-    let mut current: Option<(Ref, Vec<Ref>)> = None;
+    let mut current: Option<Homes> = None;
     for r in contains.iter().filter(|r| r.target_owned) {
         match &mut current {
-            Some((child, parents)) if child.id == r.target_id => parents.push(r.source()),
+            Some((child, parents, links)) if child.id == r.target_id => {
+                parents.push(r.source());
+                links.push(r.link(EdgeType::Contains));
+            }
             _ => {
-                if let Some((child, parents)) = current.take() {
-                    push_if_several(&mut items, child, parents);
+                if let Some(homes) = current.take() {
+                    push_if_several(&mut items, homes);
                 }
-                current = Some((r.target(), vec![r.source()]));
+                current = Some((
+                    r.target(),
+                    vec![r.source()],
+                    vec![r.link(EdgeType::Contains)],
+                ));
             }
         }
     }
-    if let Some((child, parents)) = current {
-        push_if_several(&mut items, child, parents);
+    if let Some(homes) = current {
+        push_if_several(&mut items, homes);
     }
     RuleReport::new(RuleId::MultipleHomes, items)
 }
 
-fn push_if_several(items: &mut Vec<Violation>, child: Ref, parents: Vec<Ref>) {
+fn push_if_several(
+    items: &mut Vec<Violation>,
+    (child, parents, links): (Ref, Vec<Ref>, Vec<LinkRef>),
+) {
     if parents.len() > 1 {
-        items.push(Violation::new(child, parents));
+        items.push(Violation::new(child, parents).with_links(links));
     }
 }
 
@@ -420,7 +448,10 @@ fn containment(contains: &[EdgeRow]) -> Result<[RuleReport; 2], EmberTroveError>
             Some(ContainmentRule::NotAllowed) => &mut not_allowed,
             None => continue,
         };
-        bucket.push(Violation::new(r.target(), vec![r.source()]));
+        bucket.push(
+            Violation::new(r.target(), vec![r.source()])
+                .with_links(vec![r.link(EdgeType::Contains)]),
+        );
     }
     Ok([
         RuleReport::new(RuleId::ContainedReference, contained_reference),
@@ -433,26 +464,13 @@ fn depends_on_areas(depends_on: &[EdgeRow]) -> Result<RuleReport, EmberTroveErro
     let mut items = Vec::new();
     for r in depends_on.iter().filter(|r| r.has_stake()) {
         if node_type(&r.target_type)? == NodeType::Area {
-            items.push(Violation::new(r.source(), vec![r.target()]));
+            items.push(
+                Violation::new(r.source(), vec![r.target()])
+                    .with_links(vec![r.link(EdgeType::DependsOn)]),
+            );
         }
     }
     Ok(RuleReport::new(RuleId::DependsOnArea, items))
-}
-
-/// Pairs of mine linked by `related_to` in both directions (§6.2), each
-/// pair once: from the edge whose source sorts first.
-fn related_both_ways(related_to: &[EdgeRow]) -> RuleReport {
-    let present: std::collections::HashSet<(Uuid, Uuid)> = related_to
-        .iter()
-        .map(|r| (r.source_id, r.target_id))
-        .collect();
-    let items = related_to
-        .iter()
-        .filter(|r| r.has_stake() && r.source_id < r.target_id)
-        .filter(|r| present.contains(&(r.target_id, r.source_id)))
-        .map(|r| Violation::new(r.source(), vec![r.target()]))
-        .collect();
-    RuleReport::new(RuleId::RelatedToBothWays, items)
 }
 
 // ── Loops (§6.1, §6.4, §6.5) ──────────────────────────────────────────────────
@@ -462,11 +480,14 @@ fn related_both_ways(related_to: &[EdgeRow]) -> RuleReport {
 /// else's shared nodes is still found. The path shown runs through my own
 /// node (the smallest one in the group), so it's a loop I can break.
 /// Counted per group: two loops through one shared node are one group.
-fn loops(edges: &[EdgeRow], rule: RuleId) -> RuleReport {
+/// The item carries the loop's links in order, so one can be removed.
+fn loops(edges: &[EdgeRow], edge_type: EdgeType, rule: RuleId) -> RuleReport {
     let mut nodes: HashMap<Uuid, (Ref, bool)> = HashMap::new();
+    let mut by_pair: HashMap<(Uuid, Uuid), &EdgeRow> = HashMap::new();
     let mut pairs = Vec::with_capacity(edges.len());
     for r in edges {
         pairs.push((r.source_id, r.target_id));
+        by_pair.insert((r.source_id, r.target_id), r);
         nodes
             .entry(r.source_id)
             .or_insert_with(|| (r.source(), r.source_owned));
@@ -487,7 +508,12 @@ fn loops(edges: &[EdgeRow], rule: RuleId) -> RuleReport {
             // The loop as a path: its first node (mine), then the rest.
             let (first, rest) = c.cycle.split_first()?;
             let subject = refs(std::slice::from_ref(first)).pop()?;
-            Some(Violation::new(subject, refs(rest)))
+            // `[a, b, c]` is a → b → c → a: each hop, and the one back.
+            let hops = c.cycle.iter().zip(c.cycle.iter().cycle().skip(1));
+            let links = hops
+                .filter_map(|(s, t)| by_pair.get(&(*s, *t)).map(|r| r.link(edge_type.clone())))
+                .collect();
+            Some(Violation::new(subject, refs(rest)).with_links(links))
         })
         .collect();
     RuleReport::new(rule, items)
@@ -503,7 +529,6 @@ struct SqlCounts {
     status_on_non_project: i64,
     multiple_homes: i64,
     depends_on_area: i64,
-    related_to_both_ways: i64,
 }
 
 /// Every rule over all data, no subject filter. Only numbers are read
@@ -529,12 +554,7 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
              SELECT target_id FROM edges WHERE edge_type = 'contains'
              GROUP BY target_id HAVING count(*) > 1) homes) AS multiple_homes,
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
-            WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area,
-          (SELECT count(*) FROM edges e
-            WHERE e.edge_type = 'related_to' AND e.source_id < e.target_id
-              AND EXISTS (SELECT 1 FROM edges r WHERE r.edge_type = 'related_to'
-                          AND r.source_id = e.target_id AND r.target_id = e.source_id))
-            AS related_to_both_ways
+            WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area
         "#,
     )
     .fetch_one(&mut *conn)
@@ -599,10 +619,6 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::DependsOnArea,
             count: n(sql.depends_on_area),
-        },
-        RuleCount {
-            rule: RuleId::RelatedToBothWays,
-            count: n(sql.related_to_both_ways),
         },
         RuleCount {
             rule: RuleId::ContainsCycle,

@@ -196,3 +196,38 @@ test('either end of a related link may delete it', async ({ request, otherReques
     await otherRequest.delete(`/api/nodes/${theirs.id}`);
   }
 });
+
+// ── Converting a link (#228) ─────────────────────────────────────────────────
+
+test('a link converts in one step, only for someone who may change it', async ({
+  request,
+  otherRequest,
+}) => {
+  const stamp = Date.now();
+  const area = await createNode(request, `e2e rules conv area ${stamp}`, { node_type: 'area' });
+  const project = await createNode(request, `e2e rules conv project ${stamp}`, { node_type: 'project' });
+  try {
+    const made = await request.post('/api/edges', {
+      data: { source_id: area.id, target_id: project.id, edge_type: 'contains', label: 'kept' },
+    });
+    expect(made.status()).toBe(201);
+    const id = (await made.json()).id as string;
+    const convert = (who: APIRequestContext, edge_type: string) =>
+      who.post(`/api/edges/${id}/convert`, { data: { edge_type } });
+
+    // A stranger is refused before anything is judged.
+    expect((await convert(otherRequest, 'related_to')).status()).toBe(403);
+    // Never into a structural type.
+    expect((await convert(request, 'depends_on')).status()).toBe(422);
+
+    expect((await convert(request, 'related_to')).status()).toBe(204);
+    const edges: { id: string; edge_type: string; label: string | null }[] = await (
+      await request.get(`/api/nodes/${area.id}/edges`)
+    ).json();
+    expect(edges.map((e) => [e.edge_type, e.label])).toEqual([['related_to', 'kept']]);
+    // The old link is gone.
+    expect((await convert(request, 'references')).status()).toBe(404);
+  } finally {
+    for (const n of [area, project]) await request.delete(`/api/nodes/${n.id}`);
+  }
+});

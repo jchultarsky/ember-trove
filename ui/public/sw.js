@@ -29,7 +29,9 @@
 //       stale cached HTML every v6 client is still serving.
 //   v8: Resource merged into Reference (3.0.0, #222) — evicts cached API
 //       JSON that still says "resource", which the new bundle can't read.
-const CACHE_NAME = "ember-trove-v8";
+//   v9: Data health drops the related_to_both_ways rule and adds links
+//       (#228) — evicts cached reports the new bundle can't read.
+const CACHE_NAME = "ember-trove-v9";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
