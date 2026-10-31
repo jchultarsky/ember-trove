@@ -34,6 +34,7 @@ pub mod admin;
 pub mod attachment;
 pub mod auth;
 pub mod backup;
+pub mod data_health;
 pub mod edge;
 pub mod editor_pref;
 pub mod error;
@@ -49,6 +50,7 @@ pub mod node;
 pub mod node_link;
 pub mod node_version;
 pub mod note;
+pub mod ontology;
 pub mod permission;
 pub mod person;
 pub mod picker;
@@ -96,5 +98,7 @@ mod wire_tests {
         assert_wire!(crate::task::TaskPriority);
         assert_wire!(crate::task::RecurrenceRule);
         assert_wire!(crate::permission::PermissionRole);
+        assert_wire!(crate::data_health::RuleId);
+        assert_wire!(crate::data_health::RefKind);
     }
 }

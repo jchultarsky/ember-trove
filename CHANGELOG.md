@@ -6,6 +6,52 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.48.0] - 2026-10-31
+
+### Added
+- **Data-health report API** (#208). `GET /api/data-health` lists the
+  caller's data that breaks the data model (`docs/ONTOLOGY.md`), rule by
+  rule, so cleanup can start before later releases enforce the rules.
+  - The rules checked so far: tasks, people or a project status on a
+    non-Project; tasks with no Project; a node with several homes; a
+    contained Reference; a home the containment table doesn't allow; a
+    dependency on an Area; `related_to` stored both ways; and loops in
+    homes, dependencies or derivations.
+  - Each rule gives an exact count and its first 200 items.
+  - The report is read-only and computed on request. The rules live in
+    `common::ontology`, so the later write checks will use the same ones.
+  - A loop is found even when it passes through someone else's shared
+    nodes. Each looping group of nodes is reported once, with a short path
+    through your own node, so it's one you can break.
+  - `GET /api/admin/data-health` gives an admin each rule's count across
+    every account. A loop or pair shared by two accounts counts once. It's
+    the database-wide figure that later database constraints wait on, so
+    it can exceed the accounts' reports combined: for example, a second
+    home that the child's owner can't see.
+- **Data health page** (#208): sidebar **Data health**, or Cmd-K "Go to
+  Data health".
+  - One card per rule that has items: the rule, its section of the data
+    model, how to fix it, and the items, each linking to where it lives
+    (an orphan task opens in the Inbox).
+  - Archived nodes are marked, and a long list says how many it shows.
+  - Done or cancelled tasks are marked "completed" and open their list.
+  - Tasks with no Project are listed newest first.
+  - Admins also see each rule's count across every account.
+  - The page only reads. Fix buttons come with the releases that enforce
+    each rule.
+
+### Security
+- **The data-health report shows only the caller's own data** (#208,
+  ONTOLOGY §14).
+  - It names a node only when the caller may read it, and never counts
+    hidden ones: a home you can't see is neither listed nor counted.
+  - People are named only to their owner.
+  - A loop through a node you can't see isn't reported to you at all.
+  - The admin view returns counts only, never titles, ids or content.
+  - There is no admin bypass: the repo takes the owner as a plain string,
+    so the "admin sees everything" scope can't reach it, and a test pins
+    that an admin gets their own report.
+
 ## [2.47.0] - 2026-10-31
 
 ### Added
@@ -14,7 +60,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   "Active → Blocked", "set to Active" or "Active cleared". This is the start
   of History (ONTOLOGY §10), which can't be backfilled.
   - The entry is written in the same transaction as the change, so neither
-    lands without the other. Its time is the node's new `updated_at`.
+    lands without the other. It's stamped once the node is locked, so
+    concurrent changes are listed in the order they were made.
   - A node created with a status records it on its `created` entry.
   - A status-only save (the chip) is no longer also logged as "Edited".
   - Edits are now grouped from the last *Edited* entry, so a status change

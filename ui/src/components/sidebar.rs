@@ -126,10 +126,11 @@ pub fn Sidebar(
             <SidebarLink icon="label"        label="Tags"      on_click=nav!("/tags")      collapsed=collapsed />
             <SidebarLink icon="content_copy" label="Templates" on_click=nav!("/templates") collapsed=collapsed />
             <SidebarLink icon="webhook"      label="Webhooks"  on_click=nav!("/webhooks")  collapsed=collapsed />
+            <SidebarLink icon="checklist"    label="Data health" on_click=nav!("/data-health") collapsed=collapsed />
             // ── Section 4: Admin (only visible to admins) ─────────────────────
             {move || {
                 if let AuthStatus::Authenticated(ref u) = auth_state.get()
-                    && u.roles.contains(&"admin".to_string())
+                    && u.is_admin()
                 {
                     Some(view! {
                         <div>

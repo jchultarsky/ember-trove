@@ -887,6 +887,26 @@ impl ActivityRepo for StubActivityRepo {
     }
 }
 
+/// Records whose report was asked for, to prove the route never widens it.
+#[derive(Default)]
+struct StubDataHealthRepo(std::sync::Mutex<Vec<String>>);
+#[async_trait]
+impl crate::repo::data_health::DataHealthRepo for StubDataHealthRepo {
+    async fn report_for(
+        &self,
+        owner: &str,
+    ) -> Result<Vec<common::data_health::RuleReport>, EmberTroveError> {
+        self.0.lock().expect("lock").push(owner.to_string());
+        Ok(vec![])
+    }
+    async fn counts_all(&self) -> Result<Vec<common::data_health::RuleCount>, EmberTroveError> {
+        Ok(vec![common::data_health::RuleCount {
+            rule: common::data_health::RuleId::OrphanTask,
+            count: 3,
+        }])
+    }
+}
+
 struct StubNodeVersionRepo;
 #[async_trait]
 impl NodeVersionRepo for StubNodeVersionRepo {
@@ -1083,6 +1103,7 @@ fn test_state() -> AppState {
         backup: Arc::new(StubBackupRepo),
         favorites: Arc::new(StubFavoriteRepo),
         activity: Arc::new(StubActivityRepo),
+        data_health: Arc::new(StubDataHealthRepo::default()),
         people: Arc::new(StubPersonRepo),
         node_versions: Arc::new(StubNodeVersionRepo),
         templates: Arc::new(StubTemplateRepo),
@@ -1633,6 +1654,7 @@ async fn backup_routes_registered() {
 async fn metrics_export_attachments_editor_prefs_routes_registered() {
     assert_route_registered("GET", "/metrics").await;
     assert_route_registered("GET", "/export").await;
+    assert_route_registered("GET", "/data-health").await;
     let id = Uuid::new_v4();
     assert_route_registered("GET", &format!("/attachments/{id}/download")).await;
     assert_route_registered("DELETE", &format!("/attachments/{id}")).await;
@@ -2555,5 +2577,61 @@ async fn deleting_a_node_writes_no_activity_entry() {
     assert!(
         activity.0.lock().expect("lock").is_empty(),
         "no activity write after the node is gone"
+    );
+}
+
+#[tokio::test]
+async fn the_data_health_report_is_the_callers_own_even_for_an_admin() {
+    // §14: an admin's report is their own data like anyone's. The route
+    // must pass `claims.sub`, never the admin's "everything" scope.
+    let repo = Arc::new(StubDataHealthRepo::default());
+    let mut state = test_state();
+    state.data_health = repo.clone();
+    let app = Router::new()
+        .nest("/data-health", crate::routes::data_health::router())
+        .layer(axum::Extension(admin_claims()))
+        .with_state(state);
+
+    let resp = app
+        .oneshot(Request::get("/data-health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert!(body["rules"].is_array());
+    assert_eq!(*repo.0.lock().expect("lock"), vec![admin_claims().sub]);
+}
+
+#[tokio::test]
+async fn admin_data_health_counts_are_admin_only_and_carry_no_content() {
+    let app = |claims: common::auth::AuthClaims| {
+        Router::new()
+            .nest("/admin", crate::routes::admin::router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+    };
+    let denied = app(fake_claims())
+        .oneshot(
+            Request::get("/admin/data-health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    let ok = app(admin_claims())
+        .oneshot(
+            Request::get("/admin/data-health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), StatusCode::OK);
+    let body = body_json(ok).await;
+    assert_eq!(
+        body,
+        serde_json::json!([{ "rule": "orphan_task", "count": 3 }])
     );
 }

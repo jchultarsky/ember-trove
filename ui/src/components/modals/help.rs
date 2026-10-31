@@ -226,6 +226,13 @@ const CONCEPTS: &[Concept] = &[
                it's a tag. Don't recreate Areas as tags or vice-versa.",
     },
     Concept {
+        title: "Data health",
+        body: "Data health (sidebar, or Cmd-K \"Go to Data health\") lists your \
+               data that doesn't fit the data model yet: tasks outside a Project, \
+               a node with two homes, links in a loop. It only reads: each item \
+               links to where it lives, with how to fix it there.",
+    },
+    Concept {
         title: "Recent + Search",
         body: "Recent (sidebar bottom) is your last 10 visited nodes, kept in \
                localStorage. Search is the Cmd-K palette: top 5 recent on a blank \

@@ -176,10 +176,10 @@ pub fn MyDayView() -> impl IntoView {
                 };
                 ev.prevent_default();
                 let mdt = &flat[idx];
-                let target = match mdt.task.node_id {
-                    Some(nid) => format!("/nodes/{nid}?task={}", mdt.task.id),
-                    None => format!("/tasks/inbox?task={}", mdt.task.id),
-                };
+                let target = crate::components::task_common::task_href(
+                    mdt.task.id.0,
+                    mdt.task.node_id.map(|n| n.0),
+                );
                 navigate.get_value()(&target, Default::default());
             }
             " " => {

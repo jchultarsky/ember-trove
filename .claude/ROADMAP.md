@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v2.48.0 shipped: the Data health report and page (S1b + S1c of #208;
+  PRs #211–#214). S1 is complete.**
+  - `GET /api/data-health` returns the caller's own violations across 12
+    rules: what each kind may carry, orphan tasks, homes, containment, Area
+    dependencies, `related_to` both ways, and three loop rules. Admins also
+    get counts via `GET /api/admin/data-health`.
+  - The rules live in `common::ontology` (capabilities, the containment
+    table, an iterative Tarjan SCC pass), for reuse by the S2a/S3a write
+    gates.
+  - The `/data-health` page is read-only.
+  - The prod rehearsal found 28 tasks on non-Projects and 13 orphan tasks;
+    every structural rule was clean.
+  - Next: S2a (capability table plus API write gates).
 - **v2.47.0 shipped: project-status changes are recorded in History (S1a-2
   of #208; PR #210).** A `status_changed` entry (from → to) is written in
   the same transaction as the change (`PgNodeRepo::update` with `FOR NO
