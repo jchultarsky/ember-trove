@@ -1137,12 +1137,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         let nav = nav_store.get_value();
         let g = arm_watchdog(None);
         wasm_bindgen_futures::spawn_local(async move {
-            let nt = match nt_str.as_str() {
-                "project" => NodeType::Project,
-                "area" => NodeType::Area,
-                "reference" => NodeType::Reference,
-                _ => NodeType::Article,
-            };
+            let nt = NodeType::parse(&nt_str).unwrap_or(NodeType::Article);
             let req = CreateNodeRequest {
                 title: snap.0.clone(),
                 node_type: nt,

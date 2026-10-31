@@ -32,7 +32,24 @@ pub fn read_recent() -> Vec<RecentEntry> {
     let Ok(Some(raw)) = storage.get_item(LS_KEY) else {
         return vec![];
     };
-    serde_json::from_str(&raw).unwrap_or_default()
+    let entries: Vec<RecentEntry> = serde_json::from_str(&raw).unwrap_or_default();
+    entries.into_iter().map(RecentEntry::current).collect()
+}
+
+/// The retired Resource kind's glyph (#222).
+const RESOURCE_ICON: &str = "bookmarks";
+
+impl RecentEntry {
+    /// An entry stored before 3.0 may carry the retired Resource glyph; the
+    /// node is a Reference now, so it gets that icon.
+    fn current(self) -> Self {
+        if self.icon == RESOURCE_ICON {
+            let icon = crate::components::node_meta::type_icon("reference").to_string();
+            Self { icon, ..self }
+        } else {
+            self
+        }
+    }
 }
 
 /// Prepend a node to the recent list, dedup by id, cap at [`MAX_ENTRIES`].
@@ -55,5 +72,21 @@ pub fn push_recent(id: Uuid, title: String, node_type: &str) {
 
     if let Ok(json) = serde_json::to_string(&entries) {
         let _ = storage.set_item(LS_KEY, &json);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pre_3_0_resource_entry_shows_the_reference_icon() {
+        let e = |icon: &str| RecentEntry {
+            id: Uuid::nil(),
+            title: "t".into(),
+            icon: icon.into(),
+        };
+        assert_eq!(e("bookmarks").current().icon, "menu_book");
+        assert_eq!(e("rocket_launch").current(), e("rocket_launch"));
     }
 }

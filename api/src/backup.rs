@@ -307,20 +307,28 @@ pub async fn execute_restore(
 ) -> Result<(), ApiError> {
     let job = state.backup.get(job_id).await.map_err(ApiError::from)?;
 
-    let archive_bytes = state
-        .object_store
-        .get(&job.s3_key)
-        .await
-        .map_err(|e| ApiError::Storage(format!("download backup failed: {e}")))?;
+    let download = || async {
+        state
+            .object_store
+            .get(&job.s3_key)
+            .await
+            .map_err(|e| ApiError::Storage(format!("download backup failed: {e}")))
+    };
 
     // The format first (#222): an archive this release can't restore costs
-    // no snapshot and never reaches the data parser.
-    check_format(&extract_manifest(&archive_bytes)?)?;
+    // no snapshot and never reaches the data parser. The archive is dropped
+    // again before the snapshot, which builds a second full archive in
+    // memory: holding both could exhaust a small VM mid-restore.
+    check_format(&extract_manifest(&download().await?)?)?;
 
     // Auto snapshot before restore, attributed to the admin who triggered it.
     create_backup(state, owner_id, Some("auto: pre-restore snapshot")).await?;
 
-    let (_manifest, data, attachment_files) = extract_full(&archive_bytes)?;
+    let archive_bytes = download().await?;
+    let (manifest, data, attachment_files) = extract_full(&archive_bytes)?;
+    // Again on the manifest the parse used: an archive with two manifests
+    // can't pass the first check with one and restore with the other.
+    check_format(&manifest)?;
 
     // Run all DB changes in a single transaction.
     let mut tx = state

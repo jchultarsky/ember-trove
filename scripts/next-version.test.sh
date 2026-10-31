@@ -32,6 +32,10 @@ check "major wins"           major "$(bump $'feat: a\n\nfix(x)!: b')"
 check "prose mention"        patch "$(bump $'fix: x\n\nThis is not a BREAKING CHANGE: see #1')"
 check "bang mid-subject"     patch "$(bump 'fix: handle feat!: in titles')"
 check "nothing"              patch "$(bump '')"
+# Bigger than a pipe buffer, with the match first: grep -q stops early, and
+# under pipefail (set above) a piped writer's SIGPIPE used to read as a miss.
+BIG=$'feat(x)!: y\n'"$(printf 'filler line %06d\n' $(seq 1 6000))"
+check "early match, big input" major "$(bump "$BIG")"
 
 if [ "$FAILS" -gt 0 ]; then
   echo "$FAILS failed"; exit 1

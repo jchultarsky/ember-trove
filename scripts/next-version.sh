@@ -16,9 +16,11 @@
 bump_for() {
   local msgs
   msgs=$(command cat)
-  if printf '%s\n' "$msgs" | grep -qE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:'; then
+  # Here-strings, not `printf | grep -q`: grep -q exits at the first match,
+  # and under pipefail the writer's SIGPIPE would turn a match into a miss.
+  if grep -qE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE:' <<< "$msgs"; then
     echo major
-  elif printf '%s\n' "$msgs" | grep -qE '^feat(\([^)]*\))?:'; then
+  elif grep -qE '^feat(\([^)]*\))?:' <<< "$msgs"; then
     echo minor
   else
     echo patch

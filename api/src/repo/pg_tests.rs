@@ -2136,7 +2136,7 @@ async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
     let bob = health(&pool, "bob").await;
     assert!(
         subjects(&bob, RuleId::ContainedReference).is_empty(),
-        "bob can't see alice's Resource, so the edge isn't his to see"
+        "bob can't see alice's second Reference, so the edge isn't his to see"
     );
 }
 
