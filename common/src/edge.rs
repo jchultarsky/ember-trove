@@ -39,6 +39,17 @@ impl EdgeType {
         EdgeType::DerivedFrom,
     ];
 
+    /// Whether a loop of this type is a modelling error that writes refuse
+    /// (#224): a home (§6.1), a prerequisite (§6.4) and an origin (§6.5)
+    /// can't lead back to themselves. Links and mentions may loop.
+    #[must_use]
+    pub fn is_acyclic(&self) -> bool {
+        matches!(
+            self,
+            EdgeType::Contains | EdgeType::DependsOn | EdgeType::DerivedFrom
+        )
+    }
+
     /// The label as an option shows it: "Related to".
     pub fn option_label(&self) -> String {
         let label = self.label();
@@ -125,6 +136,19 @@ mod option_tests {
         expected.sort_by_key(|t| t.as_str());
         got.sort_by_key(|t| t.as_str());
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn only_homes_prerequisites_and_origins_are_acyclic() {
+        let acyclic: Vec<_> = EdgeType::ALL.iter().filter(|t| t.is_acyclic()).collect();
+        assert_eq!(
+            acyclic,
+            [
+                &EdgeType::Contains,
+                &EdgeType::DependsOn,
+                &EdgeType::DerivedFrom
+            ]
+        );
     }
 
     #[test]

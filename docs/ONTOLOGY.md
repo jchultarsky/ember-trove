@@ -261,6 +261,9 @@ and the parent is where the child is found.
   links.
 - Because it claims the child's single home, creating a `contains` edge
   requires edit rights on **both** ends (§14).
+- It may be **removed** with edit rights on **either** end, so a child's
+  editor can always free its one home, even when the home is a node they
+  can't edit (§14).
 - `contains` governs structure, navigation, and filing only. Deleting a
   container does **not** cascade-delete its children. (Project completion
   and cancellation *do* cascade state downward — §4.1 — which is a state
@@ -624,11 +627,12 @@ model's semantics never widen what anyone can see or change.
   Company records are owner-only:** never shared, and the admin role does
   not reach them.
 - **Edges need rights on both ends.** Creating an edge requires edit rights
-  on the source and at least view rights on the target. `contains`
-  requires edit rights on **both** ends, because it claims the child's one
-  home (§6.1). An unordered `related_to` may be deleted with edit rights on
-  either end (§6.2). Errors from the structural rules (one home, the
-  containment table, cycles) never name a node the actor cannot see.
+  on the source and at least view rights on the target. `contains` requires
+  edit rights on **both** ends, because it claims the child's one home
+  (§6.1); it may be removed with edit rights on either end. An unordered
+  `related_to` may be deleted with edit rights on either end (§6.2). Errors
+  from the structural rules (one home, the containment table, cycles) never
+  name a node the actor cannot see.
 - **Reverse indexes and warnings show only what the viewer can read.**
   "Used in", "Mentioned in", Descendants, an Article's bibliography,
   transitive blockers, and deletion or archive warnings list only nodes the
@@ -671,3 +675,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-30 | §13 questions settled (mailboxes, note editing, promotion, Milestone, wiki-link shortcut, email collision) | Owner, developer session |
 | 2026-10-30 | `contains` needs edit rights on both ends; `related_to` deletable from either end; an Area is not a `depends_on` target | Developer review; confirmed by the owner |
 | 2026-10-31 | Resource merges into Reference in 3.0.0 (migration 040); backups made before 3.0 are refused rather than converted | Owner, S2c planning (#222) |
+| 2026-10-31 | A `contains` edge may be removed with edit rights on either end, so one home can't trap a child | Developer review of S3a (#224); flagged to the owner |
