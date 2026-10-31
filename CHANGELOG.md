@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-10-31
+
 ### Fixed
 - **A cancelled request could leave a database connection stuck in a
   transaction, and later saves on it were silently lost.** If a page was
