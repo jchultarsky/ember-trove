@@ -1,18 +1,27 @@
 //! `/data-health` (#208): the caller's data that doesn't fit the data model
 //! yet (`docs/ONTOLOGY.md`), one card per rule that has items.
 //!
-//! Read-only: each item links to where it lives, and each rule says how to
-//! fix it by hand until its own release adds a fix button. An admin also
-//! sees each rule's count across every account (counts only, §14).
+//! Each item links to where it lives, and each rule says how to fix it. The
+//! rules enforced so far (#216) also get one-click fixes, which call the
+//! same endpoints as the rest of the app, so the same checks apply. An admin
+//! also sees each rule's count across every account (counts only, §14).
 
-use common::data_health::{DataHealthReport, Ref, RefKind, RuleCount, RuleReport};
+use common::data_health::{
+    DataHealthReport, Ref, RefKind, RuleCount, RuleId, RuleReport, Violation,
+};
+use common::id::{MembershipId, NodeId, TaskId};
+use common::node::{NodeType, UpdateNodeRequest};
+use common::task::UpdateTaskRequest;
 use leptos::prelude::*;
 
 use crate::api;
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::empty_state::EmptyState;
+use crate::components::icon_button::IconButton;
+use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
 use crate::components::task_common::task_href;
+use crate::components::toast::{ToastLevel, push_toast};
 
 /// Where an item lives in the app. A done or cancelled task sits in its
 /// list's collapsed "completed" section, where `?task=` can't land, so it
@@ -29,6 +38,36 @@ fn ref_href(r: &Ref) -> String {
     }
 }
 
+/// A one-click fix for an item (#216).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fix {
+    /// Put the task on a Project (a task on a non-Project, or with none).
+    MoveToProject,
+    /// Clear a project status off a non-Project.
+    ClearStatus,
+    /// Take the person off the non-Project.
+    RemoveMembership,
+}
+
+/// The fix an item offers, if any. Removing a membership needs the node's
+/// owner (the API's rule), so it's offered only to them.
+fn fix_for(rule: RuleId, v: &Violation) -> Option<Fix> {
+    match rule {
+        RuleId::TaskOnNonProject | RuleId::OrphanTask if v.subject.kind == RefKind::Task => {
+            Some(Fix::MoveToProject)
+        }
+        RuleId::StatusOnNonProject => Some(Fix::ClearStatus),
+        // Needs the membership, the reader's ownership of the node, and the
+        // node itself (the call names it).
+        RuleId::MembershipOnNonProject
+            if v.membership.as_ref().is_some_and(|m| m.node_owned) && !v.related.is_empty() =>
+        {
+            Some(Fix::RemoveMembership)
+        }
+        _ => None,
+    }
+}
+
 /// "showing 200 of 341" when a rule has more items than it lists.
 fn shown_of(report: &RuleReport) -> Option<String> {
     let shown = report.items.len() as u64;
@@ -38,6 +77,8 @@ fn shown_of(report: &RuleReport) -> Option<String> {
 #[component]
 pub fn DataHealthView() -> impl IntoView {
     let report = LocalResource::new(api::fetch_data_health);
+    // After a fix, read the report again: the item leaves its card.
+    let on_fixed = Callback::new(move |()| report.refetch());
     let auth = use_auth_state();
     // Memoized: auth refreshes don't remount (and refetch) the admin counts.
     let is_admin =
@@ -58,7 +99,7 @@ pub fn DataHealthView() -> impl IntoView {
                         Err(e) => view! {
                             <p class="text-sm text-red-600 dark:text-red-400">{format!("Couldn't load the report: {e}")}</p>
                         }.into_any(),
-                        Ok(r) => report_view(r).into_any(),
+                        Ok(r) => report_view(r, on_fixed).into_any(),
                     })}
                 </Transition>
                 {move || is_admin.get().then(|| view! { <AdminCounts /> })}
@@ -67,7 +108,7 @@ pub fn DataHealthView() -> impl IntoView {
     }
 }
 
-fn report_view(report: DataHealthReport) -> impl IntoView {
+fn report_view(report: DataHealthReport, on_fixed: Callback<()>) -> impl IntoView {
     let with_items: Vec<RuleReport> = report.rules.into_iter().filter(|r| r.count > 0).collect();
     if with_items.is_empty() {
         return view! {
@@ -81,13 +122,13 @@ fn report_view(report: DataHealthReport) -> impl IntoView {
     }
     view! {
         <div class="space-y-4">
-            {with_items.into_iter().map(rule_card).collect_view()}
+            {with_items.into_iter().map(|r| rule_card(r, on_fixed)).collect_view()}
         </div>
     }
     .into_any()
 }
 
-fn rule_card(report: RuleReport) -> impl IntoView {
+fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
     let rule = report.rule;
     let shown = shown_of(&report);
     view! {
@@ -117,6 +158,9 @@ fn rule_card(report: RuleReport) -> impl IntoView {
             <ul class="divide-y divide-stone-100 dark:divide-stone-800">
                 {report.items.into_iter().map(|v| {
                     let more = v.more;
+                    let fix = fix_for(rule, &v).map(|fix| view! {
+                        <FixControl fix=fix item=v.clone() on_fixed=on_fixed />
+                    });
                     view! {
                         <li class="px-4 py-2 text-sm flex flex-wrap items-center gap-x-2 gap-y-1"
                             data-testid="data-health-item">
@@ -128,6 +172,7 @@ fn rule_card(report: RuleReport) -> impl IntoView {
                             {(more > 0).then(|| view! {
                                 <span class="text-xs text-stone-400">{format!("+{more} more")}</span>
                             })}
+                            {fix}
                         </li>
                     }
                 }).collect_view()}
@@ -136,6 +181,174 @@ fn rule_card(report: RuleReport) -> impl IntoView {
                 <p class="px-4 py-2 text-xs text-stone-400 dark:text-stone-500">{s}</p>
             })}
         </section>
+    }
+}
+
+const FIX_BUTTON: &str = "ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs \
+    text-stone-600 dark:text-stone-300 border border-stone-200 dark:border-stone-700 \
+    hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40";
+
+/// An item's one-click fix. Each calls an existing endpoint (task PATCH,
+/// node PUT, membership DELETE), so the API's own checks apply unchanged.
+///
+/// On success the control stays disabled: the report then reloads and the
+/// item leaves its card, and until then a second click would only repeat
+/// the call. Everything after an `.await` uses `try_` access: the page may
+/// be gone by the time the answer comes (`.claude/rules/leptos.md`).
+#[component]
+fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoView {
+    let busy = RwSignal::new(false);
+    let finish = move |result: Result<String, String>| match result {
+        Ok(done) => {
+            push_toast(ToastLevel::Success, done);
+            on_fixed.try_run(());
+        }
+        Err(e) => {
+            busy.try_set(false);
+            push_toast(ToastLevel::Error, e);
+        }
+    };
+    match fix {
+        Fix::MoveToProject => {
+            let picking = RwSignal::new(false);
+            let target = RwSignal::new(None::<(NodeId, String)>);
+            let task = TaskId(item.subject.id);
+            let commit = move || {
+                if busy.get_untracked() {
+                    return;
+                }
+                let Some((dest, title)) = target.get_untracked() else {
+                    return;
+                };
+                busy.set(true);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let req = UpdateTaskRequest {
+                        node_id: Some(Some(dest)),
+                        ..Default::default()
+                    };
+                    finish(
+                        api::update_task(task, &req)
+                            .await
+                            .map(|_| format!("Moved to {title}"))
+                            .map_err(|e| format!("Couldn't move: {e}")),
+                    );
+                });
+            };
+            view! {
+                {move || if picking.get() {
+                    view! {
+                        <div class="w-full sm:w-80 sm:ml-auto flex items-start gap-1">
+                            <div class="flex-1 min-w-0">
+                                <NodePicker
+                                    selected=target
+                                    placeholder="Move to a Project\u{2026}"
+                                    autofocus=true
+                                    only_type=NodeType::Project
+                                    on_commit=Callback::new(move |()| commit())
+                                />
+                            </div>
+                            <IconButton
+                                icon="close"
+                                label="Cancel"
+                                disabled=Signal::derive(move || busy.get())
+                                on_click=Callback::new(move |()| {
+                                    picking.set(false);
+                                    target.set(None);
+                                })
+                            />
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <button type="button" class=FIX_BUTTON on:click=move |_| picking.set(true)>
+                            <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"arrow_forward"</span>
+                            "Move to a Project\u{2026}"
+                        </button>
+                    }.into_any()
+                }}
+            }
+            .into_any()
+        }
+        Fix::ClearStatus => {
+            let node = NodeId(item.subject.id);
+            let clear = move |_| {
+                busy.set(true);
+                wasm_bindgen_futures::spawn_local(async move {
+                    let req = UpdateNodeRequest {
+                        title: None,
+                        body: None,
+                        metadata: None,
+                        status: None,
+                        project_status: Some(None),
+                        expected_updated_at: None,
+                    };
+                    finish(
+                        api::update_node(node, &req)
+                            .await
+                            .map(|_| "Status cleared".to_string())
+                            .map_err(|e| format!("Couldn't clear: {e}")),
+                    );
+                });
+            };
+            view! {
+                <button type="button" class=FIX_BUTTON disabled=move || busy.get() on:click=clear>
+                    <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"close"</span>
+                    "Clear status"
+                </button>
+            }
+            .into_any()
+        }
+        Fix::RemoveMembership => {
+            // `fix_for` offers this only with a membership and a node.
+            let (Some(membership), Some(node)) =
+                (item.membership.clone(), item.related.first().cloned())
+            else {
+                return ().into_any();
+            };
+            let confirming = RwSignal::new(false);
+            let person = item.subject.label.clone();
+            let question = format!("Remove {person} from {}?", node.label);
+            let remove = move |_| {
+                confirming.set(false);
+                busy.set(true);
+                let person = person.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    finish(
+                        api::remove_node_person(NodeId(node.id), MembershipId(membership.id))
+                            .await
+                            .map(|()| format!("Removed {person}"))
+                            .map_err(|e| format!("Couldn't remove: {e}")),
+                    );
+                });
+            };
+            view! {
+                {move || if confirming.get() {
+                    // Inline, worded for what it does: the person stays in
+                    // the registry; only their place on this node goes.
+                    view! {
+                        <span class="ml-auto inline-flex items-center gap-2 text-xs" role="group"
+                            aria-label="Confirm removal">
+                            <span class="text-stone-600 dark:text-stone-300">{question.clone()}</span>
+                            <button type="button" class=FIX_BUTTON on:click=remove.clone()>"Remove"</button>
+                            <button type="button"
+                                class="text-stone-500 hover:text-stone-700 dark:hover:text-stone-300"
+                                on:click=move |_| confirming.set(false)>
+                                "Cancel"
+                            </button>
+                        </span>
+                    }.into_any()
+                } else {
+                    view! {
+                        <button type="button" class=FIX_BUTTON disabled=move || busy.get()
+                            on:click=move |_| confirming.set(true)>
+                            <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"person_remove"</span>
+                            "Remove\u{2026}"
+                        </button>
+                    }.into_any()
+                }}
+            }
+            .into_any()
+        }
     }
 }
 
@@ -235,6 +448,51 @@ mod tests {
         assert_eq!(ref_href(&done), format!("/nodes/{node}"));
         let done_orphan = Ref::task(id, "t", None, false).with_closed(true);
         assert_eq!(ref_href(&done_orphan), "/tasks/inbox");
+    }
+
+    #[test]
+    fn each_s2_rule_offers_its_fix_and_the_rest_offer_none() {
+        let id = Uuid::from_u128(1);
+        let task = Violation::new(Ref::task(id, "t", None, false), vec![]);
+        assert_eq!(
+            fix_for(RuleId::TaskOnNonProject, &task),
+            Some(Fix::MoveToProject)
+        );
+        assert_eq!(fix_for(RuleId::OrphanTask, &task), Some(Fix::MoveToProject));
+        let node = Violation::new(Ref::node(id, "n", false), vec![]);
+        assert_eq!(
+            fix_for(RuleId::StatusOnNonProject, &node),
+            Some(Fix::ClearStatus)
+        );
+        let person = || Violation::new(Ref::person(id, "p"), vec![Ref::node(id, "n", false)]);
+        assert_eq!(
+            fix_for(
+                RuleId::MembershipOnNonProject,
+                &person().with_membership(id, true)
+            ),
+            Some(Fix::RemoveMembership)
+        );
+        assert_eq!(
+            fix_for(
+                RuleId::MembershipOnNonProject,
+                &person().with_membership(id, false)
+            ),
+            None,
+            "only the node's owner may remove it"
+        );
+        assert_eq!(fix_for(RuleId::MembershipOnNonProject, &person()), None);
+        for rule in [
+            RuleId::MultipleHomes,
+            RuleId::ContainsCycle,
+            RuleId::RelatedToBothWays,
+        ] {
+            assert_eq!(
+                fix_for(rule, &node),
+                None,
+                "{} has no fix yet",
+                rule.as_str()
+            );
+        }
     }
 
     #[test]

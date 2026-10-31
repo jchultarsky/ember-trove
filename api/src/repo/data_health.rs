@@ -196,6 +196,8 @@ async fn orphan_tasks(conn: &mut PgConnection, owner: &str) -> Result<RuleReport
 
 #[derive(FromRow)]
 struct MembershipRow {
+    membership_id: Uuid,
+    node_owned: bool,
     person_id: Uuid,
     person_name: String,
     node_id: Uuid,
@@ -212,7 +214,8 @@ async fn memberships_on_non_projects(
 ) -> Result<RuleReport, EmberTroveError> {
     let sql = format!(
         r#"
-        SELECT p.id AS person_id, p.display_name AS person_name,
+        SELECT m.id AS membership_id, n.owner_id = $1 AS node_owned,
+               p.id AS person_id, p.display_name AS person_name,
                n.id AS node_id, n.title AS node_title,
                n.status = 'archived' AS node_archived, count(*) OVER () AS total
         FROM node_people m
@@ -240,6 +243,7 @@ async fn memberships_on_non_projects(
                 Ref::person(r.person_id, r.person_name),
                 vec![Ref::node(r.node_id, r.node_title, r.node_archived)],
             )
+            .with_membership(r.membership_id, r.node_owned)
         })
         .collect();
     Ok(RuleReport::with_count(
