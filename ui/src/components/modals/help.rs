@@ -197,6 +197,15 @@ const CONCEPTS: &[Concept] = &[
                page.",
     },
     Concept {
+        title: "Connection rules",
+        body: "A node has one home. An Area holds Areas, Projects and Articles; a \
+               Project holds sub-Projects; a Reference is never held: link it \
+               with References instead. Contains, Depends on and Derived from \
+               can't loop back, and nothing depends on an Area. Wiki links come \
+               only from [[Title]] in the text. A home needs edit rights on both \
+               nodes.",
+    },
+    Concept {
         title: "Inbox",
         body: "Tasks where node_id IS NULL — the triage zone. Quick captures \
                (n shortcut, iOS Share Sheet) land here. Visit /tasks/inbox to add \

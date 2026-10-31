@@ -4,6 +4,7 @@ use common::{
     EmberTroveError,
     edge::{CreateEdgeRequest, Edge, EdgeType, EdgeWithTitles},
     id::{EdgeId, NodeId},
+    ontology::EdgeRefusal,
 };
 use sqlx::PgPool;
 use std::collections::HashSet;
@@ -102,6 +103,53 @@ fn parse_edge_type(s: &str) -> Result<EdgeType, EmberTroveError> {
     super::parse_wire(s, "edge_type", EdgeType::parse)
 }
 
+/// The rule a new edge of an acyclic type breaks because of the stored
+/// graph (#224, §6): a second home for a `contains` child, or a loop. The
+/// caller holds the type's advisory lock. The answer names no node; the
+/// path may run through nodes the actor can't see (§14).
+async fn structural_refusal(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    req: &CreateEdgeRequest,
+) -> Result<Option<EdgeRefusal>, EmberTroveError> {
+    let failed = |e: sqlx::Error| EmberTroveError::Internal(format!("edge check failed: {e}"));
+    if req.edge_type == EdgeType::Contains {
+        // The same parent again is a duplicate: the unique index answers
+        // that with 409 "already linked".
+        let has_home: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM edges \
+             WHERE edge_type = 'contains' AND target_id = $1 AND source_id <> $2)",
+        )
+        .bind(req.target_id.0)
+        .bind(req.source_id.0)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(failed)?;
+        if has_home {
+            return Ok(Some(EdgeRefusal::SecondHome));
+        }
+    }
+    // Would the edge close a loop: is the source reachable from the target?
+    // UNION (not UNION ALL) keeps a legacy loop from recursing forever.
+    let closes_loop: bool = sqlx::query_scalar(
+        r#"
+        WITH RECURSIVE reach(id) AS (
+            SELECT target_id FROM edges WHERE source_id = $2 AND edge_type = $3::edge_type
+            UNION
+            SELECT e.target_id FROM edges e JOIN reach r ON e.source_id = r.id
+            WHERE e.edge_type = $3::edge_type
+        )
+        SELECT EXISTS (SELECT 1 FROM reach WHERE id = $1)
+        "#,
+    )
+    .bind(req.source_id.0)
+    .bind(req.target_id.0)
+    .bind(req.edge_type.as_str())
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(failed)?;
+    Ok(closes_loop.then(|| EdgeRefusal::Loop(req.edge_type.clone())))
+}
+
 #[async_trait]
 impl EdgeRepo for PgEdgeRepo {
     async fn get(&self, id: EdgeId) -> Result<Edge, EmberTroveError> {
@@ -129,6 +177,25 @@ impl EdgeRepo for PgEdgeRepo {
         }
 
         let edge_type_str = req.edge_type.as_str();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("create edge failed: {e}")))?;
+
+        if req.edge_type.is_acyclic() {
+            // One lock per edge type (#224): without it, two inserts could
+            // each pass the checks below and together add a second home or
+            // close a loop. Edges of other types don't wait.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.edges.' || $1))")
+                .bind(edge_type_str)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| EmberTroveError::Internal(format!("edge lock failed: {e}")))?;
+            if let Some(refusal) = structural_refusal(&mut tx, &req).await? {
+                return Err(EmberTroveError::Validation(refusal.message()));
+            }
+        }
 
         let row = sqlx::query_as::<_, EdgeRow>(
             r#"
@@ -141,7 +208,7 @@ impl EdgeRepo for PgEdgeRepo {
         .bind(req.target_id.0)
         .bind(edge_type_str)
         .bind(&req.label)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| match &e {
             sqlx::Error::Database(db_err) => {
@@ -161,6 +228,9 @@ impl EdgeRepo for PgEdgeRepo {
             }
             _ => EmberTroveError::Internal(format!("create edge failed: {e}")),
         })?;
+        tx.commit()
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("create edge failed: {e}")))?;
 
         row.into_edge()
     }

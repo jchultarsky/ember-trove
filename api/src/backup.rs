@@ -69,6 +69,38 @@ fn check_format(manifest: &BackupManifest) -> Result<(), ApiError> {
     }
 }
 
+/// The restore preview's warning about links in the archive that break the
+/// data model (#224): counts per Data health rule, never titles or ids.
+/// `None` when every link fits.
+fn edge_rules_warning(data: &BackupData) -> Option<String> {
+    let kinds = data
+        .nodes
+        .iter()
+        .map(|n| (n.id.0, n.node_type.clone()))
+        .collect();
+    let edges: Vec<_> = data
+        .edges
+        .iter()
+        .map(|e| (e.source_id.0, e.target_id.0, e.edge_type.clone()))
+        .collect();
+    rules_warning(&common::data_health::graph_rule_counts(&kinds, &edges))
+}
+
+fn rules_warning(counts: &[(common::data_health::RuleId, usize)]) -> Option<String> {
+    if counts.is_empty() {
+        return None;
+    }
+    let list = counts
+        .iter()
+        .map(|(rule, n)| format!("{} ({n})", rule.title()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "Some links in this backup break the data model: {list}. \
+         They are restored as they are, and the Data health page lists them."
+    ))
+}
+
 fn add_bytes_to_archive<W: Write>(
     builder: &mut Builder<W>,
     path: &str,
@@ -271,6 +303,20 @@ pub async fn preview_restore(
 
     if let Some(w) = activity_warning(&manifest.entity_counts) {
         warnings.push(w);
+    }
+    // Restore never refuses old data (owner decision, #224); it says what
+    // the archive's links break, in counts only.
+    // An unreadable data.json fails the restore itself later; the preview
+    // still shows, saying it couldn't check.
+    match extract_data(&archive_bytes) {
+        Ok(data) => warnings.extend(edge_rules_warning(&data)),
+        Err(e) => {
+            tracing::warn!("restore preview couldn't read data.json: {e:?}");
+            warnings.push(
+                "This backup's data couldn't be read to check its links; the restore may fail."
+                    .to_string(),
+            );
+        }
     }
 
     warnings.push(
@@ -784,37 +830,56 @@ pub(crate) async fn restore_activity(
 // ── Archive parsing helpers ────────────────────────────────────────────────────
 
 fn extract_manifest(archive_bytes: &[u8]) -> Result<BackupManifest, ApiError> {
+    serde_json::from_slice(&read_entry(archive_bytes, "manifest.json")?)
+        .map_err(|e| ApiError::Internal(format!("parse manifest.json failed: {e}")))
+}
+
+/// Parse only `data.json`, for the restore preview: attachment entries are
+/// skipped unread, so a preview never holds their bytes.
+fn extract_data(archive_bytes: &[u8]) -> Result<BackupData, ApiError> {
+    serde_json::from_slice(&read_entry(archive_bytes, "data.json")?)
+        .map_err(|e| ApiError::Internal(format!("parse data.json failed: {e}")))
+}
+
+/// Decompression-bomb guard: the most one archive entry may expand to.
+const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB per file
+
+/// The bytes of the first entry called `name`, read with the per-entry
+/// bound; every other entry is skipped unread.
+fn read_entry(archive_bytes: &[u8], name: &str) -> Result<Vec<u8>, ApiError> {
     use flate2::read::GzDecoder;
     use std::io::Read;
 
-    let gz = GzDecoder::new(archive_bytes);
-    let mut archive = tar::Archive::new(gz);
+    let mut archive = tar::Archive::new(GzDecoder::new(archive_bytes));
     let entries = archive
         .entries()
         .map_err(|e| ApiError::Internal(format!("read archive entries failed: {e}")))?;
-
     for entry in entries {
         let mut entry =
             entry.map_err(|e| ApiError::Internal(format!("read archive entry failed: {e}")))?;
-        let path = entry
+        let matches = entry
             .path()
             .map_err(|e| ApiError::Internal(format!("archive entry path failed: {e}")))?
-            .to_string_lossy()
-            .to_string();
-        if path == "manifest.json" {
-            let mut buf = Vec::new();
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| ApiError::Internal(format!("read manifest.json failed: {e}")))?;
-            let manifest: BackupManifest = serde_json::from_slice(&buf)
-                .map_err(|e| ApiError::Internal(format!("parse manifest.json failed: {e}")))?;
-            return Ok(manifest);
+            .as_os_str()
+            == name;
+        if !matches {
+            continue;
         }
+        let mut buf = Vec::new();
+        (&mut entry)
+            .take(MAX_ENTRY_BYTES + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| ApiError::Internal(format!("read {name} failed: {e}")))?;
+        if buf.len() as u64 > MAX_ENTRY_BYTES {
+            return Err(ApiError::Validation(
+                "backup archive entry exceeds the size limit".to_string(),
+            ));
+        }
+        return Ok(buf);
     }
-
-    Err(ApiError::Internal(
-        "manifest.json not found in backup archive".to_string(),
-    ))
+    Err(ApiError::Internal(format!(
+        "{name} not found in backup archive"
+    )))
 }
 
 /// Parse the archive and return (manifest, data, attachment_files).
@@ -828,7 +893,6 @@ fn extract_full(
 
     // Decompression-bomb guards: bound per-entry and cumulative extracted size
     // so a malicious/corrupted archive can't OOM the API during restore.
-    const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB per file
     const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB total
 
     let gz = GzDecoder::new(archive_bytes);
@@ -983,6 +1047,23 @@ mod tests {
         );
         counts.activity = 12;
         assert_eq!(activity_warning(&counts), None, "one with it doesn't");
+    }
+
+    #[test]
+    fn the_edge_rules_warning_carries_rule_names_and_counts_only() {
+        use common::data_health::RuleId;
+        assert_eq!(rules_warning(&[]), None, "a clean graph says nothing");
+        let w = rules_warning(&[(RuleId::MultipleHomes, 2), (RuleId::ContainsCycle, 1)])
+            .expect("a warning");
+        assert_eq!(
+            w,
+            format!(
+                "Some links in this backup break the data model: {} (2), {} (1). \
+                 They are restored as they are, and the Data health page lists them.",
+                RuleId::MultipleHomes.title(),
+                RuleId::ContainsCycle.title()
+            )
+        );
     }
 
     #[test]

@@ -47,6 +47,29 @@ cargo check && cargo clippy -- -D warnings
   moves the version too: the editor then sees its own text at a new version
   and re-sends, at one extra round trip.
 
+## Edge write rules (#224)
+
+- `POST /edges` checks access first: editor on the source, and on the
+  target **editor for `contains`** (it claims the child's one home) and
+  viewer otherwise. Only then come the kind rules
+  (`common::ontology::edge_kind_violation`) and the repo's structural rules
+  (`structural_refusal`: a second home, a loop). All refusals are 422 with
+  `EdgeRefusal::message()`, which names no node.
+- The structural checks and the insert share one transaction holding
+  `pg_advisory_xact_lock(hashtext('ember.edges.' || type))` for acyclic
+  types (`EdgeType::is_acyclic`). Without it, two concurrent inserts close
+  a loop: `concurrent_inserts_cannot_close_a_loop_together` fails every
+  run with the lock removed.
+- The loop check is a recursive CTE with `UNION`, so a legacy loop
+  terminates. The home check skips the same parent, so a repeat stays a
+  409 duplicate.
+- `DELETE /edges/:id` for `contains` accepts an editor of **either** end
+  (one home must never trap a child). Other types stay source-editor only;
+  `related_to` either-end comes with S3b.
+- The restore preview counts rule breaks with
+  `common::data_health::graph_rule_counts` and warns; it never refuses
+  (owner decision).
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.

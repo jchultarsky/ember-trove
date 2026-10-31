@@ -543,6 +543,19 @@ details.
 | `derived_from` | Node A was derived from Node B | Pink, long-dash |
 | `wiki_link` | Auto-created from `[[title]]` syntax in body | Blue, short-dash |
 
+`POST /api/edges` enforces the data model's edge rules (`docs/ONTOLOGY.md`
+§6, §14). Each refusal is a 422 with the reason, and no message names a
+node:
+- `wiki_link` is never created by hand;
+- a node has at most one `contains` home, and adding one needs edit rights
+  on both nodes;
+- an Area holds Areas, Projects and Articles, a Project holds
+  sub-Projects, and a Reference is never contained;
+- nothing `depends_on` an Area;
+- `contains`, `depends_on` and `derived_from` can't form a loop.
+
+Data from before these rules stays as it is; the Data health page lists it.
+
 ### Node Statuses
 
 | Status | Meaning |
