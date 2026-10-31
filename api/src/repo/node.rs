@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
+    activity::ActivityAction,
     id::{NodeId, TagId},
     node::{
         CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeTitleEntry, NodeType,
@@ -12,6 +13,8 @@ use common::{
 };
 use sqlx::PgPool;
 use std::collections::HashMap;
+
+use super::activity::{ActivityActor, record_in};
 use uuid::Uuid;
 
 #[async_trait]
@@ -25,7 +28,16 @@ pub trait NodeRepo: Send + Sync {
 
     async fn list(&self, params: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError>;
 
-    async fn update(&self, id: NodeId, req: UpdateNodeRequest) -> Result<Node, EmberTroveError>;
+    /// Applies `req`. When it changes the project status, a `status_changed`
+    /// History entry attributed to `actor` is written in the same
+    /// transaction: the change and its record commit or fail together
+    /// (#208, ONTOLOGY §10).
+    async fn update(
+        &self,
+        id: NodeId,
+        req: UpdateNodeRequest,
+        actor: &ActivityActor,
+    ) -> Result<Node, EmberTroveError>;
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError>;
 
@@ -454,8 +466,31 @@ impl NodeRepo for PgNodeRepo {
         Ok((nodes, total as u64))
     }
 
-    async fn update(&self, id: NodeId, req: UpdateNodeRequest) -> Result<Node, EmberTroveError> {
+    async fn update(
+        &self,
+        id: NodeId,
+        req: UpdateNodeRequest,
+        actor: &ActivityActor,
+    ) -> Result<Node, EmberTroveError> {
         let status_str = req.status.as_ref().map(|v| v.as_str());
+        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("update node failed: {e}"));
+
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // Lock the row and read the status it had: the History entry needs
+        // the old value, and the lock makes "no row" mean 404 and a failed
+        // precondition below mean 412, with no second lookup. NO KEY UPDATE
+        // is the lock an UPDATE that leaves the key alone takes anyway, so
+        // it doesn't block FK inserts (tags, attachments, activity) meanwhile.
+        let Some(old_status) = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT project_status FROM nodes WHERE id = $1 FOR NO KEY UPDATE",
+        )
+        .bind(id.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_err)?
+        else {
+            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
+        };
 
         let row = sqlx::query_as::<_, NodeRow>(
             r#"
@@ -468,9 +503,9 @@ impl NodeRepo for PgNodeRepo {
                 -- where NULL clears.
                 project_status = CASE WHEN $6 THEN $7 ELSE project_status END
             -- #161: with a precondition, apply only to the version the
-            -- client saw. Under READ COMMITTED a concurrent writer's commit
-            -- is re-checked here, so of two saves sent on one version only
-            -- the first to commit applies.
+            -- client saw. The row is locked above, so a concurrent save
+            -- waits for this one and then sees the new version: of two
+            -- saves sent on one version only the first applies.
             WHERE id = $1 AND ($8::timestamptz IS NULL OR updated_at = $8)
             RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
                       status::text, project_status, pinned, created_at, updated_at
@@ -484,7 +519,7 @@ impl NodeRepo for PgNodeRepo {
         .bind(req.project_status.is_some())
         .bind(req.project_status.clone().flatten())
         .bind(req.expected_updated_at)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(|e| match &e {
             sqlx::Error::Database(db_err)
@@ -497,26 +532,31 @@ impl NodeRepo for PgNodeRepo {
             }
             _ => EmberTroveError::Internal(format!("update node failed: {e}")),
         })?;
+        // The row exists and is locked, so no row here can only be a failed
+        // precondition. Only a caller that passed authorization reaches the
+        // repo, so telling 412 from 404 leaks nothing.
         let Some(row) = row else {
-            // No row: either the node is gone or the precondition failed.
-            // Only a caller that passed authorization reaches here, so
-            // telling the two apart leaks nothing.
-            if req.expected_updated_at.is_some()
-                && sqlx::query_scalar::<_, bool>(
-                    "SELECT EXISTS (SELECT 1 FROM nodes WHERE id = $1)",
-                )
-                .bind(id.0)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| EmberTroveError::Internal(format!("update node failed: {e}")))?
-            {
-                return Err(EmberTroveError::PreconditionFailed(
-                    "the node changed since it was loaded".to_string(),
-                ));
-            }
-            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
+            return Err(EmberTroveError::PreconditionFailed(
+                "the node changed since it was loaded".to_string(),
+            ));
         };
 
+        if row.project_status != old_status {
+            let meta = actor.metadata_with(serde_json::json!({
+                "from": old_status,
+                "to": row.project_status,
+            }));
+            record_in(
+                &mut tx,
+                id,
+                &actor.subject_id,
+                ActivityAction::StatusChanged,
+                meta,
+            )
+            .await?;
+        }
+
+        tx.commit().await.map_err(db_err)?;
         row.into_node()
     }
 

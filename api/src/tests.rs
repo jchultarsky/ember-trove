@@ -110,7 +110,12 @@ impl NodeRepo for StubNodeRepo {
     async fn list(&self, _: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
         unimplemented!()
     }
-    async fn update(&self, _: NodeId, req: UpdateNodeRequest) -> Result<Node, EmberTroveError> {
+    async fn update(
+        &self,
+        _: NodeId,
+        req: UpdateNodeRequest,
+        _: &crate::repo::activity::ActivityActor,
+    ) -> Result<Node, EmberTroveError> {
         // A precondition always "fails" here, so a 412 proves the handler
         // got past authorization; anything else must not reach the repo.
         if req.expected_updated_at.is_some() {
@@ -872,6 +877,13 @@ impl ActivityRepo for StubActivityRepo {
     }
     async fn list_all(&self) -> Result<Vec<common::activity::ActivityRecord>, EmberTroveError> {
         Ok(vec![])
+    }
+    async fn latest_of(
+        &self,
+        _: NodeId,
+        _: ActivityAction,
+    ) -> Result<Option<ActivityEntry>, EmberTroveError> {
+        Ok(None)
     }
 }
 
@@ -2508,6 +2520,13 @@ impl ActivityRepo for RecordingActivityRepo {
     }
     async fn list_all(&self) -> Result<Vec<common::activity::ActivityRecord>, EmberTroveError> {
         Ok(vec![])
+    }
+    async fn latest_of(
+        &self,
+        _: NodeId,
+        _: ActivityAction,
+    ) -> Result<Option<ActivityEntry>, EmberTroveError> {
+        Ok(None)
     }
 }
 
