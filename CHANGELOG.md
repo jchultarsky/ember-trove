@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-31
+
 ### Changed
 - **A "related to" link is one link, whichever end it was made from**
   (#226, ONTOLOGY §6.2). It has no direction, so linking B to A when A is

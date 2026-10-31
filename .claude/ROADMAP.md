@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v3.2.0 shipped: `related_to` stored once (S3b of #226; PR #227).**
+  - Migration 041 merges pairs stored both ways (the oldest kept, copies
+    archived in `edges_removed_041`) and adds a LEAST/GREATEST unique
+    index. A reverse insert is a 409.
+  - An editor of either end may delete the link. Restore folds pairs by
+    the same rule.
+  - ↔ in the UI, and neighbours/backlinks are symmetric.
+  - Prod rehearsal: 15 related links, 0 pairs, ~20 ms.
+  - Next: S3c (edge report fixes, home picker, the one-home index,
+    retiring the both-ways rule).
 - **v3.1.0 shipped: edge write rules (S3a of #224; PR #225).**
   `POST /edges` refuses, with a 422 that names no node:
   - hand-made wiki links;
