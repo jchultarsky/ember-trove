@@ -110,8 +110,10 @@ impl NodeRepo for StubNodeRepo {
     async fn get_by_slug(&self, _: &str) -> Result<Node, EmberTroveError> {
         unimplemented!()
     }
-    async fn list(&self, _: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
-        unimplemented!()
+    async fn list(&self, params: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
+        // One node owned by whoever was asked for (the project dashboard).
+        let owner = params.owner_id.as_deref().unwrap_or("anyone");
+        Ok((vec![fake_node("listed", owner)], 1))
     }
     async fn update(
         &self,
@@ -182,10 +184,14 @@ impl NodeRepo for StubNodeRepo {
     }
     async fn area_for_nodes(
         &self,
-        _: &[NodeId],
-        _: Option<&str>,
+        ids: &[NodeId],
+        subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
-        unimplemented!()
+        // Echo the scope so tests can prove the route asks for the caller's.
+        Ok(ids
+            .iter()
+            .map(|id| (*id, *id, format!("area for {subject:?}")))
+            .collect())
     }
     async fn project_status_counts(
         &self,
@@ -508,20 +514,20 @@ impl TaskRepo for StubTaskRepo {
         &self,
         _: &[NodeId],
     ) -> Result<Vec<(NodeId, TaskCounts)>, EmberTroveError> {
-        unimplemented!()
+        Ok(Vec::new())
     }
     async fn list_open_for_nodes(
         &self,
         _: &[NodeId],
         _: i64,
     ) -> Result<Vec<(NodeId, Vec<common::task::TaskSummary>, bool)>, EmberTroveError> {
-        unimplemented!()
+        Ok(Vec::new())
     }
     async fn max_task_updated_for_nodes(
         &self,
         _: &[NodeId],
     ) -> Result<Vec<(NodeId, chrono::DateTime<chrono::Utc>)>, EmberTroveError> {
-        unimplemented!()
+        Ok(Vec::new())
     }
     async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> {
         unimplemented!()
@@ -743,8 +749,20 @@ impl FavoriteRepo for StubFavoriteRepo {
     async fn list(&self, _: &str) -> Result<Vec<Favorite>, EmberTroveError> {
         unimplemented!()
     }
-    async fn create(&self, _: &str, _: CreateFavoriteRequest) -> Result<Favorite, EmberTroveError> {
-        unimplemented!()
+    async fn create(
+        &self,
+        owner: &str,
+        req: CreateFavoriteRequest,
+    ) -> Result<Favorite, EmberTroveError> {
+        Ok(Favorite {
+            id: FavoriteId(Uuid::new_v4()),
+            owner_id: owner.to_string(),
+            node_id: req.node_id.map(NodeId),
+            url: req.url,
+            label: req.label,
+            position: 0,
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn delete(&self, _: FavoriteId, _: &str) -> Result<(), EmberTroveError> {
         unimplemented!()
@@ -2611,6 +2629,65 @@ async fn project_status_suggestions_are_the_callers_own() {
         body,
         serde_json::json!([{ "status": "of test-sub", "count": 1 }])
     );
+}
+
+/// The dashboard asks for Areas in the caller's scope (#228): a non-admin
+/// never gets the unfiltered admin scope.
+#[tokio::test]
+async fn the_dashboard_asks_for_areas_the_caller_can_see() {
+    async fn area_title(claims: common::auth::AuthClaims) -> serde_json::Value {
+        let resp = Router::new()
+            .nest("/dashboard", crate::routes::tasks::dashboard_router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(Request::get("/dashboard").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body[0]["area_title"].clone()
+    }
+    assert_eq!(
+        area_title(fake_claims()).await,
+        serde_json::json!("area for Some(\"test-sub\")")
+    );
+    assert_eq!(
+        area_title(admin_claims()).await,
+        serde_json::json!("area for None")
+    );
+}
+
+/// A node favorite needs view rights (#228): its list shows the node's
+/// live title. A node the caller can't see, or that doesn't exist, is a
+/// 403 before anything is stored.
+#[tokio::test]
+async fn a_favorite_needs_view_rights_on_its_node() {
+    async fn post(node: Option<u128>) -> StatusCode {
+        let body = serde_json::json!({
+            "node_id": node.map(az_node),
+            "url": node.is_none().then_some("https://example.com"),
+            "label": "x",
+        });
+        claims_app("/favorites", crate::routes::favorites::router())
+            .oneshot(
+                Request::post("/favorites")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+    assert_eq!(post(Some(AZ_FOREIGN_NODE)).await, StatusCode::FORBIDDEN);
+    assert_eq!(post(Some(0xdead_beef)).await, StatusCode::FORBIDDEN);
+    assert_eq!(post(Some(AZ_VIEW_NODE)).await, StatusCode::CREATED);
+    assert_eq!(post(None).await, StatusCode::CREATED, "a URL needs no node");
 }
 
 // ── People (#147) ─────────────────────────────────────────────────────────────
