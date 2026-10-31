@@ -32,6 +32,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   run only after the access check, so their 422 can't tell a stranger a
   node's kind. "Already has a home" and "would make a loop" can reveal that
   a link exists through a node the actor can't see; no message names it.
+- **A home can be removed from the child's side** (#224, ONTOLOGY §6.1).
+  Removing a `contains` link used to need edit rights on the home only.
+  Combined with the one-home rule, that could trap a node: if someone you
+  share it with filed it under their own Area, you couldn't remove that
+  home or add another. The child's editor can now remove it.
 
 ## [3.0.0] - 2026-10-31
 

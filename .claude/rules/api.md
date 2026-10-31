@@ -63,6 +63,9 @@ cargo check && cargo clippy -- -D warnings
 - The loop check is a recursive CTE with `UNION`, so a legacy loop
   terminates. The home check skips the same parent, so a repeat stays a
   409 duplicate.
+- `DELETE /edges/:id` for `contains` accepts an editor of **either** end
+  (one home must never trap a child). Other types stay source-editor only;
+  `related_to` either-end comes with S3b.
 - The restore preview counts rule breaks with
   `common::data_health::graph_rule_counts` and warns; it never refuses
   (owner decision).

@@ -78,7 +78,15 @@ async fn delete_edge(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let edge = state.edges.get(EdgeId(id)).await?;
-    require_editor(state.permissions.as_ref(), &claims, edge.source_id).await?;
+    let on_source = require_editor(state.permissions.as_ref(), &claims, edge.source_id).await;
+    if edge.edge_type == EdgeType::Contains && on_source.is_err() {
+        // A home can be released from the child's side too (#224): a node
+        // has only one, so its editor must be able to free it even when the
+        // home is someone else's node they can't edit or even see.
+        require_editor(state.permissions.as_ref(), &claims, edge.target_id).await?;
+    } else {
+        on_source?;
+    }
     state.edges.delete(EdgeId(id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }

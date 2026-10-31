@@ -1,11 +1,42 @@
-import { test, expect, createNode, shareNode, E2E_SUBJECT, type Page } from './fixtures';
+import {
+  test,
+  expect,
+  createNode,
+  shareNode,
+  E2E_SUBJECT,
+  type APIRequestContext,
+  type Page,
+} from './fixtures';
 
 /**
  * Edge write rules (#224, ONTOLOGY §6, §14). New connections that break the
  * data model are refused with the reason; a home needs edit rights on both
- * nodes. Titles are unique per attempt and every node is deleted in
- * `finally` (edges go with their nodes), so retries start clean.
+ * nodes. Every node title starts with PREFIX; both identities' leftovers
+ * are wiped before AND after each test (edges go with their nodes), so a
+ * retry starts clean even after a crash.
  */
+
+const PREFIX = 'e2e rules ';
+
+async function wipe(request: APIRequestContext) {
+  for (let round = 0; round < 5; round++) {
+    const hits: { id: string; title: string }[] = await (
+      await request.get(`/api/nodes/lookup?q=${encodeURIComponent(PREFIX.trim())}&limit=20`)
+    ).json();
+    const mine = hits.filter((n) => n.title.startsWith(PREFIX));
+    if (mine.length === 0) break;
+    for (const n of mine) await request.delete(`/api/nodes/${n.id}`);
+  }
+}
+
+test.beforeEach(async ({ request, otherRequest }) => {
+  await wipe(request);
+  await wipe(otherRequest);
+});
+test.afterEach(async ({ request, otherRequest }) => {
+  await wipe(request);
+  await wipe(otherRequest);
+});
 
 async function openAddEdge(page: Page, nodeId: string) {
   await page.goto(`/nodes/${nodeId}`);

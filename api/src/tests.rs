@@ -227,11 +227,25 @@ impl EdgeRepo for StubEdgeRepo {
             created_at: chrono::Utc::now(),
         })
     }
-    async fn get(&self, _: EdgeId) -> Result<Edge, EmberTroveError> {
-        unimplemented!()
+    async fn get(&self, id: EdgeId) -> Result<Edge, EmberTroveError> {
+        // Two edges from a node the caller can't touch into their own
+        // Project (#224): a home and a plain link.
+        let edge_type = match id.0.as_u128() {
+            AZ_FOREIGN_HOME_EDGE => common::edge::EdgeType::Contains,
+            AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
+            _ => return Err(EmberTroveError::NotFound(format!("edge {id}"))),
+        };
+        Ok(Edge {
+            id,
+            source_id: az_node(AZ_FOREIGN_NODE),
+            target_id: az_node(AZ_MY_PROJECT),
+            edge_type,
+            label: None,
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> {
-        unimplemented!()
+        Ok(())
     }
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> {
         unimplemented!()
@@ -304,6 +318,9 @@ const AZ_FOREIGN_NODE: u128 = 0xa2_0004;
 /// Article (`fake_node`).
 const AZ_MY_PROJECT: u128 = 0xa2_0005;
 const AZ_MY_ARTICLE: u128 = 0xa2_0006;
+/// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
+const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
+const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -2361,6 +2378,25 @@ async fn edge_rules_never_answer_a_stranger() {
             "{edge_type}: {status}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_home_can_be_released_from_the_childs_side() {
+    let delete = |edge: u128| async move {
+        claims_app("/edges", crate::routes::edges::router())
+            .oneshot(
+                Request::delete(format!("/edges/{}", Uuid::from_u128(edge)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // The caller edits the child (their Project) but not the home.
+    assert_eq!(delete(AZ_FOREIGN_HOME_EDGE).await, StatusCode::NO_CONTENT);
+    // Any other link still belongs to its source's editors.
+    assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

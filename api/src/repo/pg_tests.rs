@@ -2627,3 +2627,90 @@ async fn concurrent_inserts_cannot_close_a_loop_together(pool: PgPool) {
         );
     }
 }
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
+    // The restore preview counts in Rust (graph_rule_counts) what the
+    // report counts in SQL: on the same data they must agree (#224).
+    use super::data_health::{DataHealthRepo, PgDataHealthRepo};
+    use common::data_health::{RuleId, graph_rule_counts};
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2) = (n("area", "area 1").await, n("area", "area 2").await);
+    let (p, q) = (n("project", "p").await, n("project", "q").await);
+    let (art, r) = (n("article", "art").await, n("reference", "ref").await);
+    for (s, t, e) in [
+        (a1, p, "contains"),
+        (a2, p, "contains"),   // two homes
+        (a1, r, "contains"),   // a contained Reference
+        (art, q, "contains"),  // an Article as a home
+        (p, a1, "depends_on"), // on an Area
+        (p, q, "depends_on"),
+        (q, p, "depends_on"), // a loop
+        (p, q, "related_to"),
+        (q, p, "related_to"), // both ways
+        (art, r, "derived_from"),
+        (r, art, "derived_from"), // a loop
+    ] {
+        raw_edge(&pool, s, t, e).await;
+    }
+
+    let kinds: std::collections::HashMap<uuid::Uuid, common::node::NodeType> =
+        sqlx::query_as::<_, (uuid::Uuid, String)>("SELECT id, node_type::text FROM nodes")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(id, t)| (id, common::node::NodeType::parse(&t).unwrap()))
+            .collect();
+    let edges: Vec<_> = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, String)>(
+        "SELECT source_id, target_id, edge_type::text FROM edges",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|(s, t, e)| (s, t, common::edge::EdgeType::parse(&e).unwrap()))
+    .collect();
+    let rust: std::collections::HashMap<RuleId, u64> = graph_rule_counts(&kinds, &edges)
+        .into_iter()
+        .map(|(r, c)| (r, c as u64))
+        .collect();
+
+    let sql = PgDataHealthRepo::new(pool.clone())
+        .counts_all()
+        .await
+        .unwrap();
+    let graph_rules = [
+        RuleId::MultipleHomes,
+        RuleId::ContainedReference,
+        RuleId::ContainmentNotAllowed,
+        RuleId::DependsOnArea,
+        RuleId::RelatedToBothWays,
+        RuleId::ContainsCycle,
+        RuleId::DependsOnCycle,
+        RuleId::DerivedFromCycle,
+    ];
+    let compared: Vec<_> = sql
+        .iter()
+        .filter(|rc| graph_rules.contains(&rc.rule))
+        .collect();
+    assert_eq!(
+        compared.len(),
+        graph_rules.len(),
+        "the report counts every graph rule"
+    );
+    for rc in compared {
+        assert_eq!(
+            rust.get(&rc.rule).copied().unwrap_or(0),
+            rc.count,
+            "{:?}",
+            rc.rule
+        );
+    }
+    assert_eq!(
+        rust.get(&RuleId::DependsOnCycle),
+        Some(&1),
+        "the seed has one"
+    );
+}

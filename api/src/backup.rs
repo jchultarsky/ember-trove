@@ -306,8 +306,17 @@ pub async fn preview_restore(
     }
     // Restore never refuses old data (owner decision, #224); it says what
     // the archive's links break, in counts only.
-    if let Some(w) = edge_rules_warning(&extract_data(&archive_bytes)?) {
-        warnings.push(w);
+    // An unreadable data.json fails the restore itself later; the preview
+    // still shows, saying it couldn't check.
+    match extract_data(&archive_bytes) {
+        Ok(data) => warnings.extend(edge_rules_warning(&data)),
+        Err(e) => {
+            tracing::warn!("restore preview couldn't read data.json: {e:?}");
+            warnings.push(
+                "This backup's data couldn't be read to check its links; the restore may fail."
+                    .to_string(),
+            );
+        }
     }
 
     warnings.push(
@@ -821,47 +830,25 @@ pub(crate) async fn restore_activity(
 // ── Archive parsing helpers ────────────────────────────────────────────────────
 
 fn extract_manifest(archive_bytes: &[u8]) -> Result<BackupManifest, ApiError> {
-    use flate2::read::GzDecoder;
-    use std::io::Read;
-
-    let gz = GzDecoder::new(archive_bytes);
-    let mut archive = tar::Archive::new(gz);
-    let entries = archive
-        .entries()
-        .map_err(|e| ApiError::Internal(format!("read archive entries failed: {e}")))?;
-
-    for entry in entries {
-        let mut entry =
-            entry.map_err(|e| ApiError::Internal(format!("read archive entry failed: {e}")))?;
-        let path = entry
-            .path()
-            .map_err(|e| ApiError::Internal(format!("archive entry path failed: {e}")))?
-            .to_string_lossy()
-            .to_string();
-        if path == "manifest.json" {
-            let mut buf = Vec::new();
-            entry
-                .read_to_end(&mut buf)
-                .map_err(|e| ApiError::Internal(format!("read manifest.json failed: {e}")))?;
-            let manifest: BackupManifest = serde_json::from_slice(&buf)
-                .map_err(|e| ApiError::Internal(format!("parse manifest.json failed: {e}")))?;
-            return Ok(manifest);
-        }
-    }
-
-    Err(ApiError::Internal(
-        "manifest.json not found in backup archive".to_string(),
-    ))
+    serde_json::from_slice(&read_entry(archive_bytes, "manifest.json")?)
+        .map_err(|e| ApiError::Internal(format!("parse manifest.json failed: {e}")))
 }
 
 /// Parse only `data.json`, for the restore preview: attachment entries are
 /// skipped unread, so a preview never holds their bytes.
 fn extract_data(archive_bytes: &[u8]) -> Result<BackupData, ApiError> {
+    serde_json::from_slice(&read_entry(archive_bytes, "data.json")?)
+        .map_err(|e| ApiError::Internal(format!("parse data.json failed: {e}")))
+}
+
+/// Decompression-bomb guard: the most one archive entry may expand to.
+const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB per file
+
+/// The bytes of the first entry called `name`, read with the per-entry
+/// bound; every other entry is skipped unread.
+fn read_entry(archive_bytes: &[u8], name: &str) -> Result<Vec<u8>, ApiError> {
     use flate2::read::GzDecoder;
     use std::io::Read;
-
-    // The same per-entry bound as `extract_full`.
-    const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 
     let mut archive = tar::Archive::new(GzDecoder::new(archive_bytes));
     let entries = archive
@@ -870,30 +857,29 @@ fn extract_data(archive_bytes: &[u8]) -> Result<BackupData, ApiError> {
     for entry in entries {
         let mut entry =
             entry.map_err(|e| ApiError::Internal(format!("read archive entry failed: {e}")))?;
-        let is_data = entry
+        let matches = entry
             .path()
             .map_err(|e| ApiError::Internal(format!("archive entry path failed: {e}")))?
             .as_os_str()
-            == "data.json";
-        if !is_data {
+            == name;
+        if !matches {
             continue;
         }
         let mut buf = Vec::new();
         (&mut entry)
             .take(MAX_ENTRY_BYTES + 1)
             .read_to_end(&mut buf)
-            .map_err(|e| ApiError::Internal(format!("read data.json failed: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("read {name} failed: {e}")))?;
         if buf.len() as u64 > MAX_ENTRY_BYTES {
             return Err(ApiError::Validation(
                 "backup archive entry exceeds the size limit".to_string(),
             ));
         }
-        return serde_json::from_slice(&buf)
-            .map_err(|e| ApiError::Internal(format!("parse data.json failed: {e}")));
+        return Ok(buf);
     }
-    Err(ApiError::Internal(
-        "data.json missing from archive".to_string(),
-    ))
+    Err(ApiError::Internal(format!(
+        "{name} not found in backup archive"
+    )))
 }
 
 /// Parse the archive and return (manifest, data, attachment_files).
@@ -907,7 +893,6 @@ fn extract_full(
 
     // Decompression-bomb guards: bound per-entry and cumulative extracted size
     // so a malicious/corrupted archive can't OOM the API during restore.
-    const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB per file
     const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB total
 
     let gz = GzDecoder::new(archive_bytes);
