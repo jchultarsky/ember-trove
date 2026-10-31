@@ -282,6 +282,38 @@ impl EdgeRepo for StubEdgeRepo {
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> {
         unimplemented!()
     }
+    async fn home_of(&self, child: NodeId) -> Result<Option<Edge>, EmberTroveError> {
+        // See AZ_HIDDEN_HOME_EDGE.
+        let (edge, parent) = if child == az_node(AZ_MY_PROJECT) || child == az_node(AZ_VIEW_NODE) {
+            (AZ_HIDDEN_HOME_EDGE, AZ_FOREIGN_NODE)
+        } else if child == az_node(AZ_EDIT_NODE) {
+            (AZ_SEEN_HOME_EDGE, AZ_OWNED_NODE)
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(Edge {
+            id: EdgeId(Uuid::from_u128(edge)),
+            source_id: az_node(parent),
+            target_id: child,
+            edge_type: common::edge::EdgeType::Contains,
+            label: None,
+            created_at: chrono::Utc::now(),
+        }))
+    }
+    async fn set_home(
+        &self,
+        child: NodeId,
+        parent: Option<NodeId>,
+    ) -> Result<Option<Edge>, EmberTroveError> {
+        // Only a call that passed every route check gets here: freeing the
+        // caller's own Project. Anything else is a missing check.
+        assert_eq!(
+            (child, parent),
+            (az_node(AZ_MY_PROJECT), None),
+            "set_home reached past the route's checks"
+        );
+        Ok(None)
+    }
     async fn list_for_node_with_titles(
         &self,
         _: NodeId,
@@ -358,6 +390,11 @@ const AZ_FOREIGN_RELATED_EDGE: u128 = 0xa2_0e32;
 const AZ_STRANGERS_RELATED_EDGE: u128 = 0xa2_0e33;
 /// A home from AZ_VIEW_NODE (seen, not edited) into AZ_MY_PROJECT (#228).
 const AZ_VISIBLE_HOME_EDGE: u128 = 0xa2_0e34;
+/// `home_of` answers (#228): AZ_MY_PROJECT's home is hidden (AZ_FOREIGN_NODE)
+/// and the caller edits the child; AZ_VIEW_NODE's is hidden too, but the
+/// caller only views the child; AZ_EDIT_NODE's (AZ_OWNED_NODE) is visible.
+const AZ_HIDDEN_HOME_EDGE: u128 = 0xa2_0e35;
+const AZ_SEEN_HOME_EDGE: u128 = 0xa2_0e36;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -2509,6 +2546,89 @@ async fn a_link_converts_only_for_someone_who_could_delete_and_recreate_it() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(convert(0xdead, "related_to").await, StatusCode::NOT_FOUND);
+}
+
+/// `GET /nodes/{id}/home` (#228): a home is named only to someone who can
+/// see it; the child's editors learn a hidden one exists, nothing more.
+#[tokio::test]
+async fn a_hidden_home_is_shown_to_editors_only_and_never_named() {
+    let home = |node: u128| async move {
+        let resp = claims_app("/nodes", crate::routes::nodes::router())
+            .oneshot(
+                Request::get(format!("/nodes/{}/home", Uuid::from_u128(node)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default(),
+        )
+    };
+    // The caller edits their Project: the hidden home exists, unnamed.
+    let (status, body) = home(AZ_MY_PROJECT).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        serde_json::json!({ "home": {
+            "edge_id": Uuid::from_u128(AZ_HIDDEN_HOME_EDGE), "node": null } })
+    );
+    // A viewer of the child isn't told.
+    assert_eq!(
+        home(AZ_VIEW_NODE).await.1,
+        serde_json::json!({ "home": null })
+    );
+    // A home they can see is named.
+    let (_, body) = home(AZ_EDIT_NODE).await;
+    assert_eq!(
+        body["home"]["node"]["id"],
+        serde_json::json!(Uuid::from_u128(AZ_OWNED_NODE))
+    );
+    // A stranger gets nothing at all.
+    assert_eq!(home(AZ_FOREIGN_NODE).await.0, StatusCode::FORBIDDEN);
+}
+
+/// `PUT /nodes/{id}/home` (#228): edit rights on the child, and on the new
+/// home, before any rule; the stub panics if a refused call gets through.
+#[tokio::test]
+async fn setting_a_home_needs_both_ends_and_an_allowed_pair() {
+    let put = |node: u128, parent: Option<u128>| async move {
+        claims_app("/nodes", crate::routes::nodes::router())
+            .oneshot(
+                Request::put(format!("/nodes/{}/home", Uuid::from_u128(node)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "parent_id": parent.map(Uuid::from_u128) }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // Only viewing the child: refused before anything else.
+    assert_eq!(put(AZ_VIEW_NODE, None).await, StatusCode::FORBIDDEN);
+    // A home they only view can't be claimed.
+    assert_eq!(
+        put(AZ_MY_PROJECT, Some(AZ_VIEW_NODE)).await,
+        StatusCode::FORBIDDEN
+    );
+    // Rules after rights: itself, and an Article as a Project's home.
+    assert_eq!(
+        put(AZ_MY_PROJECT, Some(AZ_MY_PROJECT)).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        put(AZ_MY_PROJECT, Some(AZ_MY_ARTICLE)).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // The child's editor frees it, even from a home they can't see (§6.1).
+    assert_eq!(put(AZ_MY_PROJECT, None).await, StatusCode::OK);
 }
 
 #[tokio::test]

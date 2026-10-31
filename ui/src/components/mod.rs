@@ -24,6 +24,7 @@ pub mod modals;
 pub mod my_day_view;
 pub mod new_task_form;
 pub mod node_editor;
+pub mod node_home;
 pub mod node_list;
 pub mod node_meta;
 pub mod node_people;

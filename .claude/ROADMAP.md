@@ -5,6 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-31)
 
+- **v3.4.0 shipped: one home per node (S3c PR 3 of #228, PR #233). S3c done.**
+  - Migration 042: oldest home kept, extras to `edges_removed_042`,
+    `edges_one_home` unique index. Prod rehearsal: 0 homes, ~2 ms.
+  - `GET`/`PUT /nodes/{id}/home`; a Home row heads Connections, with a
+    picker limited to `ontology::allowed_homes`. A hidden home is shown
+    unnamed to the child's editors only (owner decision).
+  - Restore folds homes (`common::edge::fold_homes`); the multiple-homes
+    rule is retired, so "Keep this home" was dropped (it had nothing left
+    to act on). Service-worker cache v10.
+  - Open for the owner: `edges_removed_*` archives keep labels after
+    their nodes are deleted (since 033).
+  - Next: S4a (captures) per the programme plan.
 - **v3.3.0 shipped: Data health fixes link problems (S3c PR 2 of #228, PR #232).**
   - Edge items carry `LinkRef`s; contained References convert (one or
     all, paced), bad homes and Area dependencies link instead or go,

@@ -25,7 +25,6 @@ pub enum RuleId {
     OrphanTask,
     MembershipOnNonProject,
     StatusOnNonProject,
-    MultipleHomes,
     ContainedReference,
     ContainmentNotAllowed,
     DependsOnArea,
@@ -39,7 +38,6 @@ wire_enum!(RuleId {
     OrphanTask => "orphan_task",
     MembershipOnNonProject => "membership_on_non_project",
     StatusOnNonProject => "status_on_non_project",
-    MultipleHomes => "multiple_homes",
     ContainedReference => "contained_reference",
     ContainmentNotAllowed => "containment_not_allowed",
     DependsOnArea => "depends_on_area",
@@ -56,7 +54,7 @@ impl RuleId {
             Self::TaskOnNonProject | Self::StatusOnNonProject => "§3.2",
             Self::OrphanTask => "§9.3",
             Self::MembershipOnNonProject => "§7.2",
-            Self::MultipleHomes | Self::ContainmentNotAllowed => "§3.3",
+            Self::ContainmentNotAllowed => "§3.3",
             Self::ContainedReference | Self::ContainsCycle => "§6.1",
             Self::DependsOnArea | Self::DependsOnCycle => "§6.4",
             Self::DerivedFromCycle => "§6.5",
@@ -71,7 +69,6 @@ impl RuleId {
             Self::OrphanTask => "Tasks with no Project",
             Self::MembershipOnNonProject => "People outside a Project",
             Self::StatusOnNonProject => "A project status outside a Project",
-            Self::MultipleHomes => "More than one home",
             Self::ContainedReference => "A Reference inside a home",
             Self::ContainmentNotAllowed => "A home that isn't allowed",
             Self::DependsOnArea => "A dependency on an Area",
@@ -89,7 +86,6 @@ impl RuleId {
             Self::OrphanTask => "A task belongs to exactly one Project.",
             Self::MembershipOnNonProject => "Only Projects have people.",
             Self::StatusOnNonProject => "Only Projects have a project status.",
-            Self::MultipleHomes => "A node has at most one home (one contains parent).",
             Self::ContainedReference => {
                 "A Reference is never contained: it's shared, and reached by links."
             }
@@ -114,7 +110,6 @@ impl RuleId {
                 "Add the person to a related Project, then remove them here."
             }
             Self::StatusOnNonProject => "Clear the status, or keep the note in the body.",
-            Self::MultipleHomes => "Keep one home; turn the others into related-to links.",
             Self::ContainedReference => "Turn the contains link into a references link.",
             Self::ContainmentNotAllowed => "Move it to an allowed home, or link it instead.",
             Self::DependsOnArea => "Depend on a Project in the Area instead.",
@@ -365,9 +360,10 @@ pub struct RuleCount {
 /// counts only, never ids or titles. `kinds` maps each node to its kind;
 /// an edge with an end missing from it is skipped.
 ///
-/// It counts the way the report does: a node with two homes is one item,
-/// and a loop is one per tangle of edges. A `related_to` stored both ways
-/// is no rule break any more: restore merges it (#226).
+/// It counts the way the report does: a loop is one per tangle of edges.
+/// A `related_to` stored both ways and a second home are no rule breaks
+/// any more: the database can't hold them, and restore folds them
+/// (#226, #228).
 #[must_use]
 pub fn graph_rule_counts(
     kinds: &std::collections::HashMap<Uuid, crate::node::NodeType>,
@@ -392,21 +388,13 @@ pub fn graph_rule_counts(
     let mut counts: HashMap<RuleId, usize> = HashMap::new();
     let mut bump = |rule: RuleId, n: usize| *counts.entry(rule).or_default() += n;
 
-    let mut homes: HashMap<Uuid, usize> = HashMap::new();
-    for (_, child, _, parent_kind, child_kind) in
-        known.iter().filter(|k| *k.2 == EdgeType::Contains)
-    {
-        *homes.entry(*child).or_default() += 1;
+    for (_, _, _, parent_kind, child_kind) in known.iter().filter(|k| *k.2 == EdgeType::Contains) {
         match containment_violation(parent_kind, child_kind) {
             Some(ContainmentRule::ContainedReference) => bump(RuleId::ContainedReference, 1),
             Some(ContainmentRule::NotAllowed) => bump(RuleId::ContainmentNotAllowed, 1),
             None => {}
         }
     }
-    bump(
-        RuleId::MultipleHomes,
-        homes.values().filter(|&&n| n > 1).count(),
-    );
     bump(
         RuleId::DependsOnArea,
         known
@@ -595,7 +583,7 @@ mod tests {
         .collect();
         let edges = vec![
             (id(1), id(3), Contains),  // fine
-            (id(2), id(3), Contains),  // project 3 has two homes
+            (id(2), id(3), Contains),  // a second home: folded on restore, not a rule
             (id(1), id(4), Contains),  // a contained Reference
             (id(5), id(6), Contains),  // an Article can't be a home
             (id(3), id(1), DependsOn), // on an Area
@@ -610,7 +598,6 @@ mod tests {
         assert_eq!(
             graph_rule_counts(&kinds, &edges),
             vec![
-                (RuleId::MultipleHomes, 1),
                 (RuleId::ContainedReference, 1),
                 (RuleId::ContainmentNotAllowed, 1),
                 (RuleId::DependsOnArea, 1),

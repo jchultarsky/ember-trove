@@ -127,6 +127,37 @@ pub struct CreateEdgeRequest {
     pub label: Option<String>,
 }
 
+/// `GET`/`PUT /nodes/{id}/home` (#228): a node's one home (§3.3, §6.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct NodeHome {
+    /// `None`: the node stands alone (or its home is hidden from a viewer).
+    pub home: Option<Home>,
+}
+
+/// The `contains` link that is a node's home.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct Home {
+    pub edge_id: EdgeId,
+    /// The parent, or `None` for a home the caller can't see. Only the
+    /// child's editors are told such a home exists, with nothing about it
+    /// (owner decision, #228): they may remove it (§6.1), and a new home
+    /// would be refused anyway ("already has a home"). Viewers never are.
+    pub node: Option<HomeNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct HomeNode {
+    pub id: NodeId,
+    pub title: String,
+    pub node_type: crate::node::NodeType,
+}
+
+/// `PUT /nodes/{id}/home`: the new home, or `None` to stand alone.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SetHomeRequest {
+    pub parent_id: Option<NodeId>,
+}
+
 /// Turns a link into another type in one step (#228): a Data health fix.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ConvertEdgeRequest {
@@ -266,6 +297,78 @@ pub fn fold_related_pairs(edges: Vec<Edge>) -> (Vec<Edge>, Vec<Edge>) {
         kept.push(e);
     }
     (kept, dropped)
+}
+
+/// Keep one home per node (#228, §6.1): the oldest `contains` edge into
+/// each child stays, the rest are returned to be archived. Labels aren't
+/// carried: each belongs to its own parent. Migration 042 applies the same
+/// rule (`created_at`, then `id`), and restore uses this, so an archive
+/// from before the one-home index still restores; the 042 pg test checks
+/// that the two agree. Other types pass through untouched, in order.
+pub fn fold_homes(edges: Vec<Edge>) -> (Vec<Edge>, Vec<Edge>) {
+    use std::collections::HashMap;
+
+    let mut keep: HashMap<uuid::Uuid, (DateTime<Utc>, uuid::Uuid)> = HashMap::new();
+    for e in edges.iter().filter(|e| e.edge_type == EdgeType::Contains) {
+        let age = (e.created_at, e.id.0);
+        keep.entry(e.target_id.0)
+            .and_modify(|k| *k = (*k).min(age))
+            .or_insert(age);
+    }
+    edges.into_iter().partition(|e| {
+        e.edge_type != EdgeType::Contains
+            || keep.get(&e.target_id.0) == Some(&(e.created_at, e.id.0))
+    })
+}
+
+#[cfg(test)]
+mod home_fold_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn edge(id: u128, s: u128, t: u128, edge_type: EdgeType, day: u32) -> Edge {
+        Edge {
+            id: EdgeId(uuid::Uuid::from_u128(id)),
+            source_id: NodeId(uuid::Uuid::from_u128(s)),
+            target_id: NodeId(uuid::Uuid::from_u128(t)),
+            edge_type,
+            label: Some(format!("l{id}")),
+            created_at: Utc
+                .with_ymd_and_hms(2026, 1, day, 0, 0, 0)
+                .single()
+                .expect("date"),
+        }
+    }
+
+    #[test]
+    fn each_node_keeps_its_oldest_home() {
+        let edges = vec![
+            edge(1, 10, 99, EdgeType::Contains, 3),
+            edge(2, 11, 99, EdgeType::Contains, 1), // oldest: kept
+            edge(3, 12, 99, EdgeType::Contains, 2),
+            edge(4, 10, 98, EdgeType::Contains, 5), // the only home: kept
+            edge(5, 11, 99, EdgeType::References, 9),
+        ];
+        let (kept, dropped) = fold_homes(edges);
+        let ids = |v: &[Edge]| v.iter().map(|e| e.id.0.as_u128()).collect::<Vec<_>>();
+        assert_eq!(ids(&kept), vec![2, 4, 5], "other types untouched, in order");
+        assert_eq!(ids(&dropped), vec![1, 3]);
+        assert_eq!(
+            kept[0].label.as_deref(),
+            Some("l2"),
+            "labels stay with their link"
+        );
+    }
+
+    #[test]
+    fn a_tie_on_age_goes_to_the_smaller_id() {
+        let (kept, dropped) = fold_homes(vec![
+            edge(7, 10, 99, EdgeType::Contains, 1),
+            edge(6, 11, 99, EdgeType::Contains, 1),
+        ]);
+        assert_eq!(kept[0].id.0.as_u128(), 6);
+        assert_eq!(dropped[0].id.0.as_u128(), 7);
+    }
 }
 
 #[cfg(test)]

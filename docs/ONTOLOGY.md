@@ -677,3 +677,5 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-31 | Resource merges into Reference in 3.0.0 (migration 040); backups made before 3.0 are refused rather than converted | Owner, S2c planning (#222) |
 | 2026-10-31 | A `contains` edge may be removed with edit rights on either end, so one home can't trap a child | Developer review of S3a (#224); flagged to the owner |
 | 2026-10-31 | `related_to` merged to one edge per pair (migration 041: the oldest kept, a blank label filled from the other, copies archived) | S3b (#226) |
+| 2026-10-31 | One home per node in the database (migration 042: each node keeps its oldest home, the rest archived) | Owner, S3c planning (#228) |
+| 2026-10-31 | A home the reader can't see is shown to the child's editors as "a home you can't see" with Remove, never named; viewers aren't told | Owner, S3c planning (#228) |

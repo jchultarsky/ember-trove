@@ -84,6 +84,19 @@ cargo check && cargo clippy -- -D warnings
   pairs with `common::edge::fold_related_pairs`, migration 041's rule; the
   041 pg test asserts the two agree. Tests that need a legacy both-ways
   pair call `allow_legacy_related_pairs` (drops the index).
+- One home per node (#228): the partial unique index `edges_one_home`
+  (migration 042) on `target_id WHERE edge_type = 'contains'`. A second
+  home is still refused first by the locked check (422 `SecondHome`), and
+  `create` maps the index to the same 422. Restore folds homes with
+  `common::edge::fold_homes` (oldest kept, others into
+  `edges_removed_042`), migration 042's rule. Tests that need two homes
+  call `allow_legacy_homes`.
+- `GET /nodes/:id/home` names the parent only to someone who can view it.
+  A hidden home goes to the child's **editors** as `node: null` (owner
+  decision, #228), and to viewers not at all. `PUT` checks editor on the
+  child, then editor on the new parent, then the kinds; the repo checks for
+  a loop under the `contains` lock and deletes every other home, hidden
+  ones included (§6.1).
 - The restore preview counts rule breaks with
   `common::data_health::graph_rule_counts` and warns; it never refuses
   (owner decision).

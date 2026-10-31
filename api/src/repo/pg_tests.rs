@@ -2083,37 +2083,6 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
-async fn data_health_counts_homes_over_visible_parents_only(pool: PgPool) {
-    use common::data_health::RuleId;
-
-    let a1 = insert_raw_node(&pool, "alice", "area", "area one", "").await;
-    let a2 = insert_raw_node(&pool, "alice", "area", "area two", "").await;
-    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
-    let two_homes = insert_raw_node(&pool, "alice", "article", "two visible homes", "").await;
-    let one_visible = insert_raw_node(&pool, "alice", "article", "one visible home", "").await;
-    for parent in [a1, a2, hidden] {
-        raw_edge(&pool, parent, two_homes, "contains").await;
-    }
-    raw_edge(&pool, a1, one_visible, "contains").await;
-    raw_edge(&pool, hidden, one_visible, "contains").await;
-
-    let alice = health(&pool, "alice").await;
-    let homes = &alice[&RuleId::MultipleHomes];
-    assert_eq!(subjects(&alice, RuleId::MultipleHomes), vec![two_homes]);
-    let parents: Vec<_> = homes.items[0].related.iter().map(|r| r.id).collect();
-    assert_eq!(
-        parents.len(),
-        2,
-        "two visible homes; the hidden one isn't named"
-    );
-    assert!(!parents.contains(&hidden));
-    assert_eq!(homes.count, 1, "a hidden parent is never counted either");
-
-    // Bob owns none of the children: their homes are alice's to fix.
-    assert!(subjects(&health(&pool, "bob").await, RuleId::MultipleHomes).is_empty());
-}
-
-#[sqlx::test(migrations = "../migrations")]
 async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
     use common::data_health::RuleId;
 
@@ -2647,13 +2616,12 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
     use common::data_health::{RuleId, graph_rule_counts};
     let n =
         |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
-    let (a1, a2) = (n("area", "area 1").await, n("area", "area 2").await);
+    let a1 = n("area", "area 1").await;
     let (p, q) = (n("project", "p").await, n("project", "q").await);
     let (art, r) = (n("article", "art").await, n("reference", "ref").await);
     allow_legacy_related_pairs(&pool).await;
     for (s, t, e) in [
         (a1, p, "contains"),
-        (a2, p, "contains"),   // two homes
         (a1, r, "contains"),   // a contained Reference
         (art, q, "contains"),  // an Article as a home
         (p, a1, "depends_on"), // on an Area
@@ -2694,7 +2662,6 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
         .await
         .unwrap();
     let graph_rules = [
-        RuleId::MultipleHomes,
         RuleId::ContainedReference,
         RuleId::ContainmentNotAllowed,
         RuleId::DependsOnArea,
@@ -3015,6 +2982,7 @@ async fn the_dashboard_area_is_one_the_reader_can_see(pool: PgPool) {
 async fn a_hidden_older_area_does_not_hide_a_visible_one(pool: PgPool) {
     use common::id::NodeId;
 
+    allow_legacy_homes(&pool).await;
     let mine = insert_raw_node(&pool, "alice", "project", "alice's project", "").await;
     let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
     let own = insert_raw_node(&pool, "alice", "area", "alice's area", "").await;
@@ -3084,19 +3052,14 @@ async fn a_favorite_names_only_a_node_its_owner_can_see(pool: PgPool) {
 
 // ── Data health fixes (#228) ──────────────────────────────────────────────────
 
-/// Each edge item names the links its fixes act on: a home per parent (in
-/// the parents' order), the one bad link, a loop's links in order. Whether
+/// Each edge item names the links its fixes act on: the one bad link, or
+/// a loop's links in order. Whether
 /// the reader may remove each follows the API's rule.
 #[sqlx::test(migrations = "../migrations")]
 async fn data_health_items_carry_the_links_their_fixes_need(pool: PgPool) {
     use common::data_health::RuleId;
 
-    allow_legacy_homes(&pool).await;
     let a1 = insert_raw_node(&pool, "alice", "area", "area one", "").await;
-    let a2 = insert_raw_node(&pool, "alice", "area", "area two", "").await;
-    let child = insert_raw_node(&pool, "alice", "project", "two homes", "").await;
-    raw_edge(&pool, a1, child, "contains").await;
-    raw_edge(&pool, a2, child, "contains").await;
     let r = insert_raw_node(&pool, "alice", "reference", "a ref", "").await;
     raw_edge(&pool, a1, r, "contains").await;
     // A loop through bob's node, shared with alice.
@@ -3107,17 +3070,6 @@ async fn data_health_items_carry_the_links_their_fixes_need(pool: PgPool) {
     raw_edge(&pool, theirs, mine, "depends_on").await;
 
     let alice = health(&pool, "alice").await;
-
-    let homes = &alice[&RuleId::MultipleHomes].items[0];
-    let parents: Vec<_> = homes.related.iter().map(|p| p.id).collect();
-    let link_parents: Vec<_> = homes.links.iter().map(|l| l.source).collect();
-    assert_eq!(link_parents, parents, "a link per parent, in order");
-    assert!(
-        homes
-            .links
-            .iter()
-            .all(|l| l.target == child && l.removable())
-    );
 
     let contained = &alice[&RuleId::ContainedReference].items[0].links;
     assert_eq!((contained[0].source, contained[0].target), (a1, r));
@@ -3245,4 +3197,258 @@ async fn a_converted_link_merges_into_one_already_there(pool: PgPool) {
             Some("why".to_string())
         )]
     );
+}
+
+// ── One home (#228, migration 042) ───────────────────────────────────────────
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn edges_now(pool: &PgPool) -> Vec<common::edge::Edge> {
+    sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            uuid::Uuid,
+            uuid::Uuid,
+            String,
+            Option<String>,
+            chrono::DateTime<Utc>,
+        ),
+    >("SELECT id, source_id, target_id, edge_type::text, label, created_at FROM edges")
+    .fetch_all(pool)
+    .await
+    .expect("edges")
+    .into_iter()
+    .map(|(id, s, t, ty, label, created_at)| common::edge::Edge {
+        id: common::id::EdgeId(id),
+        source_id: common::id::NodeId(s),
+        target_id: common::id::NodeId(t),
+        edge_type: common::edge::EdgeType::parse(&ty).expect("type"),
+        label,
+        created_at,
+    })
+    .collect()
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_042_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPool) {
+    allow_legacy_homes(&pool).await;
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2, a3) = (
+        n("area", "a1").await,
+        n("area", "a2").await,
+        n("area", "a3").await,
+    );
+    let (p, q) = (n("project", "p").await, n("project", "q").await);
+    let at = |s: uuid::Uuid,
+              t: uuid::Uuid,
+              ty: &'static str,
+              label: &'static str,
+              when: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
+                 VALUES ($1, $2, $3::edge_type, $4, $5::timestamptz) RETURNING id",
+            )
+            .bind(s)
+            .bind(t)
+            .bind(ty)
+            .bind(label)
+            .bind(when)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // p has three homes; the oldest (a2) stays.
+    let p_new = at(a1, p, "contains", "one", "2026-03-01T00:00:00Z").await;
+    let p_old = at(a2, p, "contains", "two", "2026-01-01T00:00:00Z").await;
+    let p_mid = at(a3, p, "contains", "three", "2026-02-01T00:00:00Z").await;
+    // q has one home; other types are untouched.
+    let q_home = at(a1, q, "contains", "only", "2026-01-05T00:00:00Z").await;
+    let link = at(a3, q, "references", "ref", "2026-04-01T00:00:00Z").await;
+
+    // Restore's Rust rule, on the same edges, must agree with the SQL.
+    let (folded, _) = common::edge::fold_homes(edges_now(&pool).await);
+    let mut folded: Vec<_> = folded.into_iter().map(|e| e.id.0).collect();
+    folded.sort();
+
+    sqlx::raw_sql(include_str!("../../../migrations/042_one_home.sql"))
+        .execute(&pool)
+        .await
+        .expect("migration 042");
+
+    let mut live: Vec<_> = edges_now(&pool).await.into_iter().map(|e| e.id.0).collect();
+    live.sort();
+    assert_eq!(live, folded, "fold_homes is the migration's rule");
+    let mut expected = vec![p_old, q_home, link];
+    expected.sort();
+    assert_eq!(live, expected);
+    let archived: Vec<(uuid::Uuid, Option<String>)> =
+        sqlx::query_as("SELECT id, label FROM edges_removed_042 ORDER BY created_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        archived,
+        vec![(p_mid, Some("three".into())), (p_new, Some("one".into()))],
+        "labels kept with their link in the archive"
+    );
+
+    // Idempotent; and the index now refuses a second home outright.
+    sqlx::raw_sql(include_str!("../../../migrations/042_one_home.sql"))
+        .execute(&pool)
+        .await
+        .expect("re-run");
+    let second = sqlx::query(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, 'contains')",
+    )
+    .bind(a1)
+    .bind(p)
+    .execute(&pool)
+    .await;
+    assert!(second.is_err(), "the database itself refuses a second home");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn setting_a_home_replaces_clears_and_refuses_a_loop(pool: PgPool) {
+    use common::id::NodeId;
+
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2) = (n("area", "a1").await, n("area", "a2").await);
+    let p = n("project", "p").await;
+    // Someone else's home, hidden from alice: setting hers replaces it.
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's area", "").await;
+    raw_edge(&pool, hidden, p, "contains").await;
+    let repo = PgEdgeRepo::new(pool.clone());
+    let home = |e: Option<common::edge::Edge>| e.map(|e| e.source_id.0);
+
+    let set = repo
+        .set_home(NodeId(p), Some(NodeId(a1)))
+        .await
+        .expect("set");
+    assert_eq!(home(set), Some(a1));
+    assert_eq!(
+        home(repo.home_of(NodeId(p)).await.unwrap()),
+        Some(a1),
+        "bob's is gone"
+    );
+    // The same home again keeps the link it has.
+    let before = repo.home_of(NodeId(p)).await.unwrap().map(|e| e.id);
+    repo.set_home(NodeId(p), Some(NodeId(a1)))
+        .await
+        .expect("again");
+    assert_eq!(repo.home_of(NodeId(p)).await.unwrap().map(|e| e.id), before);
+    // Moved, then freed.
+    assert_eq!(
+        home(repo.set_home(NodeId(p), Some(NodeId(a2))).await.unwrap()),
+        Some(a2)
+    );
+    assert!(repo.set_home(NodeId(p), None).await.unwrap().is_none());
+    assert!(repo.home_of(NodeId(p)).await.unwrap().is_none());
+
+    // a1 holds a2; a2 can't become a1's home.
+    repo.set_home(NodeId(a2), Some(NodeId(a1)))
+        .await
+        .expect("a1 holds a2");
+    let looped = repo.set_home(NodeId(a1), Some(NodeId(a2))).await;
+    assert!(
+        matches!(&looped, Err(EmberTroveError::Validation(m)) if m.contains("loop")),
+        "{looped:?}"
+    );
+    assert!(
+        repo.home_of(NodeId(a1)).await.unwrap().is_none(),
+        "nothing changed"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_homes_leave_exactly_one(pool: PgPool) {
+    use common::id::NodeId;
+
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2) = (n("area", "a1").await, n("area", "a2").await);
+    let p = n("project", "p").await;
+    let repo = PgEdgeRepo::new(pool.clone());
+    let req = |parent| common::edge::CreateEdgeRequest {
+        source_id: NodeId(parent),
+        target_id: NodeId(p),
+        edge_type: common::edge::EdgeType::Contains,
+        label: None,
+    };
+    // A create and a set race for p's one home; the lock (and the index
+    // behind it) leave one, whichever won.
+    let (made, set) = tokio::join!(
+        repo.create(req(a1)),
+        repo.set_home(NodeId(p), Some(NodeId(a2)))
+    );
+    let homes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM edges WHERE edge_type = 'contains' AND target_id = $1",
+    )
+    .bind(p)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(homes, 1, "made: {made:?}, set: {set:?}");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPool) {
+    use chrono::TimeZone;
+    use common::backup::BackupData;
+    use common::edge::{Edge, EdgeType::Contains};
+    use common::id::EdgeId;
+
+    let a1 = create_node(&pool, "alice", "restore home a1").await;
+    let a2 = create_node(&pool, "alice", "restore home a2").await;
+    let child = create_node(&pool, "alice", "restore home child").await;
+    let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
+    let at = |s: i64| Utc.timestamp_opt(1_800_000_000 + s, 0).unwrap();
+    let home = |parent: &Node, secs: i64| Edge {
+        id: EdgeId(uuid::Uuid::new_v4()),
+        source_id: parent.id,
+        target_id: child.id,
+        edge_type: Contains,
+        label: None,
+        created_at: at(secs),
+    };
+    // An archive from before 042: two homes.
+    let (older, newer) = (home(&a1, 0), home(&a2, 60));
+    let data = BackupData {
+        nodes,
+        edges: vec![newer.clone(), older.clone()],
+        tags: vec![],
+        notes: vec![],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: vec![],
+    };
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("a two-home archive restores");
+    tx.commit().await.unwrap();
+
+    let live: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM edges")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(live, vec![older.id.0], "the oldest home stays");
+    let archived: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM edges_removed_042")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(archived, vec![newer.id.0]);
 }

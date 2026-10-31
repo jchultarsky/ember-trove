@@ -192,9 +192,8 @@ const CONCEPTS: &[Concept] = &[
         body: "An Area \"contains\" Projects via an edge of type Contains. The \
                Dashboard groups Projects under their parent Area. A Project with \
                no Area parent shows up under \"Ungrouped\" — fine for short-lived \
-               projects, but adds friction when you have many. Build the Area first, \
-               then attach Projects to it via the Edges panel on the Area's node \
-               page.",
+               projects, but adds friction when you have many. Set a Project's \
+               home from its own page: Connections \u{2192} Home.",
     },
     Concept {
         title: "Connection rules",
