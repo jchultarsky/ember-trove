@@ -141,6 +141,54 @@ pub struct MyDayTask {
     pub node_title: Option<String>,
 }
 
+/// Where a feed task (`MyDayTask`) lives, for its parent chip (#230).
+///
+/// The feeds null `node_title` when the task's node is no longer visible to
+/// the caller (a revoked share), while `node_id` stays: the task is still
+/// theirs. That case must not read as "Inbox".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskParent {
+    /// A standalone task.
+    Inbox,
+    /// A task on a node the caller can see, with its title.
+    Node(String),
+    /// A task on a node the caller can no longer see.
+    Unavailable,
+}
+
+impl TaskParent {
+    pub fn of(node_id: Option<NodeId>, node_title: Option<String>) -> Self {
+        match (node_id, node_title) {
+            (None, _) => Self::Inbox,
+            (Some(_), Some(title)) => Self::Node(title),
+            (Some(_), None) => Self::Unavailable,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Inbox => "Inbox",
+            Self::Node(title) => title,
+            Self::Unavailable => "Node unavailable",
+        }
+    }
+
+    /// Material Symbols glyph for the chip.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Inbox => "inbox",
+            Self::Node(_) => "rocket_launch",
+            Self::Unavailable => "lock",
+        }
+    }
+
+    /// Whether a click can open the task's home. The node page of an
+    /// unavailable node only answers with an error.
+    pub fn is_reachable(&self) -> bool {
+        !matches!(self, Self::Unavailable)
+    }
+}
+
 /// Compact task info for display inside dashboard project cards.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskSummary {
@@ -403,6 +451,22 @@ pub struct ReorderTasksRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_parent_tells_inbox_from_an_unavailable_node() {
+        let id = Some(NodeId(uuid::Uuid::nil()));
+        assert_eq!(TaskParent::of(None, None), TaskParent::Inbox);
+        let shown = TaskParent::of(id, Some("Plan".into()));
+        assert_eq!(shown, TaskParent::Node("Plan".into()));
+        assert_eq!((shown.label(), shown.icon()), ("Plan", "rocket_launch"));
+        assert!(shown.is_reachable());
+        // #230: a node the caller lost access to has no title, but is not Inbox.
+        let gone = TaskParent::of(id, None);
+        assert_eq!(gone, TaskParent::Unavailable);
+        assert_eq!((gone.label(), gone.icon()), ("Node unavailable", "lock"));
+        assert!(!gone.is_reachable());
+        assert!(TaskParent::Inbox.is_reachable());
+    }
 
     #[test]
     fn priority_labels_cover_every_variant_once_in_ascending_order() {

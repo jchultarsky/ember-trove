@@ -22,7 +22,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_viewer},
+    auth::permissions::{is_admin, require_editor, require_viewer, subject_scope},
     error::ApiError,
     routes::capability::require_capability,
     state::AppState,
@@ -209,7 +209,10 @@ async fn list_all_open(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
 ) -> Result<Json<Vec<MyDayTask>>, ApiError> {
-    let tasks = state.tasks.list_open_for_owner(&claims.sub).await?;
+    let tasks = state
+        .tasks
+        .list_open_for_owner(&claims.sub, subject_scope(&claims))
+        .await?;
     Ok(Json(tasks))
 }
 
@@ -354,7 +357,10 @@ async fn my_day(
     Query(q): Query<MyDayQuery>,
 ) -> Result<Json<Vec<MyDayTask>>, ApiError> {
     let date = q.date.unwrap_or_else(|| chrono::Utc::now().date_naive());
-    let tasks = state.tasks.list_my_day(&claims.sub, date).await?;
+    let tasks = state
+        .tasks
+        .list_my_day(&claims.sub, subject_scope(&claims), date)
+        .await?;
     Ok(Json(tasks))
 }
 
@@ -382,7 +388,10 @@ async fn calendar_handler(
     .pred_opt()
     .ok_or_else(|| ApiError::Validation("date underflow".into()))?;
 
-    let tasks = state.tasks.list_by_due_range(&claims.sub, from, to).await?;
+    let tasks = state
+        .tasks
+        .list_by_due_range(&claims.sub, subject_scope(&claims), from, to)
+        .await?;
     Ok(Json(tasks))
 }
 

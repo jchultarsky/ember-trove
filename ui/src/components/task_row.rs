@@ -131,7 +131,8 @@ impl TaskEditorHeights {
 #[component]
 pub fn KanbanTaskRow(
     task: Task,
-    /// Pre-resolved parent node title; `None` for standalone (Inbox) tasks.
+    /// Pre-resolved parent node title; `None` for standalone (Inbox) tasks
+    /// and for nodes the caller can no longer see (#230).
     /// The row renders an "Inbox" chip when None, or `rocket_launch` + node
     /// name when Some.
     node_title: Option<String>,
@@ -144,12 +145,12 @@ pub fn KanbanTaskRow(
     let priority = task.priority.clone();
     let due = task.due_date;
     let focus = task.focus_date;
-    let parent = node_title.unwrap_or_else(|| "Inbox".to_string());
-    let node_icon = if task.node_id.is_some() {
-        "rocket_launch"
-    } else {
-        "inbox"
-    };
+    // #230: a node the caller can no longer see has no title; say so
+    // instead of mislabelling the task as Inbox.
+    let parent_kind = common::task::TaskParent::of(task.node_id, node_title);
+    let parent = parent_kind.label().to_string();
+    let node_icon = parent_kind.icon();
+    let parent_reachable = parent_kind.is_reachable();
 
     // Display state — title shows the latest known value (may be edited).
     let title_sig = RwSignal::new(task.title.clone());
@@ -280,6 +281,9 @@ pub fn KanbanTaskRow(
         // moves the keyboard focus to it as well.
         if let Some(f) = focused_ctx {
             f.0.set(Some(task_id));
+        }
+        if !parent_reachable {
+            return;
         }
         let target = crate::components::task_common::task_href(task_id.0, node_id.map(|n| n.0));
         navigate.get_value()(&target, Default::default());

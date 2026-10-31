@@ -401,7 +401,9 @@ pub fn NotesView() -> impl IntoView {
                                     let header = match node_id {
                                         Some(nid) => {
                                             let nav = navigate.clone();
-                                            let title = node_title.unwrap_or_default();
+                                            // #230: no title = a node the caller can no longer see.
+                                            let title = node_title
+                                                .unwrap_or_else(|| "Node unavailable".to_string());
                                             view! {
                                                 <button
                                                     class="flex items-center gap-1.5 text-xs font-semibold

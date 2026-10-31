@@ -69,9 +69,15 @@ pub trait TaskRepo: Send + Sync {
     async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError>;
 
     /// Tasks the caller has marked for focus on `date` (My Day), with node titles.
+    ///
+    /// `viewer` scopes the joined `node_title` (#230): it is `NULL` when the
+    /// node is no longer visible to that subject (a revoked share), so a
+    /// task never shows a node's live title to someone who lost access.
+    /// `None` = admin (sees every node); routes pass `subject_scope`.
     async fn list_my_day(
         &self,
         owner_id: &str,
+        viewer: Option<&str>,
         date: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError>;
 
@@ -79,9 +85,11 @@ pub trait TaskRepo: Send + Sync {
     async fn list_inbox(&self, owner_id: &str) -> Result<Vec<Task>, EmberTroveError>;
 
     /// Tasks with a due_date in [from, to] inclusive, ordered by due_date then priority.
+    /// `viewer` scopes `node_title` as in [`TaskRepo::list_my_day`].
     async fn list_by_due_range(
         &self,
         owner_id: &str,
+        viewer: Option<&str>,
         from: NaiveDate,
         to: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError>;
@@ -115,7 +123,12 @@ pub trait TaskRepo: Send + Sync {
     /// joined with their parent node title.  Used by the My Day Kanban
     /// backlog zone where the user sees every open task to plan against.
     /// Sorted: due_date ASC NULLS LAST, then priority desc, then created_at ASC.
-    async fn list_open_for_owner(&self, owner_id: &str) -> Result<Vec<MyDayTask>, EmberTroveError>;
+    /// `viewer` scopes `node_title` as in [`TaskRepo::list_my_day`].
+    async fn list_open_for_owner(
+        &self,
+        owner_id: &str,
+        viewer: Option<&str>,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError>;
 
     /// All tasks across all owners — used for full backup.
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError>;
@@ -460,9 +473,10 @@ impl TaskRepo for PgTaskRepo {
     async fn list_my_day(
         &self,
         owner_id: &str,
+        viewer: Option<&str>,
         date: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, MyDayRow>(
+        let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
                 t.id, t.node_id, t.owner_id, t.title,
@@ -472,7 +486,7 @@ impl TaskRepo for PgTaskRepo {
                 t.created_at, t.updated_at,
                 n.title           AS node_title
             FROM node_tasks t
-            LEFT JOIN nodes n ON n.id = t.node_id
+            LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
               AND t.deleted_at IS NULL
               AND t.focus_date IS NOT NULL
@@ -491,9 +505,11 @@ impl TaskRepo for PgTaskRepo {
                 t.node_id NULLS FIRST,
                 t.created_at
             "#,
-        )
+            visible = super::visible_to("n", 3),
+        ))
         .bind(owner_id)
         .bind(date)
+        .bind(viewer)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list my day failed: {e}")))?;
@@ -530,10 +546,11 @@ impl TaskRepo for PgTaskRepo {
     async fn list_by_due_range(
         &self,
         owner_id: &str,
+        viewer: Option<&str>,
         from: NaiveDate,
         to: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, MyDayRow>(
+        let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
                 t.id, t.node_id, t.owner_id, t.title,
@@ -543,7 +560,7 @@ impl TaskRepo for PgTaskRepo {
                 t.created_at, t.updated_at,
                 n.title           AS node_title
             FROM node_tasks t
-            LEFT JOIN nodes n ON n.id = t.node_id
+            LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
               AND t.deleted_at IS NULL
               AND t.due_date >= $2
@@ -556,10 +573,12 @@ impl TaskRepo for PgTaskRepo {
                 END,
                 t.created_at
             "#,
-        )
+            visible = super::visible_to("n", 4),
+        ))
         .bind(owner_id)
         .bind(from)
         .bind(to)
+        .bind(viewer)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list by due range failed: {e}")))?;
@@ -567,12 +586,16 @@ impl TaskRepo for PgTaskRepo {
         rows.into_iter().map(my_day_row_to_task).collect()
     }
 
-    async fn list_open_for_owner(&self, owner_id: &str) -> Result<Vec<MyDayTask>, EmberTroveError> {
+    async fn list_open_for_owner(
+        &self,
+        owner_id: &str,
+        viewer: Option<&str>,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError> {
         // NULLS LAST on due_date so dated tasks float to the top of the
         // backlog; undated open tasks settle at the bottom.  Priority desc
         // (high → low) breaks ties.  created_at ASC keeps order stable
         // across re-fetches for items with no due date.
-        let rows = sqlx::query_as::<_, MyDayRow>(
+        let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
                 t.id, t.node_id, t.owner_id, t.title,
@@ -582,7 +605,7 @@ impl TaskRepo for PgTaskRepo {
                 t.created_at, t.updated_at,
                 n.title           AS node_title
             FROM node_tasks t
-            LEFT JOIN nodes n ON n.id = t.node_id
+            LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
               AND t.deleted_at IS NULL
               AND t.status::text NOT IN ('done', 'cancelled')
@@ -595,8 +618,10 @@ impl TaskRepo for PgTaskRepo {
                 END,
                 t.created_at ASC
             "#,
-        )
+            visible = super::visible_to("n", 2),
+        ))
         .bind(owner_id)
+        .bind(viewer)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list open for owner failed: {e}")))?;

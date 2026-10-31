@@ -494,13 +494,22 @@ impl TaskRepo for StubTaskRepo {
     ) -> Result<u64, EmberTroveError> {
         Ok(0)
     }
-    async fn list_my_day(&self, _: &str, _: NaiveDate) -> Result<Vec<MyDayTask>, EmberTroveError> {
+    async fn list_my_day(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: NaiveDate,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError> {
         unimplemented!()
     }
     async fn list_inbox(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> {
         unimplemented!()
     }
-    async fn list_open_for_owner(&self, _: &str) -> Result<Vec<MyDayTask>, EmberTroveError> {
+    async fn list_open_for_owner(
+        &self,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<Vec<MyDayTask>, EmberTroveError> {
         unimplemented!()
     }
     async fn counts_for_nodes(
@@ -531,6 +540,7 @@ impl TaskRepo for StubTaskRepo {
     async fn list_by_due_range(
         &self,
         _: &str,
+        _: Option<&str>,
         _: NaiveDate,
         _: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError> {

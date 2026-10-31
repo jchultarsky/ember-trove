@@ -972,7 +972,7 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
     }
 
     let ids: Vec<_> = tasks
-        .list_my_day("owner-a", today)
+        .list_my_day("owner-a", Some("owner-a"), today)
         .await
         .expect("my day")
         .into_iter()
@@ -986,6 +986,179 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
     // The query contract the UI's "done today" stamp exists for: a task
     // completed while still carrying an earlier focus_date drops out.
     assert!(!ids.contains(&carried_done.id));
+}
+
+/// The three task feeds' `node_title` for one task, as seen by `viewer`.
+// Fixture helper, not a #[test] fn (see `create_node`).
+#[allow(clippy::expect_used)]
+async fn feed_titles(
+    tasks: &PgTaskRepo,
+    owner: &str,
+    viewer: Option<&str>,
+    day: chrono::NaiveDate,
+    id: common::id::TaskId,
+) -> [Option<Option<String>>; 3] {
+    let pick = |v: Vec<common::task::MyDayTask>| {
+        v.into_iter()
+            .find(|t| t.task.id == id)
+            .map(|t| t.node_title)
+    };
+    [
+        pick(tasks.list_my_day(owner, viewer, day).await.expect("my day")),
+        pick(
+            tasks
+                .list_by_due_range(owner, viewer, day, day)
+                .await
+                .expect("calendar"),
+        ),
+        pick(
+            tasks
+                .list_open_for_owner(owner, viewer)
+                .await
+                .expect("backlog"),
+        ),
+    ]
+}
+
+/// #230: a task on a node whose share was revoked keeps appearing in its
+/// owner's feeds, but no longer carries the node's (live) title.
+#[sqlx::test(migrations = "../migrations")]
+async fn task_feeds_hide_the_title_of_a_node_no_longer_shared(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let perms = PgPermissionRepo::new(pool.clone());
+    let today = chrono::Utc::now().date_naive();
+    let node = create_node(&pool, "alice", "Alice Plan").await;
+    let grant = perms
+        .grant(
+            node.id,
+            "alice",
+            common::permission::GrantPermissionRequest {
+                subject_id: "bob".to_string(),
+                role: common::permission::PermissionRole::Editor,
+            },
+        )
+        .await
+        .expect("share");
+    let task = tasks
+        .create(
+            Some(node.id),
+            "bob",
+            CreateTaskRequest {
+                focus_date: Some(today),
+                due_date: Some(today),
+                ..task_req("bob's task")
+            },
+        )
+        .await
+        .expect("create");
+
+    let shown = Some(Some("Alice Plan".to_string()));
+    assert_eq!(
+        feed_titles(&tasks, "bob", Some("bob"), today, task.id).await,
+        [shown.clone(), shown.clone(), shown],
+        "while shared, every feed shows the title"
+    );
+
+    perms.revoke(grant.id, node.id).await.expect("revoke");
+    sqlx::query("UPDATE nodes SET title = 'Renamed Secret' WHERE id = $1")
+        .bind(node.id.0)
+        .execute(&pool)
+        .await
+        .expect("rename");
+
+    // The task is still Bob's and still listed, but the title is gone.
+    assert_eq!(
+        feed_titles(&tasks, "bob", Some("bob"), today, task.id).await,
+        [Some(None), Some(None), Some(None)],
+        "after revoke, no feed leaks the node's live title"
+    );
+    // An admin (viewer = None) sees every node, so the title stays.
+    let admin = Some(Some("Renamed Secret".to_string()));
+    assert_eq!(
+        feed_titles(&tasks, "bob", None, today, task.id).await,
+        [admin.clone(), admin.clone(), admin]
+    );
+    // The node's owner still sees it on her own tasks.
+    let own = tasks
+        .create(
+            Some(node.id),
+            "alice",
+            CreateTaskRequest {
+                focus_date: Some(today),
+                due_date: Some(today),
+                ..task_req("alice's task")
+            },
+        )
+        .await
+        .expect("create");
+    let mine = Some(Some("Renamed Secret".to_string()));
+    assert_eq!(
+        feed_titles(&tasks, "alice", Some("alice"), today, own.id).await,
+        [mine.clone(), mine.clone(), mine]
+    );
+}
+
+/// #230, notes feed: the same rule as the task feeds.
+#[sqlx::test(migrations = "../migrations")]
+async fn note_feed_hides_the_title_of_a_node_no_longer_shared(pool: PgPool) {
+    let notes = PgNoteRepo::new(pool.clone());
+    let perms = PgPermissionRepo::new(pool.clone());
+    let node = create_node(&pool, "alice", "Alice Plan").await;
+    let grant = perms
+        .grant(
+            node.id,
+            "alice",
+            common::permission::GrantPermissionRequest {
+                subject_id: "bob".to_string(),
+                role: common::permission::PermissionRole::Editor,
+            },
+        )
+        .await
+        .expect("share");
+    let note = notes
+        .create(
+            Some(node.id),
+            "bob",
+            common::note::CreateNoteRequest {
+                body: "bob's note".to_string(),
+                color: "default".to_string(),
+                node_id: None,
+            },
+        )
+        .await
+        .expect("note");
+    let filter = super::note::NoteFeedFilter {
+        node_id: None,
+        uncategorized: false,
+        from: None,
+        to: None,
+        q: None,
+        sort: common::note::NoteSort::Newest,
+        limit: 50,
+        offset: 0,
+    };
+    let title = |owner: Option<&'static str>| {
+        let (notes, filter) = (&notes, &filter);
+        async move {
+            notes
+                .feed(owner, filter)
+                .await
+                .expect("feed")
+                .into_iter()
+                .find(|f| f.note.id == note.id)
+                .map(|f| f.node_title)
+        }
+    };
+    assert_eq!(title(Some("bob")).await, Some(Some("Alice Plan".into())));
+
+    perms.revoke(grant.id, node.id).await.expect("revoke");
+    assert_eq!(
+        title(Some("bob")).await,
+        Some(None),
+        "no live title after revoke"
+    );
+    // Admins (owner = None) see every node.
+    assert_eq!(title(None).await, Some(Some("Alice Plan".into())));
 }
 
 // ── Editor prefs: per-field upsert + note collapse ────────────────────────────
