@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-10-31
+
 ### Added
 - **A node's home is shown and set on its own page** (#228, ONTOLOGY §3.3,
   §6.1). Connections now starts with a Home row: the parent as a link, or
