@@ -676,3 +676,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-30 | `contains` needs edit rights on both ends; `related_to` deletable from either end; an Area is not a `depends_on` target | Developer review; confirmed by the owner |
 | 2026-10-31 | Resource merges into Reference in 3.0.0 (migration 040); backups made before 3.0 are refused rather than converted | Owner, S2c planning (#222) |
 | 2026-10-31 | A `contains` edge may be removed with edit rights on either end, so one home can't trap a child | Developer review of S3a (#224); flagged to the owner |
+| 2026-10-31 | `related_to` merged to one edge per pair (migration 041: the oldest kept, a blank label filled from the other, copies archived) | S3b (#226) |

@@ -489,7 +489,13 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                 .ok()?
                 .iter()
                 .find(|e| {
-                    e.source_id == node_id && e.target_id == target && e.edge_type.as_str() == et
+                    let forward = e.source_id == node_id && e.target_id == target;
+                    // `related_to` has no direction (#226): the reverse is
+                    // the same link.
+                    let reverse = e.edge_type.is_symmetric()
+                        && e.source_id == target
+                        && e.target_id == node_id;
+                    (forward || reverse) && e.edge_type.as_str() == et
                 })
                 .map(|e| e.edge_type.label())
         })
@@ -654,7 +660,13 @@ fn EdgePanel(node_id: NodeId) -> impl IntoView {
                                             let is_outgoing = edge.source_id == node_id;
                                             let other_id = if is_outgoing { edge.target_id } else { edge.source_id };
                                             let other_title = if is_outgoing { edge.target_title.clone() } else { edge.source_title.clone() };
-                                            let direction = if is_outgoing { "\u{2192}" } else { "\u{2190}" };
+                                            let direction = if edge.edge_type.is_symmetric() {
+                                                "\u{2194}" // ↔: no direction (#226)
+                                            } else if is_outgoing {
+                                                "\u{2192}"
+                                            } else {
+                                                "\u{2190}"
+                                            };
                                             let edge_type_label = edge.edge_type.label();
                                             let label = edge.label.clone().unwrap_or_default();
                                             view! {

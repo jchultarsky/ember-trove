@@ -6,6 +6,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **A "related to" link is one link, whichever end it was made from**
+  (#226, ONTOLOGY §6.2). It has no direction, so linking B to A when A is
+  already related to B now says "already linked as related to" (409). The
+  Connections form flags it before you submit.
+  - The link shows as ↔ from both nodes, and the graph draws it without
+    an arrowhead.
+  - Migration 041 merges any pair stored both ways. It keeps the oldest; if
+    that one has no label, it takes the other's. The removed copy, with its
+    label, is kept in `edges_removed_041`. A unique index keeps pairs from
+    coming back.
+  - Restoring a backup merges such pairs by the same rule and archives the
+    copy the same way.
+  - The node's neighbours and "linked from" lists count a related link
+    from both ends, so a merged pair never turns up as an unlinked
+    mention.
+
+### Security
+- **Either end may delete a "related to" link** (#226, ONTOLOGY §14). It
+  used to need edit rights on the end it was created from. Since the link
+  has no direction, an editor of either node may now remove it, as with a
+  home (`contains`).
+
 ## [3.1.0] - 2026-10-31
 
 ### Added

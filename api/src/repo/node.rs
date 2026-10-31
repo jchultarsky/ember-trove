@@ -588,9 +588,12 @@ impl NodeRepo for PgNodeRepo {
             SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
                    n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at
             FROM nodes n
-            JOIN edges e ON e.target_id = n.id
-            WHERE e.source_id = $1
-              AND {visible}
+            -- `related_to` has no direction (#226): its other end is a
+            -- neighbour whichever way it is stored.
+            JOIN edges e
+              ON (e.source_id = $1 AND e.target_id = n.id)
+              OR (e.edge_type = 'related_to' AND e.target_id = $1 AND e.source_id = n.id)
+            WHERE {visible}
             ORDER BY n.title
             "#,
             visible = super::visible_to("n", 2),
@@ -617,9 +620,11 @@ impl NodeRepo for PgNodeRepo {
             SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
                    n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at
             FROM nodes n
-            JOIN edges e ON e.source_id = n.id
-            WHERE e.target_id = $1
-              AND {visible}
+            -- `related_to` has no direction (#226): it links back too.
+            JOIN edges e
+              ON (e.target_id = $1 AND e.source_id = n.id)
+              OR (e.edge_type = 'related_to' AND e.source_id = $1 AND e.target_id = n.id)
+            WHERE {visible}
             ORDER BY n.title
             "#,
             visible = super::visible_to("n", 2),

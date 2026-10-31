@@ -65,42 +65,35 @@ test('the page lists data that breaks the model, linked to where it lives', asyn
     });
     expect(orphanResp.ok()).toBeTruthy();
     const orphan = await orphanResp.json();
-    // related_to stored both ways.
-    for (const [s, t] of [
-      [a.id, b.id],
-      [b.id, a.id],
-    ]) {
-      const edge = await request.post('/api/edges', {
-        data: { source_id: s, target_id: t, edge_type: 'related_to' },
-      });
-      expect(edge.ok()).toBeTruthy();
-    }
+    // related_to is stored once (#226): the reverse is the same link, so
+    // that rule can no longer be broken through the API. The pg tests cover
+    // the rule on older data; here the refusal itself is checked.
+    const ab = await request.post('/api/edges', {
+      data: { source_id: a.id, target_id: b.id, edge_type: 'related_to' },
+    });
+    expect(ab.ok()).toBeTruthy();
+    const ba = await request.post('/api/edges', {
+      data: { source_id: b.id, target_id: a.id, edge_type: 'related_to' },
+    });
+    expect(ba.status()).toBe(409);
+    expect((await ba.json()).error).toBe('already linked as related to');
 
     // The API reports each under its rule, to the owner only.
     expect(await subjectsOf(request, 'orphan_task')).toContain(orphan.id);
-    const pair = await subjectsOf(request, 'related_to_both_ways');
-    expect(pair.includes(a.id) || pair.includes(b.id)).toBeTruthy();
-    for (const rule of ['orphan_task', 'related_to_both_ways']) {
-      const theirs = await subjectsOf(otherRequest, rule);
-      for (const id of [orphan.id, a.id, b.id]) expect(theirs).not.toContain(id);
-    }
+    expect(await subjectsOf(otherRequest, 'orphan_task')).not.toContain(orphan.id);
 
     // The page shows them, each in its rule's card, linking to the item.
     await page.goto('/data-health');
     await expect(page.getByRole('heading', { name: 'Data health' })).toBeVisible();
     const orphanCard = page.getByTestId('data-health-orphan_task');
     await expect(orphanCard.locator(`a[href="/tasks/inbox?task=${orphan.id}"]`)).toBeVisible();
-    // The pair this test made, by its own nodes.
-    const pairCard = page.getByTestId('data-health-related_to_both_ways');
-    await expect(pairCard.locator(`a[href="/nodes/${a.id}"]`)).toBeVisible();
-    await expect(pairCard.locator(`a[href="/nodes/${b.id}"]`)).toBeVisible();
     // Each card explains its rule and how to fix it.
     await expect(orphanCard).toContainText('A task belongs to exactly one Project.');
     await expect(orphanCard).toContainText('To fix:');
 
     // A link opens the item where it lives.
-    await pairCard.locator(`a[href="/nodes/${a.id}"]`).first().click();
-    await expect(page).toHaveURL(new RegExp(`/nodes/${a.id}`));
+    await orphanCard.locator(`a[href="/tasks/inbox?task=${orphan.id}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`/tasks/inbox\\?task=${orphan.id}`));
   } finally {
     await wipe(request);
   }
