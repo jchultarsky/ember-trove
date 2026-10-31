@@ -45,6 +45,7 @@ run_step "cargo test (ui, host)"  "cargo test -p ui --quiet"
 if command -v node >/dev/null 2>&1; then
   run_step "sw.js unit tests"     "node --test ui/public/sw.test.mjs"
 fi
+run_step "release tooling tests"  "bash scripts/close-shipped-issues.test.sh && bash scripts/next-version.test.sh"
 run_step "git status clean"       "[ -z \"\$(git status --porcelain)\" ]"
 
 echo ""

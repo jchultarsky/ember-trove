@@ -14,7 +14,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::graph_view::{
-    diamond_points, hexagon_points, node_fill, node_stroke_color, triangle_points,
+    diamond_points, node_fill, node_stroke_color, triangle_points,
 };
 
 /// Cap on rendered neighbors — beyond this the radial layout gets cramped;
@@ -44,10 +44,6 @@ fn shape_svg(nt: &NodeType, cx: f64, cy: f64, highlight: bool) -> AnyView {
         NodeType::Area => view! {
             <rect x=cx - 10.0 y=cy - 8.0 width="20" height="16" rx="4"
                   fill=fill stroke=stroke style=format!("stroke-width:{sw};") />
-        }
-        .into_any(),
-        NodeType::Resource => view! {
-            <polygon points=hexagon_points(cx, cy) fill=fill stroke=stroke style=format!("stroke-width:{sw};") />
         }
         .into_any(),
         NodeType::Reference => view! {

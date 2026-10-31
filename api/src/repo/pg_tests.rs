@@ -2114,11 +2114,12 @@ async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
     raw_edge(&pool, project, sub_area, "contains").await; // not in the table
     raw_edge(&pool, area, project, "contains").await; // fine
 
-    // Bob's Area, shared with alice, holding alice's Resource: alice sees
-    // both ends; bob can't see the Resource, so it's never named to him.
+    // Bob's Area, shared with alice, holding a second Reference of hers:
+    // alice sees both ends; bob can't see the Reference, so it's never
+    // named to him.
     let bobs = insert_raw_node(&pool, "bob", "area", "bob's shared area", "").await;
     share(&pool, bobs, "alice").await;
-    let resource = insert_raw_node(&pool, "alice", "resource", "a resource", "").await;
+    let resource = insert_raw_node(&pool, "alice", "reference", "a second reference", "").await;
     raw_edge(&pool, bobs, resource, "contains").await;
 
     let alice = health(&pool, "alice").await;
@@ -2135,7 +2136,7 @@ async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
     let bob = health(&pool, "bob").await;
     assert!(
         subjects(&bob, RuleId::ContainedReference).is_empty(),
-        "bob can't see alice's Resource, so the edge isn't his to see"
+        "bob can't see alice's second Reference, so the edge isn't his to see"
     );
 }
 
@@ -2353,4 +2354,119 @@ async fn data_health_says_when_a_membership_is_on_someone_elses_node(pool: PgPoo
     assert_eq!(item.subject.id, person);
     let membership = item.membership.clone().expect("membership");
     assert!(!membership.node_owned, "bob's node: alice gets no Remove");
+}
+
+// ── Migration 040: Resource becomes Reference (S2c, #222) ────────────────────
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_template(
+    pool: &PgPool,
+    owner: &str,
+    kind: &str,
+    name: &str,
+    default: bool,
+) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO node_templates (name, node_type, created_by, is_default) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(name)
+    .bind(kind)
+    .bind(owner)
+    .bind(default)
+    .fetch_one(pool)
+    .await
+    .expect("raw template")
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_040_makes_every_resource_a_reference_and_keeps_the_rest(pool: PgPool) {
+    // Recreate the pre-040 state: 'resource' still allowed.
+    for sql in [
+        "ALTER TABLE nodes DROP CONSTRAINT nodes_no_resource",
+        "ALTER TABLE node_templates DROP CONSTRAINT node_templates_no_resource",
+    ] {
+        sqlx::query(sql).execute(&pool).await.expect("drop check");
+    }
+    let resource = insert_raw_node(&pool, "alice", "resource", "a resource", "body").await;
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    let before: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM nodes WHERE id = $1")
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .expect("updated_at");
+    // alice has a default for both kinds; bob only for Resource.
+    let alice_res = raw_template(&pool, "alice", "resource", "Res", true).await;
+    let alice_ref = raw_template(&pool, "alice", "reference", "Ref", true).await;
+    let bob_res = raw_template(&pool, "bob", "resource", "Bob res", true).await;
+
+    // Migrations run in a transaction; SET LOCAL needs one.
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/040_resource_becomes_reference.sql"
+    ))
+    .execute(&mut *tx)
+    .await
+    .expect("re-run migration 040");
+    tx.commit().await.expect("commit");
+
+    let (kind, after): (String, chrono::DateTime<Utc>) =
+        sqlx::query_as("SELECT node_type::text, updated_at FROM nodes WHERE id = $1")
+            .bind(resource)
+            .fetch_one(&pool)
+            .await
+            .expect("node");
+    assert_eq!(kind, "reference");
+    assert_eq!(after, before, "a change of kind isn't an edit");
+    let other: String = sqlx::query_scalar("SELECT node_type::text FROM nodes WHERE id = $1")
+        .bind(article)
+        .fetch_one(&pool)
+        .await
+        .expect("article");
+    assert_eq!(other, "article", "other kinds untouched");
+
+    let template = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, bool)>(
+                "SELECT node_type, is_default FROM node_templates WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("template")
+        }
+    };
+    assert_eq!(
+        template(alice_ref).await,
+        ("reference".into(), true),
+        "the Reference default wins"
+    );
+    assert_eq!(
+        template(alice_res).await,
+        ("reference".into(), false),
+        "the Resource one is kept, demoted"
+    );
+    assert_eq!(
+        template(bob_res).await,
+        ("reference".into(), true),
+        "a lone Resource default stays the default"
+    );
+
+    // 'resource' can't come back.
+    let node = sqlx::query(
+        "INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status) \
+         VALUES ('alice', 'resource', 'again', 'again', '', '{}', 'draft')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(node.is_err(), "nodes refuse 'resource'");
+    let tpl = sqlx::query(
+        "INSERT INTO node_templates (name, node_type, created_by) VALUES ('x', 'resource', 'alice')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(tpl.is_err(), "templates refuse 'resource'");
 }

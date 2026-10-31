@@ -172,13 +172,6 @@ const GLOBAL_COMMANDS: &[CommandSpec] = &[
         hint: "",
     },
     CommandSpec {
-        cmd: Command::NewNodeOfType("resource"),
-        label: "New Resource",
-        icon: "bookmarks",
-        keywords: "add create node type",
-        hint: "",
-    },
-    CommandSpec {
         cmd: Command::NewNodeOfType("reference"),
         label: "New Reference",
         icon: "menu_book",

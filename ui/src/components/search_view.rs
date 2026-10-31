@@ -601,7 +601,6 @@ pub fn SearchView() -> impl IntoView {
                         (Some("article"),             "Article"),
                         (Some("project"),             "Project"),
                         (Some("area"),                "Area"),
-                        (Some("resource"),            "Resource"),
                         (Some("reference"),           "Reference"),
                     ].into_iter().map(|(value, label)| {
                         let value_owned: Option<String> = value.map(String::from);

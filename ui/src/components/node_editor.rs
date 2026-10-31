@@ -356,10 +356,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     let prefill_signal = use_context::<RwSignal<Option<TemplatePrefill>>>();
     // `/nodes/new?type=project` (sidebar "+", palette "New Project") presets
     // the type explicitly; it wins over the list filter. Unknown values are
-    // ignored.
+    // ignored; an old `?type=resource` link opens a Reference (#222).
     let query_type: Option<String> = leptos_router::hooks::use_query_map()
         .with_untracked(|q| q.get("type"))
-        .filter(|t| NodeType::parse(t).is_some());
+        .and_then(|t| NodeType::parse_compat(&t))
+        .map(|t| t.as_str().to_string());
 
     // The signed-in user: both draft kinds are keyed by it (#161). None (never
     // expected inside AuthGate) turns drafts off rather than sharing them.
@@ -503,7 +504,8 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         Effect::new(move |prev: Option<Option<String>>| {
             let t = query
                 .with(|q| q.get("type"))
-                .filter(|t| NodeType::parse(t).is_some());
+                .and_then(|t| NodeType::parse_compat(&t))
+                .map(|t| t.as_str().to_string());
             if let (Some(prev), Some(new)) = (prev, t.clone())
                 && prev.as_ref() != Some(&new)
             {
@@ -1135,13 +1137,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         let nav = nav_store.get_value();
         let g = arm_watchdog(None);
         wasm_bindgen_futures::spawn_local(async move {
-            let nt = match nt_str.as_str() {
-                "project" => NodeType::Project,
-                "area" => NodeType::Area,
-                "resource" => NodeType::Resource,
-                "reference" => NodeType::Reference,
-                _ => NodeType::Article,
-            };
+            let nt = NodeType::parse(&nt_str).unwrap_or(NodeType::Article);
             let req = CreateNodeRequest {
                 title: snap.0.clone(),
                 node_type: nt,
@@ -1267,7 +1263,6 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         <option value="article">"Article"</option>
                         <option value="project">"Project"</option>
                         <option value="area">"Area"</option>
-                        <option value="resource">"Resource"</option>
                         <option value="reference">"Reference"</option>
                     </select>
                     // Template picker — only visible in create mode.

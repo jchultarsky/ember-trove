@@ -9,7 +9,7 @@
 /// The canvas supports pan (drag on background) and zoom (wheel).
 ///
 /// Node shapes convey type: circle=Article, diamond=Project, rounded-rect=Area,
-/// hexagon=Resource, triangle=Reference.  Each type has a distinct fill colour.
+/// triangle=Reference.  Each type has a distinct fill colour.
 ///
 /// Edge lines convey type via colour + dash pattern; text labels are omitted.
 /// Hovering an edge shows a pop-up card with the relationship type, direction,
@@ -93,7 +93,6 @@ pub(crate) fn node_fill(nt: &NodeType) -> &'static str {
         NodeType::Article => "#d97706",   // ember
         NodeType::Project => "#5c6f96",   // slate-indigo
         NodeType::Area => "#78864f",      // moss
-        NodeType::Resource => "#8a5a7e",  // plum
         NodeType::Reference => "#a1493c", // brick (red reserved for urgency)
     }
 }
@@ -103,7 +102,6 @@ pub(crate) fn node_stroke_color(nt: &NodeType) -> &'static str {
         NodeType::Article => "#92400e",
         NodeType::Project => "#3e4c6b",
         NodeType::Area => "#535e34",
-        NodeType::Resource => "#61415a",
         NodeType::Reference => "#74332a",
     }
 }
@@ -122,18 +120,6 @@ pub(crate) fn diamond_points(cx: f64, cy: f64) -> String {
         cx - r,
         cy,
     )
-}
-
-/// Regular-hexagon points for Resource nodes.
-pub(crate) fn hexagon_points(cx: f64, cy: f64) -> String {
-    let r = 20.0_f64;
-    (0..6)
-        .map(|i| {
-            let a = std::f64::consts::PI / 3.0 * i as f64 - std::f64::consts::PI / 6.0;
-            format!("{:.1},{:.1}", cx + r * a.cos(), cy + r * a.sin())
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Upward-pointing equilateral triangle for Reference nodes.
@@ -459,7 +445,6 @@ pub fn GraphView() -> impl IntoView {
     let show_articles: RwSignal<bool> = RwSignal::new(true);
     let show_projects: RwSignal<bool> = RwSignal::new(true);
     let show_areas: RwSignal<bool> = RwSignal::new(true);
-    let show_resources: RwSignal<bool> = RwSignal::new(true);
     let show_references: RwSignal<bool> = RwSignal::new(true);
 
     // ── Orphans filter ───────────────────────────────────────────────────────
@@ -883,7 +868,6 @@ pub fn GraphView() -> impl IntoView {
                     <LegendToggle label="Article"   color="#d97706" shape="circle"   show=show_articles />
                     <LegendToggle label="Project"   color="#5c6f96" shape="diamond"  show=show_projects />
                     <LegendToggle label="Area"      color="#78864f" shape="rect"     show=show_areas />
-                    <LegendToggle label="Resource"  color="#8a5a7e" shape="hexagon"  show=show_resources />
                     <LegendToggle label="Reference" color="#a1493c" shape="triangle" show=show_references />
                 </div>
                 // Orphans-only maintenance lens.
@@ -1088,7 +1072,6 @@ pub fn GraphView() -> impl IntoView {
                             NodeType::Article   => show_articles.get(),
                             NodeType::Project   => show_projects.get(),
                             NodeType::Area      => show_areas.get(),
-                            NodeType::Resource  => show_resources.get(),
                             NodeType::Reference => show_references.get(),
                         };
                         let tag_visible = active_tag
@@ -1286,19 +1269,6 @@ pub fn GraphView() -> impl IntoView {
                                     width="44"
                                     height="30"
                                     rx="6"
-                                    style=format!(
-                                        "fill: {fill}; stroke: {stroke_c}; stroke-width: 1.5px;"
-                                    )
-                                />
-                            }
-                            .into_any(),
-                            NodeType::Resource => view! {
-                                <polygon
-                                    points=move || {
-                                        let (cx, cy) = positions
-                                            .with(|m| m.get(&id).copied().unwrap_or((W / 2.0, H / 2.0)));
-                                        hexagon_points(cx, cy)
-                                    }
                                     style=format!(
                                         "fill: {fill}; stroke: {stroke_c}; stroke-width: 1.5px;"
                                     )
@@ -2111,15 +2081,6 @@ fn legend_shape_icon(color: &'static str, shape: &'static str) -> AnyView {
             <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
                 <rect
                     x="1" y="3" width="12" height="8" rx="2"
-                    style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
-                />
-            </svg>
-        }
-        .into_any(),
-        "hexagon" => view! {
-            <svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0;">
-                <polygon
-                    points="7,1 12.2,4 12.2,10 7,13 1.8,10 1.8,4"
                     style=format!("fill:{color}; stroke:{color}; stroke-width:0.5;")
                 />
             </svg>
