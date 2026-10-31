@@ -27,6 +27,8 @@ pub struct AppState {
     pub tags: Arc<dyn TagRepo>,
     pub tasks: Arc<dyn TaskRepo>,
     pub notes: Arc<dyn NoteRepo>,
+    /// Inbox captures (#234). Owner-scoped, no admin bypass.
+    pub captures: Arc<dyn crate::repo::capture::CaptureRepo>,
     pub attachments: Arc<dyn AttachmentRepo>,
     pub permissions: Arc<dyn PermissionRepo>,
     /// People and memberships (#147). Owner-scoped, no admin bypass.

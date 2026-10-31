@@ -150,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
         tags: Arc::new(PgTagRepo::new(pool.clone())),
         tasks: Arc::new(PgTaskRepo::new(pool.clone())),
         notes: Arc::new(PgNoteRepo::new(pool.clone())),
+        captures: Arc::new(repo::capture::PgCaptureRepo::new(pool.clone())),
         attachments: Arc::new(PgAttachmentRepo::new(pool.clone())),
         permissions: Arc::new(PgPermissionRepo::new(pool.clone())),
         people: Arc::new(repo::person::PgPersonRepo::new(pool.clone())),
@@ -203,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         const TOMBSTONE_RETENTION_DAYS: i64 = 30;
         let tasks = state.tasks.clone();
         let notes = state.notes.clone();
+        let captures = state.captures.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
             loop {
@@ -221,6 +223,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "note tombstone purge failed"),
+                }
+                match captures.purge_deleted_before(cutoff).await {
+                    Ok(purged) if purged > 0 => {
+                        tracing::info!(purged, "purged expired capture tombstones");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(?e, "capture tombstone purge failed"),
                 }
             }
         });

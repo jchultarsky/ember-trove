@@ -604,12 +604,78 @@ impl TaskRepo for StubTaskRepo {
     }
 }
 
+/// Captures (#234): one belongs to "someone-else" (`AZ_OTHERS_CAPTURE`);
+/// every call names the owner it was asked for, so a test sees whose
+/// captures a route reached. Anyone but the owner gets `NotFound`, as the
+/// real repo's `WHERE owner_id = $caller` does.
+const AZ_OTHERS_CAPTURE: u128 = 0xa2_0c01;
+struct StubCaptureRepo;
+#[async_trait]
+impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
+    async fn list(&self, owner: &str) -> Result<Vec<common::capture::Capture>, EmberTroveError> {
+        Ok(vec![stub_capture(Uuid::new_v4(), owner, "mine")])
+    }
+    async fn create(
+        &self,
+        owner: &str,
+        body: &str,
+    ) -> Result<common::capture::Capture, EmberTroveError> {
+        Ok(stub_capture(Uuid::new_v4(), owner, body))
+    }
+    async fn update(
+        &self,
+        id: common::id::CaptureId,
+        owner: &str,
+        body: &str,
+    ) -> Result<common::capture::Capture, EmberTroveError> {
+        stub_owned(id, owner)?;
+        Ok(stub_capture(id.0, owner, body))
+    }
+    async fn delete(&self, id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveError> {
+        stub_owned(id, owner)
+    }
+    async fn restore(
+        &self,
+        id: common::id::CaptureId,
+        owner: &str,
+    ) -> Result<common::capture::Capture, EmberTroveError> {
+        stub_owned(id, owner)?;
+        Ok(stub_capture(id.0, owner, "back"))
+    }
+    async fn purge_deleted_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<common::capture::Capture>, EmberTroveError> {
+        unimplemented!()
+    }
+}
+
+fn stub_capture(id: Uuid, owner: &str, body: &str) -> common::capture::Capture {
+    common::capture::Capture {
+        id: common::id::CaptureId(id),
+        owner_id: owner.to_string(),
+        body: body.to_string(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+fn stub_owned(id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveError> {
+    if id.0 == Uuid::from_u128(AZ_OTHERS_CAPTURE) && owner != "someone-else" {
+        return Err(EmberTroveError::NotFound("capture not found".to_string()));
+    }
+    Ok(())
+}
+
 struct StubNoteRepo;
 #[async_trait]
 impl NoteRepo for StubNoteRepo {
     async fn create(
         &self,
-        _: Option<NodeId>,
+        _: NodeId,
         _: &str,
         _: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
@@ -636,7 +702,7 @@ impl NoteRepo for StubNoteRepo {
     ) -> Result<Note, EmberTroveError> {
         Ok(Note {
             id,
-            node_id: None,
+            node_id: NodeId(Uuid::nil()),
             owner_id: owner_id.to_string(),
             body: "restored".to_string(),
             color: "yellow".to_string(),
@@ -1241,6 +1307,7 @@ fn test_state() -> AppState {
         tags: Arc::new(StubTagRepo),
         tasks: Arc::new(StubTaskRepo),
         notes: Arc::new(StubNoteRepo),
+        captures: Arc::new(StubCaptureRepo),
         attachments: Arc::new(StubAttachmentRepo),
         permissions: Arc::new(StubPermissionRepo),
         search: Arc::new(StubSearchRepo),
@@ -2879,6 +2946,121 @@ async fn a_favorite_needs_view_rights_on_its_node() {
     assert_eq!(post(Some(0xdead_beef)).await, StatusCode::FORBIDDEN);
     assert_eq!(post(Some(AZ_VIEW_NODE)).await, StatusCode::CREATED);
     assert_eq!(post(None).await, StatusCode::CREATED, "a URL needs no node");
+}
+
+// ── Captures (#234) ───────────────────────────────────────────────────────────
+
+async fn capture_call(
+    claims: common::auth::AuthClaims,
+    req: Request<Body>,
+) -> (StatusCode, serde_json::Value) {
+    let resp = Router::new()
+        .nest("/captures", crate::routes::captures::router())
+        .nest("/inbox", crate::routes::inbox::router())
+        .nest("/notes", crate::routes::notes::note_router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+fn json_req(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// Captures are owner-only with no admin bypass (owner decision): the
+/// routes always ask for the caller's own, so an admin reaches only theirs
+/// and gets 404 for anyone else's.
+#[tokio::test]
+async fn an_admin_cannot_reach_someone_elses_capture() {
+    let others = Uuid::from_u128(AZ_OTHERS_CAPTURE);
+    let (status, list) = capture_call(
+        admin_claims(),
+        Request::get("/captures").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list[0]["owner_id"], serde_json::json!(admin_claims().sub));
+    for req in [
+        json_req(
+            "PATCH",
+            &format!("/captures/{others}"),
+            serde_json::json!({ "body": "x" }),
+        ),
+        Request::delete(format!("/captures/{others}"))
+            .body(Body::empty())
+            .unwrap(),
+        Request::post(format!("/captures/{others}/restore"))
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        assert_eq!(
+            capture_call(admin_claims(), req).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+}
+
+#[tokio::test]
+async fn quick_capture_lands_a_capture_for_the_caller() {
+    let (status, body) = capture_call(
+        fake_claims(),
+        json_req(
+            "POST",
+            "/inbox/quick",
+            serde_json::json!({ "title": "an idea", "priority": "high" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(body["id"].is_string());
+    assert_eq!(body["truncated"], serde_json::json!(false));
+    // Nothing to capture.
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req("POST", "/inbox/quick", serde_json::json!({ "title": "  " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req("POST", "/captures", serde_json::json!({ "body": " \n " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Every note has a node (§9.2): the Notes page can't make one without.
+#[tokio::test]
+async fn a_note_needs_a_node() {
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req("POST", "/notes", serde_json::json!({ "body": "loose" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // With a node, its editor rights come first.
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req(
+            "POST",
+            "/notes",
+            serde_json::json!({ "body": "on it", "node_id": Uuid::from_u128(AZ_VIEW_NODE) }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 // ── People (#147) ─────────────────────────────────────────────────────────────

@@ -51,20 +51,25 @@ fn activity_warning(counts: &EntityCounts) -> Option<String> {
     })
 }
 
-/// Only archives in this release's format restore (#222). Checked before
-/// anything else, so an older archive costs no pre-restore snapshot and
-/// never reaches the parser, which would fail on its data with a 500.
+/// Only archives this release can read restore (#222): its own format, and
+/// format 3, whose captures are notes without a node (#234). Checked before
+/// anything else, so an unreadable archive costs no pre-restore snapshot
+/// and never reaches the parser, which would fail on its data with a 500.
 fn check_format(manifest: &BackupManifest) -> Result<(), ApiError> {
-    let wanted = common::backup::SCHEMA_VERSION;
+    let (oldest, wanted) = (
+        common::backup::OLDEST_RESTORABLE,
+        common::backup::SCHEMA_VERSION,
+    );
+    let range = format!("format {oldest} to {wanted}");
     match manifest.schema_version {
-        v if v == wanted => Ok(()),
-        v if v < wanted => Err(ApiError::Validation(format!(
+        v if (oldest..=wanted).contains(&v) => Ok(()),
+        v if v < oldest => Err(ApiError::Validation(format!(
             "This backup was made by an older version of Ember Trove (format {v}). \
-             This release restores format {wanted} only."
+             This release restores {range} only."
         ))),
         v => Err(ApiError::Validation(format!(
             "This backup was made by a newer version of Ember Trove (format {v}). \
-             This release restores format {wanted} only."
+             This release restores {range} only."
         ))),
     }
 }
@@ -157,7 +162,16 @@ pub async fn create_backup(
     // Fetch all data across all users.
     let nodes = state.nodes.list_all().await.map_err(ApiError::from)?;
     let tags = state.tags.list_all().await.map_err(ApiError::from)?;
-    let notes = state.notes.list_all().await.map_err(ApiError::from)?;
+    let notes: Vec<common::backup::BackupNote> = state
+        .notes
+        .list_all()
+        .await
+        .map_err(ApiError::from)?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    // Captures (#234), all owners: the backup is admin-run.
+    let captures = state.captures.list_all().await.map_err(ApiError::from)?;
     let tasks = state.tasks.list_all().await.map_err(ApiError::from)?;
     let edges = state.edges.list_all().await.map_err(ApiError::from)?;
 
@@ -199,6 +213,7 @@ pub async fn create_backup(
         attachments: attachments.len() as u32,
         people: people.len() as u32,
         activity: activity.len() as u32,
+        captures: captures.len() as u32,
     };
 
     let now = chrono::Utc::now();
@@ -226,6 +241,7 @@ pub async fn create_backup(
         people,
         node_people,
         activity,
+        captures,
     };
 
     // Build the tar.gz archive in memory.
@@ -480,6 +496,19 @@ pub(crate) async fn restore_into(
         .await
         .map_err(|e| ApiError::Internal(format!("delete favorites failed: {e}")))?;
 
+    // What no node holds, which the cascade above never reached: tasks
+    // without a Project and the captures. A restore used to leave them, so
+    // the live database's own survived next to the archive's (#234).
+    for (what, sql) in [
+        ("tasks", "DELETE FROM node_tasks WHERE node_id IS NULL"),
+        ("captures", "DELETE FROM captures"),
+    ] {
+        sqlx::query(sql)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("delete nodeless {what} failed: {e}")))?;
+    }
+
     // Insert tags first (nodes may reference them via node_tags).
     for tag in &data.tags {
         sqlx::query(
@@ -600,8 +629,33 @@ pub(crate) async fn restore_into(
         .map_err(|e| ApiError::Internal(format!("insert edge failed: {e}")))?;
     }
 
-    // Insert notes.
+    // Captures (#234): the archive's own, plus, from a format-3 archive,
+    // its notes without a node (`capture::from_nodeless_note`, 043's rule).
+    let captures = data.captures.iter().cloned().chain(
+        data.notes
+            .iter()
+            .filter_map(common::capture::from_nodeless_note),
+    );
+    for capture in captures {
+        sqlx::query(
+            "INSERT INTO captures (id, owner_id, body, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(capture.id.0)
+        .bind(&capture.owner_id)
+        .bind(&capture.body)
+        .bind(capture.created_at)
+        .bind(capture.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("insert capture failed: {e}")))?;
+    }
+
+    // Insert notes (each on its node; the nodeless ones became captures).
     for note in &data.notes {
+        let Some(node_id) = note.node_id else {
+            continue;
+        };
         sqlx::query(
             r#"
             INSERT INTO node_notes (id, node_id, owner_id, body, color, created_at, updated_at)
@@ -612,7 +666,7 @@ pub(crate) async fn restore_into(
         // color + updated_at are restored too: they used to fall back to
         // 'default' / NOW(), losing note colours and edit times.
         .bind(note.id.0)
-        .bind(note.node_id.map(|n| n.0))
+        .bind(node_id.0)
         .bind(&note.owner_id)
         .bind(&note.body)
         .bind(&note.color)
@@ -1100,6 +1154,7 @@ mod tests {
             attachments: 0,
             people: 0,
             activity: 0,
+            captures: 0,
         };
         assert!(
             activity_warning(&counts).is_some_and(|w| w.contains("Activity")),
@@ -1177,6 +1232,7 @@ mod tests {
                 attachments: 0,
                 people: 0,
                 activity: 0,
+                captures: 0,
             },
         };
         assert!(check_format(&manifest(common::backup::SCHEMA_VERSION)).is_ok());

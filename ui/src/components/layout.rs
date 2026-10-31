@@ -110,6 +110,40 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     // Must live here (inside the Router) so use_navigate() is available.
     let navigate = use_navigate();
     let location = use_location();
+    // The home-screen "Quick capture" shortcut (manifest.json) opens
+    // `/?capture=1`: open the capture box. A share that failed comes back as
+    // `/?capture=failed&reason=…` (sw.js): say so. Either way drop the
+    // marker, so a reload doesn't repeat it. Nothing read these before #234,
+    // so the shortcut did nothing and a failed share was silent.
+    {
+        let navigate = navigate.clone();
+        Effect::new(move |done: Option<()>| {
+            if done.is_some() {
+                return;
+            }
+            let (capture, reason) = location
+                .query
+                .with_untracked(|q| (q.get("capture"), q.get("reason")));
+            let Some(capture) = capture else {
+                return;
+            };
+            match capture.as_str() {
+                "1" => show_capture.set(true),
+                "failed" => crate::components::toast::push_toast(
+                    crate::components::toast::ToastLevel::Error,
+                    crate::components::format_helpers::share_failure(reason.as_deref()),
+                ),
+                _ => return,
+            }
+            navigate(
+                &location.pathname.get_untracked(),
+                leptos_router::NavigateOptions {
+                    replace: true,
+                    ..Default::default()
+                },
+            );
+        });
+    }
     let show_shortcuts = RwSignal::new(false);
     // v2.10.0 — surface the help-modal toggle as a context so the sidebar
     // header (and any other corner of the UI) can open it without

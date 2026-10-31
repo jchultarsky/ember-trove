@@ -173,11 +173,10 @@ const CONCEPTS: &[Concept] = &[
     },
     Concept {
         title: "Notes",
-        body: "Short comments attached to a Node. Notes always have a parent — they \
-               can't stand alone. Use them for journal-style annotations on a Node \
-               (\"checked in with the team today\", \"deadline pushed to May 8\"). \
-               If you want a free-standing thought, that's an Article-typed Node \
-               (or, if you'll triage it later, a standalone Task in the Inbox).",
+        body: "Short comments on a Node. A note always belongs to one. Use them \
+               for journal-style annotations (\"checked in with the team today\", \
+               \"deadline pushed to May 8\"). A thought that belongs nowhere yet is a \
+               capture: press n.",
     },
     Concept {
         title: "focus_date vs due_date",
@@ -206,11 +205,11 @@ const CONCEPTS: &[Concept] = &[
     },
     Concept {
         title: "Inbox",
-        body: "Tasks where node_id IS NULL — the triage zone. Quick captures \
-               (n shortcut, iOS Share Sheet) land here. Visit /tasks/inbox to add \
-               quick tasks inline; the My Day Kanban backlog also surfaces every \
-               Inbox task with an \"Inbox\" chip so you can promote them to Today \
-               without leaving the Kanban.",
+        body: "Where input waits to be processed. Quick capture (n, the palette, \
+               the iOS Share Sheet) lands a capture here: text, not yet a task or a \
+               note, kept until you turn it into exactly one thing or delete it on \
+               purpose. Tasks without a Project also wait here; the My Day Kanban \
+               backlog shows them with an \"Inbox\" chip.",
     },
     Concept {
         title: "Carryover",

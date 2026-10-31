@@ -762,11 +762,14 @@ release entries above and in git history.
   and lives in the task-editor modal. `is_in_my_day`/`list_my_day` still handle carryovers
   (past `focus_date`, not done). A genuine "schedule for a future day" need should land next
   to `due_date`, never as a Kanban quick action — keep the daily surface lean. (2026-04-28)
-- **Quick-capture target is a `Task` with `node_id IS NULL`, not a Node.** `/api/inbox/quick`
-  (+ the iOS Web Share Target) creates a triage Task surfaced by `/tasks/inbox`
-  (`tasks WHERE node_id IS NULL`); wire format `{title?, body?}`, coalesced + truncated to 500
-  chars server-side. A 6th `NodeType::Inbox` variant was considered and **rejected** — it
-  would have meant a migration plus duplicate sidebar/filter/dashboard wiring for no
-  behavioural win, and Notes need a parent node so couldn't be the inbox surface. Future
-  capture paths (command palette, Apple Shortcut, third-party clippers) MUST hit
-  `/api/inbox/quick` — do not invent a parallel create-node path. (2026-04-27)
+- **Quick-capture target is a capture** (revised 2026-10-31, #234; it was a Task with
+  `node_id IS NULL` from 2026-04-27). `/api/inbox/quick` (+ the iOS Web Share Target) creates
+  a row in `captures` (migration 043), listed in the Inbox. ONTOLOGY §9.1: a capture is
+  unclassified input, processed into exactly one destination or deliberately deleted.
+  - The wire format `{title?, body?}` is kept for installed clients. The text is coalesced
+    and capped at 10,000 characters, not the old 500. An old client's `due_date` is written
+    into the text, and its `priority` is ignored.
+  - Captures are owner-only with no admin bypass.
+  - A `NodeType::Inbox` was rejected, as before.
+  - Future capture paths (Apple Shortcut, clippers) MUST hit `/api/inbox/quick` or
+    `/api/captures`; do not invent a parallel path.

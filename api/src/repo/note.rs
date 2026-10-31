@@ -13,8 +13,6 @@ use uuid::Uuid;
 pub struct NoteFeedFilter {
     /// Only notes attached to this node.
     pub node_id: Option<NodeId>,
-    /// Only standalone (inbox) notes.
-    pub uncategorized: bool,
     /// Inclusive lower bound on `created_at`.
     pub from: Option<DateTime<Utc>>,
     /// Exclusive upper bound on `created_at` (caller passes start-of-next-day).
@@ -34,10 +32,10 @@ use super::escape_like;
 
 #[async_trait]
 pub trait NoteRepo: Send + Sync {
-    /// Create a new note. `node_id: None` creates a standalone (inbox) note.
+    /// Create a new note on `node_id` (every note has a node, §9.2).
     async fn create(
         &self,
-        node_id: Option<NodeId>,
+        node_id: NodeId,
         owner_id: &str,
         req: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError>;
@@ -91,7 +89,7 @@ impl PgNoteRepo {
 #[derive(sqlx::FromRow)]
 struct NoteRow {
     id: Uuid,
-    node_id: Option<Uuid>,
+    node_id: Uuid,
     owner_id: String,
     body: String,
     color: String,
@@ -103,7 +101,7 @@ impl NoteRow {
     fn into_note(self) -> Note {
         Note {
             id: NoteId(self.id),
-            node_id: self.node_id.map(NodeId),
+            node_id: NodeId(self.node_id),
             owner_id: self.owner_id,
             body: self.body,
             color: self.color,
@@ -113,12 +111,11 @@ impl NoteRow {
     }
 }
 
-/// Feed row = a note plus its parent node's title (`None` for standalone notes,
-/// surfaced via the `LEFT JOIN nodes` in the feed queries).
+/// Feed row = a note plus its parent node's title.
 #[derive(sqlx::FromRow)]
 struct FeedRow {
     id: Uuid,
-    node_id: Option<Uuid>,
+    node_id: Uuid,
     owner_id: String,
     body: String,
     color: String,
@@ -132,7 +129,7 @@ impl FeedRow {
         FeedNote {
             note: Note {
                 id: NoteId(self.id),
-                node_id: self.node_id.map(NodeId),
+                node_id: NodeId(self.node_id),
                 owner_id: self.owner_id,
                 body: self.body,
                 color: self.color,
@@ -148,7 +145,7 @@ impl FeedRow {
 impl NoteRepo for PgNoteRepo {
     async fn create(
         &self,
-        node_id: Option<NodeId>,
+        node_id: NodeId,
         owner_id: &str,
         req: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
@@ -159,7 +156,7 @@ impl NoteRepo for PgNoteRepo {
             RETURNING id, node_id, owner_id, body, color, created_at, updated_at
             "#,
         )
-        .bind(node_id.map(|n| n.0))
+        .bind(node_id.0)
         .bind(owner_id)
         .bind(&req.body)
         .bind(&req.color)
@@ -298,12 +295,11 @@ impl NoteRepo for PgNoteRepo {
             WHERE n.deleted_at IS NULL
               AND ($1::text IS NULL OR n.owner_id = $1)
               AND ($2::uuid IS NULL OR n.node_id = $2)
-              AND (NOT $3 OR n.node_id IS NULL)
-              AND ($4::timestamptz IS NULL OR n.created_at >= $4)
-              AND ($5::timestamptz IS NULL OR n.created_at < $5)
-              AND ($6::text IS NULL OR n.body ILIKE ('%' || $6 || '%') ESCAPE '\')
+              AND ($3::timestamptz IS NULL OR n.created_at >= $3)
+              AND ($4::timestamptz IS NULL OR n.created_at < $4)
+              AND ($5::text IS NULL OR n.body ILIKE ('%' || $5 || '%') ESCAPE '\')
             ORDER BY {order_by}
-            LIMIT $7 OFFSET $8
+            LIMIT $6 OFFSET $7
             "#
         );
 
@@ -314,7 +310,6 @@ impl NoteRepo for PgNoteRepo {
         let rows = sqlx::query_as::<_, FeedRow>(&sql)
             .bind(owner_id)
             .bind(filter.node_id.map(|n| n.0))
-            .bind(filter.uncategorized)
             .bind(filter.from)
             .bind(filter.to)
             .bind(q_escaped)
