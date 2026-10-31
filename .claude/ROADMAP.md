@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v2.49.0 shipped: capability gates (S2 of #216; PRs #217–#219).**
+  Only Projects take tasks, people and a project status (§3.2).
+  - The API refuses new writes with 422, and every gate runs after authZ,
+    so the 422 can't leak a node's kind.
+  - The UI shows those sections on a non-Project only while older items
+    remain.
+  - The task pickers offer Projects only (`/nodes/lookup?node_type=`).
+  - Data health gains Move to a Project / Clear status / Remove fixes.
+  - Next: S2c (Resource → Reference, 3.0.0; it has a migration, so it
+    goes through the snapshot gate).
 - **v2.48.0 shipped: the Data health report and page (S1b + S1c of #208;
   PRs #211–#214). S1 is complete.**
   - `GET /api/data-health` returns the caller's own violations across 12

@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.49.0] - 2026-10-31
+
 ### Changed
 - **Only Projects take tasks, people and a project status** (#216,
   ONTOLOGY §3.2). The API now refuses, with 422 and the reason ("only
