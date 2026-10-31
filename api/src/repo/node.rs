@@ -106,9 +106,14 @@ pub trait NodeRepo: Send + Sync {
     /// `contain` the same project, the oldest edge (by `created_at`)
     /// wins.  Projects with no Area parent are absent from the result —
     /// the caller treats absence as "Ungrouped".
+    ///
+    /// Only Areas `subject` may read count (§14, #228): someone who can
+    /// edit my Project may file it in their private Area, and its title
+    /// must not reach my dashboard. `None` is the admin scope.
     async fn area_for_nodes(
         &self,
         node_ids: &[NodeId],
+        subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError>;
 
     /// Toggle the `pinned` flag on a single node.  Used by the
@@ -894,6 +899,7 @@ impl NodeRepo for PgNodeRepo {
     async fn area_for_nodes(
         &self,
         node_ids: &[NodeId],
+        subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
         if node_ids.is_empty() {
             return Ok(Vec::new());
@@ -909,7 +915,8 @@ impl NodeRepo for PgNodeRepo {
             area_id: Uuid,
             area_title: String,
         }
-        let rows = sqlx::query_as::<_, Row>(
+        let a_visible = super::visible_to("a", 2);
+        let rows = sqlx::query_as::<_, Row>(&format!(
             r#"
             WITH ranked AS (
                 SELECT
@@ -925,11 +932,13 @@ impl NodeRepo for PgNodeRepo {
                 WHERE e.target_id = ANY($1)
                   AND e.edge_type::text = 'contains'
                   AND a.node_type::text = 'area'
+                  AND {a_visible}
             )
             SELECT project_id, area_id, area_title FROM ranked WHERE rn = 1
-            "#,
-        )
+            "#
+        ))
         .bind(&ids)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("area_for_nodes failed: {e}")))?;

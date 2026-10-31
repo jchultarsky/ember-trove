@@ -2966,3 +2966,45 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         "the other label is kept, as the migration keeps it"
     );
 }
+
+// ── The dashboard names only Areas the reader can see (#228) ─────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_dashboard_area_is_one_the_reader_can_see(pool: PgPool) {
+    use common::id::NodeId;
+
+    let mine = insert_raw_node(&pool, "alice", "project", "alice's project", "").await;
+    // Bob, an editor of alice's project, filed it in his private Area.
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
+    raw_edge(&pool, hidden, mine, "contains").await;
+    let repo = PgNodeRepo::new(pool.clone());
+    let area_of = |rows: Vec<(NodeId, NodeId, String)>| {
+        rows.into_iter()
+            .find(|(project, _, _)| project.0 == mine)
+            .map(|(_, area, title)| (area.0, title))
+    };
+
+    let as_alice = repo
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    assert_eq!(area_of(as_alice), None, "a hidden Area is never named");
+
+    // Once bob shares the Area, alice sees where her project lives.
+    share(&pool, hidden, "alice").await;
+    let shared = repo
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    assert_eq!(
+        area_of(shared),
+        Some((hidden, "bob's private area".to_string()))
+    );
+
+    // The admin scope (no subject) sees every Area, as elsewhere.
+    let admin = repo
+        .area_for_nodes(&[NodeId(mine)], None)
+        .await
+        .expect("areas");
+    assert!(area_of(admin).is_some());
+}

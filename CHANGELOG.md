@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **The project dashboard no longer names an Area you can't see** (#228,
+  ONTOLOGY §14). It grouped each of your Projects under its Area home
+  without checking that you could read that Area. Someone with edit rights
+  on your Project could file it in their own private Area, and your
+  dashboard then showed that Area's title.
+  - Only Areas you can read now count.
+  - A Project whose only Area is hidden is listed as ungrouped.
+  - Nothing was exposed on the reference instance: it has a single owner
+    and no homes.
+
 ## [3.2.0] - 2026-10-31
 
 ### Changed

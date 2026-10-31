@@ -183,6 +183,7 @@ impl NodeRepo for StubNodeRepo {
     async fn area_for_nodes(
         &self,
         _: &[NodeId],
+        _: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
         unimplemented!()
     }
