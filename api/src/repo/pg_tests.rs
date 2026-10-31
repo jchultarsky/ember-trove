@@ -61,6 +61,9 @@ fn task_req(title: &str) -> CreateTaskRequest {
     }
 }
 
+// Fixture helper, not a #[test] fn, so clippy's allow-expect-in-tests
+// doesn't reach it: a failed fixture must fail the test that called it.
+#[allow(clippy::expect_used)]
 async fn create_node(pool: &PgPool, owner: &str, title: &str) -> Node {
     PgNodeRepo::new(pool.clone())
         .create(owner, node_req(title))
@@ -585,6 +588,9 @@ async fn task_soft_delete_restore_and_purge(pool: PgPool) {
 
 // ── Search result titles (#107) ──────────────────────────────────────────────
 
+// Fixture helper, not a #[test] fn, so clippy's allow-expect-in-tests
+// doesn't reach it: a failed fixture must fail the test that called it.
+#[allow(clippy::expect_used)]
 async fn search_one(pool: &PgPool, owner: &str, q: &str) -> Vec<common::search::SearchResult> {
     let query = common::search::SearchQuery {
         q: q.to_string(),
@@ -985,6 +991,9 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
 // ── Editor prefs: per-field upsert + note collapse ────────────────────────────
 
 /// (height, collapsed) for one owner's note pref, or None if no row exists.
+// Fixture helper, not a #[test] fn, so clippy's allow-expect-in-tests
+// doesn't reach it: a failed fixture must fail the test that called it.
+#[allow(clippy::expect_used)]
 async fn note_pref(
     repo: &PgEditorPrefRepo,
     owner: &str,
@@ -1071,6 +1080,9 @@ async fn editor_pref_bulk_collapse_and_expand(pool: PgPool) {
 
 /// Insert a node straight into the table (bypassing the create path, which
 /// would itself move a status token) with a fixed old `updated_at`.
+// Fixture helper, not a #[test] fn, so clippy's allow-expect-in-tests
+// doesn't reach it: a failed fixture must fail the test that called it.
+#[allow(clippy::expect_used)]
 async fn insert_raw_node(
     pool: &PgPool,
     owner: &str,
@@ -1513,4 +1525,200 @@ async fn the_database_refuses_an_oversized_person(pool: PgPool) {
         .create("a", &person(&"x".repeat(201), None))
         .await;
     assert!(res.is_err());
+}
+
+// ── Activity hardening (S1a-1, #208) ──────────────────────────────────────────
+
+// Fixture helper, not a #[test] fn, so clippy's allow-expect-in-tests
+// doesn't reach it: a failed fixture must fail the test that called it.
+#[allow(clippy::expect_used)]
+async fn insert_raw_activity(pool: &PgPool, node: uuid::Uuid, action: &str) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO activity_log (node_id, subject_id, action, metadata) \
+         VALUES ($1, 'alice', $2, '{\"k\":\"v\"}') RETURNING id",
+    )
+    .bind(node)
+    .bind(action)
+    .fetch_one(pool)
+    .await
+    .expect("raw activity")
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn activity_reads_skip_an_action_this_build_does_not_know(pool: PgPool) {
+    use super::activity::{ActivityRepo, PgActivityRepo};
+    use common::{activity::ActivityAction, id::NodeId};
+
+    let node = create_node(&pool, "alice", "activity tolerant").await;
+    let repo = PgActivityRepo::new(pool.clone());
+    repo.record(
+        node.id,
+        "alice",
+        ActivityAction::Edited,
+        serde_json::json!({}),
+    )
+    .await
+    .expect("record");
+    // A row a newer release wrote: one unknown action used to fail the
+    // whole list (and the dashboard recap with it).
+    for _ in 0..3 {
+        insert_raw_activity(&pool, node.id.0, "an_action_from_the_future").await;
+    }
+    // Newer than the known row, so they'd fill a short page if they counted.
+    sqlx::query(
+        "UPDATE activity_log SET created_at = now() + interval '1 hour' WHERE action <> 'edited'",
+    )
+    .execute(&pool)
+    .await
+    .expect("age rows");
+
+    let listed = repo.list(NodeId(node.id.0), 50).await.expect("list");
+    assert_eq!(listed.len(), 1, "the unknown rows are skipped, not fatal");
+    assert_eq!(listed[0].action, ActivityAction::Edited);
+    let page = repo.list(NodeId(node.id.0), 1).await.expect("short page");
+    assert_eq!(
+        page.len(),
+        1,
+        "unknown rows don't use up the LIMIT: the known row still shows"
+    );
+
+    let recent = repo
+        .list_recent_for_owner("alice", Utc::now() - Duration::hours(1), 1)
+        .await
+        .expect("recent");
+    assert_eq!(
+        recent.len(),
+        1,
+        "the recap skips them too, before its LIMIT"
+    );
+    assert_eq!(recent[0].entry.action, ActivityAction::Edited);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn activity_list_all_keeps_every_row_verbatim(pool: PgPool) {
+    use super::activity::{ActivityRepo, PgActivityRepo};
+
+    let a = create_node(&pool, "alice", "activity all a").await;
+    let b = create_node(&pool, "bob", "activity all b").await;
+    let known = insert_raw_activity(&pool, a.id.0, "edited").await;
+    let unknown = insert_raw_activity(&pool, b.id.0, "an_action_from_the_future").await;
+
+    let all = PgActivityRepo::new(pool.clone())
+        .list_all()
+        .await
+        .expect("list_all");
+    let ids: Vec<_> = all.iter().map(|r| r.id.0).collect();
+    assert!(ids.contains(&known) && ids.contains(&unknown), "all owners");
+    let row = all.iter().find(|r| r.id.0 == unknown).expect("unknown row");
+    assert_eq!(row.action, "an_action_from_the_future", "raw action kept");
+    assert_eq!(row.metadata, serde_json::json!({"k": "v"}));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn restoring_activity_skips_rows_whose_node_is_not_restored(pool: PgPool) {
+    use common::{
+        activity::ActivityRecord,
+        id::{ActivityId, NodeId},
+    };
+    use std::collections::HashSet;
+
+    let node = create_node(&pool, "alice", "activity restore").await;
+    let at = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+        .expect("ts")
+        .with_timezone(&Utc);
+    let kept = ActivityRecord {
+        id: ActivityId(uuid::Uuid::new_v4()),
+        node_id: node.id,
+        subject_id: "alice".to_string(),
+        action: "an_action_from_the_future".to_string(),
+        metadata: serde_json::json!({"from": null, "to": "Active"}),
+        created_at: at,
+    };
+    // A node created while the backup was being read: its activity made it
+    // into the archive but the node didn't. Restoring it would fail the FK
+    // and abort the whole restore.
+    let orphan = ActivityRecord {
+        id: ActivityId(uuid::Uuid::new_v4()),
+        node_id: NodeId(uuid::Uuid::new_v4()),
+        ..kept.clone()
+    };
+    let restored_nodes: HashSet<uuid::Uuid> = [node.id.0].into_iter().collect();
+
+    let mut tx = pool.begin().await.expect("tx");
+    let n = crate::backup::restore_activity(&mut tx, &[kept.clone(), orphan], &restored_nodes)
+        .await
+        .expect("restore activity");
+    tx.commit().await.expect("commit");
+    assert_eq!(n, 1, "only the row whose node exists is restored");
+
+    let (id, action, metadata, created_at): (
+        uuid::Uuid,
+        String,
+        serde_json::Value,
+        chrono::DateTime<Utc>,
+    ) = sqlx::query_as(
+        "SELECT id, action, metadata, created_at FROM activity_log WHERE node_id = $1",
+    )
+    .bind(node.id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("restored row");
+    assert_eq!(id, kept.id.0, "id kept");
+    assert_eq!(action, kept.action, "unknown action kept verbatim");
+    assert_eq!(metadata, kept.metadata);
+    assert_eq!(created_at, at, "original time kept");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_brings_the_activity_log_back(pool: PgPool) {
+    use super::activity::{ActivityRepo, PgActivityRepo};
+    use common::backup::BackupData;
+
+    // The real path: back up, then restore (which deletes every node and so
+    // cascades the log away) and check History came back as it was.
+    let a = create_node(&pool, "alice", "restore history a").await;
+    let b = create_node(&pool, "bob", "restore history b").await;
+    insert_raw_activity(&pool, a.id.0, "edited").await;
+    insert_raw_activity(&pool, b.id.0, "an_action_from_the_future").await;
+
+    let nodes = PgNodeRepo::new(pool.clone())
+        .list_all()
+        .await
+        .expect("nodes");
+    let activity = PgActivityRepo::new(pool.clone())
+        .list_all()
+        .await
+        .expect("activity");
+    assert_eq!(activity.len(), 2);
+    let data = BackupData {
+        nodes,
+        edges: vec![],
+        tags: vec![],
+        notes: vec![],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: activity.clone(),
+    };
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    let after = PgActivityRepo::new(pool.clone())
+        .list_all()
+        .await
+        .expect("activity after");
+    assert_eq!(
+        after, activity,
+        "every row back, verbatim, unknown action too"
+    );
 }

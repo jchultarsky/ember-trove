@@ -6,6 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.46.1] - 2026-10-31
+
+### Fixed
+- **Activity survives a restore** (#208). Backups now carry the activity
+  log, and a restore brings it back. Before, a restore wiped every node's
+  Activity, and that History can't be rebuilt.
+  - Rows come back exactly as written, including actions this release
+    doesn't know.
+  - Rows whose node isn't in the archive are skipped instead of aborting
+    the restore.
+  - The restore preview now shows the archive's people and activity counts.
+  - Archives made before this change restore with an empty log, as they
+    always did, and the preview warns before you confirm.
+  - An older release restoring a newer archive still ignores the log.
+- **One unknown activity row no longer breaks Activity** (#208). An action
+  this build doesn't recognise used to fail the whole list and the
+  dashboard recap. Reads now filter it out in SQL, before the page limit,
+  so rolling back past a release that adds an action leaves Activity
+  readable.
+- **Deleting a node no longer logs an FK warning** (#208). The "deleted"
+  activity entry was written after the node, and its log, were gone, so
+  the write always failed. The write and the never-stored `deleted` action
+  are removed.
+
+### Documentation
+- **Data-model ontology** (#204). `docs/ONTOLOGY.md` records the decided
+  data model: the four node kinds and their feature gates, the meaning of each
+  edge type, People, Companies, captures vs Project notes, Tasks, Project Plan
+  vs History, and Events. It is normative; where the code differs, follow-on
+  issues change the code. Docs only: no code or schema changes.
+  - It folds in the owner's rulings on the review: a closed *active /
+    complete / cancelled* terminal state beside the open status label; a
+    containment table with at most one home; when a `depends_on` is satisfied
+    for each kind; recurring tasks removed; and the cascade's safeguards. A
+    cascade closes open tasks as Cancelled, never Done.
+  - A new §14, *Ownership and visibility*, sets the access rules every
+    follow-on change inherits. Reverse indexes and mentions show only what
+    the viewer can read. People and Companies are owner-only. `contains`
+    needs edit rights on both ends. The cascade never acts beyond the actor's
+    own grants.
+  - No question is left open: §13 now records how each one was settled, and
+    §15 is a decision log.
+- **How the issue monitor claims issues, and how to send one back.**
+  `COLLABORATION.md` now covers the 👀-reaction claim that lets monitor runs
+  started together split issues rather than take the same one, and the stale
+  rule that frees a dead run's claim. To re-queue an issue, remove its
+  `claude:` label.
+
 ## [2.46.0] - 2026-10-29
 
 ### Changed

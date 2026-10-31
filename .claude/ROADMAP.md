@@ -3,7 +3,41 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-29)
+## Current state (2026-10-30)
+
+- **v2.46.1 shipped: activity hardening (S1a-1 of #208; PR #209).**
+  History survives a restore: backups carry `activity_log`, rows for
+  missing nodes are skipped. An unknown action no longer breaks Activity,
+  because reads filter in SQL before the LIMIT. The dead `deleted` write
+  is gone. This had to ship before S1a-2 writes `status_changed`.
+- **The ontology rewrite has started (#204).** `docs/ONTOLOGY.md` (PR #205)
+  is the normative data model, and every question in it is settled. The code
+  converges on it in slices, each with its own plan, issue, PR and release:
+  - **S0:** the document (PR #205).
+  - **S1:** the violations report, plus logging of status changes.
+  - **S2a–c:** what each kind may carry, enforced; Resource merged into
+    Reference (3.0.0).
+  - **S3a–c:** edge integrity: one home, the containment table, cycles,
+    `related_to` stored once.
+  - **S4a–c:** captures and convert-to-one.
+  - **S5a–d:** task states (`waiting`, `completed_at`), recurrence removed,
+    tasks need a Project, task dependencies.
+  - **S6a–d:** the closed terminal state, the cascade, History.
+  - **S7a–b:** reverse indexes and blockers.
+  - **S8–S9:** email identity, the merge tool, @-mentions.
+  - **S10:** Companies.
+  - **S11:** Events and the Calendar.
+  - **S12:** Project Plan.
+  - **S13:** the mixed graph.
+
+  Process rules:
+  - Each slice issue is claimed by the developer when its work starts, so
+    the issue monitor doesn't build it twice.
+  - A release that contains a migration waits until the owner has taken a
+    Lightsail snapshot.
+  - Data that breaks the ontology goes to a per-user report and is never
+    fixed silently. Database constraints are added only once their rule's
+    report is at zero.
 
 - **v2.46.0 shipped: the editor explains Draft / Published / Archived where
   you pick one (#196; PR #202, from the issue monitor).** A radio group with
@@ -15,17 +49,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
   autosaving editor (#197; PR #201).** #201 also fixed a WASM panic from
   the editor's forgotten debounce timers. Plus pulldown-cmark 0.13.5
   (RUSTSEC-2026-0414, PR #199) and a release job that closes the issues a
-  release ships (`Fixes #n`; PR #200, first live run on this tag). The
-  issue monitor's redesign (drain up to 3 issues per run, 👀-reaction claim
-  lock) is written and waits for Julian to paste it into the routine.
+  release ships (`Fixes #n`; PR #200, first live run on this tag).
+- **Issue monitor redesign live (2026-10-29):** each run drains up to 3
+  issues, and a 👀 reaction claims each one. A race probe (5 rounds of 3
+  concurrent claims) gave exactly one 201 per round. This fixes the #190
+  double-take. The daily `7 13 * * *` fallback, cleared by a UI save, is
+  restored. How to re-queue an issue: `COLLABORATION.md`.
 - **v2.44.1 shipped: every identity field in the person form gets its own
   autofill token (#184; PR #194).** The v2.44.0 re-test found Chrome
   offering the owner's name on the Name field, which still used `off`.
   Name, company and the email/phone/address values now carry tokens from
   `common::person::autofill_token`; position and notes keep `off`.
-  Another Chrome re-test is requested on #184 (Muse); if a field still
-  leaks, the pre-approved fallback is de-classifying it (placeholder +
-  accessible name).
+  Muse's Chrome re-test passed on 2026-10-29, and #184 is closed.
 - **v2.44.0 shipped: contact label suggestions (#183; PR #192) and the
   email-row autofill fix (#184; PR #193).** Contact labels use the shared
   `FreeTextCombo` (extracted from the #171 Role field) with starter sets

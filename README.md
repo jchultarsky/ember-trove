@@ -64,7 +64,7 @@ ember-trove/
 ├── api/                  # Axum REST backend  — port 3003
 ├── ui/                   # Leptos/Trunk WASM  — port 8003
 ├── migrations/           # sqlx migrations (PostgreSQL schema, 017 migrations)
-├── docs/                 # Deployment and operations guides
+├── docs/                 # Data-model ontology, deployment and operations guides
 └── deploy/
     ├── Dockerfile.api
     ├── Dockerfile.ui
@@ -295,7 +295,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
 Ember Trove follows a **zero-panic, TDD-first, plan-before-you-change** workflow. The
 full policy lives in [`.claude/POLICY.md`](.claude/POLICY.md); contributor mechanics in
-[`CONTRIBUTING.md`](CONTRIBUTING.md); agent guardrails in [`CLAUDE.md`](CLAUDE.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md); agent guardrails in [`CLAUDE.md`](CLAUDE.md). What the things in Trove *are* (node
+kinds, edge meanings, People, Companies, Tasks, Events) is defined in
+[`docs/ONTOLOGY.md`](docs/ONTOLOGY.md), which is normative for the data model.
 
 **One-time setup — install the git hooks:**
 
