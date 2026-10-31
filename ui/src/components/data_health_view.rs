@@ -15,13 +15,16 @@ use common::task::UpdateTaskRequest;
 use leptos::prelude::*;
 
 use crate::api;
+use crate::app::TaskRefresh;
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::empty_state::EmptyState;
-use crate::components::icon_button::IconButton;
+use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
+use crate::components::task_actions::delete_tasks_with_undo;
 use crate::components::task_common::task_href;
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::task_common::undo_restore_task;
+use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// Where an item lives in the app. A done or cancelled task sits in its
 /// list's collapsed "completed" section, where `?task=` can't land, so it
@@ -47,25 +50,42 @@ enum Fix {
     ClearStatus,
     /// Take the person off the non-Project.
     RemoveMembership,
+    /// Delete the task: the other deliberate end for a task with no proper
+    /// home (§9.3), most often a finished one.
+    DeleteTask,
 }
 
-/// The fix an item offers, if any. Removing a membership needs the node's
-/// owner (the API's rule), so it's offered only to them.
-fn fix_for(rule: RuleId, v: &Violation) -> Option<Fix> {
+/// The fixes an item offers, in button order. Removing a membership needs
+/// the node's owner (the API's rule), so it's offered only to them.
+fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
     match rule {
         RuleId::TaskOnNonProject | RuleId::OrphanTask if v.subject.kind == RefKind::Task => {
-            Some(Fix::MoveToProject)
+            vec![Fix::MoveToProject, Fix::DeleteTask]
         }
-        RuleId::StatusOnNonProject => Some(Fix::ClearStatus),
+        RuleId::StatusOnNonProject => vec![Fix::ClearStatus],
         // Needs the membership, the reader's ownership of the node, and the
         // node itself (the call names it).
         RuleId::MembershipOnNonProject
             if v.membership.as_ref().is_some_and(|m| m.node_owned) && !v.related.is_empty() =>
         {
-            Some(Fix::RemoveMembership)
+            vec![Fix::RemoveMembership]
         }
-        _ => None,
+        _ => Vec::new(),
     }
+}
+
+/// The finished tasks (done or cancelled) a task card lists: what its
+/// "Delete finished" button deletes.
+fn finished_tasks(report: &RuleReport) -> Vec<TaskId> {
+    if !matches!(report.rule, RuleId::TaskOnNonProject | RuleId::OrphanTask) {
+        return Vec::new();
+    }
+    report
+        .items
+        .iter()
+        .filter(|v| v.subject.kind == RefKind::Task && v.subject.closed)
+        .map(|v| TaskId(v.subject.id))
+        .collect()
 }
 
 /// "showing 200 of 341" when a rule has more items than it lists.
@@ -76,7 +96,13 @@ fn shown_of(report: &RuleReport) -> Option<String> {
 
 #[component]
 pub fn DataHealthView() -> impl IntoView {
-    let report = LocalResource::new(api::fetch_data_health);
+    // Reloads on the app-wide task refresh too, so a task delete (and its
+    // Undo, which can outlive this page) shows here.
+    let task_refresh = expect_context::<TaskRefresh>().0;
+    let report = LocalResource::new(move || {
+        task_refresh.track();
+        api::fetch_data_health()
+    });
     // After a fix, read the report again: the item leaves its card.
     let on_fixed = Callback::new(move |()| report.refetch());
     let auth = use_auth_state();
@@ -131,6 +157,12 @@ fn report_view(report: DataHealthReport, on_fixed: Callback<()>) -> impl IntoVie
 fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
     let rule = report.rule;
     let shown = shown_of(&report);
+    let finished = finished_tasks(&report);
+    // Only what this card lists: past the cap, the label says so.
+    let capped = report.count > report.items.len() as u64;
+    // One in-flight guard for the whole card: a row's Move and Delete, and
+    // the card's bulk delete, never run over each other.
+    let busy = RwSignal::new(false);
     view! {
         <section
             class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900"
@@ -147,6 +179,9 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
                         {report.count}
                     </span>
                 </div>
+                {(!finished.is_empty()).then(|| view! {
+                    <DeleteFinished tasks=finished capped=capped busy=busy />
+                })}
                 <p class="mt-1 text-xs text-stone-600 dark:text-stone-400">
                     {rule.explanation()}
                     <span class="text-stone-400 dark:text-stone-500">{format!(" ({})", rule.section())}</span>
@@ -158,8 +193,16 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
             <ul class="divide-y divide-stone-100 dark:divide-stone-800">
                 {report.items.into_iter().map(|v| {
                     let more = v.more;
-                    let fix = fix_for(rule, &v).map(|fix| view! {
-                        <FixControl fix=fix item=v.clone() on_fixed=on_fixed />
+                    let fixes = fixes_for(rule, &v);
+                    let fix = (!fixes.is_empty()).then(|| {
+                        let item = v.clone();
+                        view! {
+                            <span class="ml-auto inline-flex flex-wrap items-center justify-end gap-1">
+                                {fixes.into_iter().map(|fix| view! {
+                                    <FixControl fix=fix item=item.clone() busy=busy on_fixed=on_fixed />
+                                }).collect_view()}
+                            </span>
+                        }
                     });
                     view! {
                         <li class="px-4 py-2 text-sm flex flex-wrap items-center gap-x-2 gap-y-1"
@@ -184,20 +227,46 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
     }
 }
 
-const FIX_BUTTON: &str = "ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs \
+const FIX_BUTTON: &str = "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs \
     text-stone-600 dark:text-stone-300 border border-stone-200 dark:border-stone-700 \
     hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40";
 
-/// An item's one-click fix. Each calls an existing endpoint (task PATCH,
-/// node PUT, membership DELETE), so the API's own checks apply unchanged.
-///
-/// On success the control stays disabled: the report then reloads and the
-/// item leaves its card, and until then a second click would only repeat
-/// the call. Everything after an `.await` uses `try_` access: the page may
-/// be gone by the time the answer comes (`.claude/rules/leptos.md`).
+/// An inline "are you sure?" for a fix: the question, the commit button,
+/// and Cancel. Worded for what the action does, not a generic delete.
 #[component]
-fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoView {
-    let busy = RwSignal::new(false);
+fn InlineConfirm(
+    question: String,
+    commit: &'static str,
+    on_confirm: Callback<()>,
+    on_cancel: Callback<()>,
+) -> impl IntoView {
+    view! {
+        <span class="inline-flex flex-wrap items-center gap-2 text-xs" role="group"
+            aria-label=format!("Confirm {}", commit.to_lowercase())>
+            <span class="text-stone-600 dark:text-stone-300">{question}</span>
+            <button type="button" class=FIX_BUTTON on:click=move |_| on_confirm.run(())>{commit}</button>
+            <button type="button" class="text-stone-500 hover:text-stone-700 dark:hover:text-stone-300"
+                on:click=move |_| on_cancel.run(())>
+                "Cancel"
+            </button>
+        </span>
+    }
+}
+
+/// An item's one-click fix. Each calls an existing endpoint (task PATCH or
+/// DELETE, node PUT, membership DELETE), so the API's own checks apply.
+///
+/// `busy` is the card's: on success it stays set, because the report then
+/// reloads and the item leaves its card, and until then a second action
+/// would only repeat or contradict the first. Everything after an `.await`
+/// uses `try_` access: the page may be gone by then (`.claude/rules/leptos.md`).
+#[component]
+fn FixControl(
+    fix: Fix,
+    item: Violation,
+    busy: RwSignal<bool>,
+    on_fixed: Callback<()>,
+) -> impl IntoView {
     let finish = move |result: Result<String, String>| match result {
         Ok(done) => {
             push_toast(ToastLevel::Success, done);
@@ -237,7 +306,7 @@ fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoVie
             view! {
                 {move || if picking.get() {
                     view! {
-                        <div class="w-full sm:w-80 sm:ml-auto flex items-start gap-1">
+                        <div class="w-full sm:w-80 flex items-start gap-1">
                             <div class="flex-1 min-w-0">
                                 <NodePicker
                                     selected=target
@@ -260,7 +329,8 @@ fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoVie
                     }.into_any()
                 } else {
                     view! {
-                        <button type="button" class=FIX_BUTTON on:click=move |_| picking.set(true)>
+                        <button type="button" class=FIX_BUTTON disabled=move || busy.get()
+                            on:click=move |_| picking.set(true)>
                             <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"arrow_forward"</span>
                             "Move to a Project\u{2026}"
                         </button>
@@ -298,8 +368,54 @@ fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoVie
             }
             .into_any()
         }
+        Fix::DeleteTask => {
+            let task_refresh = expect_context::<TaskRefresh>().0;
+            let toast_state = use_context::<ToastState>();
+            let confirming = RwSignal::new(false);
+            let task = TaskId(item.subject.id);
+            let question = format!("Delete \u{201c}{}\u{201d}?", item.subject.label);
+            let delete = Callback::new(move |()| {
+                confirming.set(false);
+                busy.set(true);
+                wasm_bindgen_futures::spawn_local(async move {
+                    match api::delete_task(task).await {
+                        Ok(()) => {
+                            // Soft-deleted. The Undo bumps the app-wide task
+                            // refresh, so it works even after leaving the page.
+                            push_undo_toast(
+                                "Task deleted",
+                                undo_restore_task(task, task_refresh, toast_state),
+                            );
+                            task_refresh.try_update(|n| *n += 1);
+                        }
+                        Err(e) => {
+                            busy.try_set(false);
+                            push_toast(ToastLevel::Error, format!("Couldn't delete: {e}"));
+                        }
+                    }
+                });
+            });
+            view! {
+                {move || if confirming.get() {
+                    view! {
+                        <InlineConfirm question=question.clone() commit="Delete"
+                            on_confirm=delete
+                            on_cancel=Callback::new(move |()| confirming.set(false)) />
+                    }.into_any()
+                } else {
+                    // A row action: icon only (`.claude/rules/leptos.md`).
+                    view! {
+                        <IconButton icon="delete" label="Delete task"
+                            variant=IconButtonVariant::Danger
+                            disabled=Signal::derive(move || busy.get())
+                            on_click=Callback::new(move |()| confirming.set(true)) />
+                    }.into_any()
+                }}
+            }
+            .into_any()
+        }
         Fix::RemoveMembership => {
-            // `fix_for` offers this only with a membership and a node.
+            // `fixes_for` offers this only with a membership and a node.
             let (Some(membership), Some(node)) =
                 (item.membership.clone(), item.related.first().cloned())
             else {
@@ -307,8 +423,10 @@ fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoVie
             };
             let confirming = RwSignal::new(false);
             let person = item.subject.label.clone();
+            // Worded for what it does: the person stays in the registry;
+            // only their place on this node goes.
             let question = format!("Remove {person} from {}?", node.label);
-            let remove = move |_| {
+            let remove = Callback::new(move |()| {
                 confirming.set(false);
                 busy.set(true);
                 let person = person.clone();
@@ -320,22 +438,13 @@ fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoVie
                             .map_err(|e| format!("Couldn't remove: {e}")),
                     );
                 });
-            };
+            });
             view! {
                 {move || if confirming.get() {
-                    // Inline, worded for what it does: the person stays in
-                    // the registry; only their place on this node goes.
                     view! {
-                        <span class="ml-auto inline-flex items-center gap-2 text-xs" role="group"
-                            aria-label="Confirm removal">
-                            <span class="text-stone-600 dark:text-stone-300">{question.clone()}</span>
-                            <button type="button" class=FIX_BUTTON on:click=remove.clone()>"Remove"</button>
-                            <button type="button"
-                                class="text-stone-500 hover:text-stone-700 dark:hover:text-stone-300"
-                                on:click=move |_| confirming.set(false)>
-                                "Cancel"
-                            </button>
-                        </span>
+                        <InlineConfirm question=question.clone() commit="Remove"
+                            on_confirm=remove
+                            on_cancel=Callback::new(move |()| confirming.set(false)) />
                     }.into_any()
                 } else {
                     view! {
@@ -349,6 +458,49 @@ fn FixControl(fix: Fix, item: Violation, on_fixed: Callback<()>) -> impl IntoVie
             }
             .into_any()
         }
+    }
+}
+
+/// "Delete finished" on a task card (#220): its listed done or cancelled
+/// tasks, after one confirmation, with one Undo for all of them. Shares
+/// the bulk delete with the Tasks panel (`task_actions::delete_tasks_with_undo`).
+#[component]
+fn DeleteFinished(tasks: Vec<TaskId>, capped: bool, busy: RwSignal<bool>) -> impl IntoView {
+    let task_refresh = expect_context::<TaskRefresh>().0;
+    let toast_state = use_context::<ToastState>();
+    let n = tasks.len();
+    let confirming = RwSignal::new(false);
+    let shown = if capped { " shown" } else { "" };
+    let label = format!("Delete the {n} finished tasks{shown} (done or cancelled)");
+    let question = format!(
+        "Delete {n} finished task{} (done or cancelled){shown}? You can undo it.",
+        if n == 1 { "" } else { "s" }
+    );
+    let tasks = StoredValue::new(tasks);
+    let delete_all = Callback::new(move |()| {
+        confirming.set(false);
+        busy.set(true);
+        delete_tasks_with_undo(tasks.get_value(), "finished", task_refresh, toast_state);
+    });
+    view! {
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="delete-finished">
+            {move || if confirming.get() {
+                view! {
+                    <InlineConfirm question=question.clone() commit="Delete"
+                        on_confirm=delete_all
+                        on_cancel=Callback::new(move |()| confirming.set(false)) />
+                }.into_any()
+            } else {
+                // A card action: icon only, like the Tasks panel's bulk delete.
+                view! {
+                    <IconButton icon="delete_sweep" label=label.clone()
+                        variant=IconButtonVariant::Danger
+                        disabled=Signal::derive(move || busy.get())
+                        on_click=Callback::new(move |()| confirming.set(true)) />
+                    <span class="text-stone-500 dark:text-stone-400">{format!("{n} finished")}</span>
+                }.into_any()
+            }}
+        </div>
     }
 }
 
@@ -451,48 +603,74 @@ mod tests {
     }
 
     #[test]
-    fn each_s2_rule_offers_its_fix_and_the_rest_offer_none() {
+    fn each_s2_rule_offers_its_fixes_and_the_rest_offer_none() {
         let id = Uuid::from_u128(1);
         let task = Violation::new(Ref::task(id, "t", None, false), vec![]);
-        assert_eq!(
-            fix_for(RuleId::TaskOnNonProject, &task),
-            Some(Fix::MoveToProject)
-        );
-        assert_eq!(fix_for(RuleId::OrphanTask, &task), Some(Fix::MoveToProject));
+        for rule in [RuleId::TaskOnNonProject, RuleId::OrphanTask] {
+            assert_eq!(
+                fixes_for(rule, &task),
+                vec![Fix::MoveToProject, Fix::DeleteTask],
+                "a task can be homed or deliberately deleted"
+            );
+        }
         let node = Violation::new(Ref::node(id, "n", false), vec![]);
         assert_eq!(
-            fix_for(RuleId::StatusOnNonProject, &node),
-            Some(Fix::ClearStatus)
+            fixes_for(RuleId::StatusOnNonProject, &node),
+            vec![Fix::ClearStatus]
         );
         let person = || Violation::new(Ref::person(id, "p"), vec![Ref::node(id, "n", false)]);
         assert_eq!(
-            fix_for(
+            fixes_for(
                 RuleId::MembershipOnNonProject,
                 &person().with_membership(id, true)
             ),
-            Some(Fix::RemoveMembership)
+            vec![Fix::RemoveMembership]
         );
-        assert_eq!(
-            fix_for(
+        assert!(
+            fixes_for(
                 RuleId::MembershipOnNonProject,
                 &person().with_membership(id, false)
-            ),
-            None,
+            )
+            .is_empty(),
             "only the node's owner may remove it"
         );
-        assert_eq!(fix_for(RuleId::MembershipOnNonProject, &person()), None);
+        assert!(fixes_for(RuleId::MembershipOnNonProject, &person()).is_empty());
+        let nodeless = Violation::new(Ref::person(id, "p"), vec![]).with_membership(id, true);
+        assert!(
+            fixes_for(RuleId::MembershipOnNonProject, &nodeless).is_empty(),
+            "no node to name in the call: no button"
+        );
         for rule in [
             RuleId::MultipleHomes,
             RuleId::ContainsCycle,
             RuleId::RelatedToBothWays,
         ] {
-            assert_eq!(
-                fix_for(rule, &node),
-                None,
+            assert!(
+                fixes_for(rule, &node).is_empty(),
                 "{} has no fix yet",
                 rule.as_str()
             );
         }
+    }
+
+    #[test]
+    fn delete_finished_takes_only_the_finished_tasks_of_a_task_card() {
+        let task = |n: u128, closed: bool| {
+            Violation::new(
+                Ref::task(Uuid::from_u128(n), "t", None, false).with_closed(closed),
+                vec![],
+            )
+        };
+        let card = RuleReport::new(
+            RuleId::OrphanTask,
+            vec![task(1, true), task(2, false), task(3, true)],
+        );
+        assert_eq!(
+            finished_tasks(&card),
+            vec![TaskId(Uuid::from_u128(1)), TaskId(Uuid::from_u128(3))]
+        );
+        let other = RuleReport::new(RuleId::StatusOnNonProject, vec![task(4, true)]);
+        assert!(finished_tasks(&other).is_empty(), "only task cards");
     }
 
     #[test]
