@@ -225,6 +225,19 @@ pub struct Violation {
     /// How many more related things there are beyond `related`.
     #[serde(default)]
     pub more: u64,
+    /// The membership behind a person-on-a-non-Project item, which its
+    /// "Remove" fix deletes (#216). `None` for every other rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub membership: Option<MembershipRef>,
+}
+
+/// The membership a person item stands for (#216).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct MembershipRef {
+    pub id: Uuid,
+    /// The reader owns the node. Removing a membership needs the node's
+    /// owner, so the fix is offered only then.
+    pub node_owned: bool,
 }
 
 impl Violation {
@@ -237,7 +250,16 @@ impl Violation {
             subject,
             related,
             more,
+            membership: None,
         }
+    }
+
+    /// Names the membership behind a person item and whether the reader
+    /// owns its node (see [`Violation::membership`]).
+    #[must_use]
+    pub fn with_membership(mut self, id: Uuid, node_owned: bool) -> Self {
+        self.membership = Some(MembershipRef { id, node_owned });
+        self
     }
 }
 

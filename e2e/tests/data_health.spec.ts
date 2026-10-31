@@ -140,6 +140,85 @@ test('a task outside a Project links into its node', async ({ page, request }) =
   }
 });
 
+test('"Move to a Project" fixes an orphan task in one step (#216)', async ({ page, request }) => {
+  await wipe(request);
+  try {
+    const stamp = Date.now();
+    const project = await createNode(request, `${PREFIX}move target ${stamp}`, {
+      node_type: 'project',
+    });
+    const article = await createNode(request, `${PREFIX}move article ${stamp}`);
+    const orphan = await (
+      await request.post('/api/tasks', { data: { title: `${PREFIX}to move ${stamp}` } })
+    ).json();
+
+    // The API itself refuses the wrong destination.
+    const refused = await request.patch(`/api/tasks/${orphan.id}`, {
+      data: { node_id: article.id },
+    });
+    expect(refused.status()).toBe(422);
+
+    await page.goto('/data-health');
+    const card = page.getByTestId('data-health-orphan_task');
+    const row = card.getByTestId('data-health-item').filter({ hasText: `${PREFIX}to move ${stamp}` });
+    await row.getByRole('button', { name: /Move to a Project/ }).click();
+    const picker = row.getByRole('combobox', { name: 'Move to a Project…' });
+    await expect(picker).toBeFocused();
+    await picker.fill(`${PREFIX}move`);
+    // Projects only: the Article isn't offered.
+    await expect(page.getByRole('option', { name: new RegExp(`move article ${stamp}`) })).toHaveCount(0);
+    await expect(page.getByRole('option', { name: new RegExp(`move target ${stamp}`) })).toBeVisible();
+    await picker.press('Enter');
+
+    await expect(page.locator('[role="status"]').getByText(/Moved to/)).toBeVisible();
+    await expect(card.getByText(`${PREFIX}to move ${stamp}`)).toHaveCount(0);
+    await expect
+      .poll(async () => (await (await request.get(`/api/nodes/${project.id}/tasks`)).json()).length)
+      .toBe(1);
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('"Clear status" clears a status from a non-Project (#216)', async ({ page, request }) => {
+  // A status on an Article can no longer be made; serve a report that has
+  // one, pointing at a real Article, and check the fix's call goes through.
+  const article = await createNode(request, `${PREFIX}status article ${Date.now()}`);
+  try {
+    await page.route('**/api/data-health', (route) =>
+      route.fulfill({
+        json: {
+          rules: [
+            {
+              rule: 'status_on_non_project',
+              count: 1,
+              items: [{ subject: { kind: 'node', id: article.id, label: 'legacy status' }, related: [] }],
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto('/data-health');
+    const card = page.getByTestId('data-health-status_on_non_project');
+    const cleared = page.waitForResponse(
+      (r) => r.url().endsWith(`/api/nodes/${article.id}`) && r.request().method() === 'PUT',
+    );
+    await card.getByRole('button', { name: 'Clear status' }).click();
+    const response = await cleared;
+    expect(response.status()).toBe(200);
+    // Exactly a clear: the status is sent as null, and every other field is
+    // null too, which the API reads as "leave it unchanged".
+    const sent = response.request().postDataJSON();
+    expect(sent).toHaveProperty('project_status', null);
+    for (const [field, value] of Object.entries(sent)) {
+      if (field !== 'project_status') expect(value, field).toBeNull();
+    }
+    await expect(page.locator('[role="status"]').getByText('Status cleared')).toBeVisible();
+  } finally {
+    await request.delete(`/api/nodes/${article.id}`);
+  }
+});
+
 test('the palette opens Data health', async ({ page }) => {
   await page.goto('/tasks/my-day');
   await expect(page.locator('main')).toBeVisible();

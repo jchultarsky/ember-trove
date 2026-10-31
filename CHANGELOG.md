@@ -31,6 +31,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     filtered server-side through the new `node_type` parameter on
     `/api/nodes/lookup`, and say "Project".
 
+- **One-click fixes on the Data health page** (#216).
+  - A task outside a Project, or with no Project at all: **Move to a
+    Project…** opens a picker that offers Projects only.
+  - A project status on a non-Project: **Clear status**.
+  - A person on a non-Project: **Remove**, after a confirmation. It's
+    offered only to the node's owner, who is the only one the API allows.
+
+  Each fix calls the same endpoint as the rest of the app, so the same
+  checks apply. The item then leaves its card.
+
 ### Security
 - **The new 422s come after the authorization checks** (#216). A viewer or
   stranger still gets 403 and never learns what kind a node is.

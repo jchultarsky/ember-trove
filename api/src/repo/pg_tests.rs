@@ -2048,6 +2048,14 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
         subjects(&alice, RuleId::MembershipOnNonProject),
         vec![person]
     );
+    let membership = alice[&RuleId::MembershipOnNonProject].items[0]
+        .membership
+        .clone()
+        .expect("its Remove fix needs the membership");
+    assert!(
+        membership.node_owned,
+        "alice owns the article: she may remove it"
+    );
 
     let bob = health(&pool, "bob").await;
     assert_eq!(subjects(&bob, RuleId::OrphanTask), vec![bobs_orphan]);
@@ -2316,4 +2324,33 @@ async fn lookup_can_keep_to_one_kind_and_stays_scoped(pool: PgPool) {
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].id.0, project);
     assert_eq!(projects[0].node_type, NodeType::Project);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_says_when_a_membership_is_on_someone_elses_node(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    // Not makeable through the API (only the node's owner adds people), but
+    // a restore can bring it back: alice's person on bob's Article, shared
+    // with her. She sees the item, and that she can't remove it.
+    let bobs = insert_raw_node(&pool, "bob", "article", "bob's article", "").await;
+    share(&pool, bobs, "alice").await;
+    let person: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO people (owner_id, display_name) VALUES ('alice', 'Ada') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("person");
+    raw_exec(
+        &pool,
+        "INSERT INTO node_people (node_id, person_id) VALUES ($1, $2)",
+        &[bobs, person],
+    )
+    .await;
+
+    let alice = health(&pool, "alice").await;
+    let item = &alice[&RuleId::MembershipOnNonProject].items[0];
+    assert_eq!(item.subject.id, person);
+    let membership = item.membership.clone().expect("membership");
+    assert!(!membership.node_owned, "bob's node: alice gets no Remove");
 }
