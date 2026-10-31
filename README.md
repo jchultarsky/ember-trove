@@ -487,6 +487,7 @@ details.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/data-health` | The caller's own data that breaks the data model (`docs/ONTOLOGY.md`), per rule: an exact count, the first 200 items, each naming only nodes the caller can read. Admins get their own data too (no bypass) |
+| GET | `/api/admin/data-health` | Admin only: each rule's count across every account; counts only, never titles, ids or content |
 
 ### Permissions (standalone)
 

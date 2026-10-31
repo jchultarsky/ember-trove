@@ -2161,9 +2161,115 @@ async fn data_health_keeps_an_exact_count_past_the_item_cap(pool: PgPool) {
     let orphans = &alice[&RuleId::OrphanTask];
     assert_eq!(orphans.count, (ITEM_CAP + 5) as u64);
     assert_eq!(orphans.items.len(), ITEM_CAP);
+    assert_eq!(alice.len(), 12, "every rule reports, clean or not");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_finds_loops_only_through_nodes_the_owner_can_see(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    // Alice's own contains loop.
+    let a = insert_raw_node(&pool, "alice", "area", "loop a", "").await;
+    let b = insert_raw_node(&pool, "alice", "area", "loop b", "").await;
+    raw_edge(&pool, a, b, "contains").await;
+    raw_edge(&pool, b, a, "contains").await;
+
+    // A depends_on loop through bob's node, shared with alice: hers to see.
+    let mine = insert_raw_node(&pool, "alice", "project", "my project", "").await;
+    let bobs = insert_raw_node(&pool, "bob", "project", "bob's shared project", "").await;
+    share(&pool, bobs, "alice").await;
+    raw_edge(&pool, mine, bobs, "depends_on").await;
+    raw_edge(&pool, bobs, mine, "depends_on").await;
+
+    // A derived_from loop through a node alice can't see: never reported
+    // to her, so the hidden node is neither named nor counted.
+    let x = insert_raw_node(&pool, "alice", "article", "derived x", "").await;
+    let hidden = insert_raw_node(&pool, "bob", "article", "bob's private draft", "").await;
+    raw_edge(&pool, x, hidden, "derived_from").await;
+    raw_edge(&pool, hidden, x, "derived_from").await;
+
+    let alice = health(&pool, "alice").await;
+    let contains = &alice[&RuleId::ContainsCycle];
+    assert_eq!(contains.count, 1);
+    let cycle: Vec<_> = std::iter::once(contains.items[0].subject.id)
+        .chain(contains.items[0].related.iter().map(|r| r.id))
+        .collect();
+    assert_eq!(cycle.len(), 2);
+    assert!(cycle.contains(&a) && cycle.contains(&b));
+
+    let depends = &alice[&RuleId::DependsOnCycle];
+    assert_eq!(depends.count, 1, "found through the shared node");
     assert_eq!(
-        alice.len(),
-        9,
-        "every SQL rule reports, clean or not (the loops come in S1b-3)"
+        alice[&RuleId::DerivedFromCycle].count,
+        0,
+        "hidden node: not hers"
     );
+
+    // Bob can't see alice's project, so the depends_on loop isn't visible
+    // to him; the derived_from loop runs through alice's hidden-to-him node.
+    let bob = health(&pool, "bob").await;
+    assert_eq!(bob[&RuleId::DependsOnCycle].count, 0);
+    assert_eq!(bob[&RuleId::DerivedFromCycle].count, 0);
+    assert_eq!(bob[&RuleId::ContainsCycle].count, 0);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool) {
+    use super::data_health::{DataHealthRepo, PgDataHealthRepo};
+    use common::data_health::RuleId;
+
+    raw_task(&pool, "alice", None, "alice inbox").await;
+    raw_task(&pool, "bob", None, "bob inbox").await;
+    // A cross-owner related_to pair and loop count once, not once per owner.
+    let a = insert_raw_node(&pool, "alice", "project", "a", "").await;
+    let b = insert_raw_node(&pool, "bob", "project", "b", "").await;
+    raw_edge(&pool, a, b, "related_to").await;
+    raw_edge(&pool, b, a, "related_to").await;
+    raw_edge(&pool, a, b, "depends_on").await;
+    raw_edge(&pool, b, a, "depends_on").await;
+    let area = insert_raw_node(&pool, "bob", "area", "an area", "").await;
+    let reference = insert_raw_node(&pool, "bob", "reference", "a ref", "").await;
+    raw_edge(&pool, area, reference, "contains").await;
+
+    let counts: std::collections::HashMap<RuleId, u64> = PgDataHealthRepo::new(pool.clone())
+        .counts_all()
+        .await
+        .expect("counts")
+        .into_iter()
+        .map(|c| (c.rule, c.count))
+        .collect();
+    assert_eq!(counts.len(), RuleId::ALL.len(), "every rule counted");
+    assert_eq!(counts[&RuleId::OrphanTask], 2, "both accounts");
+    assert_eq!(counts[&RuleId::RelatedToBothWays], 1, "one pair, once");
+    assert_eq!(counts[&RuleId::DependsOnCycle], 1, "one loop, once");
+    assert_eq!(counts[&RuleId::ContainedReference], 1);
+    assert_eq!(
+        counts[&RuleId::ContainmentNotAllowed],
+        0,
+        "one rule per edge"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_loop_is_shown_through_the_readers_own_node(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    // One looping group {mine, b1, b2}: mine ↔ b1 and b1 ↔ b2, where b1 and
+    // b2 are bob's, shared with alice. Whatever the ids sort to, the path
+    // alice is shown must start at her node: a loop she can break.
+    let mine = insert_raw_node(&pool, "alice", "project", "mine", "").await;
+    let b1 = insert_raw_node(&pool, "bob", "project", "b1", "").await;
+    let b2 = insert_raw_node(&pool, "bob", "project", "b2", "").await;
+    share(&pool, b1, "alice").await;
+    share(&pool, b2, "alice").await;
+    for (s, t) in [(mine, b1), (b1, mine), (b1, b2), (b2, b1)] {
+        raw_edge(&pool, s, t, "depends_on").await;
+    }
+
+    let alice = health(&pool, "alice").await;
+    let loops = &alice[&RuleId::DependsOnCycle];
+    assert_eq!(loops.count, 1, "one group");
+    assert_eq!(loops.items[0].subject.id, mine);
+    assert_eq!(loops.items[0].related.len(), 1, "mine → b1 → mine");
+    assert_eq!(loops.items[0].related[0].id, b1);
 }
