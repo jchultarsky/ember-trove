@@ -21,7 +21,7 @@
 //! the card slides up/down to its new sort position.
 
 use chrono::{DateTime, Duration, Utc};
-use common::activity::RecentActivityEntry;
+use common::activity::{ActivityAction, RecentActivityEntry, status_change_summary};
 use common::id::NodeId;
 use common::task::{ProjectDashboardEntry, TaskSummary};
 use leptos::prelude::*;
@@ -229,6 +229,12 @@ fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl
                     let time = e.entry.created_at.format("%-I:%M %p").to_string();
                     let icon = e.entry.action.icon();
                     let action_label = e.entry.action.label();
+                    // A status change says what it became, not just that it
+                    // changed (#208).
+                    let detail = (e.entry.action == ActivityAction::StatusChanged).then(|| {
+                        let label = |k: &str| e.entry.metadata.get(k).and_then(|v| v.as_str());
+                        status_change_summary(label("from"), label("to"))
+                    });
                     let title = e.node_title.clone();
                     let node_id = e.entry.node_id;
                     view! {
@@ -252,6 +258,11 @@ fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl
                             >
                                 {title}
                             </a>
+                            {detail.map(|d| view! {
+                                <span class="text-stone-400 dark:text-stone-500 text-xs flex-shrink-0">
+                                    {d}
+                                </span>
+                            })}
                         </li>
                     }
                 }).collect_view()}
