@@ -6,6 +6,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.50.0] - 2026-10-31
+
+### Added
+- **Delete tasks from the Data health page** (#220). A task outside a
+  Project, or with no Project at all, can now be deleted as well as moved:
+  - **Delete** (trash icon) on each one;
+  - **Delete finished** on the card, which removes all the finished (done
+    or cancelled) tasks it lists after one confirmation.
+
+  Both are soft deletes with **Undo**, kept for 30 days like any deleted
+  task, and they use the same delete call and permissions as the rest of
+  the app.
+  - A long bulk delete is paced to stay under the API's rate limit instead
+    of failing halfway. The Tasks panel's "Delete all completed" now uses
+    the same code.
+
 ## [2.49.0] - 2026-10-31
 
 ### Changed
