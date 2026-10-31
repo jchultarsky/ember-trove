@@ -573,7 +573,7 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                 node_type=node_type.clone()
                 can_edit=can_edit
                 open=open
-                on_change=Callback::new(move |()| refresh_edges.update(|n| *n += 1))
+                refresh=refresh_edges
             />
 
             // Add edge form

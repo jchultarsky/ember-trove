@@ -55,8 +55,10 @@ pub fn HomeRow(
     can_edit: bool,
     /// Only fetch while the Connections section is open.
     open: RwSignal<bool>,
-    /// Runs after a change, so the section's link list reloads too.
-    on_change: Callback<()>,
+    /// The section's one refresh counter: a home change bumps it so the
+    /// link list reloads, and removing the home's link from that list
+    /// bumps it so this row does.
+    refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let kinds = allowed_homes(&node_type);
     if kinds.is_empty() {
@@ -68,9 +70,8 @@ pub fn HomeRow(
         }
         .into_any();
     }
-    let version = RwSignal::new(0u32);
     let home = LocalResource::new(move || {
-        let _ = version.get();
+        let _ = refresh.get();
         let is_open = open.get();
         async move {
             if !is_open {
@@ -93,8 +94,7 @@ pub fn HomeRow(
                     push_toast(ToastLevel::Success, done.to_string());
                     picking.try_set(false);
                     target.try_set(None);
-                    version.try_update(|v| *v += 1);
-                    on_change.try_run(());
+                    refresh.try_update(|v| *v += 1);
                 }
                 Err(e) => push_toast(ToastLevel::Error, format!("Couldn't change the home: {e}")),
             }

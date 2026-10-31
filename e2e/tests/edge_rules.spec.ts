@@ -273,6 +273,16 @@ test('a home is chosen, changed and removed from the child', async ({ page, requ
     const fromA1 = await (await request.get(`/api/nodes/${a1.id}/edges`)).json();
     expect(fromA1).toEqual([]);
 
+    // Removing the home's link from the list below updates the row too
+    // (one refresh for the whole section).
+    await page.getByRole('button', { name: '×' }).click();
+    await expect(row).toContainText('None: it stands alone');
+    expect((await homeOf(request, project.id)).home).toBeNull();
+
+    // And the row's own Remove.
+    await row.getByRole('button', { name: 'Choose a home' }).click();
+    await pick(`e2e rules home one ${stamp}`);
+    await expect(row.getByRole('link', { name: `e2e rules home one ${stamp}` })).toBeVisible();
     await row.getByRole('button', { name: 'Remove home' }).click();
     await expect(row).toContainText('None: it stands alone');
     expect((await homeOf(request, project.id)).home).toBeNull();
