@@ -5,6 +5,20 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-30)
 
+- **v3.1.0 shipped: edge write rules (S3a of #224; PR #225).**
+  `POST /edges` refuses, with a 422 that names no node:
+  - hand-made wiki links;
+  - contained References;
+  - pairs outside the containment table;
+  - a `depends_on` on an Area;
+  - a second home;
+  - loops of `contains`, `depends_on` or `derived_from`.
+
+  `contains` needs edit rights on both ends to create and either end to
+  remove. The checks run under a per-type advisory lock. The restore
+  preview warns with counts.
+  - Next: S3b (`related_to` stored once; it has a migration, so the
+    snapshot gate applies).
 - **v3.0.0 shipped: Resource merges into Reference (S2c of #222; PR #223).**
   Four node kinds (§3.1).
   - Migration 040 converts nodes and templates, keeping `updated_at`.
