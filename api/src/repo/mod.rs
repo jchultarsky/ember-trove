@@ -3,6 +3,7 @@ use common::EmberTroveError;
 pub mod activity;
 pub mod attachment;
 pub mod backup;
+pub mod data_health;
 pub mod edge;
 pub mod editor_pref;
 pub mod favorite;

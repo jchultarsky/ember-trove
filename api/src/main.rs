@@ -153,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
         attachments: Arc::new(PgAttachmentRepo::new(pool.clone())),
         permissions: Arc::new(PgPermissionRepo::new(pool.clone())),
         people: Arc::new(repo::person::PgPersonRepo::new(pool.clone())),
+        data_health: Arc::new(repo::data_health::PgDataHealthRepo::new(pool.clone())),
         search: Arc::new(PgSearchRepo::new(pool.clone())),
         graph: Arc::new(PgGraphRepo::new(pool.clone())),
         backup: Arc::new(PgBackupRepo::new(pool.clone())),

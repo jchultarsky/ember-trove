@@ -7,14 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **Groundwork for the data-health report** (#208). `common::ontology`
-  holds the data model's rules as functions:
-  - what each node kind may carry (§3.2);
-  - which kind may be the home of which (§3.3);
-  - a loop finder that reports each loop once, with one short cycle.
+- **Data-health report API** (#208). `GET /api/data-health` lists the
+  caller's data that breaks the data model (`docs/ONTOLOGY.md`), rule by
+  rule, so cleanup can start before later releases enforce the rules.
+  - The rules checked so far: tasks, people or a project status on a
+    non-Project; tasks with no Project; a node with several homes; a
+    contained Reference; a home the containment table doesn't allow; a
+    dependency on an Area; `related_to` stored both ways.
+  - Each rule gives an exact count and its first 200 items.
+  - The report is read-only and computed on request. The rules live in
+    `common::ontology`, so the later write checks will use the same ones.
+  - The page follows in a later release.
 
-  `common::data_health` holds the report's types. Nothing uses them yet;
-  the report and later write checks are built on them.
+### Security
+- **The data-health report shows only the caller's own data** (#208,
+  ONTOLOGY §14).
+  - It names a node only when the caller may read it, and never counts
+    hidden ones: a home you can't see is neither listed nor counted.
+  - People are named only to their owner.
+  - There is no admin bypass: the repo takes the owner as a plain string,
+    so the "admin sees everything" scope can't reach it, and a test pins
+    that an admin gets their own report.
 
 ## [2.47.0] - 2026-10-31
 
