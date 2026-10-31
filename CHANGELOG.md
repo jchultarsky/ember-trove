@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-10-31
+
 ### Security
 - **The project dashboard no longer names an Area you can't see** (#228,
   ONTOLOGY §14). It grouped each of your Projects under its Area home
