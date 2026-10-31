@@ -123,13 +123,8 @@ pub fn CreateNodeModal(
             error.set(Some("Title is required.".to_string()));
             return;
         }
-        let node_type = match node_type_str.get_untracked().as_str() {
-            "project" => NodeType::Project,
-            "area" => NodeType::Area,
-            "resource" => NodeType::Resource,
-            "reference" => NodeType::Reference,
-            _ => NodeType::Article,
-        };
+        let node_type =
+            NodeType::parse(&node_type_str.get_untracked()).unwrap_or(NodeType::Article);
         let b = body.get_untracked();
         let body_opt = if b.trim().is_empty() { None } else { Some(b) };
         let req = CreateNodeRequest {
@@ -237,7 +232,6 @@ pub fn CreateNodeModal(
                         <option value="article">"Article"</option>
                         <option value="project">"Project"</option>
                         <option value="area">"Area"</option>
-                        <option value="resource">"Resource"</option>
                         <option value="reference">"Reference"</option>
                     </select>
                 </div>
@@ -264,13 +258,7 @@ pub fn CreateNodeModal(
                             } else if let Ok(tid) = val.parse::<TemplateId>() {
                                 let templates = available_templates.get_untracked();
                                 if let Some(t) = templates.into_iter().find(|t| t.id == tid) {
-                                    let type_str = match t.node_type {
-                                        NodeType::Project   => "project",
-                                        NodeType::Area      => "area",
-                                        NodeType::Resource  => "resource",
-                                        NodeType::Reference => "reference",
-                                        NodeType::Article   => "article",
-                                    };
+                                    let type_str = t.node_type.as_str();
                                     body.set(t.body.clone());
                                     node_type_str.set(type_str.to_string());
                                     template_id_for_create.set(Some(tid));

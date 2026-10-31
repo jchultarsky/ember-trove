@@ -58,8 +58,14 @@ impl CreateDraft {
 
     /// Parse a draft from its stored JSON form. Corrupt or legacy payloads
     /// yield `None` (treated as "no draft").
+    /// A draft from before 3.0 may say `resource`: it reads as a Reference
+    /// (#222).
     pub fn parse(raw: &str) -> Option<Self> {
-        serde_json::from_str(raw).ok()
+        let mut d: Self = serde_json::from_str(raw).ok()?;
+        if let Some(t) = common::node::NodeType::parse_compat(&d.node_type) {
+            d.node_type = t.as_str().to_string();
+        }
+        Some(d)
     }
 }
 
@@ -282,6 +288,19 @@ mod tests {
         };
         let json = serde_json::to_string(&stamped).expect("serialize");
         assert_eq!(CreateDraft::parse(&json), Some(stamped));
+    }
+
+    #[test]
+    fn a_pre_3_0_resource_draft_reads_as_a_reference() {
+        let d = CreateDraft::parse(
+            r#"{"title":"t","body":"b","node_type":"resource","status":"draft"}"#,
+        )
+        .expect("old drafts stay readable");
+        assert_eq!(d.node_type, "reference");
+        // Anything unknown is left for the editor to default.
+        let d = CreateDraft::parse(r#"{"title":"t","body":"b","node_type":"x","status":"draft"}"#)
+            .expect("parses");
+        assert_eq!(d.node_type, "x");
     }
 
     #[test]

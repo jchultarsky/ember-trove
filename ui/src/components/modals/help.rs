@@ -159,10 +159,10 @@ struct Concept {
 const CONCEPTS: &[Concept] = &[
     Concept {
         title: "Nodes",
-        body: "The unit of knowledge. Five types — Article (free-form text), Project \
-               (an outcome with tasks), Area (long-running responsibility), Resource \
-               (reference material), Reference (external citation). Pick the type that \
-               matches how you'll come back to it, not the contents.",
+        body: "The unit of knowledge. Four types — Article (free-form text), Project \
+               (an outcome with tasks), Area (long-running responsibility), Reference \
+               (material you keep and cite). Pick the type that matches how you'll \
+               come back to it, not the contents.",
     },
     Concept {
         title: "Tasks",

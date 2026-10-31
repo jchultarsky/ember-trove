@@ -37,10 +37,17 @@ pub struct EntityCounts {
     pub activity: u32,
 }
 
+/// The archive format this release writes, and the only one it restores.
+/// 3 (#222): node kinds lost `resource` (merged into `reference`), so a
+/// format-2 archive can name a kind that no longer exists. Older archives
+/// are refused with a clear message rather than half-read (owner decision,
+/// 2026-10-31); a rollback goes through the server snapshot instead.
+pub const SCHEMA_VERSION: u32 = 3;
+
 /// Top-level manifest written as `manifest.json` inside the archive.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BackupManifest {
-    /// Monotonically increasing format version. Current: 1.
+    /// Monotonically increasing format version; see [`SCHEMA_VERSION`].
     pub schema_version: u32,
     pub created_at: DateTime<Utc>,
     pub created_by: String,

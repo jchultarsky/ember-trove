@@ -7,7 +7,6 @@ pub fn type_icon(node_type: &str) -> &'static str {
     match node_type {
         "project" => "rocket_launch",
         "area" => "category",
-        "resource" => "bookmarks",
         "reference" => "menu_book",
         _ => "description", // article (default)
     }
@@ -17,7 +16,6 @@ pub fn type_label(node_type: &str) -> &'static str {
     match node_type {
         "project" => "Project",
         "area" => "Area",
-        "resource" => "Resource",
         "reference" => "Reference",
         _ => "Article",
     }

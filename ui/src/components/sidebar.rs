@@ -112,7 +112,6 @@ pub fn Sidebar(
                         <TypeFilterLink icon="description"  label="Articles"   value="article"   node_type_filter=node_type_filter on_nav=on_nav />
                         <TypeFilterLink icon="rocket_launch" label="Projects"  value="project"   node_type_filter=node_type_filter on_nav=on_nav />
                         <TypeFilterLink icon="category"     label="Areas"      value="area"      node_type_filter=node_type_filter on_nav=on_nav />
-                        <TypeFilterLink icon="bookmarks"    label="Resources"  value="resource"  node_type_filter=node_type_filter on_nav=on_nav />
                         <TypeFilterLink icon="menu_book"    label="References" value="reference" node_type_filter=node_type_filter on_nav=on_nav />
                     </div>
                 }.into_any())

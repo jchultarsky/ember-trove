@@ -11,7 +11,6 @@ pub fn template_for_type(node_type: &str) -> &'static str {
     match node_type {
         "project" => PROJECT,
         "area" => AREA,
-        "resource" => RESOURCE,
         "reference" => REFERENCE,
         _ => "",
     }
@@ -37,16 +36,6 @@ const AREA: &str = "\
 -
 
 ## Resources
-
--
-";
-
-const RESOURCE: &str = "\
-## Summary
-
--
-
-## Links
 
 -
 ";

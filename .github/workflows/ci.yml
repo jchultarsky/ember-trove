@@ -87,6 +87,10 @@ jobs:
       - name: close-shipped-issues unit tests
         run: bash scripts/close-shipped-issues.test.sh
 
+      # Release tooling: which semver a release gets (`/release`).
+      - name: next-version unit tests
+        run: bash scripts/next-version.test.sh
+
   check-wasm:
     name: check (wasm32-unknown-unknown)
     runs-on: ubuntu-latest

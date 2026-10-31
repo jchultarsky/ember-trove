@@ -17,7 +17,6 @@ fn node_type_color(nt: &NodeType) -> &'static str {
         NodeType::Article => "text-amber-600 dark:text-amber-400",
         NodeType::Project => "text-blue-600 dark:text-blue-400",
         NodeType::Area => "text-green-600 dark:text-green-400",
-        NodeType::Resource => "text-purple-600 dark:text-purple-400",
         NodeType::Reference => "text-red-600 dark:text-red-400",
     }
 }
@@ -47,11 +46,10 @@ fn body_preview(body: &str) -> String {
     }
 }
 
-const ALL_TYPES: [NodeType; 5] = [
+const ALL_TYPES: [NodeType; 4] = [
     NodeType::Article,
     NodeType::Project,
     NodeType::Area,
-    NodeType::Resource,
     NodeType::Reference,
 ];
 
@@ -290,12 +288,11 @@ pub fn TemplatesView() -> impl IntoView {
                                        focus:outline-none focus:ring-2 focus:ring-amber-400"
                                 on:change=move |ev| form_type.set(event_target_value(&ev))
                             >
-                                {["article", "project", "area", "resource", "reference"].iter().map(|v| {
+                                {["article", "project", "area", "reference"].iter().map(|v| {
                                     let v = *v;
                                     let label = match v {
                                         "project" => "Project",
                                         "area" => "Area",
-                                        "resource" => "Resource",
                                         "reference" => "Reference",
                                         _ => "Article",
                                     };
