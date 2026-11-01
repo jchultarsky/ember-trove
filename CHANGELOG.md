@@ -18,6 +18,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     deleted with Undo.
   - `/api/captures` (list, create, edit, delete, restore). Captures are
     owner-only: no other account, the admin included, can see them.
+- **Converting a capture** (#234, §9.1): `POST /api/captures/{id}/convert`
+  turns it into exactly one thing, either a node (optionally filed into its
+  home), a note on a node, or a Task in a Project. The capture is deleted in
+  the same transaction, so its text is never lost or doubled. The same
+  rights and rules apply as when creating the thing directly. A Task's
+  title must fit in 500 characters: reworded, never cut.
 - **The calendar's day composer** has an optional Project. With one it adds
   that Project's task, due that day. Without one it makes a capture that
   starts with the date ("Sat 7 Nov: …").

@@ -239,6 +239,52 @@ fn parse_node_status(s: &str) -> Result<NodeStatus, EmberTroveError> {
     super::parse_wire(s, "node_status", NodeStatus::parse)
 }
 
+/// Insert a node (`NodeRepo::create`), on any executor, so capture
+/// conversion (#234) can do it inside its transaction. A taken slug or
+/// title is `AlreadyExists` (409).
+pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    owner_id: &str,
+    req: &CreateNodeRequest,
+) -> Result<Node, EmberTroveError> {
+    let slug = slugify(&req.title);
+    let node_type_str = req.node_type.as_str();
+    let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
+
+    let row = sqlx::query_as::<_, NodeRow>(
+        r#"
+        INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status,
+                           project_status)
+        VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8)
+        RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
+                  status::text, project_status, pinned, created_at, updated_at
+        "#,
+    )
+    .bind(owner_id)
+    .bind(node_type_str)
+    .bind(&req.title)
+    .bind(&slug)
+    .bind(&req.body)
+    .bind(&req.metadata)
+    .bind(status_str)
+    .bind(&req.project_status)
+    .fetch_one(ex)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db_err) if db_err.constraint() == Some("nodes_slug_key") => {
+            EmberTroveError::AlreadyExists(format!("slug already exists: {slug}"))
+        }
+        sqlx::Error::Database(db_err)
+            if db_err.constraint() == Some("nodes_owner_title_unique") =>
+        {
+            EmberTroveError::AlreadyExists(format!("a node named \"{}\" already exists", req.title))
+        }
+        _ => EmberTroveError::Internal(format!("create node failed: {e}")),
+    })?;
+
+    row.into_node()
+}
+
 #[async_trait]
 impl NodeRepo for PgNodeRepo {
     async fn create(
@@ -246,45 +292,7 @@ impl NodeRepo for PgNodeRepo {
         owner_id: &str,
         req: CreateNodeRequest,
     ) -> Result<Node, EmberTroveError> {
-        let slug = slugify(&req.title);
-        let node_type_str = req.node_type.as_str();
-        let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
-
-        let row = sqlx::query_as::<_, NodeRow>(
-            r#"
-            INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status,
-                               project_status)
-            VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8)
-            RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, project_status, pinned, created_at, updated_at
-            "#,
-        )
-        .bind(owner_id)
-        .bind(node_type_str)
-        .bind(&req.title)
-        .bind(&slug)
-        .bind(&req.body)
-        .bind(&req.metadata)
-        .bind(status_str)
-        .bind(&req.project_status)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db_err) if db_err.constraint() == Some("nodes_slug_key") => {
-                EmberTroveError::AlreadyExists(format!("slug already exists: {slug}"))
-            }
-            sqlx::Error::Database(db_err)
-                if db_err.constraint() == Some("nodes_owner_title_unique") =>
-            {
-                EmberTroveError::AlreadyExists(format!(
-                    "a node named \"{}\" already exists",
-                    req.title
-                ))
-            }
-            _ => EmberTroveError::Internal(format!("create node failed: {e}")),
-        })?;
-
-        row.into_node()
+        insert_node(&self.pool, owner_id, &req).await
     }
 
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {

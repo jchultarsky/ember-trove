@@ -3694,3 +3694,183 @@ async fn a_connection_left_inside_a_transaction_is_never_reused(pool: PgPool) {
     drop(again);
     guarded.close().await;
 }
+
+/// Converting a capture (#234, §9.1) is one transaction: the destination
+/// lands and the capture is gone, together, for each kind of destination.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
+    use super::capture::{CaptureRepo, Destination, Made, PgCaptureRepo};
+
+    let repo = PgCaptureRepo::new(pool.clone());
+    let area = PgNodeRepo::new(pool.clone())
+        .create(
+            "alice",
+            CreateNodeRequest {
+                node_type: NodeType::Area,
+                ..node_req("Home")
+            },
+        )
+        .await
+        .unwrap();
+    let project = PgNodeRepo::new(pool.clone())
+        .create(
+            "alice",
+            CreateNodeRequest {
+                node_type: NodeType::Project,
+                ..node_req("Bank")
+            },
+        )
+        .await
+        .unwrap();
+    let live = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM captures")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+
+    // A node, filed into its home, owned by the capture's owner.
+    let c = repo.create("alice", "an article idea").await.unwrap();
+    let Made::Node(node) = repo
+        .convert(
+            c.id,
+            "alice",
+            Destination::Node {
+                req: node_req("An article idea"),
+                home: Some(area.id),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a node")
+    };
+    assert_eq!(node.owner_id, "alice");
+    let (home, role): (uuid::Uuid, String) = sqlx::query_as(
+        "SELECT e.source_id, p.role::text FROM edges e \
+         JOIN permissions p ON p.node_id = e.target_id AND p.subject_id = 'alice' \
+         WHERE e.target_id = $1 AND e.edge_type = 'contains'",
+    )
+    .bind(node.id.0)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((home, role.as_str()), (area.id.0, "owner"));
+
+    // A note on a node.
+    let c = repo.create("alice", "met Ana").await.unwrap();
+    let Made::Note(note) = repo
+        .convert(
+            c.id,
+            "alice",
+            Destination::Note {
+                node_id: project.id,
+                req: common::note::CreateNoteRequest {
+                    body: "met Ana".into(),
+                    color: "default".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a note")
+    };
+    assert_eq!(
+        (note.node_id, note.owner_id.as_str()),
+        (project.id, "alice")
+    );
+
+    // A Task in its Project.
+    let c = repo.create("alice", "call the bank").await.unwrap();
+    let Made::Task { project: p, task } = repo
+        .convert(
+            c.id,
+            "alice",
+            Destination::Task {
+                node_id: project.id,
+                req: task_req("call the bank"),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a task")
+    };
+    assert_eq!((p, task.node_id), (project.id, Some(project.id)));
+
+    // Each capture went with its conversion: hard-deleted, no tombstone.
+    assert_eq!(live(pool.clone()).await, 0);
+}
+
+/// Nothing is made unless the capture is the caller's and live, and a
+/// destination that fails to land keeps the capture (rollback).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_failed_conversion_makes_nothing_and_keeps_the_capture(pool: PgPool) {
+    use super::capture::{CaptureRepo, Destination, PgCaptureRepo};
+
+    let repo = PgCaptureRepo::new(pool.clone());
+    create_node(&pool, "alice", "Taken").await;
+    let nodes = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    let into = |title: &str| Destination::Node {
+        req: node_req(title),
+        home: None,
+    };
+
+    // A taken title: 409, the capture stays, no node, no grant.
+    let c = repo.create("alice", "taken").await.unwrap();
+    assert!(matches!(
+        repo.convert(c.id, "alice", into("Taken")).await,
+        Err(EmberTroveError::AlreadyExists(_))
+    ));
+    assert_eq!(repo.list("alice").await.unwrap().len(), 1);
+    assert_eq!(nodes(pool.clone()).await, 1);
+
+    // A home that doesn't exist: the node and grant roll back too.
+    let missing = Destination::Node {
+        req: node_req("Homeless"),
+        home: Some(common::id::NodeId(uuid::Uuid::new_v4())),
+    };
+    assert!(matches!(
+        repo.convert(c.id, "alice", missing).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(repo.list("alice").await.unwrap().len(), 1);
+    assert_eq!(nodes(pool.clone()).await, 1);
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM permissions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        grants, 0,
+        "create_node's fixture grants nothing; nor may a rollback"
+    );
+
+    // Someone else's capture: not found, nothing made.
+    assert!(matches!(
+        repo.convert(c.id, "bob", into("Bob's")).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(nodes(pool.clone()).await, 1);
+
+    // Converted once, then gone: a second convert finds nothing.
+    repo.convert(c.id, "alice", into("Fresh")).await.unwrap();
+    assert!(matches!(
+        repo.convert(c.id, "alice", into("Again")).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+
+    // A binned capture (waiting on Undo) isn't converted either.
+    let binned = repo.create("alice", "binned").await.unwrap();
+    repo.delete(binned.id, "alice").await.unwrap();
+    assert!(matches!(
+        repo.convert(binned.id, "alice", into("Binned")).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(nodes(pool.clone()).await, 2);
+}

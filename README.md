@@ -491,6 +491,7 @@ change them. They are in backups, and not in search, export or webhooks.
 | PATCH | `/api/captures/{id}` | Reword a capture |
 | DELETE | `/api/captures/{id}` | Delete a capture (soft delete, restorable for 30 days) |
 | POST | `/api/captures/{id}/restore` | Un-delete a capture (backs the Undo toast) |
+| POST | `/api/captures/{id}/convert` | Turn a capture into exactly one thing, then delete it, in one transaction: `{"into":"node", node_type, title, body?, home?}`, `{"into":"note", node_id, body}` or `{"into":"task", node_id, title, due_date?, priority?}` (the node must be a Project). Needs editor rights on the node or home; answers `{"into", id, node_id?}` |
 | POST | `/api/inbox/quick` | Quick capture and the share target: `{title?, body?}` joined into one capture |
 
 ### Editor prefs (per-user UI state)
