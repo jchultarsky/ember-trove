@@ -1,6 +1,6 @@
-use common::admin::{AdminUser, CreateAdminUserRequest, UpdateUserRolesRequest};
+use common::admin::{AdminUser, CreateAdminUserRequest, PurgeCounts, UpdateUserRolesRequest};
 
-use super::{delete_empty, get_json, post_json, put_empty};
+use super::{delete_json, get_json, post_action, post_json, put_empty};
 use crate::error::UiError;
 
 pub async fn list_admin_users() -> Result<Vec<AdminUser>, UiError> {
@@ -11,8 +11,23 @@ pub async fn create_admin_user(req: &CreateAdminUserRequest) -> Result<AdminUser
     post_json("/admin/users", req).await
 }
 
-pub async fn delete_admin_user(id: &str) -> Result<(), UiError> {
-    delete_empty(&format!("/admin/users/{id}")).await
+/// Delete the account and everything it owns (#239); answers what went.
+pub async fn delete_admin_user(id: &str) -> Result<PurgeCounts, UiError> {
+    delete_json(&format!("/admin/users/{id}")).await
+}
+
+/// What deleting the account would remove. Counts only.
+pub async fn deletion_preview(id: &str) -> Result<PurgeCounts, UiError> {
+    get_json(&format!("/admin/users/{id}/deletion-preview")).await
+}
+
+/// Stop the account at once, keeping its data (#239).
+pub async fn suspend_user(id: &str) -> Result<(), UiError> {
+    post_action(&format!("/admin/users/{id}/suspend")).await
+}
+
+pub async fn reactivate_user(id: &str) -> Result<(), UiError> {
+    post_action(&format!("/admin/users/{id}/reactivate")).await
 }
 
 pub async fn list_realm_roles() -> Result<Vec<String>, UiError> {

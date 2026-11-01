@@ -70,6 +70,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - Earlier backups still hold the data until they are deleted: admin
     backups, and the server's daily database dumps (kept 30 days). If
     one of those is restored, the data comes back.
+- **Admin page: suspend, reactivate and delete with care** (#239).
+  - Suspended accounts carry a badge, and each row has Suspend or
+    Reactivate. A suspend that Cognito didn't confirm shows that, so you
+    can try again.
+  - Delete opens a dialog that counts what will go (never titles). It
+    names the shared nodes whose sharees lose access and the tasks that
+    pass to other owners, and warns that earlier backups still hold the
+    data. It stays disabled until you type the account's email.
+  - Your own row offers neither, and your own admin role can't be
+    unticked.
 - **An admin can no longer suspend or delete their own account, or remove
   their own admin role** (#239), so the last admin can't lock everyone out.
 
