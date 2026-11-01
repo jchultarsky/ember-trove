@@ -16,6 +16,10 @@
 //!     CreateNodeModal would mean either gating on a flag (more code paths)
 //!     or breaking existing callers.
 //!
+//! The composer is a blank sticky note (#240): the same paper as the
+//! Captures wall (`StickyPaper`), so what you write here looks like what
+//! lands there. Behaviour is unchanged.
+//!
 //! See `common::inbox::QuickCaptureRequest` for the wire contract.
 
 use leptos::html;
@@ -25,6 +29,7 @@ use wasm_bindgen_futures::spawn_local;
 use super::{ModalPlacement, ModalShell};
 use crate::{
     api::quick_capture,
+    components::sticky_note::{CAPTURE_ICON, StickyPaper},
     components::toast::{ToastLevel, push_toast},
 };
 
@@ -133,7 +138,8 @@ pub fn FastCaptureModal(
             <div class="p-4 flex items-center justify-between border-b border-stone-200 \
                         dark:border-stone-700">
                 <div class="flex items-center gap-2 text-stone-700 dark:text-stone-200">
-                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500">"bolt"</span>
+                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                        aria-hidden="true">{CAPTURE_ICON}</span>
                     <span class="font-medium">"Quick capture"</span>
                 </div>
                 <button
@@ -146,11 +152,12 @@ pub fn FastCaptureModal(
                     "Esc"
                 </button>
             </div>
-            <div class="p-4">
+            <div class="p-4 pt-6">
+                <StickyPaper class="p-3 pt-4">
                 <textarea
                     node_ref=textarea_ref
                     class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
-                           placeholder-stone-400 dark:placeholder-stone-500 outline-none \
+                           placeholder-stone-500 dark:placeholder-stone-400 outline-none \
                            resize-none text-base leading-relaxed min-h-[6rem]"
                     placeholder="What\u{2019}s on your mind? (Cmd/Ctrl+Enter to capture)"
                     rows="4"
@@ -160,6 +167,7 @@ pub fn FastCaptureModal(
                         text.set(v);
                     }
                 ></textarea>
+                </StickyPaper>
                 <Show when=move || error.get().is_some()>
                     <div class="mt-2 text-sm text-red-600 dark:text-red-400">
                         {move || error.get().unwrap_or_default()}

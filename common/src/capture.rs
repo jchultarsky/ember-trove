@@ -172,6 +172,74 @@ pub fn dated(date: NaiveDate, text: &str) -> String {
     format!("{}: {}", date.format("%a %-d %b"), text.trim())
 }
 
+/// How long a capture has waited, for its age tag (#240): the wall shows
+/// staleness so Inbox Zero stays visible. Buckets round down: 13 days is
+/// "1w", 59 days is "1mo".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureAge {
+    /// Under a day old, or stamped in the future (clock skew).
+    Today,
+    Days(i64),
+    Weeks(i64),
+    Months(i64),
+    Years(i64),
+}
+
+/// A capture this old or older is stale: the card says so beyond its tag.
+pub const STALE_AFTER_DAYS: i64 = 7;
+
+impl CaptureAge {
+    /// The age of a capture made at `created`, seen at `now`.
+    #[must_use]
+    pub fn between(created: DateTime<Utc>, now: DateTime<Utc>) -> Self {
+        let days = (now - created).num_days();
+        match days {
+            d if d < 1 => Self::Today,
+            d if d < 7 => Self::Days(d),
+            d if d < 30 => Self::Weeks(d / 7),
+            d if d < 365 => Self::Months(d / 30),
+            d => Self::Years(d / 365),
+        }
+    }
+
+    /// The compact tag on the card: "today", "3d", "2w", "4mo", "1y".
+    #[must_use]
+    pub fn tag(self) -> String {
+        match self {
+            Self::Today => "today".to_string(),
+            Self::Days(n) => format!("{n}d"),
+            Self::Weeks(n) => format!("{n}w"),
+            Self::Months(n) => format!("{n}mo"),
+            Self::Years(n) => format!("{n}y"),
+        }
+    }
+
+    /// The same age in words, for screen readers and the tooltip:
+    /// "captured today", "captured 3 weeks ago".
+    #[must_use]
+    pub fn describe(self) -> String {
+        let (n, unit) = match self {
+            Self::Today => return "captured today".to_string(),
+            Self::Days(n) => (n, "day"),
+            Self::Weeks(n) => (n, "week"),
+            Self::Months(n) => (n, "month"),
+            Self::Years(n) => (n, "year"),
+        };
+        let s = if n == 1 { "" } else { "s" };
+        format!("captured {n} {unit}{s} ago")
+    }
+
+    /// Whether the capture has waited at least [`STALE_AFTER_DAYS`].
+    #[must_use]
+    pub fn is_stale(self) -> bool {
+        match self {
+            Self::Today => false,
+            Self::Days(d) => d >= STALE_AFTER_DAYS,
+            Self::Weeks(_) | Self::Months(_) | Self::Years(_) => true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +260,57 @@ mod tests {
             created_at: at,
             updated_at: at,
         }
+    }
+
+    fn age(days: i64, hours: i64) -> CaptureAge {
+        let now = Utc
+            .with_ymd_and_hms(2026, 11, 1, 12, 0, 0)
+            .single()
+            .expect("date");
+        let created = now - chrono::Duration::days(days) - chrono::Duration::hours(hours);
+        CaptureAge::between(created, now)
+    }
+
+    #[test]
+    fn capture_age_buckets_round_down() {
+        let cases = [
+            (0, 0, "today"),
+            (0, 23, "today"),
+            (1, 0, "1d"),
+            (6, 23, "6d"),
+            (7, 0, "1w"),
+            (13, 0, "1w"),
+            (29, 23, "4w"),
+            (30, 0, "1mo"),
+            (59, 0, "1mo"),
+            (364, 0, "12mo"),
+            (365, 0, "1y"),
+            (800, 0, "2y"),
+        ];
+        for (d, h, want) in cases {
+            assert_eq!(age(d, h).tag(), want, "{d}d {h}h");
+        }
+    }
+
+    #[test]
+    fn a_future_stamp_reads_as_today() {
+        assert_eq!(age(-3, 0), CaptureAge::Today);
+    }
+
+    #[test]
+    fn capture_age_in_words_handles_plurals() {
+        assert_eq!(age(0, 2).describe(), "captured today");
+        assert_eq!(age(1, 0).describe(), "captured 1 day ago");
+        assert_eq!(age(21, 0).describe(), "captured 3 weeks ago");
+        assert_eq!(age(400, 0).describe(), "captured 1 year ago");
+    }
+
+    #[test]
+    fn a_capture_goes_stale_after_a_week() {
+        assert!(!age(0, 5).is_stale());
+        assert!(!age(6, 23).is_stale());
+        assert!(age(7, 0).is_stale());
+        assert!(age(90, 0).is_stale());
     }
 
     #[test]
