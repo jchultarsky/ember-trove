@@ -41,7 +41,10 @@ const COUNTS = {
 };
 
 /** Stub the admin API. Returns the calls the page made. */
-async function stubAdmin(page: Page, opts: { failSuspend?: boolean } = {}) {
+async function stubAdmin(
+  page: Page,
+  opts: { failSuspend?: boolean; failPreview?: boolean; failDelete?: boolean } = {},
+) {
   const users: User[] = [
     { id: ME, email: 'me@example.com', firstName: 'Me', suspended: false },
     { id: ANN, email: 'ann@example.com', firstName: 'Ann', suspended: false },
@@ -74,7 +77,15 @@ async function stubAdmin(page: Page, opts: { failSuspend?: boolean } = {}) {
       if (user) user.suspended = false;
       return route.fulfill({ status: 204 });
     }
-    if (action === 'deletion-preview') return route.fulfill({ json: COUNTS });
+    if (action === 'deletion-preview') {
+      if (opts.failPreview) return route.fulfill({ status: 500, json: { error: 'database error' } });
+      return route.fulfill({ json: COUNTS });
+    }
+    if (req.method() === 'DELETE' && opts.failDelete) {
+      // The API suspends first; a later step failed.
+      if (user) user.suspended = true;
+      return route.fulfill({ status: 500, json: { error: 'internal error' } });
+    }
     if (req.method() === 'DELETE') {
       users.splice(users.indexOf(user!), 1);
       return route.fulfill({ json: COUNTS });
@@ -170,4 +181,30 @@ test('Cancel and Escape leave the account alone', async ({ page }) => {
   await expect(dialog).toHaveCount(0);
   expect(calls.filter((c) => c.startsWith('DELETE'))).toEqual([]);
   await expect(row(page, 'ann@example.com')).toBeVisible();
+});
+
+test('no delete without the counts', async ({ page }) => {
+  await stubAdmin(page, { failPreview: true });
+  await gotoAdmin(page);
+  await row(page, 'ann@example.com').getByRole('button', { name: 'Delete account', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Delete account' });
+  await expect(dialog.getByRole('alert')).toContainText("Couldn't count what this account owns");
+  await dialog.getByRole('textbox', { name: "Type the account's email to confirm" }).fill('ann@example.com');
+  await expect(dialog.getByRole('button', { name: /Delete account and data/ })).toBeDisabled();
+});
+
+test('a failed delete says so, and closing shows the account suspended', async ({ page }) => {
+  const calls = await stubAdmin(page, { failDelete: true });
+  await gotoAdmin(page);
+  await row(page, 'ann@example.com').getByRole('button', { name: 'Delete account', exact: true }).click();
+  const dialog = page.getByRole('alertdialog', { name: 'Delete account' });
+  await dialog.getByRole('textbox', { name: "Type the account's email to confirm" }).fill('ann@example.com');
+  const commit = dialog.getByRole('button', { name: /Delete account and data/ });
+  await commit.dblclick();
+  await expect(dialog.getByRole('alert')).toContainText('Delete failed');
+  expect(calls.filter((c) => c.startsWith('DELETE'))).toEqual([`DELETE ${ANN}`]);
+  // The counts are read again after the failure.
+  await expect.poll(() => calls.filter((c) => c.endsWith('deletion-preview')).length).toBe(2);
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(row(page, 'ann@example.com').getByTestId('suspended-badge')).toBeVisible();
 });

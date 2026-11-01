@@ -11,6 +11,7 @@ use leptos::prelude::*;
 
 use super::ModalShell;
 use crate::api;
+use crate::components::toast::{ToastLevel, push_toast};
 
 /// "1 node", "3 nodes".
 fn plural(n: u64, one: &str, many: &str) -> String {
@@ -56,12 +57,18 @@ pub fn DeleteAccountDialog(
     email: String,
     /// Shown in the text.
     name: String,
-    /// Runs with what was removed, after the account is gone.
-    on_deleted: Callback<PurgeCounts>,
+    /// The account changed on the server: deleted, or (after a failure)
+    /// suspended and maybe partly purged. The row reloads the list.
+    on_changed: Callback<()>,
 ) -> impl IntoView {
     let typed = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
+    // Bumped after a failed delete, so the counts are read again.
+    let recount = RwSignal::new(0u32);
+    // A delete failed: the account is suspended now, and may be partly
+    // purged, so the list must reload when the dialog closes.
+    let failed = RwSignal::new(false);
     let cancel_ref: NodeRef<html::Button> = NodeRef::new();
     let user_id = StoredValue::new(user_id);
     let email = StoredValue::new(email);
@@ -70,6 +77,7 @@ pub fn DeleteAccountDialog(
     // Load the counts each time the dialog opens.
     let preview = LocalResource::new(move || {
         let open = show.get();
+        let _ = recount.get();
         let id = user_id.get_value();
         async move {
             if open {
@@ -96,8 +104,13 @@ pub fn DeleteAccountDialog(
         counts().is_some() && !busy.get() && email.with_value(|e| confirms(&typed.get(), e))
     };
     let close = Callback::new(move |()| {
-        if !busy.get_untracked() {
-            show.set(false);
+        if busy.get_untracked() {
+            return;
+        }
+        show.set(false);
+        if failed.get_untracked() {
+            failed.set(false);
+            on_changed.run(());
         }
     });
     let delete = move |_| {
@@ -107,14 +120,25 @@ pub fn DeleteAccountDialog(
         busy.set(true);
         error.set(None);
         let id = user_id.get_value();
+        let who = name.get_value();
         wasm_bindgen_futures::spawn_local(async move {
+            // The page may be gone by the time this returns (the admin
+            // navigated away): `try_` everything, and toast from here.
             match api::delete_admin_user(&id).await {
                 Ok(removed) => {
+                    push_toast(
+                        ToastLevel::Success,
+                        format!("Deleted {who}'s account and {}", removal_list(&removed)),
+                    );
                     let _ = show.try_set(false);
-                    on_deleted.run(removed);
+                    on_changed.try_run(());
                 }
                 Err(e) => {
-                    let _ = error.try_set(Some(format!("Delete failed: {e}")));
+                    let _ = error.try_set(Some(format!(
+                        "Delete failed: {e}. The account is suspended; try again."
+                    )));
+                    let _ = failed.try_set(true);
+                    let _ = recount.try_update(|n| *n += 1);
                 }
             }
             let _ = busy.try_set(false);
@@ -141,11 +165,11 @@ pub fn DeleteAccountDialog(
             </div>
 
             <div class="text-sm text-stone-600 dark:text-stone-400 leading-relaxed space-y-2"
-                 data-testid="deletion-preview">
+                 data-testid="deletion-preview" aria-live="polite">
                 {move || match preview.get().flatten() {
                     None => view! { <p>"Counting what this account owns…"</p> }.into_any(),
                     Some(Err(e)) => view! {
-                        <p class="text-red-600 dark:text-red-400">
+                        <p class="text-red-600 dark:text-red-400" role="alert">
                             {format!("Couldn't count what this account owns: {e}")}
                         </p>
                     }.into_any(),
@@ -211,7 +235,9 @@ pub fn DeleteAccountDialog(
                 <button
                     node_ref=cancel_ref
                     class="px-4 py-2 text-sm rounded-lg text-stone-600 dark:text-stone-400
-                           hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                           hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors
+                           disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled=move || busy.get()
                     on:click=move |_| close.run(())
                 >
                     "Cancel"

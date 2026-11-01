@@ -10,8 +10,7 @@ use leptos::prelude::*;
 use crate::api;
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
-use crate::components::modals::delete_account::{DeleteAccountDialog, removal_list};
-use crate::components::toast::{ToastLevel, push_toast};
+use crate::components::modals::delete_account::DeleteAccountDialog;
 
 // ── Role chip colours ─────────────────────────────────────────────────────────
 
@@ -257,7 +256,9 @@ pub fn AdminView() -> impl IntoView {
             })}
 
             // ── User table ────────────────────────────────────────────────────
-            <Suspense fallback=|| view! {
+            // A Transition, not a Suspense: a reload after Suspend or Delete
+            // keeps the table (and focus, scroll) instead of a skeleton.
+            <Transition fallback=|| view! {
                 <div class="space-y-2">
                     {(0..4).map(|_| view! {
                         <div class="h-12 rounded-lg bg-stone-100 dark:bg-stone-800 animate-pulse" />
@@ -304,7 +305,7 @@ pub fn AdminView() -> impl IntoView {
                         }.into_any(),
                     })
                 }}
-            </Suspense>
+            </Transition>
         </div>
     }
 }
@@ -360,17 +361,8 @@ fn UserRow(
             let _ = busy.try_set(false);
         });
     });
-    let deleted_name = display_name.clone();
-    let on_deleted = Callback::new(move |removed: common::admin::PurgeCounts| {
-        push_toast(
-            ToastLevel::Success,
-            format!(
-                "Deleted {deleted_name}'s account and {}",
-                removal_list(&removed)
-            ),
-        );
-        refresh.update(|n| *n += 1);
-    });
+    // The dialog toasts what went; the row only reloads the list.
+    let on_changed = Callback::new(move |()| refresh.update(|n| *n += 1));
 
     // Role editor state.
     let show_roles = RwSignal::new(false);
@@ -486,7 +478,7 @@ fn UserRow(
                     user_id=user_id.clone()
                     email=confirm_text.clone()
                     name=display_name.clone()
-                    on_deleted=on_deleted
+                    on_changed=on_changed
                 />
             })}
 
