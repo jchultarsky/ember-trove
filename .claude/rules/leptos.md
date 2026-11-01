@@ -27,7 +27,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   `/graph` · `/search` · `/notes` · `/people` · `/people/:id` · `/nodes` · `/nodes/new` · `/nodes/:id` ·
   `/nodes/:id/edit` · `/tags` · `/templates` · `/admin/users` · `/admin/permissions` ·
   `/admin/backup`. Legacy `/my-day`, `/inbox`, `/calendar` redirect to `/tasks/...`
-  (bookmarks/PWA shortcuts predating v2.3.0).
+  (bookmarks/PWA shortcuts predating v2.3.0). `/admin` goes to `/admin/users`
+  and unknown URLs to My Day, both through `GoTo` (layout.rs): **never put a
+  `<Redirect>` in the `<Routes>` fallback** — it panics (#246, ERRORS.md).
 
 ## Reactivity gotchas
 

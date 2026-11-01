@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **An unknown URL, `/admin` among them, no longer freezes the app on a
+  bare "Loading..."** (#246). The router's fallback was a `<Redirect>`,
+  which panics when it renders (WASM `unreachable`), so the page never got
+  past the sign-in check. The fallback now redirects to My Day after it
+  mounts, and `/admin` opens the Users page. Not a v3.6.0 regression: the
+  fallback dates from July.
+
 ### Changed
 - **Captures look like sticky notes** (#240, part A). The Inbox shows
   captures as a wall of yellow notes with a strip of tape, not as task
