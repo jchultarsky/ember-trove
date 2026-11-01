@@ -17,20 +17,26 @@ use crate::task::TaskPriority;
 /// quick capture made a task title, which cut a shared article's text.
 pub const QUICK_CAPTURE_MAX_LEN: usize = crate::capture::MAX_LEN;
 
+/// The most each of `title` and `body` may carry, in characters. Larger
+/// than one capture on purpose: text past [`QUICK_CAPTURE_MAX_LEN`] is
+/// clipped and reported (`truncated`), not refused, so a long share still
+/// lands. It only bounds the request.
+pub const QUICK_CAPTURE_FIELD_MAX: usize = 4 * QUICK_CAPTURE_MAX_LEN;
+
 /// Request body for `POST /api/inbox/quick`.
 ///
 /// Either `title` or `body` must be non-empty (validated server-side).  The
 /// server concatenates them with a newline if both are present, then
-/// truncates the result to `QUICK_CAPTURE_MAX_LEN` chars (Unicode-safe) so
-/// that long shared text never blows the underlying `Task.title` budget.
+/// truncates the result to `QUICK_CAPTURE_MAX_LEN` chars (Unicode-safe), the
+/// most one capture holds. Limits count characters, as the database does.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct QuickCaptureRequest {
-    #[garde(length(max = 5000))]
+    #[garde(length(chars, max = QUICK_CAPTURE_FIELD_MAX))]
     #[serde(default)]
     pub title: Option<String>,
 
     /// Optional supplementary text (URL, body of a shared web page, free notes).
-    #[garde(length(max = 5000))]
+    #[garde(length(chars, max = QUICK_CAPTURE_FIELD_MAX))]
     #[serde(default)]
     pub body: Option<String>,
 
@@ -58,7 +64,7 @@ pub struct QuickCaptureResponse {
     pub truncated: bool,
 }
 
-/// Build the final task title from a `(title, body)` pair.
+/// Build a capture's text from a `(title, body)` pair.
 ///
 /// Rules:
 /// * Trim each part.
@@ -153,6 +159,26 @@ mod tests {
         let (out, truncated) = capture_text(&req("Article", &text, None));
         assert!(!truncated);
         assert_eq!(out.chars().count(), "Article\n".len() + 4_000);
+    }
+
+    #[test]
+    fn long_or_multibyte_shares_are_clipped_not_refused() {
+        // A share of 3 000 Cyrillic characters (6 000 bytes) is accepted.
+        let cyrillic = req("", &"ж".repeat(3_000), None);
+        assert!(cyrillic.validate().is_ok());
+        assert!(!capture_text(&cyrillic).1);
+
+        // Text past one capture's length is accepted and clipped, so
+        // `truncated` can tell the user, rather than a 422.
+        let long = req("", &"x".repeat(QUICK_CAPTURE_MAX_LEN + 2_000), None);
+        assert!(long.validate().is_ok());
+        let (out, truncated) = capture_text(&long);
+        assert!(truncated);
+        assert_eq!(out.chars().count(), QUICK_CAPTURE_MAX_LEN);
+
+        // Still bounded.
+        let huge = req("", &"x".repeat(QUICK_CAPTURE_FIELD_MAX + 1), None);
+        assert!(huge.validate().is_err());
     }
 
     #[test]

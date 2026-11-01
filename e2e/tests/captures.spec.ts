@@ -104,8 +104,13 @@ test('a note needs a node; a loose thought is a capture', async ({ page, request
   try {
     await page.goto('/notes');
     const post = page.getByRole('button', { name: /Post/ });
-    await page.getByPlaceholder('Write a note…  (Ctrl+Enter to post)').fill(`${PREFIX}on a node ${stamp}`);
+    const compose = page.getByPlaceholder('Write a note…  (Ctrl+Enter to post)');
+    await compose.fill(`${PREFIX}on a node ${stamp}`);
     await expect(post).toBeDisabled();
+    // The keyboard path says why, and doesn't lock the box (review of #234:
+    // it used to stay on "Posting…" for good).
+    await compose.press('ControlOrMeta+Enter');
+    await expect(page.getByText('Pick a node for this note, or press n to capture it.')).toBeVisible();
     const picker = page.getByRole('combobox', { name: 'Note on a node…' });
     await picker.fill(`${PREFIX}note host ${stamp}`);
     await page.getByRole('option', { name: new RegExp(`note host ${stamp}`) }).click();

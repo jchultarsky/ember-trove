@@ -27,10 +27,12 @@ pub struct Capture {
     pub updated_at: DateTime<Utc>,
 }
 
-/// `POST /captures` and `PATCH /captures/{id}`.
+/// `POST /captures` and `PATCH /captures/{id}`. The limit counts
+/// characters, like the database's `char_length` CHECK; garde's plain
+/// `length` counts bytes, which refused long non-ASCII captures.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CaptureRequest {
-    #[garde(length(min = 1, max = MAX_LEN))]
+    #[garde(length(chars, min = 1, max = MAX_LEN))]
     pub body: String,
 }
 
@@ -85,6 +87,20 @@ mod tests {
         assert_eq!((c.owner_id.as_str(), c.body.as_str()), ("alice", "an idea"));
         assert_eq!(c.created_at, note(None).created_at);
         assert!(from_nodeless_note(&note(Some(1))).is_none());
+    }
+
+    #[test]
+    fn the_limit_counts_characters_like_the_database() {
+        // Two bytes a character: 10 000 of them is 20 000 bytes, still one
+        // capture's worth (the CHECK is `char_length`).
+        let full = CaptureRequest {
+            body: "é".repeat(MAX_LEN),
+        };
+        assert!(full.validate().is_ok());
+        let over = CaptureRequest {
+            body: "é".repeat(MAX_LEN + 1),
+        };
+        assert!(over.validate().is_err());
     }
 
     #[test]

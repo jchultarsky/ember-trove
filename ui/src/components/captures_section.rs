@@ -99,7 +99,9 @@ fn CaptureRow(
                             } else if ev.key() == "Escape" {
                                 // Handled here; the window dispatcher must not
                                 // also act on it (.claude/rules/leptos.md).
+                                // Escape cancels, like ✕: the draft goes too.
                                 ev.stop_propagation();
+                                draft.set(body.get_value());
                                 editing.set(false);
                             }
                         }

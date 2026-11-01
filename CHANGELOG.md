@@ -11,7 +11,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   Inbox, kept until it is processed or deleted on purpose.
   - Quick capture (`n`, the palette, the iOS share sheet) now lands a
     capture, not a task without a Project. The text is kept as typed, up to
-    10,000 characters; quick capture used to cut it to 500.
+    10,000 characters (counted as characters, so non-Latin text gets the
+    same room); quick capture used to cut it to 500. Longer text is
+    clipped, and the toast says so, rather than refused.
   - The Inbox lists captures above its tasks. Each can be reworded, or
     deleted with Undo.
   - `/api/captures` (list, create, edit, delete, restore). Captures are
@@ -30,7 +32,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   the share target, but creates a capture. A due date sent by an older
   client is written into the text; a priority is ignored.
 - Backups are format 4 (captures listed on their own). Format-3 backups
-  still restore: their notes without a node become captures.
+  still restore: their notes without a node become captures, and the
+  restore preview counts them as captures.
 
 ### Fixed
 - **Restore left the live database's nodeless tasks and notes in place.**

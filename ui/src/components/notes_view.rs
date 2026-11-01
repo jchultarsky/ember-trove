@@ -221,12 +221,17 @@ pub fn NotesView() -> impl IntoView {
         if text.is_empty() || posting.get_untracked() {
             return;
         }
-        posting.set(true);
-        error.set(None);
-        // A note belongs to a node (§9.2): Post waits for one.
+        // A note belongs to a node (§9.2): Post waits for one. Checked before
+        // `posting` is set, or Ctrl+Enter without a node (the button's
+        // `disabled` doesn't cover the keyboard) would leave it stuck.
         let Some((node_id, _)) = selected_node.get_untracked() else {
+            error.set(Some(
+                "Pick a node for this note, or press n to capture it.".to_string(),
+            ));
             return;
         };
+        posting.set(true);
+        error.set(None);
         wasm_bindgen_futures::spawn_local(async move {
             let req = CreateFeedNoteRequest {
                 note: CreateNoteRequest {

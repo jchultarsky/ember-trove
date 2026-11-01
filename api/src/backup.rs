@@ -9,7 +9,7 @@
 use bytes::Bytes;
 use common::{
     activity::ActivityRecord,
-    backup::{BackupData, BackupJob, BackupManifest, BackupPreview, EntityCounts},
+    backup::{BackupData, BackupJob, BackupManifest, BackupNote, BackupPreview, EntityCounts},
     id::NodeId,
 };
 use flate2::{Compression, write::GzEncoder};
@@ -49,6 +49,20 @@ fn activity_warning(counts: &EntityCounts) -> Option<String> {
          list will be empty."
             .to_string()
     })
+}
+
+/// The counts the preview shows, as the restore will land them: a format-3
+/// note without a node comes back as a capture (#234), so it counts there
+/// and not as a note. A no-op for format 4, whose notes all have a node.
+fn counts_as_restored(mut counts: EntityCounts, notes: &[BackupNote]) -> EntityCounts {
+    let moved = notes
+        .iter()
+        .filter(|n| common::capture::from_nodeless_note(n).is_some())
+        .count();
+    let moved = u32::try_from(moved).unwrap_or(u32::MAX);
+    counts.notes = counts.notes.saturating_sub(moved);
+    counts.captures = counts.captures.saturating_add(moved);
+    counts
 }
 
 /// Only archives this release can read restore (#222): its own format, and
@@ -162,7 +176,7 @@ pub async fn create_backup(
     // Fetch all data across all users.
     let nodes = state.nodes.list_all().await.map_err(ApiError::from)?;
     let tags = state.tags.list_all().await.map_err(ApiError::from)?;
-    let notes: Vec<common::backup::BackupNote> = state
+    let notes: Vec<BackupNote> = state
         .notes
         .list_all()
         .await
@@ -336,6 +350,7 @@ pub async fn preview_restore(
     check_format(&manifest)?;
 
     let mut warnings = Vec::new();
+    let mut entity_counts = manifest.entity_counts;
 
     // Warn about current data that will be replaced.
     let current_nodes = state.nodes.list_all().await.map_err(ApiError::from)?;
@@ -346,7 +361,7 @@ pub async fn preview_restore(
         ));
     }
 
-    if let Some(w) = activity_warning(&manifest.entity_counts) {
+    if let Some(w) = activity_warning(&entity_counts) {
         warnings.push(w);
     }
     // Restore never refuses old data (owner decision, #224); it says what
@@ -355,6 +370,7 @@ pub async fn preview_restore(
     // still shows, saying it couldn't check.
     match extract_data(&archive_bytes) {
         Ok(data) => {
+            entity_counts = counts_as_restored(entity_counts, &data.notes);
             warnings.extend(edge_rules_warning(&data));
             warnings.extend(folded_links_warnings(&data));
         }
@@ -375,7 +391,7 @@ pub async fn preview_restore(
     Ok(BackupPreview {
         job_id,
         created_at: manifest.created_at,
-        entity_counts: manifest.entity_counts,
+        entity_counts,
         warnings,
     })
 }
@@ -1141,6 +1157,37 @@ mod tests {
             restored_project_status(&n),
             (Some("## Status\n\nActive\n".into()), None)
         );
+    }
+
+    #[test]
+    fn a_format_3_preview_counts_nodeless_notes_as_captures() {
+        let at = chrono::Utc::now();
+        let note = |n: u128, node: Option<u128>| BackupNote {
+            id: common::id::NoteId(Uuid::from_u128(n)),
+            node_id: node.map(|m| common::id::NodeId(Uuid::from_u128(m))),
+            owner_id: "alice".into(),
+            body: "an idea".into(),
+            color: "default".into(),
+            created_at: at,
+            updated_at: at,
+        };
+        let counts = EntityCounts {
+            nodes: 1,
+            edges: 0,
+            tags: 0,
+            notes: 3,
+            tasks: 0,
+            attachments: 0,
+            people: 0,
+            activity: 0,
+            captures: 0,
+        };
+        let notes = [note(1, None), note(2, Some(9)), note(3, None)];
+        let out = counts_as_restored(counts.clone(), &notes);
+        assert_eq!((out.notes, out.captures), (1, 2));
+        // Format 4: every note has a node, nothing moves.
+        let out = counts_as_restored(counts, &notes[1..2]);
+        assert_eq!((out.notes, out.captures), (3, 0));
     }
 
     #[test]
