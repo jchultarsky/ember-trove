@@ -1380,6 +1380,7 @@ fn test_state() -> AppState {
         suspended: crate::auth::suspended::SuspendedSet::default(),
         object_store: Arc::new(NullObjectStore),
         object_deletions: Arc::new(StubObjectDeletionRepo),
+        draining: Arc::default(),
         oidc: None,
         cognito_admin: None,
         notifier: None,
@@ -3759,6 +3760,9 @@ struct StubObjectDeletionRepo;
 
 #[async_trait]
 impl crate::repo::object_deletion::ObjectDeletionRepo for StubObjectDeletionRepo {
+    async fn enqueue(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
     async fn due(&self, _: i64) -> Result<Vec<String>, EmberTroveError> {
         Ok(vec![])
     }
@@ -3806,6 +3810,9 @@ impl crate::repo::account::AccountRepo for StubAccountRepo {
         _: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, EmberTroveError> {
         Ok(0)
+    }
+    async fn deleted(&self) -> Result<Vec<String>, EmberTroveError> {
+        Ok(vec![])
     }
     async fn deletion_preview(
         &self,
@@ -4300,6 +4307,9 @@ async fn a_failed_purge_keeps_the_account_to_retry() {
         let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         let steps = steps(&log);
+        if fail.is_some() {
+            assert!(!steps.iter().any(|s| s.starts_with("purge")), "{steps:?}");
+        }
         assert!(!steps.contains(&format!("delete {U1}")), "{steps:?}");
         assert!(
             !steps.iter().any(|s| s.starts_with("row deleted")),

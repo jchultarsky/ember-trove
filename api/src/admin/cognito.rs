@@ -222,7 +222,6 @@ impl UserDirectory for CognitoAdminClient {
         Ok(Some(cognito_user_to_dto(user, groups)))
     }
 
-    /// Hard-delete a user by their Cognito username (which is their UUID sub).
     async fn email_of(&self, username: &str) -> Result<Option<String>, ApiError> {
         // ListUsers by `sub` (the username here) needs no IAM action beyond
         // the ones the admin page already uses. Callers pass a canonical
@@ -245,6 +244,7 @@ impl UserDirectory for CognitoAdminClient {
         }))
     }
 
+    /// Hard-delete a user by their Cognito username (which is their UUID sub).
     async fn delete_user(&self, username: &str) -> Result<(), ApiError> {
         self.client
             .admin_delete_user()

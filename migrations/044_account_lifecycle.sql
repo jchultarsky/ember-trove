@@ -9,11 +9,13 @@
 -- it expires, so the row stays a day (the longest a Cognito ID token can
 -- live) before the daily sweep drops it.
 --
--- `object_deletions` is an outbox of S3 objects to delete. A row is written
--- in the same transaction that deletes the row naming the object (an
--- account purge, a node delete), and a worker deletes the object and then
--- the row. A crash or an S3 failure leaves the row for the next try, so no
--- object is orphaned.
+-- `object_deletions` is an outbox of S3 objects to delete. A trigger queues
+-- an attachment's object whenever its row is deleted, by any path (a node
+-- delete's cascade, an account purge, a single delete, a restore), in the
+-- same transaction. A worker deletes the object and then the row; a crash
+-- or an S3 failure leaves the row for the next try, so no object is
+-- orphaned. The worker skips any key an attachment row names again (a
+-- restore puts the archive's files back under their old keys).
 -- Idempotent: safe to re-run.
 
 CREATE TABLE IF NOT EXISTS suspended_accounts (
@@ -29,3 +31,16 @@ CREATE TABLE IF NOT EXISTS object_deletions (
     attempts        INTEGER     NOT NULL DEFAULT 0,
     last_attempt_at TIMESTAMPTZ
 );
+
+CREATE OR REPLACE FUNCTION queue_attachment_object() RETURNS trigger AS $$
+BEGIN
+    INSERT INTO object_deletions (s3_key) VALUES (OLD.s3_key)
+    ON CONFLICT (s3_key) DO NOTHING;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS attachments_queue_object ON attachments;
+CREATE TRIGGER attachments_queue_object
+    AFTER DELETE ON attachments
+    FOR EACH ROW EXECUTE FUNCTION queue_attachment_object();

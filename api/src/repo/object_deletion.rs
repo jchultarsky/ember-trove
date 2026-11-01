@@ -9,7 +9,11 @@ use sqlx::PgPool;
 
 #[async_trait]
 pub trait ObjectDeletionRepo: Send + Sync {
-    /// Up to `limit` queued keys, least recently tried first.
+    /// Queue a key whose row never landed (an upload whose insert failed).
+    async fn enqueue(&self, s3_key: &str) -> Result<(), EmberTroveError>;
+    /// Up to `limit` queued keys, least recently tried first. Keys an
+    /// attachment row names again (a restore put them back) leave the queue
+    /// first and are never returned: storage must keep what a row names.
     async fn due(&self, limit: i64) -> Result<Vec<String>, EmberTroveError>;
     /// The object is gone: drop its row.
     async fn done(&self, s3_key: &str) -> Result<(), EmberTroveError>;
@@ -34,7 +38,20 @@ fn outbox_err(e: sqlx::Error) -> EmberTroveError {
 
 #[async_trait]
 impl ObjectDeletionRepo for PgObjectDeletionRepo {
+    async fn enqueue(&self, s3_key: &str) -> Result<(), EmberTroveError> {
+        sqlx::query("INSERT INTO object_deletions (s3_key) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(s3_key)
+            .execute(&self.pool)
+            .await
+            .map_err(outbox_err)?;
+        Ok(())
+    }
+
     async fn due(&self, limit: i64) -> Result<Vec<String>, EmberTroveError> {
+        sqlx::query("DELETE FROM object_deletions d USING attachments a WHERE a.s3_key = d.s3_key")
+            .execute(&self.pool)
+            .await
+            .map_err(outbox_err)?;
         sqlx::query_scalar(
             "SELECT s3_key FROM object_deletions
              ORDER BY last_attempt_at NULLS FIRST, enqueued_at

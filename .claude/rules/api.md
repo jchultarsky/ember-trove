@@ -154,10 +154,18 @@ cargo check && cargo clippy -- -D warnings
   `purging_an_account_removes_only_its_data` sweeps every
   `owner_id/subject_id/created_by/granted_by/suspended_by` column and
   fails on a leftover. Traces on others' nodes become `DELETED_ACCOUNT`.
-- **Stored files go through the `object_deletions` outbox**, written in
-  the same transaction as the row delete (`PgNodeRepo::delete`, the
-  purge); `state.drain_object_deletions()` tries at once and the daily
-  loop retries. Never delete an attachment row without queueing its key.
+- **Stored files go through the `object_deletions` outbox.** The
+  `attachments_queue_object` trigger (migration 044) queues a file
+  whenever its attachment row is deleted, by any path (cascade, purge,
+  single delete, restore), so code never queues by hand. The one
+  exception is an upload whose row insert fails: it calls `enqueue`.
+  `state.drain_object_deletions()` runs one background drain at a time,
+  batching until the queue is empty; the daily loop retries. `due()`
+  first drops keys that a row names again, so a restored file is never
+  deleted. Never log an `s3_key`: it contains the file name.
+- The purge takes `FOR UPDATE` on the account's nodes after its advisory
+  lock, and the daily sweep re-purges deleted accounts before dropping
+  their rows (to catch in-flight writes).
 - `/auth/callback` and `/auth/refresh` sit outside the layer, so they
   check `suspended_session` themselves (callback → Cognito logout URL,
   refresh → revoke + 401). Any new public route that mints a session must

@@ -34,6 +34,12 @@ pub trait AccountRepo: Send + Sync {
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, EmberTroveError>;
 
+    /// Every deleted account still on the list. The daily sweep purges
+    /// each again before dropping its row, for anything written after the
+    /// first purge (a request already in flight, another instance that
+    /// hadn't refreshed its list yet).
+    async fn deleted(&self) -> Result<Vec<String>, EmberTroveError>;
+
     /// What `purge` would remove now. Counts only (§14).
     async fn deletion_preview(&self, subject_id: &str) -> Result<PurgeCounts, EmberTroveError>;
 
@@ -47,8 +53,9 @@ pub trait AccountRepo: Send + Sync {
     /// - grants to them go; what stays on other people's nodes and names
     ///   them (History entries, version authorship, `granted_by`) is
     ///   anonymised to `DELETED_ACCOUNT`, matching their sub and `email`;
-    /// - their files are queued in `object_deletions`, for deletion from
-    ///   storage after the commit.
+    /// - their files are queued in `object_deletions` (by the attachment
+    ///   trigger), for deletion from storage after the commit;
+    /// - removed-edge archive rows with an end that no longer exists go.
     ///
     /// A second run finds nothing and returns zero counts.
     async fn purge(
@@ -132,6 +139,13 @@ impl AccountRepo for PgAccountRepo {
         Ok(done.rows_affected())
     }
 
+    async fn deleted(&self) -> Result<Vec<String>, EmberTroveError> {
+        sqlx::query_scalar("SELECT subject_id FROM suspended_accounts WHERE deleted_at IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(purge_err)
+    }
+
     async fn deletion_preview(&self, subject_id: &str) -> Result<PurgeCounts, EmberTroveError> {
         let mut conn = self.pool.acquire().await.map_err(purge_err)?;
         let shared_nodes = count(&mut conn, SHARED_NODES, subject_id).await?;
@@ -193,29 +207,20 @@ impl AccountRepo for PgAccountRepo {
             .execute(&mut *tx)
             .await
             .map_err(purge_err)?;
+        // Lock their nodes: a write that needs one (an upload, a note by a
+        // sharee) waits for the purge and then finds it gone, instead of
+        // landing in between.
+        sqlx::query("SELECT 1 FROM nodes WHERE owner_id = $1 FOR UPDATE")
+            .bind(subject_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(purge_err)?;
 
         let shared_nodes = count(&mut tx, SHARED_NODES, subject_id).await?;
 
-        // Files first, while the attachment rows still say where they are.
-        let files = exec(
-            &mut tx,
-            "INSERT INTO object_deletions (s3_key)
-             SELECT a.s3_key FROM attachments a JOIN nodes n ON n.id = a.node_id
-             WHERE n.owner_id = $1
-             ON CONFLICT (s3_key) DO NOTHING",
-            subject_id,
-        )
-        .await?;
-
-        // The edge archives have no foreign key, so the node cascade
-        // misses them.
-        for table in EDGE_ARCHIVES {
-            let sql = format!(
-                "DELETE FROM {table} WHERE source_id IN (SELECT id FROM nodes WHERE owner_id = $1)
-                    OR target_id IN (SELECT id FROM nodes WHERE owner_id = $1)"
-            );
-            exec(&mut tx, &sql, subject_id).await?;
-        }
+        // Their files: the node cascade deletes the attachment rows, and the
+        // `attachments_queue_object` trigger queues each file for storage.
+        let files = count(&mut tx, FILES, subject_id).await?;
 
         // Live tasks on other people's nodes pass to the node's owner, off
         // My Day (it was the deleted account's day, not theirs).
@@ -270,6 +275,22 @@ impl AccountRepo for PgAccountRepo {
         anonymise(&mut tx, subject_id, email).await?;
 
         let nodes = exec(&mut tx, "DELETE FROM nodes WHERE owner_id = $1", subject_id).await?;
+
+        // The edge archives have no foreign key, so the cascade misses them.
+        // A row with an end that no longer exists can't be restored, and its
+        // label is user text: drop it. That covers their nodes deleted just
+        // now and any deleted earlier.
+        for table in EDGE_ARCHIVES {
+            let sql = format!(
+                "DELETE FROM {table} t
+                 WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.id = t.source_id)
+                    OR NOT EXISTS (SELECT 1 FROM nodes n WHERE n.id = t.target_id)"
+            );
+            sqlx::query(&sql)
+                .execute(&mut *tx)
+                .await
+                .map_err(purge_err)?;
+        }
 
         tx.commit().await.map_err(purge_err)?;
         Ok(PurgeCounts {

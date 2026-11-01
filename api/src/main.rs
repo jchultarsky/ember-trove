@@ -182,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
         object_deletions: Arc::new(repo::object_deletion::PgObjectDeletionRepo::new(
             pool.clone(),
         )),
+        draining: Arc::default(),
         oidc,
         cognito_admin,
         notifier,
@@ -272,6 +273,18 @@ async fn main() -> anyhow::Result<()> {
                 // A deleted account stays refused for a day (#239): the
                 // longest a Cognito ID token issued before the deletion lives.
                 let token_cutoff = chrono::Utc::now() - chrono::TimeDelta::days(1);
+                // First purge each deleted account again: anything written
+                // after its purge (a request already in flight) goes too.
+                match accounts.deleted().await {
+                    Ok(subjects) => {
+                        for subject in subjects {
+                            if let Err(e) = accounts.purge(&subject, None).await {
+                                tracing::warn!(?e, "re-purging a deleted account failed");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(?e, "listing deleted accounts failed"),
+                }
                 match accounts.purge_deleted_before(token_cutoff).await {
                     Ok(purged) if purged > 0 => {
                         tracing::info!(purged, "dropped expired deleted-account rows");

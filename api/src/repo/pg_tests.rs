@@ -3993,6 +3993,7 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
             ('{a_shared}', '{b_node}', 'references')"),
         format!("INSERT INTO edges_removed_042 (id, source_id, target_id, edge_type, created_at) VALUES
             (gen_random_uuid(), '{a_private}', '{b_node}', 'contains', now()),
+            (gen_random_uuid(), '{b_node}', '{b_node}', 'contains', now()),
             (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'contains', now())"),
         format!("INSERT INTO tags (owner_id, name) VALUES ('{a}', 'ta'), ('{b}', 'tb')"),
         format!("INSERT INTO node_templates (name, node_type, created_by) VALUES
@@ -4006,6 +4007,7 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
         format!("INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height) VALUES
             ('{a}', 'task', gen_random_uuid(), 10), ('{b}', 'task', gen_random_uuid(), 10)"),
         format!("INSERT INTO suspended_accounts (subject_id, suspended_by) VALUES ('x', '{a}')"),
+        format!("INSERT INTO backup_jobs (created_by, s3_key) VALUES ('{a}', 'backups/1.tar.gz')"),
     ] {
         sql(pool, &q).await;
     }
@@ -4232,4 +4234,52 @@ async fn the_outbox_drops_deleted_objects_and_keeps_failures(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(left, [("bad/2".to_string(), 1)]);
+}
+
+/// #239: deleting an attachment row, by any path, queues its file; a key a
+/// row names again (a restore) leaves the queue and is never deleted.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_attachment_trigger_queues_and_a_restored_key_is_kept(pool: PgPool) {
+    use super::attachment::{AttachmentRepo, PgAttachmentRepo};
+    use super::object_deletion::{ObjectDeletionRepo, PgObjectDeletionRepo};
+    let node = create_node(&pool, "owner-1", "files").await;
+    let repo = PgAttachmentRepo::new(pool.clone());
+    let kept = repo
+        .create(node.id, "a", "text/plain", 1, "k/a")
+        .await
+        .unwrap();
+    repo.create(node.id, "b", "text/plain", 1, "k/b")
+        .await
+        .unwrap();
+    repo.delete(kept.id).await.unwrap();
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    assert_eq!(queue.due(10).await.unwrap(), ["k/a"]);
+
+    // A restore puts "k/a" back under its old key.
+    repo.create(node.id, "a", "text/plain", 1, "k/a")
+        .await
+        .unwrap();
+    assert!(queue.due(10).await.unwrap().is_empty());
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0
+    );
+}
+
+/// A drain keeps going past one batch until the queue is empty.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_drain_empties_a_queue_longer_than_one_batch(pool: PgPool) {
+    use super::object_deletion::PgObjectDeletionRepo;
+    sql(
+        &pool,
+        "INSERT INTO object_deletions (s3_key) SELECT 'k/' || g FROM generate_series(1, 1201) g",
+    )
+    .await;
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    let (deleted, failed) = crate::object_store::outbox::drain(&queue, &FlakyStore).await;
+    assert_eq!((deleted, failed), (1201, 0));
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0
+    );
 }

@@ -575,31 +575,18 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
-        let err = |e: sqlx::Error| EmberTroveError::Internal(format!("delete node failed: {e}"));
-        let mut tx = self.pool.begin().await.map_err(err)?;
-        // The attachment rows cascade away with the node; queue their
-        // objects in the same transaction so none is orphaned in storage
-        // (#239: deleting a node used to leave its files behind).
-        sqlx::query(
-            "INSERT INTO object_deletions (s3_key)
-             SELECT s3_key FROM attachments WHERE node_id = $1
-             ON CONFLICT (s3_key) DO NOTHING",
-        )
-        .bind(id.0)
-        .execute(&mut *tx)
-        .await
-        .map_err(err)?;
+        // Its attachment rows cascade away, and the `attachments_queue_object`
+        // trigger queues their files for deletion from storage (#239).
         let result = sqlx::query("DELETE FROM nodes WHERE id = $1")
             .bind(id.0)
-            .execute(&mut *tx)
+            .execute(&self.pool)
             .await
-            .map_err(err)?;
+            .map_err(|e| EmberTroveError::Internal(format!("delete node failed: {e}")))?;
 
         if result.rows_affected() == 0 {
             return Err(EmberTroveError::NotFound(format!("node {id} not found")));
         }
 
-        tx.commit().await.map_err(err)?;
         Ok(())
     }
 

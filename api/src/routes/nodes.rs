@@ -804,10 +804,22 @@ async fn upload_attachment(
         .await
         .map_err(|e| ApiError::Storage(e.to_string()))?;
 
-    let attachment = state
+    let attachment = match state
         .attachments
         .create(NodeId(id), &filename, &content_type, size_bytes, &s3_key)
-        .await?;
+        .await
+    {
+        Ok(a) => a,
+        Err(e) => {
+            // The file is stored but no row names it (the node went away
+            // meanwhile, say): queue it so it isn't orphaned (#239).
+            if let Err(q) = state.object_deletions.enqueue(&s3_key).await {
+                tracing::warn!(?q, "queueing an unattached upload failed");
+            }
+            state.drain_object_deletions();
+            return Err(e.into());
+        }
+    };
 
     log_activity(
         &state,

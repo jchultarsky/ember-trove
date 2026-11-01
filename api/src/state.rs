@@ -54,6 +54,8 @@ pub struct AppState {
     pub object_store: Arc<dyn ObjectStore>,
     /// Stored files waiting to be deleted (#239).
     pub object_deletions: Arc<dyn ObjectDeletionRepo>,
+    /// Set while a background drain runs, so deletes in a burst start one.
+    pub draining: Arc<std::sync::atomic::AtomicBool>,
     pub oidc: Option<Arc<OidcClient>>,
     /// Cognito admin client — `None` when `COGNITO_USER_POOL_ID` is not set.
     pub cognito_admin: Option<Arc<dyn UserDirectory>>,
@@ -84,10 +86,22 @@ impl AppState {
     /// than at the next daily drain (#239). Best effort: what fails stays
     /// queued.
     pub fn drain_object_deletions(&self) {
+        use std::sync::atomic::Ordering;
+        // One at a time: a running drain keeps going until the queue is
+        // empty, so a second would only repeat its deletes.
+        if self
+            .draining
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
         let queue = self.object_deletions.clone();
         let store = self.object_store.clone();
+        let draining = self.draining.clone();
         tokio::spawn(async move {
             crate::object_store::outbox::drain(queue.as_ref(), store.as_ref()).await;
+            draining.store(false, Ordering::Release);
         });
     }
 }
