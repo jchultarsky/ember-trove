@@ -1,5 +1,6 @@
 use common::EmberTroveError;
 
+pub mod account;
 pub mod activity;
 pub mod attachment;
 pub mod backup;
@@ -13,6 +14,7 @@ pub mod node;
 pub mod node_link;
 pub mod node_version;
 pub mod note;
+pub mod object_deletion;
 pub mod permission;
 pub mod person;
 #[cfg(all(test, feature = "pg-tests"))]

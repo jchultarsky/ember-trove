@@ -122,9 +122,9 @@ async fn main() -> anyhow::Result<()> {
     // Cognito Admin client — optional; enabled when COGNITO_USER_POOL_ID is set.
     let cognito_admin = if let Some(pool_id) = config.cognito_user_pool_id.clone() {
         tracing::info!("Cognito admin client enabled (pool: {pool_id})");
-        Some(Arc::new(
-            CognitoAdminClient::new(&config.cognito_region, pool_id).await,
-        ))
+        let client: Arc<dyn admin::UserDirectory> =
+            Arc::new(CognitoAdminClient::new(&config.cognito_region, pool_id).await);
+        Some(client)
     } else {
         tracing::info!("COGNITO_USER_POOL_ID not set — /admin/* endpoints disabled");
         None
@@ -141,7 +141,20 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Suspended accounts (#239). A failed load stops startup, like a failed
+    // migration: serving without the list would let suspended sessions in.
+    let accounts: Arc<dyn repo::account::AccountRepo> =
+        Arc::new(repo::account::PgAccountRepo::new(pool.clone()));
+    let suspended = auth::suspended::SuspendedSet::new(
+        accounts
+            .suspended()
+            .await
+            .map_err(|e| anyhow::anyhow!("loading suspended accounts failed: {e}"))?,
+    );
+
     let state = AppState {
+        accounts,
+        suspended,
         started_at: std::time::Instant::now(),
         request_metrics: Arc::new(routes::metrics::RequestMetrics::default()),
         nodes: Arc::new(PgNodeRepo::new(pool.clone())),
@@ -166,6 +179,10 @@ async fn main() -> anyhow::Result<()> {
         webhooks: Arc::new(PgWebhookRepo::new(pool.clone())),
         editor_prefs: Arc::new(PgEditorPrefRepo::new(pool.clone())),
         object_store,
+        object_deletions: Arc::new(repo::object_deletion::PgObjectDeletionRepo::new(
+            pool.clone(),
+        )),
+        draining: Arc::default(),
         oidc,
         cognito_admin,
         notifier,
@@ -195,6 +212,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Re-read the suspended list, so a change made by another instance (or
+    // directly in the table) applies within a minute (#239).
+    {
+        let accounts = state.accounts.clone();
+        let suspended = state.suspended.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(auth::suspended::REFRESH_INTERVAL);
+            interval.tick().await; // the first tick is immediate; startup just loaded it
+            loop {
+                interval.tick().await;
+                if let Err(e) = suspended.refresh(|| accounts.suspended()).await {
+                    tracing::warn!(
+                        ?e,
+                        "suspended accounts refresh failed; keeping the last list"
+                    );
+                }
+            }
+        });
+    }
+
     // Purge task/note tombstones older than the retention window, at startup
     // (first interval tick fires immediately) and then daily. Soft-deleted
     // rows back the UI's undo toast; after 30 days "deleted means deleted".
@@ -204,6 +241,9 @@ async fn main() -> anyhow::Result<()> {
         let tasks = state.tasks.clone();
         let notes = state.notes.clone();
         let captures = state.captures.clone();
+        let accounts = state.accounts.clone();
+        let object_deletions = state.object_deletions.clone();
+        let object_store = state.object_store.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
             loop {
@@ -230,6 +270,30 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "capture tombstone purge failed"),
                 }
+                // A deleted account stays refused for a day (#239): the
+                // longest a Cognito ID token issued before the deletion lives.
+                let token_cutoff = chrono::Utc::now() - chrono::TimeDelta::days(1);
+                // First purge each deleted account again: anything written
+                // after its purge (a request already in flight) goes too.
+                match accounts.deleted().await {
+                    Ok(subjects) => {
+                        for subject in subjects {
+                            if let Err(e) = accounts.purge(&subject, None).await {
+                                tracing::warn!(?e, "re-purging a deleted account failed");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(?e, "listing deleted accounts failed"),
+                }
+                match accounts.purge_deleted_before(token_cutoff).await {
+                    Ok(purged) if purged > 0 => {
+                        tracing::info!(purged, "dropped expired deleted-account rows");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(?e, "deleted-account row purge failed"),
+                }
+                // Retry stored files that couldn't be deleted yet (#239).
+                object_store::outbox::drain(object_deletions.as_ref(), object_store.as_ref()).await;
             }
         });
     }

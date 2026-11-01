@@ -3874,3 +3874,412 @@ async fn a_failed_conversion_makes_nothing_and_keeps_the_capture(pool: PgPool) {
     ));
     assert_eq!(nodes(pool.clone()).await, 2);
 }
+
+// ── Account lifecycle (#239) ─────────────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn suspended_accounts_round_trip(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    assert!(repo.suspended().await.unwrap().is_empty());
+
+    repo.suspend("u-1", "admin-a").await.unwrap();
+    repo.suspend("u-2", "admin-a").await.unwrap();
+    // A second suspension keeps the first record.
+    repo.suspend("u-1", "admin-b").await.unwrap();
+    let by: String =
+        sqlx::query_scalar("SELECT suspended_by FROM suspended_accounts WHERE subject_id = 'u-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(by, "admin-a");
+
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["u-1", "u-2"]);
+
+    repo.unsuspend("u-1").await.unwrap();
+    repo.unsuspend("u-1").await.unwrap(); // missing is fine
+    let set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    assert_eq!(set, ["u-2"]);
+}
+
+/// A deleted account stays refused until the sweep (#239): reactivating it
+/// can't drop the row, and only rows deleted before the cutoff go.
+#[sqlx::test(migrations = "../migrations")]
+async fn deleted_accounts_stay_suspended_until_the_sweep(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    repo.suspend("gone", "admin").await.unwrap();
+    repo.mark_deleted("gone", "admin").await.unwrap();
+    repo.mark_deleted("never-suspended", "admin").await.unwrap();
+    repo.unsuspend("gone").await.unwrap();
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["gone", "never-suspended"]);
+
+    // Too recent for the sweep.
+    let purged = repo
+        .purge_deleted_before(Utc::now() - Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+
+    sqlx::query("UPDATE suspended_accounts SET deleted_at = now() - interval '2 days' WHERE subject_id = 'gone'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    repo.suspend("live", "admin").await.unwrap();
+    let purged = repo
+        .purge_deleted_before(Utc::now() - Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["live", "never-suspended"]);
+}
+
+const PURGE_A: &str = "aaaaaaaa-0000-4000-8000-00000000000a";
+const PURGE_B: &str = "bbbbbbbb-0000-4000-8000-00000000000b";
+
+// Fixture helpers (see `create_node`): a failed query fails the caller.
+#[allow(clippy::expect_used)]
+async fn sql(pool: &PgPool, q: &str) {
+    sqlx::query(q).execute(pool).await.expect(q);
+}
+
+#[allow(clippy::expect_used)]
+async fn scalar(pool: &PgPool, q: &str) -> i64 {
+    sqlx::query_scalar(q).fetch_one(pool).await.expect(q)
+}
+
+/// Seed two accounts across every table that holds account data (#239).
+/// Returns (A's shared node, A's private node, B's node).
+async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid) {
+    let a_shared = create_node(pool, PURGE_A, "a shared").await.id.0;
+    let a_private = create_node(pool, PURGE_A, "a private").await.id.0;
+    let b_node = create_node(pool, PURGE_B, "b node").await.id.0;
+    let (a, b) = (PURGE_A, PURGE_B);
+    for q in [
+        // Grants: owners, A's node shared with B, B's node shared with A,
+        // and a grant A made on B's node for a third account.
+        format!("INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+            ('{a_shared}', '{a}', 'owner', '{a}'), ('{a_private}', '{a}', 'owner', '{a}'),
+            ('{b_node}', '{b}', 'owner', '{b}'), ('{a_shared}', '{b}', 'editor', '{a}'),
+            ('{b_node}', '{a}', 'editor', '{b}'), ('{b_node}', 'c', 'viewer', '{a}')"),
+        format!("INSERT INTO node_notes (node_id, owner_id, body) VALUES
+            ('{b_node}', '{a}', 'a on b'), ('{a_shared}', '{a}', 'a on a'),
+            ('{a_shared}', '{b}', 'b on a'), ('{b_node}', '{b}', 'b on b')"),
+        format!("INSERT INTO node_tasks (node_id, owner_id, title, focus_date, deleted_at) VALUES
+            ('{b_node}', '{a}', 'a live on b', CURRENT_DATE, NULL),
+            ('{b_node}', '{a}', 'a deleted on b', NULL, now()),
+            (NULL, '{a}', 'a standalone', NULL, NULL),
+            ('{a_shared}', '{a}', 'a on a', NULL, NULL),
+            ('{a_shared}', '{b}', 'b on a', NULL, NULL),
+            ('{b_node}', '{b}', 'b on b', NULL, NULL)"),
+        format!("INSERT INTO captures (owner_id, body) VALUES ('{a}', 'a'), ('{b}', 'b')"),
+        format!("INSERT INTO people (owner_id, display_name) VALUES ('{a}', 'pa'), ('{b}', 'pb')"),
+        format!("INSERT INTO activity_log (node_id, subject_id, action, metadata) VALUES
+            ('{b_node}', '{a}', 'edited', '{{\"actor_name\": \"Ann\", \"actor_email\": \"ann@example.com\"}}'),
+            ('{b_node}', '{b}', 'shared', '{{\"actor_name\": \"Bo\", \"subject_id\": \"{a}\", \"role\": \"editor\"}}'),
+            ('{b_node}', '{b}', 'invited', '{{\"actor_name\": \"Bo\", \"invited_email\": \"ANN@example.com\"}}'),
+            ('{b_node}', '{b}', 'edited', '{{\"actor_name\": \"Bo\", \"actor_email\": \"bo@example.com\"}}')"),
+        format!("INSERT INTO node_versions (node_id, body, created_by) VALUES
+            ('{b_node}', 'text A saved', '{a}'), ('{b_node}', 'text B saved', '{b}')"),
+        format!("INSERT INTO attachments (node_id, filename, s3_key) VALUES
+            ('{a_shared}', 'a.pdf', '{a_shared}/1/a.pdf'), ('{b_node}', 'b.pdf', '{b_node}/2/b.pdf')"),
+        format!("INSERT INTO edges (source_id, target_id, edge_type) VALUES
+            ('{a_shared}', '{b_node}', 'references')"),
+        format!("INSERT INTO edges_removed_042 (id, source_id, target_id, edge_type, created_at) VALUES
+            (gen_random_uuid(), '{a_private}', '{b_node}', 'contains', now()),
+            (gen_random_uuid(), '{b_node}', '{b_node}', 'contains', now()),
+            (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'contains', now())"),
+        format!("INSERT INTO tags (owner_id, name) VALUES ('{a}', 'ta'), ('{b}', 'tb')"),
+        format!("INSERT INTO node_templates (name, node_type, created_by) VALUES
+            ('ta', 'article', '{a}'), ('tb', 'article', '{b}')"),
+        format!("INSERT INTO search_presets (owner_id, name) VALUES ('{a}', 'sa'), ('{b}', 'sb')"),
+        format!("INSERT INTO user_favorites (owner_id, node_id, url, label) VALUES
+            ('{a}', '{a_shared}', NULL, 'fa'), ('{b}', '{a_shared}', NULL, 'fb'),
+            ('{b}', NULL, 'https://example.com', 'fb url')"),
+        format!("INSERT INTO webhooks (owner_id, url, secret) VALUES
+            ('{a}', 'https://a.example.com', 'sa'), ('{b}', 'https://b.example.com', 'sb')"),
+        format!("INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height) VALUES
+            ('{a}', 'task', gen_random_uuid(), 10), ('{b}', 'task', gen_random_uuid(), 10)"),
+        format!("INSERT INTO suspended_accounts (subject_id, suspended_by) VALUES ('x', '{a}')"),
+        format!("INSERT INTO backup_jobs (created_by, s3_key) VALUES ('{a}', 'backups/1.tar.gz')"),
+    ] {
+        sql(pool, &q).await;
+    }
+    (a_shared, a_private, b_node)
+}
+
+/// #239: purging A removes everything A owns, hands A's live task on B's
+/// node to B, anonymises what stays on B's node, and leaves B's own data
+/// alone. The preview predicted the same counts, and a second run finds
+/// nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn purging_an_account_removes_only_its_data(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    use common::admin::{DELETED_ACCOUNT, PurgeCounts};
+    let (a_shared, _, b_node) = seed_two_accounts(&pool).await;
+    let repo = PgAccountRepo::new(pool.clone());
+
+    let preview = repo.deletion_preview(PURGE_A).await.unwrap();
+    let removed = repo.purge(PURGE_A, Some("ann@example.com")).await.unwrap();
+    let expected = PurgeCounts {
+        nodes: 2,
+        shared_nodes: 1,
+        notes: 2,
+        tasks: 3,
+        tasks_handed_over: 1,
+        captures: 1,
+        people: 1,
+        files: 1,
+        settings: 6,
+    };
+    assert_eq!(removed, expected);
+    assert_eq!(preview, expected, "the preview predicts the purge");
+
+    // Nothing anywhere still names A: every column that holds an account.
+    let columns: Vec<(String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND column_name IN ('owner_id', 'subject_id', 'created_by', 'granted_by', 'suspended_by')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        columns.len() >= 15,
+        "the sweep sees the account columns: {columns:?}"
+    );
+    for (table, column) in &columns {
+        let n = scalar(
+            &pool,
+            &format!("SELECT count(*) FROM {table} WHERE {column}::text = '{PURGE_A}'"),
+        )
+        .await;
+        assert_eq!(n, 0, "{table}.{column} still names A");
+    }
+    let named = scalar(
+        &pool,
+        &format!("SELECT count(*) FROM activity_log WHERE metadata::text ILIKE '%{PURGE_A}%' OR metadata::text ILIKE '%ann@%' OR metadata::text LIKE '%Ann%'"),
+    )
+    .await;
+    assert_eq!(named, 0, "History still names A");
+
+    // A's live task on B's node now belongs to B, off My Day.
+    let (owner, focus): (String, Option<chrono::NaiveDate>) =
+        sqlx::query_as("SELECT owner_id, focus_date FROM node_tasks WHERE title = 'a live on b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((owner.as_str(), focus), (PURGE_B, None));
+
+    // B's own data: untouched, apart from what lived on A's nodes.
+    assert_eq!(
+        scalar(
+            &pool,
+            &format!("SELECT count(*) FROM nodes WHERE id = '{b_node}'")
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            &format!("SELECT count(*) FROM nodes WHERE id = '{a_shared}'")
+        )
+        .await,
+        0
+    );
+    for (q, n) in [
+        ("SELECT count(*) FROM node_notes", 1), // b on b
+        ("SELECT count(*) FROM node_tasks", 2), // b on b, handed over
+        ("SELECT count(*) FROM captures", 1),
+        ("SELECT count(*) FROM people", 1),
+        ("SELECT count(*) FROM tags", 1),
+        ("SELECT count(*) FROM node_templates", 1),
+        ("SELECT count(*) FROM search_presets", 1),
+        ("SELECT count(*) FROM user_favorites", 1), // B's url favorite
+        ("SELECT count(*) FROM webhooks", 1),
+        ("SELECT count(*) FROM editor_prefs", 1),
+        ("SELECT count(*) FROM activity_log", 4), // all on B's node
+        ("SELECT count(*) FROM node_versions", 2),
+        ("SELECT count(*) FROM attachments", 1),
+        ("SELECT count(*) FROM edges", 0),
+        ("SELECT count(*) FROM edges_removed_042", 1), // the unrelated one
+        ("SELECT count(*) FROM permissions", 2),       // B owner + c viewer
+    ] {
+        assert_eq!(scalar(&pool, q).await, n, "{q}");
+    }
+
+    // What stays on B's node is anonymised, and the version text kept.
+    let version: String =
+        sqlx::query_scalar("SELECT created_by FROM node_versions WHERE body = 'text A saved'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(version, DELETED_ACCOUNT);
+    let entries: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT subject_id, metadata FROM activity_log ORDER BY action, metadata::text COLLATE \"C\"",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(entries.contains(&(
+        DELETED_ACCOUNT.to_string(),
+        serde_json::json!({"actor_name": "Deleted account"})
+    )));
+    assert!(
+        entries
+            .iter()
+            .any(|(_, m)| m["subject_id"] == DELETED_ACCOUNT && m["role"] == "editor")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(_, m)| m["invited_email"] == "Deleted account")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(_, m)| m["actor_email"] == "bo@example.com"),
+        "B's own entry kept"
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            &format!("SELECT count(*) FROM permissions WHERE granted_by = '{DELETED_ACCOUNT}'")
+        )
+        .await,
+        1
+    );
+
+    // A's file is queued for deletion from storage; B's is not.
+    let queued: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, [format!("{a_shared}/1/a.pdf")]);
+
+    // A retry finds nothing.
+    assert!(
+        repo.purge(PURGE_A, Some("ann@example.com"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(repo.deletion_preview(PURGE_A).await.unwrap().is_empty());
+}
+
+/// #239: deleting a node queues its files in the same transaction, so they
+/// are no longer orphaned in storage.
+#[sqlx::test(migrations = "../migrations")]
+async fn deleting_a_node_queues_its_files(pool: PgPool) {
+    let node = create_node(&pool, "owner-1", "with a file").await;
+    sql(
+        &pool,
+        &format!(
+            "INSERT INTO attachments (node_id, filename, s3_key) VALUES ('{0}', 'f', '{0}/k/f')",
+            node.id.0
+        ),
+    )
+    .await;
+    PgNodeRepo::new(pool.clone()).delete(node.id).await.unwrap();
+    let queued: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, [format!("{}/k/f", node.id.0)]);
+}
+
+/// A store that fails on keys containing "bad".
+struct FlakyStore;
+
+#[async_trait::async_trait]
+impl crate::object_store::ObjectStore for FlakyStore {
+    async fn put(&self, _: &str, _: bytes::Bytes, _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, key: &str) -> Result<(), EmberTroveError> {
+        if key.contains("bad") {
+            Err(EmberTroveError::Internal("s3 down".into()))
+        } else {
+            Ok(())
+        }
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, EmberTroveError> {
+        unimplemented!()
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_outbox_drops_deleted_objects_and_keeps_failures(pool: PgPool) {
+    use super::object_deletion::PgObjectDeletionRepo;
+    sql(
+        &pool,
+        "INSERT INTO object_deletions (s3_key) VALUES ('good/1'), ('bad/2')",
+    )
+    .await;
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    let (deleted, failed) = crate::object_store::outbox::drain(&queue, &FlakyStore).await;
+    assert_eq!((deleted, failed), (1, 1));
+    let left: Vec<(String, i32)> = sqlx::query_as("SELECT s3_key, attempts FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, [("bad/2".to_string(), 1)]);
+}
+
+/// #239: deleting an attachment row, by any path, queues its file; a key a
+/// row names again (a restore) leaves the queue and is never deleted.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_attachment_trigger_queues_and_a_restored_key_is_kept(pool: PgPool) {
+    use super::attachment::{AttachmentRepo, PgAttachmentRepo};
+    use super::object_deletion::{ObjectDeletionRepo, PgObjectDeletionRepo};
+    let node = create_node(&pool, "owner-1", "files").await;
+    let repo = PgAttachmentRepo::new(pool.clone());
+    let kept = repo
+        .create(node.id, "a", "text/plain", 1, "k/a")
+        .await
+        .unwrap();
+    repo.create(node.id, "b", "text/plain", 1, "k/b")
+        .await
+        .unwrap();
+    repo.delete(kept.id).await.unwrap();
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    assert_eq!(queue.due(10).await.unwrap(), ["k/a"]);
+
+    // A restore puts "k/a" back under its old key.
+    repo.create(node.id, "a", "text/plain", 1, "k/a")
+        .await
+        .unwrap();
+    assert!(queue.due(10).await.unwrap().is_empty());
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0
+    );
+}
+
+/// A drain keeps going past one batch until the queue is empty.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_drain_empties_a_queue_longer_than_one_batch(pool: PgPool) {
+    use super::object_deletion::PgObjectDeletionRepo;
+    sql(
+        &pool,
+        "INSERT INTO object_deletions (s3_key) SELECT 'k/' || g FROM generate_series(1, 1201) g",
+    )
+    .await;
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    let (deleted, failed) = crate::object_store::outbox::drain(&queue, &FlakyStore).await;
+    assert_eq!((deleted, failed), (1201, 0));
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0
+    );
+}

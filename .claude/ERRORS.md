@@ -376,6 +376,26 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   (export the script's `COOKIE_KEY` first), then run again; or
   `--force-recreate api` after the database comes back. — 2026-10-28 (#184)
 
+### e2e: ERR_CONNECTION_REFUSED / "N did not run" in two runs at once
+- **Symptom:** a spec fails at `page.goto` with `net::ERR_CONNECTION_REFUSED`,
+  or a full run ends with "30 did not run" and odd failures.
+- **Cause:** two `./scripts/e2e.sh` runs share one compose project
+  (`ember-e2e`) and port 8003; the one that finishes tears the stack down
+  under the other. Also: a `&`-backgrounded chain inside a Bash call can
+  outlive the call and race the next run.
+- **Fix:** one e2e run at a time. Start long runs with the tool's
+  background mode (not `&`), and wait for them before running a spec
+  alone. — 2026-11-01 (#239)
+
+### Row state lost when the list reloads after an error
+- **Symptom:** a row's inline error (e.g. "suspended in Ember Trove, but
+  the sign-in provider didn't confirm") never shows.
+- **Cause:** the handler set the row's own signal, then bumped the list's
+  `refresh` to show the half-landed state; the reload rebuilt every row
+  component, and the new row started with no error.
+- **Fix:** keep state that must survive a reload in the parent, keyed by
+  the row's id (`status_error` in `admin_view.rs`). — 2026-11-01 (#239)
+
 ### Multi-line code blocks render as a stack of per-line boxes
 - **Symptom:** a fenced code block renders each line in its own bordered/background box
   instead of one clean block (worse in dark mode).

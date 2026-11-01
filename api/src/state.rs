@@ -4,24 +4,29 @@ use axum_extra::extract::cookie::Key;
 use sqlx::PgPool;
 
 use crate::{
-    admin::CognitoAdminClient,
-    auth::{AuthConfig, oidc::OidcClient},
+    admin::UserDirectory,
+    auth::{AuthConfig, oidc::OidcClient, suspended::SuspendedSet},
     config::Config,
     notify::SesNotifier,
     object_store::ObjectStore,
     repo::{
-        activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo,
-        data_health::DataHealthRepo, edge::EdgeRepo, editor_pref::EditorPrefRepo,
-        favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_link::NodeLinkRepo,
-        node_version::NodeVersionRepo, note::NoteRepo, permission::PermissionRepo,
-        person::PersonRepo, pkce::PkceRepo, search::SearchRepo, search_presets::SearchPresetRepo,
-        tag::TagRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
+        account::AccountRepo, activity::ActivityRepo, attachment::AttachmentRepo,
+        backup::BackupRepo, data_health::DataHealthRepo, edge::EdgeRepo,
+        editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
+        node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
+        object_deletion::ObjectDeletionRepo, permission::PermissionRepo, person::PersonRepo,
+        pkce::PkceRepo, search::SearchRepo, search_presets::SearchPresetRepo, tag::TagRepo,
+        task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
     },
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    /// The suspended-account list (#239).
+    pub accounts: Arc<dyn AccountRepo>,
+    /// The same list in memory, checked on every request (#239).
+    pub suspended: SuspendedSet,
     pub nodes: Arc<dyn NodeRepo>,
     pub edges: Arc<dyn EdgeRepo>,
     pub tags: Arc<dyn TagRepo>,
@@ -47,9 +52,13 @@ pub struct AppState {
     pub webhooks: Arc<dyn WebhookRepo>,
     pub editor_prefs: Arc<dyn EditorPrefRepo>,
     pub object_store: Arc<dyn ObjectStore>,
+    /// Stored files waiting to be deleted (#239).
+    pub object_deletions: Arc<dyn ObjectDeletionRepo>,
+    /// Set while a background drain runs, so deletes in a burst start one.
+    pub draining: Arc<std::sync::atomic::AtomicBool>,
     pub oidc: Option<Arc<OidcClient>>,
     /// Cognito admin client — `None` when `COGNITO_USER_POOL_ID` is not set.
-    pub cognito_admin: Option<Arc<CognitoAdminClient>>,
+    pub cognito_admin: Option<Arc<dyn UserDirectory>>,
     /// SES notifier — `None` when `SES_FROM_EMAIL` is not set.
     pub notifier: Option<Arc<SesNotifier>>,
     pub cookie_key: Key,
@@ -69,5 +78,30 @@ pub struct AppState {
 impl axum::extract::FromRef<AppState> for Key {
     fn from_ref(state: &AppState) -> Self {
         state.cookie_key.clone()
+    }
+}
+
+impl AppState {
+    /// Delete queued files from storage in the background, now rather
+    /// than at the next daily drain (#239). Best effort: what fails stays
+    /// queued.
+    pub fn drain_object_deletions(&self) {
+        use std::sync::atomic::Ordering;
+        // One at a time: a running drain keeps going until the queue is
+        // empty, so a second would only repeat its deletes.
+        if self
+            .draining
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let queue = self.object_deletions.clone();
+        let store = self.object_store.clone();
+        let draining = self.draining.clone();
+        tokio::spawn(async move {
+            crate::object_store::outbox::drain(queue.as_ref(), store.as_ref()).await;
+            draining.store(false, Ordering::Release);
+        });
     }
 }

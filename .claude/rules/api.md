@@ -125,6 +125,52 @@ cargo check && cargo clippy -- -D warnings
   helpers for any other write that must share a transaction; don't copy
   the SQL.
 
+## Account lifecycle (#239)
+
+- Cognito sits behind `admin::UserDirectory`; route tests use the
+  recording `FakeDirectory` in `tests.rs` (one step log shared with the
+  stub `AccountRepo`, so tests assert order across both).
+- **Suspension fails closed.** Suspend writes `suspended_accounts`, then
+  the in-memory `SuspendedSet`, and only then asks Cognito (disable +
+  global sign-out). Reactivate asks Cognito first and drops the row last.
+  A Cognito failure after the row is a 502 `ApiError::Upstream` that says
+  the account is suspended here.
+- `reject_suspended` is the layer just inside `require_auth`: a suspended
+  `sub` gets the same 401 as a bad token. The set is loaded at startup (a
+  failed load stops startup) and re-read every 60 s through
+  `SuspendedSet::refresh`, whose generation check drops a read that raced
+  a route's change. Always write the row before touching the set.
+- An admin can't suspend, delete or demote their own account (422).
+- `{id}` must be the canonical lower-case UUID (`account_id`): Cognito
+  also accepts an email alias or another casing, which would miss the
+  self-guard and the set.
+- Delete suspends first and ends with `mark_deleted`; the row stays a day
+  (the longest ID-token life), then the daily sweep drops it.
+- **Purge** (`AccountRepo::purge`, one transaction, advisory-locked per
+  subject): delete order is suspend → email → purge → drain → Cognito
+  delete → `mark_deleted`. Settings are deleted *before* the nodes so the
+  counts match `deletion_preview`. Anything new keyed by an account must
+  join the purge (`SETTINGS` or its own step); the pg test
+  `purging_an_account_removes_only_its_data` sweeps every
+  `owner_id/subject_id/created_by/granted_by/suspended_by` column and
+  fails on a leftover. Traces on others' nodes become `DELETED_ACCOUNT`.
+- **Stored files go through the `object_deletions` outbox.** The
+  `attachments_queue_object` trigger (migration 044) queues a file
+  whenever its attachment row is deleted, by any path (cascade, purge,
+  single delete, restore), so code never queues by hand. The one
+  exception is an upload whose row insert fails: it calls `enqueue`.
+  `state.drain_object_deletions()` runs one background drain at a time,
+  batching until the queue is empty; the daily loop retries. `due()`
+  first drops keys that a row names again, so a restored file is never
+  deleted. Never log an `s3_key`: it contains the file name.
+- The purge takes `FOR UPDATE` on the account's nodes after its advisory
+  lock, and the daily sweep re-purges deleted accounts before dropping
+  their rows (to catch in-flight writes).
+- `/auth/callback` and `/auth/refresh` sit outside the layer, so they
+  check `suspended_session` themselves (callback → Cognito logout URL,
+  refresh → revoke + 401). Any new public route that mints a session must
+  do the same.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.
@@ -145,5 +191,5 @@ cargo check && cargo clippy -- -D warnings
 
 - `SetUICustomization` uses an allowlist — unlisted CSS classes raise
   `InvalidParameterException`. Authoritative CSS: `deploy/cognito.css` + `deploy/logo.png`.
-- Apply via `boto3.client('cognito-idp').set_ui_customization(...)` (`aws` CLI unavailable).
+- Apply via `boto3.client('cognito-idp').set_ui_customization(...)` (or the `aws` CLI with `--region us-east-2`).
 - Pool: `us-east-2_4RQfxhKqn` · Client: `eogq2sehdad3uc8nmar7aneol`.

@@ -575,6 +575,8 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
+        // Its attachment rows cascade away, and the `attachments_queue_object`
+        // trigger queues their files for deletion from storage (#239).
         let result = sqlx::query("DELETE FROM nodes WHERE id = $1")
             .bind(id.0)
             .execute(&self.pool)
