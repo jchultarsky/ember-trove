@@ -3,8 +3,19 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-31)
+## Current state (2026-11-01)
 
+- **v3.6.0 shipped: account lifecycle (#239; PRs #241–#243).**
+  - Migration 044: `suspended_accounts`, `object_deletions` and the
+    `attachments_queue_object` trigger.
+  - Admins can suspend an account (its sessions stop at the next request,
+    and login and refresh are refused), reactivate it, or delete it with
+    its data, after a preview that shows counts only. The user's tasks on
+    other people's Projects pass to those owners, and their traces there
+    become "Deleted account".
+  - Deleted nodes and attachments now delete their stored files through the
+    outbox. Backlog: sweep files orphaned before 3.6.0, and purge data
+    left by accounts deleted directly in the AWS console.
 - **v3.5.0 shipped: captures (S4a + S4b of #204, #234; PRs #236–#238).**
   - Migration 043: a `captures` table; the 3 notes without a node moved
     into it (prod rehearsal ~4 ms), and `node_notes.node_id` is NOT NULL.

@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-11-01
+
 ### Fixed
 - **Deleting a node or an attachment now deletes its files from storage**
   (#239). The rows went, but the stored objects stayed behind; a failed

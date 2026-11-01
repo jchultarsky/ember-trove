@@ -78,7 +78,9 @@ cargo check -p ui --target wasm32-unknown-unknown
   scopes incl. `repo`+`workflow`) — usable for runs/PRs/releases. Its https credential helper
   also lets `git push` succeed from tool shells (the sandbox osxkeychain does **not** unlock
   non-interactively, so without gh, pushes fail with "could not read Username").
-- **`aws` CLI unavailable:** use `boto3` (`pip3 install boto3`).
+- **`aws` CLI** (v2, Homebrew) is configured with the owner's credentials. The
+  config's region is wrong (`us-east-2a`), so pass `--region us-east-2`.
+  Read-only calls are fine; Lightsail snapshots need the owner's go-ahead.
 - **`zoxide` doctor banner** in tool shells is a harness double-source artifact, not a config
   bug — ignore it (or `export _ZO_DOCTOR=0`).
 - **Worktrees:** cwd resets — always use absolute paths. If a worktree dir is deleted and the
