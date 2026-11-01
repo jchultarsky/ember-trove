@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    auth::middleware::SESSION_COOKIE, error::ApiError, repo::pkce::PKCE_TTL, state::AppState,
+    auth::{middleware::SESSION_COOKIE, oidc::OidcClient},
+    error::ApiError,
+    repo::pkce::PKCE_TTL,
+    state::AppState,
 };
 
 /// Cookie that holds the encrypted refresh token.
@@ -210,6 +213,23 @@ async fn try_callback(
         .id_token
         .unwrap_or_else(|| cognito_access_token.clone());
 
+    // A suspended account (#239) gets no session. It goes out through
+    // Cognito's logout, which clears the hosted-login session; otherwise
+    // AuthGate's login redirect would sign it straight back in, in a loop,
+    // whenever Cognito's own block didn't land.
+    if suspended_session(app_state, oidc, &session_token).await? {
+        let jar = jar.remove(
+            Cookie::build((OAUTH_STATE_COOKIE, ""))
+                .path("/api/auth")
+                .build(),
+        );
+        return Ok((
+            jar,
+            [(header::CACHE_CONTROL, "no-store")],
+            Redirect::to(&cognito_logout_url(app_state)),
+        ));
+    }
+
     let secure = app_state.auth.cookie_secure;
 
     let session_cookie = session_cookie(session_token, secure);
@@ -301,6 +321,13 @@ async fn refresh(
         .id_token
         .unwrap_or_else(|| cognito_access_token.clone());
 
+    // A suspended account (#239) renews nothing: its refresh token is
+    // revoked, and the 401 sends the UI to login once instead of retrying.
+    if suspended_session(&state, oidc, &session_token).await? {
+        oidc.backchannel_logout(&refresh_token).await;
+        return Err(ApiError::Unauthorized("invalid token".to_string()));
+    }
+
     // Renew BOTH tokens. The refresh path used to renew only the session
     // cookie, so change-password (which needs the Cognito access token)
     // failed once the original access token expired, about an hour after
@@ -339,10 +366,15 @@ async fn logout(
         .remove(refresh_cookie(String::new(), secure))
         .remove(access_cookie(String::new(), secure));
 
-    // Redirect through Cognito's end-session endpoint so the SSO session cookie
-    // at the Cognito domain is cleared.  Without this the browser is silently
-    // re-authenticated on the very next /api/auth/login round-trip.
-    let redirect_url = if let Some(oidc) = state.oidc.as_ref() {
+    let redirect_url = cognito_logout_url(&state);
+    (updated_jar, Json(RedirectResponse { redirect_url }))
+}
+
+/// Cognito's end-session URL, back to the frontend. Going through it clears
+/// the SSO session cookie at the Cognito domain; without it the browser is
+/// silently re-authenticated on the very next /api/auth/login round-trip.
+fn cognito_logout_url(state: &AppState) -> String {
+    if let Some(oidc) = state.oidc.as_ref() {
         format!(
             "{}?client_id={}&logout_uri={}",
             oidc.end_session_endpoint,
@@ -351,9 +383,20 @@ async fn logout(
         )
     } else {
         state.auth.frontend_url.clone()
-    };
+    }
+}
 
-    (updated_jar, Json(RedirectResponse { redirect_url }))
+/// Whether a freshly issued session token belongs to a suspended account
+/// (#239). Login and renewal sit outside `reject_suspended`, so they ask
+/// here; a token that doesn't validate fails the same way it would on its
+/// first request.
+async fn suspended_session(
+    state: &AppState,
+    oidc: &OidcClient,
+    token: &str,
+) -> Result<bool, ApiError> {
+    let claims = oidc.validate_token(token).await?;
+    Ok(state.suspended.contains(&claims.sub).await)
 }
 
 async fn change_password(

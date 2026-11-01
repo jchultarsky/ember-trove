@@ -534,7 +534,9 @@ change them. They are in backups, and not in search, export or webhooks.
 | POST | `/api/admin/users` | Create user |
 | DELETE | `/api/admin/users/{id}` | Delete user |
 | GET | `/api/admin/users/roles` | List available roles |
-| PUT | `/api/admin/users/{id}/roles` | Set roles for a user |
+| PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
+| POST | `/api/admin/users/{id}/suspend` | Suspend: no sign-in, open sessions refused at once, data kept |
+| POST | `/api/admin/users/{id}/reactivate` | Lift a suspension |
 | GET | `/api/admin/backup` | Stream full-system backup (NDJSON) |
 | POST | `/api/admin/restore` | Restore from backup file |
 | GET | `/api/metrics` | Operational metrics snapshot (version, uptime, pool stats, row counts) |
