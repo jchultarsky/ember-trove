@@ -48,6 +48,7 @@ uuid_newtype!(AttachmentId);
 uuid_newtype!(PermissionId);
 uuid_newtype!(TaskId);
 uuid_newtype!(NoteId);
+uuid_newtype!(CaptureId);
 uuid_newtype!(FavoriteId);
 uuid_newtype!(ActivityId);
 uuid_newtype!(NodeVersionId);

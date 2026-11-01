@@ -43,21 +43,25 @@ function loadWorker(network) {
     caches: {
       open: async () => cache,
       match: (req) => cache.match(req),
-      keys: async () => ['ember-trove-v10'],
+      keys: async () => ['ember-trove-v11'],
       delete: async () => true,
     },
-    fetch: async (req) => {
+    fetch: async (req, init) => {
       const url = typeof req === 'string' ? req : req.url;
       calls.push(url);
-      return network(new URL(url, ORIGIN).pathname, req);
+      return network(new URL(url, ORIGIN).pathname, req, init);
     },
-    URL, Response: class { constructor(body, init = {}) { Object.assign(this, fakeResponse(body, init)); } },
+    URL, Response: class {
+      constructor(body, init = {}) { Object.assign(this, fakeResponse(body, init)); }
+      static redirect(location, status) { return { redirect: location, status }; }
+    },
     console,
   };
   vm.runInNewContext(SOURCE, sandbox);
-  async function dispatch(path, { method = 'GET', mode = 'cors' } = {}) {
+  async function dispatch(path, { method = 'GET', mode = 'cors', form } = {}) {
     let responded;
     const request = { url: new URL(path, ORIGIN).href, method, mode };
+    if (form) request.formData = async () => new Map(Object.entries(form));
     listeners.fetch({ request, respondWith: (p) => { responded = p; } });
     return responded ? await responded : undefined; // undefined = not intercepted
   }
@@ -132,4 +136,35 @@ test('a 401 from the API purges cached data and is not cached', async () => {
 test('API mutations pass straight through', async () => {
   const sw = loadWorker(() => ok('x'));
   assert.equal(await sw.dispatch('/api/nodes', { method: 'POST' }), undefined);
+});
+
+// ── Web Share Target (#234) ──────────────────────────────────────────────────
+
+test('a share lands one capture and opens the Inbox', async () => {
+  let sent;
+  const sw = loadWorker((path, _req, init) => {
+    sent = { path, body: JSON.parse(init.body) };
+    return fakeResponse('{}', { status: 201 });
+  });
+  const res = await sw.dispatch('/share', {
+    method: 'POST',
+    form: { title: 'An article', text: 'worth reading', url: 'https://example.com/a' },
+  });
+  assert.deepEqual(sent, {
+    path: '/api/inbox/quick',
+    body: { title: 'An article', body: 'worth reading\nhttps://example.com/a' },
+  });
+  assert.deepEqual(res, { redirect: '/tasks/inbox?captured=1', status: 303 });
+});
+
+test('a share while signed out says so instead of landing nowhere', async () => {
+  const sw = loadWorker(() => fakeResponse('', { status: 401 }));
+  const res = await sw.dispatch('/share', { method: 'POST', form: { text: 'x' } });
+  assert.deepEqual(res, { redirect: '/?capture=failed&reason=auth', status: 303 });
+});
+
+test('a share the server refuses names the status', async () => {
+  const sw = loadWorker(() => fakeResponse('', { status: 422 }));
+  const res = await sw.dispatch('/share', { method: 'POST', form: { title: ' ' } });
+  assert.deepEqual(res, { redirect: '/?capture=failed&reason=422', status: 303 });
 });

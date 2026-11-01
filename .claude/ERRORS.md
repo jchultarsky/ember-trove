@@ -210,6 +210,16 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   before pushing. Plain-prose files (CHANGELOG, rules) are safe to join. —
   2026-10-25
 
+### A pg test passes locally and fails in CI on row order
+- **Symptom:** `repo tests (postgres)` fails an `assert_eq!` on a `Vec` whose
+  rows are the same but in a different order; the local run is green.
+- **Cause:** text `ORDER BY` follows the database's collation. The local
+  stack sorts with `C` (byte order: "a tombstone" < "an idea"), CI's
+  `postgres:16` with `en_US.utf8`, which ignores spaces at the first level
+  ("an idea" < "a tombstone").
+- **Fix:** in tests, sort text with `ORDER BY body COLLATE "C"` (or by a
+  non-text key), never a bare text column. — 2026-11-01 (#236)
+
 ## Leptos / WASM
 
 ### Reactivity silently stops working

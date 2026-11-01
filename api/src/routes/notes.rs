@@ -8,7 +8,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use common::{
     auth::AuthClaims,
     id::{NodeId, NoteId},
-    note::{CreateNoteRequest, FeedNote, Note, NoteFeedParams, NoteSort, UpdateNoteRequest},
+    note::{
+        CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteFeedParams, NoteSort,
+        UpdateNoteRequest,
+    },
 };
 use garde::Validate;
 use uuid::Uuid;
@@ -28,7 +31,7 @@ pub fn node_note_router() -> Router<AppState> {
 /// Mounts under `/notes`
 pub fn note_router() -> Router<AppState> {
     Router::new()
-        .route("/", post(create_standalone_note))
+        .route("/", post(create_note_on_node))
         .route("/feed", get(note_feed))
         .route("/{note_id}", patch(update_note).delete(delete_note))
         .route("/{note_id}/restore", post(restore_note))
@@ -60,28 +63,27 @@ async fn create_note(
 
     let note = state
         .notes
-        .create(Some(NodeId(node_id)), &claims.sub, req)
+        .create(NodeId(node_id), &claims.sub, req)
         .await?;
     Ok((StatusCode::CREATED, Json(note)))
 }
 
-/// POST /notes — create a note, optionally attached to a node via `node_id` in
-/// the body. With no `node_id` it's a standalone (inbox / micro-blog) note.
-/// Attaching to a node requires editor rights on that node.
-async fn create_standalone_note(
+/// POST /notes — the Notes page's compose box: a note on the node named in
+/// the body, which needs editor rights on it. Every note has a node (§9.2);
+/// a request without one is refused (422) — quick thoughts are captures
+/// (`/captures`, #234).
+async fn create_note_on_node(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Json(req): Json<CreateNoteRequest>,
+    Json(req): Json<CreateFeedNoteRequest>,
 ) -> Result<(StatusCode, Json<Note>), ApiError> {
+    require_editor(state.permissions.as_ref(), &claims, req.node_id).await?;
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
-
-    let node_id = req.node_id;
-    if let Some(node_id) = node_id {
-        require_editor(state.permissions.as_ref(), &claims, node_id).await?;
-    }
-
-    let note = state.notes.create(node_id, &claims.sub, req).await?;
+    let note = state
+        .notes
+        .create(req.node_id, &claims.sub, req.note)
+        .await?;
     Ok((StatusCode::CREATED, Json(note)))
 }
 
@@ -124,7 +126,7 @@ async fn restore_note(
 }
 
 /// GET /notes/feed — notes with node titles, filtered + sorted per query params
-/// (node_id, uncategorized, from, to, q, sort). Admins see all owners' notes.
+/// (node_id, from, to, q, sort). Admins see all owners' notes.
 async fn note_feed(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -147,7 +149,6 @@ async fn note_feed(
             .as_deref()
             .and_then(|s| Uuid::parse_str(s).ok())
             .map(NodeId),
-        uncategorized: params.uncategorized.unwrap_or(false),
         from: params.from.as_deref().and_then(parse_date_start),
         to: params.to.as_deref().and_then(parse_date_end),
         q: params.q.filter(|s| !s.trim().is_empty()),

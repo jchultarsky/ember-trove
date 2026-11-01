@@ -6,6 +6,43 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Captures** (#234, ONTOLOGY §9.1): unclassified input waiting in the
+  Inbox, kept until it is processed or deleted on purpose.
+  - Quick capture (`n`, the palette, the iOS share sheet) now lands a
+    capture, not a task without a Project. The text is kept as typed, up to
+    10,000 characters (counted as characters, so non-Latin text gets the
+    same room); quick capture used to cut it to 500. Longer text is
+    clipped, and the toast says so, rather than refused.
+  - The Inbox lists captures above its tasks. Each can be reworded, or
+    deleted with Undo.
+  - `/api/captures` (list, create, edit, delete, restore). Captures are
+    owner-only: no other account, the admin included, can see them.
+- **The calendar's day composer** has an optional Project. With one it adds
+  that Project's task, due that day. Without one it makes a capture that
+  starts with the date ("Sat 7 Nov: …").
+
+### Changed
+- **Every note belongs to a node** (§9.2, migration 043). The few notes
+  that had none move into captures, keeping their text and dates.
+  - The Notes page's compose box needs a node, and points loose thoughts to
+    quick capture.
+  - Its "Uncategorized (inbox)" filter is gone.
+- `POST /api/inbox/quick` keeps its path and format, for installed apps and
+  the share target, but creates a capture. A due date sent by an older
+  client is written into the text; a priority is ignored.
+- Backups are format 4 (captures listed on their own). Format-3 backups
+  still restore: their notes without a node become captures, and the
+  restore preview counts them as captures.
+
+### Fixed
+- **Restore left the live database's nodeless tasks and notes in place.**
+  They sat next to the restored ones; a restore now replaces them too.
+- **The home-screen "Quick capture" shortcut works.** It opened a URL
+  nothing read; it now opens quick capture.
+- **A share that fails now says so,** for example "sign in, then share it
+  again", instead of landing on a blank page.
+
 ## [3.4.1] - 2026-10-31
 
 ### Fixed

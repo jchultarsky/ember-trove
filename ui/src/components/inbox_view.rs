@@ -37,9 +37,10 @@ pub fn InboxView() -> impl IntoView {
     let refresh = task_refresh.0;
 
     // If we got here via the iOS Web Share Target SW handler (which 303s to
-    // /tasks/inbox?captured=1) or the home-screen "Quick capture" shortcut,
-    // confirm the capture with a toast and strip the marker from the URL so
-    // a refresh doesn't re-fire it.  Runs once per mount.
+    // /tasks/inbox?captured=1), confirm the capture with a toast and strip
+    // the marker from the URL so a refresh doesn't re-fire it. (The
+    // home-screen "Quick capture" shortcut is `/?capture=1`: it opens the
+    // capture box, see `layout.rs`.) Runs once per mount.
     Effect::new(move |run_count: Option<()>| {
         if run_count.is_some() {
             return;
@@ -96,7 +97,7 @@ pub fn InboxView() -> impl IntoView {
             <PageHeader
                 icon="inbox"
                 title="Inbox"
-                subtitle="Capture tasks — link to a node when ready".into_any()
+                subtitle="Captures and tasks waiting to be processed".into_any()
             >
                 {move || (!triage.get()).then(|| view! {
                     <button
@@ -125,6 +126,9 @@ pub fn InboxView() -> impl IntoView {
                 })}
 
                 <div class=move || if triage.get() { "hidden" } else { "contents" }>
+                // ── Captures (§9.1, #234): what quick capture and the share
+                // sheet land, waiting to be processed.
+                <crate::components::captures_section::CapturesSection refresh=refresh />
                 // ── Add-task form — shared with the node-detail TaskPanel ─────
                 // node_id omitted ⇒ standalone capture with the optional picker.
                 <NewTaskForm refresh=refresh />

@@ -2,7 +2,7 @@ use leptos::prelude::*;
 
 use common::{
     id::{NodeId, NoteId},
-    note::{CreateNoteRequest, NoteSort},
+    note::{CreateFeedNoteRequest, CreateNoteRequest, NoteSort},
 };
 use gloo_timers::callback::Timeout;
 use leptos_router::hooks::use_navigate;
@@ -81,15 +81,14 @@ pub fn NotesView() -> impl IntoView {
 
     // ── Filter / sort state ─────────────────────────────────────────────────
     let sort = RwSignal::new(NoteSort::Newest);
-    // Node filter: "" = all, "inbox" = standalone, else a node UUID. Chosen
-    // as a scope ("all" / "inbox" / "node") plus, for "node", the shared
-    // NodePicker — the dropdown used to list every node title (#134).
+    // Node filter: "" = all, else a node UUID. Chosen as a scope ("all" /
+    // "node") plus, for "node", the shared NodePicker — the dropdown used to
+    // list every node title (#134).
     let node_filter = RwSignal::new(String::new());
     let filter_mode = RwSignal::new("all");
     let filter_node = RwSignal::new(None::<(NodeId, String)>);
     Effect::new(move |_| {
         let value = match filter_mode.get() {
-            "inbox" => "inbox".to_string(),
             "node" => filter_node
                 .get()
                 .map(|(id, _)| id.0.to_string())
@@ -147,11 +146,7 @@ pub fn NotesView() -> impl IntoView {
     let loading_more = RwSignal::new(false);
     let req_v = RwSignal::new(0u32);
 
-    let parse_node_filter = |nf: &str| match nf {
-        "" => (None, false),
-        "inbox" => (None, true),
-        s => (uuid::Uuid::parse_str(s).ok().map(NodeId), false),
-    };
+    let parse_node_filter = |nf: &str| uuid::Uuid::parse_str(nf).ok().map(NodeId);
 
     // Fresh load whenever any filter (or the reload counter) changes.
     Effect::new(move |_| {
@@ -167,10 +162,8 @@ pub fn NotesView() -> impl IntoView {
         page.set(1);
         loading.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let (node_id, uncategorized) = parse_node_filter(&nf);
             let res = crate::api::fetch_notes_feed(
-                node_id,
-                uncategorized,
+                parse_node_filter(&nf),
                 Some(from.as_str()),
                 Some(to.as_str()),
                 Some(q.as_str()),
@@ -203,10 +196,8 @@ pub fn NotesView() -> impl IntoView {
         let to = to_date.get_untracked();
         let q = text_q.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
-            let (node_id, uncategorized) = parse_node_filter(&nf);
             let res = crate::api::fetch_notes_feed(
-                node_id,
-                uncategorized,
+                parse_node_filter(&nf),
                 Some(from.as_str()),
                 Some(to.as_str()),
                 Some(q.as_str()),
@@ -230,13 +221,23 @@ pub fn NotesView() -> impl IntoView {
         if text.is_empty() || posting.get_untracked() {
             return;
         }
+        // A note belongs to a node (§9.2): Post waits for one. Checked before
+        // `posting` is set, or Ctrl+Enter without a node (the button's
+        // `disabled` doesn't cover the keyboard) would leave it stuck.
+        let Some((node_id, _)) = selected_node.get_untracked() else {
+            error.set(Some(
+                "Pick a node for this note, or press n to capture it.".to_string(),
+            ));
+            return;
+        };
         posting.set(true);
         error.set(None);
-        let node_id = selected_node.get_untracked().map(|(id, _)| id);
         wasm_bindgen_futures::spawn_local(async move {
-            let req = CreateNoteRequest {
-                body: text,
-                color: "default".to_string(),
+            let req = CreateFeedNoteRequest {
+                note: CreateNoteRequest {
+                    body: text,
+                    color: "default".to_string(),
+                },
                 node_id,
             };
             match crate::api::create_note_global(&req).await {
@@ -264,12 +265,18 @@ pub fn NotesView() -> impl IntoView {
                 />
                 <div class="flex items-center gap-2">
                     <div class="flex-1 min-w-0 max-w-[20rem]">
-                        <NodePicker selected=selected_node placeholder="Attach to a node (optional)…" />
+                        <NodePicker selected=selected_node placeholder="Note on a node\u{2026}" />
                     </div>
+                    // Input that belongs nowhere yet is a capture (§9.1).
+                    <span class="text-xs text-stone-400 dark:text-stone-500">
+                        "No node yet? Press "<kbd class="font-mono">"n"</kbd>" to capture it."
+                    </span>
                     <button
                         class="inline-flex items-center justify-center gap-1.5 ml-auto px-3 py-1.5 rounded-lg bg-ember text-white text-sm font-medium
                             hover:bg-ember-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        disabled=move || posting.get() || body.get().trim().is_empty()
+                        disabled=move || {
+                            posting.get() || body.get().trim().is_empty() || selected_node.with(Option::is_none)
+                        }
                         on:click=move |_| do_post()
                     >
                         <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">"send"</span>
@@ -309,7 +316,6 @@ pub fn NotesView() -> impl IntoView {
                     title="Filter by node"
                     on:change=move |ev| {
                         let mode = match event_target_value(&ev).as_str() {
-                            "inbox" => "inbox",
                             "node" => "node",
                             _ => "all",
                         };
@@ -317,7 +323,6 @@ pub fn NotesView() -> impl IntoView {
                     }
                 >
                     <option value="all" selected=move || filter_mode.get() == "all">"All notes"</option>
-                    <option value="inbox" selected=move || filter_mode.get() == "inbox">"Uncategorized (inbox)"</option>
                     <option value="node" selected=move || filter_mode.get() == "node">"A node\u{2026}"</option>
                 </select>
                 {move || (filter_mode.get() == "node").then(|| view! {
@@ -397,9 +402,10 @@ pub fn NotesView() -> impl IntoView {
                                     let ts = crate::components::format_helpers::format_timestamp(&feed_note.note.created_at);
 
                                     // Header: clickable node label that deep-links to the
-                                    // note inside its node (`?note=`); or an Inbox pill.
-                                    let header = match node_id {
-                                        Some(nid) => {
+                                    // note inside its node (`?note=`).
+                                    let header = {
+                                        let nid = node_id;
+                                        {
                                             let nav = navigate.clone();
                                             let title = node_title.unwrap_or_default();
                                             view! {
@@ -423,15 +429,6 @@ pub fn NotesView() -> impl IntoView {
                                                 </button>
                                             }.into_any()
                                         }
-                                        None => view! {
-                                            <span class="inline-flex items-center gap-1.5 text-xs font-semibold
-                                                text-stone-400 dark:text-stone-500 uppercase tracking-wider">
-                                                <span class="material-symbols-outlined" style="font-size: 13px;">
-                                                    {"inbox"}
-                                                </span>
-                                                "Inbox"
-                                            </span>
-                                        }.into_any(),
                                     };
 
                                     view! {

@@ -48,34 +48,29 @@ test.describe('app shell', () => {
   });
 });
 
-test.describe('quick capture with natural-language tokens', () => {
-  test('parses tokens, previews chips, lands in the inbox', async ({ page, request }) => {
-    const title = `e2e capture ${Date.now()}`;
+test.describe('quick capture', () => {
+  test('lands a capture in the inbox, words kept as typed (#234)', async ({ page, request }) => {
+    const text = `e2e capture ${Date.now()} tomorrow p1`;
     await page.goto('/tasks/my-day');
     await focusNeutral(page);
     await page.keyboard.press('n');
 
-    const box = page.getByPlaceholder(/What's on your mind/);
+    const box = page.getByPlaceholder(/What’s on your mind/);
     await expect(box).toBeVisible();
-    await box.fill(`${title} tomorrow p1`);
-
-    // Live parse preview chips.
-    await expect(page.getByText(/Due (Mon|Tue|Wed|Thu|Fri|Sat|Sun)/)).toBeVisible();
-    await expect(page.getByText('High priority')).toBeVisible();
+    await box.fill(text);
+    // A capture isn't classified yet: no date or priority chips.
+    await expect(page.getByText('High priority')).toHaveCount(0);
 
     await page.keyboard.press('ControlOrMeta+Enter');
     await expect(page.locator('[role="status"]').getByText(/Captured to Inbox/)).toBeVisible();
 
-    // The task lands de-tokenized, with the parsed priority.
-    await page.goto('/tasks/inbox');
-    const row = page.locator('[data-task-id]', { hasText: title });
-    await expect(row).toBeVisible();
-    await expect(row.getByRole('img', { name: 'High priority' })).toBeVisible();
-
-    // Clean up — later specs (triage) assume they control the inbox.
-    const inbox = await (await request.get('/api/tasks/inbox')).json();
-    const created = inbox.find((t: { title: string }) => t.title === title);
-    if (created) await request.delete(`/api/tasks/${created.id}`);
+    // A capture, not a task: "tomorrow p1" is still in its text.
+    const captures: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
+    const created = captures.find((c) => c.body === text);
+    expect(created).toBeTruthy();
+    const inbox: { title: string }[] = await (await request.get('/api/tasks/inbox')).json();
+    expect(inbox.some((t) => t.title.includes(text))).toBe(false);
+    await request.delete(`/api/captures/${created!.id}`);
   });
 });
 
@@ -122,7 +117,7 @@ test.describe('keyboard listener lifecycle', () => {
     await page.keyboard.press('x');
     // Event dispatch must still be alive: `n` opens quick capture.
     await page.keyboard.press('n');
-    await expect(page.getByPlaceholder(/What's on your mind/)).toBeVisible();
+    await expect(page.getByPlaceholder(/What.s on your mind/)).toBeVisible();
     await page.keyboard.press('Escape');
     // (The fixture also fails any test on a page error; explicit here.)
     expect(pageErrors).toEqual([]);

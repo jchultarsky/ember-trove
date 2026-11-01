@@ -9,13 +9,12 @@ fn default_note_color() -> String {
     "default".to_string()
 }
 
-/// A note. Attached to a node, or standalone (`node_id: None`) for an
-/// inbox / micro-blog entry that isn't associated with any node.
+/// A note on a node (ONTOLOGY §9.2). Every note has one: input that
+/// belongs nowhere yet is a capture (`crate::capture`, #234).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Note {
     pub id: NoteId,
-    /// Parent node, or `None` for a standalone (inbox) note.
-    pub node_id: Option<NodeId>,
+    pub node_id: NodeId,
     pub owner_id: String,
     pub body: String,
     /// Named palette key for the card background colour (e.g. "amber", "rose").
@@ -27,7 +26,7 @@ pub struct Note {
 }
 
 /// Note enriched with the parent node's title — used in the central feed.
-/// `node_title` is `None` for standalone (inbox) notes.
+/// `node_title` is `None` only if the node can't be read back.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FeedNote {
     #[serde(flatten)]
@@ -44,12 +43,17 @@ pub struct CreateNoteRequest {
     #[garde(length(min = 1, max = 20))]
     #[serde(default = "default_note_color")]
     pub color: String,
-    /// Parent node. Absent / `None` creates a standalone (inbox) note.
-    /// Only honored by the global `POST /notes` route; the node-scoped
-    /// `POST /nodes/:id/notes` route always uses the node from the URL.
+}
+
+/// `POST /notes`: a note on a node, chosen in the request. A note always
+/// has a node (§9.2); quick thoughts go to a capture (#234).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
+pub struct CreateFeedNoteRequest {
+    #[garde(dive)]
+    #[serde(flatten)]
+    pub note: CreateNoteRequest,
     #[garde(skip)]
-    #[serde(default)]
-    pub node_id: Option<NodeId>,
+    pub node_id: NodeId,
 }
 
 /// Sort order for the notes feed.
@@ -82,8 +86,6 @@ impl NoteSort {
 pub struct NoteFeedParams {
     /// Filter to a specific node (UUID string).
     pub node_id: Option<String>,
-    /// When `true`, return only standalone (inbox) notes.
-    pub uncategorized: Option<bool>,
     /// Inclusive lower bound on `created_at` (`YYYY-MM-DD`).
     pub from: Option<String>,
     /// Inclusive upper bound on `created_at` (`YYYY-MM-DD`).

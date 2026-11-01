@@ -53,6 +53,13 @@ export async function seedTrove(
     data: { body: `Call notes: ${word} wants a demo.`, color: 'default' },
   });
   expect(note.ok()).toBeTruthy();
+  // A capture (#234) that mentions the word: captures are never search
+  // results or picker options, so specs on those see it doesn't leak in.
+  const capture = await request.post('/api/captures', {
+    data: { body: `Idea: ask ${word} about pricing` },
+  });
+  expect(capture.ok()).toBeTruthy();
+  const captureId = (await capture.json()).id as string;
   return {
     word,
     exact,
@@ -60,6 +67,7 @@ export async function seedTrove(
     mentions,
     cleanup: async () => {
       for (const id of ids) await request.delete(`/api/nodes/${id}`);
+      await request.delete(`/api/captures/${captureId}`);
     },
   };
 }

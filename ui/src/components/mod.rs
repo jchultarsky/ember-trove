@@ -5,6 +5,7 @@ pub mod backup_view;
 pub mod body_outline;
 pub mod bulk_permissions_view;
 pub mod calendar_view;
+pub mod captures_section;
 pub mod change_password_modal;
 pub mod dark_mode_toggle;
 pub mod data_health_view;
