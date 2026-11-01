@@ -110,6 +110,17 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     // Must live here (inside the Router) so use_navigate() is available.
     let navigate = use_navigate();
     let location = use_location();
+    // A toast's Open (a converted capture, #234) asks for a page this way.
+    {
+        let navigate = navigate.clone();
+        let nav = expect_context::<crate::app::NavRequest>().0;
+        Effect::new(move |_| {
+            if let Some(path) = nav.get() {
+                nav.set(None);
+                navigate(&path, Default::default());
+            }
+        });
+    }
     // The home-screen "Quick capture" shortcut (manifest.json) opens
     // `/?capture=1`: open the capture box. A share that failed comes back as
     // `/?capture=failed&reason=…` (sw.js): say so. Either way drop the

@@ -24,6 +24,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   the same transaction, so its text is never lost or doubled. The same
   rights and rules apply as when creating the thing directly. A Task's
   title must fit in 500 characters: reworded, never cut.
+  - In the Inbox, each capture's **Convert** button opens a dialog with
+    Node, Note and Task tabs. The text is prefilled: the first line becomes
+    the title. A counter shows when a Task's title is too long. After
+    converting you stay in the Inbox, and the toast's **Open** goes to what
+    was made.
 - **The calendar's day composer** has an optional Project. With one it adds
   that Project's task, due that day. Without one it makes a capture that
   starts with the date ("Sat 7 Nov: …").

@@ -208,7 +208,9 @@ const CONCEPTS: &[Concept] = &[
         body: "Where input waits to be processed. Quick capture (n, the palette, \
                the iOS Share Sheet) lands a capture here: text, not yet a task or a \
                note, kept until you turn it into exactly one thing or delete it on \
-               purpose. Tasks without a Project also wait here; the My Day Kanban \
+               purpose. Convert (the arrow on a capture) makes it a node, a note on a \
+               node, or a task in a Project, and the capture goes. Tasks without a \
+               Project also wait here; the My Day Kanban \
                backlog shows them with an \"Inbox\" chip.",
     },
     Concept {

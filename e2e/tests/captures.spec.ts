@@ -125,3 +125,160 @@ test('a note needs a node; a loose thought is a capture', async ({ page, request
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+// ── Converting a capture (S4b, §9.1) ────────────────────────────────────────
+
+async function convertDialog(page: Page, text: string) {
+  await page.goto('/tasks/inbox');
+  const row = page.getByTestId('capture').filter({ hasText: text });
+  await row.getByRole('button', { name: 'Convert capture' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Convert capture' });
+  await expect(dialog).toBeVisible();
+  return { row, dialog };
+}
+
+async function pick(page: Page, combobox: string, title: string) {
+  await page.getByRole('combobox', { name: combobox }).fill(title);
+  await page.getByRole('option', { name: new RegExp(title) }).click();
+}
+
+test('a capture becomes a node filed into its home, then opens', async ({ page, request }) => {
+  const stamp = Date.now();
+  const text = `${PREFIX}${stamp} garden plan\nbeds by the fence`;
+  await request.post('/api/captures', { data: { body: text } });
+  const area = await createNode(request, `${PREFIX}area ${stamp}`, { node_type: 'area' });
+  let made: string | undefined;
+  try {
+    const { row, dialog } = await convertDialog(page, `${PREFIX}${stamp} garden plan`);
+    // The first line is the title, the rest the body.
+    await expect(dialog.getByRole('textbox', { name: 'Title' })).toHaveValue(`${PREFIX}${stamp} garden plan`);
+    await expect(dialog.getByRole('textbox', { name: 'Body' })).toHaveValue('beds by the fence');
+    await pick(page, 'Choose a home (Area)…', `${PREFIX}area ${stamp}`);
+    await dialog.getByRole('button', { name: 'Convert' }).click();
+
+    await expect(row).toHaveCount(0);
+    const toast = page.locator('[role="status"]').filter({ hasText: 'Made a new Article' });
+    await toast.getByRole('button', { name: 'Open' }).click();
+    await expect(page).toHaveURL(/\/nodes\/[0-9a-f-]{36}$/);
+    made = page.url().split('/').pop();
+    const home = await (await request.get(`/api/nodes/${made}/home`)).json();
+    expect(home.home.node.id).toBe(area.id);
+  } finally {
+    if (made) await request.delete(`/api/nodes/${made}`);
+    await request.delete(`/api/nodes/${area.id}`);
+  }
+});
+
+test('a capture becomes a note on a node, or a task in a Project', async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = await createNode(request, `${PREFIX}host ${stamp}`);
+  const project = await createNode(request, `${PREFIX}proj ${stamp}`, { node_type: 'project' });
+  try {
+    const note = `${PREFIX}${stamp} met Ana about the lease`;
+    await request.post('/api/captures', { data: { body: note } });
+    let { row, dialog } = await convertDialog(page, note);
+    await dialog.getByRole('button', { name: 'Note', exact: true }).click();
+    await pick(page, 'Note on a node…', `${PREFIX}host ${stamp}`);
+    await dialog.getByRole('button', { name: 'Convert' }).click();
+    await expect(row).toHaveCount(0);
+    const notes: { body: string }[] = await (await request.get(`/api/nodes/${host.id}/notes`)).json();
+    expect(notes.map((n) => n.body)).toContain(note);
+
+    const task = `${PREFIX}${stamp} call the bank`;
+    await request.post('/api/captures', { data: { body: task } });
+    ({ row, dialog } = await convertDialog(page, task));
+    await dialog.getByRole('button', { name: 'Task', exact: true }).click();
+    const convert = dialog.getByRole('button', { name: 'Convert' });
+    await expect(convert).toBeDisabled(); // no Project yet (§9.3)
+    await pick(page, 'Task in a Project…', `${PREFIX}proj ${stamp}`);
+    await dialog.getByLabel('Due date').fill('2026-11-07');
+    await convert.click();
+    await expect(row).toHaveCount(0);
+    await expect(page.locator('[role="status"]').getByText(/Added a task to/)).toBeVisible();
+    const tasks: { title: string; due_date: string }[] = await (
+      await request.get(`/api/nodes/${project.id}/tasks`)
+    ).json();
+    expect(tasks.find((t) => t.title === task)?.due_date).toBe('2026-11-07');
+  } finally {
+    await request.delete(`/api/nodes/${host.id}`);
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
+test('a long capture must be reworded to become a task', async ({ page, request }) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `${PREFIX}proj long ${stamp}`, { node_type: 'project' });
+  const text = `${PREFIX}${stamp} ${'word '.repeat(110)}`;
+  await request.post('/api/captures', { data: { body: text } });
+  try {
+    const { row, dialog } = await convertDialog(page, `${PREFIX}${stamp}`);
+    await dialog.getByRole('button', { name: 'Task', exact: true }).click();
+    await pick(page, 'Task in a Project…', `${PREFIX}proj long ${stamp}`);
+    const convert = dialog.getByRole('button', { name: 'Convert' });
+    // Never cut: the whole text is there, over the limit, so Convert waits.
+    await expect(dialog.getByTestId('title-counter')).toHaveText(/\/ 500/);
+    await expect(convert).toBeDisabled();
+    await dialog.getByRole('textbox', { name: 'Task title' }).fill(`${PREFIX}${stamp} the short version`);
+    await expect(convert).toBeEnabled();
+    await convert.click();
+    await expect(row).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
+test('a conversion is the owner’s, and a task needs a Project', async ({ request, otherRequest }) => {
+  const stamp = Date.now();
+  const made = await request.post('/api/captures', { data: { body: `${PREFIX}${stamp} mine` } });
+  const id = (await made.json()).id as string;
+  const article = await createNode(request, `${PREFIX}article ${stamp}`);
+  try {
+    // Another account: 404, as if it didn't exist, and it stays.
+    const theirs = await otherRequest.post(`/api/captures/${id}/convert`, {
+      data: { into: 'node', node_type: 'article', title: `${PREFIX}stolen ${stamp}` },
+    });
+    expect(theirs.status()).toBe(404);
+    // A Task on an Article: 422 (§9.3), and the capture stays.
+    const onArticle = await request.post(`/api/captures/${id}/convert`, {
+      data: { into: 'task', node_id: article.id, title: 'x' },
+    });
+    expect(onArticle.status()).toBe(422);
+    const mine: { id: string }[] = await (await request.get('/api/captures')).json();
+    expect(mine.some((c) => c.id === id)).toBe(true);
+  } finally {
+    await request.delete(`/api/nodes/${article.id}`);
+  }
+});
+
+test('the convert dialog works from the keyboard', async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = await createNode(request, `${PREFIX}kbd host ${stamp}`);
+  const text = `${PREFIX}${stamp} by keyboard`;
+  await request.post('/api/captures', { data: { body: text } });
+  try {
+    // Focus starts inside: Escape closes, and the capture stays (review of
+    // S4b: focus used to stay on the row, so Escape did nothing).
+    let { row, dialog } = await convertDialog(page, text);
+    await expect(dialog.getByRole('textbox', { name: 'Title' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(row).toBeVisible();
+
+    // A keyboard pick keeps focus in the dialog, so Ctrl+Enter converts.
+    ({ row, dialog } = await convertDialog(page, text));
+    await dialog.getByRole('button', { name: 'Note', exact: true }).click();
+    const picker = page.getByRole('combobox', { name: 'Note on a node…' });
+    await picker.fill(`${PREFIX}kbd host ${stamp}`);
+    await expect(
+      page.getByRole('listbox').getByRole('option', { selected: true }),
+    ).toContainText(`kbd host ${stamp}`);
+    await picker.press('Enter');
+    await expect(dialog.getByRole('button', { name: 'Convert' })).toBeFocused();
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await expect(row).toHaveCount(0);
+    const notes: { body: string }[] = await (await request.get(`/api/nodes/${host.id}/notes`)).json();
+    expect(notes.map((n) => n.body)).toContain(text);
+  } finally {
+    await request.delete(`/api/nodes/${host.id}`);
+  }
+});

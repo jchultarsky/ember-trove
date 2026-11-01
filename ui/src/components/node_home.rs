@@ -38,7 +38,7 @@ fn shown(home: &NodeHome) -> Shown {
 }
 
 /// The picker's placeholder: which kinds may be the home.
-fn pick_placeholder(kinds: &[NodeType]) -> String {
+pub(crate) fn pick_placeholder(kinds: &[NodeType]) -> String {
     let names: Vec<&str> = kinds
         .iter()
         .map(|k| crate::components::node_meta::type_label(k.as_str()))
