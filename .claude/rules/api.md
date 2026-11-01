@@ -141,6 +141,15 @@ cargo check && cargo clippy -- -D warnings
   `SuspendedSet::refresh`, whose generation check drops a read that raced
   a route's change. Always write the row before touching the set.
 - An admin can't suspend, delete or demote their own account (422).
+- `{id}` must be the canonical lower-case UUID (`account_id`): Cognito
+  also accepts an email alias or another casing, which would miss the
+  self-guard and the set.
+- Delete suspends first and ends with `mark_deleted`; the row stays a day
+  (the longest ID-token life), then the daily sweep drops it.
+- `/auth/callback` and `/auth/refresh` sit outside the layer, so they
+  check `suspended_session` themselves (callback → Cognito logout URL,
+  refresh → revoke + 401). Any new public route that mints a session must
+  do the same.
 
 ## Admin permission model
 

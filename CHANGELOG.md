@@ -19,8 +19,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     if Cognito then fails, the admin is told and can retry.
     `POST …/reactivate` lifts the suspension only once Cognito has allowed
     sign-in again.
+  - Login and session renewal refuse a suspended account too. The
+    renewal revokes its refresh token, and a login goes out through
+    Cognito's logout, so the browser can't loop back in.
+  - Account ids in these routes must be the canonical lower-case UUID. An
+    email alias or another casing reached Cognito but missed the
+    suspended list and the self-guard.
   - The Cognito IAM policy needs `AdminDisableUser`, `AdminEnableUser` and
     `AdminUserGlobalSignOut` (`docs/deploy-aws.md`).
+- **Deleting an account suspends it first and keeps it refused for a day**
+  (#239). An ID token issued before the deletion used to work until it
+  expired, about an hour.
 - **An admin can no longer suspend or delete their own account, or remove
   their own admin role** (#239), so the last admin can't lock everyone out.
 

@@ -237,6 +237,7 @@ async fn main() -> anyhow::Result<()> {
         let tasks = state.tasks.clone();
         let notes = state.notes.clone();
         let captures = state.captures.clone();
+        let accounts = state.accounts.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
             loop {
@@ -262,6 +263,16 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "capture tombstone purge failed"),
+                }
+                // A deleted account stays refused for a day (#239): the
+                // longest a Cognito ID token issued before the deletion lives.
+                let token_cutoff = chrono::Utc::now() - chrono::TimeDelta::days(1);
+                match accounts.purge_deleted_before(token_cutoff).await {
+                    Ok(purged) if purged > 0 => {
+                        tracing::info!(purged, "dropped expired deleted-account rows");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(?e, "deleted-account row purge failed"),
                 }
             }
         });

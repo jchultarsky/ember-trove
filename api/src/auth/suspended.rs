@@ -88,15 +88,18 @@ impl SuspendedSet {
 
 /// Refuse a suspended subject's request with the same 401 as a bad token,
 /// so nothing tells the client why. Runs inside `require_auth`, which has
-/// put the claims in place (the e2e bypass included).
+/// put the claims in place (the e2e bypass included). No claims means the
+/// layers were stacked the wrong way round: refuse, so that mistake breaks
+/// every route loudly instead of letting suspended accounts through.
 pub async fn reject_suspended(
     State(state): State<AppState>,
     request: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    if let Some(claims) = request.extensions().get::<AuthClaims>()
-        && state.suspended.contains(&claims.sub).await
-    {
+    let Some(claims) = request.extensions().get::<AuthClaims>() else {
+        return Err(ApiError::Unauthorized("invalid token".to_string()));
+    };
+    if state.suspended.contains(&claims.sub).await {
         return Err(ApiError::Unauthorized("invalid token".to_string()));
     }
     Ok(next.run(request).await)

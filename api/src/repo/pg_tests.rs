@@ -3903,3 +3903,39 @@ async fn suspended_accounts_round_trip(pool: PgPool) {
     let set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
     assert_eq!(set, ["u-2"]);
 }
+
+/// A deleted account stays refused until the sweep (#239): reactivating it
+/// can't drop the row, and only rows deleted before the cutoff go.
+#[sqlx::test(migrations = "../migrations")]
+async fn deleted_accounts_stay_suspended_until_the_sweep(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    repo.suspend("gone", "admin").await.unwrap();
+    repo.mark_deleted("gone", "admin").await.unwrap();
+    repo.mark_deleted("never-suspended", "admin").await.unwrap();
+    repo.unsuspend("gone").await.unwrap();
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["gone", "never-suspended"]);
+
+    // Too recent for the sweep.
+    let purged = repo
+        .purge_deleted_before(Utc::now() - Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+
+    sqlx::query("UPDATE suspended_accounts SET deleted_at = now() - interval '2 days' WHERE subject_id = 'gone'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    repo.suspend("live", "admin").await.unwrap();
+    let purged = repo
+        .purge_deleted_before(Utc::now() - Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["live", "never-suspended"]);
+}

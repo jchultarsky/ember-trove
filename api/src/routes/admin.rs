@@ -81,15 +81,28 @@ async fn create_user(
     Ok((StatusCode::CREATED, Json(user)))
 }
 
-/// `DELETE /admin/users/{id}` — hard-delete a Cognito user by their username (UUID).
+/// `DELETE /admin/users/{id}`: delete the account (#239). It is suspended
+/// first and stays refused until its last ID token has expired.
 async fn delete_user(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
+    let id = account_id(&id)?;
     refuse_own_account(&claims, &id, "You can't delete your own account.")?;
-    cognito_client(&state)?.delete_user(&id).await?;
+    let directory = cognito_client(&state)?;
+    // Lock the account out first, so a deletion that stops halfway leaves
+    // it suspended rather than live; every step is safe to retry.
+    state.accounts.suspend(&id, &claims.sub).await?;
+    state.suspended.insert(&id).await;
+    match directory.delete_user(&id).await {
+        Ok(()) | Err(ApiError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+    // An ID token issued before now stays valid until it expires, so the
+    // row stays (marked deleted) until the daily sweep.
+    state.accounts.mark_deleted(&id, &claims.sub).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -111,6 +124,7 @@ async fn set_user_roles(
     Json(req): Json<UpdateUserRolesRequest>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
+    let id = account_id(&id)?;
     if !req.roles.iter().any(|r| r == ADMIN_ROLE) {
         refuse_own_account(&claims, &id, "You can't remove your own admin role.")?;
     }
@@ -127,6 +141,22 @@ const ADMIN_ROLE: &str = "admin";
 /// already refused by the API; Cognito's sign-in block didn't confirm.
 const SUSPEND_UNCONFIRMED: &str = "The account is suspended in Ember Trove, but the sign-in \
      provider didn't confirm. Try again.";
+
+/// The account id in the path, in the one spelling the API keys on: a
+/// lower-case hyphenated UUID, which is both the Cognito username and the
+/// token's `sub` (the pool signs in by email; see `UserDirectory`).
+///
+/// SECURITY (#239): Cognito also accepts an email alias, or the UUID in
+/// another case, as a username. Such an id would reach the right Cognito
+/// user while missing the self-guard and the suspended list, which compare
+/// strings. So anything but the canonical form is refused.
+fn account_id(raw: &str) -> Result<String, ApiError> {
+    let canonical = uuid::Uuid::parse_str(raw)
+        .map(|u| u.hyphenated().to_string())
+        .ok()
+        .filter(|c| c == raw);
+    canonical.ok_or_else(|| ApiError::Validation("not an account id".to_string()))
+}
 
 /// An admin can't lock out, delete or demote their own account (#239), so
 /// the last admin can't remove the only way back in.
@@ -151,6 +181,7 @@ async fn suspend_user(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
+    let id = account_id(&id)?;
     refuse_own_account(&claims, &id, "You can't suspend your own account.")?;
     let directory = cognito_client(&state)?;
     state.accounts.suspend(&id, &claims.sub).await?;
@@ -169,13 +200,15 @@ async fn suspend_user(
 /// `POST /admin/users/{id}/reactivate` (#239). Fails closed the other way:
 /// Cognito lets the account sign in again first, and only then does the
 /// API take it off the list. If Cognito fails, or no longer has the
-/// account, it stays on the list (deleting the account removes the row).
+/// account, it stays on the list (a deleted account's row is dropped by
+/// the daily sweep, once its last ID token has expired).
 async fn reactivate_user(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
+    let id = account_id(&id)?;
     cognito_client(&state)?.enable_user(&id).await?;
     state.accounts.unsuspend(&id).await?;
     state.suspended.remove(&id).await;

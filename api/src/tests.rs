@@ -3734,6 +3734,18 @@ async fn a_project_status_can_be_set_only_on_a_project_but_always_cleared() {
 
 // ── Account lifecycle (#239) ─────────────────────────────────────────────────
 
+const ADMIN_SUB: &str = "0a0a0a0a-0000-4000-8000-00000000000a";
+const U1: &str = "00000000-0000-4000-8000-000000000001";
+const U2: &str = "00000000-0000-4000-8000-000000000002";
+
+/// An admin whose `sub` is a real account id, as Cognito issues them.
+fn uuid_admin() -> common::auth::AuthClaims {
+    common::auth::AuthClaims {
+        sub: ADMIN_SUB.to_string(),
+        ..admin_claims()
+    }
+}
+
 /// One log shared by the account repo and the directory fake, so a test can
 /// assert the order of the steps across both.
 type StepLog = Arc<std::sync::Mutex<Vec<String>>>;
@@ -3762,6 +3774,20 @@ impl crate::repo::account::AccountRepo for StubAccountRepo {
         self.log.lock().unwrap().push(format!("row- {subject_id}"));
         self.rows.lock().unwrap().remove(subject_id);
         Ok(())
+    }
+    async fn mark_deleted(&self, subject_id: &str, _by: &str) -> Result<(), EmberTroveError> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("row deleted {subject_id}"));
+        self.rows.lock().unwrap().insert(subject_id.to_string());
+        Ok(())
+    }
+    async fn purge_deleted_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        Ok(0)
     }
 }
 
@@ -3792,7 +3818,7 @@ impl FakeDirectory {
 #[async_trait]
 impl crate::admin::UserDirectory for FakeDirectory {
     async fn list_users(&self) -> Result<Vec<common::admin::AdminUser>, crate::error::ApiError> {
-        Ok(["test-sub", "u-1", "u-2"]
+        Ok([ADMIN_SUB, U1, U2]
             .into_iter()
             .map(|id| common::admin::AdminUser {
                 id: id.to_string(),
@@ -3885,24 +3911,24 @@ async fn account_lifecycle_routes_are_admin_only() {
     let (state, log) = lifecycle_state(FakeDirectory::default());
     let app = admin_app_with(state.clone(), fake_claims());
     for (method, uri) in [
-        ("POST", "/admin/users/u-1/suspend"),
-        ("POST", "/admin/users/u-1/reactivate"),
-        ("DELETE", "/admin/users/u-1"),
-        ("PUT", "/admin/users/u-1/roles"),
+        ("POST", format!("/admin/users/{U1}/suspend")),
+        ("POST", format!("/admin/users/{U1}/reactivate")),
+        ("DELETE", format!("/admin/users/{U1}")),
+        ("PUT", format!("/admin/users/{U1}/roles")),
     ] {
-        let (status, _) = admin_call(&app, method, uri, r#"{"roles":[]}"#).await;
+        let (status, _) = admin_call(&app, method, &uri, r#"{"roles":[]}"#).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
     }
     assert!(steps(&log).is_empty(), "nothing may run for a non-admin");
-    assert!(!state.suspended.contains("u-1").await);
+    assert!(!state.suspended.contains(U1).await);
 }
 
 /// SECURITY (#239): the last admin can't remove the only way back in.
 #[tokio::test]
 async fn an_admin_cannot_suspend_delete_or_demote_themselves() {
     let (state, log) = lifecycle_state(FakeDirectory::default());
-    let app = admin_app_with(state.clone(), admin_claims());
-    let me = admin_claims().sub;
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let me = ADMIN_SUB;
     for (method, uri, body) in [
         ("POST", format!("/admin/users/{me}/suspend"), "{}"),
         ("DELETE", format!("/admin/users/{me}"), "{}"),
@@ -3916,7 +3942,7 @@ async fn an_admin_cannot_suspend_delete_or_demote_themselves() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
     }
     assert!(steps(&log).is_empty());
-    assert!(!state.suspended.contains(&me).await);
+    assert!(!state.suspended.contains(me).await);
 
     // Changing your own roles while keeping admin is fine.
     let (status, _) = admin_call(
@@ -3932,15 +3958,19 @@ async fn an_admin_cannot_suspend_delete_or_demote_themselves() {
 #[tokio::test]
 async fn suspend_blocks_the_api_before_asking_cognito() {
     let (state, log) = lifecycle_state(FakeDirectory::default());
-    let app = admin_app_with(state.clone(), admin_claims());
-    let (status, _) = admin_call(&app, "POST", "/admin/users/u-1/suspend", "").await;
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(
         steps(&log),
-        ["row+ u-1", "disable u-1", "sign-out u-1"],
+        [
+            format!("row+ {U1}"),
+            format!("disable {U1}"),
+            format!("sign-out {U1}")
+        ],
         "the row lands before Cognito is asked"
     );
-    assert!(state.suspended.contains("u-1").await);
+    assert!(state.suspended.contains(U1).await);
 
     let (status, body) = admin_call(&app, "GET", "/admin/users", "").await;
     assert_eq!(status, StatusCode::OK);
@@ -3949,9 +3979,9 @@ async fn suspend_blocks_the_api_before_asking_cognito() {
     assert_eq!(
         flags,
         [
-            ("test-sub".to_string(), false),
-            ("u-1".to_string(), true),
-            ("u-2".to_string(), false)
+            (ADMIN_SUB.to_string(), false),
+            (U1.to_string(), true),
+            (U2.to_string(), false)
         ]
     );
 }
@@ -3965,11 +3995,12 @@ async fn a_cognito_failure_leaves_the_account_suspended() {
             fail: Some(op),
             ..FakeDirectory::default()
         });
-        let app = admin_app_with(state.clone(), admin_claims());
-        let (status, body) = admin_call(&app, "POST", "/admin/users/u-1/suspend", "").await;
+        let app = admin_app_with(state.clone(), uuid_admin());
+        let (status, body) =
+            admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{op}");
         assert!(body.contains("suspended in Ember Trove"), "{body}");
-        assert!(state.suspended.contains("u-1").await, "{op}");
+        assert!(state.suspended.contains(U1).await, "{op}");
     }
 }
 
@@ -3979,22 +4010,29 @@ async fn suspending_an_account_cognito_lacks_keeps_it_refused() {
         missing: true,
         ..FakeDirectory::default()
     });
-    let app = admin_app_with(state.clone(), admin_claims());
-    let (status, _) = admin_call(&app, "POST", "/admin/users/u-1/suspend", "").await;
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(state.suspended.contains("u-1").await);
+    assert!(state.suspended.contains(U1).await);
 }
 
 #[tokio::test]
 async fn reactivate_unblocks_only_after_cognito() {
     let (state, log) = lifecycle_state(FakeDirectory::default());
-    state.accounts.suspend("u-1", "admin").await.unwrap();
-    state.suspended.insert("u-1").await;
-    let app = admin_app_with(state.clone(), admin_claims());
-    let (status, _) = admin_call(&app, "POST", "/admin/users/u-1/reactivate", "").await;
+    state.accounts.suspend(U1, "admin").await.unwrap();
+    state.suspended.insert(U1).await;
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/reactivate"), "").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(steps(&log), ["row+ u-1", "enable u-1", "row- u-1"]);
-    assert!(!state.suspended.contains("u-1").await);
+    assert_eq!(
+        steps(&log),
+        [
+            format!("row+ {U1}"),
+            format!("enable {U1}"),
+            format!("row- {U1}")
+        ]
+    );
+    assert!(!state.suspended.contains(U1).await);
 }
 
 #[tokio::test]
@@ -4010,11 +4048,12 @@ async fn a_failed_reactivation_stays_suspended() {
         },
     ] {
         let (state, log) = lifecycle_state(directory);
-        state.suspended.insert("u-1").await;
-        let app = admin_app_with(state.clone(), admin_claims());
-        let (status, _) = admin_call(&app, "POST", "/admin/users/u-1/reactivate", "").await;
+        state.suspended.insert(U1).await;
+        let app = admin_app_with(state.clone(), uuid_admin());
+        let (status, _) =
+            admin_call(&app, "POST", &format!("/admin/users/{U1}/reactivate"), "").await;
         assert!(status.is_client_error() || status.is_server_error());
-        assert!(state.suspended.contains("u-1").await);
+        assert!(state.suspended.contains(U1).await);
         assert!(!steps(&log).iter().any(|s| s.starts_with("row-")));
     }
 }
@@ -4070,4 +4109,111 @@ async fn a_suspended_account_s_valid_token_gets_401() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// SECURITY (#239): Cognito accepts an email alias, or the UUID in another
+/// case, as a username. Such an id would miss the self-guard and the
+/// suspended list, so only the canonical id is accepted.
+#[tokio::test]
+async fn only_the_canonical_account_id_is_accepted() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let upper = ADMIN_SUB.to_uppercase();
+    for id in [
+        upper.as_str(),
+        "admin@example.com",
+        "0a0a0a0a00004000800000000000000a",
+        "{0a0a0a0a-0000-4000-8000-00000000000a}",
+        "not-an-id",
+    ] {
+        for (method, uri, body) in [
+            ("POST", format!("/admin/users/{id}/suspend"), ""),
+            ("POST", format!("/admin/users/{id}/reactivate"), ""),
+            ("DELETE", format!("/admin/users/{id}"), ""),
+            ("PUT", format!("/admin/users/{id}/roles"), r#"{"roles":[]}"#),
+        ] {
+            let (status, _) = admin_call(&app, method, &uri, body).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
+        }
+    }
+    assert!(
+        steps(&log).is_empty(),
+        "nothing may run for a non-canonical id"
+    );
+}
+
+#[tokio::test]
+async fn delete_locks_the_account_out_first_and_keeps_it_refused() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        steps(&log),
+        [
+            format!("row+ {U1}"),
+            format!("delete {U1}"),
+            format!("row deleted {U1}")
+        ]
+    );
+    // An ID token issued before the deletion is still refused.
+    assert!(state.suspended.contains(U1).await);
+}
+
+/// A retry after Cognito already deleted the account still finishes.
+#[tokio::test]
+async fn deleting_an_account_cognito_lacks_still_finishes() {
+    let (state, log) = lifecycle_state(FakeDirectory {
+        missing: true,
+        ..FakeDirectory::default()
+    });
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(steps(&log).contains(&format!("row deleted {U1}")));
+    assert!(state.suspended.contains(U1).await);
+}
+
+#[tokio::test]
+async fn a_failed_cognito_delete_leaves_the_account_suspended() {
+    let (state, log) = lifecycle_state(FakeDirectory {
+        fail: Some("delete"),
+        ..FakeDirectory::default()
+    });
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(state.suspended.contains(U1).await);
+    assert!(!steps(&log).iter().any(|s| s.starts_with("row deleted")));
+}
+
+/// Without a configured directory nothing is written: the route can't
+/// finish, so it mustn't half-start.
+#[tokio::test]
+async fn suspend_without_a_directory_writes_nothing() {
+    let state = test_state();
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(state.accounts.suspended().await.unwrap().is_empty());
+    assert!(!state.suspended.contains(U1).await);
+}
+
+/// The suspended check fails closed: with no claims in place (the layers
+/// stacked the wrong way round) every request is refused.
+#[tokio::test]
+async fn reject_suspended_refuses_a_request_without_claims() {
+    let state = test_state();
+    let app = Router::new()
+        .merge(crate::routes::auth::protected_router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::suspended::reject_suspended,
+        ))
+        .with_state(state);
+    let resp = app
+        .oneshot(Request::get("/auth/me").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
