@@ -149,35 +149,7 @@ impl PgTaskRepo {
         req: CreateTaskRequest,
         parent: Option<TaskId>,
     ) -> Result<Task, EmberTroveError> {
-        // node_id from path param takes precedence; fall back to body field.
-        let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
-        let status = req.status.as_ref().map_or("open", |s| s.as_str());
-        let priority = req.priority.as_ref().map_or("medium", |p| p.as_str());
-        let recurrence = req.recurrence.as_ref().map(|r| r.as_str().to_string());
-
-        let row = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
-            INSERT INTO node_tasks
-                (node_id, owner_id, title, status, priority, focus_date, due_date, recurrence,
-                 recurrence_parent_id)
-            VALUES ($1, $2, $3, $4::task_status, $5::task_priority, $6, $7, $8, $9)
-            RETURNING {SELECT_COLS}
-            "#
-        ))
-        .bind(resolved_node_id)
-        .bind(owner_id)
-        .bind(&req.title)
-        .bind(status)
-        .bind(priority)
-        .bind(req.focus_date)
-        .bind(req.due_date)
-        .bind(recurrence)
-        .bind(parent.map(|p| p.0))
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("create task failed: {e}")))?;
-
-        row.into_task()
+        insert_task(&self.pool, node_id, owner_id, &req, parent).await
     }
 }
 
@@ -277,6 +249,46 @@ fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
         task,
         node_title: r.node_title,
     })
+}
+
+/// Insert a task (`TaskRepo::create`), on any executor, so capture
+/// conversion (#234) can do it inside its transaction.
+pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    node_id: Option<NodeId>,
+    owner_id: &str,
+    req: &CreateTaskRequest,
+    parent: Option<TaskId>,
+) -> Result<Task, EmberTroveError> {
+    // node_id from path param takes precedence; fall back to body field.
+    let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
+    let status = req.status.as_ref().map_or("open", |s| s.as_str());
+    let priority = req.priority.as_ref().map_or("medium", |p| p.as_str());
+    let recurrence = req.recurrence.as_ref().map(|r| r.as_str().to_string());
+
+    let row = sqlx::query_as::<_, TaskRow>(&format!(
+        r#"
+        INSERT INTO node_tasks
+            (node_id, owner_id, title, status, priority, focus_date, due_date, recurrence,
+             recurrence_parent_id)
+        VALUES ($1, $2, $3, $4::task_status, $5::task_priority, $6, $7, $8, $9)
+        RETURNING {SELECT_COLS}
+        "#
+    ))
+    .bind(resolved_node_id)
+    .bind(owner_id)
+    .bind(&req.title)
+    .bind(status)
+    .bind(priority)
+    .bind(req.focus_date)
+    .bind(req.due_date)
+    .bind(recurrence)
+    .bind(parent.map(|p| p.0))
+    .fetch_one(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("create task failed: {e}")))?;
+
+    row.into_task()
 }
 
 #[async_trait]

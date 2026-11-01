@@ -115,6 +115,15 @@ cargo check && cargo clippy -- -D warnings
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
   rule). Restore also clears the live captures and nodeless tasks, which
   the `nodes` cascade never reached.
+- `POST /captures/{id}/convert` (S4b): the route checks the destination
+  first, as its create route would (editor on the node or home, the
+  containment table, `Capability::Tasks`). Then `CaptureRepo::convert`
+  runs one transaction: it **deletes the capture first** (no row: 404,
+  nothing made), then inserts through the shared executor-generic helpers
+  (`insert_node`, `insert_grant`, `insert_home`, `insert_note`,
+  `insert_task`). A failed insert rolls the delete back. Reuse those
+  helpers for any other write that must share a transaction; don't copy
+  the SQL.
 
 ## Admin permission model
 

@@ -157,6 +157,36 @@ async fn structural_refusal(
         .then(|| EdgeRefusal::Loop(req.edge_type.clone())))
 }
 
+/// Link `child` into `parent` (`contains`): its home. The caller has
+/// checked access and kinds, and holds the type lock or knows the child is
+/// new (no loop can pass through a node with no children). A repeat is a
+/// no-op; a vanished node is `NotFound`; a second home (`edges_one_home`)
+/// is the usual 422.
+pub(crate) async fn insert_home<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    parent: NodeId,
+    child: NodeId,
+) -> Result<(), EmberTroveError> {
+    sqlx::query(
+        "INSERT INTO edges (source_id, target_id, edge_type) \
+         VALUES ($1, $2, 'contains') ON CONFLICT DO NOTHING",
+    )
+    .bind(parent.0)
+    .bind(child.0)
+    .execute(ex)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(d) if d.is_foreign_key_violation() => {
+            EmberTroveError::NotFound("node not found".to_string())
+        }
+        sqlx::Error::Database(d) if d.constraint() == Some("edges_one_home") => {
+            EmberTroveError::Validation(EdgeRefusal::SecondHome.message())
+        }
+        _ => EmberTroveError::Internal(format!("set home failed: {e}")),
+    })?;
+    Ok(())
+}
+
 /// Would the edge close a loop: is its source reachable from its target
 /// through edges of its type? The caller holds the type's lock.
 async fn closes_loop(
@@ -416,20 +446,7 @@ impl EdgeRepo for PgEdgeRepo {
         let home = match parent {
             None => None,
             Some(parent) => {
-                sqlx::query(
-                    "INSERT INTO edges (source_id, target_id, edge_type) \
-                     VALUES ($1, $2, 'contains') ON CONFLICT DO NOTHING",
-                )
-                .bind(parent.0)
-                .bind(child.0)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| match &e {
-                    sqlx::Error::Database(d) if d.is_foreign_key_violation() => {
-                        EmberTroveError::NotFound("node not found".to_string())
-                    }
-                    _ => fail(e),
-                })?;
+                insert_home(&mut *tx, parent, child).await?;
                 sqlx::query_as::<_, EdgeRow>(
                     "SELECT id, source_id, target_id, edge_type::text, label, created_at \
                      FROM edges WHERE edge_type = 'contains' AND target_id = $1",

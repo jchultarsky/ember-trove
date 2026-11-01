@@ -141,6 +141,32 @@ impl FeedRow {
     }
 }
 
+/// Insert a note on a node (`NoteRepo::create`), on any executor, so
+/// capture conversion (#234) can do it inside its transaction.
+pub(crate) async fn insert_note<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    node_id: NodeId,
+    owner_id: &str,
+    req: &CreateNoteRequest,
+) -> Result<Note, EmberTroveError> {
+    let row = sqlx::query_as::<_, NoteRow>(
+        r#"
+        INSERT INTO node_notes (node_id, owner_id, body, color)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, node_id, owner_id, body, color, created_at, updated_at
+        "#,
+    )
+    .bind(node_id.0)
+    .bind(owner_id)
+    .bind(&req.body)
+    .bind(&req.color)
+    .fetch_one(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("create note failed: {e}")))?;
+
+    Ok(row.into_note())
+}
+
 #[async_trait]
 impl NoteRepo for PgNoteRepo {
     async fn create(
@@ -149,22 +175,7 @@ impl NoteRepo for PgNoteRepo {
         owner_id: &str,
         req: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
-        let row = sqlx::query_as::<_, NoteRow>(
-            r#"
-            INSERT INTO node_notes (node_id, owner_id, body, color)
-            VALUES ($1, $2, $3, $4)
-            RETURNING id, node_id, owner_id, body, color, created_at, updated_at
-            "#,
-        )
-        .bind(node_id.0)
-        .bind(owner_id)
-        .bind(&req.body)
-        .bind(&req.color)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("create note failed: {e}")))?;
-
-        Ok(row.into_note())
+        insert_note(&self.pool, node_id, owner_id, &req).await
     }
 
     async fn update(

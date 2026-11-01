@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::backup::BackupNote;
-use crate::id::CaptureId;
+use crate::id::{CaptureId, NodeId, NoteId, TaskId};
+use crate::node::NodeType;
+use crate::task::TaskPriority;
 
 /// The longest a capture may be, in characters (the database's CHECK).
 pub const MAX_LEN: usize = 10_000;
@@ -34,6 +36,98 @@ pub struct Capture {
 pub struct CaptureRequest {
     #[garde(length(chars, min = 1, max = MAX_LEN))]
     pub body: String,
+}
+
+/// The longest title a node or a Task may have, in characters (the
+/// database's CHECKs).
+pub const TITLE_MAX_LEN: usize = 500;
+
+/// `POST /captures/{id}/convert` (#234, ONTOLOGY §9.1): the one thing a
+/// capture becomes. Its text is copied or reworded by the user; the
+/// capture is then deleted, with no link back to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "into", rename_all = "snake_case")]
+pub enum ConvertCaptureRequest {
+    /// A new node of any kind, optionally with its home (a `contains`
+    /// link from `home`).
+    Node {
+        node_type: NodeType,
+        title: String,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        home: Option<NodeId>,
+    },
+    /// A note on an existing node (§9.2).
+    Note { node_id: NodeId, body: String },
+    /// A Task in a Project (§9.3: a Task needs its Project).
+    Task {
+        node_id: NodeId,
+        title: String,
+        #[serde(default)]
+        due_date: Option<NaiveDate>,
+        #[serde(default)]
+        priority: Option<TaskPriority>,
+    },
+}
+
+impl ConvertCaptureRequest {
+    /// The request with its text trimmed, or why it can't be saved. Limits
+    /// count characters, as the database's CHECKs do. An empty node body
+    /// becomes `None`.
+    ///
+    /// # Errors
+    /// The 422 message: a blank or over-long title or note.
+    pub fn checked(self) -> Result<Self, String> {
+        fn text(s: &str, what: &str, max: usize) -> Result<String, String> {
+            let t = s.trim();
+            if t.is_empty() {
+                return Err(format!("{what} can't be empty"));
+            }
+            if t.chars().count() > max {
+                return Err(format!("{what} is longer than {max} characters"));
+            }
+            Ok(t.to_string())
+        }
+        Ok(match self {
+            Self::Node {
+                node_type,
+                title,
+                body,
+                home,
+            } => Self::Node {
+                node_type,
+                title: text(&title, "the title", TITLE_MAX_LEN)?,
+                body: body.map(|b| b.trim().to_string()).filter(|b| !b.is_empty()),
+                home,
+            },
+            Self::Note { node_id, body } => Self::Note {
+                node_id,
+                body: text(&body, "the note", MAX_LEN)?,
+            },
+            Self::Task {
+                node_id,
+                title,
+                due_date,
+                priority,
+            } => Self::Task {
+                node_id,
+                title: text(&title, "the title", TITLE_MAX_LEN)?,
+                due_date,
+                priority,
+            },
+        })
+    }
+}
+
+/// What a capture became: enough for the Inbox's toast to name it and
+/// open it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "into", rename_all = "snake_case")]
+pub enum Converted {
+    Node { id: NodeId },
+    Note { id: NoteId, node_id: NodeId },
+    Task { id: TaskId, node_id: NodeId },
 }
 
 /// A note with no node becomes a capture (#234): migration 043's rule, kept
@@ -101,6 +195,73 @@ mod tests {
             body: "é".repeat(MAX_LEN + 1),
         };
         assert!(over.validate().is_err());
+    }
+
+    #[test]
+    fn a_convert_request_names_its_destination() {
+        let req: ConvertCaptureRequest = serde_json::from_value(serde_json::json!({
+            "into": "task",
+            "node_id": uuid::Uuid::from_u128(3),
+            "title": "call the bank",
+        }))
+        .expect("a task");
+        assert!(matches!(
+            req,
+            ConvertCaptureRequest::Task {
+                due_date: None,
+                priority: None,
+                ..
+            }
+        ));
+        // A Task without its Project is not a request at all (§9.3).
+        assert!(
+            serde_json::from_value::<ConvertCaptureRequest>(
+                serde_json::json!({ "into": "task", "title": "x" })
+            )
+            .is_err()
+        );
+        let out = serde_json::to_value(Converted::Node {
+            id: NodeId(uuid::Uuid::from_u128(4)),
+        })
+        .expect("json");
+        assert_eq!(out["into"], "node");
+    }
+
+    #[test]
+    fn a_convert_request_is_trimmed_and_limited_in_characters() {
+        let node = |title: String, body: Option<&str>| ConvertCaptureRequest::Node {
+            node_type: NodeType::Article,
+            title,
+            body: body.map(str::to_string),
+            home: None,
+        };
+        // Two bytes a character: 500 of them fit a title.
+        assert!(node("é".repeat(TITLE_MAX_LEN), None).checked().is_ok());
+        assert!(node("é".repeat(TITLE_MAX_LEN + 1), None).checked().is_err());
+        assert!(node("   ".into(), None).checked().is_err());
+        assert_eq!(
+            node(" Idea ".into(), Some("  ")).checked(),
+            Ok(node("Idea".into(), None))
+        );
+
+        let note = |body: String| ConvertCaptureRequest::Note {
+            node_id: NodeId(uuid::Uuid::from_u128(1)),
+            body,
+        };
+        assert!(note("ж".repeat(MAX_LEN)).checked().is_ok());
+        assert!(note("ж".repeat(MAX_LEN + 1)).checked().is_err());
+        assert!(note("\n ".into()).checked().is_err());
+
+        let task = ConvertCaptureRequest::Task {
+            node_id: NodeId(uuid::Uuid::from_u128(1)),
+            title: "x".repeat(TITLE_MAX_LEN + 1),
+            due_date: None,
+            priority: None,
+        };
+        assert!(
+            task.checked().is_err(),
+            "a Task's title must fit (owner decision)"
+        );
     }
 
     #[test]

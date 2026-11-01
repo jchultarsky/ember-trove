@@ -8,7 +8,15 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::{EmberTroveError, capture::Capture, id::CaptureId};
+use common::{
+    EmberTroveError,
+    capture::Capture,
+    id::{CaptureId, NodeId},
+    node::{CreateNodeRequest, Node},
+    note::{CreateNoteRequest, Note},
+    permission::{GrantPermissionRequest, PermissionRole},
+    task::{CreateTaskRequest, Task},
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -30,6 +38,48 @@ pub trait CaptureRepo: Send + Sync {
     async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError>;
     /// Every live capture of every owner: the admin-run backup only.
     async fn list_all(&self) -> Result<Vec<Capture>, EmberTroveError>;
+    /// Turn the owner's live capture into exactly one destination (§9.1)
+    /// in one transaction: the capture is hard-deleted first (no row:
+    /// `NotFound`, nothing made), then the destination is inserted. Any
+    /// failure rolls both back, so the text is never lost nor doubled.
+    /// The caller has already checked access and kinds.
+    async fn convert(
+        &self,
+        id: CaptureId,
+        owner: &str,
+        into: Destination,
+    ) -> Result<Made, EmberTroveError>;
+}
+
+/// What a capture becomes, ready to insert: the route has validated it,
+/// checked the caller's rights, and set a Project's initial status.
+#[derive(Debug, Clone)]
+pub enum Destination {
+    Node {
+        req: CreateNodeRequest,
+        home: Option<NodeId>,
+    },
+    Note {
+        node_id: NodeId,
+        req: CreateNoteRequest,
+    },
+    Task {
+        node_id: NodeId,
+        req: CreateTaskRequest,
+    },
+}
+
+/// The destination as inserted, for the route's follow-up (activity,
+/// webhooks, wiki links) and its answer.
+#[derive(Debug, Clone)]
+pub enum Made {
+    Node(Box<Node>),
+    Note(Note),
+    /// The Task and the Project it was made in.
+    Task {
+        project: NodeId,
+        task: Task,
+    },
 }
 
 pub struct PgCaptureRepo {
@@ -169,5 +219,54 @@ impl CaptureRepo for PgCaptureRepo {
         .await
         .map_err(db("list all captures"))?;
         Ok(rows.into_iter().map(Capture::from).collect())
+    }
+
+    async fn convert(
+        &self,
+        id: CaptureId,
+        owner: &str,
+        into: Destination,
+    ) -> Result<Made, EmberTroveError> {
+        let mut tx = self.pool.begin().await.map_err(db("convert capture"))?;
+        // First, so a missing (or someone else's, or binned) capture makes
+        // nothing; the row lock also stops a second convert of it. A hard
+        // delete: no provenance is kept (§9.1).
+        let gone = sqlx::query(
+            "DELETE FROM captures WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL",
+        )
+        .bind(id.0)
+        .bind(owner)
+        .execute(&mut *tx)
+        .await
+        .map_err(db("convert capture"))?;
+        if gone.rows_affected() == 0 {
+            return Err(not_found());
+        }
+        let made = match into {
+            Destination::Node { req, home } => {
+                let node = super::node::insert_node(&mut *tx, owner, &req).await?;
+                let grant = GrantPermissionRequest {
+                    subject_id: owner.to_string(),
+                    role: PermissionRole::Owner,
+                };
+                super::permission::insert_grant(&mut *tx, node.id, owner, &grant).await?;
+                if let Some(parent) = home {
+                    // A new node has no children, so no loop can pass
+                    // through it, and no other home: the `contains` lock
+                    // isn't needed.
+                    super::edge::insert_home(&mut *tx, parent, node.id).await?;
+                }
+                Made::Node(Box::new(node))
+            }
+            Destination::Note { node_id, req } => {
+                Made::Note(super::note::insert_note(&mut *tx, node_id, owner, &req).await?)
+            }
+            Destination::Task { node_id, req } => Made::Task {
+                project: node_id,
+                task: super::task::insert_task(&mut *tx, Some(node_id), owner, &req, None).await?,
+            },
+        };
+        tx.commit().await.map_err(db("convert capture"))?;
+        Ok(made)
     }
 }
