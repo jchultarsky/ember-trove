@@ -20,6 +20,8 @@ pub trait UserDirectory: Send + Sync {
     async fn list_users(&self) -> Result<Vec<AdminUser>, ApiError>;
     /// Create a user, assign its first groups and optionally email it.
     async fn create_user(&self, req: &CreateAdminUserRequest) -> Result<AdminUser, ApiError>;
+    /// The account's email, or `None` when the pool no longer has it.
+    async fn email_of(&self, username: &str) -> Result<Option<String>, ApiError>;
     /// The user with this email, if any.
     async fn find_user_by_email(&self, email: &str) -> Result<Option<AdminUser>, ApiError>;
     /// Hard-delete the account.

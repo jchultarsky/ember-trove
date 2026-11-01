@@ -146,6 +146,26 @@ cargo check && cargo clippy -- -D warnings
   self-guard and the set.
 - Delete suspends first and ends with `mark_deleted`; the row stays a day
   (the longest ID-token life), then the daily sweep drops it.
+- **Purge** (`AccountRepo::purge`, one transaction, advisory-locked per
+  subject): delete order is suspend → email → purge → drain → Cognito
+  delete → `mark_deleted`. Settings are deleted *before* the nodes so the
+  counts match `deletion_preview`. Anything new keyed by an account must
+  join the purge (`SETTINGS` or its own step); the pg test
+  `purging_an_account_removes_only_its_data` sweeps every
+  `owner_id/subject_id/created_by/granted_by/suspended_by` column and
+  fails on a leftover. Traces on others' nodes become `DELETED_ACCOUNT`.
+- **Stored files go through the `object_deletions` outbox.** The
+  `attachments_queue_object` trigger (migration 044) queues a file
+  whenever its attachment row is deleted, by any path (cascade, purge,
+  single delete, restore), so code never queues by hand. The one
+  exception is an upload whose row insert fails: it calls `enqueue`.
+  `state.drain_object_deletions()` runs one background drain at a time,
+  batching until the queue is empty; the daily loop retries. `due()`
+  first drops keys that a row names again, so a restored file is never
+  deleted. Never log an `s3_key`: it contains the file name.
+- The purge takes `FOR UPDATE` on the account's nodes after its advisory
+  lock, and the daily sweep re-purges deleted accounts before dropping
+  their rows (to catch in-flight writes).
 - `/auth/callback` and `/auth/refresh` sit outside the layer, so they
   check `suspended_session` themselves (callback → Cognito logout URL,
   refresh → revoke + 401). Any new public route that mints a session must

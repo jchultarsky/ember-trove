@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Deleting a node or an attachment now deletes its files from storage**
+  (#239). The rows went, but the stored objects stayed behind; a failed
+  single-attachment delete also logged the file name.
+  - A trigger on `attachments` (migration 044) queues the file of every
+    deleted row in `object_deletions`, in the same transaction, whatever
+    deleted it.
+  - A drain deletes the files right away, batch after batch until the
+    queue is empty, and the daily loop retries any that failed.
+  - A key that an attachment row names again (for example, after a
+    restore) leaves the queue and is never deleted.
+  - Files orphaned before this release are not swept yet; that is
+    backlog.
+
 ### Security
 - **Suspend an account** (#239): `POST /api/admin/users/{id}/suspend` keeps
   the account's data and stops it at once.
@@ -27,9 +41,35 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     suspended list and the self-guard.
   - The Cognito IAM policy needs `AdminDisableUser`, `AdminEnableUser` and
     `AdminUserGlobalSignOut` (`docs/deploy-aws.md`).
-- **Deleting an account suspends it first and keeps it refused for a day**
-  (#239). An ID token issued before the deletion used to work until it
-  expired, about an hour.
+- **Deleting an account deletes its data** (#239; owner decision). It used
+  to remove only the Cognito account and leave everything the person owned
+  behind.
+  - One transaction removes everything the account owns: its nodes (shared
+    ones too, so their sharees lose access), notes, tasks, captures,
+    People, tags, templates, saved searches, favorites, webhooks and
+    editor settings, and its grants. It also deletes every removed-edge
+    archive row whose node no longer exists.
+  - Its live tasks on other people's nodes pass to the node's owner and
+    leave My Day. Its notes there are deleted.
+  - What stays on other people's nodes, such as History entries, the
+    authorship of versions it saved and grants it made, is anonymised to
+    "Deleted account". Version text stays, because it is the node owner's
+    content.
+  - Its files are deleted from storage after the commit.
+  - The purge locks the account's nodes, so a sharee's upload waits and
+    then fails, rather than slipping a file in.
+  - The daily sweep runs the purge again on deleted accounts, which
+    removes anything an in-flight request wrote after the first run.
+  - The order is suspend, then purge, then delete in Cognito, and every
+    step is safe to retry. If the purge fails, the account stays
+    suspended in Cognito.
+  - The account stays refused for a day after deletion. Before this, an
+    ID token issued before the deletion kept working for up to an hour.
+  - `GET /api/admin/users/{id}/deletion-preview` gives counts only, never
+    titles. `DELETE` answers with the same counts.
+  - Earlier backups still hold the data until they are deleted: admin
+    backups, and the server's daily database dumps (kept 30 days). If
+    one of those is restored, the data comes back.
 - **An admin can no longer suspend or delete their own account, or remove
   their own admin role** (#239), so the last admin can't lock everyone out.
 

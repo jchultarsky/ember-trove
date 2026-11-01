@@ -222,6 +222,28 @@ impl UserDirectory for CognitoAdminClient {
         Ok(Some(cognito_user_to_dto(user, groups)))
     }
 
+    async fn email_of(&self, username: &str) -> Result<Option<String>, ApiError> {
+        // ListUsers by `sub` (the username here) needs no IAM action beyond
+        // the ones the admin page already uses. Callers pass a canonical
+        // UUID; the quotes are escaped anyway, as in `find_user_by_email`.
+        let escaped = username.replace('\\', "\\\\").replace('"', "\\\"");
+        let resp = self
+            .client
+            .list_users()
+            .user_pool_id(&self.user_pool_id)
+            .filter(format!("sub = \"{escaped}\""))
+            .send()
+            .await
+            .map_err(|e| cognito_err("list_users_by_sub", e))?;
+        Ok(resp.users().first().and_then(|u| {
+            u.attributes()
+                .iter()
+                .find(|a| a.name() == "email")
+                .and_then(|a| a.value())
+                .map(str::to_string)
+        }))
+    }
+
     /// Hard-delete a user by their Cognito username (which is their UUID sub).
     async fn delete_user(&self, username: &str) -> Result<(), ApiError> {
         self.client

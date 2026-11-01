@@ -1379,6 +1379,8 @@ fn test_state() -> AppState {
         accounts: Arc::new(StubAccountRepo::default()),
         suspended: crate::auth::suspended::SuspendedSet::default(),
         object_store: Arc::new(NullObjectStore),
+        object_deletions: Arc::new(StubObjectDeletionRepo),
+        draining: Arc::default(),
         oidc: None,
         cognito_admin: None,
         notifier: None,
@@ -3754,10 +3756,30 @@ fn steps(log: &StepLog) -> Vec<String> {
     log.lock().unwrap().clone()
 }
 
+struct StubObjectDeletionRepo;
+
+#[async_trait]
+impl crate::repo::object_deletion::ObjectDeletionRepo for StubObjectDeletionRepo {
+    async fn enqueue(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn due(&self, _: i64) -> Result<Vec<String>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn done(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn failed(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct StubAccountRepo {
     rows: std::sync::Mutex<std::collections::HashSet<String>>,
     log: StepLog,
+    /// Make `purge` fail.
+    purge_fails: bool,
 }
 
 #[async_trait]
@@ -3788,6 +3810,35 @@ impl crate::repo::account::AccountRepo for StubAccountRepo {
         _: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, EmberTroveError> {
         Ok(0)
+    }
+    async fn deleted(&self) -> Result<Vec<String>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn deletion_preview(
+        &self,
+        _: &str,
+    ) -> Result<common::admin::PurgeCounts, EmberTroveError> {
+        Ok(common::admin::PurgeCounts {
+            nodes: 3,
+            ..Default::default()
+        })
+    }
+    async fn purge(
+        &self,
+        subject_id: &str,
+        email: Option<&str>,
+    ) -> Result<common::admin::PurgeCounts, EmberTroveError> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("purge {subject_id} {}", email.unwrap_or("-")));
+        if self.purge_fails {
+            return Err(EmberTroveError::Internal("account purge failed".into()));
+        }
+        Ok(common::admin::PurgeCounts {
+            nodes: 3,
+            ..Default::default()
+        })
     }
 }
 
@@ -3843,6 +3894,16 @@ impl crate::admin::UserDirectory for FakeDirectory {
         _: &str,
     ) -> Result<Option<common::admin::AdminUser>, crate::error::ApiError> {
         Ok(None)
+    }
+    async fn email_of(&self, user: &str) -> Result<Option<String>, crate::error::ApiError> {
+        self.log.lock().unwrap().push(format!("email {user}"));
+        if self.missing {
+            return Ok(None);
+        }
+        if self.fail == Some("email") {
+            return Err(crate::error::ApiError::Internal("lookup failed".into()));
+        }
+        Ok(Some(format!("{user}@example.com")))
     }
     async fn delete_user(&self, user: &str) -> Result<(), crate::error::ApiError> {
         self.call("delete", user)
@@ -4146,16 +4207,21 @@ async fn only_the_canonical_account_id_is_accepted() {
 async fn delete_locks_the_account_out_first_and_keeps_it_refused() {
     let (state, log) = lifecycle_state(FakeDirectory::default());
     let app = admin_app_with(state.clone(), uuid_admin());
-    let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         steps(&log),
         [
             format!("row+ {U1}"),
+            format!("email {U1}"),
+            format!("purge {U1} {U1}@example.com"),
             format!("delete {U1}"),
             format!("row deleted {U1}")
-        ]
+        ],
+        "suspend, then purge, and only then delete in Cognito"
     );
+    let counts: common::admin::PurgeCounts = serde_json::from_str(&body).unwrap();
+    assert_eq!(counts.nodes, 3);
     // An ID token issued before the deletion is still refused.
     assert!(state.suspended.contains(U1).await);
 }
@@ -4169,7 +4235,9 @@ async fn deleting_an_account_cognito_lacks_still_finishes() {
     });
     let app = admin_app_with(state.clone(), uuid_admin());
     let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::OK);
+    // No email to match invites by, but the purge still runs.
+    assert!(steps(&log).contains(&format!("purge {U1} -")));
     assert!(steps(&log).contains(&format!("row deleted {U1}")));
     assert!(state.suspended.contains(U1).await);
 }
@@ -4216,4 +4284,64 @@ async fn reject_suspended_refuses_a_request_without_claims() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A failed purge leaves the account in Cognito, suspended, so the admin
+/// can retry; nothing after the purge runs.
+#[tokio::test]
+async fn a_failed_purge_keeps_the_account_to_retry() {
+    for (purge_fails, fail) in [(true, None), (false, Some("email"))] {
+        let log = StepLog::default();
+        let mut state = test_state();
+        state.accounts = Arc::new(StubAccountRepo {
+            log: log.clone(),
+            purge_fails,
+            ..StubAccountRepo::default()
+        });
+        state.cognito_admin = Some(Arc::new(FakeDirectory {
+            log: log.clone(),
+            fail,
+            ..FakeDirectory::default()
+        }));
+        let app = admin_app_with(state.clone(), uuid_admin());
+        let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let steps = steps(&log);
+        if fail.is_some() {
+            assert!(!steps.iter().any(|s| s.starts_with("purge")), "{steps:?}");
+        }
+        assert!(!steps.contains(&format!("delete {U1}")), "{steps:?}");
+        assert!(
+            !steps.iter().any(|s| s.starts_with("row deleted")),
+            "{steps:?}"
+        );
+        assert!(state.suspended.contains(U1).await);
+    }
+}
+
+#[tokio::test]
+async fn the_deletion_preview_is_admin_only_and_counts_only() {
+    let (state, _) = lifecycle_state(FakeDirectory::default());
+    let uri = format!("/admin/users/{U1}/deletion-preview");
+    let (status, _) = admin_call(
+        &admin_app_with(state.clone(), fake_claims()),
+        "GET",
+        &uri,
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let app = admin_app_with(state, uuid_admin());
+    let (status, body) = admin_call(&app, "GET", &uri, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let counts: common::admin::PurgeCounts = serde_json::from_str(&body).unwrap();
+    assert_eq!(counts.nodes, 3);
+    let (status, _) = admin_call(
+        &app,
+        "GET",
+        "/admin/users/someone@example.com/deletion-preview",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }

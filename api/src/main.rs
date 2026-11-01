@@ -179,6 +179,10 @@ async fn main() -> anyhow::Result<()> {
         webhooks: Arc::new(PgWebhookRepo::new(pool.clone())),
         editor_prefs: Arc::new(PgEditorPrefRepo::new(pool.clone())),
         object_store,
+        object_deletions: Arc::new(repo::object_deletion::PgObjectDeletionRepo::new(
+            pool.clone(),
+        )),
+        draining: Arc::default(),
         oidc,
         cognito_admin,
         notifier,
@@ -238,6 +242,8 @@ async fn main() -> anyhow::Result<()> {
         let notes = state.notes.clone();
         let captures = state.captures.clone();
         let accounts = state.accounts.clone();
+        let object_deletions = state.object_deletions.clone();
+        let object_store = state.object_store.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
             loop {
@@ -267,6 +273,18 @@ async fn main() -> anyhow::Result<()> {
                 // A deleted account stays refused for a day (#239): the
                 // longest a Cognito ID token issued before the deletion lives.
                 let token_cutoff = chrono::Utc::now() - chrono::TimeDelta::days(1);
+                // First purge each deleted account again: anything written
+                // after its purge (a request already in flight) goes too.
+                match accounts.deleted().await {
+                    Ok(subjects) => {
+                        for subject in subjects {
+                            if let Err(e) = accounts.purge(&subject, None).await {
+                                tracing::warn!(?e, "re-purging a deleted account failed");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(?e, "listing deleted accounts failed"),
+                }
                 match accounts.purge_deleted_before(token_cutoff).await {
                     Ok(purged) if purged > 0 => {
                         tracing::info!(purged, "dropped expired deleted-account rows");
@@ -274,6 +292,8 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "deleted-account row purge failed"),
                 }
+                // Retry stored files that couldn't be deleted yet (#239).
+                object_store::outbox::drain(object_deletions.as_ref(), object_store.as_ref()).await;
             }
         });
     }

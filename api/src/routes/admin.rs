@@ -11,7 +11,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use common::{
-    admin::{AdminUser, CreateAdminUserRequest, UpdateUserRolesRequest},
+    admin::{AdminUser, CreateAdminUserRequest, PurgeCounts, UpdateUserRolesRequest},
     auth::AuthClaims,
 };
 use garde::Validate;
@@ -28,6 +28,7 @@ pub fn router() -> Router<AppState> {
         .route("/users/{id}/roles", put(set_user_roles))
         .route("/users/{id}/suspend", post(suspend_user))
         .route("/users/{id}/reactivate", post(reactivate_user))
+        .route("/users/{id}/deletion-preview", get(deletion_preview))
         .route("/data-health", get(data_health_counts))
 }
 
@@ -81,29 +82,61 @@ async fn create_user(
     Ok((StatusCode::CREATED, Json(user)))
 }
 
-/// `DELETE /admin/users/{id}`: delete the account (#239). It is suspended
-/// first and stays refused until its last ID token has expired.
+/// `DELETE /admin/users/{id}`: delete the account and everything it owns
+/// (#239; owner decisions in `AccountRepo::purge`). Answers what was
+/// removed.
+///
+/// Each step is safe to repeat, so a retry finishes whatever a failure
+/// left:
+/// 1. Suspend: from here the API, login and renewal all refuse it, so it
+///    can't add data while it is being deleted.
+/// 2. Read its email (to anonymise invites naming it), unless Cognito no
+///    longer has it.
+/// 3. Purge its data in one transaction. A failure leaves the account in
+///    Cognito, suspended, to retry.
+/// 4. Delete its stored files, in the background (what fails stays queued
+///    for the daily drain).
+/// 5. Delete it in Cognito.
+/// 6. Mark the row deleted: an ID token issued before now stays valid
+///    until it expires, so the row stays until the daily sweep.
 async fn delete_user(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<PurgeCounts>, ApiError> {
     require_admin(&claims)?;
     let id = account_id(&id)?;
     refuse_own_account(&claims, &id, "You can't delete your own account.")?;
     let directory = cognito_client(&state)?;
-    // Lock the account out first, so a deletion that stops halfway leaves
-    // it suspended rather than live; every step is safe to retry.
     state.accounts.suspend(&id, &claims.sub).await?;
     state.suspended.insert(&id).await;
+    let email = directory.email_of(&id).await?;
+    let removed = state.accounts.purge(&id, email.as_deref()).await?;
+    state.drain_object_deletions();
     match directory.delete_user(&id).await {
         Ok(()) | Err(ApiError::NotFound(_)) => {}
         Err(e) => return Err(e),
     }
-    // An ID token issued before now stays valid until it expires, so the
-    // row stays (marked deleted) until the daily sweep.
     state.accounts.mark_deleted(&id, &claims.sub).await?;
-    Ok(StatusCode::NO_CONTENT)
+    // Counts only, no subject: enough to audit that a deletion ran.
+    tracing::info!(
+        nodes = removed.nodes,
+        files = removed.files,
+        "an admin deleted an account and its data"
+    );
+    Ok(Json(removed))
+}
+
+/// `GET /admin/users/{id}/deletion-preview` (#239): what deleting the
+/// account would remove. Counts only, never titles (§14).
+async fn deletion_preview(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<String>,
+) -> Result<Json<PurgeCounts>, ApiError> {
+    require_admin(&claims)?;
+    let id = account_id(&id)?;
+    Ok(Json(state.accounts.deletion_preview(&id).await?))
 }
 
 /// `GET /admin/users/roles` — list all available groups (roles).

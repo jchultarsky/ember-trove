@@ -495,6 +495,9 @@ pub(crate) async fn restore_into(
     data: &BackupData,
 ) -> Result<(), ApiError> {
     // Delete all nodes (CASCADE removes edges, notes, tasks, attachments, permissions).
+    // The attachment trigger queues every live file for deletion (#239);
+    // the archive's own come back under their old keys and leave the queue
+    // again at the end.
     sqlx::query("DELETE FROM nodes")
         .execute(&mut *conn)
         .await
@@ -901,6 +904,13 @@ pub(crate) async fn restore_into(
     // above cascaded the old log away, so this brings History back.
     let restored_nodes: HashSet<Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
     restore_activity(conn, &data.activity, &restored_nodes).await?;
+
+    // The archive's files are back under their old keys: keep them out of
+    // the deletion queue (the drain also skips any key a row names).
+    sqlx::query("DELETE FROM object_deletions d USING attachments a WHERE a.s3_key = d.s3_key")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("unqueue restored files failed: {e}")))?;
 
     Ok(())
 }
