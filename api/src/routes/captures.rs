@@ -136,6 +136,11 @@ async fn convert_capture(
                 project_status: None,
                 template_id: None,
             };
+            // `create_node`'s own rules, so a converted node can't hold a
+            // title the editor would then refuse on every save (its limit
+            // counts bytes; the shared check above counts characters).
+            req.validate()
+                .map_err(|e| ApiError::Validation(e.to_string()))?;
             crate::routes::nodes::initial_project_status(&mut req)?;
             Destination::Node { req, home }
         }

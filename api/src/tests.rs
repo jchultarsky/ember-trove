@@ -3195,6 +3195,14 @@ async fn a_conversion_is_refused_before_anything_is_made() {
             serde_json::json!({ "into": "note", "node_id": project, "body": "  " }),
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
+        // A node keeps create_node's limit (500 bytes): 300 Cyrillic
+        // letters fit a Task, not a node the editor could save again.
+        (
+            serde_json::json!({
+                "into": "node", "node_type": "article", "title": "ж".repeat(300),
+            }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
     ] {
         let (status, out) = capture_call(fake_claims(), convert_req(mine, body.clone())).await;
         assert_eq!(status, want, "{body}: {out}");

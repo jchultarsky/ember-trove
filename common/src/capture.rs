@@ -38,8 +38,9 @@ pub struct CaptureRequest {
     pub body: String,
 }
 
-/// The longest title a node or a Task may have, in characters (the
-/// database's CHECKs).
+/// The longest title a Task may have, in characters (`node_tasks`'
+/// CHECK). A node's title also passes `CreateNodeRequest`'s own check,
+/// which the API applies on top.
 pub const TITLE_MAX_LEN: usize = 500;
 
 /// `POST /captures/{id}/convert` (#234, ONTOLOGY §9.1): the one thing a
