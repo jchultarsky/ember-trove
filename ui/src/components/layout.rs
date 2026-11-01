@@ -400,7 +400,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                     tabindex="-1"
                     class="flex-1 overflow-auto flex flex-col min-w-0 focus:outline-none"
                 >
-                    <Routes fallback=|| view! { <Redirect path="/tasks/my-day" /> }>
+                    <Routes fallback=|| view! { <GoTo path="/tasks/my-day" /> }>
                         <Route path=path!("/")                 view=|| view! { <Redirect path="/tasks/my-day" /> } />
                         <Route path=path!("/tasks")            view=|| view! { <Redirect path="/tasks/my-day" /> } />
                         <Route path=path!("/tasks/my-day")     view=|| view! { <TasksView active=TasksTab::MyDay    /> } />
@@ -425,6 +425,8 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/templates")      view=TemplatesView />
                         <Route path=path!("/data-health")    view=DataHealthView />
                                 <Route path=path!("/webhooks")       view=WebhooksView />
+                        // No admin index page: `/admin` opens Users (#246).
+                        <Route path=path!("/admin")             view=|| view! { <GoTo path="/admin/users" /> } />
                         <Route path=path!("/admin/users")       view=AdminView />
                         <Route path=path!("/admin/permissions") view=BulkPermissionsView />
                         <Route path=path!("/admin/backup")      view=BackupView />
@@ -605,6 +607,25 @@ fn section_title(path: &str) -> &'static str {
     } else {
         "Ember Trove"
     }
+}
+
+/// Redirect to `path` once mounted (#246).
+///
+/// `<Redirect>` navigates while it renders. As the `<Routes>` fallback that
+/// panics in leptos_router 0.8 (release WASM: `unreachable`), so every
+/// unknown URL, `/admin` among them, froze on the AuthGate's bare
+/// "Loading...". An `Effect` runs after the render, outside the router's
+/// update, so the navigation is safe. Use this for the fallback and for
+/// any new redirect route.
+#[component]
+fn GoTo(path: &'static str) -> impl IntoView {
+    let navigate = use_navigate();
+    // Replace, so Back doesn't return to the URL that redirects again.
+    let options = leptos_router::NavigateOptions {
+        replace: true,
+        ..Default::default()
+    };
+    Effect::new(move |_| navigate(path, options.clone()));
 }
 
 /// Auth gate: spinner → login redirect → render app.
