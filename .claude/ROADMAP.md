@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-10-31)
 
+- **v3.5.0 shipped: captures (S4a + S4b of #204, #234; PRs #236–#238).**
+  - Migration 043: a `captures` table; the 3 notes without a node moved
+    into it (prod rehearsal ~4 ms), and `node_notes.node_id` is NOT NULL.
+  - Quick capture, the share sheet and the calendar (without a Project)
+    land captures in the Inbox. They are owner-only, with no admin bypass.
+  - `POST /captures/{id}/convert` turns one into a node (optionally with
+    a home), a note or a Task in a Project, in one transaction (delete
+    first). The Inbox's Convert dialog drives it.
+  - Backup format 4; format 3 still restores (nodeless notes become
+    captures). Next: S4c, the Inbox redesign.
 - **v3.4.1 shipped: pooled connections are never reused inside a
   transaction (PR #235).** sqlx 0.8.6 leaks one when a request is cancelled
   during `BEGIN` (the depth counter isn't incremented yet, so no rollback is
