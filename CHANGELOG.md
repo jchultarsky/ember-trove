@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-10-31
+
 ### Added
 - **Captures** (#234, ONTOLOGY §9.1): unclassified input waiting in the
   Inbox, kept until it is processed or deleted on purpose.
