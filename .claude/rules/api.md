@@ -191,5 +191,5 @@ cargo check && cargo clippy -- -D warnings
 
 - `SetUICustomization` uses an allowlist — unlisted CSS classes raise
   `InvalidParameterException`. Authoritative CSS: `deploy/cognito.css` + `deploy/logo.png`.
-- Apply via `boto3.client('cognito-idp').set_ui_customization(...)` (`aws` CLI unavailable).
+- Apply via `boto3.client('cognito-idp').set_ui_customization(...)` (or the `aws` CLI with `--region us-east-2`).
 - Pool: `us-east-2_4RQfxhKqn` · Client: `eogq2sehdad3uc8nmar7aneol`.
