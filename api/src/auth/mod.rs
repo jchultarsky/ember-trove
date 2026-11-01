@@ -1,6 +1,7 @@
 pub mod middleware;
 pub mod oidc;
 pub mod permissions;
+pub mod suspended;
 
 /// Configuration for OIDC / JWT validation, loaded at startup.
 #[derive(Debug, Clone)]

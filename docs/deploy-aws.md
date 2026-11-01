@@ -238,7 +238,10 @@ The API uses the AWS SDK to manage Cognito users (create/delete/list). Create a 
         "cognito-idp:ListGroups",
         "cognito-idp:AdminAddUserToGroup",
         "cognito-idp:AdminRemoveUserFromGroup",
-        "cognito-idp:AdminListGroupsForUser"
+        "cognito-idp:AdminListGroupsForUser",
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminEnableUser",
+        "cognito-idp:AdminUserGlobalSignOut"
       ],
       "Resource": "arn:aws:cognito-idp:<region>:<account-id>:userpool/<user-pool-id>"
     }

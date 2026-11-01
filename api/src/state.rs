@@ -4,24 +4,29 @@ use axum_extra::extract::cookie::Key;
 use sqlx::PgPool;
 
 use crate::{
-    admin::CognitoAdminClient,
-    auth::{AuthConfig, oidc::OidcClient},
+    admin::UserDirectory,
+    auth::{AuthConfig, oidc::OidcClient, suspended::SuspendedSet},
     config::Config,
     notify::SesNotifier,
     object_store::ObjectStore,
     repo::{
-        activity::ActivityRepo, attachment::AttachmentRepo, backup::BackupRepo,
-        data_health::DataHealthRepo, edge::EdgeRepo, editor_pref::EditorPrefRepo,
-        favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo, node_link::NodeLinkRepo,
-        node_version::NodeVersionRepo, note::NoteRepo, permission::PermissionRepo,
-        person::PersonRepo, pkce::PkceRepo, search::SearchRepo, search_presets::SearchPresetRepo,
-        tag::TagRepo, task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
+        account::AccountRepo, activity::ActivityRepo, attachment::AttachmentRepo,
+        backup::BackupRepo, data_health::DataHealthRepo, edge::EdgeRepo,
+        editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
+        node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
+        permission::PermissionRepo, person::PersonRepo, pkce::PkceRepo, search::SearchRepo,
+        search_presets::SearchPresetRepo, tag::TagRepo, task::TaskRepo, template::TemplateRepo,
+        webhook::WebhookRepo,
     },
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
+    /// The suspended-account list (#239).
+    pub accounts: Arc<dyn AccountRepo>,
+    /// The same list in memory, checked on every request (#239).
+    pub suspended: SuspendedSet,
     pub nodes: Arc<dyn NodeRepo>,
     pub edges: Arc<dyn EdgeRepo>,
     pub tags: Arc<dyn TagRepo>,
@@ -49,7 +54,7 @@ pub struct AppState {
     pub object_store: Arc<dyn ObjectStore>,
     pub oidc: Option<Arc<OidcClient>>,
     /// Cognito admin client — `None` when `COGNITO_USER_POOL_ID` is not set.
-    pub cognito_admin: Option<Arc<CognitoAdminClient>>,
+    pub cognito_admin: Option<Arc<dyn UserDirectory>>,
     /// SES notifier — `None` when `SES_FROM_EMAIL` is not set.
     pub notifier: Option<Arc<SesNotifier>>,
     pub cookie_key: Key,

@@ -1,5 +1,6 @@
 use common::EmberTroveError;
 
+pub mod account;
 pub mod activity;
 pub mod attachment;
 pub mod backup;

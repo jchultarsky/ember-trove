@@ -12,6 +12,11 @@ pub struct AdminUser {
     pub last_name: Option<String>,
     pub enabled: bool,
     pub realm_roles: Vec<String>,
+    /// Suspended in Ember Trove (#239): the API refuses the account's
+    /// sessions and Cognito blocks its sign-in. Filled from the API's own
+    /// list, not from Cognito.
+    #[serde(default)]
+    pub suspended: bool,
 }
 
 impl AdminUser {
@@ -66,6 +71,7 @@ mod tests {
             last_name: last.map(str::to_string),
             enabled: true,
             realm_roles: vec![],
+            suspended: false,
         }
     }
 

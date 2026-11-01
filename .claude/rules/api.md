@@ -125,6 +125,23 @@ cargo check && cargo clippy -- -D warnings
   helpers for any other write that must share a transaction; don't copy
   the SQL.
 
+## Account lifecycle (#239)
+
+- Cognito sits behind `admin::UserDirectory`; route tests use the
+  recording `FakeDirectory` in `tests.rs` (one step log shared with the
+  stub `AccountRepo`, so tests assert order across both).
+- **Suspension fails closed.** Suspend writes `suspended_accounts`, then
+  the in-memory `SuspendedSet`, and only then asks Cognito (disable +
+  global sign-out). Reactivate asks Cognito first and drops the row last.
+  A Cognito failure after the row is a 502 `ApiError::Upstream` that says
+  the account is suspended here.
+- `reject_suspended` is the layer just inside `require_auth`: a suspended
+  `sub` gets the same 401 as a bad token. The set is loaded at startup (a
+  failed load stops startup) and re-read every 60 s through
+  `SuspendedSet::refresh`, whose generation check drops a read that raced
+  a route's change. Always write the row before touching the set.
+- An admin can't suspend, delete or demote their own account (422).
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.

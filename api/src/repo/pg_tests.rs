@@ -3874,3 +3874,32 @@ async fn a_failed_conversion_makes_nothing_and_keeps_the_capture(pool: PgPool) {
     ));
     assert_eq!(nodes(pool.clone()).await, 2);
 }
+
+// ── Account lifecycle (#239) ─────────────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn suspended_accounts_round_trip(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    assert!(repo.suspended().await.unwrap().is_empty());
+
+    repo.suspend("u-1", "admin-a").await.unwrap();
+    repo.suspend("u-2", "admin-a").await.unwrap();
+    // A second suspension keeps the first record.
+    repo.suspend("u-1", "admin-b").await.unwrap();
+    let by: String =
+        sqlx::query_scalar("SELECT suspended_by FROM suspended_accounts WHERE subject_id = 'u-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(by, "admin-a");
+
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["u-1", "u-2"]);
+
+    repo.unsuspend("u-1").await.unwrap();
+    repo.unsuspend("u-1").await.unwrap(); // missing is fine
+    let set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    assert_eq!(set, ["u-2"]);
+}

@@ -122,9 +122,9 @@ async fn main() -> anyhow::Result<()> {
     // Cognito Admin client — optional; enabled when COGNITO_USER_POOL_ID is set.
     let cognito_admin = if let Some(pool_id) = config.cognito_user_pool_id.clone() {
         tracing::info!("Cognito admin client enabled (pool: {pool_id})");
-        Some(Arc::new(
-            CognitoAdminClient::new(&config.cognito_region, pool_id).await,
-        ))
+        let client: Arc<dyn admin::UserDirectory> =
+            Arc::new(CognitoAdminClient::new(&config.cognito_region, pool_id).await);
+        Some(client)
     } else {
         tracing::info!("COGNITO_USER_POOL_ID not set — /admin/* endpoints disabled");
         None
@@ -141,7 +141,20 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // Suspended accounts (#239). A failed load stops startup, like a failed
+    // migration: serving without the list would let suspended sessions in.
+    let accounts: Arc<dyn repo::account::AccountRepo> =
+        Arc::new(repo::account::PgAccountRepo::new(pool.clone()));
+    let suspended = auth::suspended::SuspendedSet::new(
+        accounts
+            .suspended()
+            .await
+            .map_err(|e| anyhow::anyhow!("loading suspended accounts failed: {e}"))?,
+    );
+
     let state = AppState {
+        accounts,
+        suspended,
         started_at: std::time::Instant::now(),
         request_metrics: Arc::new(routes::metrics::RequestMetrics::default()),
         nodes: Arc::new(PgNodeRepo::new(pool.clone())),
@@ -190,6 +203,26 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "PKCE sweep failed"),
+                }
+            }
+        });
+    }
+
+    // Re-read the suspended list, so a change made by another instance (or
+    // directly in the table) applies within a minute (#239).
+    {
+        let accounts = state.accounts.clone();
+        let suspended = state.suspended.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(auth::suspended::REFRESH_INTERVAL);
+            interval.tick().await; // the first tick is immediate; startup just loaded it
+            loop {
+                interval.tick().await;
+                if let Err(e) = suspended.refresh(|| accounts.suspended()).await {
+                    tracing::warn!(
+                        ?e,
+                        "suspended accounts refresh failed; keeping the last list"
+                    );
                 }
             }
         });

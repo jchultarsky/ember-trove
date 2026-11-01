@@ -177,6 +177,11 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/metrics", metrics::router())
         .nest("/editor-prefs", editor_prefs::router())
         .nest("/data-health", data_health::router())
+        // Inner layer: runs after `require_auth` has put the claims in place.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::suspended::reject_suspended,
+        ))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     // Rate-limited public routes (auth callbacks) + protected routes. Every

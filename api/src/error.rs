@@ -35,6 +35,12 @@ pub enum ApiError {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// An upstream service (Cognito) failed after part of the work landed.
+    /// The message is written for the client and names no internal detail;
+    /// the upstream error itself is logged where it happened.
+    #[error("upstream error: {0}")]
+    Upstream(String),
 }
 
 impl From<EmberTroveError> for ApiError {
@@ -74,6 +80,7 @@ impl IntoResponse for ApiError {
                     "storage error".to_string(),
                 )
             }
+            Self::Upstream(msg) => (StatusCode::BAD_GATEWAY, msg.clone()),
             Self::Internal(msg) => {
                 tracing::error!(%msg, "internal error");
                 (
