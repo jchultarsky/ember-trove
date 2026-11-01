@@ -3493,7 +3493,7 @@ async fn migration_043_moves_nodeless_notes_into_captures(pool: PgPool) {
     }
 
     let captures: Vec<(uuid::Uuid, String, String, bool, chrono::DateTime<Utc>)> = sqlx::query_as(
-        "SELECT id, owner_id, body, deleted_at IS NOT NULL, updated_at FROM captures ORDER BY body",
+        "SELECT id, owner_id, body, deleted_at IS NOT NULL, updated_at FROM captures ORDER BY body COLLATE \"C\"",
     )
     .fetch_all(&pool)
     .await
