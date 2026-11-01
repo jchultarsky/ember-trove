@@ -533,6 +533,8 @@ async fn delete_node(
     // only produced a warning.
     let existing = state.nodes.get(NodeId(id)).await.ok();
     state.nodes.delete(NodeId(id)).await?;
+    // The delete queued the node's files; remove them from storage now.
+    state.drain_object_deletions();
     if let Some(owner_id) = existing.map(|n| n.owner_id) {
         dispatch(
             state.webhooks.clone(),

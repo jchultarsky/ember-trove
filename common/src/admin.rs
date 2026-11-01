@@ -50,6 +50,46 @@ pub struct CreateAdminUserRequest {
     pub send_welcome_email: bool,
 }
 
+/// What stands in for a deleted account's subject on what stays behind on
+/// other people's nodes (#239): History entries, version authorship and
+/// `granted_by`. A Cognito `sub` is a UUID, so this can't collide with one.
+pub const DELETED_ACCOUNT: &str = "deleted-account";
+
+/// The name shown in place of a deleted account's name or email.
+pub const DELETED_ACCOUNT_NAME: &str = "Deleted account";
+
+/// What deleting an account removes, or would remove (#239). Counts only:
+/// the admin never sees a title or any content (ONTOLOGY §14).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeCounts {
+    /// Their nodes, with everything on them.
+    pub nodes: u64,
+    /// Of those, nodes shared with someone else, who loses access.
+    pub shared_nodes: u64,
+    /// Their notes, on any node.
+    pub notes: u64,
+    /// Their tasks that are deleted.
+    pub tasks: u64,
+    /// Their tasks on other people's nodes, which pass to the node's owner.
+    pub tasks_handed_over: u64,
+    pub captures: u64,
+    pub people: u64,
+    /// Files attached to their nodes.
+    pub files: u64,
+    /// Tags, templates, saved searches, favorites, webhooks and editor
+    /// settings.
+    pub settings: u64,
+}
+
+impl PurgeCounts {
+    /// Nothing was (or would be) removed: a retry of a finished purge.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Request body for replacing a user's full set of realm roles.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateUserRolesRequest {

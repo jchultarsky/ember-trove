@@ -179,6 +179,9 @@ async fn main() -> anyhow::Result<()> {
         webhooks: Arc::new(PgWebhookRepo::new(pool.clone())),
         editor_prefs: Arc::new(PgEditorPrefRepo::new(pool.clone())),
         object_store,
+        object_deletions: Arc::new(repo::object_deletion::PgObjectDeletionRepo::new(
+            pool.clone(),
+        )),
         oidc,
         cognito_admin,
         notifier,
@@ -238,6 +241,8 @@ async fn main() -> anyhow::Result<()> {
         let notes = state.notes.clone();
         let captures = state.captures.clone();
         let accounts = state.accounts.clone();
+        let object_deletions = state.object_deletions.clone();
+        let object_store = state.object_store.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(24 * 3600));
             loop {
@@ -274,6 +279,8 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "deleted-account row purge failed"),
                 }
+                // Retry stored files that couldn't be deleted yet (#239).
+                object_store::outbox::drain(object_deletions.as_ref(), object_store.as_ref()).await;
             }
         });
     }

@@ -146,6 +146,18 @@ cargo check && cargo clippy -- -D warnings
   self-guard and the set.
 - Delete suspends first and ends with `mark_deleted`; the row stays a day
   (the longest ID-token life), then the daily sweep drops it.
+- **Purge** (`AccountRepo::purge`, one transaction, advisory-locked per
+  subject): delete order is suspend → email → purge → drain → Cognito
+  delete → `mark_deleted`. Settings are deleted *before* the nodes so the
+  counts match `deletion_preview`. Anything new keyed by an account must
+  join the purge (`SETTINGS` or its own step); the pg test
+  `purging_an_account_removes_only_its_data` sweeps every
+  `owner_id/subject_id/created_by/granted_by/suspended_by` column and
+  fails on a leftover. Traces on others' nodes become `DELETED_ACCOUNT`.
+- **Stored files go through the `object_deletions` outbox**, written in
+  the same transaction as the row delete (`PgNodeRepo::delete`, the
+  purge); `state.drain_object_deletions()` tries at once and the daily
+  loop retries. Never delete an attachment row without queueing its key.
 - `/auth/callback` and `/auth/refresh` sit outside the layer, so they
   check `suspended_session` themselves (callback → Cognito logout URL,
   refresh → revoke + 401). Any new public route that mints a session must

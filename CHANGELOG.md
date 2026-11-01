@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Deleting a node now deletes its files from storage** (#239). The
+  attachment rows went with the node, but the stored objects were left
+  behind. Deletions now go through an outbox (`object_deletions`,
+  migration 044), written in the same transaction, and anything that
+  fails is retried daily.
+
 ### Security
 - **Suspend an account** (#239): `POST /api/admin/users/{id}/suspend` keeps
   the account's data and stops it at once.
@@ -27,9 +34,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     suspended list and the self-guard.
   - The Cognito IAM policy needs `AdminDisableUser`, `AdminEnableUser` and
     `AdminUserGlobalSignOut` (`docs/deploy-aws.md`).
-- **Deleting an account suspends it first and keeps it refused for a day**
-  (#239). An ID token issued before the deletion used to work until it
-  expired, about an hour.
+- **Deleting an account deletes its data** (#239; owner decision). It used
+  to remove only the Cognito account and leave everything the person owned
+  behind.
+  - One transaction removes everything the account owns: its nodes (shared
+    ones too, so their sharees lose access), notes, tasks, captures,
+    People, tags, templates, saved searches, favorites, webhooks and
+    editor settings, its grants, and its rows in the removed-edge
+    archives.
+  - Its live tasks on other people's nodes pass to the node's owner and
+    leave My Day. Its notes there are deleted.
+  - What stays on other people's nodes, such as History entries, the
+    authorship of versions it saved and grants it made, is anonymised to
+    "Deleted account". Version text stays, because it is the node owner's
+    content.
+  - Its files are deleted from storage after the commit.
+  - The order is suspend, then purge, then delete in Cognito, and every
+    step is safe to retry. If the purge fails, the account stays
+    suspended in Cognito.
+  - The account stays refused for a day after deletion. Before this, an
+    ID token issued before the deletion kept working for up to an hour.
+  - `GET /api/admin/users/{id}/deletion-preview` gives counts only, never
+    titles. `DELETE` answers with the same counts.
+  - Backups taken earlier still hold the data until they are deleted.
 - **An admin can no longer suspend or delete their own account, or remove
   their own admin role** (#239), so the last admin can't lock everyone out.
 

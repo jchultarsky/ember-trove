@@ -14,9 +14,9 @@ use crate::{
         backup::BackupRepo, data_health::DataHealthRepo, edge::EdgeRepo,
         editor_pref::EditorPrefRepo, favorite::FavoriteRepo, graph::GraphRepo, node::NodeRepo,
         node_link::NodeLinkRepo, node_version::NodeVersionRepo, note::NoteRepo,
-        permission::PermissionRepo, person::PersonRepo, pkce::PkceRepo, search::SearchRepo,
-        search_presets::SearchPresetRepo, tag::TagRepo, task::TaskRepo, template::TemplateRepo,
-        webhook::WebhookRepo,
+        object_deletion::ObjectDeletionRepo, permission::PermissionRepo, person::PersonRepo,
+        pkce::PkceRepo, search::SearchRepo, search_presets::SearchPresetRepo, tag::TagRepo,
+        task::TaskRepo, template::TemplateRepo, webhook::WebhookRepo,
     },
 };
 
@@ -52,6 +52,8 @@ pub struct AppState {
     pub webhooks: Arc<dyn WebhookRepo>,
     pub editor_prefs: Arc<dyn EditorPrefRepo>,
     pub object_store: Arc<dyn ObjectStore>,
+    /// Stored files waiting to be deleted (#239).
+    pub object_deletions: Arc<dyn ObjectDeletionRepo>,
     pub oidc: Option<Arc<OidcClient>>,
     /// Cognito admin client — `None` when `COGNITO_USER_POOL_ID` is not set.
     pub cognito_admin: Option<Arc<dyn UserDirectory>>,
@@ -74,5 +76,18 @@ pub struct AppState {
 impl axum::extract::FromRef<AppState> for Key {
     fn from_ref(state: &AppState) -> Self {
         state.cookie_key.clone()
+    }
+}
+
+impl AppState {
+    /// Delete queued files from storage in the background, now rather
+    /// than at the next daily drain (#239). Best effort: what fails stays
+    /// queued.
+    pub fn drain_object_deletions(&self) {
+        let queue = self.object_deletions.clone();
+        let store = self.object_store.clone();
+        tokio::spawn(async move {
+            crate::object_store::outbox::drain(queue.as_ref(), store.as_ref()).await;
+        });
     }
 }

@@ -532,7 +532,8 @@ change them. They are in backups, and not in search, export or webhooks.
 |--------|------|-------------|
 | GET | `/api/admin/users` | List users |
 | POST | `/api/admin/users` | Create user |
-| DELETE | `/api/admin/users/{id}` | Delete user |
+| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts; backups keep data until deleted) |
+| GET | `/api/admin/users/{id}/deletion-preview` | What deleting the account would remove (counts only) |
 | GET | `/api/admin/users/roles` | List available roles |
 | PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
 | POST | `/api/admin/users/{id}/suspend` | Suspend: no sign-in, open sessions refused at once, data kept |
