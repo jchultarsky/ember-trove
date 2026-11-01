@@ -14,6 +14,7 @@ use common::{
     node::NodeType,
     ontology::allowed_homes,
 };
+use leptos::html;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -100,6 +101,42 @@ pub fn ConvertCaptureDialog(
     };
     let ready = Signal::derive(move || request().is_some_and(|r| r.checked().is_ok()));
 
+    // Keys reach ModalShell's Escape, Tab trap and Ctrl+Enter only from
+    // inside the panel, so focus must be there: the Title on open (tracking
+    // the NodeRef, no rAF; .claude/rules/leptos.md), and after a pick
+    // (the picker's input turns into a chip and drops focus) the Convert
+    // button, or the form itself while Convert is disabled.
+    let form_ref: NodeRef<html::Div> = NodeRef::new();
+    let title_ref: NodeRef<html::Input> = NodeRef::new();
+    let convert_ref: NodeRef<html::Button> = NodeRef::new();
+    Effect::new(move |_| {
+        if !show.get() {
+            return;
+        }
+        if let Some(el) = title_ref.get() {
+            let _ = el.focus();
+        } else if let Some(el) = form_ref.get() {
+            let _ = el.focus();
+        }
+    });
+    let after_pick = Callback::new(move |()| {
+        let convert = convert_ref.get_untracked();
+        match convert {
+            Some(b) if ready.get_untracked() && !busy.get_untracked() => {
+                // `prop:disabled` catches up on the next tick, and a
+                // disabled button can't take focus: enable it now, as the
+                // reactive prop is about to.
+                b.set_disabled(false);
+                let _ = b.focus();
+            }
+            _ => {
+                if let Some(el) = form_ref.get_untracked() {
+                    let _ = el.focus();
+                }
+            }
+        }
+    });
+
     let toast_state = use_context::<ToastState>();
     let nav = expect_context::<crate::app::NavRequest>().0;
     let submit_pending = RwSignal::new(false);
@@ -157,14 +194,16 @@ pub fn ConvertCaptureDialog(
                             },
                         );
                     }
+                    // Stays busy: the capture is gone, so until the list
+                    // reloads this row must not convert it again (a 404).
                     show.try_set(false);
                     refresh.try_update(|n| *n += 1);
                 }
                 Err(e) => {
                     error.try_set(Some(e.to_string()));
+                    busy.try_set(false);
                 }
             }
-            busy.try_set(false);
         });
     });
 
@@ -219,7 +258,7 @@ pub fn ConvertCaptureDialog(
                     }).collect_view()}
                 </div>
             </div>
-            <div class="p-4 space-y-3">
+            <div class="p-4 space-y-3 outline-none" tabindex="-1" node_ref=form_ref>
                 {move || match dest.get() {
                     Dest::Node => view! {
                         <label class="block text-xs text-stone-500">"Kind"
@@ -240,7 +279,7 @@ pub fn ConvertCaptureDialog(
                             </select>
                         </label>
                         <div>
-                            <input class=field aria-label="Title" prop:value=move || title.get()
+                            <input class=field aria-label="Title" node_ref=title_ref prop:value=move || title.get()
                                 on:input=move |ev| title.set(event_target_value(&ev)) />
                             <div class="text-right">{move || counter(title.with(|t| t.trim().chars().count()))}</div>
                         </div>
@@ -257,20 +296,21 @@ pub fn ConvertCaptureDialog(
                                 }.into_any()
                             } else {
                                 view! {
-                                    <NodePicker selected=home only_types=kinds
+                                    <NodePicker selected=home only_types=kinds on_commit=after_pick
                                         placeholder=crate::components::node_home::pick_placeholder(kinds) />
                                 }.into_any()
                             }
                         }}
                     }.into_any(),
                     Dest::Note => view! {
-                        <NodePicker selected=note_node placeholder="Note on a node\u{2026}" />
+                        <NodePicker selected=note_node on_commit=after_pick
+                            placeholder="Note on a node\u{2026}" />
                         <textarea class=format!("{field} min-h-[6rem]") aria-label="Note"
                             prop:value=move || note_text.get()
                             on:input=move |ev| note_text.set(event_target_value(&ev))></textarea>
                     }.into_any(),
                     Dest::Task => view! {
-                        <NodePicker selected=project only_type=NodeType::Project
+                        <NodePicker selected=project only_type=NodeType::Project on_commit=after_pick
                             placeholder="Task in a Project\u{2026}" />
                         <div>
                             <input class=field aria-label="Task title" prop:value=move || task_title.get()
@@ -294,7 +334,7 @@ pub fn ConvertCaptureDialog(
                 <button type="button"
                     class="px-3 py-1.5 text-sm text-stone-600 dark:text-stone-300 hover:text-stone-900"
                     on:click=move |_| show.set(false)>"Cancel"</button>
-                <button type="button"
+                <button type="button" node_ref=convert_ref
                     class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-ember text-white text-sm \
                            hover:bg-ember-strong disabled:opacity-50"
                     prop:disabled=move || busy.get() || !ready.get()

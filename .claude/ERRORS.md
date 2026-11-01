@@ -222,6 +222,16 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 
 ## Leptos / WASM
 
+### Focusing a button right after the state that enables it
+- **Symptom:** `el.focus()` on a button does nothing (e2e `toBeFocused`
+  fails), though the button is enabled a moment later.
+- **Cause:** a signal set applies `prop:disabled` on the next tick, so the
+  button is still disabled when focus is called in the same handler, and a
+  disabled element can't take focus.
+- **Fix:** when the state says it's enabled, `set_disabled(false)` on the
+  element first (the prop is about to do the same), then focus it. Real
+  example: `after_pick` in `modals/convert_capture.rs`. — 2026-11-01 (#234)
+
 ### Reactivity silently stops working
 - **Symptom:** a closure compiles but the view never updates; clippy/compiler may warn the
   closure is `FnOnce`.

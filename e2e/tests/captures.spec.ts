@@ -249,3 +249,36 @@ test('a conversion is the owner’s, and a task needs a Project', async ({ reque
     await request.delete(`/api/nodes/${article.id}`);
   }
 });
+
+test('the convert dialog works from the keyboard', async ({ page, request }) => {
+  const stamp = Date.now();
+  const host = await createNode(request, `${PREFIX}kbd host ${stamp}`);
+  const text = `${PREFIX}${stamp} by keyboard`;
+  await request.post('/api/captures', { data: { body: text } });
+  try {
+    // Focus starts inside: Escape closes, and the capture stays (review of
+    // S4b: focus used to stay on the row, so Escape did nothing).
+    let { row, dialog } = await convertDialog(page, text);
+    await expect(dialog.getByRole('textbox', { name: 'Title' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(row).toBeVisible();
+
+    // A keyboard pick keeps focus in the dialog, so Ctrl+Enter converts.
+    ({ row, dialog } = await convertDialog(page, text));
+    await dialog.getByRole('button', { name: 'Note', exact: true }).click();
+    const picker = page.getByRole('combobox', { name: 'Note on a node…' });
+    await picker.fill(`${PREFIX}kbd host ${stamp}`);
+    await expect(
+      page.getByRole('listbox').getByRole('option', { selected: true }),
+    ).toContainText(`kbd host ${stamp}`);
+    await picker.press('Enter');
+    await expect(dialog.getByRole('button', { name: 'Convert' })).toBeFocused();
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await expect(row).toHaveCount(0);
+    const notes: { body: string }[] = await (await request.get(`/api/nodes/${host.id}/notes`)).json();
+    expect(notes.map((n) => n.body)).toContain(text);
+  } finally {
+    await request.delete(`/api/nodes/${host.id}`);
+  }
+});
