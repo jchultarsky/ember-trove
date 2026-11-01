@@ -2,12 +2,17 @@
 //! to be processed. Each one can be reworded, converted into exactly one
 //! thing (`ConvertCaptureDialog`), or deliberately deleted, with Undo. S4c
 //! folds this into a redesigned Inbox.
+//!
+//! #240 gives captures their own identity: a wall of sticky notes
+//! (`StickyPaper`), not task-style rows, each showing how long it has
+//! waited (`common::capture::CaptureAge`), so Inbox Zero stays in view.
 
-use common::capture::Capture;
+use common::capture::{Capture, CaptureAge};
 use common::id::CaptureId;
 use leptos::prelude::*;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::sticky_note::{CAPTURE_ICON, StickyPaper};
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 #[component]
@@ -25,18 +30,19 @@ pub fn CapturesSection(
             {move || captures.get().map(|result| match result {
                 Ok(list) if list.is_empty() => ().into_any(),
                 Ok(list) => view! {
-                    <section class="rounded-lg border border-stone-200 dark:border-stone-700
-                                    bg-white dark:bg-stone-900"
-                        data-testid="captures" aria-labelledby="captures-heading">
-                        <header class="px-4 py-2 border-b border-stone-100 dark:border-stone-800
-                                       flex items-baseline justify-between">
+                    <section data-testid="captures" aria-labelledby="captures-heading">
+                        <header class="mb-3 flex items-center gap-2">
+                            <span class="material-symbols-outlined text-ember" style="font-size: 18px;"
+                                aria-hidden="true">{CAPTURE_ICON}</span>
                             <h2 id="captures-heading"
                                 class="text-sm font-semibold text-stone-800 dark:text-stone-200">
                                 "Captures"
                             </h2>
                             <span class="text-xs tabular-nums text-stone-500">{list.len()}</span>
                         </header>
-                        <ul class="divide-y divide-stone-100 dark:divide-stone-800">
+                        // A wall, not a list (#240): scanning a corkboard. The
+                        // top padding leaves room for each card's tape.
+                        <ul class="grid gap-4 pt-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
                             {list.into_iter().map(|c| view! {
                                 <CaptureRow capture=c refresh=refresh toast_state=toast_state />
                             }).collect_view()}
@@ -64,6 +70,8 @@ fn CaptureRow(
     let converting = RwSignal::new(false);
     let body = StoredValue::new(capture.body);
     let when = crate::components::format_helpers::format_timestamp(&capture.created_at);
+    let age = CaptureAge::between(capture.created_at, chrono::Utc::now());
+    let age_title = format!("{} \u{00b7} {when}", age.describe());
 
     let save = move || {
         let text = draft.get_untracked().trim().to_string();
@@ -84,12 +92,14 @@ fn CaptureRow(
     };
 
     view! {
-        <li class="px-4 py-2 text-sm flex items-start gap-2" data-testid="capture">
+        <li class="list-none" data-testid="capture">
+        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()>
             {move || if editing.get() {
                 view! {
                     <textarea
-                        class="flex-1 min-h-[3rem] rounded-md border border-stone-200 dark:border-stone-700
-                               bg-transparent px-2 py-1 text-stone-900 dark:text-stone-100"
+                        class="flex-1 min-h-[5rem] w-full rounded-sm border border-sticky-edge
+                               dark:border-sticky-dim-edge bg-white/40 dark:bg-black/20 px-2 py-1
+                               text-stone-900 dark:text-stone-100"
                         aria-label="Capture text"
                         prop:value=move || draft.get()
                         on:input=move |ev| draft.set(event_target_value(&ev))
@@ -107,35 +117,54 @@ fn CaptureRow(
                             }
                         }
                     ></textarea>
-                    <IconButton icon="check" label="Save capture" variant=IconButtonVariant::Save
-                        disabled=Signal::derive(move || busy.get() || draft.get().trim().is_empty())
-                        on_click=Callback::new(move |()| save()) />
-                    <IconButton icon="close" label="Cancel"
-                        on_click=Callback::new(move |()| {
-                            draft.set(body.get_value());
-                            editing.set(false);
-                        }) />
+                    <div class="flex items-center justify-end gap-1">
+                        <IconButton icon="check" label="Save capture" variant=IconButtonVariant::Save
+                            disabled=Signal::derive(move || busy.get() || draft.get().trim().is_empty())
+                            on_click=Callback::new(move |()| save()) />
+                        <IconButton icon="close" label="Cancel"
+                            on_click=Callback::new(move |()| {
+                                draft.set(body.get_value());
+                                editing.set(false);
+                            }) />
+                    </div>
                 }.into_any()
             } else {
+                let age_title = age_title.clone();
                 view! {
-                    <div class="flex-1 min-w-0">
-                        <p class="whitespace-pre-wrap break-words text-stone-800 dark:text-stone-200">
-                            {body.get_value()}
-                        </p>
-                        <p class="mt-0.5 text-xs text-stone-400">{when.clone()}</p>
+                    <p class="flex-1 whitespace-pre-wrap break-words">
+                        {body.get_value()}
+                    </p>
+                    <div class="flex items-center gap-1">
+                        // The glyph + "Capture" keep the identity without colour.
+                        <span class="material-symbols-outlined text-stone-500 dark:text-stone-400"
+                            style="font-size: 14px;" aria-hidden="true">{CAPTURE_ICON}</span>
+                        // The tag is for the eye; screen readers get the
+                        // words ("captured 3 weeks ago"), which say "capture" too.
+                        <span class="sr-only">{age.describe()}</span>
+                        <span data-testid="capture-age" aria-hidden="true"
+                            class=if age.is_stale() {
+                                "text-xs tabular-nums font-medium text-stone-700 dark:text-stone-300"
+                            } else {
+                                "text-xs tabular-nums text-stone-500 dark:text-stone-400"
+                            }
+                            title=age_title>
+                            {age.tag()}
+                        </span>
+                        <span class="flex-1"></span>
+                        <IconButton icon="move_item" label="Convert capture"
+                            disabled=Signal::derive(move || busy.get())
+                            on_click=Callback::new(move |()| converting.set(true)) />
+                        <IconButton icon="edit" label="Edit capture"
+                            disabled=Signal::derive(move || busy.get())
+                            on_click=Callback::new(move |()| editing.set(true)) />
+                        <IconButton icon="delete" label="Delete capture"
+                            variant=IconButtonVariant::Danger
+                            disabled=Signal::derive(move || busy.get())
+                            on_click=Callback::new(move |()| delete_with_undo(id, busy, refresh, toast_state)) />
                     </div>
-                    <IconButton icon="move_item" label="Convert capture"
-                        disabled=Signal::derive(move || busy.get())
-                        on_click=Callback::new(move |()| converting.set(true)) />
-                    <IconButton icon="edit" label="Edit capture"
-                        disabled=Signal::derive(move || busy.get())
-                        on_click=Callback::new(move |()| editing.set(true)) />
-                    <IconButton icon="delete" label="Delete capture"
-                        variant=IconButtonVariant::Danger
-                        disabled=Signal::derive(move || busy.get())
-                        on_click=Callback::new(move |()| delete_with_undo(id, busy, refresh, toast_state)) />
                 }.into_any()
             }}
+        </StickyPaper>
             <crate::components::modals::convert_capture::ConvertCaptureDialog
                 capture_id=id text=body.get_value() show=converting refresh=refresh />
         </li>

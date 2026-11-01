@@ -47,6 +47,10 @@ test('a capture lands in the Inbox, is reworded, deleted, and comes back with Un
   await page.goto('/tasks/inbox');
   const row = page.getByTestId('captures').getByTestId('capture').filter({ hasText: text });
   await expect(row).toBeVisible();
+  // #240: a fresh capture's age tag reads "today", with the words for a
+  // screen reader beside it.
+  await expect(row.getByTestId('capture-age')).toHaveText('today');
+  await expect(row.getByText('captured today')).toBeAttached();
 
   await row.getByRole('button', { name: 'Edit capture' }).click();
   const field = page.getByRole('textbox', { name: 'Capture text' });

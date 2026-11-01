@@ -6,6 +6,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Captures look like sticky notes** (#240, part A). The Inbox shows
+  captures as a wall of yellow notes with a strip of tape, not as task
+  rows; dark mode uses a muted paper so the yellow doesn't glow. The text
+  stays in the interface font, left-aligned.
+  - Each note shows how long it has waited ("today", "3d", "2w", "4mo"),
+    from `common::capture::CaptureAge`; a note a week old or more tilts a
+    little and its tag darkens. Screen readers hear "captured 3 weeks ago".
+  - The quick-capture composer (`n`, the palette) is a blank sticky note.
+  - Colour is never the only signal: the "Captures" heading and the
+    capture glyph (⚡, the same as Quick capture's) stay. The sticky-note
+    glyph remains Notes' own.
+  - Presentation only: no API, data or behaviour change. The rename to
+    "Captures" and grid keyboard navigation come in part B.
+
 ## [3.6.0] - 2026-11-01
 
 ### Fixed

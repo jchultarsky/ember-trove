@@ -45,6 +45,7 @@ pub mod search_view;
 pub mod sidebar;
 pub mod skeleton;
 pub mod status_picker;
+pub mod sticky_note;
 pub mod tag_bar;
 pub mod tag_manager;
 pub mod task_actions;
