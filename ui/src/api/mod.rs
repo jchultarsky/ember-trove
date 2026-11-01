@@ -319,6 +319,12 @@ pub async fn delete_empty(path: &str) -> Result<(), UiError> {
     parse_empty(send_authed(|| built(Request::delete(&url).build())).await?).await
 }
 
+/// DELETE `path`, parse a JSON response into `T`.
+pub async fn delete_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, UiError> {
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::delete(&url).build())).await?).await
+}
+
 /// PUT `body` as JSON to `path`, expecting no response body.
 pub async fn put_empty<B: Serialize>(path: &str, body: &B) -> Result<(), UiError> {
     let url = api_url(path);
