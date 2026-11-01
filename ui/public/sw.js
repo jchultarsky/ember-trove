@@ -32,7 +32,9 @@
 //   v9: Data health drops the related_to_both_ways rule and adds links
 //       (#228) — evicts cached reports the new bundle can't read.
 //   v10: Data health drops the multiple_homes rule (#228, migration 042).
-const CACHE_NAME = "ember-trove-v10";
+//   v11: captures (#234) — quick capture and the share target land a
+//        capture, not a task; evicts cached notes and inbox JSON.
+const CACHE_NAME = "ember-trove-v11";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
@@ -170,7 +172,7 @@ async function logoutAndPurge(request) {
 // manifest.json's `share_target.params` (title / text / url). We forward them
 // to /api/inbox/quick (cookies travel automatically because this is same-
 // origin) and 303 the browser to /tasks/inbox so the SPA boots and shows the
-// new task. On failure we redirect to a route that the SPA recognises and
+// new capture (#234). On failure we redirect to a route that the SPA recognises and
 // shows a toast for, instead of leaving the user on a blank /share URL.
 async function handleShareTarget(request) {
   try {

@@ -101,6 +101,30 @@ cargo check && cargo clippy -- -D warnings
   `common::data_health::graph_rule_counts` and warns; it never refuses
   (owner decision).
 
+## Captures (#234)
+
+- A capture is unclassified Inbox input (`captures`, migration 043). Notes
+  always have a node now (`node_notes.node_id NOT NULL`).
+- **Owner-only, no admin bypass**, like People: `CaptureRepo` takes the
+  owner as `&str` and every query matches `owner_id`. Another account,
+  admins included, gets 404. Only `list_all` (the admin backup) crosses
+  owners.
+- `/inbox/quick` keeps its path and wire format for installed service
+  workers; `common::inbox::capture_text` builds the text.
+- Restore accepts formats 3 and 4 (`OLDEST_RESTORABLE`). A format-3 note
+  without a node becomes a capture (`capture::from_nodeless_note`, 043's
+  rule). Restore also clears the live captures and nodeless tasks, which
+  the `nodes` cascade never reached.
+- `POST /captures/{id}/convert` (S4b): the route checks the destination
+  first, as its create route would (editor on the node or home, the
+  containment table, `Capability::Tasks`). Then `CaptureRepo::convert`
+  runs one transaction: it **deletes the capture first** (no row: 404,
+  nothing made), then inserts through the shared executor-generic helpers
+  (`insert_node`, `insert_grant`, `insert_home`, `insert_note`,
+  `insert_task`). A failed insert rolls the delete back. Reuse those
+  helpers for any other write that must share a transaction; don't copy
+  the SQL.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.

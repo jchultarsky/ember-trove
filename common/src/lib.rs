@@ -34,6 +34,7 @@ pub mod admin;
 pub mod attachment;
 pub mod auth;
 pub mod backup;
+pub mod capture;
 pub mod data_health;
 pub mod edge;
 pub mod editor_pref;

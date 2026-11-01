@@ -210,7 +210,27 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   before pushing. Plain-prose files (CHANGELOG, rules) are safe to join. —
   2026-10-25
 
+### A pg test passes locally and fails in CI on row order
+- **Symptom:** `repo tests (postgres)` fails an `assert_eq!` on a `Vec` whose
+  rows are the same but in a different order; the local run is green.
+- **Cause:** text `ORDER BY` follows the database's collation. The local
+  stack sorts with `C` (byte order: "a tombstone" < "an idea"), CI's
+  `postgres:16` with `en_US.utf8`, which ignores spaces at the first level
+  ("an idea" < "a tombstone").
+- **Fix:** in tests, sort text with `ORDER BY body COLLATE "C"` (or by a
+  non-text key), never a bare text column. — 2026-11-01 (#236)
+
 ## Leptos / WASM
+
+### Focusing a button right after the state that enables it
+- **Symptom:** `el.focus()` on a button does nothing (e2e `toBeFocused`
+  fails), though the button is enabled a moment later.
+- **Cause:** a signal set applies `prop:disabled` on the next tick, so the
+  button is still disabled when focus is called in the same handler, and a
+  disabled element can't take focus.
+- **Fix:** when the state says it's enabled, `set_disabled(false)` on the
+  element first (the prop is about to do the same), then focus it. Real
+  example: `after_pick` in `modals/convert_capture.rs`. — 2026-11-01 (#234)
 
 ### Reactivity silently stops working
 - **Symptom:** a closure compiles but the view never updates; clippy/compiler may warn the

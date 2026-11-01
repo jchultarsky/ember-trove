@@ -138,9 +138,9 @@ struct CommandSpec {
 const GLOBAL_COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         cmd: Command::NewTask,
-        label: "New task (quick capture)",
+        label: "Quick capture",
         icon: "bolt",
-        keywords: "add create todo capture inbox",
+        keywords: "add create todo task note idea capture inbox",
         hint: "n",
     },
     CommandSpec {

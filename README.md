@@ -475,7 +475,24 @@ details.
 | PATCH | `/api/notes/{id}` | Edit a note body (owner-only) |
 | DELETE | `/api/notes/{id}` | Delete a note (soft delete — restorable for 30 days) |
 | POST | `/api/notes/{id}/restore` | Un-delete a note (backs the UI's undo toast) |
+| POST | `/api/notes` | A note on the node named in the body (`node_id` required; every note has a node) |
 | GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first) |
+
+### Captures (Inbox)
+
+A capture is unclassified input waiting in the Inbox (ONTOLOGY §9.1).
+Captures are owner-only: no other account, the admin included, can list or
+change them. They are in backups, and not in search, export or webhooks.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/captures` | The caller's captures, newest first |
+| POST | `/api/captures` | Capture some text (`{body}`, up to 10,000 characters) |
+| PATCH | `/api/captures/{id}` | Reword a capture |
+| DELETE | `/api/captures/{id}` | Delete a capture (soft delete, restorable for 30 days) |
+| POST | `/api/captures/{id}/restore` | Un-delete a capture (backs the Undo toast) |
+| POST | `/api/captures/{id}/convert` | Turn a capture into exactly one thing, then delete it, in one transaction: `{"into":"node", node_type, title, body?, home?}`, `{"into":"note", node_id, body}` or `{"into":"task", node_id, title, due_date?, priority?}` (the node must be a Project). Needs editor rights on the node or home; answers `{"into", id, node_id?}` |
+| POST | `/api/inbox/quick` | Quick capture and the share target: `{title?, body?}` joined into one capture |
 
 ### Editor prefs (per-user UI state)
 

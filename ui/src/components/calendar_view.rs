@@ -98,36 +98,50 @@ fn MonthGrid(
     let days = days_in_month(year, month);
     let offset = first_weekday(year, month);
 
-    // Quick-add: Enter in the in-cell composer creates a standalone task due
-    // on that day (same capture path as the Inbox form; it shows up in the
-    // Inbox for triage like any other task).
+    // Quick-add (#234, owner decision): Enter in the in-cell composer makes
+    // the chosen Project's task, due that day. With no Project it makes a
+    // capture led by the date ("Sat 7 Nov: …", `capture::dated`): a task
+    // belongs to a Project (§9.3), and a capture has no date of its own.
     let compose_title: RwSignal<String> = RwSignal::new(String::new());
+    let compose_project = RwSignal::new(None::<(common::id::NodeId, String)>);
     let submit_compose = move |date: NaiveDate| {
         let title = compose_title.get_untracked().trim().to_string();
         if title.is_empty() {
             return;
         }
-        let req = CreateTaskRequest {
-            title,
-            node_id: None,
-            status: None,
-            priority: None,
-            focus_date: None,
-            due_date: Some(date),
-            recurrence: None,
-        };
+        let project = compose_project.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::create_standalone_task(&req).await {
-                Ok(_) => {
-                    composing.set(None);
-                    compose_title.set(String::new());
-                    push_toast(
-                        ToastLevel::Success,
-                        format!("Task added — due {}", date.format("%b %-d")),
-                    );
-                    refresh.update(|n| *n += 1);
+            let done = match project {
+                Some((node_id, name)) => {
+                    let req = CreateTaskRequest {
+                        title,
+                        node_id: Some(node_id),
+                        status: None,
+                        priority: None,
+                        focus_date: None,
+                        due_date: Some(date),
+                        recurrence: None,
+                    };
+                    crate::api::create_standalone_task(&req).await.map(|_| {
+                        format!(
+                            "Task added to {name} \u{2014} due {}",
+                            date.format("%b %-d")
+                        )
+                    })
                 }
-                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't add task: {e}")),
+                None => crate::api::create_capture(&common::capture::dated(date, &title))
+                    .await
+                    .map(|_| format!("Captured for {}", date.format("%a %-d %b"))),
+            };
+            match done {
+                Ok(msg) => {
+                    composing.try_set(None);
+                    compose_title.try_set(String::new());
+                    compose_project.try_set(None);
+                    push_toast(ToastLevel::Success, msg);
+                    refresh.try_update(|n| *n += 1);
+                }
+                Err(e) => push_toast(ToastLevel::Error, format!("Couldn't add it: {e}")),
             }
         });
     };
@@ -185,10 +199,13 @@ fn MonthGrid(
                         <div
                             class=format!("{cell_class} cursor-pointer")
                             data-date=date.to_string()
-                            title="Add a task due this day"
+                            title="Add a task or a capture for this day"
                             on:click=move |_| {
-                                compose_title.set(String::new());
-                                composing.set(Some(date));
+                                if composing.get_untracked() != Some(date) {
+                                    compose_title.set(String::new());
+                                    compose_project.set(None);
+                                    composing.set(Some(date));
+                                }
                             }
                         >
                             // Day number
@@ -196,10 +213,13 @@ fn MonthGrid(
 
                             // Quick-add composer (one cell at a time)
                             {move || (composing.get() == Some(date)).then(|| view! {
+                                <div class="space-y-1" data-testid="calendar-composer"
+                                    on:click=move |ev: web_sys::MouseEvent| ev.stop_propagation()>
                                 <input
                                     type="text"
                                     autofocus
-                                    placeholder="New task…"
+                                    aria-label="Task or capture"
+                                    placeholder="Task or capture\u{2026}"
                                     class="w-full text-xs rounded-lg border border-amber-400
                                            bg-white dark:bg-stone-800
                                            text-stone-800 dark:text-stone-200
@@ -218,6 +238,13 @@ fn MonthGrid(
                                         }
                                     }
                                 />
+                                // Optional: with a Project it's that Project's task.
+                                <crate::components::node_picker::NodePicker
+                                    selected=compose_project
+                                    placeholder="Project (optional)\u{2026}"
+                                    only_type=common::node::NodeType::Project
+                                />
+                                </div>
                             })}
 
                             // Task chips

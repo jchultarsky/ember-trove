@@ -263,7 +263,7 @@ fn status_error(e: project_status::StatusError) -> ApiError {
 /// starts as "Active", which is what the old scaffold said. Other types
 /// get none, and a status given for one is refused (§3.2, #216); a blank
 /// one is no status, so it passes.
-fn initial_project_status(req: &mut CreateNodeRequest) -> Result<(), ApiError> {
+pub(crate) fn initial_project_status(req: &mut CreateNodeRequest) -> Result<(), ApiError> {
     if let Some(given) = req.project_status.take() {
         req.project_status = project_status::normalize(&given).map_err(status_error)?;
         if req.project_status.is_some() {
@@ -314,13 +314,26 @@ async fn create_node(
         .await
         .map_err(|e| ApiError::Internal(format!("auto-grant owner permission failed: {e}")))?;
 
-    sync_wikilinks(
-        &state,
+    node_created(&state, &claims, &node, template_id).await?;
+    Ok((StatusCode::CREATED, Json(node)))
+}
+
+/// What follows a new node (`create_node`, a converted capture #234): its
+/// wiki links, the `Created` entry and the webhook. The entry and webhook
+/// go out even if the links fail; that error is returned last.
+pub(crate) async fn node_created(
+    state: &AppState,
+    claims: &AuthClaims,
+    node: &Node,
+    template_id: Option<common::id::TemplateId>,
+) -> Result<(), ApiError> {
+    let linked = sync_wikilinks(
+        state,
         node.id,
         &node.owner_id,
         node.body.as_deref().unwrap_or(""),
     )
-    .await?;
+    .await;
     let (action, mut meta) = if let Some(tid) = template_id {
         (
             ActivityAction::CreatedFromTemplate,
@@ -330,7 +343,7 @@ async fn create_node(
         (ActivityAction::Created, json!({ "title": node.title }))
     };
     with_initial_status(&mut meta, node.project_status.as_deref());
-    log_activity(&state, node.id, &claims, action, meta).await;
+    log_activity(state, node.id, claims, action, meta).await;
     dispatch(
         state.webhooks.clone(),
         EVENT_NODE_CREATED,
@@ -338,7 +351,7 @@ async fn create_node(
         &claims.sub,
         &node.owner_id,
     );
-    Ok((StatusCode::CREATED, Json(node)))
+    linked
 }
 
 async fn get_node(

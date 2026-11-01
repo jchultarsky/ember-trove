@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod auth;
 pub mod backup;
 pub(crate) mod capability;
+pub mod captures;
 pub mod data_health;
 pub mod edges;
 pub mod editor_prefs;
@@ -154,6 +155,7 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/dashboard/projects", tasks::dashboard_router())
         .nest("/dashboard/activity", tasks::dashboard_activity_router())
         .nest("/inbox", inbox::router())
+        .nest("/captures", captures::router())
         .nest("/nodes/{node_id}/notes", notes::node_note_router())
         .nest("/notes", notes::note_router())
         .nest("/edges", edges::router())

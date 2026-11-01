@@ -9,7 +9,7 @@
 use bytes::Bytes;
 use common::{
     activity::ActivityRecord,
-    backup::{BackupData, BackupJob, BackupManifest, BackupPreview, EntityCounts},
+    backup::{BackupData, BackupJob, BackupManifest, BackupNote, BackupPreview, EntityCounts},
     id::NodeId,
 };
 use flate2::{Compression, write::GzEncoder};
@@ -51,20 +51,39 @@ fn activity_warning(counts: &EntityCounts) -> Option<String> {
     })
 }
 
-/// Only archives in this release's format restore (#222). Checked before
-/// anything else, so an older archive costs no pre-restore snapshot and
-/// never reaches the parser, which would fail on its data with a 500.
+/// The counts the preview shows, as the restore will land them: a format-3
+/// note without a node comes back as a capture (#234), so it counts there
+/// and not as a note. A no-op for format 4, whose notes all have a node.
+fn counts_as_restored(mut counts: EntityCounts, notes: &[BackupNote]) -> EntityCounts {
+    let moved = notes
+        .iter()
+        .filter(|n| common::capture::from_nodeless_note(n).is_some())
+        .count();
+    let moved = u32::try_from(moved).unwrap_or(u32::MAX);
+    counts.notes = counts.notes.saturating_sub(moved);
+    counts.captures = counts.captures.saturating_add(moved);
+    counts
+}
+
+/// Only archives this release can read restore (#222): its own format, and
+/// format 3, whose captures are notes without a node (#234). Checked before
+/// anything else, so an unreadable archive costs no pre-restore snapshot
+/// and never reaches the parser, which would fail on its data with a 500.
 fn check_format(manifest: &BackupManifest) -> Result<(), ApiError> {
-    let wanted = common::backup::SCHEMA_VERSION;
+    let (oldest, wanted) = (
+        common::backup::OLDEST_RESTORABLE,
+        common::backup::SCHEMA_VERSION,
+    );
+    let range = format!("format {oldest} to {wanted}");
     match manifest.schema_version {
-        v if v == wanted => Ok(()),
-        v if v < wanted => Err(ApiError::Validation(format!(
+        v if (oldest..=wanted).contains(&v) => Ok(()),
+        v if v < oldest => Err(ApiError::Validation(format!(
             "This backup was made by an older version of Ember Trove (format {v}). \
-             This release restores format {wanted} only."
+             This release restores {range} only."
         ))),
         v => Err(ApiError::Validation(format!(
             "This backup was made by a newer version of Ember Trove (format {v}). \
-             This release restores format {wanted} only."
+             This release restores {range} only."
         ))),
     }
 }
@@ -157,7 +176,16 @@ pub async fn create_backup(
     // Fetch all data across all users.
     let nodes = state.nodes.list_all().await.map_err(ApiError::from)?;
     let tags = state.tags.list_all().await.map_err(ApiError::from)?;
-    let notes = state.notes.list_all().await.map_err(ApiError::from)?;
+    let notes: Vec<BackupNote> = state
+        .notes
+        .list_all()
+        .await
+        .map_err(ApiError::from)?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    // Captures (#234), all owners: the backup is admin-run.
+    let captures = state.captures.list_all().await.map_err(ApiError::from)?;
     let tasks = state.tasks.list_all().await.map_err(ApiError::from)?;
     let edges = state.edges.list_all().await.map_err(ApiError::from)?;
 
@@ -199,6 +227,7 @@ pub async fn create_backup(
         attachments: attachments.len() as u32,
         people: people.len() as u32,
         activity: activity.len() as u32,
+        captures: captures.len() as u32,
     };
 
     let now = chrono::Utc::now();
@@ -226,6 +255,7 @@ pub async fn create_backup(
         people,
         node_people,
         activity,
+        captures,
     };
 
     // Build the tar.gz archive in memory.
@@ -320,6 +350,7 @@ pub async fn preview_restore(
     check_format(&manifest)?;
 
     let mut warnings = Vec::new();
+    let mut entity_counts = manifest.entity_counts;
 
     // Warn about current data that will be replaced.
     let current_nodes = state.nodes.list_all().await.map_err(ApiError::from)?;
@@ -330,7 +361,7 @@ pub async fn preview_restore(
         ));
     }
 
-    if let Some(w) = activity_warning(&manifest.entity_counts) {
+    if let Some(w) = activity_warning(&entity_counts) {
         warnings.push(w);
     }
     // Restore never refuses old data (owner decision, #224); it says what
@@ -339,6 +370,7 @@ pub async fn preview_restore(
     // still shows, saying it couldn't check.
     match extract_data(&archive_bytes) {
         Ok(data) => {
+            entity_counts = counts_as_restored(entity_counts, &data.notes);
             warnings.extend(edge_rules_warning(&data));
             warnings.extend(folded_links_warnings(&data));
         }
@@ -359,7 +391,7 @@ pub async fn preview_restore(
     Ok(BackupPreview {
         job_id,
         created_at: manifest.created_at,
-        entity_counts: manifest.entity_counts,
+        entity_counts,
         warnings,
     })
 }
@@ -479,6 +511,19 @@ pub(crate) async fn restore_into(
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("delete favorites failed: {e}")))?;
+
+    // What no node holds, which the cascade above never reached: tasks
+    // without a Project and the captures. A restore used to leave them, so
+    // the live database's own survived next to the archive's (#234).
+    for (what, sql) in [
+        ("tasks", "DELETE FROM node_tasks WHERE node_id IS NULL"),
+        ("captures", "DELETE FROM captures"),
+    ] {
+        sqlx::query(sql)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("delete nodeless {what} failed: {e}")))?;
+    }
 
     // Insert tags first (nodes may reference them via node_tags).
     for tag in &data.tags {
@@ -600,8 +645,33 @@ pub(crate) async fn restore_into(
         .map_err(|e| ApiError::Internal(format!("insert edge failed: {e}")))?;
     }
 
-    // Insert notes.
+    // Captures (#234): the archive's own, plus, from a format-3 archive,
+    // its notes without a node (`capture::from_nodeless_note`, 043's rule).
+    let captures = data.captures.iter().cloned().chain(
+        data.notes
+            .iter()
+            .filter_map(common::capture::from_nodeless_note),
+    );
+    for capture in captures {
+        sqlx::query(
+            "INSERT INTO captures (id, owner_id, body, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(capture.id.0)
+        .bind(&capture.owner_id)
+        .bind(&capture.body)
+        .bind(capture.created_at)
+        .bind(capture.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("insert capture failed: {e}")))?;
+    }
+
+    // Insert notes (each on its node; the nodeless ones became captures).
     for note in &data.notes {
+        let Some(node_id) = note.node_id else {
+            continue;
+        };
         sqlx::query(
             r#"
             INSERT INTO node_notes (id, node_id, owner_id, body, color, created_at, updated_at)
@@ -612,7 +682,7 @@ pub(crate) async fn restore_into(
         // color + updated_at are restored too: they used to fall back to
         // 'default' / NOW(), losing note colours and edit times.
         .bind(note.id.0)
-        .bind(note.node_id.map(|n| n.0))
+        .bind(node_id.0)
         .bind(&note.owner_id)
         .bind(&note.body)
         .bind(&note.color)
@@ -1090,6 +1160,37 @@ mod tests {
     }
 
     #[test]
+    fn a_format_3_preview_counts_nodeless_notes_as_captures() {
+        let at = chrono::Utc::now();
+        let note = |n: u128, node: Option<u128>| BackupNote {
+            id: common::id::NoteId(Uuid::from_u128(n)),
+            node_id: node.map(|m| common::id::NodeId(Uuid::from_u128(m))),
+            owner_id: "alice".into(),
+            body: "an idea".into(),
+            color: "default".into(),
+            created_at: at,
+            updated_at: at,
+        };
+        let counts = EntityCounts {
+            nodes: 1,
+            edges: 0,
+            tags: 0,
+            notes: 3,
+            tasks: 0,
+            attachments: 0,
+            people: 0,
+            activity: 0,
+            captures: 0,
+        };
+        let notes = [note(1, None), note(2, Some(9)), note(3, None)];
+        let out = counts_as_restored(counts.clone(), &notes);
+        assert_eq!((out.notes, out.captures), (1, 2));
+        // Format 4: every note has a node, nothing moves.
+        let out = counts_as_restored(counts, &notes[1..2]);
+        assert_eq!((out.notes, out.captures), (3, 0));
+    }
+
+    #[test]
     fn the_preview_warns_when_a_backup_has_no_activity_history() {
         let mut counts = EntityCounts {
             nodes: 3,
@@ -1100,6 +1201,7 @@ mod tests {
             attachments: 0,
             people: 0,
             activity: 0,
+            captures: 0,
         };
         assert!(
             activity_warning(&counts).is_some_and(|w| w.contains("Activity")),
@@ -1177,6 +1279,7 @@ mod tests {
                 attachments: 0,
                 people: 0,
                 activity: 0,
+                captures: 0,
             },
         };
         assert!(check_format(&manifest(common::backup::SCHEMA_VERSION)).is_ok());
