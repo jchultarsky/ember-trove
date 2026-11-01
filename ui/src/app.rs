@@ -49,6 +49,14 @@ pub struct FavoritesRefresh(pub RwSignal<u32>);
 #[derive(Clone, Copy)]
 pub struct ShowCapture(pub RwSignal<bool>);
 
+// ── Navigation from outside the router ─────────────────────────────────────
+
+/// A path to open, set by code with no reactive owner of its own, such as a
+/// toast's action (a `ToastAction` must not hold a `NavigateFn`, which lives
+/// under the component that made it). `Layout` navigates and clears it.
+#[derive(Clone, Copy)]
+pub struct NavRequest(pub RwSignal<Option<String>>);
+
 // ── Template prefill ───────────────────────────────────────────────────────
 
 /// Pre-fill data passed from TemplatesView to NodeEditor when "Use" is clicked.
@@ -136,6 +144,9 @@ pub fn App() -> impl IntoView {
     // Quick-capture modal — opened via the `n` keyboard shortcut.
     let show_capture = ShowCapture(RwSignal::new(false));
     provide_context(show_capture);
+
+    // Toast actions that open a page set this; Layout acts on it.
+    provide_context(NavRequest(RwSignal::new(None)));
 
     // Toast notification state.
     let toast_state = ToastState::new();

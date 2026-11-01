@@ -131,6 +131,25 @@ pub enum Converted {
     Task { id: TaskId, node_id: NodeId },
 }
 
+/// How the convert dialog prefills a title and a body from a capture: its
+/// first non-blank line is the title, the rest (if any) the body. Nothing
+/// is cut: a first line over [`TITLE_MAX_LEN`] stays whole, for the user
+/// to reword (owner decision, #234).
+#[must_use]
+pub fn split_title(text: &str) -> (String, Option<String>) {
+    let text = text.trim();
+    match text.split_once('\n') {
+        Some((first, rest)) => {
+            let rest = rest.trim();
+            (
+                first.trim().to_string(),
+                (!rest.is_empty()).then(|| rest.to_string()),
+            )
+        }
+        None => (text.to_string(), None),
+    }
+}
+
 /// A note with no node becomes a capture (#234): migration 043's rule, kept
 /// here for restoring archives made before it (format 3). Same id, owner,
 /// text and times. `None` for a note that has a node.
@@ -263,6 +282,25 @@ mod tests {
             task.checked().is_err(),
             "a Task's title must fit (owner decision)"
         );
+    }
+
+    #[test]
+    fn the_first_line_is_the_title_and_the_rest_the_body() {
+        assert_eq!(
+            split_title("  call the bank  "),
+            ("call the bank".into(), None)
+        );
+        assert_eq!(
+            split_title("\nRead this\r\n  https://example.com \n\nmore\n"),
+            (
+                "Read this".into(),
+                Some("https://example.com \n\nmore".into())
+            )
+        );
+        assert_eq!(split_title("only\n   \n"), ("only".into(), None));
+        // Never cut: a long first line is kept whole, to be reworded.
+        let long = "x".repeat(TITLE_MAX_LEN + 10);
+        assert_eq!(split_title(&long).0.chars().count(), TITLE_MAX_LEN + 10);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! `/captures` (#234): the caller's Inbox captures. Owner-only server-side.
 
 use common::{
-    capture::{Capture, CaptureRequest},
+    capture::{Capture, CaptureRequest, ConvertCaptureRequest, Converted},
     id::CaptureId,
 };
 
@@ -38,4 +38,13 @@ pub async fn delete_capture(id: CaptureId) -> Result<(), UiError> {
 
 pub async fn restore_capture(id: CaptureId) -> Result<Capture, UiError> {
     post_json(&format!("/captures/{id}/restore"), &serde_json::json!({})).await
+}
+
+/// Turn a capture into exactly one thing (§9.1); the server deletes it in
+/// the same transaction.
+pub async fn convert_capture(
+    id: CaptureId,
+    req: &ConvertCaptureRequest,
+) -> Result<Converted, UiError> {
+    post_json(&format!("/captures/{id}/convert"), req).await
 }

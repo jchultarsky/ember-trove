@@ -1,7 +1,7 @@
 //! The Inbox's captures (ONTOLOGY §9.1, #234): unclassified input waiting
-//! to be processed. Each one can be reworded or deliberately deleted, with
-//! Undo. Converting one into exactly one destination comes with S4b, and
-//! S4c folds this into a redesigned Inbox.
+//! to be processed. Each one can be reworded, converted into exactly one
+//! thing (`ConvertCaptureDialog`), or deliberately deleted, with Undo. S4c
+//! folds this into a redesigned Inbox.
 
 use common::capture::Capture;
 use common::id::CaptureId;
@@ -61,6 +61,7 @@ fn CaptureRow(
     let editing = RwSignal::new(false);
     let draft = RwSignal::new(capture.body.clone());
     let busy = RwSignal::new(false);
+    let converting = RwSignal::new(false);
     let body = StoredValue::new(capture.body);
     let when = crate::components::format_helpers::format_timestamp(&capture.created_at);
 
@@ -123,6 +124,9 @@ fn CaptureRow(
                         </p>
                         <p class="mt-0.5 text-xs text-stone-400">{when.clone()}</p>
                     </div>
+                    <IconButton icon="move_item" label="Convert capture"
+                        disabled=Signal::derive(move || busy.get())
+                        on_click=Callback::new(move |()| converting.set(true)) />
                     <IconButton icon="edit" label="Edit capture"
                         disabled=Signal::derive(move || busy.get())
                         on_click=Callback::new(move |()| editing.set(true)) />
@@ -132,6 +136,8 @@ fn CaptureRow(
                         on_click=Callback::new(move |()| delete_with_undo(id, busy, refresh, toast_state)) />
                 }.into_any()
             }}
+            <crate::components::modals::convert_capture::ConvertCaptureDialog
+                capture_id=id text=body.get_value() show=converting refresh=refresh />
         </li>
     }
 }
