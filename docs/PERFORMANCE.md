@@ -182,7 +182,8 @@ also recreate `postgres`, restarting it for a few seconds. So:
   - `/templates`: the closed create dialogs no longer fetch it; it loads when one
     opens;
   - `/editor-prefs`: one fetch per node page, shared by the task and note panels.
-- **The proxy speaks HTTP/2** (`http2 on;`, nginx pinned to `1.29-alpine`).
+- **The proxy speaks HTTP/2** (`http2 on;`, nginx pinned to `1.30-alpine`, the stable branch;
+  1.29 is end-of-life).
 
 | | requests per page load (1×) |
 |---|---|
