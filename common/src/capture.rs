@@ -19,12 +19,84 @@ use crate::task::TaskPriority;
 /// The longest a capture may be, in characters (the database's CHECK).
 pub const MAX_LEN: usize = 10_000;
 
+/// The paper colour of a capture's sticky note (#273). The keys are the
+/// notes' palette (`note::CreateNoteRequest::color`), so there is nothing
+/// new to learn, but here it is a closed set: an unknown key is refused at
+/// the door (a 422) instead of stored, and the database CHECK
+/// (migration 045) holds the same list. `Default` is the classic sticky
+/// yellow every capture had before, so existing captures keep their look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CaptureColor {
+    #[default]
+    Default,
+    Amber,
+    Rose,
+    Lime,
+    Sky,
+    Violet,
+}
+
+impl CaptureColor {
+    /// Every colour, in the order the picker shows them.
+    pub const ALL: [Self; 6] = [
+        Self::Default,
+        Self::Amber,
+        Self::Rose,
+        Self::Lime,
+        Self::Sky,
+        Self::Violet,
+    ];
+
+    /// The stored key (the same as the JSON one).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Amber => "amber",
+            Self::Rose => "rose",
+            Self::Lime => "lime",
+            Self::Sky => "sky",
+            Self::Violet => "violet",
+        }
+    }
+
+    /// The colour stored under `key`. Anything else reads as the default
+    /// paper: the database CHECK keeps other keys out, so this only
+    /// matters for a hand-edited row.
+    #[must_use]
+    pub fn from_key(key: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|c| c.as_str() == key)
+            .unwrap_or_default()
+    }
+
+    /// The colour's name, for the picker's accessible labels: colour is
+    /// never the only signal (#240).
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Yellow",
+            Self::Amber => "Amber",
+            Self::Rose => "Rose",
+            Self::Lime => "Lime",
+            Self::Sky => "Sky",
+            Self::Violet => "Violet",
+        }
+    }
+}
+
 /// One capture.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Capture {
     pub id: CaptureId,
     pub owner_id: String,
     pub body: String,
+    /// The sticky note's paper (#273). Absent in archives made before it,
+    /// which restore as the default yellow.
+    #[serde(default)]
+    pub color: CaptureColor,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -36,6 +108,12 @@ pub struct Capture {
 pub struct CaptureRequest {
     #[garde(length(chars, min = 1, max = MAX_LEN))]
     pub body: String,
+    /// The paper colour (#273). Absent: the default yellow on create, and
+    /// unchanged on an edit, so a client that only rewords (or predates
+    /// colours) never resets it.
+    #[garde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<CaptureColor>,
 }
 
 /// The longest title a Task may have, in characters (`node_tasks`'
@@ -159,6 +237,9 @@ pub fn from_nodeless_note(note: &BackupNote) -> Option<Capture> {
         id: CaptureId(note.id.0),
         owner_id: note.owner_id.clone(),
         body: note.body.clone(),
+        // 043 moved only default-coloured notes, and a capture's default
+        // is its own paper: a note's colour doesn't carry over.
+        color: CaptureColor::Default,
         created_at: note.created_at,
         updated_at: note.updated_at,
     })
@@ -323,15 +404,61 @@ mod tests {
     }
 
     #[test]
+    fn capture_colours_use_the_notes_keys_and_refuse_others() {
+        let keys: Vec<&str> = CaptureColor::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(keys, ["default", "amber", "rose", "lime", "sky", "violet"]);
+        for c in CaptureColor::ALL {
+            // The JSON key is the stored key, and both read back.
+            assert_eq!(serde_json::to_value(c).expect("json"), c.as_str());
+            assert_eq!(CaptureColor::from_key(c.as_str()), c);
+        }
+        assert_eq!(CaptureColor::default(), CaptureColor::Default);
+        assert_eq!(CaptureColor::from_key("chartreuse"), CaptureColor::Default);
+        // An unknown key is no request at all: never stored.
+        assert!(
+            serde_json::from_value::<CaptureRequest>(
+                serde_json::json!({ "body": "x", "color": "url(evil)" })
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_request_without_a_colour_leaves_it_alone() {
+        let req: CaptureRequest =
+            serde_json::from_value(serde_json::json!({ "body": "x" })).expect("old client");
+        assert_eq!(req.color, None);
+        let req: CaptureRequest =
+            serde_json::from_value(serde_json::json!({ "body": "x", "color": "sky" }))
+                .expect("a colour");
+        assert_eq!(req.color, Some(CaptureColor::Sky));
+    }
+
+    #[test]
+    fn an_archived_capture_without_a_colour_is_yellow() {
+        let c: Capture = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::from_u128(1),
+            "owner_id": "alice",
+            "body": "x",
+            "created_at": "2026-10-01T09:00:00Z",
+            "updated_at": "2026-10-01T09:00:00Z",
+        }))
+        .expect("a format-4 capture");
+        assert_eq!(c.color, CaptureColor::Default);
+    }
+
+    #[test]
     fn the_limit_counts_characters_like_the_database() {
         // Two bytes a character: 10 000 of them is 20 000 bytes, still one
         // capture's worth (the CHECK is `char_length`).
         let full = CaptureRequest {
             body: "é".repeat(MAX_LEN),
+            color: None,
         };
         assert!(full.validate().is_ok());
         let over = CaptureRequest {
             body: "é".repeat(MAX_LEN + 1),
+            color: None,
         };
         assert!(over.validate().is_err());
     }

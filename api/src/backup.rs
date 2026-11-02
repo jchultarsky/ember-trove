@@ -657,12 +657,13 @@ pub(crate) async fn restore_into(
     );
     for capture in captures {
         sqlx::query(
-            "INSERT INTO captures (id, owner_id, body, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO captures (id, owner_id, body, color, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
         )
         .bind(capture.id.0)
         .bind(&capture.owner_id)
         .bind(&capture.body)
+        .bind(capture.color.as_str())
         .bind(capture.created_at)
         .bind(capture.updated_at)
         .execute(&mut *conn)

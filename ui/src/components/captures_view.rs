@@ -40,7 +40,7 @@ use crate::app::TaskRefresh;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::page_header::PageHeader;
-use crate::components::sticky_note::{CAPTURE_ICON, StickyPaper};
+use crate::components::sticky_note::{CAPTURE_ICON, PaperPicker, StickyPaper};
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// The toast every way of adding a capture shows.
@@ -328,6 +328,9 @@ fn CaptureRow(
     let busy = RwSignal::new(false);
     let converting = RwSignal::new(false);
     let body = StoredValue::new(capture.body);
+    // The stored paper, and the one being picked while editing (#273).
+    let stored_color = capture.color;
+    let draft_color = RwSignal::new(stored_color);
     let edit_ref: NodeRef<html::Textarea> = NodeRef::new();
 
     // A key aimed at this card does what its button would. Registered
@@ -373,9 +376,10 @@ fn CaptureRow(
         if text.is_empty() || busy.get_untracked() {
             return;
         }
+        let paper = draft_color.get_untracked();
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_capture(id, &text).await {
+            match crate::api::update_capture(id, &text, paper).await {
                 Ok(_) => {
                     editing.try_set(false);
                     refresh.try_update(|n| *n += 1);
@@ -400,7 +404,8 @@ fn CaptureRow(
             // A click puts the keyboard cursor here too, like My Day.
             on:click=move |_| keys.focused.set(Some(id))
         >
-        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()>
+        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()
+            color=Signal::derive(move || if editing.get() { draft_color.get() } else { stored_color })>
             {move || if editing.get() {
                 view! {
                     <textarea
@@ -421,17 +426,21 @@ fn CaptureRow(
                                 // Escape cancels, like ✕: the draft goes too.
                                 ev.stop_propagation();
                                 draft.set(body.get_value());
+                                draft_color.set(stored_color);
                                 editing.set(false);
                             }
                         }
                     ></textarea>
                     <div class="flex items-center justify-end gap-1">
+                        <PaperPicker selected=draft_color />
+                        <span class="flex-1"></span>
                         <IconButton icon="check" label="Save capture" variant=IconButtonVariant::Save
                             disabled=Signal::derive(move || busy.get() || draft.get().trim().is_empty())
                             on_click=Callback::new(move |()| save()) />
                         <IconButton icon="close" label="Cancel"
                             on_click=Callback::new(move |()| {
                                 draft.set(body.get_value());
+                                draft_color.set(stored_color);
                                 editing.set(false);
                             }) />
                     </div>
