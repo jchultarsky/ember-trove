@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **The app loads on a phone again without a minutes-long wait.** The
+  production proxy strips `Accept-Encoding` from page requests so it can
+  stamp the CSP nonce into the HTML (May 2026), and that left every asset
+  uncompressed. The WASM had grown to 35.6 MB, so after each release a
+  phone sat on the loading screen until the whole file arrived (reported
+  on iPhone with v3.8.0). The proxy now gzips the WASM, scripts, styles
+  and SVG itself: 35.6 MB becomes 4.4 MB. The nonce is still stamped first.
+
 ## [3.8.0] - 2026-11-02
 
 ### Added

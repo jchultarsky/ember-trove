@@ -420,3 +420,20 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   `wasm-bindgen --target web`, and a Playwright page that stubs `/api/*`
   (`e2e/tests/routing.spec.ts`). — 2026-11-01 (#246)
 
+## Phone stuck on the loading screen after a release (2026-11-02)
+
+- **Symptom:** desktop Chrome loads; an iPhone shows "Loading…" for
+  minutes after each release. In WebKit (Playwright `devices['iPhone 15']`)
+  the module imports, but `init()` stays pending, because
+  `resp.arrayBuffer()` on the WASM doesn't finish.
+- **Cause:** the WASM is served uncompressed: 35.6 MB.
+  `deploy/nginx.prod.conf` sets `proxy_set_header Accept-Encoding ""` on
+  `location /` so `sub_filter` can stamp the CSP nonce, and the proxy had no
+  gzip of its own. The UI container's own gzip never fired.
+- **Fix:** gzip in the proxy's `location /` (wasm, js, css, svg, json).
+  `sub_filter` runs before gzip. Check it with
+  `curl -so /dev/null -w '%{size_download} %header{content-encoding}' -H 'Accept-Encoding: gzip' https://trove.chultarsky.me/<wasm>`.
+- **Reproduce without a phone:** run Playwright's `webkit` with an iPhone
+  device in `mcr.microsoft.com/playwright` against prod. Signed out, a
+  healthy load redirects to Cognito; a stuck one stays on `/`.
+
