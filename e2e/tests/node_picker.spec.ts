@@ -12,8 +12,9 @@ import { seedTrove } from './seed';
 /**
  * The shared node picker as a combobox (#126): text filters, only an option
  * commits, the committed node is a chip. Exercised through the Connections
- * "add edge" form (which used to treat typed text as the target UUID) and
- * the Inbox add-task form (attach), which must behave identically.
+ * "add edge" form (which used to treat typed text as the target UUID). The
+ * Inbox's attach pickers went with the Inbox (S4c, #240); the task picker
+ * left is the Convert dialog's.
  *
  * Node titles are unique per attempt (`Date.now()`); every created node is
  * deleted in `finally`, so retries never see leftovers.
@@ -226,35 +227,6 @@ test('Escape closes only the list, then clears the text; blur closes the list', 
   }
 });
 
-test('the Inbox add-task picker attaches by the same rules', async ({ page, request }) => {
-  const stamp = Date.now();
-  // A Project: only Projects take tasks (§3.2, #216).
-  const node = await createNode(request, `e2e attach node ${stamp}`, { node_type: 'project' });
-  const title = `e2e attach task ${stamp}`;
-  try {
-    await page.goto('/tasks/inbox');
-    const form = page.getByTestId('new-task-form');
-    await form.getByPlaceholder('Task title…').fill(title);
-    const combo = form.getByRole('combobox', { name: 'Link to a Project (optional)…' });
-    await combo.fill(`e2e attach node ${stamp}`);
-    await combo.press('Enter');
-    await expect(form.getByTestId('node-picker-chip')).toContainText(`e2e attach node ${stamp}`);
-    await form.getByPlaceholder('Task title…').press('Enter');
-    await expect
-      .poll(async () => {
-        const tasks: { title: string }[] = await (
-          await request.get(`/api/nodes/${node.id}/tasks`)
-        ).json();
-        return tasks.some((t) => t.title === title);
-      })
-      .toBe(true);
-  } finally {
-    const tasks: { id: string }[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
-    for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
-    await request.delete(`/api/nodes/${node.id}`);
-  }
-});
-
 test('an existing connection is flagged before submit; the API refuses a duplicate', async ({
   page,
   request,
@@ -333,46 +305,29 @@ test('Add to Favorites picks a node with the shared picker', async ({ page, requ
   }
 });
 
-test('Inbox "Assign to a Project" commits with the shared picker', async ({ page, request }) => {
-  const stamp = Date.now();
-  const node = await createNode(request, `e2e assign node ${stamp}`, { node_type: 'project' });
-  const created = await request.post('/api/tasks', { data: { title: `e2e assign task ${stamp}` } });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
-  try {
-    await page.goto('/tasks/inbox');
-    const row = page.locator(`[data-task-id="${task.id}"]`);
-    await row.locator('button[title="Assign to a Project"]').click();
-    const combo = row.getByRole('combobox', { name: 'Search Projects…' });
-    await expect(combo).toBeFocused();
-    await combo.fill(`e2e assign node ${stamp}`);
-    await combo.press('Enter');
-    await expect
-      .poll(async () => {
-        const tasks: { id: string }[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
-        return tasks.some((t) => t.id === task.id);
-      })
-      .toBe(true);
-  } finally {
-    await request.delete(`/api/tasks/${task.id}`);
-    await request.delete(`/api/nodes/${node.id}`);
-  }
-});
-
 test('the task pickers offer Projects only (#216)', async ({ page, request }) => {
   const stamp = Date.now();
   const project = await createNode(request, `e2e kind pick project ${stamp}`, {
     node_type: 'project',
   });
   const article = await createNode(request, `e2e kind pick article ${stamp}`);
+  const capture = await (
+    await request.post('/api/captures', { data: { body: `e2e kind pick capture ${stamp}` } })
+  ).json();
   try {
-    await page.goto('/tasks/inbox');
-    const form = page.getByTestId('new-task-form');
-    const combo = form.getByRole('combobox', { name: 'Link to a Project (optional)…' });
+    // The Convert dialog's Task destination (the Inbox's add-task picker
+    // went with the Inbox, S4c).
+    await page.goto('/tasks/captures');
+    const card = page.getByTestId('capture').filter({ hasText: `e2e kind pick capture ${stamp}` });
+    await card.getByRole('button', { name: 'Convert capture' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Convert capture' });
+    await dialog.getByRole('button', { name: 'Task', exact: true }).click();
+    const combo = dialog.getByRole('combobox', { name: 'Task in a Project…' });
     await combo.fill(`e2e kind pick`);
     await expect(page.getByRole('option', { name: new RegExp(`project ${stamp}`) })).toBeVisible();
     await expect(page.getByRole('option', { name: new RegExp(`article ${stamp}`) })).toHaveCount(0);
   } finally {
+    await request.delete(`/api/captures/${capture.id}`);
     for (const n of [project, article]) await request.delete(`/api/nodes/${n.id}`);
   }
 });

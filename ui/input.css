@@ -56,6 +56,15 @@
   --color-glow: #fbbf24;      /* heat-1: today, focus, carried */
   --color-heat-high: #ea580c; /* heat-2: imminent */
   --color-heat-max: #dc2626;  /* heat-3: overdue, destructive */
+  /* Capture identity (#240): a sticky note. Paper, not heat — the yellow is
+     an entity marker, never urgency. The dim pair is the dark-mode paper, a
+     muted olive so the card doesn't glow on stone-950. */
+  --color-sticky: #fef9c3;          /* yellow-100 */
+  --color-sticky-edge: #fde68a;     /* amber-200 */
+  --color-sticky-tape: #fffbeb99;   /* translucent amber-50 */
+  --color-sticky-dim: #34301f;
+  --color-sticky-dim-edge: #4a442b;
+  --color-sticky-dim-tape: #78716c66; /* translucent stone-500 */
 }
 
 /* Display-face utility — pairs the family with its variation settings so a
@@ -347,7 +356,7 @@ input[type="checkbox"]:checked::after {
 
 /* ── Focus-task highlight (v2.6.2) ─────────────────────────────────────────────
    Applied for ~1.8s by `focus_task::schedule_focus_task` when the destination
-   view (NodeView, InboxView, TaskPanel) renders the row matching the
+   view (NodeView, TaskPanel) renders the row matching the
    `?task=<id>` query param the Kanban click navigation set. */
 @keyframes focus-task-flash {
   0%   { box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0); background-color: rgba(245, 158, 11, 0); }

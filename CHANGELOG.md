@@ -6,6 +6,72 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-11-02
+
+### Fixed
+- **An open task editor keeps your unsaved text when its list reloads**
+  (#250). On a Project's task panel, anything that reloads the tasks
+  closed the editor and dropped the typed text without Undo: ☀ on any
+  task, ticking one, or a quick capture with `n`. My Day kept the editor
+  open but reset its text to the saved task.
+  - The draft of the task being edited now belongs to the list, not the
+    row (`EditSession`): a rebuilt row, or the task moving between My
+    Day's Today and Backlog mid-edit, keeps editing the same text.
+  - Opening an editor (pencil, `e`, Edit) always starts from the saved
+    task, and Escape's "Edit discarded · Undo" still restores the text.
+  - One task is edited at a time on the panel, as on My Day.
+- **An unknown URL, `/admin` among them, no longer freezes the app on a
+  bare "Loading..."** (#246). The router's fallback was a `<Redirect>`,
+  which panics when it renders (WASM `unreachable`), so the page never got
+  past the sign-in check. The fallback now redirects to My Day after it
+  mounts, and `/admin` opens the Users page. Not a v3.6.0 regression: the
+  fallback dates from July.
+
+### Changed
+- **Captures look like sticky notes** (#240, part A). The Inbox shows
+  captures as a wall of yellow notes with a strip of tape, not as task
+  rows; dark mode uses a muted paper so the yellow doesn't glow. The text
+  stays in the interface font, left-aligned.
+  - Each note shows how long it has waited ("today", "3d", "2w", "4mo"),
+    from `common::capture::CaptureAge`; a note a week old or more tilts a
+    little and its tag darkens. Screen readers hear "captured 3 weeks ago".
+  - The quick-capture composer (`n`, the palette) is a blank sticky note.
+  - Colour is never the only signal: the "Captures" heading and the
+    capture glyph (⚡, the same as Quick capture's) stay. The sticky-note
+    glyph remains Notes' own.
+  - Presentation only: no API, data or behaviour change.
+- **The Inbox is now Captures** (#240, part B; programme slice S4c). The
+  page is named for what it holds: Tasks → Captures, at `/tasks/captures`.
+  - `/tasks/inbox` and `/inbox` redirect there and keep their query, so a
+    share from an installed app (which still lands on
+    `/tasks/inbox?captured=1`) is confirmed as before.
+  - It holds captures only. The task list, its "Process" triage mode and
+    its add-task form are gone: a task needs its Project (ONTOLOGY §9.3).
+    A task left without one is listed by Data health ("Move to a
+    Project"); its My Day chip reads "No Project" and opens Data health.
+  - An empty wall says "Nothing captured".
+  - The words follow: "Added to Captures" (quick capture, the share sheet,
+    the calendar), "Go to Captures" in the palette, `n` is "Quick capture"
+    in help, the home-screen shortcut, help text. The service worker's
+    cache moves to v12.
+  - No API change: `GET /api/tasks/inbox` stays until tasks without a
+    Project are refused (S5c).
+
+### Added
+- **Keys on the Captures wall** (#240, part B2). `j`/`k` and ←/→ move
+  through the cards in reading order, ↑/↓ to the card above or below
+  (`common::grid_nav`, nearest by column). `Enter` or `c` converts the
+  focused capture, `e` edits it, `d` deletes it with Undo, and `Esc` drops
+  the focus. After a delete the focus moves to the card now in its place.
+  - The keys are ignored while any dialog is open (`keyboard::modal_open`),
+    so `d` can't delete a card behind the Convert dialog.
+  - Editing a capture, by key or button, focuses its text box.
+  - Help lists the keys under "Captures".
+- **The Notes page hands loose text to Captures** (#234, Muse's v3.5.0
+  friction item). Its hint used to say "press n to capture it", but `n`
+  opened an empty composer. "Capture it" now turns the text in the box
+  into a capture, clears the box and offers Open.
+
 ## [3.6.0] - 2026-11-01
 
 ### Fixed

@@ -41,15 +41,11 @@ pub fn DueDateField(
     /// Wrapper classes (e.g. `flex-1` when the field shares a row).
     #[prop(optional)]
     wrapper_class: Option<&'static str>,
-    /// Lets a parent focus the input (Inbox triage).
-    #[prop(optional)]
-    node_ref: Option<NodeRef<leptos::html::Input>>,
 ) -> impl IntoView {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let hint_id = format!("due-hint-{id}");
     let warn_id = format!("due-warn-{id}");
     let described_by = format!("{hint_id} {warn_id}");
-    let node_ref = node_ref.unwrap_or_default();
     let today = local_today();
     let parsed = move || value.get().trim().parse::<NaiveDate>().ok();
 
@@ -57,7 +53,6 @@ pub fn DueDateField(
         <span class=wrapper_class.unwrap_or(WRAPPER_CLASS) data-testid="due-date-field">
             <input
                 type="date"
-                node_ref=node_ref
                 class=input_class.unwrap_or(DUE_INPUT_CLASS)
                 title="Due date (optional)"
                 aria-describedby=described_by

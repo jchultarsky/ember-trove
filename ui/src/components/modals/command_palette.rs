@@ -103,7 +103,7 @@ impl PaletteAction {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Command {
     GoMyDay,
-    GoInbox,
+    GoCaptures,
     GoCalendar,
     GoDashboard,
     GoGraph,
@@ -140,7 +140,7 @@ const GLOBAL_COMMANDS: &[CommandSpec] = &[
         cmd: Command::NewTask,
         label: "Quick capture",
         icon: "bolt",
-        keywords: "add create todo task note idea capture inbox",
+        keywords: "add create todo task note idea capture captures inbox",
         hint: "n",
     },
     CommandSpec {
@@ -186,10 +186,10 @@ const GLOBAL_COMMANDS: &[CommandSpec] = &[
         hint: "",
     },
     CommandSpec {
-        cmd: Command::GoInbox,
-        label: "Go to Inbox",
-        icon: "inbox",
-        keywords: "tasks triage process",
+        cmd: Command::GoCaptures,
+        label: "Go to Captures",
+        icon: "bolt",
+        keywords: "inbox captures process sticky",
         hint: "",
     },
     CommandSpec {
@@ -608,7 +608,7 @@ pub fn CommandPalette(
                 let nav = navigate.get_value();
                 match spec.cmd {
                     Command::GoMyDay => nav("/tasks/my-day", Default::default()),
-                    Command::GoInbox => nav("/tasks/inbox", Default::default()),
+                    Command::GoCaptures => nav("/tasks/captures", Default::default()),
                     Command::GoCalendar => nav("/tasks/calendar", Default::default()),
                     Command::GoDashboard => nav("/dashboard", Default::default()),
                     Command::GoGraph => nav("/graph", Default::default()),

@@ -29,16 +29,20 @@ use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toa
 
 /// Where an item lives in the app. A done or cancelled task sits in its
 /// list's collapsed "completed" section, where `?task=` can't land, so it
-/// links to the list itself.
-fn ref_href(r: &Ref) -> String {
+/// links to the list itself. A task with no Project lives only here (S4c:
+/// the Inbox no longer lists it), so it has no link.
+fn ref_href(r: &Ref) -> Option<String> {
     match r.kind {
-        RefKind::Node => format!("/nodes/{}", r.id),
-        RefKind::Task if r.closed => match r.node_id {
-            Some(node) => format!("/nodes/{node}"),
-            None => "/tasks/inbox".to_string(),
-        },
-        RefKind::Task => task_href(r.id, r.node_id),
-        RefKind::Person => format!("/people/{}", r.id),
+        RefKind::Node => Some(format!("/nodes/{}", r.id)),
+        RefKind::Task => {
+            let node = r.node_id?;
+            Some(if r.closed {
+                format!("/nodes/{node}")
+            } else {
+                task_href(r.id, Some(node))
+            })
+        }
+        RefKind::Person => Some(format!("/people/{}", r.id)),
     }
 }
 
@@ -794,10 +798,17 @@ fn RefLink(r: Ref) -> impl IntoView {
     let archived = r.archived && r.kind == RefKind::Node;
     let closed = r.closed;
     view! {
-        <a href=href
-           class="text-stone-800 dark:text-stone-200 hover:text-amber-700 dark:hover:text-amber-400 underline-offset-2 hover:underline">
-            {r.label}
-        </a>
+        {match href {
+            Some(href) => view! {
+                <a href=href
+                   class="text-stone-800 dark:text-stone-200 hover:text-amber-700 dark:hover:text-amber-400 underline-offset-2 hover:underline">
+                    {r.label}
+                </a>
+            }.into_any(),
+            None => view! {
+                <span class="text-stone-800 dark:text-stone-200">{r.label}</span>
+            }.into_any(),
+        }}
         {archived.then(|| view! { <Badge text="archived" /> })}
         {closed.then(|| view! { <Badge text="completed" /> })}
     }
@@ -862,17 +873,23 @@ mod tests {
     fn each_kind_links_to_where_it_lives() {
         let id = Uuid::from_u128(1);
         let node = Uuid::from_u128(2);
-        assert_eq!(ref_href(&Ref::node(id, "n", false)), format!("/nodes/{id}"));
+        assert_eq!(
+            ref_href(&Ref::node(id, "n", false)),
+            Some(format!("/nodes/{id}"))
+        );
         assert_eq!(
             ref_href(&Ref::task(id, "t", Some(node), false)),
-            format!("/nodes/{node}?task={id}")
+            Some(format!("/nodes/{node}?task={id}"))
         );
         assert_eq!(
             ref_href(&Ref::task(id, "t", None, false)),
-            format!("/tasks/inbox?task={id}"),
-            "an orphan task opens in the Inbox"
+            None,
+            "a task with no Project lives only on this page"
         );
-        assert_eq!(ref_href(&Ref::person(id, "p")), format!("/people/{id}"));
+        assert_eq!(
+            ref_href(&Ref::person(id, "p")),
+            Some(format!("/people/{id}"))
+        );
     }
 
     #[test]
@@ -880,9 +897,9 @@ mod tests {
         let id = Uuid::from_u128(1);
         let node = Uuid::from_u128(2);
         let done = Ref::task(id, "t", Some(node), false).with_closed(true);
-        assert_eq!(ref_href(&done), format!("/nodes/{node}"));
+        assert_eq!(ref_href(&done), Some(format!("/nodes/{node}")));
         let done_orphan = Ref::task(id, "t", None, false).with_closed(true);
-        assert_eq!(ref_href(&done_orphan), "/tasks/inbox");
+        assert_eq!(ref_href(&done_orphan), None);
     }
 
     #[test]

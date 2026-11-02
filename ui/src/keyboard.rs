@@ -23,3 +23,14 @@ pub fn active_element_is_editable() -> bool {
         })
         .unwrap_or(false)
 }
+
+/// True while any modal is open. Every modal goes through `ModalShell`,
+/// which mounts its `aria-modal` panel only while shown, so a page's
+/// single-key shortcuts can't act on what lies behind a dialog (the
+/// Captures wall's `d` must never delete a card behind Convert).
+pub fn modal_open() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.query_selector("[aria-modal=\"true\"]").ok().flatten())
+        .is_some()
+}

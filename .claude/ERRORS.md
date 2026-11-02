@@ -406,3 +406,17 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   property (background, border, padding, shadow) on **both** `.prose pre code` **and**
   `.dark .prose pre code` in the same edit. The dark reset must be on `.dark .prose pre code`
   specifically to win specificity. — 2026-04 (v2.10.2–v2.10.4)
+
+### Unknown URL freezes on a bare "Loading..." (Routes fallback `<Redirect>`)
+- **Symptom:** any URL no route matches (e.g. `/admin`) shows the AuthGate's
+  bare "Loading..." forever; the tab title still resolves. Release WASM logs
+  only `RuntimeError: unreachable`; the panic hook prints nothing.
+- **Cause:** `<Routes fallback=|| view! { <Redirect .../> }>` navigates while
+  the router is rendering its fallback, and leptos_router 0.8.17 panics.
+  `<Redirect>` as a `<Route>` view (`/`, `/tasks`) is fine.
+- **Fix:** `GoTo` in `layout.rs` navigates from an `Effect` (after mount,
+  `replace: true`). Use it for the fallback and new redirect routes. Repro
+  without trunk: `cargo build -p ui --release --target wasm32-unknown-unknown`,
+  `wasm-bindgen --target web`, and a Playwright page that stubs `/api/*`
+  (`e2e/tests/routing.spec.ts`). — 2026-11-01 (#246)
+

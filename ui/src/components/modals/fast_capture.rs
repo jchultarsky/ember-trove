@@ -1,8 +1,8 @@
 //! Fast-capture modal — the *primary* `n`-shortcut surface.
 //!
 //! One autofocused textarea, no other fields, no decisions.  Cmd/Ctrl+Enter
-//! sends the text to `POST /api/inbox/quick`, which lands a capture in the
-//! Inbox (ONTOLOGY §9.1, #234): unclassified, so no date or priority —
+//! sends the text to `POST /api/inbox/quick`, which lands a capture on the
+//! Captures wall (ONTOLOGY §9.1, #234): unclassified, so no date or priority —
 //! those come when it's processed.  Esc closes.  "More fields…" hands off
 //! to the structured `CreateNodeModal` when the thing is already a node.
 //!
@@ -10,11 +10,15 @@
 //!   - The structured modal asks for type + template + body + title — that's
 //!     the right surface for "I want to make a Project node," not for "I'm
 //!     about to lose this thought."
-//!   - Different submit target (capture in the Inbox vs. typed Node), different
+//!   - Different submit target (a capture vs. typed Node), different
 //!     post-success behaviour (toast + close vs. navigate to new node).
 //!   - The `n` shortcut should always be the friction floor.  Extending
 //!     CreateNodeModal would mean either gating on a flag (more code paths)
 //!     or breaking existing callers.
+//!
+//! The composer is a blank sticky note (#240): the same paper as the
+//! Captures wall (`StickyPaper`), so what you write here looks like what
+//! lands there. Behaviour is unchanged.
 //!
 //! See `common::inbox::QuickCaptureRequest` for the wire contract.
 
@@ -23,8 +27,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use super::{ModalPlacement, ModalShell};
+use crate::components::captures_view::CAPTURED_TOAST;
 use crate::{
     api::quick_capture,
+    components::sticky_note::{CAPTURE_ICON, StickyPaper},
     components::toast::{ToastLevel, push_toast},
 };
 
@@ -68,7 +74,7 @@ pub fn FastCaptureModal(
         }
     });
 
-    // The Inbox lists captures; it reloads on the app-wide refresh.
+    // The Captures wall reloads on the app-wide refresh.
     let task_refresh = expect_context::<crate::app::TaskRefresh>().0;
     let submit_pending = RwSignal::new(false);
     Effect::new(move |_| {
@@ -92,11 +98,11 @@ pub fn FastCaptureModal(
                     task_refresh.try_update(|n| *n += 1);
                     let msg = if resp.truncated {
                         format!(
-                            "Captured to Inbox (text was clipped to {} characters)",
+                            "{CAPTURED_TOAST} (text was clipped to {} characters)",
                             common::capture::MAX_LEN
                         )
                     } else {
-                        "Captured to Inbox".to_string()
+                        CAPTURED_TOAST.to_string()
                     };
                     push_toast(ToastLevel::Success, msg);
                     on_close.run(());
@@ -133,7 +139,8 @@ pub fn FastCaptureModal(
             <div class="p-4 flex items-center justify-between border-b border-stone-200 \
                         dark:border-stone-700">
                 <div class="flex items-center gap-2 text-stone-700 dark:text-stone-200">
-                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500">"bolt"</span>
+                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                        aria-hidden="true">{CAPTURE_ICON}</span>
                     <span class="font-medium">"Quick capture"</span>
                 </div>
                 <button
@@ -146,11 +153,12 @@ pub fn FastCaptureModal(
                     "Esc"
                 </button>
             </div>
-            <div class="p-4">
+            <div class="p-4 pt-6">
+                <StickyPaper class="p-3 pt-4">
                 <textarea
                     node_ref=textarea_ref
                     class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
-                           placeholder-stone-400 dark:placeholder-stone-500 outline-none \
+                           placeholder-stone-500 dark:placeholder-stone-400 outline-none \
                            resize-none text-base leading-relaxed min-h-[6rem]"
                     placeholder="What\u{2019}s on your mind? (Cmd/Ctrl+Enter to capture)"
                     rows="4"
@@ -160,6 +168,7 @@ pub fn FastCaptureModal(
                         text.set(v);
                     }
                 ></textarea>
+                </StickyPaper>
                 <Show when=move || error.get().is_some()>
                     <div class="mt-2 text-sm text-red-600 dark:text-red-400">
                         {move || error.get().unwrap_or_default()}
