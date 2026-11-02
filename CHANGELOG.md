@@ -17,6 +17,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     shared, archived included), edges and positions as their own routes
     (owned). Admins see all, as before.
   - The preview helper moved to `common::markdown::plain_preview`.
+- **Fewer requests on every page, and HTTP/2** (performance P1 #2).
+  - Every page load sends 3 fewer API requests, a node page 4:
+    - the update banner reuses the version the app already fetched;
+    - the two always-mounted create dialogs fetch their templates when they
+      open, not at start (which also shows a template edited since);
+    - the node page reads the editor prefs once for its task and note
+      panels.
+  - The production proxy speaks HTTP/2 (`http2 on;`), so a page's requests
+    share one connection instead of queueing for six.
+
+### Fixed
+- **The create dialog keeps the template you pick.** Picking a template sets
+  the node type, which re-ran the type's default and switched the picker
+  back to it, so the node recorded the wrong template. A list that arrives
+  after the dialog opens no longer overrides a pick either. A real change
+  of type still applies that type's default.
+
+## [3.9.0] - 2026-11-02
+
+### Security
+- **The production proxy moves to nginx's stable branch (1.30), and every
+  deploy pulls it.** It ran nginx 1.29.6, an end-of-life mainline release
+  with fixed CVEs, among them TLS session-ticket forgery (CVE-2026-97629,
+  CVE-2026-95101) and buffer overflows in script evaluation and the proxy
+  module. The image tag floated (`nginx:alpine`), but the deploy never
+  pulled it again, so it never updated. It is now pinned to
+  `nginx:1.30-alpine` (1.30.6 today; patches arrive with the minor), and
+  `release.yml` pulls it on every release.
 
 ### Security
 - **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of
@@ -62,6 +90,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     Postgres now loads (compose `command`; the extension is created by hand);
   - `common/tests/layout_timings.rs`: graph layout timings;
   - `performance.mark`s at app start (`et:mounted`, `et:auth`).
+
+### Fixed
+- **The "new version" notice is no longer squeezed on a phone** (#262). It
+  was centred with `left: 50%` plus a translate, and a fixed box placed that
+  way shrink-wraps into the half of the viewport to its right: 187px on a
+  375px phone, so the sentence wrapped onto four lines. It now spans the
+  viewport minus 1rem a side (up to `max-w-2xl`, centred), the Reload button
+  never wraps or shrinks, and the bottom offset clears the iPhone home
+  indicator. New e2e check at 375px.
 
 ## [3.8.1] - 2026-11-02
 

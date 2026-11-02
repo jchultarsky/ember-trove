@@ -169,6 +169,11 @@ jobs:
             echo "=== Pulling pre-built images for ${TAG} ==="
             docker pull "${API_IMAGE}:${TAG}"
             docker pull "${UI_IMAGE}:${TAG}"
+            # The proxy's image is a public tag, not built here: pull it every
+            # release, or compose keeps the copy it already has (a tag that
+            # exists locally is never re-pulled), and security patches never
+            # arrive. It sat on nginx 1.29.6 that way (2026-11-02).
+            docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod pull proxy
 
             echo "=== Restarting services ==="
             IMAGE_TAG="${TAG}" \

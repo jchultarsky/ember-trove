@@ -2,9 +2,11 @@
 //!
 //! A tab can keep running an old bundle after a deploy, and then a shipped
 //! fix looks like it "doesn't work" (exactly what #129 recorded). The bundle
-//! knows its own version (`crate::version`); this checks the server's at
-//! startup, every 10 minutes, and whenever the window regains focus, and
-//! offers a reload when they differ. Navigations are network-first in the
+//! knows its own version (`crate::version`); this compares it with the
+//! server's, and offers a reload when they differ. The server's version is
+//! the app's `AppVersion`: `app.rs` fetches it at startup (this used to send
+//! a second request for it, performance P1 #2), and this re-checks it every
+//! 10 minutes and whenever the window regains focus. Navigations are network-first in the
 //! service worker, so the reload really loads the new release.
 //!
 //! The reload must not cost an open dialog its input (#170): the person
@@ -17,7 +19,8 @@ const RECHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 6
 
 #[component]
 pub fn UpdateBanner() -> impl IntoView {
-    let server = RwSignal::new(String::new());
+    // Shared with the sidebar header, which shows it.
+    let server = expect_context::<crate::app::AppVersion>().0;
     let check = move || {
         wasm_bindgen_futures::spawn_local(async move {
             let v = crate::api::fetch_api_version().await;
@@ -27,8 +30,6 @@ pub fn UpdateBanner() -> impl IntoView {
             }
         });
     };
-    check();
-
     if let Ok(handle) = set_interval_with_handle(check, RECHECK_EVERY) {
         on_cleanup(move || handle.clear());
     }
@@ -48,23 +49,32 @@ pub fn UpdateBanner() -> impl IntoView {
                 data-testid="update-banner"
                 role="status"
                 aria-live="polite"
-                // Floating, so it never shifts the layout.
-                class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-2rem)]
-                    flex items-center gap-3 px-4 py-2 text-sm rounded-xl shadow-lg
+                // Floating, so it never shifts the layout. Centred with
+                // `inset-x-4 mx-auto w-fit`, not `left-1/2 -translate-x-1/2`:
+                // a fixed box at `left: 50%` shrink-wraps into the 50vw left
+                // of it, which squeezed the text onto four lines on a phone
+                // (#262). This way it may use the viewport minus 1rem a side.
+                // The bottom offset clears the iPhone home indicator. Below
+                // `sm` the Reload button wraps under the text (right-aligned),
+                // so the text keeps the full width: beside it, the button
+                // still pushed the text onto three lines at 375 px.
+                style="bottom: max(1rem, env(safe-area-inset-bottom));"
+                class="fixed inset-x-4 mx-auto w-fit max-w-2xl z-50
+                    flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2 px-4 py-2 text-sm rounded-xl shadow-lg
                     bg-amber-50 dark:bg-stone-900 text-amber-900 dark:text-amber-200
                     border border-amber-200 dark:border-amber-800"
             >
                 // `info`: already in the subsetted icon font (refresh-icon-font.sh).
-                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                <span class="material-symbols-outlined shrink-0" style="font-size: 18px;" aria-hidden="true">
                     "info"
                 </span>
-                <span>
+                <span class="min-w-0 flex-1 basis-[calc(100%-2.5rem)] sm:basis-auto">
                     {move || format!("A new version of Ember Trove (v{}) is available.", server.get())}
                     {move || form_open().then_some(" The open form is kept and comes back after the reload.")}
                 </span>
                 <button
                     type="button"
-                    class="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
+                    class="shrink-0 whitespace-nowrap ml-auto inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
                     on:click=move |_| {
                         if let Some(w) = web_sys::window() {
                             let _ = w.location().reload();

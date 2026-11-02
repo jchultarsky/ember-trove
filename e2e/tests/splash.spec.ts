@@ -98,6 +98,32 @@ test('a newer server version offers a reload; Reload reloads', async ({ page }) 
   await expect(page.locator('main')).toBeVisible();
 });
 
+test('on a phone the banner uses the width and keeps Reload clear (#262)', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 740 });
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: { status: 'ok', service: 'ember-trove-api', database: 'ok', version: '99.0.0' },
+    }),
+  );
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  const banner = page.getByTestId('update-banner');
+  await expect(banner).toBeVisible();
+  const box = (await banner.boundingBox())!;
+  // `left: 50%` capped it at half the viewport (187px, four lines of text).
+  expect(box.width).toBeGreaterThan(375 - 2 * 16 - 1);
+  expect(box.x).toBeGreaterThanOrEqual(15);
+  expect(box.x + box.width).toBeLessThanOrEqual(375 - 15);
+  const text = (await banner.getByText(/A new version of Ember Trove/).boundingBox())!;
+  const reload = (await banner.getByRole('button', { name: 'Reload' }).boundingBox())!;
+  // Two natural lines at most (14px text, 20px line height).
+  expect(text.height).toBeLessThanOrEqual(41);
+  // Reload never covers the text: beside it, or (on a phone) wrapped below.
+  const beside = reload.x >= text.x + text.width;
+  const below = reload.y >= text.y + text.height;
+  expect(beside || below).toBe(true);
+});
+
 test('no banner while the server runs this bundle', async ({ page }) => {
   // Wait for the banner's own check (the splash and the sidebar ask too).
   const checks = page.waitForResponse('**/api/health');

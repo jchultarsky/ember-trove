@@ -63,7 +63,12 @@ services:
     restart: unless-stopped
 
   proxy:
-    image: nginx:alpine
+    # The stable branch, pinned to a minor so its security patches flow (the
+    # deploy pulls it every release, release.yml). The floating `nginx:alpine`
+    # was never re-pulled and sat on 1.29.6, an end-of-life mainline with
+    # fixed CVEs (TLS session-ticket forgery among them), 2026-11-02.
+    # nginx.prod.conf uses `http2 on;`, which nginx before 1.25.1 rejects.
+    image: nginx:1.30-alpine
     ports:
       - "80:80"
       - "443:443"
