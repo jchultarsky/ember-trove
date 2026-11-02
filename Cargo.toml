@@ -74,3 +74,16 @@ chrono = { version = "0.4", features = ["serde"] }
 [profile.dist]
 inherits = "release"
 lto      = "thin"
+
+# The UI's WASM, built for size: every release, a browser downloads it
+# whole, so its size is what a phone waits for (2026-11-02: 35.6 MB raw,
+# 25 MB of it the name section). Only `trunk build --cargo-profile
+# wasm-release` (deploy/Dockerfile.ui) uses it; the API keeps `release`.
+# Measured with wasm-opt after it: "z" 6.2 MB / 2.2 MB gzipped, "s"
+# 7.3 MB / 2.5 MB. "s" keeps more speed (the graph layout runs here) for
+# 300 KB on the wire.
+[profile.wasm-release]
+inherits      = "release"
+opt-level     = "s"
+lto           = true
+codegen-units = 1

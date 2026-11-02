@@ -37,6 +37,31 @@ RUN set -eu; \
     rm "/tmp/$asset"; \
     trunk --version
 
+# Binaryen's wasm-opt, PINNED and checksum-verified like trunk above; Trunk
+# runs it on release builds (`data-wasm-opt` in ui/index.html, the version
+# in ui/Trunk.toml). It shrinks the WASM and drops its 25 MB name section.
+# To bump: BINARYEN_VERSION here and in Trunk.toml, and both checksums from
+# the release's `<asset>.sha256` files.
+ARG BINARYEN_VERSION=version_133
+ARG BINARYEN_SHA256_X86_64=2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+ARG BINARYEN_SHA256_AARCH64=89c07ea56faf38d0fbecf36ca8ec0721756716185f265b568e133d427f299bf8
+RUN set -eu; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64)  sha="$BINARYEN_SHA256_X86_64" ;; \
+      aarch64) sha="$BINARYEN_SHA256_AARCH64" ;; \
+      *) echo "unsupported build arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    asset="binaryen-${BINARYEN_VERSION}-${arch}-linux.tar.gz"; \
+    curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-all-errors --retry-delay 3 \
+      -o "/tmp/$asset" \
+      "https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/${asset}"; \
+    echo "$sha  /tmp/$asset" | sha256sum -c -; \
+    tar -xzf "/tmp/$asset" -C /opt; \
+    ln -s "/opt/binaryen-${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt; \
+    rm "/tmp/$asset"; \
+    wasm-opt --version
+
 RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /build
@@ -59,7 +84,8 @@ COPY common/ ./common/
 COPY ui/     ./ui/
 
 WORKDIR /build/ui
-RUN trunk build --release
+# The size-built profile (root Cargo.toml, `wasm-release`).
+RUN trunk build --release --cargo-profile wasm-release
 
 # ── Stage 2: nginx static serving (non-root) ──────────────────────────────────
 # nginx-unprivileged runs as the unprivileged `nginx` user (uid 101) and binds

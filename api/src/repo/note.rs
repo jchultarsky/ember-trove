@@ -302,7 +302,7 @@ impl NoteRepo for PgNoteRepo {
                 n.id, n.node_id, n.owner_id, n.body, n.color, n.created_at, n.updated_at,
                 nd.title AS node_title
             FROM node_notes n
-            LEFT JOIN nodes nd ON nd.id = n.node_id
+            LEFT JOIN nodes nd ON nd.id = n.node_id AND {visible}
             WHERE n.deleted_at IS NULL
               AND ($1::text IS NULL OR n.owner_id = $1)
               AND ($2::uuid IS NULL OR n.node_id = $2)
@@ -311,7 +311,10 @@ impl NoteRepo for PgNoteRepo {
               AND ($5::text IS NULL OR n.body ILIKE ('%' || $5 || '%') ESCAPE '\')
             ORDER BY {order_by}
             LIMIT $6 OFFSET $7
-            "#
+            "#,
+            // #230: `node_title` is NULL once the node is no longer visible
+            // to the caller (a revoked share). `$1` is NULL for admins.
+            visible = super::visible_to("nd", 1),
         );
 
         // Escape LIKE metacharacters so a `q` of "%" / "_" matches literally
