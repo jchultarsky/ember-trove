@@ -75,7 +75,7 @@ ember-trove/
     ├── .env.prod.template         # production env var template
     ├── cognito.css                # Cognito hosted UI custom stylesheet
     ├── logo.png                   # Cognito hosted UI logo
-    └── backup.sh                  # PostgreSQL backup/restore to S3
+    └── app-backup.sh              # automatic app backup on the host (release + daily)
 ```
 
 ---
@@ -535,7 +535,7 @@ change them. They are in backups, and not in search, export or webhooks.
 |--------|------|-------------|
 | GET | `/api/admin/users` | List users |
 | POST | `/api/admin/users` | Create user |
-| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier admin backups and the daily database dumps (30 days) keep the data until they are deleted |
+| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier backups keep the data until they are deleted: an admin's until removed by hand, automatic ones until they fall out of the newest 10 |
 | GET | `/api/admin/users/{id}/deletion-preview` | What deleting the account would remove (counts only) |
 | GET | `/api/admin/users/roles` | List available roles |
 | PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
@@ -545,6 +545,38 @@ change them. They are in backups, and not in search, export or webhooks.
 | POST | `/api/admin/restore` | Restore from backup file |
 | GET | `/api/metrics` | Operational metrics snapshot: version, uptime, pool stats, row counts, request counts, and latency per route since start (`routes`: count, total, mean, p50, p95, p99, max). Shown on **Admin → Performance** (`/admin/performance`) |
 | GET | `/api/metrics/db` | The database's 15 slowest statements by total time, from `pg_stat_statements` (`enabled: false` when it isn't preloaded or created). Reading and writing statements only, as Postgres normalised them (`$1` for every value), with comments stripped |
+
+### Automatic backups
+
+An app backup is made **after every deploy** (the release workflow) and
+**every day** at 07:43 UTC (`.github/workflows/backup.yml`). Both run
+`deploy/app-backup.sh` on the host over SSH, which runs a command the API
+binary has instead of serving:
+
+```bash
+docker exec deploy-api-1 ember-trove-api backup create --comment "Daily"
+```
+
+- It's the same backup as **Admin → Backup → Create**, listed there with an
+  **Automatic** badge, and it restores the same way.
+- Only the **newest 10 automatic backups** are kept, daily and after-deploy
+  together (about ten days); each run deletes older ones (archive and row).
+  Backups an admin makes are never deleted this way.
+- The schedule is a GitHub Actions workflow, not the host's crontab: a
+  failed backup turns the run red and GitHub emails the maintainer. Run it
+  by hand from **Actions → Daily Backup → Run workflow**. (The old nightly
+  `pg_dump` cron, `deploy/backup.sh`, never ran: its log path wasn't
+  writable. It was removed on 2026-11-02.)
+- It needs no sign-in: running it takes a shell on the server, which already
+  has the database and storage credentials. Nothing new listens on the
+  network.
+- The Actions log is public, so the script echoes only the summary
+  (backup id and counts). The command's full output stays on the server in
+  `~/ember-trove-backups.log` (owner-only). In command mode the binary logs
+  errors only and skips OIDC discovery.
+- If storage refuses to delete an old archive, its key goes to the
+  `object_deletions` queue, which the daily task retries, so no archive
+  outlives its row unnoticed.
 
 ---
 

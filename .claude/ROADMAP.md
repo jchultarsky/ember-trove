@@ -5,6 +5,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-02)
 
+- **v3.11.0 shipped: automatic backups** (PRs #274, #276). An app backup
+  after every deploy and daily at 07:43 UTC (`backup.yml`), through
+  `deploy/app-backup.sh`; the newest 10 automatic backups are kept. The
+  never-run `pg_dump` cron (`deploy/backup.sh`) and its one stale dump are
+  gone.
 - **v3.10.0 shipped: performance P1 #1 and #2, and an admin Performance
   page.**
   - The graph loads in one slim request (`GET /api/graph`, PR #266): 15.7 MB

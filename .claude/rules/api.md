@@ -171,6 +171,24 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
+## Server commands and automatic backups (2026-11-02)
+
+- `api/src/cli.rs`: `ember-trove-api backup create [--comment TEXT]` runs
+  instead of serving (parsed before anything connects; anything unknown is
+  refused). It needs a shell on the server, never a sign-in: don't add an
+  HTTP route or token for it.
+- It records `common::backup::AUTOMATIC_ACTOR` as `created_by`, and then
+  `backup::prune_automatic` keeps the newest `AUTOMATIC_KEPT` (10)
+  automatic backups. An admin's backups are never pruned. Deleting a backup
+  goes through `backup::delete_backup` (archive, then row), shared with the
+  Delete route.
+- It runs through `deploy/app-backup.sh` (public-log-safe output, full
+  output in `~/ember-trove-backups.log` on the host): after each deploy
+  (`release.yml`) and daily (`backup.yml`, sharing the deploy's
+  concurrency group). Schedules live in Actions, never the host's
+  crontab, so a failure is a red run and an email (the old `backup.sh`
+  cron failed silently for seven months).
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.
