@@ -36,7 +36,7 @@ use tower_http::LatencyUnit;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::{auth::middleware::require_auth, state::AppState};
@@ -197,27 +197,38 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     let router = Router::new()
         .route("/health", get(health))
         .merge(rate_limited)
-        // Count every response by status class (includes /health). Applied here
-        // so it wraps all routes; reads/writes the counters in AppState.
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            metrics::track_requests,
-        ))
+        // Unknown /api/* paths: a plain 404, as before, but now through the
+        // layers below, so they are counted and logged under "(unmatched)".
+        // (Nested under /api, this router's missing fallback meant the outer
+        // router's, which has no layers.)
+        .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(cors)
         // 30-second request timeout — returns 408 Request Timeout.
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
         ))
-        // Structured per-request tracing: one span per request carrying method,
-        // path, and X-Request-Id; response logged at INFO with latency in ms.
+        // Count every response by status class and its latency per route
+        // (includes /health). Outside the timeout, so a request that hits it
+        // is counted as the 408 it returns, with its full time: the slowest
+        // requests are the ones a latency figure must not drop. Latency is
+        // to the response head; a streamed body (export, backup, files)
+        // keeps going after it.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            metrics::track_requests,
+        ))
+        // Structured per-request tracing: one span per request carrying the
+        // method, the matched route pattern and X-Request-Id; the response is
+        // logged at INFO with its latency in µs. Never the raw URI: it held
+        // ids and search terms (`q=`), user content in the log (P0, 2026-11-02).
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .make_span_with(request_span)
                 .on_response(
                     DefaultOnResponse::new()
                         .level(Level::INFO)
-                        .latency_unit(LatencyUnit::Millis),
+                        .latency_unit(LatencyUnit::Micros),
                 ),
         )
         // Propagate X-Request-Id from requests; generate one if absent.
@@ -225,6 +236,21 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .with_state(state);
     Ok(router)
+}
+
+/// The span every request is logged under: its route label (method and
+/// matched pattern, `metrics::route_label`) and request id.
+fn request_span<B>(req: &axum::http::Request<B>) -> tracing::Span {
+    let route = metrics::route_label(
+        req.method().as_str(),
+        req.extensions().get::<axum::extract::MatchedPath>(),
+    );
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-");
+    tracing::info_span!("request", route = %route, request_id = %request_id)
 }
 
 async fn health(State(state): State<AppState>) -> Json<Value> {

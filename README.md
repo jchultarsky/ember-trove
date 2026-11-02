@@ -542,7 +542,7 @@ change them. They are in backups, and not in search, export or webhooks.
 | POST | `/api/admin/users/{id}/reactivate` | Lift a suspension |
 | GET | `/api/admin/backup` | Stream full-system backup (NDJSON) |
 | POST | `/api/admin/restore` | Restore from backup file |
-| GET | `/api/metrics` | Operational metrics snapshot (version, uptime, pool stats, row counts) |
+| GET | `/api/metrics` | Operational metrics snapshot: version, uptime, pool stats, row counts, request counts, and latency per route since start (`routes`: count, mean, p50, p95, p99, max) |
 
 ---
 

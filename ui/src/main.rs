@@ -9,6 +9,7 @@ mod focus_task;
 mod keyboard;
 mod markdown;
 mod note_actions;
+mod perf;
 mod recent;
 mod spark;
 mod templates;
@@ -41,6 +42,7 @@ fn main() {
     // Before the loading screen (which carries the stamp) is removed.
     version::capture();
     leptos::mount::mount_to_body(App);
+    perf::mark("et:mounted");
     // Remove the static HTML loading screen now that the Leptos tree is in the
     // DOM. Done after mount so there is no flash of empty content between the
     // two states.

@@ -6,6 +6,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Request logs no longer contain search terms or ids.** The per-request log
+  line recorded the raw URI, query string included, so `GET /api/search?q=…`
+  wrote the user's search text into the server log. It now records the
+  matched route (`GET /api/nodes/{id}`) and the request id. Latency is now in
+  µs.
+
+### Added
+- **Per-route API latency** in the admin-only `GET /api/metrics` (`routes`):
+  count, mean, p50, p95, p99 and max per route since start, slowest total
+  first.
+  - Labels are built from fixed sets: the route pattern, never the path or
+    query, and the method, with any non-standard method counted as `OTHER`.
+    So no ids or query text are kept, and no request can add a label.
+  - It is recorded outside the 30 s timeout, so a request that hits the
+    timeout counts as its 408, with its full time.
+  - An unknown `/api/*` path now goes through the API's own layers. It is
+    counted as `(unmatched)` and answers 404 even when signed out; behind
+    the auth layer it used to answer 401. That change exposed four tests that
+    had been passing by accident; they now check the real routes.
+- **Performance tooling** (P0 of the performance phase), with its baseline in
+  `docs/PERFORMANCE.md`:
+  - `scripts/perf/seed.sh`: prod-shaped synthetic data at any scale, for the
+    local stack only;
+  - `e2e/perf/`: page-load and action timings in Chromium desktop, a throttled
+    phone, and iPhone WebKit;
+  - `scripts/perf/pg-top.sh`: top statements from `pg_stat_statements`, which
+    Postgres now loads (compose `command`; the extension is created by hand);
+  - `common/tests/layout_timings.rs`: graph layout timings;
+  - `performance.mark`s at app start (`et:mounted`, `et:auth`).
+
 ## [3.8.1] - 2026-11-02
 
 ### Security
