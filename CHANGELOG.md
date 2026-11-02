@@ -37,6 +37,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - `common/tests/layout_timings.rs`: graph layout timings;
   - `performance.mark`s at app start (`et:mounted`, `et:auth`).
 
+### Fixed
+- **The "new version" notice is no longer squeezed on a phone** (#262). It
+  was centred with `left: 50%` plus a translate, and a fixed box placed that
+  way shrink-wraps into the half of the viewport to its right: 187px on a
+  375px phone, so the sentence wrapped onto four lines. It now spans the
+  viewport minus 1rem a side (up to `max-w-2xl`, centred), the Reload button
+  never wraps or shrinks, and the bottom offset clears the iPhone home
+  indicator. New e2e check at 375px.
+
 ## [3.8.1] - 2026-11-02
 
 ### Security

@@ -48,23 +48,29 @@ pub fn UpdateBanner() -> impl IntoView {
                 data-testid="update-banner"
                 role="status"
                 aria-live="polite"
-                // Floating, so it never shifts the layout.
-                class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[calc(100vw-2rem)]
+                // Floating, so it never shifts the layout. Centred with
+                // `inset-x-4 mx-auto w-fit`, not `left-1/2 -translate-x-1/2`:
+                // a fixed box at `left: 50%` shrink-wraps into the 50vw left
+                // of it, which squeezed the text onto four lines on a phone
+                // (#262). This way it may use the viewport minus 1rem a side.
+                // The bottom offset clears the iPhone home indicator.
+                style="bottom: max(1rem, env(safe-area-inset-bottom));"
+                class="fixed inset-x-4 mx-auto w-fit max-w-2xl z-50
                     flex items-center gap-3 px-4 py-2 text-sm rounded-xl shadow-lg
                     bg-amber-50 dark:bg-stone-900 text-amber-900 dark:text-amber-200
                     border border-amber-200 dark:border-amber-800"
             >
                 // `info`: already in the subsetted icon font (refresh-icon-font.sh).
-                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                <span class="material-symbols-outlined shrink-0" style="font-size: 18px;" aria-hidden="true">
                     "info"
                 </span>
-                <span>
+                <span class="min-w-0">
                     {move || format!("A new version of Ember Trove (v{}) is available.", server.get())}
                     {move || form_open().then_some(" The open form is kept and comes back after the reload.")}
                 </span>
                 <button
                     type="button"
-                    class="inline-flex items-center justify-center gap-1.5 px-3 py-1 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
+                    class="shrink-0 whitespace-nowrap inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-ember hover:bg-ember-strong text-white text-xs font-medium"
                     on:click=move |_| {
                         if let Some(w) = web_sys::window() {
                             let _ = w.location().reload();
