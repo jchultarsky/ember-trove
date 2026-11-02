@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-11-02
+
 ### Added
 - **An app backup after every deploy.** The API binary has a server-side
   command, `ember-trove-api backup create [--comment TEXT]`, which makes the
