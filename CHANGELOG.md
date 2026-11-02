@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.8.1] - 2026-11-02
+
 ### Security
 - **Task and note feeds no longer show the title of a node you lost access
   to** (#230). After an owner revoked a share, a task or note the former
