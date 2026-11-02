@@ -188,8 +188,8 @@ test('node panel: ☀ stays available while editing a task and applies immediate
     await page.goto(`/nodes/${node.id}`);
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.locator('button[title="Edit task"]').click();
-    // Edit hides Assign/Edit/Delete — but not ☀ (it isn't Save-gated).
-    await expect(row.locator('button[title="Edit task"]')).toHaveCount(0);
+    // ☀ isn't Save-gated: it acts while the editor is open.
+    await expect(row.getByTestId('task-editor')).toBeVisible();
     const sun = row.getByRole('button', { name: 'Add to My Day' });
     await expect(sun).toHaveAttribute('aria-pressed', 'false');
     await sun.click();
@@ -203,6 +203,8 @@ test('node panel: ☀ stays available while editing a task and applies immediate
         return tasks.find((t) => t.id === task.id)?.focus_date ?? null;
       })
       .toBe(localISO(0));
+    // …and the editor is still open.
+    await expect(row.getByTestId('task-editor')).toBeVisible();
   });
 });
 
