@@ -1476,6 +1476,49 @@ async fn request_metrics_middleware_counts_responses() {
 }
 
 #[tokio::test]
+async fn request_latency_is_kept_per_route_pattern_never_per_path() {
+    // Performance phase P0: the per-route latency and the request log name
+    // the matched pattern. An id or a search term in the URL must never
+    // become a label (that would keep user content, and grow without bound).
+    let metrics = Arc::new(crate::routes::metrics::RequestMetrics::default());
+    let mut state = test_state();
+    state.request_metrics = metrics.clone();
+    let app = build_router(state).expect("router builds");
+    let id = "3f2a1c9e-8b7d-4e6f-9a0b-1c2d3e4f5a6b";
+    for uri in [
+        format!("/nodes/{id}?q=topsecret"),
+        format!("/nodes/{id}"),
+        "/no-such-route/abc".to_string(),
+    ] {
+        let _ = app
+            .clone()
+            .oneshot(Request::get(uri.as_str()).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+    }
+    let routes = metrics.routes_snapshot();
+    let labels: Vec<&str> = routes.iter().map(|r| r.route.as_str()).collect();
+    assert!(
+        labels
+            .iter()
+            .any(|l| l.starts_with("GET ") && l.contains("/nodes/{")),
+        "the node route is counted under its pattern: {labels:?}"
+    );
+    let node = routes
+        .iter()
+        .find(|r| r.route.contains("/nodes/{"))
+        .unwrap();
+    assert_eq!(node.count, 2, "both node requests share one label");
+    for l in &labels {
+        assert!(
+            !l.contains(id) && !l.contains("topsecret") && !l.contains('?'),
+            "{l}"
+        );
+    }
+    assert!(labels.contains(&"GET (unmatched)"), "{labels:?}");
+}
+
+#[tokio::test]
 async fn health_body_has_required_fields() {
     let resp = test_app()
         .oneshot(Request::get("/health").body(Body::empty()).unwrap())

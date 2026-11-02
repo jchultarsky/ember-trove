@@ -63,6 +63,7 @@ web-sys = { version = "0.3", features = [
     "Url",
     "UrlSearchParams",
     "ScrollIntoViewOptions",
+    "Performance", # start-up marks for performance measurement (perf.rs)
     "ScrollBehavior",
     "ScrollLogicalPosition",
     "DomTokenList",

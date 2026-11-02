@@ -1,6 +1,18 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Query statistics for performance work (P0, 2026-11-02):
+    # pg_stat_statements keeps normalised statements ($1, never values) with
+    # their timings; read them with scripts/perf/pg-top.sh. The extension is
+    # created once per database by hand (see that script), not by a migration.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - track_io_timing=on
     environment:
       POSTGRES_DB: ember_trove
       POSTGRES_USER: ember_trove

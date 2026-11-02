@@ -6,6 +6,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Request logs no longer contain search terms or ids.** The per-request log
+  line recorded the raw URI, query string included, so `GET /api/search?q=…`
+  wrote the user's search text into the server log. It now records the
+  matched route (`GET /api/nodes/{id}`) and the request id. Latency is now in
+  µs.
+
+### Added
+- **Per-route API latency** in the admin-only `GET /api/metrics` (`routes`):
+  count, mean, p50, p95, p99 and max per route since start, slowest total
+  first. Labels are route patterns, so no ids or query text are kept, and an
+  unknown path can't add a label.
+- **Performance tooling** (P0 of the performance phase), with its baseline in
+  `docs/PERFORMANCE.md`:
+  - `scripts/perf/seed.sh`: prod-shaped synthetic data at any scale, for the
+    local stack only;
+  - `e2e/perf/`: page-load and action timings in Chromium desktop, a throttled
+    phone, and iPhone WebKit;
+  - `scripts/perf/pg-top.sh`: top statements from `pg_stat_statements`, which
+    Postgres now loads (compose `command`; the extension is created by hand);
+  - `common/tests/layout_timings.rs`: graph layout timings;
+  - `performance.mark`s at app start (`et:mounted`, `et:auth`).
+
 ## [3.8.1] - 2026-11-02
 
 ### Security

@@ -680,7 +680,10 @@ fn AuthGate(auth_state: AuthState, children: ChildrenFn) -> impl IntoView {
                 </div>
             }.into_any()
         }
-        AuthStatus::Authenticated(_) => children().into_any(),
+        AuthStatus::Authenticated(_) => {
+            crate::perf::mark("et:auth");
+            children().into_any()
+        }
     }
 }
 
