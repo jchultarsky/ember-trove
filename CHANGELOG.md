@@ -38,6 +38,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   title input also gets an accessible name ("Title").
 
 ### Added
+- **Copy a task's text from the task list** (#269). Task rows are drag
+  sources (reorder), so the mouse couldn't select their text, and the native
+  context menu had nothing to copy. Each row (a node's Tasks section and
+  My Day) now has a Copy icon action that puts the title on the clipboard
+  as the row shows it: plain text, without the Markdown source
+  (`markdown::markdown_inline_plain_text`). Drag-to-reorder is unchanged.
 - **Per-route API latency** in the admin-only `GET /api/metrics` (`routes`):
   count, mean, p50, p95, p99 and max per route since start, slowest total
   first.

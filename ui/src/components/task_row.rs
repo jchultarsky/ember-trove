@@ -45,7 +45,8 @@ use crate::components::task_actions::{
 };
 use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
-    TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view, priority_dot_view,
+    CopyTaskButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view,
+    priority_dot_view,
 };
 use crate::components::toast::ToastState;
 
@@ -561,6 +562,7 @@ pub fn KanbanTaskRow(
                         </button>
                     }.into_any(),
                 }}
+                <CopyTaskButton title=title_sig/>
                 <button
                     type="button"
                     class="p-1 rounded text-stone-300 dark:text-stone-600 \

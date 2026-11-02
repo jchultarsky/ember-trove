@@ -15,8 +15,8 @@ use crate::components::task_common::{
 };
 use crate::components::task_row::{EditSession, EditingTaskId, TaskEditorHeights};
 use crate::components::task_row_scaffold::{
-    MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, action_btn_class,
-    due_badge_view, priority_dot_view,
+    CopyTaskButton, MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody,
+    action_btn_class, due_badge_view, priority_dot_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use common::ontology::Capability;
@@ -390,6 +390,9 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                 <MyDayButton
                     active=in_my_day
                     on_toggle=Callback::new(move |()| toggle_my_day(task_id, in_my_day, ctx))
+                />
+                <CopyTaskButton
+                    title=Signal::derive(move || saved_task.with_value(|t| t.title.clone()))
                 />
                 <button
                     class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")

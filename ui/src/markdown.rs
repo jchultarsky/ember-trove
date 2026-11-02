@@ -290,6 +290,30 @@ pub fn render_markdown_inline(source: &str) -> String {
     sanitizer().clean(html_out.trim()).to_string()
 }
 
+/// The **visible text** of an inline-Markdown string, as the row shows it:
+/// emphasis, code ticks and link URLs dropped, raw inline HTML tags dropped
+/// (their text kept), entities decoded, whitespace collapsed to single
+/// spaces. Used by the task row's Copy button (#269), so what lands on the
+/// clipboard is what the user reads, not the stored Markdown source.
+pub fn markdown_inline_plain_text(source: &str) -> String {
+    let mut out = String::new();
+    for ev in Parser::new_ext(source, MD_OPTIONS) {
+        match ev {
+            Event::Text(t) | Event::Code(t) => out.push_str(&t),
+            Event::SoftBreak | Event::HardBreak | Event::Rule => out.push(' '),
+            // Inline markup sits inside words ("un**break**able"): no space.
+            Event::Start(Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. })
+            | Event::End(
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link,
+            ) => {}
+            // Block boundaries become spaces so words don't run together.
+            Event::Start(_) | Event::End(_) => out.push(' '),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 // ── List-card excerpts (#175) ──────────────────────────────────────────────────
 
 /// Visible-text budget for a card excerpt. Rendering stops at the first block
@@ -473,6 +497,51 @@ pub fn render_excerpt(source: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Task title → clipboard text (#269) ────────────────────────────────
+
+    #[test]
+    fn plain_title_drops_inline_markup() {
+        assert_eq!(
+            markdown_inline_plain_text("Ship **v3** with *care* and `cargo test`"),
+            "Ship v3 with care and cargo test"
+        );
+    }
+
+    #[test]
+    fn plain_title_does_not_split_words_at_inline_markup() {
+        assert_eq!(markdown_inline_plain_text("un**break**able"), "unbreakable");
+    }
+
+    #[test]
+    fn plain_title_keeps_link_text_not_url() {
+        assert_eq!(
+            markdown_inline_plain_text("Read [the spec](https://example.com/spec)"),
+            "Read the spec"
+        );
+    }
+
+    #[test]
+    fn plain_title_drops_inline_html_tags_but_keeps_their_text() {
+        assert_eq!(
+            markdown_inline_plain_text("<span style=\"color: red;\">Urgent</span> call back"),
+            "Urgent call back"
+        );
+    }
+
+    #[test]
+    fn plain_title_decodes_entities_and_collapses_whitespace() {
+        assert_eq!(
+            markdown_inline_plain_text("  Tom &amp; Jerry\n\nsecond   line  "),
+            "Tom & Jerry second line"
+        );
+    }
+
+    #[test]
+    fn plain_title_of_plain_text_is_unchanged() {
+        assert_eq!(markdown_inline_plain_text("Example task"), "Example task");
+        assert_eq!(markdown_inline_plain_text(""), "");
+    }
 
     #[test]
     fn excerpt_renders_inline_markup_and_lists() {
