@@ -182,7 +182,12 @@ cargo check && cargo clippy -- -D warnings
   automatic backups. An admin's backups are never pruned. Deleting a backup
   goes through `backup::delete_backup` (archive, then row), shared with the
   Delete route.
-- `release.yml` runs it in its own step after the deploy.
+- It runs through `deploy/app-backup.sh` (public-log-safe output, full
+  output in `~/ember-trove-backups.log` on the host): after each deploy
+  (`release.yml`) and daily (`backup.yml`, sharing the deploy's
+  concurrency group). Schedules live in Actions, never the host's
+  crontab, so a failure is a red run and an email (the old `backup.sh`
+  cron failed silently for seven months).
 
 ## Admin permission model
 

@@ -75,7 +75,7 @@ ember-trove/
     ├── .env.prod.template         # production env var template
     ├── cognito.css                # Cognito hosted UI custom stylesheet
     ├── logo.png                   # Cognito hosted UI logo
-    └── backup.sh                  # PostgreSQL backup/restore to S3
+    └── app-backup.sh              # automatic app backup on the host (release + daily)
 ```
 
 ---
@@ -548,21 +548,29 @@ change them. They are in backups, and not in search, export or webhooks.
 
 ### Automatic backups
 
-The release workflow makes an app backup after every deploy, with a command
-the API binary runs on the server instead of serving:
+An app backup is made **after every deploy** (the release workflow) and
+**every day** at 07:43 UTC (`.github/workflows/backup.yml`). Both run
+`deploy/app-backup.sh` on the host over SSH, which runs a command the API
+binary has instead of serving:
 
 ```bash
-docker exec deploy-api-1 ember-trove-api backup create --comment "After the v3.11.0 deploy"
+docker exec deploy-api-1 ember-trove-api backup create --comment "Daily"
 ```
 
 - It's the same backup as **Admin → Backup → Create**, listed there with an
   **Automatic** badge, and it restores the same way.
-- Only the **newest 10 automatic backups** are kept; each run deletes older
-  ones (archive and row). Backups an admin makes are never deleted this way.
+- Only the **newest 10 automatic backups** are kept, daily and after-deploy
+  together (about ten days); each run deletes older ones (archive and row).
+  Backups an admin makes are never deleted this way.
+- The schedule is a GitHub Actions workflow, not the host's crontab: a
+  failed backup turns the run red and GitHub emails the maintainer. Run it
+  by hand from **Actions → Daily Backup → Run workflow**. (The old nightly
+  `pg_dump` cron, `deploy/backup.sh`, never ran: its log path wasn't
+  writable. It was removed on 2026-11-02.)
 - It needs no sign-in: running it takes a shell on the server, which already
   has the database and storage credentials. Nothing new listens on the
   network.
-- The Actions log is public, so the release step echoes only the summary
+- The Actions log is public, so the script echoes only the summary
   (backup id and counts). The command's full output stays on the server in
   `~/ember-trove-backups.log` (owner-only). In command mode the binary logs
   errors only and skips OIDC discovery.
