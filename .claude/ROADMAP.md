@@ -5,6 +5,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-02)
 
+- **v3.10.0 shipped: performance P1 #1 and #2, and an admin Performance
+  page.**
+  - The graph loads in one slim request (`GET /api/graph`, PR #266): 15.7 MB
+    → 1.7 MB at 10×.
+  - Fewer requests per page load, and HTTP/2 at the proxy (PR #268).
+  - Admin → Performance (`/admin/performance`, PR #272): route timings and
+    the slowest statements (`GET /api/metrics/db`, comments stripped).
+  - CI's macOS build runs on pushes only and isn't required (PR #270).
 - **v3.9.0 shipped: the performance phase's measurement (P0, PR #260), two
   layout fixes from Muse (#261, #262), and pulldown-cmark 0.13.6
   (RUSTSEC-2026-0433, PR #265). The proxy moves to nginx 1.30 stable, pulled
