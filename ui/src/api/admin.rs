@@ -1,4 +1,5 @@
 use common::admin::{AdminUser, CreateAdminUserRequest, PurgeCounts, UpdateUserRolesRequest};
+use common::metrics::{DbStatements, Metrics};
 
 use super::{delete_json, get_json, post_action, post_json, put_empty};
 use crate::error::UiError;
@@ -36,4 +37,14 @@ pub async fn list_realm_roles() -> Result<Vec<String>, UiError> {
 
 pub async fn set_user_roles(id: &str, req: &UpdateUserRolesRequest) -> Result<(), UiError> {
     put_empty(&format!("/admin/users/{id}/roles"), req).await
+}
+
+/// Request counts and latency per route since the API started (admin only).
+pub async fn fetch_metrics() -> Result<Metrics, UiError> {
+    get_json("/metrics").await
+}
+
+/// The database's slowest statements (admin only).
+pub async fn fetch_db_statements() -> Result<DbStatements, UiError> {
+    get_json("/metrics/db").await
 }

@@ -23,6 +23,7 @@ use crate::{
         node_list::NodeList,
         node_view::NodeView,
         notes_view::NotesView,
+        performance_view::PerformanceView,
         project_dashboard::ProjectDashboard,
         search_view::SearchView,
         sidebar::Sidebar,
@@ -434,6 +435,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/admin/users")       view=AdminView />
                         <Route path=path!("/admin/permissions") view=BulkPermissionsView />
                         <Route path=path!("/admin/backup")      view=BackupView />
+                        <Route path=path!("/admin/performance") view=PerformanceView />
                     </Routes>
                 </main>
             </div>

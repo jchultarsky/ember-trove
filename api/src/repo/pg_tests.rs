@@ -4536,3 +4536,80 @@ async fn a_drain_empties_a_queue_longer_than_one_batch(pool: PgPool) {
         0
     );
 }
+
+// ── Admin Performance page: database statements ──────────────────────────────
+
+/// `GET /api/metrics/db` lists only data statements (`SELECT`, `INSERT`,
+/// `UPDATE`, `DELETE`, `WITH`), whose values Postgres always replaces with
+/// `$1`. Utility statements (`SET`, `COMMENT`, `ALTER ROLE … PASSWORD`) keep
+/// their literal text, so they never reach the page, and comments, which
+/// normalisation keeps, are stripped. Without the extension
+/// the answer is "not enabled", not an error. CI's Postgres doesn't preload
+/// `pg_stat_statements`, so there only the first half runs; run it locally
+/// with `-c shared_preload_libraries=pg_stat_statements` for the rest.
+#[sqlx::test(migrations = "../migrations")]
+async fn db_statements_need_the_extension_and_list_only_data_statements(pool: PgPool) {
+    use crate::routes::metrics::top_statements;
+
+    let off = top_statements(&pool).await.unwrap();
+    assert!(!off.enabled, "a fresh database has no extension");
+    assert!(off.statements.is_empty());
+
+    let preload: String = sqlx::query_scalar("SELECT current_setting('shared_preload_libraries')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    if !preload.contains("pg_stat_statements") {
+        return;
+    }
+    // The statistics are cluster-wide: start clean, so the migrations this
+    // database just ran can't push the probes out of the top 15.
+    sqlx::raw_sql(
+        "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+         SELECT pg_stat_statements_reset();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "SET application_name = 'utility-secret-value';
+         COMMENT ON TABLE tags IS 'utility-secret-value';
+         SELECT count(*) FROM nodes WHERE title = 'literal-secret-value';
+         SELECT count(*) FROM tags /* comment-secret@example.com */ WHERE name = 'x';
+         SELECT id FROM edges -- line-secret@example.com
+         WHERE edge_type = 'contains';",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let on = top_statements(&pool).await.unwrap();
+    assert!(on.enabled);
+    assert!(
+        on.statements
+            .iter()
+            .any(|s| s.query.contains("FROM nodes WHERE title = $1")),
+        "the data statement is listed, normalised: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements
+            .iter()
+            .any(|s| s.query.contains("FROM tags WHERE name = $1")),
+        "the commented statement is listed, comment removed: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements.iter().all(|s| !s.query.contains("secret")),
+        "no literal value or utility statement: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements
+            .iter()
+            .all(|s| !s.query.contains("pg_stat_statements") && !s.query.contains("pg_extension")),
+        "the page's own queries aren't listed: {:?}",
+        on.statements
+    );
+    assert!(on.statements.len() <= common::metrics::TOP_STATEMENTS as usize);
+}

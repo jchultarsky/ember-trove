@@ -2020,6 +2020,7 @@ async fn backup_routes_registered() {
 #[tokio::test]
 async fn metrics_export_attachments_editor_prefs_routes_registered() {
     assert_route_registered("GET", "/metrics").await;
+    assert_route_registered("GET", "/metrics/db").await;
     assert_route_registered("GET", "/export").await;
     assert_route_registered("GET", "/data-health").await;
     let id = Uuid::new_v4();
@@ -2202,6 +2203,18 @@ async fn restore_refuses_an_old_backup_before_the_snapshot() {
 async fn metrics_rejects_non_admin() {
     let resp = claims_app("/metrics", crate::routes::metrics::router())
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// The database statements are admin-only too, and the role is checked
+/// before the database is touched: the test pool has no database behind it,
+/// so a query first would answer 500, not 403.
+#[tokio::test]
+async fn metrics_db_rejects_non_admin_before_any_query() {
+    let resp = claims_app("/metrics", crate::routes::metrics::router())
+        .oneshot(Request::get("/metrics/db").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);

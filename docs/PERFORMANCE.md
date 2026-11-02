@@ -157,6 +157,8 @@ Impact is what the measurements above show; effort and risk are estimates.
 
 **Still to measure on prod after this release:** per-route latency from `/api/metrics`
 after a day or two of real use, and `pg_stat_statements` there.
+Both are on **Admin → Performance** (`/admin/performance`) from the release after
+3.9.0. Production has collected statement statistics since 3.9.0 (2026-11-02).
 
 **Turning on `pg_stat_statements` on prod.** The release deploy recreates only `api`,
 `ui` and `proxy`. With the new Postgres `command` in the compose file, Compose may
