@@ -5,6 +5,7 @@ import {
   localISO,
   type APIRequestContext,
   type Locator,
+  type Page,
 } from './fixtures';
 
 /**
@@ -33,6 +34,17 @@ async function withProject(
     for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
     await request.delete(`/api/nodes/${node.id}`);
   }
+}
+
+/**
+ * After a refetch's response: let the app read it and re-render (the
+ * response resolves on its headers, before the WASM has the body).
+ */
+async function settled(page: Page) {
+  await page.waitForLoadState('networkidle');
+  await page.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))),
+  );
 }
 
 const nodeTasks = async (request: APIRequestContext, nodeId: string): Promise<Task[]> =>
@@ -211,6 +223,7 @@ test('node panel: ☀ stays available while editing a task and applies immediate
       })
       .toBe(localISO(0));
     await refetched;
+    await settled(page);
     // The editor is still open, with the text as typed, and nothing saved.
     await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
     expect((await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.title).toBe(title);
@@ -227,6 +240,52 @@ test('My Day: an open edit survives a quick capture reloading the list', async (
 }) => {
   await withProject(request, 'e2e myday keep node', async (node) => {
     const title = `e2e myday keep ${Date.now()}`;
+    try {
+      const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+        data: { title, focus_date: localISO(0) },
+      });
+      expect(created.ok()).toBeTruthy();
+      const task = await created.json();
+      await page.goto('/tasks/my-day');
+      const row = page.locator(`[data-task-id="${task.id}"]`);
+      await row.getByRole('button', { name: 'Edit task' }).click();
+      const editor = row.getByTestId('task-editor');
+      await editor.locator('textarea').fill(`${title} reworded`);
+
+      // A quick capture bumps the task refresh: both zones reload and every
+      // row is rebuilt (the task sits in Today, from /api/my-day).
+      const refetched = Promise.all([
+        page.waitForResponse((r) => r.request().method() === 'GET' && r.url().endsWith('/api/tasks/all')),
+        page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('/api/my-day?')),
+      ]);
+      await page.locator('main').click({ position: { x: 5, y: 5 } });
+      await page.keyboard.press('n');
+      await page.getByPlaceholder(/What’s on your mind/).fill(`e2e cap ${title}`);
+      await page.keyboard.press('ControlOrMeta+Enter');
+      await refetched;
+      await settled(page);
+
+      await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
+      // Cancel still goes back to the saved title, and reopening shows it.
+      await editor.getByRole('button', { name: 'Cancel' }).click();
+      await row.getByRole('button', { name: 'Edit task' }).click();
+      await expect(editor.locator('textarea')).toHaveValue(title);
+    } finally {
+      const captures: { id: string; body: string }[] = await (
+        await request.get('/api/captures')
+      ).json();
+      for (const c of captures.filter((c) => c.body === `e2e cap ${title}`)) {
+        await request.delete(`/api/captures/${c.id}`);
+      }
+    }
+  });
+});
+
+test('My Day: an edit survives the task moving to the backlog', async ({ page, request }) => {
+  // Review of #250: the two zones reload apart, so a per-row copy of the
+  // draft raced the move.
+  await withProject(request, 'e2e myday move node', async (node) => {
+    const title = `e2e myday move ${Date.now()}`;
     const created = await request.post(`/api/nodes/${node.id}/tasks`, {
       data: { title, focus_date: localISO(0) },
     });
@@ -235,29 +294,15 @@ test('My Day: an open edit survives a quick capture reloading the list', async (
     await page.goto('/tasks/my-day');
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.getByRole('button', { name: 'Edit task' }).click();
-    const editor = row.getByTestId('task-editor');
-    await editor.locator('textarea').fill(`${title} reworded`);
-
-    // A quick capture bumps the task refresh: both zones reload and every
-    // row is rebuilt (the task sits in Today, from /api/my-day).
-    const refetched = Promise.all([
-      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().endsWith('/api/tasks/all')),
-      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('/api/my-day?')),
-    ]);
-    await page.locator('main').click({ position: { x: 5, y: 5 } });
-    await page.keyboard.press('n');
-    await page.getByPlaceholder(/What’s on your mind/).fill(`e2e cap ${title}`);
-    await page.keyboard.press('ControlOrMeta+Enter');
-    await refetched;
-
-    await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
-    // Cancel still goes back to the saved title.
-    await editor.getByRole('button', { name: 'Cancel' }).click();
-    await expect(row).toContainText(title);
-    const captures: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
-    for (const c of captures.filter((c) => c.body === `e2e cap ${title}`)) {
-      await request.delete(`/api/captures/${c.id}`);
-    }
+    await row.getByTestId('task-editor').locator('textarea').fill(`${title} moved`);
+    await row.locator('button[title="Remove from today (back to backlog)"]').click();
+    await expect
+      .poll(async () => (await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.focus_date ?? null)
+      .toBeNull();
+    await settled(page);
+    // One row, in the backlog, still editing, with the text as typed.
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId('task-editor').locator('textarea')).toHaveValue(`${title} moved`);
   });
 });
 
