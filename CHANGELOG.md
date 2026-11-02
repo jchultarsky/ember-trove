@@ -24,6 +24,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   after the dialog opens no longer overrides a pick either. A real change
   of type still applies that type's default.
 
+### Tooling
+- **CI's macOS build runs on pushes to develop and main only, and is no
+  longer a required check.** GitHub's arm64 macOS runners ran short and
+  left PRs blocked until the job was cancelled unstarted. Production runs
+  on Linux, and that build stays required on every PR.
+
 ## [3.9.0] - 2026-11-02
 
 ### Security
@@ -89,12 +95,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   viewport minus 1rem a side (up to `max-w-2xl`, centred), the Reload button
   never wraps or shrinks, and the bottom offset clears the iPhone home
   indicator. New e2e check at 375px.
-
-### Tooling
-- **CI's macOS build runs on pushes to develop and main only, and is no
-  longer a required check.** GitHub's arm64 macOS runners ran short and
-  left PRs blocked until the job was cancelled unstarted. Production runs
-  on Linux, and that build stays required on every PR.
 
 ## [3.8.1] - 2026-11-02
 
