@@ -328,11 +328,15 @@ pub struct TaskEditDraft {
     pub due: RwSignal<String>,
     pub recurrence: RwSignal<String>,
     saved: StoredValue<[String; 4]>,
+    /// Values sent by Save and not yet seen back from the server (a failed
+    /// Save leaves them here, so reopening keeps them).
+    pending: StoredValue<bool>,
 }
 
 impl TaskEditDraft {
-    pub fn from_task(task: &Task) -> Self {
-        let saved = [
+    /// The editor's four fields for `task` as saved.
+    fn values_of(task: &Task) -> [String; 4] {
+        [
             task.title.clone(),
             task.priority.as_str().to_string(),
             task.due_date
@@ -342,13 +346,18 @@ impl TaskEditDraft {
                 .as_ref()
                 .map(|r| r.as_str().to_string())
                 .unwrap_or_default(),
-        ];
+        ]
+    }
+
+    pub fn from_task(task: &Task) -> Self {
+        let saved = Self::values_of(task);
         Self {
             title: RwSignal::new(saved[0].clone()),
             priority: RwSignal::new(saved[1].clone()),
             due: RwSignal::new(saved[2].clone()),
             recurrence: RwSignal::new(saved[3].clone()),
             saved: StoredValue::new(saved),
+            pending: StoredValue::new(false),
         }
     }
 
@@ -391,6 +400,26 @@ impl TaskEditDraft {
         );
     }
 
+    /// Whether reopening `task`'s editor should keep this draft rather than
+    /// start again from `task`: it has unsaved changes, or a Save sent
+    /// values the server hasn't shown back (a failed Save).
+    pub fn worth_keeping(&self, task: &Task) -> bool {
+        let typed = [
+            self.title.try_get_untracked(),
+            self.priority.try_get_untracked(),
+            self.due.try_get_untracked(),
+            self.recurrence.try_get_untracked(),
+        ];
+        let Some(typed) = typed.into_iter().collect::<Option<Vec<String>>>() else {
+            return false;
+        };
+        let differs = |other: &[String; 4]| typed.iter().zip(other).any(|(t, o)| t != o);
+        let dirty = self.saved.try_with_value(|s| differs(s)).unwrap_or(false);
+        let unconfirmed =
+            self.pending.try_get_value().unwrap_or(false) && differs(&Self::values_of(task));
+        dirty || unconfirmed
+    }
+
     /// Free the draft's signals (`EditSession` replacing it with another).
     pub fn dispose(self) {
         self.title.dispose();
@@ -398,6 +427,7 @@ impl TaskEditDraft {
         self.due.dispose();
         self.recurrence.dispose();
         self.saved.dispose();
+        self.pending.dispose();
     }
 
     /// The PATCH for the current values (`None` = blank title, don't save),
@@ -411,6 +441,7 @@ impl TaskEditDraft {
         ];
         let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3])?;
         self.saved.set_value(vals);
+        self.pending.set_value(true);
         Some(req)
     }
 }

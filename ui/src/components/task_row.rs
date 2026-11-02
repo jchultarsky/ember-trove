@@ -98,17 +98,31 @@ pub struct EditSession {
 
 impl EditSession {
     /// Provide the session for a list whose open editor is `editing`.
+    ///
+    /// The drafts get their own child owner. Storing the view's own owner
+    /// here instead made a cycle (a value it owns holding it strongly): the
+    /// page was never cleaned up, and My Day's key handler kept acting on
+    /// other pages (review of #250).
     pub fn provide(editing: RwSignal<Option<TaskId>>) {
         provide_context(EditSession {
-            owner: StoredValue::new(Owner::current()),
+            owner: StoredValue::new(Owner::current().map(|_| Owner::new())),
             current: StoredValue::new(None),
             editing,
         });
     }
 
     /// Open `task`'s editor on its saved values (the pencil, `e`, Edit).
+    /// A changed draft of the same task is kept: clicking Edit again on the
+    /// open editor, or after a failed Save, must not throw the text away
+    /// (`TaskEditDraft::worth_keeping`).
     pub fn open(&self, task: &Task) {
-        self.replace(task);
+        let keep = matches!(
+            self.current.try_get_value().flatten(),
+            Some((id, draft)) if id == task.id && draft.worth_keeping(task)
+        );
+        if !keep {
+            self.replace(task);
+        }
         self.editing.set(Some(task.id));
     }
 
@@ -232,7 +246,8 @@ pub fn KanbanTaskRow(
     // Optional because KanbanTaskRow could in principle be used outside
     // a Kanban (no consumer today, but the type is reusable).  When the
     // contexts aren't provided we fall back to local-only signals so
-    // mouse-driven UX still works.
+    // mouse-driven UX still works. The `EditSession` (the draft) is
+    // required: MyDayView provides it (#250).
     let focused_ctx: Option<FocusedTaskId> = use_context();
     let editing_ctx: Option<EditingTaskId> = use_context();
     let editing_local: RwSignal<Option<TaskId>> = RwSignal::new(None);

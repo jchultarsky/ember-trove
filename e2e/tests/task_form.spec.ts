@@ -41,7 +41,6 @@ async function withProject(
  * response resolves on its headers, before the WASM has the body).
  */
 async function settled(page: Page) {
-  await page.waitForLoadState('networkidle');
   await page.evaluate(
     () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))),
   );
@@ -295,14 +294,61 @@ test('My Day: an edit survives the task moving to the backlog', async ({ page, r
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.getByRole('button', { name: 'Edit task' }).click();
     await row.getByTestId('task-editor').locator('textarea').fill(`${title} moved`);
+    // Both zones reload, apart: the race the per-row copy lost.
+    const reloaded = Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().endsWith('/api/tasks/all')),
+      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('/api/my-day?')),
+    ]);
     await row.locator('button[title="Remove from today (back to backlog)"]').click();
-    await expect
-      .poll(async () => (await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.focus_date ?? null)
-      .toBeNull();
+    await reloaded;
+    // The row is now the backlog's (only it has "Add to today").
+    await expect(row.locator('button[title="Add to today"]')).toBeVisible();
     await settled(page);
-    // One row, in the backlog, still editing, with the text as typed.
+    // One row, still editing, with the text as typed.
     await expect(row).toHaveCount(1);
     await expect(row.getByTestId('task-editor').locator('textarea')).toHaveValue(`${title} moved`);
+  });
+});
+
+test('node panel: Edit on the open editor keeps the typed text', async ({ page, request }) => {
+  // Review of #250: reopening rebuilt the draft from the saved task.
+  await withProject(request, 'e2e reopen keep node', async (node) => {
+    const title = `e2e reopen keep ${Date.now()}`;
+    const task = await (await request.post(`/api/nodes/${node.id}/tasks`, { data: { title } })).json();
+    await page.goto(`/nodes/${node.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit task"]').click();
+    const box = row.getByTestId('task-editor').locator('textarea');
+    await box.fill(`${title} typed`);
+    await row.locator('button[title="Edit task"]').click();
+    await expect(box).toHaveValue(`${title} typed`);
+    // Cancel, then Edit: the saved title.
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
+    await row.locator('button[title="Edit task"]').click();
+    await expect(box).toHaveValue(title);
+  });
+});
+
+test('leaving My Day takes its keys with it', async ({ page, request }) => {
+  // Review of #250: a draft owner stored in the page's own owner kept the
+  // page alive, and My Day's Space ticked its focused task on other pages.
+  await withProject(request, 'e2e myday leave node', async (node) => {
+    const title = `e2e myday leave ${Date.now()}`;
+    const task = await (
+      await request.post(`/api/nodes/${node.id}/tasks`, { data: { title, focus_date: localISO(0) } })
+    ).json();
+    await page.goto('/tasks/my-day');
+    // A row click sets the keyboard cursor and opens the task's Project.
+    await page.locator(`[data-task-id="${task.id}"]`).getByText(title).click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
+    await expect(page.getByTestId('node-tasks')).toBeVisible({ timeout: 15_000 });
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(500);
+    const after = (await nodeTasks(request, node.id)).find((t) => t.id === task.id) as
+      | (Task & { status?: string })
+      | undefined;
+    expect(after?.status).toBe('open');
   });
 });
 
