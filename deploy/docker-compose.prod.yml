@@ -63,7 +63,9 @@ services:
     restart: unless-stopped
 
   proxy:
-    image: nginx:alpine
+    # Pinned to a minor (patches still flow): nginx.prod.conf uses `http2 on;`,
+    # which nginx before 1.25.1 rejects.
+    image: nginx:1.29-alpine
     ports:
       - "80:80"
       - "443:443"

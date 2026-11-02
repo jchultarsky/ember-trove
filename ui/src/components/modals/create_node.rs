@@ -51,12 +51,25 @@ pub fn CreateNodeModal(
     let node_type_filter: Option<RwSignal<Option<String>>> =
         use_context::<RwSignal<Option<String>>>();
 
-    // Fetch the user's saved templates for the picker.
-    let templates_resource = LocalResource::new(crate::api::list_templates);
+    // The user's saved templates for the picker, fetched each time the dialog
+    // opens: two of these dialogs are always mounted, and both fetched at
+    // app start whether or not they were ever opened (performance P1 #2). On
+    // open also means a template edited since shows up. The default-template
+    // effect below already handles a list that arrives after opening.
+    let templates_resource = LocalResource::new(move || {
+        let open = show.get();
+        async move {
+            if open {
+                Some(crate::api::list_templates().await)
+            } else {
+                None
+            }
+        }
+    });
     // Mirror into a plain signal so the on:change handler can read untracked.
     let available_templates: RwSignal<Vec<NodeTemplate>> = RwSignal::new(vec![]);
     Effect::new(move |_| {
-        if let Some(Ok(ts)) = templates_resource.get() {
+        if let Some(Some(Ok(ts))) = templates_resource.get() {
             available_templates.set(ts);
         }
     });

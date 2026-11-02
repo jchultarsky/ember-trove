@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Fewer requests on every page, and HTTP/2** (performance P1 #2).
+  - Every page load sends 3 fewer API requests, a node page 4:
+    - the update banner reuses the version the app already fetched;
+    - the two always-mounted create dialogs fetch their templates when they
+      open, not at start (which also shows a template edited since);
+    - the node page reads the editor prefs once for its task and note
+      panels.
+  - The production proxy speaks HTTP/2 (`http2 on;`), so a page's requests
+    share one connection instead of queueing for six. The proxy image is
+    pinned to `nginx:1.29-alpine`, which supports the directive.
+
 ### Security
 - **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of
   nested image wiki links with `ENABLE_WIKILINKS`). It runs in the browser
