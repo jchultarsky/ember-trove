@@ -12,7 +12,9 @@ test.describe('editor header (#261)', () => {
     const node = await createNode(request, `e2e header ${Date.now()}`, { node_type: 'project' });
     try {
       await page.goto(`/nodes/${node.id}/edit`);
-      const title = page.getByRole('textbox', { name: 'Title' });
+      // exact: the body's placeholder ("use [[Node Title]] to link nodes")
+      // matches 'Title' as a substring too.
+      const title = page.getByRole('textbox', { name: 'Title', exact: true });
       await expect(title).toHaveValue(node.title);
       // Something changed, so Revert joins the row too: the busiest header.
       await title.fill(`${node.title} renamed`);
