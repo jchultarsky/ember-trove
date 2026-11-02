@@ -5,6 +5,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-02)
 
+- **v3.8.1 shipped: security fix #230 (PR #231), and the app loads fast on
+  phones again (PRs #255, #256).**
+  - Task and note feeds join a node's title only when the caller can see
+    the node (`repo::visible_to`). A lost share reads "Node unavailable".
+  - The WASM was 35.6 MB and served uncompressed. The proxy strips
+    `Accept-Encoding` for nonce injection, so the proxy now gzips assets
+    itself. The UI builds with the `wasm-release` profile (opt-level s,
+    LTO) through pinned Binaryen `wasm-opt -Os`: 6.6 MB, about 2.5 MB on
+    the wire. An iPhone had waited about 10 minutes after v3.8.0.
+  - Next: a measure-first performance phase (owner, 2026-11-02), then S5a.
 - **v3.8.0 shipped: a "+" on the Captures page (#252, PR #253).** It opens
   the quick-capture composer, like `n`. From Muse's v3.7.0 UI test; the
   owner hit it too.
