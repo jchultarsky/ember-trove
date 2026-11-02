@@ -35,14 +35,58 @@ pub struct EntityCounts {
     /// carried the log; restoring one of those leaves Activity empty.
     #[serde(default)]
     pub activity: u32,
+    /// Inbox captures (#234). 0 for archives made before them.
+    #[serde(default)]
+    pub captures: u32,
 }
 
-/// The archive format this release writes, and the only one it restores.
+/// The archive format this release writes.
 /// 3 (#222): node kinds lost `resource` (merged into `reference`), so a
 /// format-2 archive can name a kind that no longer exists. Older archives
 /// are refused with a clear message rather than half-read (owner decision,
 /// 2026-10-31); a rollback goes through the server snapshot instead.
-pub const SCHEMA_VERSION: u32 = 3;
+/// 4 (#234): captures have their own list, and every note has a node.
+pub const SCHEMA_VERSION: u32 = 4;
+
+/// The oldest format this release restores. Format 3 differs from 4 only
+/// in holding captures as notes without a node, which restore converts
+/// losslessly (`capture::from_nodeless_note`), so the backups taken just
+/// before 3.5.0 stay restorable.
+pub const OLDEST_RESTORABLE: u32 = 3;
+
+/// A note as an archive holds it. Before format 4 a note could have no
+/// node; those are captures now (#234). Everything a `Note` has, with an
+/// optional node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupNote {
+    pub id: crate::id::NoteId,
+    #[serde(default)]
+    pub node_id: Option<crate::id::NodeId>,
+    pub owner_id: String,
+    pub body: String,
+    #[serde(default = "default_color")]
+    pub color: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+fn default_color() -> String {
+    "default".to_string()
+}
+
+impl From<Note> for BackupNote {
+    fn from(n: Note) -> Self {
+        Self {
+            id: n.id,
+            node_id: Some(n.node_id),
+            owner_id: n.owner_id,
+            body: n.body,
+            color: n.color,
+            created_at: n.created_at,
+            updated_at: n.updated_at,
+        }
+    }
+}
 
 /// Top-level manifest written as `manifest.json` inside the archive.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -79,7 +123,7 @@ pub struct BackupData {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub tags: Vec<Tag>,
-    pub notes: Vec<Note>,
+    pub notes: Vec<BackupNote>,
     pub tasks: Vec<Task>,
     /// Attachment metadata only; raw bytes are stored as separate entries in the archive.
     pub attachments: Vec<Attachment>,
@@ -116,6 +160,11 @@ pub struct BackupData {
     /// restore with an empty log, as they always did.
     #[serde(default)]
     pub activity: Vec<ActivityRecord>,
+    // ── Captures (format 4, #234) ─────────────────────────────────────────
+    /// The Inbox's unprocessed input (ONTOLOGY §9.1). A format-3 archive
+    /// has none here: its captures are its notes without a node.
+    #[serde(default)]
+    pub captures: Vec<crate::capture::Capture>,
 }
 
 /// Returned by the preview endpoint before a restore is confirmed.

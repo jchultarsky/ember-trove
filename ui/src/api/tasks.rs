@@ -13,10 +13,6 @@ pub async fn fetch_tasks(node_id: NodeId) -> Result<Vec<Task>, UiError> {
     get_json(&format!("/nodes/{node_id}/tasks")).await
 }
 
-pub async fn list_inbox() -> Result<Vec<Task>, UiError> {
-    get_json("/tasks/inbox").await
-}
-
 /// Backlog feed for the My Day Kanban — every open task across every node,
 /// joined with parent node title, sorted due_date NULLS LAST then priority
 /// then created_at.  See `TaskRepo::list_open_for_owner`.

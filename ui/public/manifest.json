@@ -28,7 +28,7 @@
     {
       "name": "Quick capture",
       "short_name": "Capture",
-      "description": "Drop a thought into the Inbox without opening anything else",
+      "description": "Stick a thought on the Captures wall without opening anything else",
       "url": "/?capture=1"
     },
     {
@@ -37,9 +37,9 @@
       "url": "/tasks/my-day"
     },
     {
-      "name": "Inbox",
-      "short_name": "Inbox",
-      "url": "/tasks/inbox"
+      "name": "Captures",
+      "short_name": "Captures",
+      "url": "/tasks/captures"
     }
   ]
 }

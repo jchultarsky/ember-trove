@@ -1,48 +1,54 @@
 //! DTOs for the quick-capture endpoint (`POST /api/inbox/quick`).
 //!
-//! Quick capture lands a single low-friction task in the user's Inbox
-//! (`tasks` row with `node_id IS NULL`).  It exists as a separate endpoint
-//! from the normal task-create flow because:
-//!
-//! * the iOS Web Share Target sends multipart fields (`title`, `text`, `url`)
-//!   that we want to coalesce into one short Task title server-side, and
-//! * the surface area is intentionally tiny — no priority, due date, or node
-//!   association.  Triage happens later in the Inbox view.
+//! Quick capture lands one capture in the user's Inbox (ONTOLOGY §9.1,
+//! #234; before 3.5.0 it made a task with no Project). The path and wire
+//! format stay as they were: installed service workers and the iOS Web
+//! Share Target call it, sending `title`, `text` and `url`, which the
+//! server joins into one capture. Processing happens later, in the Inbox.
 
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::id::TaskId;
+use crate::id::CaptureId;
 use crate::task::TaskPriority;
 
-/// Maximum length of a captured task title.  Matches `CreateTaskRequest::title`.
-pub const QUICK_CAPTURE_MAX_LEN: usize = 500;
+/// The longest a capture may be (`capture::MAX_LEN`). It was 500 while
+/// quick capture made a task title, which cut a shared article's text.
+pub const QUICK_CAPTURE_MAX_LEN: usize = crate::capture::MAX_LEN;
+
+/// The most each of `title` and `body` may carry, in characters. Larger
+/// than one capture on purpose: text past [`QUICK_CAPTURE_MAX_LEN`] is
+/// clipped and reported (`truncated`), not refused, so a long share still
+/// lands. It only bounds the request.
+pub const QUICK_CAPTURE_FIELD_MAX: usize = 4 * QUICK_CAPTURE_MAX_LEN;
 
 /// Request body for `POST /api/inbox/quick`.
 ///
 /// Either `title` or `body` must be non-empty (validated server-side).  The
 /// server concatenates them with a newline if both are present, then
-/// truncates the result to `QUICK_CAPTURE_MAX_LEN` chars (Unicode-safe) so
-/// that long shared text never blows the underlying `Task.title` budget.
+/// truncates the result to `QUICK_CAPTURE_MAX_LEN` chars (Unicode-safe), the
+/// most one capture holds. Limits count characters, as the database does.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct QuickCaptureRequest {
-    #[garde(length(max = 5000))]
+    #[garde(length(chars, max = QUICK_CAPTURE_FIELD_MAX))]
     #[serde(default)]
     pub title: Option<String>,
 
     /// Optional supplementary text (URL, body of a shared web page, free notes).
-    #[garde(length(max = 5000))]
+    #[garde(length(chars, max = QUICK_CAPTURE_FIELD_MAX))]
     #[serde(default)]
     pub body: Option<String>,
 
-    /// Optional due date, parsed client-side from natural-language tokens
-    /// ("friday", "tomorrow", "2026-07-01") — see `common::quickadd`.
+    /// Sent by clients from before 3.5.0, whose capture box parsed a due
+    /// date. A capture has no date, so it is written into the text
+    /// ([`capture_text`]) rather than dropped.
     #[garde(skip)]
     #[serde(default)]
     pub due_date: Option<chrono::NaiveDate>,
 
-    /// Optional priority, parsed client-side ("p1"/"!high" etc.).
+    /// Sent by clients from before 3.5.0. A capture isn't classified yet,
+    /// so it has no priority: accepted and ignored.
     #[garde(skip)]
     #[serde(default)]
     pub priority: Option<TaskPriority>,
@@ -51,14 +57,14 @@ pub struct QuickCaptureRequest {
 /// Response body for `POST /api/inbox/quick`.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct QuickCaptureResponse {
-    pub id: TaskId,
+    pub id: CaptureId,
     /// `true` when the input was longer than `QUICK_CAPTURE_MAX_LEN` and was
     /// shortened on the way in.  The UI can surface this as "Captured —
     /// edit to add full body" so the user knows nothing was silently lost.
     pub truncated: bool,
 }
 
-/// Build the final task title from a `(title, body)` pair.
+/// Build a capture's text from a `(title, body)` pair.
 ///
 /// Rules:
 /// * Trim each part.
@@ -99,9 +105,81 @@ pub fn coalesce_capture(title: Option<&str>, body: Option<&str>) -> (String, boo
     (format!("{truncated} …"), true)
 }
 
+/// What a quick capture saves (#234): its title and body joined
+/// ([`coalesce_capture`]), led by an old client's due date, since a capture
+/// has no date of its own. Empty when there is no text at all, whatever
+/// the date: the handler refuses that.
+#[must_use]
+pub fn capture_text(req: &QuickCaptureRequest) -> (String, bool) {
+    let (text, _) = coalesce_capture(req.title.as_deref(), req.body.as_deref());
+    if text.is_empty() {
+        return (text, false);
+    }
+    let title = match req.due_date {
+        Some(due) => Some(format!(
+            "Due {}: {}",
+            due.format("%a %-d %b"),
+            req.title.as_deref().unwrap_or("").trim()
+        )),
+        None => req.title.clone(),
+    };
+    coalesce_capture(title.as_deref(), req.body.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn req(title: &str, body: &str, due: Option<(i32, u32, u32)>) -> QuickCaptureRequest {
+        QuickCaptureRequest {
+            title: Some(title.into()),
+            body: Some(body.into()),
+            due_date: due.and_then(|(y, m, d)| chrono::NaiveDate::from_ymd_opt(y, m, d)),
+            priority: Some(TaskPriority::High),
+        }
+    }
+
+    #[test]
+    fn an_old_clients_due_date_leads_the_capture_and_priority_is_ignored() {
+        assert_eq!(
+            capture_text(&req("call the bank", "", Some((2026, 11, 7)))).0,
+            "Due Sat 7 Nov: call the bank"
+        );
+        assert_eq!(
+            capture_text(&req("call the bank", "", None)).0,
+            "call the bank"
+        );
+        // A date alone is no capture.
+        assert_eq!(capture_text(&req(" ", "", Some((2026, 11, 7)))).0, "");
+    }
+
+    #[test]
+    fn a_shared_article_keeps_far_more_than_a_task_title_did() {
+        let text = "x".repeat(4_000);
+        let (out, truncated) = capture_text(&req("Article", &text, None));
+        assert!(!truncated);
+        assert_eq!(out.chars().count(), "Article\n".len() + 4_000);
+    }
+
+    #[test]
+    fn long_or_multibyte_shares_are_clipped_not_refused() {
+        // A share of 3 000 Cyrillic characters (6 000 bytes) is accepted.
+        let cyrillic = req("", &"ж".repeat(3_000), None);
+        assert!(cyrillic.validate().is_ok());
+        assert!(!capture_text(&cyrillic).1);
+
+        // Text past one capture's length is accepted and clipped, so
+        // `truncated` can tell the user, rather than a 422.
+        let long = req("", &"x".repeat(QUICK_CAPTURE_MAX_LEN + 2_000), None);
+        assert!(long.validate().is_ok());
+        let (out, truncated) = capture_text(&long);
+        assert!(truncated);
+        assert_eq!(out.chars().count(), QUICK_CAPTURE_MAX_LEN);
+
+        // Still bounded.
+        let huge = req("", &"x".repeat(QUICK_CAPTURE_FIELD_MAX + 1), None);
+        assert!(huge.validate().is_err());
+    }
 
     #[test]
     fn coalesce_returns_empty_when_both_blank() {

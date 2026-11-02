@@ -122,3 +122,28 @@ pub fn copy_to_clipboard(text: &str) {
         let _ = write.call1(&clipboard, &text.into());
     }
 }
+
+/// The toast for a share that didn't land (#234): `sw.js` sends the
+/// browser to `/?capture=failed&reason=<auth|status|exception>`.
+#[must_use]
+pub fn share_failure(reason: Option<&str>) -> String {
+    match reason {
+        Some("auth") => "The share didn\u{2019}t land: sign in, then share it again.".to_string(),
+        Some(r) if r.parse::<u16>().is_ok() => {
+            format!("The share didn\u{2019}t land (the server answered {r}). Try again.")
+        }
+        _ => "The share didn\u{2019}t land. Try again.".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod share_tests {
+    use super::share_failure;
+
+    #[test]
+    fn a_failed_share_says_what_to_do() {
+        assert!(share_failure(Some("auth")).contains("sign in"));
+        assert!(share_failure(Some("500")).contains("500"));
+        assert_eq!(share_failure(None), share_failure(Some("exception")));
+    }
+}

@@ -58,7 +58,7 @@ async fn download(
         .map_err(|e| ApiError::Internal(format!("response build: {e}")))
 }
 
-/// Delete the attachment record and the corresponding S3 object.
+/// Delete the attachment record; its S3 object follows through the queue.
 async fn delete_attachment(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -66,10 +66,9 @@ async fn delete_attachment(
 ) -> Result<StatusCode, ApiError> {
     let attachment = state.attachments.get(AttachmentId(id)).await?;
     require_editor(state.permissions.as_ref(), &claims, attachment.node_id).await?;
-    let s3_key = state.attachments.delete(AttachmentId(id)).await?;
-    // Best-effort S3 delete — log but don't fail the request if S3 is unavailable.
-    if let Err(e) = state.object_store.delete(&s3_key).await {
-        tracing::warn!(s3_key, error = %e, "S3 delete failed after DB record removed");
-    }
+    // The row's delete queues its file (the attachment trigger, #239); the
+    // drain deletes it from storage, and retries daily if that fails.
+    state.attachments.delete(AttachmentId(id)).await?;
+    state.drain_object_deletions();
     Ok(StatusCode::NO_CONTENT)
 }

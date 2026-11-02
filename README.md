@@ -27,8 +27,8 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
 - **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. `p` key toggles pin on the open node.
 - **Node templates** — create reusable Markdown templates for each node type; "Use" pre-fills the editor body.
-- **Quick capture** — `n` keyboard shortcut opens a lightweight modal for rapid node creation. Type, title, and optional body; Ctrl+Enter to save.
-- **Keyboard shortcuts** — `n` new node · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields.
+- **Quick capture** — `n` opens a blank sticky note; Ctrl/Cmd+Enter sticks it on the Captures wall (Tasks → Captures), where each capture waits to become exactly one thing: a node, a note on a node, or a task in a Project.
+- **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
 - **Multi-user permissions** — nodes are **private by default**. Owners can invite others by email with Viewer / Editor / Owner roles. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
@@ -410,6 +410,9 @@ details.
 | GET | `/api/edges` | List all edges |
 | POST | `/api/edges` | Create edge |
 | DELETE | `/api/edges/{id}` | Delete edge |
+| GET | `/api/nodes/{id}/home` | The node's one home; one the caller can't see is shown unnamed, and only to the node's editors |
+| PUT | `/api/nodes/{id}/home` | Set the home (`parent_id`), or remove it (`null`) |
+| POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |
 
 ### Tags
 
@@ -472,7 +475,26 @@ details.
 | PATCH | `/api/notes/{id}` | Edit a note body (owner-only) |
 | DELETE | `/api/notes/{id}` | Delete a note (soft delete — restorable for 30 days) |
 | POST | `/api/notes/{id}/restore` | Un-delete a note (backs the UI's undo toast) |
+| POST | `/api/notes` | A note on the node named in the body (`node_id` required; every note has a node) |
 | GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first) |
+
+### Captures
+
+A capture is unclassified input waiting on the Captures wall
+(`/tasks/captures`, ONTOLOGY §9.1; the Inbox until S4c, and `/tasks/inbox`
+still redirects there).
+Captures are owner-only: no other account, the admin included, can list or
+change them. They are in backups, and not in search, export or webhooks.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/captures` | The caller's captures, newest first |
+| POST | `/api/captures` | Capture some text (`{body}`, up to 10,000 characters) |
+| PATCH | `/api/captures/{id}` | Reword a capture |
+| DELETE | `/api/captures/{id}` | Delete a capture (soft delete, restorable for 30 days) |
+| POST | `/api/captures/{id}/restore` | Un-delete a capture (backs the Undo toast) |
+| POST | `/api/captures/{id}/convert` | Turn a capture into exactly one thing, then delete it, in one transaction: `{"into":"node", node_type, title, body?, home?}`, `{"into":"note", node_id, body}` or `{"into":"task", node_id, title, due_date?, priority?}` (the node must be a Project). Needs editor rights on the node or home; answers `{"into", id, node_id?}` |
+| POST | `/api/inbox/quick` | Quick capture and the share target: `{title?, body?}` joined into one capture |
 
 ### Editor prefs (per-user UI state)
 
@@ -512,9 +534,12 @@ details.
 |--------|------|-------------|
 | GET | `/api/admin/users` | List users |
 | POST | `/api/admin/users` | Create user |
-| DELETE | `/api/admin/users/{id}` | Delete user |
+| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier admin backups and the daily database dumps (30 days) keep the data until they are deleted |
+| GET | `/api/admin/users/{id}/deletion-preview` | What deleting the account would remove (counts only) |
 | GET | `/api/admin/users/roles` | List available roles |
-| PUT | `/api/admin/users/{id}/roles` | Set roles for a user |
+| PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
+| POST | `/api/admin/users/{id}/suspend` | Suspend: no sign-in, open sessions refused at once, data kept |
+| POST | `/api/admin/users/{id}/reactivate` | Lift a suspension |
 | GET | `/api/admin/backup` | Stream full-system backup (NDJSON) |
 | POST | `/api/admin/restore` | Restore from backup file |
 | GET | `/api/metrics` | Operational metrics snapshot (version, uptime, pool stats, row counts) |
@@ -547,8 +572,9 @@ details.
 §6, §14). Each refusal is a 422 with the reason, and no message names a
 node:
 - `wiki_link` is never created by hand;
-- a node has at most one `contains` home, and adding one needs edit rights
-  on both nodes;
+- a node has at most one `contains` home (the database enforces it since
+  migration 042), and adding one needs edit rights on both nodes. A node's
+  page sets its home directly (`PUT /api/nodes/{id}/home`);
 - an Area holds Areas, Projects and Articles, a Project holds
   sub-Projects, and a Reference is never contained;
 - nothing `depends_on` an Area;
@@ -556,7 +582,11 @@ node:
 - `related_to` has no direction: it is stored once per pair (the reverse
   is a 409 duplicate), and an editor of either end may delete it.
 
-Data from before these rules stays as it is; the Data health page lists it.
+Data from before these rules stays as it is; the Data health page lists it,
+with fix buttons. `POST /api/edges/{id}/convert` turns a link into a
+`references` or `related_to` link in one step. The caller must be allowed
+to delete the old link and to create the new one; a `related_to` runs from
+whichever end they edit.
 
 ### Node Statuses
 
@@ -582,12 +612,16 @@ Nodes are **private by default** — only the creating user can see a node until
 
 | Key | Action |
 |-----|--------|
-| `n` | Open quick-capture modal (new node) |
+| `n` | Quick capture (lands on the Captures wall) |
 | `g` | Go to graph view |
 | `/` | Focus search |
 | `p` | Toggle pin on the open node |
 | `?` | Toggle keyboard shortcuts help overlay |
 | `Esc` | Back to node list / close modal |
+
+On the Captures wall: `j`/`k` or the arrows move across the cards, `Enter` or
+`c` converts the focused capture, `e` edits it, `d` deletes it (Undo in the
+toast), `Esc` drops the focus. They do nothing while a dialog is open.
 
 ---
 

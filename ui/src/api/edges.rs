@@ -1,9 +1,12 @@
 use common::{
-    edge::{CreateEdgeRequest, Edge, EdgeWithTitles},
+    edge::{
+        ConvertEdgeRequest, CreateEdgeRequest, Edge, EdgeType, EdgeWithTitles, NodeHome,
+        SetHomeRequest,
+    },
     id::{EdgeId, NodeId},
 };
 
-use super::{delete_empty, get_json, post_json};
+use super::{delete_empty, get_json, post_empty, post_json, put_json};
 use crate::error::UiError;
 
 pub async fn fetch_all_edges() -> Result<Vec<Edge>, UiError> {
@@ -24,4 +27,28 @@ pub async fn create_edge(req: &CreateEdgeRequest) -> Result<Edge, UiError> {
 
 pub async fn delete_edge(id: EdgeId) -> Result<(), UiError> {
     delete_empty(&format!("/edges/{id}")).await
+}
+
+/// `POST /edges/{id}/convert` (#228): the link becomes `to`, in one step.
+pub async fn convert_edge(id: uuid::Uuid, to: EdgeType) -> Result<(), UiError> {
+    post_empty(
+        &format!("/edges/{id}/convert"),
+        &ConvertEdgeRequest { edge_type: to },
+    )
+    .await
+}
+
+/// `GET /nodes/{id}/home` (#228): the node's one home, as far as the
+/// caller may know it.
+pub async fn fetch_home(node_id: NodeId) -> Result<NodeHome, UiError> {
+    get_json(&format!("/nodes/{node_id}/home")).await
+}
+
+/// `PUT /nodes/{id}/home` (#228): a new home, or `None` to stand alone.
+pub async fn set_home(node_id: NodeId, parent_id: Option<NodeId>) -> Result<NodeHome, UiError> {
+    put_json(
+        &format!("/nodes/{node_id}/home"),
+        &SetHomeRequest { parent_id },
+    )
+    .await
 }

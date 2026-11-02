@@ -6,6 +6,16 @@ use leptos::prelude::*;
 use crate::api;
 use crate::components::format_helpers::format_timestamp;
 
+/// An account id as shown: a deleted account's placeholder reads as its
+/// name (#239); any other id is shown as it is.
+fn shown_subject(subject: &str) -> &str {
+    if subject == common::admin::DELETED_ACCOUNT {
+        common::admin::DELETED_ACCOUNT_NAME
+    } else {
+        subject
+    }
+}
+
 /// Returns actor name from metadata, falling back to `subject_id`.
 fn actor_display(entry: &ActivityEntry) -> String {
     entry
@@ -20,7 +30,7 @@ fn actor_display(entry: &ActivityEntry) -> String {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
         })
-        .unwrap_or(&entry.subject_id)
+        .unwrap_or_else(|| shown_subject(&entry.subject_id))
         .to_string()
 }
 
@@ -48,7 +58,7 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
                 .get("invited_email")
                 .or_else(|| entry.metadata.get("subject_id"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .map_or("?", shown_subject);
             Some(format!("{who} as {role}"))
         }
         ActivityAction::Exported => entry
@@ -194,5 +204,29 @@ mod tests {
             serde_json::json!({ "from": "Done", "to": null }),
         );
         assert_eq!(action_detail(&cleared).as_deref(), Some("Done cleared"));
+    }
+
+    /// #239: what stays on others' nodes after an account is deleted reads
+    /// as "Deleted account", never the raw placeholder.
+    #[test]
+    fn a_deleted_account_reads_as_deleted_account() {
+        let mut by = entry(ActivityAction::Edited, serde_json::json!({}));
+        by.subject_id = common::admin::DELETED_ACCOUNT.to_string();
+        assert_eq!(actor_display(&by), "Deleted account");
+
+        let grant = entry(
+            ActivityAction::PermissionGranted,
+            serde_json::json!({ "subject_id": common::admin::DELETED_ACCOUNT, "role": "editor" }),
+        );
+        assert_eq!(
+            action_detail(&grant).as_deref(),
+            Some("Deleted account as editor")
+        );
+
+        let other = entry(
+            ActivityAction::PermissionGranted,
+            serde_json::json!({ "subject_id": "someone", "role": "viewer" }),
+        );
+        assert_eq!(action_detail(&other).as_deref(), Some("someone as viewer"));
     }
 }

@@ -110,8 +110,10 @@ impl NodeRepo for StubNodeRepo {
     async fn get_by_slug(&self, _: &str) -> Result<Node, EmberTroveError> {
         unimplemented!()
     }
-    async fn list(&self, _: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
-        unimplemented!()
+    async fn list(&self, params: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
+        // One node owned by whoever was asked for (the project dashboard).
+        let owner = params.owner_id.as_deref().unwrap_or("anyone");
+        Ok((vec![fake_node("listed", owner)], 1))
     }
     async fn update(
         &self,
@@ -182,9 +184,14 @@ impl NodeRepo for StubNodeRepo {
     }
     async fn area_for_nodes(
         &self,
-        _: &[NodeId],
+        ids: &[NodeId],
+        subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
-        unimplemented!()
+        // Echo the scope so tests can prove the route asks for the caller's.
+        Ok(ids
+            .iter()
+            .map(|id| (*id, *id, format!("area for {subject:?}")))
+            .collect())
     }
     async fn project_status_counts(
         &self,
@@ -231,7 +238,7 @@ impl EdgeRepo for StubEdgeRepo {
         // Two edges from a node the caller can't touch into their own
         // Project (#224): a home and a plain link.
         let edge_type = match id.0.as_u128() {
-            AZ_FOREIGN_HOME_EDGE => common::edge::EdgeType::Contains,
+            AZ_FOREIGN_HOME_EDGE | AZ_VISIBLE_HOME_EDGE => common::edge::EdgeType::Contains,
             AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
             AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
                 common::edge::EdgeType::RelatedTo
@@ -243,9 +250,14 @@ impl EdgeRepo for StubEdgeRepo {
         } else {
             AZ_MY_PROJECT
         };
+        let source = if id.0.as_u128() == AZ_VISIBLE_HOME_EDGE {
+            AZ_VIEW_NODE
+        } else {
+            AZ_FOREIGN_NODE
+        };
         Ok(Edge {
             id,
-            source_id: az_node(AZ_FOREIGN_NODE),
+            source_id: az_node(source),
             target_id: az_node(target),
             edge_type,
             label: None,
@@ -255,8 +267,52 @@ impl EdgeRepo for StubEdgeRepo {
     async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> {
         Ok(())
     }
+    async fn convert(
+        &self,
+        _: EdgeId,
+        _: common::edge::EdgeType,
+        _: common::edge::EdgeType,
+        swap: bool,
+    ) -> Result<(), EmberTroveError> {
+        // The only allowed conversion in this world runs from the child's
+        // side (the caller edits the target only), so the ends must swap.
+        assert!(swap, "a related link runs from the end the caller edits");
+        Ok(())
+    }
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Edge>, EmberTroveError> {
         unimplemented!()
+    }
+    async fn home_of(&self, child: NodeId) -> Result<Option<Edge>, EmberTroveError> {
+        // See AZ_HIDDEN_HOME_EDGE.
+        let (edge, parent) = if child == az_node(AZ_MY_PROJECT) || child == az_node(AZ_VIEW_NODE) {
+            (AZ_HIDDEN_HOME_EDGE, AZ_FOREIGN_NODE)
+        } else if child == az_node(AZ_EDIT_NODE) {
+            (AZ_SEEN_HOME_EDGE, AZ_OWNED_NODE)
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(Edge {
+            id: EdgeId(Uuid::from_u128(edge)),
+            source_id: az_node(parent),
+            target_id: child,
+            edge_type: common::edge::EdgeType::Contains,
+            label: None,
+            created_at: chrono::Utc::now(),
+        }))
+    }
+    async fn set_home(
+        &self,
+        child: NodeId,
+        parent: Option<NodeId>,
+    ) -> Result<Option<Edge>, EmberTroveError> {
+        // Only a call that passed every route check gets here: freeing the
+        // caller's own Project. Anything else is a missing check.
+        assert_eq!(
+            (child, parent),
+            (az_node(AZ_MY_PROJECT), None),
+            "set_home reached past the route's checks"
+        );
+        Ok(None)
     }
     async fn list_for_node_with_titles(
         &self,
@@ -272,7 +328,8 @@ impl EdgeRepo for StubEdgeRepo {
         unimplemented!()
     }
     async fn sync_wikilinks(&self, _: NodeId, _: &[NodeId]) -> Result<(), EmberTroveError> {
-        unimplemented!()
+        // A converted capture's node links its body (#234); nothing to keep.
+        Ok(())
     }
 }
 
@@ -332,6 +389,13 @@ const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
 const AZ_FOREIGN_RELATED_EDGE: u128 = 0xa2_0e32;
 /// A related link between two nodes the caller can't edit.
 const AZ_STRANGERS_RELATED_EDGE: u128 = 0xa2_0e33;
+/// A home from AZ_VIEW_NODE (seen, not edited) into AZ_MY_PROJECT (#228).
+const AZ_VISIBLE_HOME_EDGE: u128 = 0xa2_0e34;
+/// `home_of` answers (#228): AZ_MY_PROJECT's home is hidden (AZ_FOREIGN_NODE)
+/// and the caller edits the child; AZ_VIEW_NODE's is hidden too, but the
+/// caller only views the child; AZ_EDIT_NODE's (AZ_OWNED_NODE) is visible.
+const AZ_HIDDEN_HOME_EDGE: u128 = 0xa2_0e35;
+const AZ_SEEN_HOME_EDGE: u128 = 0xa2_0e36;
 
 /// Someone else's standalone task.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -516,20 +580,20 @@ impl TaskRepo for StubTaskRepo {
         &self,
         _: &[NodeId],
     ) -> Result<Vec<(NodeId, TaskCounts)>, EmberTroveError> {
-        unimplemented!()
+        Ok(Vec::new())
     }
     async fn list_open_for_nodes(
         &self,
         _: &[NodeId],
         _: i64,
     ) -> Result<Vec<(NodeId, Vec<common::task::TaskSummary>, bool)>, EmberTroveError> {
-        unimplemented!()
+        Ok(Vec::new())
     }
     async fn max_task_updated_for_nodes(
         &self,
         _: &[NodeId],
     ) -> Result<Vec<(NodeId, chrono::DateTime<chrono::Utc>)>, EmberTroveError> {
-        unimplemented!()
+        Ok(Vec::new())
     }
     async fn list_all_for_owner(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> {
         unimplemented!()
@@ -551,12 +615,130 @@ impl TaskRepo for StubTaskRepo {
     }
 }
 
+/// Captures (#234): one belongs to "someone-else" (`AZ_OTHERS_CAPTURE`);
+/// every call names the owner it was asked for, so a test sees whose
+/// captures a route reached. Anyone but the owner gets `NotFound`, as the
+/// real repo's `WHERE owner_id = $caller` does.
+const AZ_OTHERS_CAPTURE: u128 = 0xa2_0c01;
+struct StubCaptureRepo;
+#[async_trait]
+impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
+    async fn list(&self, owner: &str) -> Result<Vec<common::capture::Capture>, EmberTroveError> {
+        Ok(vec![stub_capture(Uuid::new_v4(), owner, "mine")])
+    }
+    async fn create(
+        &self,
+        owner: &str,
+        body: &str,
+    ) -> Result<common::capture::Capture, EmberTroveError> {
+        Ok(stub_capture(Uuid::new_v4(), owner, body))
+    }
+    async fn update(
+        &self,
+        id: common::id::CaptureId,
+        owner: &str,
+        body: &str,
+    ) -> Result<common::capture::Capture, EmberTroveError> {
+        stub_owned(id, owner)?;
+        Ok(stub_capture(id.0, owner, body))
+    }
+    async fn delete(&self, id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveError> {
+        stub_owned(id, owner)
+    }
+    async fn restore(
+        &self,
+        id: common::id::CaptureId,
+        owner: &str,
+    ) -> Result<common::capture::Capture, EmberTroveError> {
+        stub_owned(id, owner)?;
+        Ok(stub_capture(id.0, owner, "back"))
+    }
+    async fn purge_deleted_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn list_all(&self) -> Result<Vec<common::capture::Capture>, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn convert(
+        &self,
+        id: common::id::CaptureId,
+        owner: &str,
+        into: crate::repo::capture::Destination,
+    ) -> Result<crate::repo::capture::Made, EmberTroveError> {
+        use crate::repo::capture::{Destination, Made};
+        stub_owned(id, owner)?;
+        // Only destinations the caller may write reach the repo; anything
+        // else is a check the handler skipped, so the test fails loudly.
+        let editable = |n: NodeId| {
+            matches!(
+                n.0.as_u128(),
+                AZ_OWNED_NODE | AZ_EDIT_NODE | AZ_MY_PROJECT | AZ_MY_ARTICLE
+            )
+        };
+        Ok(match into {
+            Destination::Node { req, home } => {
+                assert!(home.is_none_or(editable), "home not checked");
+                Made::Node(Box::new(Node {
+                    node_type: req.node_type,
+                    title: req.title,
+                    project_status: req.project_status,
+                    ..fake_node("converted", owner)
+                }))
+            }
+            Destination::Note { node_id, req } => {
+                assert!(editable(node_id), "note's node not checked");
+                Made::Note(Note {
+                    id: common::id::NoteId(Uuid::new_v4()),
+                    node_id,
+                    owner_id: owner.to_string(),
+                    body: req.body,
+                    color: req.color,
+                    created_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                })
+            }
+            Destination::Task { node_id, req } => {
+                assert_eq!(node_id.0.as_u128(), AZ_MY_PROJECT, "task gates skipped");
+                Made::Task {
+                    project: node_id,
+                    task: Task {
+                        node_id: Some(node_id),
+                        owner_id: owner.to_string(),
+                        title: req.title,
+                        ..stub_task(TaskId(Uuid::new_v4()))
+                    },
+                }
+            }
+        })
+    }
+}
+
+fn stub_capture(id: Uuid, owner: &str, body: &str) -> common::capture::Capture {
+    common::capture::Capture {
+        id: common::id::CaptureId(id),
+        owner_id: owner.to_string(),
+        body: body.to_string(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+fn stub_owned(id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveError> {
+    if id.0 == Uuid::from_u128(AZ_OTHERS_CAPTURE) && owner != "someone-else" {
+        return Err(EmberTroveError::NotFound("capture not found".to_string()));
+    }
+    Ok(())
+}
+
 struct StubNoteRepo;
 #[async_trait]
 impl NoteRepo for StubNoteRepo {
     async fn create(
         &self,
-        _: Option<NodeId>,
+        _: NodeId,
         _: &str,
         _: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
@@ -583,7 +765,7 @@ impl NoteRepo for StubNoteRepo {
     ) -> Result<Note, EmberTroveError> {
         Ok(Note {
             id,
-            node_id: None,
+            node_id: NodeId(Uuid::nil()),
             owner_id: owner_id.to_string(),
             body: "restored".to_string(),
             color: "yellow".to_string(),
@@ -752,8 +934,20 @@ impl FavoriteRepo for StubFavoriteRepo {
     async fn list(&self, _: &str) -> Result<Vec<Favorite>, EmberTroveError> {
         unimplemented!()
     }
-    async fn create(&self, _: &str, _: CreateFavoriteRequest) -> Result<Favorite, EmberTroveError> {
-        unimplemented!()
+    async fn create(
+        &self,
+        owner: &str,
+        req: CreateFavoriteRequest,
+    ) -> Result<Favorite, EmberTroveError> {
+        Ok(Favorite {
+            id: FavoriteId(Uuid::new_v4()),
+            owner_id: owner.to_string(),
+            node_id: req.node_id.map(NodeId),
+            url: req.url,
+            label: req.label,
+            position: 0,
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn delete(&self, _: FavoriteId, _: &str) -> Result<(), EmberTroveError> {
         unimplemented!()
@@ -1176,6 +1370,7 @@ fn test_state() -> AppState {
         tags: Arc::new(StubTagRepo),
         tasks: Arc::new(StubTaskRepo),
         notes: Arc::new(StubNoteRepo),
+        captures: Arc::new(StubCaptureRepo),
         attachments: Arc::new(StubAttachmentRepo),
         permissions: Arc::new(StubPermissionRepo),
         search: Arc::new(StubSearchRepo),
@@ -1191,7 +1386,11 @@ fn test_state() -> AppState {
         node_links: Arc::new(StubNodeLinkRepo),
         webhooks: Arc::new(StubWebhookRepo),
         editor_prefs: Arc::new(StubEditorPrefRepo),
+        accounts: Arc::new(StubAccountRepo::default()),
+        suspended: crate::auth::suspended::SuspendedSet::default(),
         object_store: Arc::new(NullObjectStore),
+        object_deletions: Arc::new(StubObjectDeletionRepo),
+        draining: Arc::default(),
         oidc: None,
         cognito_admin: None,
         notifier: None,
@@ -2431,6 +2630,141 @@ async fn a_home_can_be_released_from_the_childs_side() {
     assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
 }
 
+/// `POST /edges/{id}/convert` (#228): rights first (to delete the old link
+/// and create the new one), then which conversions exist.
+#[tokio::test]
+async fn a_link_converts_only_for_someone_who_could_delete_and_recreate_it() {
+    let convert = |edge: u128, to: &'static str| async move {
+        claims_app("/edges", crate::routes::edges::router())
+            .oneshot(
+                Request::post(format!("/edges/{}/convert", Uuid::from_u128(edge)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "edge_type": to }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // The child's editor may turn a home they can see into a related link,
+    // which then runs from their own node (the stub asserts the swap).
+    assert_eq!(
+        convert(AZ_VISIBLE_HOME_EDGE, "related_to").await,
+        StatusCode::NO_CONTENT
+    );
+    // ... but not into a references link, which belongs to the parent.
+    assert_eq!(
+        convert(AZ_VISIBLE_HOME_EDGE, "references").await,
+        StatusCode::FORBIDDEN
+    );
+    // A related link needs a parent they can see.
+    assert_eq!(
+        convert(AZ_FOREIGN_HOME_EDGE, "related_to").await,
+        StatusCode::FORBIDDEN
+    );
+    // Only after the rights: a structural target is no conversion.
+    assert_eq!(
+        convert(AZ_VISIBLE_HOME_EDGE, "depends_on").await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // A stranger is refused before anything is judged, and a directed link
+    // belongs to its source's editors.
+    assert_eq!(
+        convert(AZ_STRANGERS_RELATED_EDGE, "wiki_link").await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        convert(AZ_FOREIGN_LINK_EDGE, "related_to").await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(convert(0xdead, "related_to").await, StatusCode::NOT_FOUND);
+}
+
+/// `GET /nodes/{id}/home` (#228): a home is named only to someone who can
+/// see it; the child's editors learn a hidden one exists, nothing more.
+#[tokio::test]
+async fn a_hidden_home_is_shown_to_editors_only_and_never_named() {
+    let home = |node: u128| async move {
+        let resp = claims_app("/nodes", crate::routes::nodes::router())
+            .oneshot(
+                Request::get(format!("/nodes/{}/home", Uuid::from_u128(node)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default(),
+        )
+    };
+    // The caller edits their Project: the hidden home exists, unnamed.
+    let (status, body) = home(AZ_MY_PROJECT).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        serde_json::json!({ "home": {
+            "edge_id": Uuid::from_u128(AZ_HIDDEN_HOME_EDGE), "node": null } })
+    );
+    // A viewer of the child isn't told.
+    assert_eq!(
+        home(AZ_VIEW_NODE).await.1,
+        serde_json::json!({ "home": null })
+    );
+    // A home they can see is named.
+    let (_, body) = home(AZ_EDIT_NODE).await;
+    assert_eq!(
+        body["home"]["node"]["id"],
+        serde_json::json!(Uuid::from_u128(AZ_OWNED_NODE))
+    );
+    // A stranger gets nothing at all.
+    assert_eq!(home(AZ_FOREIGN_NODE).await.0, StatusCode::FORBIDDEN);
+}
+
+/// `PUT /nodes/{id}/home` (#228): edit rights on the child, and on the new
+/// home, before any rule; the stub panics if a refused call gets through.
+#[tokio::test]
+async fn setting_a_home_needs_both_ends_and_an_allowed_pair() {
+    let put = |node: u128, parent: Option<u128>| async move {
+        claims_app("/nodes", crate::routes::nodes::router())
+            .oneshot(
+                Request::put(format!("/nodes/{}/home", Uuid::from_u128(node)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "parent_id": parent.map(Uuid::from_u128) }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // Only viewing the child: refused before anything else.
+    assert_eq!(put(AZ_VIEW_NODE, None).await, StatusCode::FORBIDDEN);
+    // A home they only view can't be claimed.
+    assert_eq!(
+        put(AZ_MY_PROJECT, Some(AZ_VIEW_NODE)).await,
+        StatusCode::FORBIDDEN
+    );
+    // Rules after rights: itself, and an Article as a Project's home.
+    assert_eq!(
+        put(AZ_MY_PROJECT, Some(AZ_MY_PROJECT)).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        put(AZ_MY_PROJECT, Some(AZ_MY_ARTICLE)).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // The child's editor frees it, even from a home they can't see (§6.1).
+    assert_eq!(put(AZ_MY_PROJECT, None).await, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn edge_kind_rules_refuse_with_the_reason() {
     let (status, body) = post_typed_edge(AZ_EDIT_NODE, AZ_OWNED_NODE, "wiki_link").await;
@@ -2620,6 +2954,295 @@ async fn project_status_suggestions_are_the_callers_own() {
         body,
         serde_json::json!([{ "status": "of test-sub", "count": 1 }])
     );
+}
+
+/// The dashboard asks for Areas in the caller's scope (#228): a non-admin
+/// never gets the unfiltered admin scope.
+#[tokio::test]
+async fn the_dashboard_asks_for_areas_the_caller_can_see() {
+    async fn area_title(claims: common::auth::AuthClaims) -> serde_json::Value {
+        let resp = Router::new()
+            .nest("/dashboard", crate::routes::tasks::dashboard_router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(Request::get("/dashboard").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        body[0]["area_title"].clone()
+    }
+    assert_eq!(
+        area_title(fake_claims()).await,
+        serde_json::json!("area for Some(\"test-sub\")")
+    );
+    assert_eq!(
+        area_title(admin_claims()).await,
+        serde_json::json!("area for None")
+    );
+}
+
+/// A node favorite needs view rights (#228): its list shows the node's
+/// live title. A node the caller can't see, or that doesn't exist, is a
+/// 403 before anything is stored.
+#[tokio::test]
+async fn a_favorite_needs_view_rights_on_its_node() {
+    async fn post(node: Option<u128>) -> StatusCode {
+        let body = serde_json::json!({
+            "node_id": node.map(az_node),
+            "url": node.is_none().then_some("https://example.com"),
+            "label": "x",
+        });
+        claims_app("/favorites", crate::routes::favorites::router())
+            .oneshot(
+                Request::post("/favorites")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+    assert_eq!(post(Some(AZ_FOREIGN_NODE)).await, StatusCode::FORBIDDEN);
+    assert_eq!(post(Some(0xdead_beef)).await, StatusCode::FORBIDDEN);
+    assert_eq!(post(Some(AZ_VIEW_NODE)).await, StatusCode::CREATED);
+    assert_eq!(post(None).await, StatusCode::CREATED, "a URL needs no node");
+}
+
+// ── Captures (#234) ───────────────────────────────────────────────────────────
+
+async fn capture_call(
+    claims: common::auth::AuthClaims,
+    req: Request<Body>,
+) -> (StatusCode, serde_json::Value) {
+    let resp = Router::new()
+        .nest("/captures", crate::routes::captures::router())
+        .nest("/inbox", crate::routes::inbox::router())
+        .nest("/notes", crate::routes::notes::note_router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+fn json_req(method: &str, uri: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// Captures are owner-only with no admin bypass (owner decision): the
+/// routes always ask for the caller's own, so an admin reaches only theirs
+/// and gets 404 for anyone else's.
+#[tokio::test]
+async fn an_admin_cannot_reach_someone_elses_capture() {
+    let others = Uuid::from_u128(AZ_OTHERS_CAPTURE);
+    let (status, list) = capture_call(
+        admin_claims(),
+        Request::get("/captures").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list[0]["owner_id"], serde_json::json!(admin_claims().sub));
+    for req in [
+        json_req(
+            "PATCH",
+            &format!("/captures/{others}"),
+            serde_json::json!({ "body": "x" }),
+        ),
+        Request::delete(format!("/captures/{others}"))
+            .body(Body::empty())
+            .unwrap(),
+        Request::post(format!("/captures/{others}/restore"))
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        assert_eq!(
+            capture_call(admin_claims(), req).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+}
+
+#[tokio::test]
+async fn quick_capture_lands_a_capture_for_the_caller() {
+    let (status, body) = capture_call(
+        fake_claims(),
+        json_req(
+            "POST",
+            "/inbox/quick",
+            serde_json::json!({ "title": "an idea", "priority": "high" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(body["id"].is_string());
+    assert_eq!(body["truncated"], serde_json::json!(false));
+    // Nothing to capture.
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req("POST", "/inbox/quick", serde_json::json!({ "title": "  " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req("POST", "/captures", serde_json::json!({ "body": " \n " })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+fn convert_req(capture: Uuid, body: serde_json::Value) -> Request<Body> {
+    json_req("POST", &format!("/captures/{capture}/convert"), body)
+}
+
+/// A capture becomes exactly one thing (#234, §9.1), in the caller's name.
+#[tokio::test]
+async fn a_capture_converts_into_a_node_a_note_or_a_task() {
+    let mine = Uuid::new_v4();
+    for (body, into) in [
+        (
+            serde_json::json!({ "into": "node", "node_type": "project", "title": " Plan " }),
+            "node",
+        ),
+        (
+            serde_json::json!({
+                "into": "node", "node_type": "project", "title": "Sub",
+                "home": Uuid::from_u128(AZ_MY_PROJECT),
+            }),
+            "node",
+        ),
+        (
+            serde_json::json!({
+                "into": "note", "node_id": Uuid::from_u128(AZ_EDIT_NODE), "body": "met Ana",
+            }),
+            "note",
+        ),
+        (
+            serde_json::json!({
+                "into": "task", "node_id": Uuid::from_u128(AZ_MY_PROJECT),
+                "title": "call the bank", "due_date": "2026-11-07",
+            }),
+            "task",
+        ),
+    ] {
+        let (status, out) = capture_call(fake_claims(), convert_req(mine, body)).await;
+        assert_eq!(status, StatusCode::CREATED, "{into}: {out}");
+        assert_eq!(out["into"], into);
+    }
+}
+
+/// Someone else's capture is a 404, an admin's request included, even
+/// with a destination the admin may write: never a hint it exists.
+#[tokio::test]
+async fn nobody_converts_someone_elses_capture() {
+    let others = Uuid::from_u128(AZ_OTHERS_CAPTURE);
+    let note = serde_json::json!({
+        "into": "note", "node_id": Uuid::from_u128(AZ_OWNED_NODE), "body": "x",
+    });
+    for claims in [fake_claims(), admin_claims()] {
+        let (status, _) = capture_call(claims, convert_req(others, note.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+}
+
+/// The destination's rules come before anything is made: editor rights
+/// (403), then the kinds and the text (422). The stub repo panics if a
+/// refused destination reaches it.
+#[tokio::test]
+async fn a_conversion_is_refused_before_anything_is_made() {
+    let mine = Uuid::new_v4();
+    let view = Uuid::from_u128(AZ_VIEW_NODE);
+    let project = Uuid::from_u128(AZ_MY_PROJECT);
+    let article = Uuid::from_u128(AZ_MY_ARTICLE);
+    for (body, want) in [
+        (
+            serde_json::json!({ "into": "note", "node_id": view, "body": "x" }),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            serde_json::json!({ "into": "task", "node_id": view, "title": "x" }),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            serde_json::json!({
+                "into": "node", "node_type": "article", "title": "x", "home": view,
+            }),
+            StatusCode::FORBIDDEN,
+        ),
+        // A Task needs a Project (§9.3).
+        (
+            serde_json::json!({ "into": "task", "node_id": article, "title": "x" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // A Project holds only Projects (§3.3).
+        (
+            serde_json::json!({
+                "into": "node", "node_type": "article", "title": "x", "home": project,
+            }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // A Task's title must fit (owner decision): reworded, never cut.
+        (
+            serde_json::json!({
+                "into": "task", "node_id": project, "title": "x".repeat(501),
+            }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            serde_json::json!({ "into": "note", "node_id": project, "body": "  " }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        // A node keeps create_node's limit (500 bytes): 300 Cyrillic
+        // letters fit a Task, not a node the editor could save again.
+        (
+            serde_json::json!({
+                "into": "node", "node_type": "article", "title": "ж".repeat(300),
+            }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let (status, out) = capture_call(fake_claims(), convert_req(mine, body.clone())).await;
+        assert_eq!(status, want, "{body}: {out}");
+    }
+}
+
+/// Every note has a node (§9.2): the Notes page can't make one without.
+#[tokio::test]
+async fn a_note_needs_a_node() {
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req("POST", "/notes", serde_json::json!({ "body": "loose" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // With a node, its editor rights come first.
+    let (status, _) = capture_call(
+        fake_claims(),
+        json_req(
+            "POST",
+            "/notes",
+            serde_json::json!({ "body": "on it", "node_id": Uuid::from_u128(AZ_VIEW_NODE) }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 // ── People (#147) ─────────────────────────────────────────────────────────────
@@ -3119,4 +3742,616 @@ async fn a_project_status_can_be_set_only_on_a_project_but_always_cleared() {
         set(AZ_VIEW_NODE, "Active".into()).await,
         StatusCode::FORBIDDEN
     );
+}
+
+// ── Account lifecycle (#239) ─────────────────────────────────────────────────
+
+const ADMIN_SUB: &str = "0a0a0a0a-0000-4000-8000-00000000000a";
+const U1: &str = "00000000-0000-4000-8000-000000000001";
+const U2: &str = "00000000-0000-4000-8000-000000000002";
+
+/// An admin whose `sub` is a real account id, as Cognito issues them.
+fn uuid_admin() -> common::auth::AuthClaims {
+    common::auth::AuthClaims {
+        sub: ADMIN_SUB.to_string(),
+        ..admin_claims()
+    }
+}
+
+/// One log shared by the account repo and the directory fake, so a test can
+/// assert the order of the steps across both.
+type StepLog = Arc<std::sync::Mutex<Vec<String>>>;
+
+fn steps(log: &StepLog) -> Vec<String> {
+    log.lock().unwrap().clone()
+}
+
+struct StubObjectDeletionRepo;
+
+#[async_trait]
+impl crate::repo::object_deletion::ObjectDeletionRepo for StubObjectDeletionRepo {
+    async fn enqueue(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn due(&self, _: i64) -> Result<Vec<String>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn done(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+    async fn failed(&self, _: &str) -> Result<(), EmberTroveError> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct StubAccountRepo {
+    rows: std::sync::Mutex<std::collections::HashSet<String>>,
+    log: StepLog,
+    /// Make `purge` fail.
+    purge_fails: bool,
+}
+
+#[async_trait]
+impl crate::repo::account::AccountRepo for StubAccountRepo {
+    async fn suspended(&self) -> Result<std::collections::HashSet<String>, EmberTroveError> {
+        Ok(self.rows.lock().unwrap().clone())
+    }
+    async fn suspend(&self, subject_id: &str, _by: &str) -> Result<(), EmberTroveError> {
+        self.log.lock().unwrap().push(format!("row+ {subject_id}"));
+        self.rows.lock().unwrap().insert(subject_id.to_string());
+        Ok(())
+    }
+    async fn unsuspend(&self, subject_id: &str) -> Result<(), EmberTroveError> {
+        self.log.lock().unwrap().push(format!("row- {subject_id}"));
+        self.rows.lock().unwrap().remove(subject_id);
+        Ok(())
+    }
+    async fn mark_deleted(&self, subject_id: &str, _by: &str) -> Result<(), EmberTroveError> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("row deleted {subject_id}"));
+        self.rows.lock().unwrap().insert(subject_id.to_string());
+        Ok(())
+    }
+    async fn purge_deleted_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        Ok(0)
+    }
+    async fn deleted(&self) -> Result<Vec<String>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn deletion_preview(
+        &self,
+        _: &str,
+    ) -> Result<common::admin::PurgeCounts, EmberTroveError> {
+        Ok(common::admin::PurgeCounts {
+            nodes: 3,
+            ..Default::default()
+        })
+    }
+    async fn purge(
+        &self,
+        subject_id: &str,
+        email: Option<&str>,
+    ) -> Result<common::admin::PurgeCounts, EmberTroveError> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("purge {subject_id} {}", email.unwrap_or("-")));
+        if self.purge_fails {
+            return Err(EmberTroveError::Internal("account purge failed".into()));
+        }
+        Ok(common::admin::PurgeCounts {
+            nodes: 3,
+            ..Default::default()
+        })
+    }
+}
+
+/// A Cognito stand-in that records every call. `fail` names an operation
+/// that errors; `missing` makes every per-user call answer "not found".
+#[derive(Default)]
+struct FakeDirectory {
+    log: StepLog,
+    fail: Option<&'static str>,
+    missing: bool,
+}
+
+impl FakeDirectory {
+    fn call(&self, op: &str, user: &str) -> Result<(), crate::error::ApiError> {
+        self.log.lock().unwrap().push(format!("{op} {user}"));
+        if self.missing {
+            return Err(crate::error::ApiError::NotFound("user not found".into()));
+        }
+        if self.fail == Some(op) {
+            return Err(crate::error::ApiError::Internal(
+                "identity provider operation failed".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::admin::UserDirectory for FakeDirectory {
+    async fn list_users(&self) -> Result<Vec<common::admin::AdminUser>, crate::error::ApiError> {
+        Ok([ADMIN_SUB, U1, U2]
+            .into_iter()
+            .map(|id| common::admin::AdminUser {
+                id: id.to_string(),
+                username: format!("{id}@example.com"),
+                email: Some(format!("{id}@example.com")),
+                first_name: None,
+                last_name: None,
+                enabled: true,
+                realm_roles: vec![],
+                suspended: false,
+            })
+            .collect())
+    }
+    async fn create_user(
+        &self,
+        _: &common::admin::CreateAdminUserRequest,
+    ) -> Result<common::admin::AdminUser, crate::error::ApiError> {
+        unimplemented!()
+    }
+    async fn find_user_by_email(
+        &self,
+        _: &str,
+    ) -> Result<Option<common::admin::AdminUser>, crate::error::ApiError> {
+        Ok(None)
+    }
+    async fn email_of(&self, user: &str) -> Result<Option<String>, crate::error::ApiError> {
+        self.log.lock().unwrap().push(format!("email {user}"));
+        if self.missing {
+            return Ok(None);
+        }
+        if self.fail == Some("email") {
+            return Err(crate::error::ApiError::Internal("lookup failed".into()));
+        }
+        Ok(Some(format!("{user}@example.com")))
+    }
+    async fn delete_user(&self, user: &str) -> Result<(), crate::error::ApiError> {
+        self.call("delete", user)
+    }
+    async fn list_groups(&self) -> Result<Vec<String>, crate::error::ApiError> {
+        Ok(vec!["admin".into()])
+    }
+    async fn set_user_groups(
+        &self,
+        user: &str,
+        _: &[String],
+    ) -> Result<(), crate::error::ApiError> {
+        self.call("groups", user)
+    }
+    async fn disable_user(&self, user: &str) -> Result<(), crate::error::ApiError> {
+        self.call("disable", user)
+    }
+    async fn enable_user(&self, user: &str) -> Result<(), crate::error::ApiError> {
+        self.call("enable", user)
+    }
+    async fn sign_out_everywhere(&self, user: &str) -> Result<(), crate::error::ApiError> {
+        self.call("sign-out", user)
+    }
+}
+
+/// A state whose account repo and directory share one step log.
+fn lifecycle_state(mut directory: FakeDirectory) -> (AppState, StepLog) {
+    let log = StepLog::default();
+    directory.log = log.clone();
+    let mut state = test_state();
+    state.accounts = Arc::new(StubAccountRepo {
+        log: log.clone(),
+        ..StubAccountRepo::default()
+    });
+    state.cognito_admin = Some(Arc::new(directory));
+    (state, log)
+}
+
+fn admin_app_with(state: AppState, claims: common::auth::AuthClaims) -> Router {
+    Router::new()
+        .nest("/admin", crate::routes::admin::router())
+        .layer(axum::Extension(claims))
+        .with_state(state)
+}
+
+async fn admin_call(app: &Router, method: &str, uri: &str, body: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn account_lifecycle_routes_are_admin_only() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), fake_claims());
+    for (method, uri) in [
+        ("POST", format!("/admin/users/{U1}/suspend")),
+        ("POST", format!("/admin/users/{U1}/reactivate")),
+        ("DELETE", format!("/admin/users/{U1}")),
+        ("PUT", format!("/admin/users/{U1}/roles")),
+    ] {
+        let (status, _) = admin_call(&app, method, &uri, r#"{"roles":[]}"#).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+    }
+    assert!(steps(&log).is_empty(), "nothing may run for a non-admin");
+    assert!(!state.suspended.contains(U1).await);
+}
+
+/// SECURITY (#239): the last admin can't remove the only way back in.
+#[tokio::test]
+async fn an_admin_cannot_suspend_delete_or_demote_themselves() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let me = ADMIN_SUB;
+    for (method, uri, body) in [
+        ("POST", format!("/admin/users/{me}/suspend"), "{}"),
+        ("DELETE", format!("/admin/users/{me}"), "{}"),
+        (
+            "PUT",
+            format!("/admin/users/{me}/roles"),
+            r#"{"roles":["user"]}"#,
+        ),
+    ] {
+        let (status, _) = admin_call(&app, method, &uri, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
+    }
+    assert!(steps(&log).is_empty());
+    assert!(!state.suspended.contains(me).await);
+
+    // Changing your own roles while keeping admin is fine.
+    let (status, _) = admin_call(
+        &app,
+        "PUT",
+        &format!("/admin/users/{me}/roles"),
+        r#"{"roles":["admin","user"]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn suspend_blocks_the_api_before_asking_cognito() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        steps(&log),
+        [
+            format!("row+ {U1}"),
+            format!("disable {U1}"),
+            format!("sign-out {U1}")
+        ],
+        "the row lands before Cognito is asked"
+    );
+    assert!(state.suspended.contains(U1).await);
+
+    let (status, body) = admin_call(&app, "GET", "/admin/users", "").await;
+    assert_eq!(status, StatusCode::OK);
+    let users: Vec<common::admin::AdminUser> = serde_json::from_str(&body).unwrap();
+    let flags: Vec<(String, bool)> = users.into_iter().map(|u| (u.id, u.suspended)).collect();
+    assert_eq!(
+        flags,
+        [
+            (ADMIN_SUB.to_string(), false),
+            (U1.to_string(), true),
+            (U2.to_string(), false)
+        ]
+    );
+}
+
+/// Fails closed: a Cognito failure leaves the account refused by the API,
+/// and the admin is told it didn't fully land.
+#[tokio::test]
+async fn a_cognito_failure_leaves_the_account_suspended() {
+    for op in ["disable", "sign-out"] {
+        let (state, _) = lifecycle_state(FakeDirectory {
+            fail: Some(op),
+            ..FakeDirectory::default()
+        });
+        let app = admin_app_with(state.clone(), uuid_admin());
+        let (status, body) =
+            admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{op}");
+        assert!(body.contains("suspended in Ember Trove"), "{body}");
+        assert!(state.suspended.contains(U1).await, "{op}");
+    }
+}
+
+#[tokio::test]
+async fn suspending_an_account_cognito_lacks_keeps_it_refused() {
+    let (state, _) = lifecycle_state(FakeDirectory {
+        missing: true,
+        ..FakeDirectory::default()
+    });
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(state.suspended.contains(U1).await);
+}
+
+#[tokio::test]
+async fn reactivate_unblocks_only_after_cognito() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    state.accounts.suspend(U1, "admin").await.unwrap();
+    state.suspended.insert(U1).await;
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/reactivate"), "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        steps(&log),
+        [
+            format!("row+ {U1}"),
+            format!("enable {U1}"),
+            format!("row- {U1}")
+        ]
+    );
+    assert!(!state.suspended.contains(U1).await);
+}
+
+#[tokio::test]
+async fn a_failed_reactivation_stays_suspended() {
+    for directory in [
+        FakeDirectory {
+            fail: Some("enable"),
+            ..FakeDirectory::default()
+        },
+        FakeDirectory {
+            missing: true,
+            ..FakeDirectory::default()
+        },
+    ] {
+        let (state, log) = lifecycle_state(directory);
+        state.suspended.insert(U1).await;
+        let app = admin_app_with(state.clone(), uuid_admin());
+        let (status, _) =
+            admin_call(&app, "POST", &format!("/admin/users/{U1}/reactivate"), "").await;
+        assert!(status.is_client_error() || status.is_server_error());
+        assert!(state.suspended.contains(U1).await);
+        assert!(!steps(&log).iter().any(|s| s.starts_with("row-")));
+    }
+}
+
+/// A router with the real `reject_suspended` layer, as `build_router`
+/// stacks it inside `require_auth`, and `claims` standing in for a valid
+/// token.
+fn session_app(state: AppState, claims: common::auth::AuthClaims) -> Router {
+    Router::new()
+        .merge(crate::routes::auth::protected_router())
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::suspended::reject_suspended,
+        ))
+        .layer(axum::Extension(claims))
+        .with_state(state)
+}
+
+/// SECURITY (#239): a token issued before the suspension stops working at
+/// once, with the same answer as a bad token.
+#[tokio::test]
+async fn a_suspended_account_s_valid_token_gets_401() {
+    let state = test_state();
+    let app = session_app(state.clone(), fake_claims());
+    for uri in ["/auth/me", "/nodes"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{uri} before suspension");
+    }
+
+    state.suspended.insert(&fake_claims().sub).await;
+    for uri in ["/auth/me", "/nodes"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{uri}");
+        assert_eq!(body_json(resp).await["error"], "invalid token");
+    }
+
+    // Someone else's session is untouched.
+    let other = common::auth::AuthClaims {
+        sub: "someone-else".into(),
+        ..fake_claims()
+    };
+    let resp = session_app(state, other)
+        .oneshot(Request::get("/auth/me").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+/// SECURITY (#239): Cognito accepts an email alias, or the UUID in another
+/// case, as a username. Such an id would miss the self-guard and the
+/// suspended list, so only the canonical id is accepted.
+#[tokio::test]
+async fn only_the_canonical_account_id_is_accepted() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let upper = ADMIN_SUB.to_uppercase();
+    for id in [
+        upper.as_str(),
+        "admin@example.com",
+        "0a0a0a0a00004000800000000000000a",
+        "{0a0a0a0a-0000-4000-8000-00000000000a}",
+        "not-an-id",
+    ] {
+        for (method, uri, body) in [
+            ("POST", format!("/admin/users/{id}/suspend"), ""),
+            ("POST", format!("/admin/users/{id}/reactivate"), ""),
+            ("DELETE", format!("/admin/users/{id}"), ""),
+            ("PUT", format!("/admin/users/{id}/roles"), r#"{"roles":[]}"#),
+        ] {
+            let (status, _) = admin_call(&app, method, &uri, body).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
+        }
+    }
+    assert!(
+        steps(&log).is_empty(),
+        "nothing may run for a non-canonical id"
+    );
+}
+
+#[tokio::test]
+async fn delete_locks_the_account_out_first_and_keeps_it_refused() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, body) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        steps(&log),
+        [
+            format!("row+ {U1}"),
+            format!("email {U1}"),
+            format!("purge {U1} {U1}@example.com"),
+            format!("delete {U1}"),
+            format!("row deleted {U1}")
+        ],
+        "suspend, then purge, and only then delete in Cognito"
+    );
+    let counts: common::admin::PurgeCounts = serde_json::from_str(&body).unwrap();
+    assert_eq!(counts.nodes, 3);
+    // An ID token issued before the deletion is still refused.
+    assert!(state.suspended.contains(U1).await);
+}
+
+/// A retry after Cognito already deleted the account still finishes.
+#[tokio::test]
+async fn deleting_an_account_cognito_lacks_still_finishes() {
+    let (state, log) = lifecycle_state(FakeDirectory {
+        missing: true,
+        ..FakeDirectory::default()
+    });
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::OK);
+    // No email to match invites by, but the purge still runs.
+    assert!(steps(&log).contains(&format!("purge {U1} -")));
+    assert!(steps(&log).contains(&format!("row deleted {U1}")));
+    assert!(state.suspended.contains(U1).await);
+}
+
+#[tokio::test]
+async fn a_failed_cognito_delete_leaves_the_account_suspended() {
+    let (state, log) = lifecycle_state(FakeDirectory {
+        fail: Some("delete"),
+        ..FakeDirectory::default()
+    });
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(state.suspended.contains(U1).await);
+    assert!(!steps(&log).iter().any(|s| s.starts_with("row deleted")));
+}
+
+/// Without a configured directory nothing is written: the route can't
+/// finish, so it mustn't half-start.
+#[tokio::test]
+async fn suspend_without_a_directory_writes_nothing() {
+    let state = test_state();
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(&app, "POST", &format!("/admin/users/{U1}/suspend"), "").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(state.accounts.suspended().await.unwrap().is_empty());
+    assert!(!state.suspended.contains(U1).await);
+}
+
+/// The suspended check fails closed: with no claims in place (the layers
+/// stacked the wrong way round) every request is refused.
+#[tokio::test]
+async fn reject_suspended_refuses_a_request_without_claims() {
+    let state = test_state();
+    let app = Router::new()
+        .merge(crate::routes::auth::protected_router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::suspended::reject_suspended,
+        ))
+        .with_state(state);
+    let resp = app
+        .oneshot(Request::get("/auth/me").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A failed purge leaves the account in Cognito, suspended, so the admin
+/// can retry; nothing after the purge runs.
+#[tokio::test]
+async fn a_failed_purge_keeps_the_account_to_retry() {
+    for (purge_fails, fail) in [(true, None), (false, Some("email"))] {
+        let log = StepLog::default();
+        let mut state = test_state();
+        state.accounts = Arc::new(StubAccountRepo {
+            log: log.clone(),
+            purge_fails,
+            ..StubAccountRepo::default()
+        });
+        state.cognito_admin = Some(Arc::new(FakeDirectory {
+            log: log.clone(),
+            fail,
+            ..FakeDirectory::default()
+        }));
+        let app = admin_app_with(state.clone(), uuid_admin());
+        let (status, _) = admin_call(&app, "DELETE", &format!("/admin/users/{U1}"), "").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let steps = steps(&log);
+        if fail.is_some() {
+            assert!(!steps.iter().any(|s| s.starts_with("purge")), "{steps:?}");
+        }
+        assert!(!steps.contains(&format!("delete {U1}")), "{steps:?}");
+        assert!(
+            !steps.iter().any(|s| s.starts_with("row deleted")),
+            "{steps:?}"
+        );
+        assert!(state.suspended.contains(U1).await);
+    }
+}
+
+#[tokio::test]
+async fn the_deletion_preview_is_admin_only_and_counts_only() {
+    let (state, _) = lifecycle_state(FakeDirectory::default());
+    let uri = format!("/admin/users/{U1}/deletion-preview");
+    let (status, _) = admin_call(
+        &admin_app_with(state.clone(), fake_claims()),
+        "GET",
+        &uri,
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let app = admin_app_with(state, uuid_admin());
+    let (status, body) = admin_call(&app, "GET", &uri, "").await;
+    assert_eq!(status, StatusCode::OK);
+    let counts: common::admin::PurgeCounts = serde_json::from_str(&body).unwrap();
+    assert_eq!(counts.nodes, 3);
+    let (status, _) = admin_call(
+        &app,
+        "GET",
+        "/admin/users/someone@example.com/deletion-preview",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }

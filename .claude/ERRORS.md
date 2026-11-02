@@ -210,7 +210,27 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   before pushing. Plain-prose files (CHANGELOG, rules) are safe to join. —
   2026-10-25
 
+### A pg test passes locally and fails in CI on row order
+- **Symptom:** `repo tests (postgres)` fails an `assert_eq!` on a `Vec` whose
+  rows are the same but in a different order; the local run is green.
+- **Cause:** text `ORDER BY` follows the database's collation. The local
+  stack sorts with `C` (byte order: "a tombstone" < "an idea"), CI's
+  `postgres:16` with `en_US.utf8`, which ignores spaces at the first level
+  ("an idea" < "a tombstone").
+- **Fix:** in tests, sort text with `ORDER BY body COLLATE "C"` (or by a
+  non-text key), never a bare text column. — 2026-11-01 (#236)
+
 ## Leptos / WASM
+
+### Focusing a button right after the state that enables it
+- **Symptom:** `el.focus()` on a button does nothing (e2e `toBeFocused`
+  fails), though the button is enabled a moment later.
+- **Cause:** a signal set applies `prop:disabled` on the next tick, so the
+  button is still disabled when focus is called in the same handler, and a
+  disabled element can't take focus.
+- **Fix:** when the state says it's enabled, `set_disabled(false)` on the
+  element first (the prop is about to do the same), then focus it. Real
+  example: `after_pick` in `modals/convert_capture.rs`. — 2026-11-01 (#234)
 
 ### Reactivity silently stops working
 - **Symptom:** a closure compiles but the view never updates; clippy/compiler may warn the
@@ -356,6 +376,26 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   (export the script's `COOKIE_KEY` first), then run again; or
   `--force-recreate api` after the database comes back. — 2026-10-28 (#184)
 
+### e2e: ERR_CONNECTION_REFUSED / "N did not run" in two runs at once
+- **Symptom:** a spec fails at `page.goto` with `net::ERR_CONNECTION_REFUSED`,
+  or a full run ends with "30 did not run" and odd failures.
+- **Cause:** two `./scripts/e2e.sh` runs share one compose project
+  (`ember-e2e`) and port 8003; the one that finishes tears the stack down
+  under the other. Also: a `&`-backgrounded chain inside a Bash call can
+  outlive the call and race the next run.
+- **Fix:** one e2e run at a time. Start long runs with the tool's
+  background mode (not `&`), and wait for them before running a spec
+  alone. — 2026-11-01 (#239)
+
+### Row state lost when the list reloads after an error
+- **Symptom:** a row's inline error (e.g. "suspended in Ember Trove, but
+  the sign-in provider didn't confirm") never shows.
+- **Cause:** the handler set the row's own signal, then bumped the list's
+  `refresh` to show the half-landed state; the reload rebuilt every row
+  component, and the new row started with no error.
+- **Fix:** keep state that must survive a reload in the parent, keyed by
+  the row's id (`status_error` in `admin_view.rs`). — 2026-11-01 (#239)
+
 ### Multi-line code blocks render as a stack of per-line boxes
 - **Symptom:** a fenced code block renders each line in its own bordered/background box
   instead of one clean block (worse in dark mode).
@@ -366,3 +406,17 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   property (background, border, padding, shadow) on **both** `.prose pre code` **and**
   `.dark .prose pre code` in the same edit. The dark reset must be on `.dark .prose pre code`
   specifically to win specificity. — 2026-04 (v2.10.2–v2.10.4)
+
+### Unknown URL freezes on a bare "Loading..." (Routes fallback `<Redirect>`)
+- **Symptom:** any URL no route matches (e.g. `/admin`) shows the AuthGate's
+  bare "Loading..." forever; the tab title still resolves. Release WASM logs
+  only `RuntimeError: unreachable`; the panic hook prints nothing.
+- **Cause:** `<Routes fallback=|| view! { <Redirect .../> }>` navigates while
+  the router is rendering its fallback, and leptos_router 0.8.17 panics.
+  `<Redirect>` as a `<Route>` view (`/`, `/tasks`) is fine.
+- **Fix:** `GoTo` in `layout.rs` navigates from an `Effect` (after mount,
+  `replace: true`). Use it for the fallback and new redirect routes. Repro
+  without trunk: `cargo build -p ui --release --target wasm32-unknown-unknown`,
+  `wasm-bindgen --target web`, and a Playwright page that stubs `/api/*`
+  (`e2e/tests/routing.spec.ts`). — 2026-11-01 (#246)
+

@@ -1,6 +1,6 @@
 use common::{
     id::{NodeId, NoteId},
-    note::{CreateNoteRequest, FeedNote, Note, NoteSort, UpdateNoteRequest},
+    note::{CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteSort, UpdateNoteRequest},
 };
 
 use super::{delete_empty, get_json, patch_json, post_json};
@@ -14,9 +14,9 @@ pub async fn create_note(node_id: NodeId, req: &CreateNoteRequest) -> Result<Not
     post_json(&format!("/nodes/{node_id}/notes"), req).await
 }
 
-/// Create a note from the global Notes view. With `req.node_id == None` this is
-/// a standalone (inbox / micro-blog) note; with `Some(id)` it attaches to that node.
-pub async fn create_note_global(req: &CreateNoteRequest) -> Result<Note, UiError> {
+/// Create a note from the Notes page, on the node it names (every note has
+/// one, §9.2; quick thoughts are captures, #234).
+pub async fn create_note_global(req: &CreateFeedNoteRequest) -> Result<Note, UiError> {
     post_json("/notes", req).await
 }
 
@@ -39,11 +39,9 @@ pub async fn restore_note(note_id: NoteId) -> Result<Note, UiError> {
 pub const FEED_PAGE_SIZE: u32 = 50;
 
 /// Fetch one page of the notes feed with optional filters + sort.
-/// `node_id` and `uncategorized` are mutually exclusive (the UI sends at most one).
 /// `page` is 1-based; each page returns up to [`FEED_PAGE_SIZE`] rows.
 pub async fn fetch_notes_feed(
     node_id: Option<NodeId>,
-    uncategorized: bool,
     from: Option<&str>,
     to: Option<&str>,
     q: Option<&str>,
@@ -53,9 +51,6 @@ pub async fn fetch_notes_feed(
     let mut parts: Vec<String> = Vec::new();
     if let Some(n) = node_id {
         parts.push(format!("node_id={}", n.0));
-    }
-    if uncategorized {
-        parts.push("uncategorized=true".to_string());
     }
     if let Some(f) = from.filter(|s| !s.is_empty()) {
         parts.push(format!("from={f}"));

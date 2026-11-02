@@ -21,13 +21,18 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 - Route paths require the `path!()` macro:
   ```rust
   use leptos_router::path;
-  <Route path=path!("/tasks/inbox") view=|| view!{ <TasksView active=TasksTab::Inbox/> } />
+  <Route path=path!("/tasks/captures") view=|| view!{ <TasksView active=TasksTab::Captures/> } />
   ```
-- **URL map:** `/tasks/my-day` · `/tasks/inbox` · `/tasks/calendar` · `/dashboard` ·
+- **URL map:** `/tasks/my-day` · `/tasks/captures` · `/tasks/calendar` · `/dashboard` ·
   `/graph` · `/search` · `/notes` · `/people` · `/people/:id` · `/nodes` · `/nodes/new` · `/nodes/:id` ·
   `/nodes/:id/edit` · `/tags` · `/templates` · `/admin/users` · `/admin/permissions` ·
   `/admin/backup`. Legacy `/my-day`, `/inbox`, `/calendar` redirect to `/tasks/...`
-  (bookmarks/PWA shortcuts predating v2.3.0).
+  (bookmarks/PWA shortcuts predating v2.3.0). The Inbox became Captures (S4c,
+  #240): `/tasks/inbox` and `/inbox` go to `/tasks/captures` through
+  `GoTo keep_query=true`, because installed service workers still land a
+  share on `/tasks/inbox?captured=1`. `/admin` goes to `/admin/users`
+  and unknown URLs to My Day, both through `GoTo` (layout.rs): **never put a
+  `<Redirect>` in the `<Routes>` fallback** — it panics (#246, ERRORS.md).
 
 ## Reactivity gotchas
 

@@ -83,6 +83,36 @@ impl PermissionRow {
     }
 }
 
+/// Grant a role on a node (`PermissionRepo::grant`), on any executor, so
+/// capture conversion (#234) grants a new node's owner inside its
+/// transaction.
+pub(crate) async fn insert_grant<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    node_id: NodeId,
+    granted_by: &str,
+    req: &GrantPermissionRequest,
+) -> Result<Permission, EmberTroveError> {
+    let role_str = req.role.as_str();
+    let row = sqlx::query_as::<_, PermissionRow>(
+        r#"
+        INSERT INTO permissions (node_id, subject_id, role, granted_by)
+        VALUES ($1, $2, $3::permission_role, $4)
+        ON CONFLICT (node_id, subject_id)
+            DO UPDATE SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by
+        RETURNING id, node_id, subject_id, role::text, granted_by, created_at
+        "#,
+    )
+    .bind(node_id.inner())
+    .bind(&req.subject_id)
+    .bind(role_str)
+    .bind(granted_by)
+    .fetch_one(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("grant permission failed: {e}")))?;
+
+    row.into_permission()
+}
+
 #[async_trait]
 impl PermissionRepo for PgPermissionRepo {
     async fn grant(
@@ -91,25 +121,7 @@ impl PermissionRepo for PgPermissionRepo {
         granted_by: &str,
         req: GrantPermissionRequest,
     ) -> Result<Permission, EmberTroveError> {
-        let role_str = req.role.as_str();
-        let row = sqlx::query_as::<_, PermissionRow>(
-            r#"
-            INSERT INTO permissions (node_id, subject_id, role, granted_by)
-            VALUES ($1, $2, $3::permission_role, $4)
-            ON CONFLICT (node_id, subject_id)
-                DO UPDATE SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by
-            RETURNING id, node_id, subject_id, role::text, granted_by, created_at
-            "#,
-        )
-        .bind(node_id.inner())
-        .bind(&req.subject_id)
-        .bind(role_str)
-        .bind(granted_by)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("grant permission failed: {e}")))?;
-
-        row.into_permission()
+        insert_grant(&self.pool, node_id, granted_by, &req).await
     }
 
     async fn revoke(&self, id: PermissionId, node_id: NodeId) -> Result<(), EmberTroveError> {

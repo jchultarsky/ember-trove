@@ -1,13 +1,9 @@
-//! Shared add-task form used by both the node-detail `TaskPanel` and the
-//! `InboxView`.  Centralising the markup keeps the two surfaces visually and
-//! behaviourally identical (icon submit, priority/due/recurrence controls,
-//! inline error), so they can no longer drift apart.
+//! The add-task form of a Project's `TaskPanel`: icon submit,
+//! priority/due/recurrence controls and an inline error.
 //!
-//! When `node_id` is `Some`, the form creates the task under that node and no
-//! node picker is shown (node-detail usage).  When `node_id` is `None`, the
-//! form is a standalone/inbox capture and shows an *optional* debounced
-//! node-search picker so the user can link the task to a node — or leave it
-//! unlinked if no suitable node exists yet.
+//! It always creates the task on its node. The Inbox's variant with an
+//! optional Project picker went with the Inbox (S4c, #240): a task needs its
+//! Project (ONTOLOGY §9.3), and loose input is a capture.
 //!
 //! The ☀ toggle commits the new task to My Day in the same request
 //! (`focus_date` = the viewer's local today), instead of a create-then-toggle
@@ -21,25 +17,21 @@ use leptos::prelude::*;
 
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
-use crate::components::node_picker::NodePicker;
 use crate::components::task_common::parse_priority;
 use crate::components::task_row_scaffold::{PriorityPicker, RecurrenceOptions};
 
 /// Reusable "new task" form.
 ///
-/// * `node_id` — `Some(id)` fixes the parent node and hides the picker;
-///   `None` shows the optional node-search picker and creates a standalone task.
+/// * `node_id` — the Project the task is created on.
 /// * `refresh` — bumped after a successful create so the surrounding list reloads.
 /// * `on_added` — optional callback invoked after a successful create (the node
 ///   panel uses it to collapse the form again).
 #[component]
 pub fn NewTaskForm(
-    #[prop(optional)] node_id: Option<NodeId>,
+    node_id: NodeId,
     refresh: RwSignal<u32>,
     #[prop(optional)] on_added: Option<Callback<()>>,
 ) -> impl IntoView {
-    let show_picker = node_id.is_none();
-
     // Core form state
     let new_title = RwSignal::new(String::new());
     let new_priority = RwSignal::new("medium".to_string());
@@ -48,9 +40,6 @@ pub fn NewTaskForm(
     let new_my_day = RwSignal::new(false);
     let adding = RwSignal::new(false);
     let add_error = RwSignal::new(Option::<String>::None);
-
-    // Optional node-picker state (only meaningful when `show_picker`).
-    let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
 
     let do_add = move || {
         // Enter bypassed the button's `disabled`: a fast double Enter created
@@ -67,34 +56,25 @@ pub fn NewTaskForm(
         let due_date = new_due.get_untracked().trim().parse::<NaiveDate>().ok();
         let recurrence = common::task::RecurrenceRule::parse(&new_recurrence.get_untracked());
         let focus_date = new_my_day.get_untracked().then(local_today);
-        // Fixed prop node wins; otherwise use the optionally-picked node.
-        let chosen_node = node_id.or_else(|| selected_node.get_untracked().map(|(id, _)| id));
         adding.set(true);
         add_error.set(None);
         wasm_bindgen_futures::spawn_local(async move {
             let req = CreateTaskRequest {
                 title,
-                node_id: chosen_node,
+                node_id: Some(node_id),
                 status: None,
                 priority: Some(priority),
                 focus_date,
                 due_date,
                 recurrence,
             };
-            // A fixed node uses the node-scoped endpoint (path param);
-            // standalone capture uses /tasks, which honours the body node_id.
-            let result = match node_id {
-                Some(nid) => crate::api::create_task(nid, &req).await,
-                None => crate::api::create_standalone_task(&req).await,
-            };
-            match result {
+            match crate::api::create_task(node_id, &req).await {
                 Ok(_) => {
                     new_title.set(String::new());
                     new_priority.set("medium".to_string());
                     new_due.set(String::new());
                     new_recurrence.set(String::new());
                     new_my_day.set(false);
-                    selected_node.set(None);
                     refresh.update(|n| *n += 1);
                     if let Some(cb) = on_added {
                         cb.run(());
@@ -174,13 +154,6 @@ pub fn NewTaskForm(
                     </span>
                 </button>
             </div>
-
-            // Optional node picker — only for standalone (inbox) capture.
-            {show_picker.then(|| view! {
-                // Only Projects take tasks (§3.2, #216).
-                <NodePicker selected=selected_node only_type=common::node::NodeType::Project
-                    placeholder="Link to a Project (optional)\u{2026}" />
-            })}
 
             {move || add_error.get().map(|msg| view! {
                 <p class="text-xs text-red-500">{msg}</p>

@@ -8,6 +8,9 @@ use common::admin::{AdminUser, CreateAdminUserRequest, UpdateUserRolesRequest};
 use leptos::prelude::*;
 
 use crate::api;
+use crate::auth::{AuthStatus, use_auth_state};
+use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::modals::delete_account::DeleteAccountDialog;
 
 // ── Role chip colours ─────────────────────────────────────────────────────────
 
@@ -24,6 +27,17 @@ fn role_chip_class(role: &str) -> &'static str {
 #[component]
 pub fn AdminView() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
+    let auth = use_auth_state();
+    // Your own account: no suspend or delete, and its admin role stays (the
+    // API refuses those too, #239).
+    let my_sub = move || match auth.get() {
+        AuthStatus::Authenticated(u) => Some(u.sub),
+        _ => None,
+    };
+    // A suspend or reactivate error, by account id. Kept here: the list
+    // reloads after a failure (it may have half-landed), which rebuilds the
+    // rows.
+    let status_error: RwSignal<Option<(String, String)>> = RwSignal::new(None);
 
     // ── Create-user form state ────────────────────────────────────────────────
     let show_create = RwSignal::new(false);
@@ -242,7 +256,9 @@ pub fn AdminView() -> impl IntoView {
             })}
 
             // ── User table ────────────────────────────────────────────────────
-            <Suspense fallback=|| view! {
+            // A Transition, not a Suspense: a reload after Suspend or Delete
+            // keeps the table (and focus, scroll) instead of a skeleton.
+            <Transition fallback=|| view! {
                 <div class="space-y-2">
                     {(0..4).map(|_| view! {
                         <div class="h-12 rounded-lg bg-stone-100 dark:bg-stone-800 animate-pulse" />
@@ -280,13 +296,16 @@ pub fn AdminView() -> impl IntoView {
                                 </div>
                                 // Rows
                                 {list.into_iter().map(|user| {
-                                    view! { <UserRow user=user refresh=refresh available_roles=available_roles /> }
+                                    let is_self = my_sub().as_deref() == Some(user.id.as_str());
+                                    view! {
+                                        <UserRow user=user is_self=is_self refresh=refresh status_error=status_error available_roles=available_roles />
+                                    }
                                 }).collect::<Vec<_>>()}
                             </div>
                         }.into_any(),
                     })
                 }}
-            </Suspense>
+            </Transition>
         </div>
     }
 }
@@ -296,18 +315,54 @@ pub fn AdminView() -> impl IntoView {
 #[component]
 fn UserRow(
     user: AdminUser,
+    /// The signed-in admin's own row.
+    is_self: bool,
     refresh: RwSignal<u32>,
+    status_error: RwSignal<Option<(String, String)>>,
     available_roles: LocalResource<Vec<String>>,
 ) -> impl IntoView {
     let user_id = user.id.clone();
     let display_name = user.display_name();
     let email = user.email.clone().unwrap_or_default();
     let enabled = user.enabled;
+    let suspended = user.suspended;
     let realm_roles = user.realm_roles.clone();
+    // What the admin types to confirm a deletion.
+    let confirm_text = user.email.clone().unwrap_or_else(|| user.username.clone());
 
-    // Delete confirmation state (two-click pattern).
-    let confirm_delete = RwSignal::new(false);
-    let deleting = RwSignal::new(false);
+    let show_delete = RwSignal::new(false);
+    let busy = RwSignal::new(false);
+    let id_for_status = StoredValue::new(user_id.clone());
+    let row_error = move || {
+        status_error
+            .get()
+            .filter(|(id, _)| id_for_status.with_value(|me| me == id))
+            .map(|(_, msg)| msg)
+    };
+    let set_suspended = Callback::new(move |suspend: bool| {
+        busy.set(true);
+        status_error.set(None);
+        let id = id_for_status.get_value();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = if suspend {
+                api::suspend_user(&id).await
+            } else {
+                api::reactivate_user(&id).await
+            };
+            match result {
+                Ok(()) => refresh.update(|n| *n += 1),
+                Err(e) => {
+                    // A failed suspend may still have stopped the account
+                    // here (the API says so); reload to show where it is.
+                    let _ = status_error.try_set(Some((id, e.to_string())));
+                    refresh.update(|n| *n += 1);
+                }
+            }
+            let _ = busy.try_set(false);
+        });
+    });
+    // The dialog toasts what went; the row only reloads the list.
+    let on_changed = Callback::new(move |()| refresh.update(|n| *n += 1));
 
     // Role editor state.
     let show_roles = RwSignal::new(false);
@@ -319,7 +374,7 @@ fn UserRow(
     let user_id_for_roles = user_id.clone();
 
     view! {
-        <div class="border-b border-stone-100 dark:border-stone-800 last:border-0">
+        <div class="border-b border-stone-100 dark:border-stone-800 last:border-0" data-testid="user-row">
             // Main row
             <div class="grid grid-cols-[1fr_1fr_auto_auto] gap-4 items-center px-4 py-3 group hover:bg-stone-50 dark:hover:bg-stone-800/40">
                 // Name + status
@@ -342,6 +397,13 @@ fn UserRow(
                             {format!("@{}", user.username)}
                         </span>
                     </div>
+                    {suspended.then(|| view! {
+                        <span class="px-1.5 py-0.5 text-[10px] rounded-full font-medium
+                                     bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-200"
+                              data-testid="suspended-badge">
+                            "Suspended"
+                        </span>
+                    })}
                 </div>
 
                 // Email
@@ -376,62 +438,49 @@ fn UserRow(
                         </span>
                     </button>
 
-                    // Delete button (two-click confirm) — inline closures to satisfy FnMut bound.
-                    {move || {
-                        let uid_del = user_id.clone();
-                        if confirm_delete.get() {
+                    // Suspend / reactivate and delete: never on your own row.
+                    {(!is_self).then(|| view! {
+                        {if suspended {
                             view! {
-                                <div class="flex items-center gap-1">
-                                    <span class="text-xs text-red-500 whitespace-nowrap">"Delete?"</span>
-                                    <button
-                                        title="Confirm delete"
-                                        aria-label="Confirm delete"
-                                        class="p-1.5 rounded-lg text-white bg-red-500 hover:bg-red-600 transition-colors disabled:opacity-40"
-                                        on:click=move |_| {
-                                            deleting.set(true);
-                                            let id = uid_del.clone();
-                                            wasm_bindgen_futures::spawn_local(async move {
-                                                match api::delete_admin_user(&id).await {
-                                                    Ok(_) => refresh.update(|n| *n += 1),
-                                                    Err(e) => {
-                                                        tracing::error!("delete user failed: {e}");
-                                                        deleting.set(false);
-                                                        confirm_delete.set(false);
-                                                    }
-                                                }
-                                            });
-                                        }
-                                        disabled=move || deleting.get()
-                                    >
-                                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">"check"</span>
-                                    </button>
-                                    <button
-                                        title="Cancel delete"
-                                        aria-label="Cancel delete"
-                                        class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
-                                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-                                        on:click=move |_| confirm_delete.set(false)
-                                    >
-                                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 14px;">"close"</span>
-                                    </button>
-                                </div>
+                                <IconButton
+                                    icon="lock_open"
+                                    label="Reactivate account"
+                                    disabled=busy
+                                    on_click=move |()| set_suspended.run(false)
+                                />
                             }.into_any()
                         } else {
                             view! {
-                                <button
-                                    class="p-1.5 rounded-lg text-stone-300 dark:text-stone-700
-                                        hover:text-red-500 dark:hover:text-red-400
-                                        hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                                    title="Delete user"
-                                    on:click=move |_| confirm_delete.set(true)
-                                >
-                                    <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 16px;">"delete"</span>
-                                </button>
+                                <IconButton
+                                    icon="block"
+                                    label="Suspend account"
+                                    disabled=busy
+                                    on_click=move |()| set_suspended.run(true)
+                                />
                             }.into_any()
-                        }
-                    }}
+                        }}
+                        <IconButton
+                            icon="delete"
+                            label="Delete account"
+                            variant=IconButtonVariant::Danger
+                            disabled=busy
+                            on_click=move |()| show_delete.set(true)
+                        />
+                    })}
                 </div>
             </div>
+            {move || row_error().map(|msg| view! {
+                <p class="px-4 pb-3 text-xs text-red-600 dark:text-red-400" role="alert">{msg}</p>
+            })}
+            {(!is_self).then(|| view! {
+                <DeleteAccountDialog
+                    show=show_delete
+                    user_id=user_id.clone()
+                    email=confirm_text.clone()
+                    name=display_name.clone()
+                    on_changed=on_changed
+                />
+            })}
 
             // Role editor panel (expands below row)
             {move || show_roles.get().then(|| {
@@ -444,11 +493,15 @@ fn UserRow(
                                 let checked = move || edited_roles.get().contains(&role_clone);
                                 let role_for_toggle = role.clone();
                                 let chip_class = role_chip_class(&role);
+                                // Your own admin role can't be removed here (#239).
+                                let locked = is_self && role == "admin";
                                 view! {
-                                    <label class="flex items-center gap-1.5 cursor-pointer select-none">
+                                    <label class="flex items-center gap-1.5 cursor-pointer select-none"
+                                           title=locked.then_some("You can't remove your own admin role")>
                                         <input
                                             type="checkbox"
-                                            class="cursor-pointer"
+                                            class="cursor-pointer disabled:cursor-not-allowed"
+                                            disabled=locked
                                             prop:checked=checked
                                             on:change=move |_| {
                                                 edited_roles.update(|roles| {

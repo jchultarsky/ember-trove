@@ -671,12 +671,11 @@ async fn search_pagination_totals_and_per_source_snippets(pool: PgPool) {
     let host = create_node(&pool, "owner-a", "Snippet host").await;
     PgNoteRepo::new(pool.clone())
         .create(
-            Some(host.id),
+            host.id,
             "owner-a",
             common::note::CreateNoteRequest {
                 body: "a heliotrope remark".to_string(),
                 color: "default".to_string(),
-                node_id: None,
             },
         )
         .await
@@ -737,12 +736,11 @@ async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
     let host = create_node(&pool, "owner-a", "Host node").await;
     let note = notes
         .create(
-            Some(host.id),
+            host.id,
             "owner-a",
             common::note::CreateNoteRequest {
                 body: "zebrafinch notebook".to_string(),
                 color: "default".to_string(),
-                node_id: None,
             },
         )
         .await
@@ -1117,19 +1115,17 @@ async fn note_feed_hides_the_title_of_a_node_no_longer_shared(pool: PgPool) {
         .expect("share");
     let note = notes
         .create(
-            Some(node.id),
+            node.id,
             "bob",
             common::note::CreateNoteRequest {
                 body: "bob's note".to_string(),
                 color: "default".to_string(),
-                node_id: None,
             },
         )
         .await
         .expect("note");
     let filter = super::note::NoteFeedFilter {
         node_id: None,
-        uncategorized: false,
         from: None,
         to: None,
         q: None,
@@ -1889,6 +1885,7 @@ async fn a_restore_brings_the_activity_log_back(pool: PgPool) {
         people: vec![],
         node_people: vec![],
         activity: activity.clone(),
+        captures: vec![],
     };
 
     let mut tx = pool.begin().await.expect("tx");
@@ -2256,37 +2253,6 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
-async fn data_health_counts_homes_over_visible_parents_only(pool: PgPool) {
-    use common::data_health::RuleId;
-
-    let a1 = insert_raw_node(&pool, "alice", "area", "area one", "").await;
-    let a2 = insert_raw_node(&pool, "alice", "area", "area two", "").await;
-    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
-    let two_homes = insert_raw_node(&pool, "alice", "article", "two visible homes", "").await;
-    let one_visible = insert_raw_node(&pool, "alice", "article", "one visible home", "").await;
-    for parent in [a1, a2, hidden] {
-        raw_edge(&pool, parent, two_homes, "contains").await;
-    }
-    raw_edge(&pool, a1, one_visible, "contains").await;
-    raw_edge(&pool, hidden, one_visible, "contains").await;
-
-    let alice = health(&pool, "alice").await;
-    let homes = &alice[&RuleId::MultipleHomes];
-    assert_eq!(subjects(&alice, RuleId::MultipleHomes), vec![two_homes]);
-    let parents: Vec<_> = homes.items[0].related.iter().map(|r| r.id).collect();
-    assert_eq!(
-        parents.len(),
-        2,
-        "two visible homes; the hidden one isn't named"
-    );
-    assert!(!parents.contains(&hidden));
-    assert_eq!(homes.count, 1, "a hidden parent is never counted either");
-
-    // Bob owns none of the children: their homes are alice's to fix.
-    assert!(subjects(&health(&pool, "bob").await, RuleId::MultipleHomes).is_empty());
-}
-
-#[sqlx::test(migrations = "../migrations")]
 async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
     use common::data_health::RuleId;
 
@@ -2325,7 +2291,7 @@ async fn data_health_puts_each_bad_contains_edge_under_one_rule(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
-async fn data_health_finds_area_dependencies_and_doubled_related_links(pool: PgPool) {
+async fn data_health_finds_area_dependencies_with_their_link(pool: PgPool) {
     use common::data_health::RuleId;
 
     let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
@@ -2333,16 +2299,14 @@ async fn data_health_finds_area_dependencies_and_doubled_related_links(pool: PgP
     let other = insert_raw_node(&pool, "alice", "project", "another project", "").await;
     raw_edge(&pool, project, area, "depends_on").await;
     raw_edge(&pool, project, other, "depends_on").await; // fine
-    allow_legacy_related_pairs(&pool).await;
-    raw_edge(&pool, project, other, "related_to").await;
-    raw_edge(&pool, other, project, "related_to").await;
 
     let alice = health(&pool, "alice").await;
     assert_eq!(subjects(&alice, RuleId::DependsOnArea), vec![project]);
-    let pairs = &alice[&RuleId::RelatedToBothWays];
-    assert_eq!(pairs.count, 1, "one pair, listed once");
-    let pair = [pairs.items[0].subject.id, pairs.items[0].related[0].id];
-    assert!(pair.contains(&project) && pair.contains(&other));
+    // The item names the link its fixes act on (#228).
+    let links = &alice[&RuleId::DependsOnArea].items[0].links;
+    assert_eq!(links.len(), 1);
+    assert_eq!((links[0].source, links[0].target), (project, area));
+    assert!(links[0].removable());
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -2356,7 +2320,11 @@ async fn data_health_keeps_an_exact_count_past_the_item_cap(pool: PgPool) {
     let orphans = &alice[&RuleId::OrphanTask];
     assert_eq!(orphans.count, (ITEM_CAP + 5) as u64);
     assert_eq!(orphans.items.len(), ITEM_CAP);
-    assert_eq!(alice.len(), 12, "every rule reports, clean or not");
+    assert_eq!(
+        alice.len(),
+        RuleId::ALL.len(),
+        "every rule reports, clean or not"
+    );
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -2415,12 +2383,9 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
 
     raw_task(&pool, "alice", None, "alice inbox").await;
     raw_task(&pool, "bob", None, "bob inbox").await;
-    // A cross-owner related_to pair and loop count once, not once per owner.
+    // A cross-owner loop counts once, not once per owner.
     let a = insert_raw_node(&pool, "alice", "project", "a", "").await;
     let b = insert_raw_node(&pool, "bob", "project", "b", "").await;
-    allow_legacy_related_pairs(&pool).await;
-    raw_edge(&pool, a, b, "related_to").await;
-    raw_edge(&pool, b, a, "related_to").await;
     raw_edge(&pool, a, b, "depends_on").await;
     raw_edge(&pool, b, a, "depends_on").await;
     let area = insert_raw_node(&pool, "bob", "area", "an area", "").await;
@@ -2436,7 +2401,6 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
         .collect();
     assert_eq!(counts.len(), RuleId::ALL.len(), "every rule counted");
     assert_eq!(counts[&RuleId::OrphanTask], 2, "both accounts");
-    assert_eq!(counts[&RuleId::RelatedToBothWays], 1, "one pair, once");
     assert_eq!(counts[&RuleId::DependsOnCycle], 1, "one loop, once");
     assert_eq!(counts[&RuleId::ContainedReference], 1);
     assert_eq!(
@@ -2822,20 +2786,19 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
     use common::data_health::{RuleId, graph_rule_counts};
     let n =
         |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
-    let (a1, a2) = (n("area", "area 1").await, n("area", "area 2").await);
+    let a1 = n("area", "area 1").await;
     let (p, q) = (n("project", "p").await, n("project", "q").await);
     let (art, r) = (n("article", "art").await, n("reference", "ref").await);
     allow_legacy_related_pairs(&pool).await;
     for (s, t, e) in [
         (a1, p, "contains"),
-        (a2, p, "contains"),   // two homes
         (a1, r, "contains"),   // a contained Reference
         (art, q, "contains"),  // an Article as a home
         (p, a1, "depends_on"), // on an Area
         (p, q, "depends_on"),
         (q, p, "depends_on"), // a loop
         (p, q, "related_to"),
-        (q, p, "related_to"), // both ways
+        (q, p, "related_to"), // both ways: no rule any more (#228)
         (art, r, "derived_from"),
         (r, art, "derived_from"), // a loop
     ] {
@@ -2869,11 +2832,9 @@ async fn the_restore_counts_match_the_reports_admin_counts(pool: PgPool) {
         .await
         .unwrap();
     let graph_rules = [
-        RuleId::MultipleHomes,
         RuleId::ContainedReference,
         RuleId::ContainmentNotAllowed,
         RuleId::DependsOnArea,
-        RuleId::RelatedToBothWays,
         RuleId::ContainsCycle,
         RuleId::DependsOnCycle,
         RuleId::DerivedFromCycle,
@@ -3115,6 +3076,7 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         people: vec![],
         node_people: vec![],
         activity: vec![],
+        captures: vec![],
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3137,5 +3099,1358 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         archived,
         vec![(newer.id.0, Some("theirs".to_string()))],
         "the other label is kept, as the migration keeps it"
+    );
+}
+
+// ── The dashboard names only Areas the reader can see (#228) ─────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_dashboard_area_is_one_the_reader_can_see(pool: PgPool) {
+    use common::id::NodeId;
+
+    let mine = insert_raw_node(&pool, "alice", "project", "alice's project", "").await;
+    // Bob, an editor of alice's project, filed it in his private Area.
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
+    raw_edge(&pool, hidden, mine, "contains").await;
+    let repo = PgNodeRepo::new(pool.clone());
+    let area_of = |rows: Vec<(NodeId, NodeId, String)>| {
+        rows.into_iter()
+            .find(|(project, _, _)| project.0 == mine)
+            .map(|(_, area, title)| (area.0, title))
+    };
+
+    let as_alice = repo
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    assert_eq!(area_of(as_alice), None, "a hidden Area is never named");
+
+    // Once bob shares the Area, alice sees where her project lives.
+    share(&pool, hidden, "alice").await;
+    let shared = repo
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    assert_eq!(
+        area_of(shared),
+        Some((hidden, "bob's private area".to_string()))
+    );
+
+    // The admin scope (no subject) sees every Area, as elsewhere.
+    let admin = repo
+        .area_for_nodes(&[NodeId(mine)], None)
+        .await
+        .expect("areas");
+    assert_eq!(
+        area_of(admin),
+        Some((hidden, "bob's private area".to_string()))
+    );
+}
+
+/// A hidden older home must not shadow a visible newer one: the filter is
+/// applied before the oldest is picked (legacy data can hold two homes).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_hidden_older_area_does_not_hide_a_visible_one(pool: PgPool) {
+    use common::id::NodeId;
+
+    allow_legacy_homes(&pool).await;
+    let mine = insert_raw_node(&pool, "alice", "project", "alice's project", "").await;
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's private area", "").await;
+    let own = insert_raw_node(&pool, "alice", "area", "alice's area", "").await;
+    for (parent, age) in [(hidden, 2), (own, 1)] {
+        sqlx::query(
+            "INSERT INTO edges (source_id, target_id, edge_type, created_at) \
+             VALUES ($1, $2, 'contains', now() - make_interval(hours => $3))",
+        )
+        .bind(parent)
+        .bind(mine)
+        .bind(age)
+        .execute(&pool)
+        .await
+        .expect("home");
+    }
+
+    let rows = PgNodeRepo::new(pool.clone())
+        .area_for_nodes(&[NodeId(mine)], Some("alice"))
+        .await
+        .expect("areas");
+    let named: Vec<_> = rows.into_iter().map(|(_, a, t)| (a.0, t)).collect();
+    assert_eq!(named, vec![(own, "alice's area".to_string())]);
+}
+
+/// A favorite shows a node's live title only while its owner may read the
+/// node (#228); otherwise the label stored when it was added.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_favorite_names_only_a_node_its_owner_can_see(pool: PgPool) {
+    use super::favorite::{FavoriteRepo, PgFavoriteRepo};
+    use common::favorite::CreateFavoriteRequest;
+
+    let node = insert_raw_node(&pool, "alice", "article", "alice's secret plan", "").await;
+    let repo = PgFavoriteRepo::new(pool.clone());
+    // Written straight to the repo: the route would refuse it (403).
+    repo.create(
+        "bob",
+        CreateFavoriteRequest {
+            node_id: Some(node),
+            url: None,
+            label: "a label bob typed".to_string(),
+        },
+    )
+    .await
+    .expect("favorite");
+    let label = |favs: Vec<common::favorite::Favorite>| favs[0].label.clone();
+
+    assert_eq!(
+        label(repo.list("bob").await.expect("list")),
+        "a label bob typed"
+    );
+    share(&pool, node, "bob").await;
+    assert_eq!(
+        label(repo.list("bob").await.expect("list")),
+        "alice's secret plan"
+    );
+    // Revoked again: back to the stored label, never the live title.
+    sqlx::query("DELETE FROM permissions WHERE node_id = $1 AND subject_id = 'bob'")
+        .bind(node)
+        .execute(&pool)
+        .await
+        .expect("revoke");
+    assert_eq!(
+        label(repo.list("bob").await.expect("list")),
+        "a label bob typed"
+    );
+}
+
+// ── Data health fixes (#228) ──────────────────────────────────────────────────
+
+/// Each edge item names the links its fixes act on: the one bad link, or
+/// a loop's links in order. Whether
+/// the reader may remove each follows the API's rule.
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_items_carry_the_links_their_fixes_need(pool: PgPool) {
+    use common::data_health::RuleId;
+
+    let a1 = insert_raw_node(&pool, "alice", "area", "area one", "").await;
+    let r = insert_raw_node(&pool, "alice", "reference", "a ref", "").await;
+    raw_edge(&pool, a1, r, "contains").await;
+    // A loop through bob's node, shared with alice.
+    let mine = insert_raw_node(&pool, "alice", "project", "mine", "").await;
+    let theirs = insert_raw_node(&pool, "bob", "project", "theirs", "").await;
+    share(&pool, theirs, "alice").await;
+    raw_edge(&pool, mine, theirs, "depends_on").await;
+    raw_edge(&pool, theirs, mine, "depends_on").await;
+
+    let alice = health(&pool, "alice").await;
+
+    let contained = &alice[&RuleId::ContainedReference].items[0].links;
+    assert_eq!((contained[0].source, contained[0].target), (a1, r));
+    assert!(contained[0].convertible_to(&common::edge::EdgeType::References));
+
+    let lp = &alice[&RuleId::DependsOnCycle].items[0];
+    let hops: Vec<_> = lp.links.iter().map(|l| (l.source, l.target)).collect();
+    assert_eq!(
+        hops,
+        vec![(mine, theirs), (theirs, mine)],
+        "from alice's node"
+    );
+    // Her link she may remove; bob's link into her node is his.
+    assert_eq!(
+        lp.links.iter().map(|l| l.removable()).collect::<Vec<_>>(),
+        vec![true, false]
+    );
+}
+
+/// Recreate the pre-042 state, where a node could have two homes, so
+/// tests of legacy data can seed them. A no-op until 042 exists.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn allow_legacy_homes(pool: &PgPool) {
+    sqlx::query("DROP INDEX IF EXISTS edges_one_home")
+        .execute(pool)
+        .await
+        .expect("drop the one-home index");
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn edges_between(
+    pool: &PgPool,
+    a: uuid::Uuid,
+    b: uuid::Uuid,
+) -> Vec<(uuid::Uuid, uuid::Uuid, String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT source_id, target_id, edge_type::text, label FROM edges \
+         WHERE (source_id = $1 AND target_id = $2) OR (source_id = $2 AND target_id = $1) \
+         ORDER BY edge_type::text",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_all(pool)
+    .await
+    .expect("edges")
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn converting_a_link_keeps_its_label_and_age_in_one_step(pool: PgPool) {
+    use common::{edge::EdgeType, id::EdgeId};
+
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let r = insert_raw_node(&pool, "alice", "reference", "a ref", "").await;
+    let (id, created): (uuid::Uuid, chrono::DateTime<Utc>) = sqlx::query_as(
+        "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
+         VALUES ($1, $2, 'contains', 'kept', now() - interval '3 days') RETURNING id, created_at",
+    )
+    .bind(area)
+    .bind(r)
+    .fetch_one(&pool)
+    .await
+    .expect("edge");
+    let repo = PgEdgeRepo::new(pool.clone());
+
+    repo.convert(EdgeId(id), EdgeType::Contains, EdgeType::References, false)
+        .await
+        .expect("convert");
+    assert_eq!(
+        edges_between(&pool, area, r).await,
+        vec![(area, r, "references".to_string(), Some("kept".to_string()))]
+    );
+    let age: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT created_at FROM edges WHERE source_id = $1 AND target_id = $2")
+            .bind(area)
+            .bind(r)
+            .fetch_one(&pool)
+            .await
+            .expect("age");
+    assert_eq!(age, created);
+
+    // The old link is gone, so a second attempt is a 404, not a conversion
+    // the route's checks never saw.
+    let again = repo
+        .convert(EdgeId(id), EdgeType::Contains, EdgeType::References, false)
+        .await;
+    assert!(
+        matches!(again, Err(EmberTroveError::NotFound(_))),
+        "{again:?}"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_converted_link_merges_into_one_already_there(pool: PgPool) {
+    use common::{edge::EdgeType, id::EdgeId};
+
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
+    // Legacy: an Article as a home, and the two already related the other
+    // way, without a label.
+    raw_edge(&pool, project, article, "related_to").await;
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO edges (source_id, target_id, edge_type, label) \
+         VALUES ($1, $2, 'contains', 'why') RETURNING id",
+    )
+    .bind(article)
+    .bind(project)
+    .fetch_one(&pool)
+    .await
+    .expect("edge");
+
+    // Unswapped, so only `edges_related_to_once` (the reverse) can absorb
+    // it; the blank label left behind takes the converted one's.
+    PgEdgeRepo::new(pool.clone())
+        .convert(EdgeId(id), EdgeType::Contains, EdgeType::RelatedTo, false)
+        .await
+        .expect("convert");
+    assert_eq!(
+        edges_between(&pool, article, project).await,
+        vec![(
+            project,
+            article,
+            "related_to".to_string(),
+            Some("why".to_string())
+        )]
+    );
+}
+
+// ── One home (#228, migration 042) ───────────────────────────────────────────
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn edges_now(pool: &PgPool) -> Vec<common::edge::Edge> {
+    sqlx::query_as::<
+        _,
+        (
+            uuid::Uuid,
+            uuid::Uuid,
+            uuid::Uuid,
+            String,
+            Option<String>,
+            chrono::DateTime<Utc>,
+        ),
+    >("SELECT id, source_id, target_id, edge_type::text, label, created_at FROM edges")
+    .fetch_all(pool)
+    .await
+    .expect("edges")
+    .into_iter()
+    .map(|(id, s, t, ty, label, created_at)| common::edge::Edge {
+        id: common::id::EdgeId(id),
+        source_id: common::id::NodeId(s),
+        target_id: common::id::NodeId(t),
+        edge_type: common::edge::EdgeType::parse(&ty).expect("type"),
+        label,
+        created_at,
+    })
+    .collect()
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_042_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPool) {
+    allow_legacy_homes(&pool).await;
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2, a3) = (
+        n("area", "a1").await,
+        n("area", "a2").await,
+        n("area", "a3").await,
+    );
+    let (p, q) = (n("project", "p").await, n("project", "q").await);
+    let at = |s: uuid::Uuid,
+              t: uuid::Uuid,
+              ty: &'static str,
+              label: &'static str,
+              when: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO edges (source_id, target_id, edge_type, label, created_at) \
+                 VALUES ($1, $2, $3::edge_type, $4, $5::timestamptz) RETURNING id",
+            )
+            .bind(s)
+            .bind(t)
+            .bind(ty)
+            .bind(label)
+            .bind(when)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    // p has three homes; the oldest (a2) stays.
+    let p_new = at(a1, p, "contains", "one", "2026-03-01T00:00:00Z").await;
+    let p_old = at(a2, p, "contains", "two", "2026-01-01T00:00:00Z").await;
+    let p_mid = at(a3, p, "contains", "three", "2026-02-01T00:00:00Z").await;
+    // q has one home; other types are untouched.
+    let q_home = at(a1, q, "contains", "only", "2026-01-05T00:00:00Z").await;
+    let link = at(a3, q, "references", "ref", "2026-04-01T00:00:00Z").await;
+
+    // Restore's Rust rule, on the same edges, must agree with the SQL.
+    let (folded, _) = common::edge::fold_homes(edges_now(&pool).await);
+    let mut folded: Vec<_> = folded.into_iter().map(|e| e.id.0).collect();
+    folded.sort();
+
+    sqlx::raw_sql(include_str!("../../../migrations/042_one_home.sql"))
+        .execute(&pool)
+        .await
+        .expect("migration 042");
+
+    let mut live: Vec<_> = edges_now(&pool).await.into_iter().map(|e| e.id.0).collect();
+    live.sort();
+    assert_eq!(live, folded, "fold_homes is the migration's rule");
+    let mut expected = vec![p_old, q_home, link];
+    expected.sort();
+    assert_eq!(live, expected);
+    let archived: Vec<(uuid::Uuid, Option<String>)> =
+        sqlx::query_as("SELECT id, label FROM edges_removed_042 ORDER BY created_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        archived,
+        vec![(p_mid, Some("three".into())), (p_new, Some("one".into()))],
+        "labels kept with their link in the archive"
+    );
+
+    // Idempotent; and the index now refuses a second home outright.
+    sqlx::raw_sql(include_str!("../../../migrations/042_one_home.sql"))
+        .execute(&pool)
+        .await
+        .expect("re-run");
+    let second = sqlx::query(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, 'contains')",
+    )
+    .bind(a1)
+    .bind(p)
+    .execute(&pool)
+    .await;
+    assert!(second.is_err(), "the database itself refuses a second home");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn setting_a_home_replaces_clears_and_refuses_a_loop(pool: PgPool) {
+    use common::id::NodeId;
+
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2) = (n("area", "a1").await, n("area", "a2").await);
+    let p = n("project", "p").await;
+    // Someone else's home, hidden from alice: setting hers replaces it.
+    let hidden = insert_raw_node(&pool, "bob", "area", "bob's area", "").await;
+    raw_edge(&pool, hidden, p, "contains").await;
+    let repo = PgEdgeRepo::new(pool.clone());
+    let home = |e: Option<common::edge::Edge>| e.map(|e| e.source_id.0);
+
+    let set = repo
+        .set_home(NodeId(p), Some(NodeId(a1)))
+        .await
+        .expect("set");
+    assert_eq!(home(set), Some(a1));
+    assert_eq!(
+        home(repo.home_of(NodeId(p)).await.unwrap()),
+        Some(a1),
+        "bob's is gone"
+    );
+    // The same home again keeps the link it has.
+    let before = repo.home_of(NodeId(p)).await.unwrap().map(|e| e.id);
+    repo.set_home(NodeId(p), Some(NodeId(a1)))
+        .await
+        .expect("again");
+    assert_eq!(repo.home_of(NodeId(p)).await.unwrap().map(|e| e.id), before);
+    // Moved, then freed.
+    assert_eq!(
+        home(repo.set_home(NodeId(p), Some(NodeId(a2))).await.unwrap()),
+        Some(a2)
+    );
+    assert!(repo.set_home(NodeId(p), None).await.unwrap().is_none());
+    assert!(repo.home_of(NodeId(p)).await.unwrap().is_none());
+
+    // a1 holds a2; a2 can't become a1's home.
+    repo.set_home(NodeId(a2), Some(NodeId(a1)))
+        .await
+        .expect("a1 holds a2");
+    let looped = repo.set_home(NodeId(a1), Some(NodeId(a2))).await;
+    assert!(
+        matches!(&looped, Err(EmberTroveError::Validation(m)) if m.contains("loop")),
+        "{looped:?}"
+    );
+    assert!(
+        repo.home_of(NodeId(a1)).await.unwrap().is_none(),
+        "nothing changed"
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_homes_leave_exactly_one(pool: PgPool) {
+    use common::id::NodeId;
+
+    let n =
+        |kind: &'static str, title: &'static str| insert_raw_node(&pool, "alice", kind, title, "");
+    let (a1, a2) = (n("area", "a1").await, n("area", "a2").await);
+    let p = n("project", "p").await;
+    let repo = PgEdgeRepo::new(pool.clone());
+    let req = |parent| common::edge::CreateEdgeRequest {
+        source_id: NodeId(parent),
+        target_id: NodeId(p),
+        edge_type: common::edge::EdgeType::Contains,
+        label: None,
+    };
+    // A create and a set race for p's one home; the lock (and the index
+    // behind it) leave one, whichever won.
+    let (made, set) = tokio::join!(
+        repo.create(req(a1)),
+        repo.set_home(NodeId(p), Some(NodeId(a2)))
+    );
+    let homes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM edges WHERE edge_type = 'contains' AND target_id = $1",
+    )
+    .bind(p)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(homes, 1, "made: {made:?}, set: {set:?}");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPool) {
+    use chrono::TimeZone;
+    use common::backup::BackupData;
+    use common::edge::{Edge, EdgeType::Contains};
+    use common::id::EdgeId;
+
+    let a1 = create_node(&pool, "alice", "restore home a1").await;
+    let a2 = create_node(&pool, "alice", "restore home a2").await;
+    let child = create_node(&pool, "alice", "restore home child").await;
+    let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
+    let at = |s: i64| Utc.timestamp_opt(1_800_000_000 + s, 0).unwrap();
+    let home = |parent: &Node, secs: i64| Edge {
+        id: EdgeId(uuid::Uuid::new_v4()),
+        source_id: parent.id,
+        target_id: child.id,
+        edge_type: Contains,
+        label: None,
+        created_at: at(secs),
+    };
+    // An archive from before 042: two homes.
+    let (older, newer) = (home(&a1, 0), home(&a2, 60));
+    let data = BackupData {
+        nodes,
+        edges: vec![newer.clone(), older.clone()],
+        tags: vec![],
+        notes: vec![],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: vec![],
+        captures: vec![],
+    };
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("a two-home archive restores");
+    tx.commit().await.unwrap();
+
+    let live: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM edges")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(live, vec![older.id.0], "the oldest home stays");
+    let archived: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM edges_removed_042")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(archived, vec![newer.id.0]);
+}
+
+// ── Captures (#234, migration 043) ───────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_043_moves_nodeless_notes_into_captures(pool: PgPool) {
+    // Recreate the pre-043 state: notes may have no node.
+    sqlx::query("ALTER TABLE node_notes ALTER COLUMN node_id DROP NOT NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let host = insert_raw_node(&pool, "alice", "article", "host", "").await;
+    let note = |node: Option<uuid::Uuid>, body: &'static str, gone: bool| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO node_notes (node_id, owner_id, body, created_at, updated_at, deleted_at) \
+                 VALUES ($1, 'alice', $2, '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', \
+                         CASE WHEN $3 THEN now() END) RETURNING id",
+            )
+            .bind(node)
+            .bind(body)
+            .bind(gone)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let loose = note(None, "an idea", false).await;
+    let binned = note(None, "a tombstone", true).await;
+    let kept = note(Some(host), "on a node", false).await;
+
+    for _ in 0..2 {
+        // Idempotent: the second run finds nothing left to move.
+        sqlx::raw_sql(include_str!("../../../migrations/043_captures.sql"))
+            .execute(&pool)
+            .await
+            .expect("migration 043");
+    }
+
+    let captures: Vec<(uuid::Uuid, String, String, bool, chrono::DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, owner_id, body, deleted_at IS NOT NULL, updated_at FROM captures ORDER BY body COLLATE \"C\"",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let ids: Vec<_> = captures.iter().map(|c| (c.0, c.2.as_str(), c.3)).collect();
+    assert_eq!(
+        ids,
+        vec![(binned, "a tombstone", true), (loose, "an idea", false)]
+    );
+    assert!(captures.iter().all(|c| c.1 == "alice"));
+    assert_eq!(
+        captures[0].4,
+        "2026-01-02T00:00:00Z"
+            .parse::<chrono::DateTime<Utc>>()
+            .unwrap(),
+        "times kept"
+    );
+    let notes: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM node_notes")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(notes, vec![kept]);
+    let nodeless = sqlx::query("INSERT INTO node_notes (owner_id, body) VALUES ('alice', 'x')")
+        .execute(&pool)
+        .await;
+    assert!(nodeless.is_err(), "a note's node is required now");
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn captures_are_reachable_by_their_owner_only(pool: PgPool) {
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+
+    let repo = PgCaptureRepo::new(pool.clone());
+    let mine = repo.create("alice", "mine").await.unwrap();
+    repo.create("bob", "bob's").await.unwrap();
+
+    let bodies =
+        |v: Vec<common::capture::Capture>| v.into_iter().map(|c| c.body).collect::<Vec<_>>();
+    assert_eq!(bodies(repo.list("alice").await.unwrap()), vec!["mine"]);
+    // Bob — or an admin, who passes their own subject — can't touch it.
+    for result in [
+        repo.update(mine.id, "bob", "taken").await.map(|_| ()),
+        repo.delete(mine.id, "bob").await,
+    ] {
+        assert!(
+            matches!(result, Err(EmberTroveError::NotFound(_))),
+            "{result:?}"
+        );
+    }
+    assert_eq!(
+        repo.update(mine.id, "alice", "reworded")
+            .await
+            .unwrap()
+            .body,
+        "reworded"
+    );
+
+    // Delete is a tombstone: gone from the list, back with restore.
+    repo.delete(mine.id, "alice").await.unwrap();
+    assert!(repo.list("alice").await.unwrap().is_empty());
+    assert!(matches!(
+        repo.restore(mine.id, "bob").await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    repo.restore(mine.id, "alice").await.unwrap();
+    assert_eq!(bodies(repo.list("alice").await.unwrap()), vec!["reworded"]);
+
+    // Purged only once its tombstone is old enough.
+    repo.delete(mine.id, "alice").await.unwrap();
+    assert_eq!(
+        repo.purge_deleted_before(Utc::now() - Duration::days(1))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        repo.purge_deleted_before(Utc::now() + Duration::days(1))
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(pool: PgPool) {
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+    use common::backup::{BackupData, BackupNote};
+    use common::id::NoteId;
+
+    // What the live database holds before the restore: a capture and a
+    // task with no Project. Neither is in the archive, so neither survives.
+    let captures = PgCaptureRepo::new(pool.clone());
+    captures.create("alice", "live capture").await.unwrap();
+    raw_task(&pool, "alice", None, "live inbox task").await;
+
+    let host = create_node(&pool, "alice", "restore capture host").await;
+    let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
+    let at = Utc::now() - Duration::days(3);
+    let note = |node: Option<common::id::NodeId>, body: &str| BackupNote {
+        id: NoteId(uuid::Uuid::new_v4()),
+        node_id: node,
+        owner_id: "alice".into(),
+        body: body.into(),
+        color: "default".into(),
+        created_at: at,
+        updated_at: at,
+    };
+    // A format-3 archive: one note on a node, one without.
+    let (on_node, loose) = (
+        note(Some(host.id), "on its node"),
+        note(None, "a loose idea"),
+    );
+    let data = BackupData {
+        nodes,
+        edges: vec![],
+        tags: vec![],
+        notes: vec![on_node.clone(), loose.clone()],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: vec![],
+        captures: vec![],
+    };
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.unwrap();
+
+    let restored = captures.list("alice").await.unwrap();
+    assert_eq!(restored.len(), 1, "the live capture is gone: {restored:?}");
+    assert_eq!(restored[0].id.0, loose.id.0, "same id");
+    assert_eq!(restored[0].body, "a loose idea");
+    let notes: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM node_notes")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(notes, vec![on_node.id.0]);
+    let inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM node_tasks WHERE node_id IS NULL")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(inbox, 0, "the live inbox task didn't survive the restore");
+}
+
+// ── The pool never hands out a connection inside a transaction ───────────────
+
+/// sqlx 0.8 leaves a connection inside a transaction when a request is
+/// cancelled while `BEGIN` is in flight: its rollback guard checks a depth
+/// counter that isn't incremented yet. A raw `BEGIN` reproduces the same
+/// state (the server in a transaction, sqlx's depth 0). The pool's release
+/// check must close such a connection; reused, it would run later requests
+/// inside a transaction no one commits (found by the #234 e2e run).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_connection_left_inside_a_transaction_is_never_reused(pool: PgPool) {
+    let guarded = crate::repo::pool_options()
+        .max_connections(1)
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    {
+        let mut conn = guarded.acquire().await.unwrap();
+        sqlx::query("BEGIN").execute(&mut *conn).await.unwrap();
+        sqlx::query("SELECT 1").execute(&mut *conn).await.unwrap();
+        assert!(
+            crate::repo::in_transaction_block(&mut conn).await.unwrap(),
+            "the check sees the leaked transaction"
+        );
+    }
+    // One connection allowed: this waits for the release check above.
+    let mut conn = guarded.acquire().await.unwrap();
+    assert!(
+        !crate::repo::in_transaction_block(&mut conn).await.unwrap(),
+        "a pooled connection came back inside a transaction"
+    );
+    // And the check itself doesn't mistake an ordinary connection for one
+    // in a transaction (the extended protocol's timestamps would), or the
+    // pool would close every connection on release.
+    drop(conn);
+    let mut first = guarded.acquire().await.unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *first)
+        .await
+        .unwrap();
+    drop(first);
+    let mut again = guarded.acquire().await.unwrap();
+    let pid_again: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *again)
+        .await
+        .unwrap();
+    assert_eq!(pid, pid_again, "a clean connection is reused, not closed");
+    drop(again);
+    guarded.close().await;
+}
+
+/// Converting a capture (#234, §9.1) is one transaction: the destination
+/// lands and the capture is gone, together, for each kind of destination.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
+    use super::capture::{CaptureRepo, Destination, Made, PgCaptureRepo};
+
+    let repo = PgCaptureRepo::new(pool.clone());
+    let area = PgNodeRepo::new(pool.clone())
+        .create(
+            "alice",
+            CreateNodeRequest {
+                node_type: NodeType::Area,
+                ..node_req("Home")
+            },
+        )
+        .await
+        .unwrap();
+    let project = PgNodeRepo::new(pool.clone())
+        .create(
+            "alice",
+            CreateNodeRequest {
+                node_type: NodeType::Project,
+                ..node_req("Bank")
+            },
+        )
+        .await
+        .unwrap();
+    let live = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM captures")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+
+    // A node, filed into its home, owned by the capture's owner.
+    let c = repo.create("alice", "an article idea").await.unwrap();
+    let Made::Node(node) = repo
+        .convert(
+            c.id,
+            "alice",
+            Destination::Node {
+                req: node_req("An article idea"),
+                home: Some(area.id),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a node")
+    };
+    assert_eq!(node.owner_id, "alice");
+    let (home, role): (uuid::Uuid, String) = sqlx::query_as(
+        "SELECT e.source_id, p.role::text FROM edges e \
+         JOIN permissions p ON p.node_id = e.target_id AND p.subject_id = 'alice' \
+         WHERE e.target_id = $1 AND e.edge_type = 'contains'",
+    )
+    .bind(node.id.0)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((home, role.as_str()), (area.id.0, "owner"));
+
+    // A note on a node.
+    let c = repo.create("alice", "met Ana").await.unwrap();
+    let Made::Note(note) = repo
+        .convert(
+            c.id,
+            "alice",
+            Destination::Note {
+                node_id: project.id,
+                req: common::note::CreateNoteRequest {
+                    body: "met Ana".into(),
+                    color: "default".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a note")
+    };
+    assert_eq!(
+        (note.node_id, note.owner_id.as_str()),
+        (project.id, "alice")
+    );
+
+    // A Task in its Project.
+    let c = repo.create("alice", "call the bank").await.unwrap();
+    let Made::Task { project: p, task } = repo
+        .convert(
+            c.id,
+            "alice",
+            Destination::Task {
+                node_id: project.id,
+                req: task_req("call the bank"),
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a task")
+    };
+    assert_eq!((p, task.node_id), (project.id, Some(project.id)));
+
+    // Each capture went with its conversion: hard-deleted, no tombstone.
+    assert_eq!(live(pool.clone()).await, 0);
+}
+
+/// Nothing is made unless the capture is the caller's and live, and a
+/// destination that fails to land keeps the capture (rollback).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_failed_conversion_makes_nothing_and_keeps_the_capture(pool: PgPool) {
+    use super::capture::{CaptureRepo, Destination, PgCaptureRepo};
+
+    let repo = PgCaptureRepo::new(pool.clone());
+    create_node(&pool, "alice", "Taken").await;
+    let nodes = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM nodes")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    let into = |title: &str| Destination::Node {
+        req: node_req(title),
+        home: None,
+    };
+
+    // A taken title: 409, the capture stays, no node, no grant.
+    let c = repo.create("alice", "taken").await.unwrap();
+    assert!(matches!(
+        repo.convert(c.id, "alice", into("Taken")).await,
+        Err(EmberTroveError::AlreadyExists(_))
+    ));
+    assert_eq!(repo.list("alice").await.unwrap().len(), 1);
+    assert_eq!(nodes(pool.clone()).await, 1);
+
+    // A home that doesn't exist: the node and grant roll back too.
+    let missing = Destination::Node {
+        req: node_req("Homeless"),
+        home: Some(common::id::NodeId(uuid::Uuid::new_v4())),
+    };
+    assert!(matches!(
+        repo.convert(c.id, "alice", missing).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(repo.list("alice").await.unwrap().len(), 1);
+    assert_eq!(nodes(pool.clone()).await, 1);
+    let grants: i64 = sqlx::query_scalar("SELECT count(*) FROM permissions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        grants, 0,
+        "create_node's fixture grants nothing; nor may a rollback"
+    );
+
+    // Someone else's capture: not found, nothing made.
+    assert!(matches!(
+        repo.convert(c.id, "bob", into("Bob's")).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(nodes(pool.clone()).await, 1);
+
+    // Converted once, then gone: a second convert finds nothing.
+    repo.convert(c.id, "alice", into("Fresh")).await.unwrap();
+    assert!(matches!(
+        repo.convert(c.id, "alice", into("Again")).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+
+    // A binned capture (waiting on Undo) isn't converted either.
+    let binned = repo.create("alice", "binned").await.unwrap();
+    repo.delete(binned.id, "alice").await.unwrap();
+    assert!(matches!(
+        repo.convert(binned.id, "alice", into("Binned")).await,
+        Err(EmberTroveError::NotFound(_))
+    ));
+    assert_eq!(nodes(pool.clone()).await, 2);
+}
+
+// ── Account lifecycle (#239) ─────────────────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn suspended_accounts_round_trip(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    assert!(repo.suspended().await.unwrap().is_empty());
+
+    repo.suspend("u-1", "admin-a").await.unwrap();
+    repo.suspend("u-2", "admin-a").await.unwrap();
+    // A second suspension keeps the first record.
+    repo.suspend("u-1", "admin-b").await.unwrap();
+    let by: String =
+        sqlx::query_scalar("SELECT suspended_by FROM suspended_accounts WHERE subject_id = 'u-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(by, "admin-a");
+
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["u-1", "u-2"]);
+
+    repo.unsuspend("u-1").await.unwrap();
+    repo.unsuspend("u-1").await.unwrap(); // missing is fine
+    let set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    assert_eq!(set, ["u-2"]);
+}
+
+/// A deleted account stays refused until the sweep (#239): reactivating it
+/// can't drop the row, and only rows deleted before the cutoff go.
+#[sqlx::test(migrations = "../migrations")]
+async fn deleted_accounts_stay_suspended_until_the_sweep(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    repo.suspend("gone", "admin").await.unwrap();
+    repo.mark_deleted("gone", "admin").await.unwrap();
+    repo.mark_deleted("never-suspended", "admin").await.unwrap();
+    repo.unsuspend("gone").await.unwrap();
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["gone", "never-suspended"]);
+
+    // Too recent for the sweep.
+    let purged = repo
+        .purge_deleted_before(Utc::now() - Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+
+    sqlx::query("UPDATE suspended_accounts SET deleted_at = now() - interval '2 days' WHERE subject_id = 'gone'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    repo.suspend("live", "admin").await.unwrap();
+    let purged = repo
+        .purge_deleted_before(Utc::now() - Duration::days(1))
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+    let mut set: Vec<String> = repo.suspended().await.unwrap().into_iter().collect();
+    set.sort();
+    assert_eq!(set, ["live", "never-suspended"]);
+}
+
+const PURGE_A: &str = "aaaaaaaa-0000-4000-8000-00000000000a";
+const PURGE_B: &str = "bbbbbbbb-0000-4000-8000-00000000000b";
+
+// Fixture helpers (see `create_node`): a failed query fails the caller.
+#[allow(clippy::expect_used)]
+async fn sql(pool: &PgPool, q: &str) {
+    sqlx::query(q).execute(pool).await.expect(q);
+}
+
+#[allow(clippy::expect_used)]
+async fn scalar(pool: &PgPool, q: &str) -> i64 {
+    sqlx::query_scalar(q).fetch_one(pool).await.expect(q)
+}
+
+/// Seed two accounts across every table that holds account data (#239).
+/// Returns (A's shared node, A's private node, B's node).
+async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid) {
+    let a_shared = create_node(pool, PURGE_A, "a shared").await.id.0;
+    let a_private = create_node(pool, PURGE_A, "a private").await.id.0;
+    let b_node = create_node(pool, PURGE_B, "b node").await.id.0;
+    let (a, b) = (PURGE_A, PURGE_B);
+    for q in [
+        // Grants: owners, A's node shared with B, B's node shared with A,
+        // and a grant A made on B's node for a third account.
+        format!("INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+            ('{a_shared}', '{a}', 'owner', '{a}'), ('{a_private}', '{a}', 'owner', '{a}'),
+            ('{b_node}', '{b}', 'owner', '{b}'), ('{a_shared}', '{b}', 'editor', '{a}'),
+            ('{b_node}', '{a}', 'editor', '{b}'), ('{b_node}', 'c', 'viewer', '{a}')"),
+        format!("INSERT INTO node_notes (node_id, owner_id, body) VALUES
+            ('{b_node}', '{a}', 'a on b'), ('{a_shared}', '{a}', 'a on a'),
+            ('{a_shared}', '{b}', 'b on a'), ('{b_node}', '{b}', 'b on b')"),
+        format!("INSERT INTO node_tasks (node_id, owner_id, title, focus_date, deleted_at) VALUES
+            ('{b_node}', '{a}', 'a live on b', CURRENT_DATE, NULL),
+            ('{b_node}', '{a}', 'a deleted on b', NULL, now()),
+            (NULL, '{a}', 'a standalone', NULL, NULL),
+            ('{a_shared}', '{a}', 'a on a', NULL, NULL),
+            ('{a_shared}', '{b}', 'b on a', NULL, NULL),
+            ('{b_node}', '{b}', 'b on b', NULL, NULL)"),
+        format!("INSERT INTO captures (owner_id, body) VALUES ('{a}', 'a'), ('{b}', 'b')"),
+        format!("INSERT INTO people (owner_id, display_name) VALUES ('{a}', 'pa'), ('{b}', 'pb')"),
+        format!("INSERT INTO activity_log (node_id, subject_id, action, metadata) VALUES
+            ('{b_node}', '{a}', 'edited', '{{\"actor_name\": \"Ann\", \"actor_email\": \"ann@example.com\"}}'),
+            ('{b_node}', '{b}', 'shared', '{{\"actor_name\": \"Bo\", \"subject_id\": \"{a}\", \"role\": \"editor\"}}'),
+            ('{b_node}', '{b}', 'invited', '{{\"actor_name\": \"Bo\", \"invited_email\": \"ANN@example.com\"}}'),
+            ('{b_node}', '{b}', 'edited', '{{\"actor_name\": \"Bo\", \"actor_email\": \"bo@example.com\"}}')"),
+        format!("INSERT INTO node_versions (node_id, body, created_by) VALUES
+            ('{b_node}', 'text A saved', '{a}'), ('{b_node}', 'text B saved', '{b}')"),
+        format!("INSERT INTO attachments (node_id, filename, s3_key) VALUES
+            ('{a_shared}', 'a.pdf', '{a_shared}/1/a.pdf'), ('{b_node}', 'b.pdf', '{b_node}/2/b.pdf')"),
+        format!("INSERT INTO edges (source_id, target_id, edge_type) VALUES
+            ('{a_shared}', '{b_node}', 'references')"),
+        format!("INSERT INTO edges_removed_042 (id, source_id, target_id, edge_type, created_at) VALUES
+            (gen_random_uuid(), '{a_private}', '{b_node}', 'contains', now()),
+            (gen_random_uuid(), '{b_node}', '{b_node}', 'contains', now()),
+            (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'contains', now())"),
+        format!("INSERT INTO tags (owner_id, name) VALUES ('{a}', 'ta'), ('{b}', 'tb')"),
+        format!("INSERT INTO node_templates (name, node_type, created_by) VALUES
+            ('ta', 'article', '{a}'), ('tb', 'article', '{b}')"),
+        format!("INSERT INTO search_presets (owner_id, name) VALUES ('{a}', 'sa'), ('{b}', 'sb')"),
+        format!("INSERT INTO user_favorites (owner_id, node_id, url, label) VALUES
+            ('{a}', '{a_shared}', NULL, 'fa'), ('{b}', '{a_shared}', NULL, 'fb'),
+            ('{b}', NULL, 'https://example.com', 'fb url')"),
+        format!("INSERT INTO webhooks (owner_id, url, secret) VALUES
+            ('{a}', 'https://a.example.com', 'sa'), ('{b}', 'https://b.example.com', 'sb')"),
+        format!("INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height) VALUES
+            ('{a}', 'task', gen_random_uuid(), 10), ('{b}', 'task', gen_random_uuid(), 10)"),
+        format!("INSERT INTO suspended_accounts (subject_id, suspended_by) VALUES ('x', '{a}')"),
+        format!("INSERT INTO backup_jobs (created_by, s3_key) VALUES ('{a}', 'backups/1.tar.gz')"),
+    ] {
+        sql(pool, &q).await;
+    }
+    (a_shared, a_private, b_node)
+}
+
+/// #239: purging A removes everything A owns, hands A's live task on B's
+/// node to B, anonymises what stays on B's node, and leaves B's own data
+/// alone. The preview predicted the same counts, and a second run finds
+/// nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn purging_an_account_removes_only_its_data(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    use common::admin::{DELETED_ACCOUNT, PurgeCounts};
+    let (a_shared, _, b_node) = seed_two_accounts(&pool).await;
+    let repo = PgAccountRepo::new(pool.clone());
+
+    let preview = repo.deletion_preview(PURGE_A).await.unwrap();
+    let removed = repo.purge(PURGE_A, Some("ann@example.com")).await.unwrap();
+    let expected = PurgeCounts {
+        nodes: 2,
+        shared_nodes: 1,
+        notes: 2,
+        tasks: 3,
+        tasks_handed_over: 1,
+        captures: 1,
+        people: 1,
+        files: 1,
+        settings: 6,
+    };
+    assert_eq!(removed, expected);
+    assert_eq!(preview, expected, "the preview predicts the purge");
+
+    // Nothing anywhere still names A: every column that holds an account.
+    let columns: Vec<(String, String)> = sqlx::query_as(
+        "SELECT table_name::text, column_name::text FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND column_name IN ('owner_id', 'subject_id', 'created_by', 'granted_by', 'suspended_by')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        columns.len() >= 15,
+        "the sweep sees the account columns: {columns:?}"
+    );
+    for (table, column) in &columns {
+        let n = scalar(
+            &pool,
+            &format!("SELECT count(*) FROM {table} WHERE {column}::text = '{PURGE_A}'"),
+        )
+        .await;
+        assert_eq!(n, 0, "{table}.{column} still names A");
+    }
+    let named = scalar(
+        &pool,
+        &format!("SELECT count(*) FROM activity_log WHERE metadata::text ILIKE '%{PURGE_A}%' OR metadata::text ILIKE '%ann@%' OR metadata::text LIKE '%Ann%'"),
+    )
+    .await;
+    assert_eq!(named, 0, "History still names A");
+
+    // A's live task on B's node now belongs to B, off My Day.
+    let (owner, focus): (String, Option<chrono::NaiveDate>) =
+        sqlx::query_as("SELECT owner_id, focus_date FROM node_tasks WHERE title = 'a live on b'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((owner.as_str(), focus), (PURGE_B, None));
+
+    // B's own data: untouched, apart from what lived on A's nodes.
+    assert_eq!(
+        scalar(
+            &pool,
+            &format!("SELECT count(*) FROM nodes WHERE id = '{b_node}'")
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            &format!("SELECT count(*) FROM nodes WHERE id = '{a_shared}'")
+        )
+        .await,
+        0
+    );
+    for (q, n) in [
+        ("SELECT count(*) FROM node_notes", 1), // b on b
+        ("SELECT count(*) FROM node_tasks", 2), // b on b, handed over
+        ("SELECT count(*) FROM captures", 1),
+        ("SELECT count(*) FROM people", 1),
+        ("SELECT count(*) FROM tags", 1),
+        ("SELECT count(*) FROM node_templates", 1),
+        ("SELECT count(*) FROM search_presets", 1),
+        ("SELECT count(*) FROM user_favorites", 1), // B's url favorite
+        ("SELECT count(*) FROM webhooks", 1),
+        ("SELECT count(*) FROM editor_prefs", 1),
+        ("SELECT count(*) FROM activity_log", 4), // all on B's node
+        ("SELECT count(*) FROM node_versions", 2),
+        ("SELECT count(*) FROM attachments", 1),
+        ("SELECT count(*) FROM edges", 0),
+        ("SELECT count(*) FROM edges_removed_042", 1), // the unrelated one
+        ("SELECT count(*) FROM permissions", 2),       // B owner + c viewer
+    ] {
+        assert_eq!(scalar(&pool, q).await, n, "{q}");
+    }
+
+    // What stays on B's node is anonymised, and the version text kept.
+    let version: String =
+        sqlx::query_scalar("SELECT created_by FROM node_versions WHERE body = 'text A saved'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(version, DELETED_ACCOUNT);
+    let entries: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT subject_id, metadata FROM activity_log ORDER BY action, metadata::text COLLATE \"C\"",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(entries.contains(&(
+        DELETED_ACCOUNT.to_string(),
+        serde_json::json!({"actor_name": "Deleted account"})
+    )));
+    assert!(
+        entries
+            .iter()
+            .any(|(_, m)| m["subject_id"] == DELETED_ACCOUNT && m["role"] == "editor")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(_, m)| m["invited_email"] == "Deleted account")
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(_, m)| m["actor_email"] == "bo@example.com"),
+        "B's own entry kept"
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            &format!("SELECT count(*) FROM permissions WHERE granted_by = '{DELETED_ACCOUNT}'")
+        )
+        .await,
+        1
+    );
+
+    // A's file is queued for deletion from storage; B's is not.
+    let queued: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, [format!("{a_shared}/1/a.pdf")]);
+
+    // A retry finds nothing.
+    assert!(
+        repo.purge(PURGE_A, Some("ann@example.com"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(repo.deletion_preview(PURGE_A).await.unwrap().is_empty());
+}
+
+/// #239: deleting a node queues its files in the same transaction, so they
+/// are no longer orphaned in storage.
+#[sqlx::test(migrations = "../migrations")]
+async fn deleting_a_node_queues_its_files(pool: PgPool) {
+    let node = create_node(&pool, "owner-1", "with a file").await;
+    sql(
+        &pool,
+        &format!(
+            "INSERT INTO attachments (node_id, filename, s3_key) VALUES ('{0}', 'f', '{0}/k/f')",
+            node.id.0
+        ),
+    )
+    .await;
+    PgNodeRepo::new(pool.clone()).delete(node.id).await.unwrap();
+    let queued: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, [format!("{}/k/f", node.id.0)]);
+}
+
+/// A store that fails on keys containing "bad".
+struct FlakyStore;
+
+#[async_trait::async_trait]
+impl crate::object_store::ObjectStore for FlakyStore {
+    async fn put(&self, _: &str, _: bytes::Bytes, _: &str) -> Result<(), EmberTroveError> {
+        unimplemented!()
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn delete(&self, key: &str) -> Result<(), EmberTroveError> {
+        if key.contains("bad") {
+            Err(EmberTroveError::Internal("s3 down".into()))
+        } else {
+            Ok(())
+        }
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, EmberTroveError> {
+        unimplemented!()
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_outbox_drops_deleted_objects_and_keeps_failures(pool: PgPool) {
+    use super::object_deletion::PgObjectDeletionRepo;
+    sql(
+        &pool,
+        "INSERT INTO object_deletions (s3_key) VALUES ('good/1'), ('bad/2')",
+    )
+    .await;
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    let (deleted, failed) = crate::object_store::outbox::drain(&queue, &FlakyStore).await;
+    assert_eq!((deleted, failed), (1, 1));
+    let left: Vec<(String, i32)> = sqlx::query_as("SELECT s3_key, attempts FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, [("bad/2".to_string(), 1)]);
+}
+
+/// #239: deleting an attachment row, by any path, queues its file; a key a
+/// row names again (a restore) leaves the queue and is never deleted.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_attachment_trigger_queues_and_a_restored_key_is_kept(pool: PgPool) {
+    use super::attachment::{AttachmentRepo, PgAttachmentRepo};
+    use super::object_deletion::{ObjectDeletionRepo, PgObjectDeletionRepo};
+    let node = create_node(&pool, "owner-1", "files").await;
+    let repo = PgAttachmentRepo::new(pool.clone());
+    let kept = repo
+        .create(node.id, "a", "text/plain", 1, "k/a")
+        .await
+        .unwrap();
+    repo.create(node.id, "b", "text/plain", 1, "k/b")
+        .await
+        .unwrap();
+    repo.delete(kept.id).await.unwrap();
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    assert_eq!(queue.due(10).await.unwrap(), ["k/a"]);
+
+    // A restore puts "k/a" back under its old key.
+    repo.create(node.id, "a", "text/plain", 1, "k/a")
+        .await
+        .unwrap();
+    assert!(queue.due(10).await.unwrap().is_empty());
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0
+    );
+}
+
+/// A drain keeps going past one batch until the queue is empty.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_drain_empties_a_queue_longer_than_one_batch(pool: PgPool) {
+    use super::object_deletion::PgObjectDeletionRepo;
+    sql(
+        &pool,
+        "INSERT INTO object_deletions (s3_key) SELECT 'k/' || g FROM generate_series(1, 1201) g",
+    )
+    .await;
+    let queue = PgObjectDeletionRepo::new(pool.clone());
+    let (deleted, failed) = crate::object_store::outbox::drain(&queue, &FlakyStore).await;
+    assert_eq!((deleted, failed), (1201, 0));
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0
     );
 }

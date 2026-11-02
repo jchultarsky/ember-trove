@@ -1,0 +1,46 @@
+-- Account lifecycle (#239): suspending an account, and deleting its data.
+--
+-- `suspended_accounts` lists the accounts an admin suspended. The API keeps
+-- it in memory and refuses their sessions at once, and Cognito blocks
+-- their sign-in. It holds only the subject and who suspended it, no email
+-- or other personal data. Deleting an account suspends it first, so a
+-- deletion that stops halfway stays locked out, and then stamps
+-- `deleted_at`: an ID token issued before the deletion stays valid until
+-- it expires, so the row stays a day (the longest a Cognito ID token can
+-- live) before the daily sweep drops it.
+--
+-- `object_deletions` is an outbox of S3 objects to delete. A trigger queues
+-- an attachment's object whenever its row is deleted, by any path (a node
+-- delete's cascade, an account purge, a single delete, a restore), in the
+-- same transaction. A worker deletes the object and then the row; a crash
+-- or an S3 failure leaves the row for the next try, so no object is
+-- orphaned. The worker skips any key an attachment row names again (a
+-- restore puts the archive's files back under their old keys).
+-- Idempotent: safe to re-run.
+
+CREATE TABLE IF NOT EXISTS suspended_accounts (
+    subject_id   TEXT        PRIMARY KEY,
+    suspended_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    suspended_by TEXT        NOT NULL,
+    deleted_at   TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS object_deletions (
+    s3_key          TEXT        PRIMARY KEY,
+    enqueued_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    attempts        INTEGER     NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ
+);
+
+CREATE OR REPLACE FUNCTION queue_attachment_object() RETURNS trigger AS $$
+BEGIN
+    INSERT INTO object_deletions (s3_key) VALUES (OLD.s3_key)
+    ON CONFLICT (s3_key) DO NOTHING;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS attachments_queue_object ON attachments;
+CREATE TRIGGER attachments_queue_object
+    AFTER DELETE ON attachments
+    FOR EACH ROW EXECUTE FUNCTION queue_attachment_object();

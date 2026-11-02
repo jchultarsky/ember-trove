@@ -4,13 +4,16 @@
 //! Credentials are loaded from environment variables (`AWS_ACCESS_KEY_ID` /
 //! `AWS_SECRET_ACCESS_KEY`) via `aws-config`.
 
+use async_trait::async_trait;
 use aws_config::{BehaviorVersion, Region, meta::region::RegionProviderChain};
 use aws_sdk_cognitoidentityprovider::{
     Client,
+    error::ProvideErrorMetadata,
     types::{AttributeType, MessageActionType},
 };
 use common::admin::{AdminUser, CreateAdminUserRequest};
 
+use super::UserDirectory;
 use crate::error::ApiError;
 
 /// Map a Cognito SDK error to a generic client-facing error, logging the real
@@ -20,6 +23,16 @@ use crate::error::ApiError;
 fn cognito_err(op: &str, e: impl std::fmt::Display) -> ApiError {
     tracing::error!(op, error = %e, "Cognito admin operation failed");
     ApiError::Internal("identity provider operation failed".to_string())
+}
+
+/// Like `cognito_err`, but an unknown user becomes `NotFound`, so callers
+/// can tell "already gone" from a failure (#239: retries are idempotent).
+fn user_err(op: &str, e: impl ProvideErrorMetadata + std::fmt::Display) -> ApiError {
+    if e.code() == Some("UserNotFoundException") {
+        ApiError::NotFound("user not found".to_string())
+    } else {
+        cognito_err(op, e)
+    }
 }
 
 // ── Client ───────────────────────────────────────────────────────────────────
@@ -50,10 +63,32 @@ impl CognitoAdminClient {
         }
     }
 
+    /// Get the groups a user currently belongs to.
+    pub async fn list_user_groups(&self, username: &str) -> Result<Vec<String>, ApiError> {
+        let resp = self
+            .client
+            .admin_list_groups_for_user()
+            .user_pool_id(&self.user_pool_id)
+            .username(username)
+            .send()
+            .await
+            .map_err(|e| user_err("list_user_groups", e))?;
+
+        Ok(resp
+            .groups()
+            .iter()
+            .filter_map(|g| g.group_name())
+            .map(str::to_string)
+            .collect())
+    }
+}
+
+#[async_trait]
+impl UserDirectory for CognitoAdminClient {
     // ── User operations ───────────────────────────────────────────────────────
 
     /// List all users in the pool (up to 60 per SDK page; we collect all pages).
-    pub async fn list_users(&self) -> Result<Vec<AdminUser>, ApiError> {
+    async fn list_users(&self) -> Result<Vec<AdminUser>, ApiError> {
         let mut users = Vec::new();
         let mut pagination_token: Option<String> = None;
 
@@ -88,7 +123,7 @@ impl CognitoAdminClient {
     /// If `send_welcome_email` is true, Cognito sends a temporary-password email.
     /// Otherwise the user is created in FORCE_CHANGE_PASSWORD state with a
     /// suppressed invitation message.
-    pub async fn create_user(&self, req: &CreateAdminUserRequest) -> Result<AdminUser, ApiError> {
+    async fn create_user(&self, req: &CreateAdminUserRequest) -> Result<AdminUser, ApiError> {
         let message_action = if req.send_welcome_email {
             None
         } else {
@@ -163,7 +198,7 @@ impl CognitoAdminClient {
     ///
     /// Returns `None` when no user with that email exists in the pool.
     /// Uses the Cognito `ListUsers` filter `email = "<addr>"`.
-    pub async fn find_user_by_email(&self, email: &str) -> Result<Option<AdminUser>, ApiError> {
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<AdminUser>, ApiError> {
         // Escape `"` and `\` so the address can't break out of the quoted
         // ListUsers filter, independent of any upstream `garde(email)` check.
         let escaped = email.replace('\\', "\\\\").replace('"', "\\\"");
@@ -187,27 +222,42 @@ impl CognitoAdminClient {
         Ok(Some(cognito_user_to_dto(user, groups)))
     }
 
+    async fn email_of(&self, username: &str) -> Result<Option<String>, ApiError> {
+        // ListUsers by `sub` (the username here) needs no IAM action beyond
+        // the ones the admin page already uses. Callers pass a canonical
+        // UUID; the quotes are escaped anyway, as in `find_user_by_email`.
+        let escaped = username.replace('\\', "\\\\").replace('"', "\\\"");
+        let resp = self
+            .client
+            .list_users()
+            .user_pool_id(&self.user_pool_id)
+            .filter(format!("sub = \"{escaped}\""))
+            .send()
+            .await
+            .map_err(|e| cognito_err("list_users_by_sub", e))?;
+        Ok(resp.users().first().and_then(|u| {
+            u.attributes()
+                .iter()
+                .find(|a| a.name() == "email")
+                .and_then(|a| a.value())
+                .map(str::to_string)
+        }))
+    }
+
     /// Hard-delete a user by their Cognito username (which is their UUID sub).
-    pub async fn delete_user(&self, username: &str) -> Result<(), ApiError> {
+    async fn delete_user(&self, username: &str) -> Result<(), ApiError> {
         self.client
             .admin_delete_user()
             .user_pool_id(&self.user_pool_id)
             .username(username)
             .send()
             .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("UserNotFoundException") {
-                    ApiError::NotFound(format!("user {username} not found"))
-                } else {
-                    cognito_err("admin_delete_user", e)
-                }
-            })?;
+            .map_err(|e| user_err("admin_delete_user", e))?;
         Ok(())
     }
 
     /// List all groups in the user pool (these are the equivalent of realm roles).
-    pub async fn list_groups(&self) -> Result<Vec<String>, ApiError> {
+    async fn list_groups(&self) -> Result<Vec<String>, ApiError> {
         let mut groups = Vec::new();
         let mut next_token: Option<String> = None;
 
@@ -238,31 +288,8 @@ impl CognitoAdminClient {
         Ok(groups)
     }
 
-    /// Get the groups a user currently belongs to.
-    pub async fn list_user_groups(&self, username: &str) -> Result<Vec<String>, ApiError> {
-        let resp = self
-            .client
-            .admin_list_groups_for_user()
-            .user_pool_id(&self.user_pool_id)
-            .username(username)
-            .send()
-            .await
-            .map_err(|e| cognito_err("list_user_groups", e))?;
-
-        Ok(resp
-            .groups()
-            .iter()
-            .filter_map(|g| g.group_name())
-            .map(str::to_string)
-            .collect())
-    }
-
     /// Replace a user's full group membership with the provided list.
-    pub async fn set_user_groups(
-        &self,
-        username: &str,
-        desired: &[String],
-    ) -> Result<(), ApiError> {
+    async fn set_user_groups(&self, username: &str, desired: &[String]) -> Result<(), ApiError> {
         let current = self.list_user_groups(username).await?;
 
         // Add to groups the user is not yet in.
@@ -295,6 +322,39 @@ impl CognitoAdminClient {
 
         Ok(())
     }
+
+    async fn disable_user(&self, username: &str) -> Result<(), ApiError> {
+        self.client
+            .admin_disable_user()
+            .user_pool_id(&self.user_pool_id)
+            .username(username)
+            .send()
+            .await
+            .map_err(|e| user_err("admin_disable_user", e))?;
+        Ok(())
+    }
+
+    async fn enable_user(&self, username: &str) -> Result<(), ApiError> {
+        self.client
+            .admin_enable_user()
+            .user_pool_id(&self.user_pool_id)
+            .username(username)
+            .send()
+            .await
+            .map_err(|e| user_err("admin_enable_user", e))?;
+        Ok(())
+    }
+
+    async fn sign_out_everywhere(&self, username: &str) -> Result<(), ApiError> {
+        self.client
+            .admin_user_global_sign_out()
+            .user_pool_id(&self.user_pool_id)
+            .username(username)
+            .send()
+            .await
+            .map_err(|e| user_err("admin_user_global_sign_out", e))?;
+        Ok(())
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -323,5 +383,6 @@ fn cognito_user_to_dto(
         last_name: get_attr("family_name"),
         enabled: user.enabled(),
         realm_roles: groups,
+        suspended: false,
     }
 }

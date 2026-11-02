@@ -26,7 +26,7 @@ test('opens with Cmd+K, lists capture commands on empty query, closes on Esc', a
   await expect(input).toBeVisible();
   // Autofocus contract: typing right after ⌘K lands in the query.
   await expect(input).toBeFocused();
-  await expect(page.getByRole('button', { name: /New task \(quick capture\)/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Quick capture/ })).toBeVisible();
 
   await page.keyboard.press('Escape');
   await expect(input).not.toBeVisible();
@@ -83,7 +83,7 @@ test('? opens help; the Anywhere group renders from the shortcut registry', asyn
   // The Anywhere section and its registry-sourced rows.
   await expect(dialog.getByRole('heading', { name: 'Anywhere' })).toBeVisible();
   for (const desc of [
-    'Quick capture (Inbox)',
+    'Quick capture',
     'Graph view',
     'Open command palette',
     'Open command palette (alt)',

@@ -3,8 +3,86 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-10-30)
+## Current state (2026-11-02)
 
+- **v3.8.0 shipped: a "+" on the Captures page (#252, PR #253).** It opens
+  the quick-capture composer, like `n`. From Muse's v3.7.0 UI test; the
+  owner hit it too.
+- **v3.7.0 shipped: the Captures view (S4c of #204; #240 parts A and B,
+  PRs #244, #248, #249) and #250 (PR #251).** No migration.
+  - The Inbox is Captures (`/tasks/captures`; `/tasks/inbox` and `/inbox`
+    redirect and keep `?captured=1` for installed service workers). It holds
+    captures only, as a sticky-note wall with ages; task triage and the
+    Inbox add-task form are gone, so no UI path makes a task without a
+    Project. Data health lists those (`OrphanTask`).
+  - Wall keys: j/k and arrows (`common::grid_nav`), Enter/c, e, d; ignored
+    while any dialog is open (`keyboard::modal_open`).
+  - Notes' compose box: "Capture it" (Muse's v3.5.0 friction item).
+  - #250: an open task editor keeps its unsaved text through a list
+    reload. The list owns the draft (`EditSession`, a child owner; storing
+    the route's own owner made a cycle that kept My Day's key handler
+    alive on other pages, caught in review).
+  - Next: S5a (task status: `in_progress` → open, `waiting`,
+    `completed_at`).
+
+- **v3.6.0 shipped: account lifecycle (#239; PRs #241–#243).**
+  - Migration 044: `suspended_accounts`, `object_deletions` and the
+    `attachments_queue_object` trigger.
+  - Admins can suspend an account (its sessions stop at the next request,
+    and login and refresh are refused), reactivate it, or delete it with
+    its data, after a preview that shows counts only. The user's tasks on
+    other people's Projects pass to those owners, and their traces there
+    become "Deleted account".
+  - Deleted nodes and attachments now delete their stored files through the
+    outbox. Backlog: sweep files orphaned before 3.6.0, and purge data
+    left by accounts deleted directly in the AWS console.
+- **v3.5.0 shipped: captures (S4a + S4b of #204, #234; PRs #236–#238).**
+  - Migration 043: a `captures` table; the 3 notes without a node moved
+    into it (prod rehearsal ~4 ms), and `node_notes.node_id` is NOT NULL.
+  - Quick capture, the share sheet and the calendar (without a Project)
+    land captures in the Inbox. They are owner-only, with no admin bypass.
+  - `POST /captures/{id}/convert` turns one into a node (optionally with
+    a home), a note or a Task in a Project, in one transaction (delete
+    first). The Inbox's Convert dialog drives it.
+  - Backup format 4; format 3 still restores (nodeless notes become
+    captures). Next: S4c, the Inbox redesign.
+- **v3.4.1 shipped: pooled connections are never reused inside a
+  transaction (PR #235).** sqlx 0.8.6 leaks one when a request is cancelled
+  during `BEGIN` (the depth counter isn't incremented yet, so no rollback is
+  queued). Later requests then ran in a transaction no one commits: lost
+  writes and 30 s lock waits. `repo::pool_options` closes such a connection
+  on release (`now() <> statement_timestamp()`, simple protocol). Found by
+  the S4a e2e run.
+- **v3.4.0 shipped: one home per node (S3c PR 3 of #228, PR #233). S3c done.**
+  - Migration 042: oldest home kept, extras to `edges_removed_042`,
+    `edges_one_home` unique index. Prod rehearsal: 0 homes, ~2 ms.
+  - `GET`/`PUT /nodes/{id}/home`; a Home row heads Connections, with a
+    picker limited to `ontology::allowed_homes`. A hidden home is shown
+    unnamed to the child's editors only (owner decision).
+  - Restore folds homes (`common::edge::fold_homes`); the multiple-homes
+    rule is retired, so "Keep this home" was dropped (it had nothing left
+    to act on). Service-worker cache v10.
+  - Open for the owner: `edges_removed_*` archives keep labels after
+    their nodes are deleted (since 033).
+  - Next: S4a (captures) per the programme plan.
+- **v3.3.0 shipped: Data health fixes link problems (S3c PR 2 of #228, PR #232).**
+  - Edge items carry `LinkRef`s; contained References convert (one or
+    all, paced), bad homes and Area dependencies link instead or go,
+    loops lose one link at a time.
+  - `POST /edges/{id}/convert` (`common::edge::convert_ends`: delete
+    rights, then the conversion, then create rights).
+  - The both-ways rule is retired (index 041). Service-worker cache v9.
+  - Next: S3c PR 3 (Home row + picker, `GET`/`PUT /nodes/{id}/home`,
+    migration 042 one-home index; snapshot gate).
+- **v3.2.1 shipped: security patch, S3c PR 1 of #228 (PR #229).**
+  - The project dashboard names only Area homes the reader can see
+    (`area_for_nodes` takes the subject).
+  - `POST /favorites` needs view rights on a node, and the list shows a
+    node's live title only while it's visible.
+  - Review finding left for later: task views keep a revoked node's
+    title (#230, probably S5c).
+  - Next: S3c PR 2 (edge fixes on Data health, `POST /edges/{id}/convert`,
+    retiring the both-ways rule), then PR 3 (homes and migration 042).
 - **v3.2.0 shipped: `related_to` stored once (S3b of #226; PR #227).**
   - Migration 041 merges pairs stored both ways (the oldest kept, copies
     archived in `edges_removed_041`) and adds a LEAST/GREATEST unique
@@ -732,11 +810,14 @@ release entries above and in git history.
   and lives in the task-editor modal. `is_in_my_day`/`list_my_day` still handle carryovers
   (past `focus_date`, not done). A genuine "schedule for a future day" need should land next
   to `due_date`, never as a Kanban quick action — keep the daily surface lean. (2026-04-28)
-- **Quick-capture target is a `Task` with `node_id IS NULL`, not a Node.** `/api/inbox/quick`
-  (+ the iOS Web Share Target) creates a triage Task surfaced by `/tasks/inbox`
-  (`tasks WHERE node_id IS NULL`); wire format `{title?, body?}`, coalesced + truncated to 500
-  chars server-side. A 6th `NodeType::Inbox` variant was considered and **rejected** — it
-  would have meant a migration plus duplicate sidebar/filter/dashboard wiring for no
-  behavioural win, and Notes need a parent node so couldn't be the inbox surface. Future
-  capture paths (command palette, Apple Shortcut, third-party clippers) MUST hit
-  `/api/inbox/quick` — do not invent a parallel create-node path. (2026-04-27)
+- **Quick-capture target is a capture** (revised 2026-10-31, #234; it was a Task with
+  `node_id IS NULL` from 2026-04-27). `/api/inbox/quick` (+ the iOS Web Share Target) creates
+  a row in `captures` (migration 043), listed in the Inbox. ONTOLOGY §9.1: a capture is
+  unclassified input, processed into exactly one destination or deliberately deleted.
+  - The wire format `{title?, body?}` is kept for installed clients. The text is coalesced
+    and capped at 10,000 characters, not the old 500. An old client's `due_date` is written
+    into the text, and its `priority` is ignored.
+  - Captures are owner-only with no admin bypass.
+  - A `NodeType::Inbox` was rejected, as before.
+  - Future capture paths (Apple Shortcut, clippers) MUST hit `/api/inbox/quick` or
+    `/api/captures`; do not invent a parallel path.

@@ -2,7 +2,7 @@
 //! the current URL, scroll the matching `[data-task-id="<id>"]` element
 //! into view, and briefly highlight it.
 //!
-//! Used by `NodeView` and `InboxView` (both render task rows that carry
+//! Used by `NodeView` (it renders task rows that carry
 //! `data-task-id` attributes).  The Kanban's `KanbanTaskRow` writes the
 //! query param when the user clicks anywhere on the row body.
 //!

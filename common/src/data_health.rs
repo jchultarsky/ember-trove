@@ -25,11 +25,9 @@ pub enum RuleId {
     OrphanTask,
     MembershipOnNonProject,
     StatusOnNonProject,
-    MultipleHomes,
     ContainedReference,
     ContainmentNotAllowed,
     DependsOnArea,
-    RelatedToBothWays,
     ContainsCycle,
     DependsOnCycle,
     DerivedFromCycle,
@@ -40,11 +38,9 @@ wire_enum!(RuleId {
     OrphanTask => "orphan_task",
     MembershipOnNonProject => "membership_on_non_project",
     StatusOnNonProject => "status_on_non_project",
-    MultipleHomes => "multiple_homes",
     ContainedReference => "contained_reference",
     ContainmentNotAllowed => "containment_not_allowed",
     DependsOnArea => "depends_on_area",
-    RelatedToBothWays => "related_to_both_ways",
     ContainsCycle => "contains_cycle",
     DependsOnCycle => "depends_on_cycle",
     DerivedFromCycle => "derived_from_cycle",
@@ -58,9 +54,8 @@ impl RuleId {
             Self::TaskOnNonProject | Self::StatusOnNonProject => "§3.2",
             Self::OrphanTask => "§9.3",
             Self::MembershipOnNonProject => "§7.2",
-            Self::MultipleHomes | Self::ContainmentNotAllowed => "§3.3",
+            Self::ContainmentNotAllowed => "§3.3",
             Self::ContainedReference | Self::ContainsCycle => "§6.1",
-            Self::RelatedToBothWays => "§6.2",
             Self::DependsOnArea | Self::DependsOnCycle => "§6.4",
             Self::DerivedFromCycle => "§6.5",
         }
@@ -74,11 +69,9 @@ impl RuleId {
             Self::OrphanTask => "Tasks with no Project",
             Self::MembershipOnNonProject => "People outside a Project",
             Self::StatusOnNonProject => "A project status outside a Project",
-            Self::MultipleHomes => "More than one home",
             Self::ContainedReference => "A Reference inside a home",
             Self::ContainmentNotAllowed => "A home that isn't allowed",
             Self::DependsOnArea => "A dependency on an Area",
-            Self::RelatedToBothWays => "A link stored both ways",
             Self::ContainsCycle => "Homes in a loop",
             Self::DependsOnCycle => "Dependencies in a loop",
             Self::DerivedFromCycle => "Derivations in a loop",
@@ -93,7 +86,6 @@ impl RuleId {
             Self::OrphanTask => "A task belongs to exactly one Project.",
             Self::MembershipOnNonProject => "Only Projects have people.",
             Self::StatusOnNonProject => "Only Projects have a project status.",
-            Self::MultipleHomes => "A node has at most one home (one contains parent).",
             Self::ContainedReference => {
                 "A Reference is never contained: it's shared, and reached by links."
             }
@@ -101,17 +93,14 @@ impl RuleId {
                 "An Area holds Areas, Projects and Articles; a Project holds only sub-Projects."
             }
             Self::DependsOnArea => "An Area never completes, so nothing can depend on it.",
-            Self::RelatedToBothWays => {
-                "A related-to link has no direction, so one pair needs it only once."
-            }
             Self::ContainsCycle => "Homes can't loop: no node may contain itself, even indirectly.",
             Self::DependsOnCycle => "A dependency loop is a deadlock: nothing in it could finish.",
             Self::DerivedFromCycle => "An origin comes before what was derived from it.",
         }
     }
 
-    /// What to do about it. Fix buttons arrive with the release that owns
-    /// each rule; until then these say how to fix it by hand.
+    /// What to do about it. Most rules also have fix buttons on the page
+    /// (#216, #228); this says what they do, or how to fix it by hand.
     #[must_use]
     pub fn fix_hint(self) -> &'static str {
         match self {
@@ -121,11 +110,9 @@ impl RuleId {
                 "Add the person to a related Project, then remove them here."
             }
             Self::StatusOnNonProject => "Clear the status, or keep the note in the body.",
-            Self::MultipleHomes => "Keep one home; turn the others into related-to links.",
             Self::ContainedReference => "Turn the contains link into a references link.",
             Self::ContainmentNotAllowed => "Move it to an allowed home, or link it instead.",
             Self::DependsOnArea => "Depend on a Project in the Area instead.",
-            Self::RelatedToBothWays => "Delete one of the two links.",
             Self::ContainsCycle | Self::DependsOnCycle | Self::DerivedFromCycle => {
                 "Remove one edge of the loop."
             }
@@ -229,6 +216,54 @@ pub struct Violation {
     /// "Remove" fix deletes (#216). `None` for every other rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub membership: Option<MembershipRef>,
+    /// The links behind an edge item, which its fixes act on (#228): each
+    /// home of a node with two, the one bad `contains` or `depends_on`, or
+    /// a loop's links in order. Empty for every other rule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<LinkRef>,
+}
+
+/// One link a fix can act on (#228). Both ends are nodes the reader can
+/// see: the report loads only such links (§14).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LinkRef {
+    pub id: Uuid,
+    pub edge_type: crate::edge::EdgeType,
+    pub source: Uuid,
+    pub target: Uuid,
+    /// The reader owns the source, or the target. Fixes are offered by
+    /// ownership, the way a membership's Remove is (#216); the API checks
+    /// the real rights, shares included.
+    pub source_owned: bool,
+    pub target_owned: bool,
+}
+
+impl LinkRef {
+    fn rights(owned: bool) -> crate::edge::EndRights {
+        crate::edge::EndRights {
+            edit: owned,
+            view: true,
+        }
+    }
+
+    /// The reader may delete the link (the rule of `DELETE /edges/{id}`).
+    #[must_use]
+    pub fn removable(&self) -> bool {
+        self.source_owned || (self.edge_type.deletable_from_target() && self.target_owned)
+    }
+
+    /// The reader may turn the link into `to` (the rule of
+    /// `POST /edges/{id}/convert`, [`crate::edge::convert_ends`]).
+    #[must_use]
+    pub fn convertible_to(&self, to: &crate::edge::EdgeType) -> bool {
+        crate::edge::convert_ends(
+            &self.edge_type,
+            to,
+            Self::rights(self.source_owned),
+            Self::rights(self.target_owned),
+        )
+        .is_ok()
+    }
 }
 
 /// The membership a person item stands for (#216).
@@ -251,7 +286,22 @@ impl Violation {
             related,
             more,
             membership: None,
+            links: Vec::new(),
         }
+    }
+
+    /// Names the links behind an edge item (see [`Violation::links`]).
+    /// Only links whose two ends the item names are kept, so every link
+    /// can be shown and acted on: past [`RELATED_CAP`], a long loop's
+    /// unnamed hops and a node's unlisted homes drop out with their nodes.
+    #[must_use]
+    pub fn with_links(mut self, links: Vec<LinkRef>) -> Self {
+        let named = |id: Uuid| id == self.subject.id || self.related.iter().any(|r| r.id == id);
+        self.links = links
+            .into_iter()
+            .filter(|l| named(l.source) && named(l.target))
+            .collect();
+        self
     }
 
     /// Names the membership behind a person item and whether the reader
@@ -310,8 +360,10 @@ pub struct RuleCount {
 /// counts only, never ids or titles. `kinds` maps each node to its kind;
 /// an edge with an end missing from it is skipped.
 ///
-/// It counts the way the report does: a node with two homes is one item,
-/// a pair linked both ways is one, and a loop is one per tangle of edges.
+/// It counts the way the report does: a loop is one per tangle of edges.
+/// A `related_to` stored both ways and a second home are no rule breaks
+/// any more: the database can't hold them, and restore folds them
+/// (#226, #228).
 #[must_use]
 pub fn graph_rule_counts(
     kinds: &std::collections::HashMap<Uuid, crate::node::NodeType>,
@@ -320,7 +372,7 @@ pub fn graph_rule_counts(
     use crate::edge::EdgeType;
     use crate::node::NodeType;
     use crate::ontology::{ContainmentRule, containment_violation, cyclic_components};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     let known: Vec<_> = edges
         .iter()
@@ -336,11 +388,7 @@ pub fn graph_rule_counts(
     let mut counts: HashMap<RuleId, usize> = HashMap::new();
     let mut bump = |rule: RuleId, n: usize| *counts.entry(rule).or_default() += n;
 
-    let mut homes: HashMap<Uuid, usize> = HashMap::new();
-    for (_, child, _, parent_kind, child_kind) in
-        known.iter().filter(|k| *k.2 == EdgeType::Contains)
-    {
-        *homes.entry(*child).or_default() += 1;
+    for (_, _, _, parent_kind, child_kind) in known.iter().filter(|k| *k.2 == EdgeType::Contains) {
         match containment_violation(parent_kind, child_kind) {
             Some(ContainmentRule::ContainedReference) => bump(RuleId::ContainedReference, 1),
             Some(ContainmentRule::NotAllowed) => bump(RuleId::ContainmentNotAllowed, 1),
@@ -348,22 +396,10 @@ pub fn graph_rule_counts(
         }
     }
     bump(
-        RuleId::MultipleHomes,
-        homes.values().filter(|&&n| n > 1).count(),
-    );
-    bump(
         RuleId::DependsOnArea,
         known
             .iter()
             .filter(|k| *k.2 == EdgeType::DependsOn && *k.4 == NodeType::Area)
-            .count(),
-    );
-    let related: HashSet<(Uuid, Uuid)> = of_type(&EdgeType::RelatedTo).into_iter().collect();
-    bump(
-        RuleId::RelatedToBothWays,
-        related
-            .iter()
-            .filter(|(a, b)| a < b && related.contains(&(*b, *a)))
             .count(),
     );
     for (edge_type, rule) in [
@@ -462,6 +498,75 @@ mod tests {
     }
 
     #[test]
+    fn a_links_fixes_follow_the_apis_rules() {
+        use crate::edge::EdgeType::{self, *};
+        let link = |edge_type: EdgeType, source_owned: bool, target_owned: bool| LinkRef {
+            id: Uuid::nil(),
+            edge_type,
+            source: Uuid::from_u128(1),
+            target: Uuid::from_u128(2),
+            source_owned,
+            target_owned,
+        };
+        // The child's owner may free a home and relate it, not reference it.
+        let freed = link(Contains, false, true);
+        assert!(freed.removable());
+        assert!(freed.convertible_to(&RelatedTo));
+        assert!(!freed.convertible_to(&References));
+        // The parent's owner may do all three.
+        let parent = link(Contains, true, false);
+        assert!(parent.removable() && parent.convertible_to(&References));
+        // A dependency is its source's alone.
+        let dep = link(DependsOn, false, true);
+        assert!(!dep.removable() && !dep.convertible_to(&RelatedTo));
+        assert!(link(DependsOn, true, false).removable());
+        // Never to a structural type.
+        assert!(!parent.convertible_to(&DependsOn));
+    }
+
+    #[test]
+    fn an_item_keeps_only_links_whose_ends_it_names() {
+        // A loop 0 → 1 → … → n → 0 longer than the cap: the hops past the
+        // last listed node can't be named, so they aren't listed either.
+        let n = RELATED_CAP as u128 + 3;
+        let hop = |i: u128| LinkRef {
+            id: Uuid::from_u128(1000 + i),
+            edge_type: crate::edge::EdgeType::DependsOn,
+            source: Uuid::from_u128(i),
+            target: Uuid::from_u128((i + 1) % (n + 1)),
+            source_owned: true,
+            target_owned: true,
+        };
+        let members = (1..=n)
+            .map(|i| Ref::node(Uuid::from_u128(i), "m", false))
+            .collect();
+        let v = Violation::new(Ref::node(Uuid::from_u128(0), "s", false), members)
+            .with_links((0..=n).map(hop).collect());
+        assert_eq!(v.links.len(), RELATED_CAP, "0→1 … 19→20, all named");
+        assert!(v.links.iter().all(|l| l.target != Uuid::from_u128(0)));
+        // A short loop keeps every hop, the one back included.
+        let short = Violation::new(
+            Ref::node(Uuid::from_u128(0), "s", false),
+            vec![Ref::node(Uuid::from_u128(1), "m", false)],
+        )
+        .with_links(vec![
+            LinkRef {
+                target: Uuid::from_u128(1),
+                source: Uuid::from_u128(0),
+                ..hop(0)
+            },
+            LinkRef {
+                source: Uuid::from_u128(1),
+                target: Uuid::from_u128(0),
+                ..hop(1)
+            },
+        ]);
+        assert_eq!(short.links.len(), 2);
+        let json = serde_json::to_value(item(2)).expect("ser");
+        assert!(json.get("links").is_none(), "omitted when empty");
+    }
+
+    #[test]
     fn graph_rule_counts_counts_each_rule_like_the_report() {
         use crate::edge::EdgeType::*;
         use crate::node::NodeType::{self, *};
@@ -478,26 +583,24 @@ mod tests {
         .collect();
         let edges = vec![
             (id(1), id(3), Contains),  // fine
-            (id(2), id(3), Contains),  // project 3 has two homes
+            (id(2), id(3), Contains),  // a second home: folded on restore, not a rule
             (id(1), id(4), Contains),  // a contained Reference
             (id(5), id(6), Contains),  // an Article can't be a home
             (id(3), id(1), DependsOn), // on an Area
             (id(3), id(6), DependsOn), // fine
             (id(6), id(3), DependsOn), // closes a loop with the line above
             (id(3), id(6), RelatedTo),
-            (id(6), id(3), RelatedTo),   // both ways
+            (id(6), id(3), RelatedTo), // both ways: merged on restore, not a rule
             (id(5), id(4), DerivedFrom), // fine
-            (id(1), id(9), Contains),    // unknown end: skipped
-            (id(4), id(5), WikiLink),    // mentions are never a violation
+            (id(1), id(9), Contains),  // unknown end: skipped
+            (id(4), id(5), WikiLink),  // mentions are never a violation
         ];
         assert_eq!(
             graph_rule_counts(&kinds, &edges),
             vec![
-                (RuleId::MultipleHomes, 1),
                 (RuleId::ContainedReference, 1),
                 (RuleId::ContainmentNotAllowed, 1),
                 (RuleId::DependsOnArea, 1),
-                (RuleId::RelatedToBothWays, 1),
                 (RuleId::DependsOnCycle, 1),
             ]
         );

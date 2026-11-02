@@ -1,19 +1,24 @@
 //! Fast-capture modal — the *primary* `n`-shortcut surface.
 //!
 //! One autofocused textarea, no other fields, no decisions.  Cmd/Ctrl+Enter
-//! sends the text to `POST /api/inbox/quick`, which lands a Task in the
-//! Inbox.  Esc closes.  "More fields…" hands off to the structured
-//! `CreateNodeModal` for typed-knowledge captures (article/project/area/etc).
+//! sends the text to `POST /api/inbox/quick`, which lands a capture on the
+//! Captures wall (ONTOLOGY §9.1, #234): unclassified, so no date or priority —
+//! those come when it's processed.  Esc closes.  "More fields…" hands off
+//! to the structured `CreateNodeModal` when the thing is already a node.
 //!
 //! Why a separate component vs. extending `CreateNodeModal`:
 //!   - The structured modal asks for type + template + body + title — that's
 //!     the right surface for "I want to make a Project node," not for "I'm
 //!     about to lose this thought."
-//!   - Different submit target (Task in Inbox vs. typed Node), different
+//!   - Different submit target (a capture vs. typed Node), different
 //!     post-success behaviour (toast + close vs. navigate to new node).
 //!   - The `n` shortcut should always be the friction floor.  Extending
 //!     CreateNodeModal would mean either gating on a flag (more code paths)
 //!     or breaking existing callers.
+//!
+//! The composer is a blank sticky note (#240): the same paper as the
+//! Captures wall (`StickyPaper`), so what you write here looks like what
+//! lands there. Behaviour is unchanged.
 //!
 //! See `common::inbox::QuickCaptureRequest` for the wire contract.
 
@@ -22,8 +27,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use super::{ModalPlacement, ModalShell};
+use crate::components::captures_view::CAPTURED_TOAST;
 use crate::{
     api::quick_capture,
+    components::sticky_note::{CAPTURE_ICON, StickyPaper},
     components::toast::{ToastLevel, push_toast},
 };
 
@@ -67,40 +74,35 @@ pub fn FastCaptureModal(
         }
     });
 
-    // Live natural-language parse: "buy milk friday p1" → due + priority.
-    // Re-derives on every keystroke; the chips below the textarea preview
-    // the interpretation so token misfires are visible before submitting.
-    let parsed = Memo::new(move |_| {
-        let input = text.get();
-        let today = crate::components::format_helpers::local_today();
-        common::quickadd::parse_quick_add(&input, today)
-    });
-
+    // The Captures wall reloads on the app-wide refresh.
+    let task_refresh = expect_context::<crate::app::TaskRefresh>().0;
     let submit_pending = RwSignal::new(false);
     Effect::new(move |_| {
         if !submit_pending.get() {
             return;
         }
         submit_pending.set(false);
-        let p = parsed.get_untracked();
-        if p.title.trim().is_empty() {
+        // The text as typed: a capture keeps it whole, words like "friday"
+        // or "p1" included, until it's processed (§9.1).
+        let owned = text.get_untracked();
+        if owned.trim().is_empty() {
             error.set(Some("Type something to capture.".to_string()));
             return;
         }
-        // Send the de-tokenized text as `body` so the API's coalesce_capture
-        // treats it as a single chunk; `title` is left empty and gets derived
-        // server-side via truncation.
-        let owned = p.title.clone();
         loading.set(true);
         error.set(None);
         spawn_local(async move {
-            match quick_capture("", Some(&owned), p.due_date, p.priority).await {
+            match quick_capture(&owned).await {
                 Ok(resp) => {
                     loading.set(false);
+                    task_refresh.try_update(|n| *n += 1);
                     let msg = if resp.truncated {
-                        "Captured to Inbox (text was clipped to 500 chars)".to_string()
+                        format!(
+                            "{CAPTURED_TOAST} (text was clipped to {} characters)",
+                            common::capture::MAX_LEN
+                        )
                     } else {
-                        "Captured to Inbox".to_string()
+                        CAPTURED_TOAST.to_string()
                     };
                     push_toast(ToastLevel::Success, msg);
                     on_close.run(());
@@ -137,7 +139,8 @@ pub fn FastCaptureModal(
             <div class="p-4 flex items-center justify-between border-b border-stone-200 \
                         dark:border-stone-700">
                 <div class="flex items-center gap-2 text-stone-700 dark:text-stone-200">
-                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500">"bolt"</span>
+                    <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                        aria-hidden="true">{CAPTURE_ICON}</span>
                     <span class="font-medium">"Quick capture"</span>
                 </div>
                 <button
@@ -150,13 +153,14 @@ pub fn FastCaptureModal(
                     "Esc"
                 </button>
             </div>
-            <div class="p-4">
+            <div class="p-4 pt-6">
+                <StickyPaper class="p-3 pt-4">
                 <textarea
                     node_ref=textarea_ref
                     class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
-                           placeholder-stone-400 dark:placeholder-stone-500 outline-none \
+                           placeholder-stone-500 dark:placeholder-stone-400 outline-none \
                            resize-none text-base leading-relaxed min-h-[6rem]"
-                    placeholder="What's on your mind? Try \u{201c}buy milk friday p1\u{201d} (Cmd/Ctrl+Enter to save)"
+                    placeholder="What\u{2019}s on your mind? (Cmd/Ctrl+Enter to capture)"
                     rows="4"
                     prop:value=move || text.get()
                     on:input=move |ev| {
@@ -164,37 +168,7 @@ pub fn FastCaptureModal(
                         text.set(v);
                     }
                 ></textarea>
-                // Parse preview — what the date/priority tokens will become.
-                {move || {
-                    let p = parsed.get();
-                    (p.due_date.is_some() || p.priority.is_some()).then(|| view! {
-                        <div class="mt-2 flex items-center gap-2 flex-wrap" aria-live="polite">
-                            {p.due_date.map(|d| view! {
-                                <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
-                                             bg-amber-50 dark:bg-amber-900/30
-                                             text-amber-700 dark:text-amber-400">
-                                    <span class="material-symbols-outlined" style="font-size:12px;">"event"</span>
-                                    {format!("Due {}", d.format("%a, %b %-d"))}
-                                </span>
-                            })}
-                            {p.priority.map(|pr| {
-                                let label = match pr {
-                                    common::task::TaskPriority::High => "High priority",
-                                    common::task::TaskPriority::Medium => "Medium priority",
-                                    common::task::TaskPriority::Low => "Low priority",
-                                };
-                                view! {
-                                    <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full
-                                                 bg-stone-100 dark:bg-stone-800
-                                                 text-stone-600 dark:text-stone-300">
-                                        <span class="material-symbols-outlined" style="font-size:12px;">"flag"</span>
-                                        {label}
-                                    </span>
-                                }
-                            })}
-                        </div>
-                    })
-                }}
+                </StickyPaper>
                 <Show when=move || error.get().is_some()>
                     <div class="mt-2 text-sm text-red-600 dark:text-red-400">
                         {move || error.get().unwrap_or_default()}

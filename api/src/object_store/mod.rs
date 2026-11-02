@@ -1,3 +1,4 @@
+pub mod outbox;
 pub mod s3;
 
 use async_trait::async_trait;

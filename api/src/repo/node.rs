@@ -106,9 +106,14 @@ pub trait NodeRepo: Send + Sync {
     /// `contain` the same project, the oldest edge (by `created_at`)
     /// wins.  Projects with no Area parent are absent from the result —
     /// the caller treats absence as "Ungrouped".
+    ///
+    /// Only Areas `subject` may read count (§14, #228): someone who can
+    /// edit my Project may file it in their private Area, and its title
+    /// must not reach my dashboard. `None` is the admin scope.
     async fn area_for_nodes(
         &self,
         node_ids: &[NodeId],
+        subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError>;
 
     /// Toggle the `pinned` flag on a single node.  Used by the
@@ -234,6 +239,52 @@ fn parse_node_status(s: &str) -> Result<NodeStatus, EmberTroveError> {
     super::parse_wire(s, "node_status", NodeStatus::parse)
 }
 
+/// Insert a node (`NodeRepo::create`), on any executor, so capture
+/// conversion (#234) can do it inside its transaction. A taken slug or
+/// title is `AlreadyExists` (409).
+pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    owner_id: &str,
+    req: &CreateNodeRequest,
+) -> Result<Node, EmberTroveError> {
+    let slug = slugify(&req.title);
+    let node_type_str = req.node_type.as_str();
+    let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
+
+    let row = sqlx::query_as::<_, NodeRow>(
+        r#"
+        INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status,
+                           project_status)
+        VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8)
+        RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
+                  status::text, project_status, pinned, created_at, updated_at
+        "#,
+    )
+    .bind(owner_id)
+    .bind(node_type_str)
+    .bind(&req.title)
+    .bind(&slug)
+    .bind(&req.body)
+    .bind(&req.metadata)
+    .bind(status_str)
+    .bind(&req.project_status)
+    .fetch_one(ex)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db_err) if db_err.constraint() == Some("nodes_slug_key") => {
+            EmberTroveError::AlreadyExists(format!("slug already exists: {slug}"))
+        }
+        sqlx::Error::Database(db_err)
+            if db_err.constraint() == Some("nodes_owner_title_unique") =>
+        {
+            EmberTroveError::AlreadyExists(format!("a node named \"{}\" already exists", req.title))
+        }
+        _ => EmberTroveError::Internal(format!("create node failed: {e}")),
+    })?;
+
+    row.into_node()
+}
+
 #[async_trait]
 impl NodeRepo for PgNodeRepo {
     async fn create(
@@ -241,45 +292,7 @@ impl NodeRepo for PgNodeRepo {
         owner_id: &str,
         req: CreateNodeRequest,
     ) -> Result<Node, EmberTroveError> {
-        let slug = slugify(&req.title);
-        let node_type_str = req.node_type.as_str();
-        let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
-
-        let row = sqlx::query_as::<_, NodeRow>(
-            r#"
-            INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status,
-                               project_status)
-            VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8)
-            RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, project_status, pinned, created_at, updated_at
-            "#,
-        )
-        .bind(owner_id)
-        .bind(node_type_str)
-        .bind(&req.title)
-        .bind(&slug)
-        .bind(&req.body)
-        .bind(&req.metadata)
-        .bind(status_str)
-        .bind(&req.project_status)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db_err) if db_err.constraint() == Some("nodes_slug_key") => {
-                EmberTroveError::AlreadyExists(format!("slug already exists: {slug}"))
-            }
-            sqlx::Error::Database(db_err)
-                if db_err.constraint() == Some("nodes_owner_title_unique") =>
-            {
-                EmberTroveError::AlreadyExists(format!(
-                    "a node named \"{}\" already exists",
-                    req.title
-                ))
-            }
-            _ => EmberTroveError::Internal(format!("create node failed: {e}")),
-        })?;
-
-        row.into_node()
+        insert_node(&self.pool, owner_id, &req).await
     }
 
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
@@ -562,6 +575,8 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
+        // Its attachment rows cascade away, and the `attachments_queue_object`
+        // trigger queues their files for deletion from storage (#239).
         let result = sqlx::query("DELETE FROM nodes WHERE id = $1")
             .bind(id.0)
             .execute(&self.pool)
@@ -894,6 +909,7 @@ impl NodeRepo for PgNodeRepo {
     async fn area_for_nodes(
         &self,
         node_ids: &[NodeId],
+        subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError> {
         if node_ids.is_empty() {
             return Ok(Vec::new());
@@ -909,7 +925,8 @@ impl NodeRepo for PgNodeRepo {
             area_id: Uuid,
             area_title: String,
         }
-        let rows = sqlx::query_as::<_, Row>(
+        let a_visible = super::visible_to("a", 2);
+        let rows = sqlx::query_as::<_, Row>(&format!(
             r#"
             WITH ranked AS (
                 SELECT
@@ -925,11 +942,13 @@ impl NodeRepo for PgNodeRepo {
                 WHERE e.target_id = ANY($1)
                   AND e.edge_type::text = 'contains'
                   AND a.node_type::text = 'area'
+                  AND {a_visible}
             )
             SELECT project_id, area_id, area_title FROM ranked WHERE rn = 1
-            "#,
-        )
+            "#
+        ))
         .bind(&ids)
+        .bind(subject)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("area_for_nodes failed: {e}")))?;

@@ -7,11 +7,11 @@ use axum::{
 use common::{
     auth::AuthClaims,
     favorite::{CreateFavoriteRequest, Favorite, ReorderFavoritesRequest},
-    id::FavoriteId,
+    id::{FavoriteId, NodeId},
 };
 use uuid::Uuid;
 
-use crate::{error::ApiError, state::AppState};
+use crate::{auth::permissions::require_viewer, error::ApiError, state::AppState};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -32,11 +32,18 @@ async fn list_favorites(
 }
 
 /// POST /favorites — add a new favorite (node or URL).
+///
+/// A node favorite needs view rights on the node (§14, #228): its list
+/// shows the node's live title. A missing node is a 403 like a hidden one,
+/// so the answer never says whether an id exists.
 async fn create_favorite(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateFavoriteRequest>,
 ) -> Result<(StatusCode, Json<Favorite>), ApiError> {
+    if let Some(node_id) = req.node_id {
+        require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
+    }
     let fav = state.favorites.create(&claims.sub, req).await?;
     Ok((StatusCode::CREATED, Json(fav)))
 }

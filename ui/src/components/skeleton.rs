@@ -32,7 +32,7 @@ pub fn SkeletonListRow() -> impl IntoView {
 }
 
 /// A stack of row placeholders — usable as a Suspense fallback for any
-/// list-shaped view (My Day tasks, Inbox tasks, Notes feed, etc.).
+/// list-shaped view (My Day tasks, Notes feed, etc.).
 #[component]
 pub fn SkeletonList(#[prop(default = 5)] rows: usize) -> impl IntoView {
     view! {

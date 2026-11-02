@@ -677,3 +677,10 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-31 | Resource merges into Reference in 3.0.0 (migration 040); backups made before 3.0 are refused rather than converted | Owner, S2c planning (#222) |
 | 2026-10-31 | A `contains` edge may be removed with edit rights on either end, so one home can't trap a child | Developer review of S3a (#224); flagged to the owner |
 | 2026-10-31 | `related_to` merged to one edge per pair (migration 041: the oldest kept, a blank label filled from the other, copies archived) | S3b (#226) |
+| 2026-10-31 | One home per node in the database (migration 042: each node keeps its oldest home, the rest archived) | Owner, S3c planning (#228) |
+| 2026-10-31 | A home the reader can't see is shown to the child's editors as "a home you can't see" with Remove, never named; viewers aren't told | Owner, S3c planning (#228) |
+| 2026-10-31 | Captures get their own table; notes without a node become captures, and a note's node is required (migration 043) | Owner, S4a planning (#234) |
+| 2026-10-31 | Captures are owner-only, with no admin bypass; in backups, never in search, export or webhooks | Owner, S4a planning (#234) |
+| 2026-10-31 | The calendar's day composer makes the chosen Project's task due that day, or else a capture led by the date | Owner, S4a planning (#234) |
+| 2026-10-31 | Converting a capture offers a node (with an optional home), a note on a node, or a Task in a Project; Event and Person join with their slices. A Task's title must fit (500 characters): the text is reworded, never cut | Owner, S4b planning (#234) |
+| 2026-11-01 | The captures' place is named Captures (the Inbox until then) and holds captures only; a Task without a Project is listed by Data health, not by Captures. Captures are never searched: a glance at the wall is the point | Owner, on #240 (S4c) |

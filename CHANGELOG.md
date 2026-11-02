@@ -15,8 +15,308 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   visible to the caller (`repo::visible_to`, the dashboard's rule; admins
   still see every title). The task or note itself stays: it is still
   theirs. Its chip now reads "Node unavailable" (🔒) instead of a stale
-  title or "Inbox", and a task row no longer links to a node page that
+  title or "No Project", and a task row no longer links to a node page that
   would only refuse.
+
+## [3.8.0] - 2026-11-02
+
+### Added
+- **A "+" on the Captures page** (#252). It opens the quick-capture
+  composer, the same as `n`; the new capture appears on the wall at once.
+  Until now only the keyboard (or the palette, the calendar, Notes) could
+  add one, and nothing on the page said so once a capture existed.
+
+## [3.7.0] - 2026-11-02
+
+### Fixed
+- **An open task editor keeps your unsaved text when its list reloads**
+  (#250). On a Project's task panel, anything that reloads the tasks
+  closed the editor and dropped the typed text without Undo: ☀ on any
+  task, ticking one, or a quick capture with `n`. My Day kept the editor
+  open but reset its text to the saved task.
+  - The draft of the task being edited now belongs to the list, not the
+    row (`EditSession`): a rebuilt row, or the task moving between My
+    Day's Today and Backlog mid-edit, keeps editing the same text.
+  - Opening an editor (pencil, `e`, Edit) always starts from the saved
+    task, and Escape's "Edit discarded · Undo" still restores the text.
+  - One task is edited at a time on the panel, as on My Day.
+- **An unknown URL, `/admin` among them, no longer freezes the app on a
+  bare "Loading..."** (#246). The router's fallback was a `<Redirect>`,
+  which panics when it renders (WASM `unreachable`), so the page never got
+  past the sign-in check. The fallback now redirects to My Day after it
+  mounts, and `/admin` opens the Users page. Not a v3.6.0 regression: the
+  fallback dates from July.
+
+### Changed
+- **Captures look like sticky notes** (#240, part A). The Inbox shows
+  captures as a wall of yellow notes with a strip of tape, not as task
+  rows; dark mode uses a muted paper so the yellow doesn't glow. The text
+  stays in the interface font, left-aligned.
+  - Each note shows how long it has waited ("today", "3d", "2w", "4mo"),
+    from `common::capture::CaptureAge`; a note a week old or more tilts a
+    little and its tag darkens. Screen readers hear "captured 3 weeks ago".
+  - The quick-capture composer (`n`, the palette) is a blank sticky note.
+  - Colour is never the only signal: the "Captures" heading and the
+    capture glyph (⚡, the same as Quick capture's) stay. The sticky-note
+    glyph remains Notes' own.
+  - Presentation only: no API, data or behaviour change.
+- **The Inbox is now Captures** (#240, part B; programme slice S4c). The
+  page is named for what it holds: Tasks → Captures, at `/tasks/captures`.
+  - `/tasks/inbox` and `/inbox` redirect there and keep their query, so a
+    share from an installed app (which still lands on
+    `/tasks/inbox?captured=1`) is confirmed as before.
+  - It holds captures only. The task list, its "Process" triage mode and
+    its add-task form are gone: a task needs its Project (ONTOLOGY §9.3).
+    A task left without one is listed by Data health ("Move to a
+    Project"); its My Day chip reads "No Project" and opens Data health.
+  - An empty wall says "Nothing captured".
+  - The words follow: "Added to Captures" (quick capture, the share sheet,
+    the calendar), "Go to Captures" in the palette, `n` is "Quick capture"
+    in help, the home-screen shortcut, help text. The service worker's
+    cache moves to v12.
+  - No API change: `GET /api/tasks/inbox` stays until tasks without a
+    Project are refused (S5c).
+
+### Added
+- **Keys on the Captures wall** (#240, part B2). `j`/`k` and ←/→ move
+  through the cards in reading order, ↑/↓ to the card above or below
+  (`common::grid_nav`, nearest by column). `Enter` or `c` converts the
+  focused capture, `e` edits it, `d` deletes it with Undo, and `Esc` drops
+  the focus. After a delete the focus moves to the card now in its place.
+  - The keys are ignored while any dialog is open (`keyboard::modal_open`),
+    so `d` can't delete a card behind the Convert dialog.
+  - Editing a capture, by key or button, focuses its text box.
+  - Help lists the keys under "Captures".
+- **The Notes page hands loose text to Captures** (#234, Muse's v3.5.0
+  friction item). Its hint used to say "press n to capture it", but `n`
+  opened an empty composer. "Capture it" now turns the text in the box
+  into a capture, clears the box and offers Open.
+
+## [3.6.0] - 2026-11-01
+
+### Fixed
+- **Deleting a node or an attachment now deletes its files from storage**
+  (#239). The rows went, but the stored objects stayed behind; a failed
+  single-attachment delete also logged the file name.
+  - A trigger on `attachments` (migration 044) queues the file of every
+    deleted row in `object_deletions`, in the same transaction, whatever
+    deleted it.
+  - A drain deletes the files right away, batch after batch until the
+    queue is empty, and the daily loop retries any that failed.
+  - A key that an attachment row names again (for example, after a
+    restore) leaves the queue and is never deleted.
+  - Files orphaned before this release are not swept yet; that is
+    backlog.
+
+### Security
+- **Suspend an account** (#239): `POST /api/admin/users/{id}/suspend` keeps
+  the account's data and stops it at once.
+  - Its open sessions stop at the next request. The API keeps a list of
+    suspended accounts (`suspended_accounts`, migration 044), held in
+    memory and checked on every request, and answers them with the same
+    401 as a bad token.
+  - Cognito disables the account and signs it out everywhere, so it can't
+    sign in or renew a session.
+  - It fails closed. The API refuses the account before Cognito is asked;
+    if Cognito then fails, the admin is told and can retry.
+    `POST …/reactivate` lifts the suspension only once Cognito has allowed
+    sign-in again.
+  - Login and session renewal refuse a suspended account too. The
+    renewal revokes its refresh token, and a login goes out through
+    Cognito's logout, so the browser can't loop back in.
+  - Account ids in these routes must be the canonical lower-case UUID. An
+    email alias or another casing reached Cognito but missed the
+    suspended list and the self-guard.
+  - The Cognito IAM policy needs `AdminDisableUser`, `AdminEnableUser` and
+    `AdminUserGlobalSignOut` (`docs/deploy-aws.md`).
+- **Deleting an account deletes its data** (#239; owner decision). It used
+  to remove only the Cognito account and leave everything the person owned
+  behind.
+  - One transaction removes everything the account owns: its nodes (shared
+    ones too, so their sharees lose access), notes, tasks, captures,
+    People, tags, templates, saved searches, favorites, webhooks and
+    editor settings, and its grants. It also deletes every removed-edge
+    archive row whose node no longer exists.
+  - Its live tasks on other people's nodes pass to the node's owner and
+    leave My Day. Its notes there are deleted.
+  - What stays on other people's nodes, such as History entries, the
+    authorship of versions it saved and grants it made, is anonymised to
+    "Deleted account". Version text stays, because it is the node owner's
+    content.
+  - Its files are deleted from storage after the commit.
+  - The purge locks the account's nodes, so a sharee's upload waits and
+    then fails, rather than slipping a file in.
+  - The daily sweep runs the purge again on deleted accounts, which
+    removes anything an in-flight request wrote after the first run.
+  - The order is suspend, then purge, then delete in Cognito, and every
+    step is safe to retry. If the purge fails, the account stays
+    suspended in Cognito.
+  - The account stays refused for a day after deletion. Before this, an
+    ID token issued before the deletion kept working for up to an hour.
+  - `GET /api/admin/users/{id}/deletion-preview` gives counts only, never
+    titles. `DELETE` answers with the same counts.
+  - Earlier backups still hold the data until they are deleted: admin
+    backups, and the server's daily database dumps (kept 30 days). If
+    one of those is restored, the data comes back.
+- **Admin page: suspend, reactivate and delete with care** (#239).
+  - Suspended accounts carry a badge, and each row has Suspend or
+    Reactivate. A suspend that Cognito didn't confirm shows that, so you
+    can try again.
+  - Delete opens a dialog that counts what will go (never titles). It
+    names the shared nodes whose sharees lose access and the tasks that
+    pass to other owners, and warns that earlier backups still hold the
+    data. It stays disabled until you type the account's email.
+  - Your own row offers neither, and your own admin role can't be
+    unticked.
+- **An admin can no longer suspend or delete their own account, or remove
+  their own admin role** (#239), so the last admin can't lock everyone out.
+
+## [3.5.0] - 2026-10-31
+
+### Added
+- **Captures** (#234, ONTOLOGY §9.1): unclassified input waiting in the
+  Inbox, kept until it is processed or deleted on purpose.
+  - Quick capture (`n`, the palette, the iOS share sheet) now lands a
+    capture, not a task without a Project. The text is kept as typed, up to
+    10,000 characters (counted as characters, so non-Latin text gets the
+    same room); quick capture used to cut it to 500. Longer text is
+    clipped, and the toast says so, rather than refused.
+  - The Inbox lists captures above its tasks. Each can be reworded, or
+    deleted with Undo.
+  - `/api/captures` (list, create, edit, delete, restore). Captures are
+    owner-only: no other account, the admin included, can see them.
+- **Converting a capture** (#234, §9.1): `POST /api/captures/{id}/convert`
+  turns it into exactly one thing, either a node (optionally filed into its
+  home), a note on a node, or a Task in a Project. The capture is deleted in
+  the same transaction, so its text is never lost or doubled. The same
+  rights and rules apply as when creating the thing directly. A Task's
+  title must fit in 500 characters: reworded, never cut.
+  - In the Inbox, each capture's **Convert** button opens a dialog with
+    Node, Note and Task tabs. The text is prefilled: the first line becomes
+    the title. A counter shows when a Task's title is too long. After
+    converting you stay in the Inbox, and the toast's **Open** goes to what
+    was made.
+- **The calendar's day composer** has an optional Project. With one it adds
+  that Project's task, due that day. Without one it makes a capture that
+  starts with the date ("Sat 7 Nov: …").
+
+### Changed
+- **Every note belongs to a node** (§9.2, migration 043). The few notes
+  that had none move into captures, keeping their text and dates.
+  - The Notes page's compose box needs a node, and points loose thoughts to
+    quick capture.
+  - Its "Uncategorized (inbox)" filter is gone.
+- `POST /api/inbox/quick` keeps its path and format, for installed apps and
+  the share target, but creates a capture. A due date sent by an older
+  client is written into the text; a priority is ignored.
+- Backups are format 4 (captures listed on their own). Format-3 backups
+  still restore: their notes without a node become captures, and the
+  restore preview counts them as captures.
+
+### Fixed
+- **Restore left the live database's nodeless tasks and notes in place.**
+  They sat next to the restored ones; a restore now replaces them too.
+- **The home-screen "Quick capture" shortcut works.** It opened a URL
+  nothing read; it now opens quick capture.
+- **A share that fails now says so,** for example "sign in, then share it
+  again", instead of landing on a blank page.
+
+## [3.4.1] - 2026-10-31
+
+### Fixed
+- **A cancelled request could leave a database connection stuck in a
+  transaction, and later saves on it were silently lost.** If a page was
+  closed or left at the moment a request began a transaction (for example
+  while Data health was loading), the database library returned that
+  connection to the pool without rolling the transaction back. Any later
+  request handed that connection ran inside a transaction no one commits:
+  its writes were lost when the connection closed, and its locks held up
+  other saves for up to 30 seconds.
+  - Each connection is now checked when it returns to the pool, and closed
+    if it is still inside a transaction; the database rolls it back.
+  - Found by the e2e suite while building captures (#234). Nothing points
+    to it having hit the reference instance, which has a single user.
+
+## [3.4.0] - 2026-10-31
+
+### Added
+- **A node's home is shown and set on its own page** (#228, ONTOLOGY §3.3,
+  §6.1). Connections now starts with a Home row: the parent as a link, or
+  "None: it stands alone".
+  - Editors can choose, change or remove the home there.
+  - The picker offers only the kinds that may be the home: an Area for an
+    Area or an Article, an Area or a Project for a Project. A Reference has
+    no home.
+- `GET` / `PUT /api/nodes/{id}/home`. Setting a home needs edit rights on
+  both nodes, and the containment table and loop rule apply. Removing one
+  needs only the node's.
+
+### Changed
+- **The database now holds at most one home per node** (migration 042).
+  Before the index is added, any node that still has several homes keeps
+  its oldest; the others are copied to `edges_removed_042`, then removed.
+  A restore folds an older backup's homes the same way, and its preview
+  says how many.
+- **The "More than one home" rule is gone from Data health.** It can no
+  longer happen. Its planned "Keep this home" fix had nothing left to act
+  on, so it was dropped.
+
+### Security
+- **A home you can't see is never named** (§14, owner decision).
+  - A node's editors see "A home you can't see" with Remove, so they can
+    free their node; the API sends no title, id or owner for it. Before,
+    such a home was invisible, and adding a new one failed with "already
+    has a home".
+  - Someone who can only view the node isn't told it exists.
+
+## [3.3.0] - 2026-10-31
+
+### Added
+- **Data health can fix link problems** (#228, ONTOLOGY §3.3, §6).
+  - A Reference inside a home: "Make it a reference link" turns the
+    `contains` into a `references` link, keeping its label. "Convert all"
+    does every listed one after a single confirmation.
+  - A home that isn't allowed, or a dependency on an Area: "Link instead"
+    turns it into a related link; Remove deletes it.
+  - A loop lists its links ("A → B"). Removing any one of yours breaks it.
+  - Buttons appear only where the call would pass: the item carries each
+    link's id, and the page applies the API's own rules to what you own.
+- `POST /api/edges/{id}/convert` turns a link into a `references` or
+  `related_to` link in one transaction. It needs rights to delete the old
+  link and to create the new one. A `related_to` runs from whichever end
+  you can edit. If an identical link is already there, it absorbs the
+  converted one and takes its label when it has none.
+- "Convert all" sends its calls at a pace the write limit allows, like the
+  bulk task delete, and says how many failed.
+
+### Changed
+- **The "A link stored both ways" rule is gone from Data health.** Since
+  3.2.0 the database stores a related link once, so the rule could never
+  fire. A backup that still holds such a pair says so in the restore
+  preview, as a count, and restores each pair as one link.
+
+## [3.2.1] - 2026-10-31
+
+### Security
+- **The project dashboard no longer names an Area you can't see** (#228,
+  ONTOLOGY §14). It grouped each of your Projects under its Area home
+  without checking that you could read that Area. Someone with edit rights
+  on your Project could file it in their own private Area, and your
+  dashboard then showed that Area's title.
+  - Only Areas you can read now count.
+  - A Project whose only Area is hidden is listed as ungrouped.
+  - Nothing was exposed on the reference instance: it has a single owner
+    and no homes.
+- **A favorite shows a node's title only while you can read the node**
+  (#228, found in review). A favorite holds a node id and showed that
+  node's current title, renames included.
+  - Adding a favorite never checked access, so anyone who knew a node's id
+    (for example from a share later revoked) could read its title. The
+    answer also told an existing id from a made-up one.
+  - Adding a node favorite now needs view rights; a node you can't see and
+    one that doesn't exist both get 403.
+  - A favorite whose node you can no longer read shows the label it was
+    saved with, not the live title.
 
 ## [3.2.0] - 2026-10-31
 

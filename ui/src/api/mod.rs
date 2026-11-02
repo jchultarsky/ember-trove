@@ -5,6 +5,7 @@ mod admin;
 mod attachments;
 mod auth;
 mod backup;
+mod captures;
 mod data_health;
 mod edges;
 mod editor_prefs;
@@ -318,6 +319,12 @@ pub async fn delete_empty(path: &str) -> Result<(), UiError> {
     parse_empty(send_authed(|| built(Request::delete(&url).build())).await?).await
 }
 
+/// DELETE `path`, parse a JSON response into `T`.
+pub async fn delete_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, UiError> {
+    let url = api_url(path);
+    parse_json(send_authed(|| built(Request::delete(&url).build())).await?).await
+}
+
 /// PUT `body` as JSON to `path`, expecting no response body.
 pub async fn put_empty<B: Serialize>(path: &str, body: &B) -> Result<(), UiError> {
     let url = api_url(path);
@@ -358,6 +365,7 @@ pub use admin::*;
 pub use attachments::*;
 pub use auth::*;
 pub use backup::*;
+pub use captures::*;
 pub use data_health::*;
 pub use edges::*;
 pub use editor_prefs::*;
