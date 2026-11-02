@@ -45,6 +45,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     Project are refused (S5c).
 
 ### Added
+- **Keys on the Captures wall** (#240, part B2). `j`/`k` and ←/→ move
+  through the cards in reading order, ↑/↓ to the card above or below
+  (`common::grid_nav`, nearest by column). `Enter` or `c` converts the
+  focused capture, `e` edits it, `d` deletes it with Undo, and `Esc` drops
+  the focus. After a delete the focus moves to the card now in its place.
+  - The keys are ignored while any dialog is open (`keyboard::modal_open`),
+    so `d` can't delete a card behind the Convert dialog.
+  - Editing a capture, by key or button, focuses its text box.
+  - Help lists the keys under "Captures".
 - **The Notes page hands loose text to Captures** (#234, Muse's v3.5.0
   friction item). Its hint used to say "press n to capture it", but `n`
   opened an empty composer. "Capture it" now turns the text in the box

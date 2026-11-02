@@ -188,6 +188,103 @@ test('the Notes box hands loose text to Captures', async ({ page, request }) => 
   await expect(page.getByTestId('capture').filter({ hasText: text })).toBeVisible();
 });
 
+// ── Keys on the wall (#240 part B2) ─────────────────────────────────────────
+
+/** Three captures, newest first on the wall: `three`, `two`, `one`. */
+async function threeOnTheWall(page: Page, request: APIRequestContext) {
+  const stamp = Date.now();
+  const bodies = ['one', 'two', 'three'].map((w) => `${PREFIX}${stamp} keys ${w}`);
+  for (const body of bodies) {
+    expect((await request.post('/api/captures', { data: { body } })).status()).toBe(201);
+  }
+  await page.goto('/tasks/captures');
+  const card = (w: string) => page.getByTestId('capture').filter({ hasText: `${stamp} keys ${w}` });
+  await expect(card('one')).toBeVisible();
+  // Neutral focus, so single keys reach the wall (e2e.md).
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  return card;
+}
+
+const focusedCard = (page: Page) => page.locator('[data-testid="capture"][aria-current="true"]');
+
+test('j, k and the arrows move the focus ring across the wall', async ({ page, request }) => {
+  const card = await threeOnTheWall(page, request);
+  await expect(focusedCard(page)).toHaveCount(0);
+  await page.keyboard.press('j');
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('j');
+  await expect(card('two')).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('k');
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('ArrowRight');
+  await expect(card('two')).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+  await expect(focusedCard(page)).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(focusedCard(page)).toHaveCount(0);
+});
+
+test('d deletes the focused capture, Undo brings it back', async ({ page, request }) => {
+  const card = await threeOnTheWall(page, request);
+  await page.keyboard.press('j');
+  await page.keyboard.press('d');
+  await expect(card('three')).toHaveCount(0);
+  // The ring moves to the card now in its place.
+  await expect(card('two')).toHaveAttribute('aria-current', 'true');
+  await page.locator('[role="status"]').getByRole('button', { name: 'Undo' }).click();
+  await expect(card('three')).toBeVisible();
+});
+
+test('c converts and e edits the focused capture', async ({ page, request }) => {
+  const card = await threeOnTheWall(page, request);
+  await page.keyboard.press('j');
+  await page.keyboard.press('c');
+  const dialog = page.getByRole('dialog', { name: 'Convert capture' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('textbox', { name: 'Title' })).toHaveValue(/keys three/);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  // The ring stays where it was.
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('e');
+  // (Editing moves the text into a textarea, so the card no longer matches
+  // by its text.)
+  const field = page.getByRole('textbox', { name: 'Capture text' });
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue(/keys three$/);
+});
+
+test('the wall’s keys never act behind a dialog', async ({ page, request }) => {
+  const card = await threeOnTheWall(page, request);
+  await page.keyboard.press('j');
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'Convert capture' });
+  await expect(dialog).toBeVisible();
+  // Even with nothing focused inside the dialog, d does nothing.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('d');
+  await page.keyboard.press('j');
+  // (Escape needs focus inside the dialog; with none there, use Cancel.)
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(card('three')).toBeVisible();
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+
+  // The same behind the quick-capture composer.
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('n');
+  const composer = page.getByRole('dialog', { name: 'Quick capture' });
+  await expect(composer).toBeVisible();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('d');
+  await composer.getByRole('button', { name: 'Close' }).click();
+  await expect(composer).toHaveCount(0);
+  await expect(card('three')).toBeVisible();
+});
+
 // ── Converting a capture (S4b, §9.1) ────────────────────────────────────────
 
 async function convertDialog(page: Page, text: string) {

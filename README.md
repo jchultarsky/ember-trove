@@ -27,8 +27,8 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
 - **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. `p` key toggles pin on the open node.
 - **Node templates** — create reusable Markdown templates for each node type; "Use" pre-fills the editor body.
-- **Quick capture** — `n` keyboard shortcut opens a lightweight modal for rapid node creation. Type, title, and optional body; Ctrl+Enter to save.
-- **Keyboard shortcuts** — `n` new node · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields.
+- **Quick capture** — `n` opens a blank sticky note; Ctrl/Cmd+Enter sticks it on the Captures wall (Tasks → Captures), where each capture waits to become exactly one thing: a node, a note on a node, or a task in a Project.
+- **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
 - **Multi-user permissions** — nodes are **private by default**. Owners can invite others by email with Viewer / Editor / Owner roles. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
@@ -612,12 +612,16 @@ Nodes are **private by default** — only the creating user can see a node until
 
 | Key | Action |
 |-----|--------|
-| `n` | Open quick-capture modal (new node) |
+| `n` | Quick capture (lands on the Captures wall) |
 | `g` | Go to graph view |
 | `/` | Focus search |
 | `p` | Toggle pin on the open node |
 | `?` | Toggle keyboard shortcuts help overlay |
 | `Esc` | Back to node list / close modal |
+
+On the Captures wall: `j`/`k` or the arrows move across the cards, `Enter` or
+`c` converts the focused capture, `e` edits it, `d` deletes it (Undo in the
+toast), `Esc` drops the focus. They do nothing while a dialog is open.
 
 ---
 
