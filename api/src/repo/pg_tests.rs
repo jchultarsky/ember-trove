@@ -71,6 +71,88 @@ async fn create_node(pool: &PgPool, owner: &str, title: &str) -> Node {
         .expect("node create")
 }
 
+// ── The graph's nodes (performance P1) ───────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn graph_nodes_follow_the_node_list_scope_and_carry_no_body(pool: PgPool) {
+    let graph = PgGraphRepo::new(pool.clone());
+    let mine = create_node(&pool, "owner-a", "A long").await;
+    let archived = create_node(&pool, "owner-a", "A archived").await;
+    let private = create_node(&pool, "owner-b", "B private").await;
+    let shared = create_node(&pool, "owner-b", "B shared").await;
+    // An 18 KB body (prod's largest), led by a heading the preview skips.
+    let long = format!("# Heading\n\n{}", "word ".repeat(3_600));
+    sqlx::query("UPDATE nodes SET body = $2 WHERE id = $1")
+        .bind(mine.id.0)
+        .bind(&long)
+        .execute(&pool)
+        .await
+        .expect("body");
+    sqlx::query("UPDATE nodes SET status = 'archived' WHERE id = $1")
+        .bind(archived.id.0)
+        .execute(&pool)
+        .await
+        .expect("archive");
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by)
+         VALUES ($1, 'owner-a', 'viewer', 'owner-b')",
+    )
+    .bind(shared.id.0)
+    .execute(&pool)
+    .await
+    .expect("share");
+    let tag: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO tags (owner_id, name, color) VALUES ('owner-a', 'red', '#ff0000') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("tag");
+    sqlx::query("INSERT INTO node_tags (node_id, tag_id) VALUES ($1, $2)")
+        .bind(mine.id.0)
+        .bind(tag.0)
+        .execute(&pool)
+        .await
+        .expect("tag a node");
+
+    let a = graph.list_nodes(Some("owner-a")).await.expect("a's graph");
+    let ids: std::collections::HashSet<_> = a.iter().map(|n| n.id).collect();
+    assert!(
+        ids.contains(&mine.id) && ids.contains(&archived.id),
+        "own, archived too"
+    );
+    assert!(
+        ids.contains(&shared.id),
+        "a node shared with A is on A's graph"
+    );
+    assert!(!ids.contains(&private.id), "B's private node never is");
+    assert_eq!(a.len(), 3);
+
+    let m = a.iter().find(|n| n.id == mine.id).unwrap();
+    let preview = m.preview.as_deref().unwrap_or_default();
+    assert!(
+        preview.starts_with("word word"),
+        "the heading is skipped: {preview}"
+    );
+    assert_eq!(
+        preview.chars().count(),
+        101,
+        "100 characters and the ellipsis"
+    );
+    assert_eq!(
+        m.tags,
+        vec![common::graph::GraphTag {
+            id: common::id::TagId(tag.0),
+            color: "#ff0000".to_string()
+        }]
+    );
+    let arch = a.iter().find(|n| n.id == archived.id).unwrap();
+    assert_eq!(arch.status, common::node::NodeStatus::Archived);
+
+    // An admin (None) sees every node.
+    let all = graph.list_nodes(None).await.expect("all");
+    assert_eq!(all.len(), 4);
+}
+
 // ── Node owner-scoping ────────────────────────────────────────────────────────
 
 #[sqlx::test(migrations = "../migrations")]

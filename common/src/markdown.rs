@@ -3,6 +3,33 @@
 //! These helpers operate on raw markdown text without requiring a full parser,
 //! keeping the `common` crate dependency-free of `pulldown-cmark`.
 
+/// A plain-text preview of a markdown body: its text lines (no headings,
+/// code fences or rules) joined with spaces, `**`, `__` and backticks
+/// dropped, cut to `max_chars` characters with "…" when longer. `None` when
+/// nothing is left. A heuristic, not a parser (this module has none); the
+/// graph's hover card shows it as plain text.
+pub fn plain_preview(body: &str, max_chars: usize) -> Option<String> {
+    let text = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty() && !l.starts_with('#') && !l.starts_with("```") && !l.starts_with("---")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    let clean = text.replace("**", "").replace("__", "").replace('`', "");
+    let mut chars = clean.chars();
+    let taken: String = chars.by_ref().take(max_chars).collect();
+    Some(if chars.next().is_some() {
+        format!("{taken}\u{2026}")
+    } else {
+        taken
+    })
+}
+
 /// Extract the content under a markdown heading whose text matches
 /// `heading` (case-insensitive).  Returns everything from the line after
 /// the heading up to (but not including) the next heading of equal or
@@ -298,6 +325,37 @@ WIP.
         assert_eq!(
             link_first_mention("[[Other|alpha thing]] end", "Alpha"),
             None
+        );
+    }
+
+    #[test]
+    fn a_plain_preview_keeps_text_lines_only() {
+        let body =
+            "# Heading\n\nSome **bold** text.\n\n```\ncode\n```\n---\nMore `code` and __more__.";
+        // The fence's inner line is text to this heuristic, as it was in the
+        // graph view it came from.
+        assert_eq!(
+            plain_preview(body, 100).as_deref(),
+            Some("Some bold text. code More code and more.")
+        );
+    }
+
+    #[test]
+    fn a_plain_preview_of_nothing_is_none() {
+        assert_eq!(plain_preview("", 100), None);
+        assert_eq!(plain_preview("# Only a heading\n\n---\n", 100), None);
+    }
+
+    #[test]
+    fn a_plain_preview_cuts_by_characters_not_bytes() {
+        let body = "é".repeat(150);
+        let p = plain_preview(&body, 100).unwrap_or_default();
+        assert_eq!(p.chars().count(), 101, "100 characters and the ellipsis");
+        assert!(p.ends_with('\u{2026}'));
+        assert_eq!(plain_preview("short", 100).as_deref(), Some("short"));
+        assert_eq!(
+            plain_preview(&"x".repeat(100), 100).map(|p| p.len()),
+            Some(100)
         );
     }
 }

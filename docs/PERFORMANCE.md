@@ -177,6 +177,27 @@ also recreate `postgres`, restarting it for a few seconds. So:
 - A request that hits the 30 s timeout is recorded as its 408, with the full time.
 - A request whose client disconnects is not recorded.
 
+## P1 results
+
+### #1 One slim graph request (2026-11-02)
+
+`GET /api/graph` returns nodes without bodies (a 100-character plain-text preview
+instead), edges and positions in one response. It replaced paging through
+`GET /nodes`, then `/edges`, then `/graph/positions`.
+
+| graph page | before | after |
+|---|---|---|
+| 1×: API data | 1,558 kB, 11 requests | **174 kB**, 8 requests |
+| 1×: phone-4g ready (warm) | 3,112 ms | **1,121 ms** |
+| 10×: API data | 15,743 kB, 24 requests | **1,743 kB**, 8 requests |
+| 10×: phone-4g ready (cold / warm) | 22,732 / 19,726 ms | **7,946 / 4,144 ms** |
+| 10×: desktop ready (warm) | 788 ms | 539 ms |
+
+(The 8 requests are the page's: the graph's one, plus the app's own at start.)
+
+At 10× the phone is now held up by two things: the 1.7 MB transfer, which API
+compression (#6) cuts to about a fifth, and drawing 3,000 nodes on a 4× slower CPU.
+
 ### #2 Fewer round trips at start (2026-11-02)
 
 - **Removed duplicate requests:**
