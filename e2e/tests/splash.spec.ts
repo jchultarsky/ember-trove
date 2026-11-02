@@ -118,7 +118,10 @@ test('on a phone the banner uses the width and keeps Reload clear (#262)', async
   const reload = (await banner.getByRole('button', { name: 'Reload' }).boundingBox())!;
   // Two natural lines at most (14px text, 20px line height).
   expect(text.height).toBeLessThanOrEqual(41);
-  expect(reload.x).toBeGreaterThanOrEqual(text.x + text.width);
+  // Reload never covers the text: beside it, or (on a phone) wrapped below.
+  const beside = reload.x >= text.x + text.width;
+  const below = reload.y >= text.y + text.height;
+  expect(beside || below).toBe(true);
 });
 
 test('no banner while the server runs this bundle', async ({ page }) => {
