@@ -5,6 +5,14 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-02)
 
+- **v3.9.0 shipped: the performance phase's measurement (P0, PR #260), two
+  layout fixes from Muse (#261, #262), and pulldown-cmark 0.13.6
+  (RUSTSEC-2026-0433, PR #265). The proxy moves to nginx 1.30 stable, pulled
+  on every deploy (PR #267; 1.29 was end-of-life with CVEs).**
+  - Per-route API latency in `/api/metrics`. The request log names routes,
+    never raw URIs (it logged search terms). `pg_stat_statements` is on.
+  - Baseline and ranked fixes in `docs/PERFORMANCE.md`. P1 #1 (the slim
+    graph, #266) and #2 (fewer requests, HTTP/2) follow.
 - **v3.8.1 shipped: security fix #230 (PR #231), and the app loads fast on
   phones again (PRs #255, #256).**
   - Task and note feeds join a node's title only when the caller can see

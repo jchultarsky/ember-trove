@@ -1,6 +1,18 @@
 services:
   postgres:
     image: postgres:16-alpine
+    # Query statistics for performance work (P0, 2026-11-02):
+    # pg_stat_statements keeps normalised statements ($1, never values) with
+    # their timings; read them with scripts/perf/pg-top.sh. The extension is
+    # created once per database by hand (see that script), not by a migration.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=top
+      - -c
+      - track_io_timing=on
     environment:
       POSTGRES_DB: ember_trove
       POSTGRES_USER: ember_trove
@@ -51,7 +63,11 @@ services:
     restart: unless-stopped
 
   proxy:
-    image: nginx:alpine
+    # The stable branch, pinned to a minor so its security patches flow (the
+    # deploy pulls it every release, release.yml). The floating `nginx:alpine`
+    # was never re-pulled and sat on 1.29.6, an end-of-life mainline with
+    # fixed CVEs (TLS session-ticket forgery among them), 2026-11-02.
+    image: nginx:1.30-alpine
     ports:
       - "80:80"
       - "443:443"

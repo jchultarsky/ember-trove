@@ -6,6 +6,72 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-11-02
+
+### Security
+- **The production proxy moves to nginx's stable branch (1.30), and every
+  deploy pulls it.** It ran nginx 1.29.6, an end-of-life mainline release
+  with fixed CVEs, among them TLS session-ticket forgery (CVE-2026-97629,
+  CVE-2026-95101) and buffer overflows in script evaluation and the proxy
+  module. The image tag floated (`nginx:alpine`), but the deploy never
+  pulled it again, so it never updated. It is now pinned to
+  `nginx:1.30-alpine` (1.30.6 today; patches arrive with the minor), and
+  `release.yml` pulls it on every release.
+
+### Security
+- **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of
+  nested image wiki links with `ENABLE_WIKILINKS`). It runs in the browser
+  only, and we don't enable that option, so it wasn't exploitable here. The
+  bump keeps `cargo audit` clean; the new advisory was failing every PR.
+
+### Security
+- **Request logs no longer contain search terms or ids.** The per-request log
+  line recorded the raw URI, query string included, so `GET /api/search?q=…`
+  wrote the user's search text into the server log. It now records the
+  matched route (`GET /api/nodes/{id}`) and the request id. Latency is now in
+  µs.
+
+### Changed
+- **The node editor's title has its own row on desktop** (#261). The header
+  put the title input on the same row as the type, status, save state,
+  preview, Revert and Done controls, which left the title the narrowest thing
+  on it. The title now spans the first row and the controls wrap on a second,
+  right-aligned row, as they already did on mobile. Presentation only. The
+  title input also gets an accessible name ("Title").
+
+### Added
+- **Per-route API latency** in the admin-only `GET /api/metrics` (`routes`):
+  count, mean, p50, p95, p99 and max per route since start, slowest total
+  first.
+  - Labels are built from fixed sets: the route pattern, never the path or
+    query, and the method, with any non-standard method counted as `OTHER`.
+    So no ids or query text are kept, and no request can add a label.
+  - It is recorded outside the 30 s timeout, so a request that hits the
+    timeout counts as its 408, with its full time.
+  - An unknown `/api/*` path now goes through the API's own layers. It is
+    counted as `(unmatched)` and answers 404 even when signed out; behind
+    the auth layer it used to answer 401. That change exposed four tests that
+    had been passing by accident; they now check the real routes.
+- **Performance tooling** (P0 of the performance phase), with its baseline in
+  `docs/PERFORMANCE.md`:
+  - `scripts/perf/seed.sh`: prod-shaped synthetic data at any scale, for the
+    local stack only;
+  - `e2e/perf/`: page-load and action timings in Chromium desktop, a throttled
+    phone, and iPhone WebKit;
+  - `scripts/perf/pg-top.sh`: top statements from `pg_stat_statements`, which
+    Postgres now loads (compose `command`; the extension is created by hand);
+  - `common/tests/layout_timings.rs`: graph layout timings;
+  - `performance.mark`s at app start (`et:mounted`, `et:auth`).
+
+### Fixed
+- **The "new version" notice is no longer squeezed on a phone** (#262). It
+  was centred with `left: 50%` plus a translate, and a fixed box placed that
+  way shrink-wraps into the half of the viewport to its right: 187px on a
+  375px phone, so the sentence wrapped onto four lines. It now spans the
+  viewport minus 1rem a side (up to `max-w-2xl`, centred), the Reload button
+  never wraps or shrinks, and the bottom offset clears the iPhone home
+  indicator. New e2e check at 375px.
+
 ## [3.8.1] - 2026-11-02
 
 ### Security

@@ -1227,13 +1227,13 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-full">
-            // Header — stacks vertically below md: so the metadata selects +
-            // Save/Cancel buttons remain reachable without horizontal scroll
-            // on mobile.
-            <div class="flex flex-col md:flex-row md:items-center md:justify-between
-                        gap-2 px-4 md:px-6 py-3 md:py-4
+            // Header — two rows at every width (#261): the title gets the
+            // full first row, the metadata selects and actions the second.
+            // Sharing one row on desktop left the title input the narrowest
+            // thing on it once the controls had accreted.
+            <div class="flex flex-col gap-2 px-4 md:px-6 py-3 md:py-4
                         border-b border-stone-200 dark:border-stone-800">
-                <div class="flex items-center gap-3 flex-1 min-w-0">
+                <div class="flex items-center gap-3 min-w-0" data-testid="editor-title-row">
                     <button
                         title="Back to nodes"
                         aria-label="Back to nodes"
@@ -1249,11 +1249,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                                text-stone-900 dark:text-stone-100
                                focus:outline-none placeholder-stone-400"
                         placeholder="Node title\u{2026}"
+                        aria-label="Title"
                         prop:value=move || title.get()
                         on:input=move |ev| title.set(event_target_value(&ev))
                     />
                 </div>
-                <div class="flex items-center gap-2 flex-wrap md:flex-nowrap md:justify-end">
+                <div class="flex items-center gap-2 flex-wrap md:justify-end" data-testid="editor-controls-row">
                     <select
                         class="text-sm bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300
                             rounded-lg px-2 py-1.5 focus:outline-none"
