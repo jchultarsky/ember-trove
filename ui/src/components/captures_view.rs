@@ -86,6 +86,7 @@ pub fn CapturesView() -> impl IntoView {
     take_captured_marker(refresh);
 
     let toast_state = use_context::<ToastState>();
+    let show_capture = expect_context::<crate::app::ShowCapture>().0;
     let captures = LocalResource::new(move || {
         let _ = refresh.get();
         async move { crate::api::list_captures().await }
@@ -185,7 +186,13 @@ pub fn CapturesView() -> impl IntoView {
                 icon=CAPTURE_ICON
                 title="Captures"
                 subtitle="Turn each into one thing, or delete it".into_any()
-            />
+            >
+                // The page for captures makes them too (#252: only `n` did, and
+                // nothing on the page said so once a capture existed). Opens
+                // the same composer as `n`.
+                <IconButton icon="add" label="New capture (n)"
+                    on_click=Callback::new(move |()| show_capture.set(true)) />
+            </PageHeader>
             <div class="flex-1 overflow-auto px-4 py-4">
                 <Transition fallback=|| ()>
                     {move || captures.get().map(|result| match result {
