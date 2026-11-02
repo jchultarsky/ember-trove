@@ -176,6 +176,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                     }
                                 }
                             };
+                            // Computed here: the panels' wrapper takes its
+                            // children by value.
+                            let tasks_allowed = allows(&n.node_type, Capability::Tasks);
 
                             view! {
                                 <div class="flex flex-col h-full">
@@ -392,10 +395,13 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         />
                                         // Tasks and People belong to Projects (§3.2, #216);
                                         // elsewhere they show only while older items remain.
-                                        <TaskPanel node_id=id allowed=allows(&n.node_type, Capability::Tasks)
+                                        // One editor-prefs fetch per node for both panels (P1 #2).
+                                        <crate::components::task_row::EditorPrefsScope>
+                                        <TaskPanel node_id=id allowed=tasks_allowed
                                             can_fix=is_canonical_owner />
                                         // Note panel — append-only; owner can add, everyone can read
                                         <NotePanel node_id=id is_owner=is_owner />
+                                        </crate::components::task_row::EditorPrefsScope>
                                         // People (#147): only the node's own owner may change them.
                                         <crate::components::node_people::NodePeoplePanel node_id=id can_edit=is_canonical_owner
                                             allowed=allows(&n.node_type, Capability::People) />

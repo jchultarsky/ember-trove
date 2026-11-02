@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Fewer requests on every page, and HTTP/2** (performance P1 #2).
+  - Every page load sends 3 fewer API requests, a node page 4:
+    - the update banner reuses the version the app already fetched;
+    - the two always-mounted create dialogs fetch their templates when they
+      open, not at start (which also shows a template edited since);
+    - the node page reads the editor prefs once for its task and note
+      panels.
+  - The production proxy speaks HTTP/2 (`http2 on;`), so a page's requests
+    share one connection instead of queueing for six.
+
+### Fixed
+- **The create dialog keeps the template you pick.** Picking a template sets
+  the node type, which re-ran the type's default and switched the picker
+  back to it, so the node recorded the wrong template. A list that arrives
+  after the dialog opens no longer overrides a pick either. A real change
+  of type still applies that type's default.
+
 ### Security
 - **The production proxy moves to nginx's stable branch (1.30), and every
   deploy pulls it.** It ran nginx 1.29.6, an end-of-life mainline release
