@@ -70,6 +70,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   never wraps or shrinks, and the bottom offset clears the iPhone home
   indicator. New e2e check at 375px.
 
+### Tooling
+- **CI's macOS build runs on pushes to develop and main only, and is no
+  longer a required check.** GitHub's arm64 macOS runners ran short and
+  left PRs blocked until the job was cancelled unstarted. Production runs
+  on Linux, and that build stays required on every PR.
+
 ## [3.8.1] - 2026-11-02
 
 ### Security
