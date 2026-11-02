@@ -18,7 +18,12 @@ use std::io::Write;
 use tar::Builder;
 use uuid::Uuid;
 
-use crate::{error::ApiError, state::AppState};
+use crate::{
+    error::ApiError,
+    object_store::ObjectStore,
+    repo::{backup::BackupRepo, object_deletion::ObjectDeletionRepo},
+    state::AppState,
+};
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -160,7 +165,8 @@ fn add_bytes_to_archive<W: Write>(
     header.set_cksum();
     builder
         .append_data(&mut header, path, data)
-        .map_err(|e| ApiError::Internal(format!("tar append failed for {path}: {e}")))?;
+        // No path in the message: an attachment's holds its file name.
+        .map_err(|e| ApiError::Internal(format!("tar append failed: {e}")))?;
     Ok(())
 }
 
@@ -279,8 +285,10 @@ pub async fn create_backup(
                 add_bytes_to_archive(&mut builder, &archive_path, &file_bytes)?;
             }
             Err(e) => {
+                // The attachment's id, never its key: the key holds the file
+                // name, and this command's output can reach the release log.
                 tracing::warn!(
-                    key = %att.s3_key,
+                    attachment_id = %att.id,
                     "attachment fetch failed during backup, skipping: {e}"
                 );
             }
@@ -321,6 +329,47 @@ pub async fn create_backup(
         .map_err(ApiError::from)?;
 
     Ok(job)
+}
+
+// ── delete and prune ───────────────────────────────────────────────────────────
+
+/// Delete one backup: its archive, then its row. An archive holds everyone's
+/// data, so it must never outlive its row unnoticed: if the store refuses,
+/// the key goes to the `object_deletions` outbox (the daily drain retries
+/// it), and if even that fails, the row stays so the backup is still listed.
+pub async fn delete_backup(
+    backups: &dyn BackupRepo,
+    store: &dyn ObjectStore,
+    outbox: &dyn ObjectDeletionRepo,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    let job = backups.get(id).await.map_err(ApiError::from)?;
+    if let Err(e) = store.delete(&job.s3_key).await {
+        tracing::warn!(%id, "backup archive delete failed, queued for retry: {e}");
+        outbox.enqueue(&job.s3_key).await.map_err(ApiError::from)?;
+    }
+    backups.delete(id).await.map_err(ApiError::from)
+}
+
+/// Delete the automatic backups past the newest `keep`
+/// (`common::backup::automatic_to_prune`); an admin's are never touched.
+/// One already gone (an admin deleted it meanwhile) counts as deleted.
+/// Returns how many were deleted.
+pub async fn prune_automatic(
+    backups: &dyn BackupRepo,
+    store: &dyn ObjectStore,
+    outbox: &dyn ObjectDeletionRepo,
+    keep: usize,
+) -> Result<usize, ApiError> {
+    let jobs = backups.list_all().await.map_err(ApiError::from)?;
+    let doomed = common::backup::automatic_to_prune(&jobs, keep);
+    for id in &doomed {
+        match delete_backup(backups, store, outbox, *id).await {
+            Ok(()) | Err(ApiError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(doomed.len())
 }
 
 // ── preview_restore ────────────────────────────────────────────────────────────

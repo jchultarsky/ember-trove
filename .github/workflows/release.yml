@@ -209,3 +209,33 @@ jobs:
             docker image prune -a -f || true
             docker builder prune -a -f || true
             df -h / | tail -1
+
+      # An app backup after every deploy, in the format the new version
+      # restores (2026-11-02). The API's own command makes it, as the
+      # admin's Backup button would, and keeps the newest 10 automatic
+      # backups (an admin's are never deleted). Its own step, so a failed
+      # backup shows as such and not as a failed deploy.
+      #
+      # This log is public (public repo). The command's full output stays on
+      # the server in ~/ember-trove-backups.log (owner-only); only its two
+      # summary lines, ids and counts, are echoed here.
+      - name: Back up after the deploy
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          command_timeout: 10m
+          envs: GITHUB_REF_NAME
+          script: |
+            set -euo pipefail
+            umask 077
+            LOG="$HOME/ember-trove-backups.log"
+            OUT=$(docker exec deploy-api-1 ember-trove-api backup create \
+              --comment "After the ${GITHUB_REF_NAME} deploy" 2>&1) && STATUS=0 || STATUS=$?
+            { echo "=== $(date -u +%FT%TZ) ${GITHUB_REF_NAME} exit ${STATUS}"; echo "$OUT"; } >> "$LOG"
+            echo "$OUT" | grep -E '^(backup [0-9a-f-]+ created:|deleted [0-9]+ automatic)' || true
+            if [ "$STATUS" -ne 0 ]; then
+              echo "Backup failed (exit ${STATUS}); details in ~/ember-trove-backups.log on the server."
+              exit 1
+            fi

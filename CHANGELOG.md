@@ -6,6 +6,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **An app backup after every deploy.** The API binary has a server-side
+  command, `ember-trove-api backup create [--comment TEXT]`, which makes the
+  same backup as the admin's button. The release workflow runs it after
+  each deploy, so a fresh backup in the new version's format no longer
+  waits for someone to press the button.
+  - The **newest 10 automatic backups** are kept; each run deletes older
+    ones, archive and row. Backups an admin makes are never deleted this
+    way. The Backup page marks automatic ones with a badge.
+  - No sign-in and no new credential: the command needs a shell on the
+    server, which already holds the database and storage credentials.
+
+### Security
+- **Automatic backups don't pile up.** Each backup holds a full copy of
+  everyone's data, deleted accounts' included, until it is deleted. Keeping
+  only the newest 10 automatic ones bounds how long that data lingers.
+- **Nothing private reaches the public release log.** The repo's Actions
+  logs are public, so the backup step keeps the command's full output on
+  the server (`~/ember-trove-backups.log`, owner-only) and echoes only the
+  backup id and counts. In command mode the binary logs errors only.
+- **No backup archive outlives its row unnoticed.** If storage refuses to
+  delete an archive (pruning or the admin's Delete), its key goes to the
+  `object_deletions` queue for the daily retry instead of being forgotten.
+- **Logs no longer carry attachment file names.** A backup that can't read
+  an attachment logs the attachment's id, not its storage key, and an
+  archive error no longer names the file. Deleting a backup no longer logs
+  its key either.
+
 ## [3.10.0] - 2026-11-02
 
 ### Added
