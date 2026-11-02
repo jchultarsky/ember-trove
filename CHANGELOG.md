@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-11-02
+
 ### Security
 - **The production proxy moves to nginx's stable branch (1.30), and every
   deploy pulls it.** It ran nginx 1.29.6, an end-of-life mainline release
