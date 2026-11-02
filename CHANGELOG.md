@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-11-02
+
 ### Added
 - **Admin → Performance** (`/admin/performance`, admins only): the API's
   timings since the last deploy and the database's slowest statements, so
