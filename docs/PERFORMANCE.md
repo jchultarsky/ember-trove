@@ -23,8 +23,15 @@ local stack only; no prod data is copied.
 
 | Scale | Nodes | Tasks | Notes | Versions | Edges |
 |---|---|---|---|---|---|
-| 1× (prod's counts, 2026-11-02) | 300 | 270 | 500 | 2,100 | 183 |
+| 1× (shaped like prod, 2026-11-02) | 300 | 270 | 500 | 2,100 | 183 |
 | 10× (growth headroom) | 3,000 | 2,700 | 5,000 | 21,000 | 1,833 |
+
+Where 1× differs from prod (300 nodes, 280 tasks, 130 edges):
+- **Edges:** about 1.4× prod's.
+- **Bodies:** the synthetic ones are 3–6 KB; prod's average 1.4 KB (max 18 KB). So
+  every figure dominated by bodies (the graph and node-list kB) is about 3× what prod
+  sends today. The graph at 1× on prod is about 0.5 MB, not 1.6 MB, and it still
+  grows with every node.
 
 **Browser profiles.**
 - `desktop`: Chromium, no throttling.
@@ -76,6 +83,10 @@ local stack only; no prod data is copied.
 | quick capture on My Day | 3 requests, 64 kB refetched | 3 requests, **637 kB** refetched |
 | drag a graph node, 60 mouse moves (desktop) | 1,847 ms (31 ms per move) | 1,005 ms (17 ms per move) |
 
+The drag figure is a single run per scale and noisy: 10× being faster than 1× is
+run-to-run variance, not a property of the code. What holds is that a mouse move
+costs tens of ms, not a few.
+
 ### Start-up
 
 - The phone's cold start mounts at about 2.8 s at every scale: the 2.3 MB download,
@@ -107,7 +118,8 @@ local stack only; no prod data is copied.
 | 1,000 | 17 ms | 4.7 ms |
 | 2,000 | 60 ms | 14.5 ms |
 
-The layout isn't the problem. Even 2–4× slower as size-optimised WASM, it stays far
+The layout isn't the problem. As size-optimised WASM it may run 2–4× slower, which
+puts 2,000 nodes at about 120–240 ms from scratch and 30–60 ms on a normal load: far
 under a second at realistic sizes.
 
 ### WASM contents (code bytes, `wasm-release`)
@@ -140,7 +152,25 @@ Impact is what the measurements above show; effort and risk are estimates.
 **Not worth doing now:**
 - the SQL rewrites from the survey (`lower(title)` index, the full-edges aggregate,
   fuzzy search): at 10× the database answers in under 10 ms;
-- moving the graph layout to a worker: under 100 ms at 2,000 nodes.
+- moving the graph layout to a worker: about 120–240 ms from scratch at 2,000
+  nodes, and a normal load (all pinned) is a quarter of that.
 
 **Still to measure on prod after this release:** per-route latency from `/api/metrics`
 after a day or two of real use, and `pg_stat_statements` there.
+
+**Turning on `pg_stat_statements` on prod.** The release deploy recreates only `api`,
+`ui` and `proxy`. With the new Postgres `command` in the compose file, Compose may
+also recreate `postgres`, restarting it for a few seconds. So:
+
+1. Before pushing the tag: take a Lightsail snapshot.
+2. After the deploy, check `SHOW shared_preload_libraries`. If it doesn't list
+   `pg_stat_statements`, run `docker compose -f deploy/docker-compose.prod.yml
+   --env-file deploy/.env.prod up -d postgres`.
+3. Once: `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`.
+4. Check that `scripts/perf/pg-top.sh` answers.
+
+**Metrics notes.**
+- Latency runs to the response head. A streamed body (export, backup, files) keeps
+  going after it.
+- A request that hits the 30 s timeout is recorded as its 408, with the full time.
+- A request whose client disconnects is not recorded.

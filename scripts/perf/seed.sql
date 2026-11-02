@@ -4,7 +4,9 @@
 -- identities. Never run it against prod. No prod data is copied: shapes and
 -- sizes come from prod's aggregate counts (2026-11-02):
 --   ~300 nodes, 280 tasks, 500 notes, 2,100 versions, 130 edges, 270
---   permission rows, 46 favorites, 940 activity entries, ~10 KB per node.
+--   permission rows, 46 favorites, 940 activity entries. Prod's node bodies
+--   average 1.4 KB (max 18 KB); these are 3-6 KB, so body bytes here run
+--   about 3x prod's, and edges about 1.4x (183 against 130).
 -- `scale` multiplies all of it: 1 = prod today, 10 = growth headroom.
 --
 --   scripts/perf/seed.sh 10      (wraps this; also cleans up first)

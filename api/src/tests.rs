@@ -1483,16 +1483,36 @@ async fn request_latency_is_kept_per_route_pattern_never_per_path() {
     let metrics = Arc::new(crate::routes::metrics::RequestMetrics::default());
     let mut state = test_state();
     state.request_metrics = metrics.clone();
-    let app = build_router(state).expect("router builds");
+    // Nested under /api, as main.rs serves it: an unknown /api path must
+    // still reach the layers (it used to fall through to the outer router).
+    let app = Router::new().nest("/api", build_router(state).expect("router builds"));
     let id = "3f2a1c9e-8b7d-4e6f-9a0b-1c2d3e4f5a6b";
     for uri in [
-        format!("/nodes/{id}?q=topsecret"),
-        format!("/nodes/{id}"),
-        "/no-such-route/abc".to_string(),
+        format!("/api/nodes/{id}?q=topsecret"),
+        format!("/api/nodes/{id}"),
+        "/api/no-such-route/abc".to_string(),
     ] {
-        let _ = app
+        let resp = app
             .clone()
             .oneshot(Request::get(uri.as_str()).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        if uri.contains("no-such-route") {
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        }
+    }
+    // A made-up method can't mint a label either (any token is a valid
+    // method to http, and a 405 is still matched to its route).
+    for m in ["FOO123", "BAR456"] {
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(m)
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
     }
@@ -1514,8 +1534,17 @@ async fn request_latency_is_kept_per_route_pattern_never_per_path() {
             !l.contains(id) && !l.contains("topsecret") && !l.contains('?'),
             "{l}"
         );
+        assert!(!l.contains("FOO123") && !l.contains("BAR456"), "{l}");
     }
     assert!(labels.contains(&"GET (unmatched)"), "{labels:?}");
+    let other = routes
+        .iter()
+        .find(|r| r.route.starts_with("OTHER "))
+        .unwrap();
+    assert_eq!(
+        other.count, 2,
+        "both made-up methods share one label: {labels:?}"
+    );
 }
 
 #[tokio::test]
@@ -1669,7 +1698,10 @@ async fn search_route_registered() {
 }
 #[tokio::test]
 async fn graph_route_registered() {
-    assert_route_registered("GET", "/graph").await;
+    // `/graph` itself has no route; the old path passed only because an
+    // unknown path behind the auth layer answered 401 (found with the P0
+    // fallback, which now answers 404).
+    assert_route_registered("GET", "/graph/positions").await;
 }
 #[tokio::test]
 async fn favorites_list_route_registered() {
@@ -1743,18 +1775,20 @@ fn permission_role_roundtrip_all_variants() {
 
 #[tokio::test]
 async fn search_preset_list_route_registered() {
-    assert_route_registered("GET", "/api/search-presets").await;
+    assert_route_registered("GET", "/search-presets").await;
 }
 
 #[tokio::test]
 async fn search_preset_create_route_registered() {
-    assert_route_registered("POST", "/api/search-presets").await;
+    // The test app isn't nested under /api (that was a false pass: see
+    // `graph_route_registered`).
+    assert_route_registered("POST", "/search-presets").await;
 }
 
 #[tokio::test]
 async fn search_preset_delete_route_registered() {
     let id = Uuid::new_v4();
-    assert_route_registered("DELETE", &format!("/api/search-presets/{id}")).await;
+    assert_route_registered("DELETE", &format!("/search-presets/{id}")).await;
 }
 
 // ── Quick capture (Phase 1 / iOS Web Share Target) ───────────────────────────

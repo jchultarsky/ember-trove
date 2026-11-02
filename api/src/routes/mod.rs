@@ -197,17 +197,26 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     let router = Router::new()
         .route("/health", get(health))
         .merge(rate_limited)
-        // Count every response by status class (includes /health). Applied here
-        // so it wraps all routes; reads/writes the counters in AppState.
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            metrics::track_requests,
-        ))
+        // Unknown /api/* paths: a plain 404, as before, but now through the
+        // layers below, so they are counted and logged under "(unmatched)".
+        // (Nested under /api, this router's missing fallback meant the outer
+        // router's, which has no layers.)
+        .fallback(|| async { StatusCode::NOT_FOUND })
         .layer(cors)
         // 30-second request timeout — returns 408 Request Timeout.
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(30),
+        ))
+        // Count every response by status class and its latency per route
+        // (includes /health). Outside the timeout, so a request that hits it
+        // is counted as the 408 it returns, with its full time: the slowest
+        // requests are the ones a latency figure must not drop. Latency is
+        // to the response head; a streamed body (export, backup, files)
+        // keeps going after it.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            metrics::track_requests,
         ))
         // Structured per-request tracing: one span per request carrying the
         // method, the matched route pattern and X-Request-Id; the response is

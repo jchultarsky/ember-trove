@@ -11,7 +11,8 @@ set -euo pipefail
 export PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PG="$(docker ps --format '{{.Names}}' | grep -E 'e2e.*postgres' | head -1)"
+# `|| true`: with no match, grep's exit would end the script before the message.
+PG="$(docker ps --format '{{.Names}}' | grep -E 'e2e.*postgres' | head -1 || true)"
 if [ -z "$PG" ]; then
   echo "no local e2e postgres container running (start the stack with KEEP_STACK=1 ./scripts/e2e.sh)" >&2
   exit 1

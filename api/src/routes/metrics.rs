@@ -113,9 +113,15 @@ pub async fn track_requests(State(state): State<AppState>, req: Request, next: N
 }
 
 /// The label a request is counted and logged under: its method and matched
-/// route pattern. Unmatched requests share one label, so a scan of random
-/// paths can't grow the map.
+/// route pattern. Both come from fixed sets, so no request can mint a new
+/// label: unmatched paths share one, and so does every method outside the
+/// standard ones (http accepts any token as a method, and a 405 is still
+/// counted under its route; review of P0).
 pub fn route_label(method: &str, matched: Option<&MatchedPath>) -> String {
+    let method = match method {
+        "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" => method,
+        _ => "OTHER",
+    };
     format!(
         "{method} {}",
         matched.map_or("(unmatched)", MatchedPath::as_str)
@@ -392,5 +398,14 @@ mod tests {
     #[test]
     fn an_unmatched_request_shares_one_label() {
         assert_eq!(route_label("GET", None), "GET (unmatched)");
+    }
+
+    #[test]
+    fn a_made_up_method_shares_one_label() {
+        let long = "X".repeat(5000);
+        for m in ["FOO123", "PROPFIND", "get", long.as_str()] {
+            assert_eq!(route_label(m, None), "OTHER (unmatched)");
+        }
+        assert_eq!(route_label("DELETE", None), "DELETE (unmatched)");
     }
 }

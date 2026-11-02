@@ -16,8 +16,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ### Added
 - **Per-route API latency** in the admin-only `GET /api/metrics` (`routes`):
   count, mean, p50, p95, p99 and max per route since start, slowest total
-  first. Labels are route patterns, so no ids or query text are kept, and an
-  unknown path can't add a label.
+  first.
+  - Labels are built from fixed sets: the route pattern, never the path or
+    query, and the method, with any non-standard method counted as `OTHER`.
+    So no ids or query text are kept, and no request can add a label.
+  - It is recorded outside the 30 s timeout, so a request that hits the
+    timeout counts as its 408, with its full time.
+  - An unknown `/api/*` path now goes through the API's own layers. It is
+    counted as `(unmatched)` and answers 404 even when signed out; behind
+    the auth layer it used to answer 401. That change exposed four tests that
+    had been passing by accident; they now check the real routes.
 - **Performance tooling** (P0 of the performance phase), with its baseline in
   `docs/PERFORMANCE.md`:
   - `scripts/perf/seed.sh`: prod-shaped synthetic data at any scale, for the
