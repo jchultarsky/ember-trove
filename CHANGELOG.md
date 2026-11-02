@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **A visible "New capture" button on the Captures page** (#252). The
+  header's + opens the same quick-capture composer as `n`, so a capture
+  can be made from the page named for it, with or without captures on
+  the wall. The empty state's hint mentions it too.
+
 ## [3.7.0] - 2026-11-02
 
 ### Fixed

@@ -66,6 +66,19 @@ test('a capture lands on the wall, is reworded, deleted, and comes back with Und
   await expect(reworded).toBeVisible();
 });
 
+test('the Captures page has its own New capture button (#252)', async ({ page }) => {
+  const text = `${PREFIX}${Date.now()} from the header`;
+  await page.goto('/tasks/captures');
+  await expect(page.locator('main')).toBeVisible();
+  await page.locator('main').getByRole('button', { name: 'New capture', exact: true }).click();
+  const box = page.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toBeFocused();
+  await box.fill(text);
+  await page.keyboard.press('ControlOrMeta+Enter');
+  await expect(page.locator('[role="status"]').getByText(/Added to Captures/)).toBeVisible();
+  await expect(page.getByTestId('capture').filter({ hasText: text })).toBeVisible();
+});
+
 test('a capture is its owner’s alone', async ({ page, request, otherRequest }) => {
   const text = `${PREFIX}${Date.now()} private thought`;
   const made = await request.post('/api/captures', { data: { body: text } });

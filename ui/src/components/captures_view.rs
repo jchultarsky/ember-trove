@@ -36,7 +36,7 @@ use leptos::html;
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 
-use crate::app::TaskRefresh;
+use crate::app::{ShowCapture, TaskRefresh};
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::page_header::PageHeader;
@@ -86,6 +86,10 @@ pub fn CapturesView() -> impl IntoView {
     take_captured_marker(refresh);
 
     let toast_state = use_context::<ToastState>();
+    // The page's own create action (#252): the same quick-capture composer
+    // as `n`, the palette and the share sheet, so there is one way a
+    // capture is made. Icon-only, as header actions are (leptos.md).
+    let show_capture = expect_context::<ShowCapture>().0;
     let captures = LocalResource::new(move || {
         let _ = refresh.get();
         async move { crate::api::list_captures().await }
@@ -185,7 +189,13 @@ pub fn CapturesView() -> impl IntoView {
                 icon=CAPTURE_ICON
                 title="Captures"
                 subtitle="Turn each into one thing, or delete it".into_any()
-            />
+            >
+                <IconButton
+                    icon="add"
+                    label="New capture"
+                    on_click=Callback::new(move |_| show_capture.set(true))
+                />
+            </PageHeader>
             <div class="flex-1 overflow-auto px-4 py-4">
                 <Transition fallback=|| ()>
                     {move || captures.get().map(|result| match result {
@@ -193,7 +203,7 @@ pub fn CapturesView() -> impl IntoView {
                             <EmptyState
                                 icon=CAPTURE_ICON
                                 message="Nothing captured"
-                                hint="Press n anywhere to capture a thought."
+                                hint="Press n anywhere, or + above, to capture a thought."
                             />
                         }.into_any(),
                         Ok(list) => view! {
