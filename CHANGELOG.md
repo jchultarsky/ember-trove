@@ -24,6 +24,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   after the dialog opens no longer overrides a pick either. A real change
   of type still applies that type's default.
 
+### Tooling
+- **CI's macOS build runs on pushes to develop and main only, and is no
+  longer a required check.** GitHub's arm64 macOS runners ran short and
+  left PRs blocked until the job was cancelled unstarted. Production runs
+  on Linux, and that build stays required on every PR.
+
 ## [3.9.0] - 2026-11-02
 
 ### Security
