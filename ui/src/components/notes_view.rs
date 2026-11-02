@@ -255,7 +255,8 @@ pub fn NotesView() -> impl IntoView {
 
     // Text that belongs to no node yet is a capture (§9.1): hand it over
     // as typed, then clear the box (Muse's v3.5.0 friction item, #234: "press
-    // n" opened the composer empty). On failure the text stays put.
+    // n" opened the composer empty). On failure the text stays put. A node
+    // already picked stays picked: only the text moved.
     let do_capture = move || {
         let text = body.get_untracked().trim().to_string();
         if text.is_empty() || posting.get_untracked() {
@@ -267,7 +268,6 @@ pub fn NotesView() -> impl IntoView {
             match crate::api::create_capture(&text).await {
                 Ok(_) => {
                     body.try_set(String::new());
-                    selected_node.try_set(None);
                     if let Some(ts) = toast_state {
                         ts.push_with_action(
                             ToastLevel::Success,

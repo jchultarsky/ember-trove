@@ -345,7 +345,11 @@ pub fn KanbanTaskRow(
                 s
             }
             data-task-id=task_id.0.to_string()
-            title="Click to open the task in its parent node"
+            title=if has_node {
+                "Click to open the task in its parent node"
+            } else {
+                "No Project: click to fix it in Data health"
+            }
         >
             // Checkbox — toggles Open ↔ Done
             <TaskCheckbox

@@ -356,7 +356,7 @@ input[type="checkbox"]:checked::after {
 
 /* ── Focus-task highlight (v2.6.2) ─────────────────────────────────────────────
    Applied for ~1.8s by `focus_task::schedule_focus_task` when the destination
-   view (NodeView, InboxView, TaskPanel) renders the row matching the
+   view (NodeView, TaskPanel) renders the row matching the
    `?task=<id>` query param the Kanban click navigation set. */
 @keyframes focus-task-flash {
   0%   { box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0); background-color: rgba(245, 158, 11, 0); }

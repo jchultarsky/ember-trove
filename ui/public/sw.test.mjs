@@ -140,7 +140,7 @@ test('API mutations pass straight through', async () => {
 
 // ── Web Share Target (#234) ──────────────────────────────────────────────────
 
-test('a share lands one capture and opens the Inbox', async () => {
+test('a share lands one capture and opens Captures', async () => {
   let sent;
   const sw = loadWorker((path, _req, init) => {
     sent = { path, body: JSON.parse(init.body) };

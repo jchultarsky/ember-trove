@@ -68,7 +68,7 @@ test('node page: adding a task with ☀ on puts it in My Day', async ({ page, re
   }
 });
 
-test('node page: ☀ is off by default and resets after adding', async ({ page, request }) => {
+test('node page: ☀ is off by default for each new task', async ({ page, request }) => {
   await withProject(request, 'e2e form plain node', async (node) => {
     const stamp = Date.now();
     const first = `e2e form plain ${stamp}`;

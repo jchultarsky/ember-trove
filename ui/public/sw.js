@@ -80,7 +80,7 @@ self.addEventListener("fetch", (event) => {
 
   // Web Share Target — iOS / Android shells POST here when the user shares
   // text/url into Trove from another app. We translate the multipart form
-  // into a /api/inbox/quick call and bounce the user to the Inbox view with
+  // into a /api/inbox/quick call and bounce the user to the Captures view with
   // a success or failure marker so the SPA can show a toast.
   if (request.method === "POST" && url.pathname === "/share") {
     event.respondWith(handleShareTarget(request));
