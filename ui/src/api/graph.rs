@@ -1,8 +1,10 @@
 use super::{get_json, put_empty};
 use crate::error::UiError;
 
-pub async fn fetch_positions() -> Result<Vec<common::graph::NodePosition>, UiError> {
-    get_json("/graph/positions").await
+/// Everything the graph view draws, in one request (performance P1): nodes
+/// without bodies, edges and saved positions.
+pub async fn fetch_graph() -> Result<common::graph::GraphData, UiError> {
+    get_json("/graph").await
 }
 
 pub async fn save_position(node_id: uuid::Uuid, x: f64, y: f64) -> Result<(), UiError> {

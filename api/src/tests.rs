@@ -881,6 +881,12 @@ impl SearchRepo for StubSearchRepo {
 struct StubGraphRepo;
 #[async_trait]
 impl GraphRepo for StubGraphRepo {
+    async fn list_nodes(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<common::graph::GraphNode>, EmberTroveError> {
+        unimplemented!()
+    }
     async fn list_positions(&self, _: Option<&str>) -> Result<Vec<NodePosition>, EmberTroveError> {
         unimplemented!()
     }
@@ -1702,6 +1708,11 @@ async fn graph_route_registered() {
     // unknown path behind the auth layer answered 401 (found with the P0
     // fallback, which now answers 404).
     assert_route_registered("GET", "/graph/positions").await;
+}
+#[tokio::test]
+async fn graph_data_route_registered() {
+    // Performance P1: the graph's one request.
+    assert_route_registered("GET", "/graph").await;
 }
 #[tokio::test]
 async fn favorites_list_route_registered() {

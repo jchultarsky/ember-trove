@@ -452,6 +452,7 @@ details.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/graph` | Everything the graph view draws in one response: the visible nodes without bodies (title, kind, status, pinned, tag ids and colours, a 100-character plain-text preview), the edges and the saved positions |
 | GET | `/api/graph/positions` | List saved node positions |
 | PUT | `/api/graph/positions/{node_id}` | Save / update a node position |
 
