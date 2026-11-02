@@ -5,6 +5,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-02)
 
+- **v3.8.0 shipped: a "+" on the Captures page (#252, PR #253).** It opens
+  the quick-capture composer, like `n`. From Muse's v3.7.0 UI test; the
+  owner hit it too.
 - **v3.7.0 shipped: the Captures view (S4c of #204; #240 parts A and B,
   PRs #244, #248, #249) and #250 (PR #251).** No migration.
   - The Inbox is Captures (`/tasks/captures`; `/tasks/inbox` and `/inbox`

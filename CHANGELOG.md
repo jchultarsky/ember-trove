@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-11-02
+
 ### Added
 - **A "+" on the Captures page** (#252). It opens the quick-capture
   composer, the same as `n`; the new capture appears on the wall at once.
