@@ -34,6 +34,7 @@ pub mod note_panel;
 pub mod notes_view;
 pub mod page_header;
 pub mod people_view;
+pub mod performance_view;
 pub mod permission_dialog;
 pub mod project_dashboard;
 pub mod project_status;

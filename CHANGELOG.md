@@ -6,6 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Admin → Performance** (`/admin/performance`, admins only): the API's
+  timings since the last deploy and the database's slowest statements, so
+  checking speed no longer means reading raw JSON with a token.
+  - A summary (version, uptime, requests, 4xx and 5xx, database
+    connections in use, row counts) and a table of API routes with count,
+    total, p50, p95, p99 and max, sortable by column. Slow figures (from
+    250 ms) take the heat colours.
+  - The 15 slowest database statements from `pg_stat_statements` through a
+    new admin-only `GET /api/metrics/db`, or a note when the server doesn't
+    collect them.
+  - It refreshes only on the Refresh button, so an open tab adds no load.
+  - `GET /api/metrics` routes gain `total_ms`.
+
+### Security
+- **The statement list shows no data values.**
+  - It lists only reading and writing statements (`SELECT`, `INSERT`,
+    `UPDATE`, `DELETE`, `WITH`), which Postgres stores with every value
+    replaced by `$1`. Utility statements keep their literal text (`SET`,
+    `COMMENT`, `ALTER ROLE … PASSWORD`), so they are never listed.
+  - Comments survive Postgres's normalisation (a `-- for ann@example.com`
+    typed in psql would show), so the API strips them before the text
+    leaves the server. Table and column names stay; only admins see them.
+  - Both endpoints check the admin role before touching the database.
+
 ### Changed
 - **Fewer requests on every page, and HTTP/2** (performance P1 #2).
   - Every page load sends 3 fewer API requests, a node page 4:
