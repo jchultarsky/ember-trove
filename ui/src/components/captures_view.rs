@@ -10,10 +10,31 @@
 //! Captures have their own identity (#240): a wall of sticky notes
 //! (`StickyPaper`), not task-style rows, each showing how long it has
 //! waited (`common::capture::CaptureAge`).
+//!
+//! ## Keyboard (#240 part B2)
+//!
+//! A window keydown listener while the view is mounted, like My Day's.
+//! It does nothing on a modifier, while a field or button has focus, or
+//! while any modal is open, so `d` never acts behind the Convert dialog.
+//!
+//!   `j` / `→`        next capture (reading order)
+//!   `k` / `←`        previous capture
+//!   `↓` / `↑`        the card below / above (`common::grid_nav`)
+//!   `Enter` / `c`    convert the focused capture
+//!   `e`              edit it
+//!   `d`              delete it (Undo in the toast)
+//!   `Escape`         drop the focus ring
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::capture::{Capture, CaptureAge};
+use common::grid_nav::{self, Cell, Step};
 use common::id::CaptureId;
+use leptos::ev;
+use leptos::html;
 use leptos::prelude::*;
+use leptos::wasm_bindgen::JsCast;
 
 use crate::app::TaskRefresh;
 use crate::components::empty_state::EmptyState;
@@ -24,6 +45,38 @@ use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toa
 
 /// The toast every way of adding a capture shows.
 pub const CAPTURED_TOAST: &str = "Added to Captures";
+
+/// What a key asks the focused card to do. The card itself acts, with the
+/// same code as its buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardCommand {
+    Convert,
+    Edit,
+    Delete,
+}
+
+/// The wall's keyboard cursor, shared by the view and its cards.
+#[derive(Clone, Copy)]
+struct WallKeys {
+    /// The card with the focus ring.
+    focused: RwSignal<Option<CaptureId>>,
+    /// How to reach each mounted card. A command is delivered at once or
+    /// not at all: one left in a signal for a card that wasn't mounted
+    /// (the wall showing a load error) fired when the card came back,
+    /// deleting it unasked (review of #240 B2).
+    cards: StoredValue<HashMap<CaptureId, CardHandle>>,
+}
+
+/// One mounted card's way in. `instance` tells this mount from a later one
+/// of the same capture (a reload remounts every card), so a card going
+/// away never unregisters its successor.
+#[derive(Clone, Copy)]
+struct CardHandle {
+    instance: u64,
+    run: Callback<CardCommand>,
+}
+
+static NEXT_CARD_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
 #[component]
 pub fn CapturesView() -> impl IntoView {
@@ -37,6 +90,94 @@ pub fn CapturesView() -> impl IntoView {
         let _ = refresh.get();
         async move { crate::api::list_captures().await }
     });
+
+    let keys = WallKeys {
+        focused: RwSignal::new(None),
+        cards: StoredValue::new(HashMap::new()),
+    };
+    // The cards' ids in display order, for the key handler.
+    let order = RwSignal::new(Vec::<CaptureId>::new());
+    Effect::new(move |_| {
+        // Still loading: keep the old order and the focus (a reload keeps
+        // the old value meanwhile).
+        let list = match captures.get() {
+            None => return,
+            Some(Ok(list)) => list,
+            // The error state shows no cards: nothing to aim at.
+            Some(Err(_)) => {
+                keys.focused.set(None);
+                order.set(Vec::new());
+                return;
+            }
+        };
+        let ids: Vec<CaptureId> = list.iter().map(|c| c.id).collect();
+        // A converted or deleted card hands the ring to the one now in
+        // its place.
+        if let Some(gone) = keys.focused.get_untracked()
+            && !ids.contains(&gone)
+        {
+            let next = order.with_untracked(|old| old.iter().position(|id| *id == gone));
+            let next = next.and_then(|i| ids.get(i.min(ids.len().saturating_sub(1))).copied());
+            keys.focused.set(next);
+        }
+        order.set(ids);
+    });
+
+    let key_handle = window_event_listener(ev::keydown, move |ev| {
+        if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
+            return;
+        }
+        if crate::keyboard::active_element_is_editable() || crate::keyboard::modal_open() {
+            return;
+        }
+        let ids = order.get_untracked();
+        if ids.is_empty() {
+            return;
+        }
+        let key = ev.key();
+        let cur = keys
+            .focused
+            .get_untracked()
+            .and_then(|f| ids.iter().position(|id| *id == f));
+        let mv = match key.as_str() {
+            "j" | "ArrowRight" => Some(Step::Next),
+            "k" | "ArrowLeft" => Some(Step::Prev),
+            "ArrowDown" => Some(Step::Down),
+            "ArrowUp" => Some(Step::Up),
+            _ => None,
+        };
+        if let Some(step) = mv {
+            ev.prevent_default();
+            let target = grid_nav::step(&card_cells(&ids), cur, step).and_then(|i| ids.get(i));
+            if let Some(&id) = target {
+                keys.focused.set(Some(id));
+                scroll_card_into_view(id);
+            }
+            return;
+        }
+        let Some(id) = cur.and_then(|i| ids.get(i)).copied() else {
+            return;
+        };
+        let cmd = match key.as_str() {
+            "Enter" | "c" => CardCommand::Convert,
+            "e" => CardCommand::Edit,
+            "d" => CardCommand::Delete,
+            "Escape" => {
+                ev.prevent_default();
+                keys.focused.set(None);
+                return;
+            }
+            _ => return,
+        };
+        ev.prevent_default();
+        let card = keys.cards.with_value(|cards| cards.get(&id).copied());
+        if let Some(card) = card {
+            card.run.try_run(cmd);
+        }
+    });
+    // Dropping the handle doesn't detach it (leptos.md): a leaked listener
+    // reads disposed signals and poisons event dispatch.
+    on_cleanup(move || key_handle.remove());
 
     view! {
         <div class="flex flex-col h-full">
@@ -64,7 +205,7 @@ pub fn CapturesView() -> impl IntoView {
                                 // The top padding leaves room for each card's tape.
                                 <ul class="grid gap-4 pt-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
                                     {list.into_iter().map(|c| view! {
-                                        <CaptureRow capture=c refresh=refresh toast_state=toast_state />
+                                        <CaptureRow capture=c refresh=refresh toast_state=toast_state keys=keys />
                                     }).collect_view()}
                                 </ul>
                             </section>
@@ -76,6 +217,50 @@ pub fn CapturesView() -> impl IntoView {
                 </Transition>
             </div>
         </div>
+    }
+}
+
+/// Each card's top-left corner, in `ids` order. A card that isn't in the
+/// DOM (mid-refresh) makes the wall read as one column, which still moves
+/// in reading order.
+fn card_cells(ids: &[CaptureId]) -> Vec<Cell> {
+    let rects: Option<Vec<Cell>> = ids
+        .iter()
+        .map(|id| {
+            let el = card_element(*id)?;
+            let r = el.get_bounding_client_rect();
+            Some(Cell {
+                x: r.left(),
+                y: r.top(),
+            })
+        })
+        .collect();
+    rects.unwrap_or_else(|| {
+        (0..ids.len())
+            .map(|i| Cell {
+                x: 0.0,
+                y: i as f64 * 100.0,
+            })
+            .collect()
+    })
+}
+
+fn card_element(id: CaptureId) -> Option<web_sys::HtmlElement> {
+    web_sys::window()?
+        .document()?
+        .query_selector(&format!("[data-capture-id=\"{id}\"]"))
+        .ok()
+        .flatten()?
+        .dyn_into::<web_sys::HtmlElement>()
+        .ok()
+}
+
+fn scroll_card_into_view(id: CaptureId) {
+    if let Some(el) = card_element(id) {
+        let opts = web_sys::ScrollIntoViewOptions::new();
+        opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+        opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+        el.scroll_into_view_with_scroll_into_view_options(&opts);
     }
 }
 
@@ -128,6 +313,7 @@ fn CaptureRow(
     capture: Capture,
     refresh: RwSignal<u32>,
     toast_state: Option<ToastState>,
+    keys: WallKeys,
 ) -> impl IntoView {
     let id = capture.id;
     let editing = RwSignal::new(false);
@@ -135,6 +321,42 @@ fn CaptureRow(
     let busy = RwSignal::new(false);
     let converting = RwSignal::new(false);
     let body = StoredValue::new(capture.body);
+    let edit_ref: NodeRef<html::Textarea> = NodeRef::new();
+
+    // A key aimed at this card does what its button would. Registered
+    // while mounted only.
+    let instance = NEXT_CARD_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let run = Callback::new(move |cmd: CardCommand| {
+        if busy.get_untracked() {
+            return;
+        }
+        match cmd {
+            CardCommand::Convert => converting.set(true),
+            CardCommand::Edit => editing.set(true),
+            CardCommand::Delete => delete_with_undo(id, busy, refresh, toast_state),
+        }
+    });
+    keys.cards.update_value(|cards| {
+        cards.insert(id, CardHandle { instance, run });
+    });
+    on_cleanup(move || {
+        // `try_`: the wall may be going away too.
+        keys.cards.try_update_value(|cards| {
+            if cards.get(&id).is_some_and(|c| c.instance == instance) {
+                cards.remove(&id);
+            }
+        });
+    });
+    // The text box takes the focus when editing starts, by key or click
+    // (NodeRef + Effect, leptos.md).
+    Effect::new(move |_| {
+        if editing.get()
+            && let Some(el) = edit_ref.get()
+        {
+            let _ = el.focus();
+        }
+    });
+    let is_focused = move || keys.focused.get() == Some(id);
     let when = crate::components::format_helpers::format_timestamp(&capture.created_at);
     let age = CaptureAge::between(capture.created_at, chrono::Utc::now());
     let age_title = format!("{} \u{00b7} {when}", age.describe());
@@ -158,11 +380,24 @@ fn CaptureRow(
     };
 
     view! {
-        <li class="list-none" data-testid="capture">
+        <li
+            data-testid="capture"
+            data-capture-id=id.to_string()
+            aria-current=move || is_focused().then_some("true")
+            class=move || if is_focused() {
+                "list-none rounded-sm ring-2 ring-ember ring-offset-4 \
+                 ring-offset-stone-50 dark:ring-offset-stone-950"
+            } else {
+                "list-none"
+            }
+            // A click puts the keyboard cursor here too, like My Day.
+            on:click=move |_| keys.focused.set(Some(id))
+        >
         <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()>
             {move || if editing.get() {
                 view! {
                     <textarea
+                        node_ref=edit_ref
                         class="flex-1 min-h-[5rem] w-full rounded-sm border border-sticky-edge
                                dark:border-sticky-dim-edge bg-white/40 dark:bg-black/20 px-2 py-1
                                text-stone-900 dark:text-stone-100"
@@ -253,9 +488,11 @@ fn delete_with_undo(
     busy.set(true);
     wasm_bindgen_futures::spawn_local(async move {
         let result = crate::api::delete_capture(id).await;
-        busy.try_set(false);
         match result {
             Ok(()) => {
+                // Stays busy: the card is gone on the server and leaves at the
+                // reload. A second `d` meanwhile was a second DELETE, a 404
+                // and a false "Delete failed" (review of #240 B2).
                 refresh.try_update(|n| *n += 1);
                 push_undo_toast(
                     "Capture deleted",
@@ -275,7 +512,10 @@ fn delete_with_undo(
                     }),
                 );
             }
-            Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            Err(e) => {
+                busy.try_set(false);
+                push_toast(ToastLevel::Error, format!("Delete failed: {e}"));
+            }
         }
     });
 }

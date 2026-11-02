@@ -102,6 +102,33 @@ const MY_DAY: &[Shortcut] = &[
     },
 ];
 
+const CAPTURES: &[Shortcut] = &[
+    Shortcut {
+        key: "j / k",
+        description: "Next / previous capture",
+    },
+    Shortcut {
+        key: "← → ↑ ↓",
+        description: "Move across the wall",
+    },
+    Shortcut {
+        key: "Enter / c",
+        description: "Convert the focused capture",
+    },
+    Shortcut {
+        key: "e",
+        description: "Edit it",
+    },
+    Shortcut {
+        key: "d",
+        description: "Delete it (undo via toast)",
+    },
+    Shortcut {
+        key: "Escape",
+        description: "Drop the focus",
+    },
+];
+
 // View-specific groups. The "Anywhere" group is prepended at render time from
 // `common::keyboard::GLOBAL` (see `ShortcutsTab`); these still migrate to the
 // registry with the Phase 2 scope model.
@@ -109,6 +136,10 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "My Day Kanban",
         items: MY_DAY,
+    },
+    ShortcutGroup {
+        title: "Captures",
+        items: CAPTURES,
     },
     ShortcutGroup {
         title: "Node view",
