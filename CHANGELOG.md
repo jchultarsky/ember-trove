@@ -19,6 +19,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   matched route (`GET /api/nodes/{id}`) and the request id. Latency is now in
   µs.
 
+### Changed
+- **The node editor's title has its own row on desktop** (#261). The header
+  put the title input on the same row as the type, status, save state,
+  preview, Revert and Done controls, which left the title the narrowest thing
+  on it. The title now spans the first row and the controls wrap on a second,
+  right-aligned row, as they already did on mobile. Presentation only. The
+  title input also gets an accessible name ("Title").
+
 ### Added
 - **Per-route API latency** in the admin-only `GET /api/metrics` (`routes`):
   count, mean, p50, p95, p99 and max per route since start, slowest total
