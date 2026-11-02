@@ -201,9 +201,9 @@ impl TaskEditorHeights {
 #[component]
 pub fn KanbanTaskRow(
     task: Task,
-    /// Pre-resolved parent node title; `None` for a task with no Project.
-    /// The row renders a muted "No Project" chip when None, or
-    /// `rocket_launch` + node name when Some.
+    /// Pre-resolved parent node title; `None` for a task with no Project
+    /// and for a node the caller can no longer see (#230). The chip says
+    /// which (`common::task::TaskParent`).
     node_title: Option<String>,
     today: NaiveDate,
     zone: KanbanZone,
@@ -214,14 +214,15 @@ pub fn KanbanTaskRow(
     let priority = task.priority.clone();
     let due = task.due_date;
     let focus = task.focus_date;
-    let has_node = task.node_id.is_some();
-    let parent = node_title.unwrap_or_else(|| "No Project".to_string());
-    let node_icon = if has_node {
-        "rocket_launch"
-    } else {
-        "link_off"
-    };
-    // A missing Project is a data problem, not urgency: stone, not amber.
+    // #230: a node the caller can no longer see has no title: say so,
+    // rather than "No Project" or a stale title.
+    let parent_kind = common::task::TaskParent::of(task.node_id, node_title);
+    let parent = parent_kind.label().to_string();
+    let node_icon = parent_kind.icon();
+    let parent_reachable = parent_kind.is_reachable();
+    let has_node = matches!(parent_kind, common::task::TaskParent::Node(_));
+    // Only a visible Project is amber. No Project is a data problem and an
+    // unavailable node is a fact, neither is urgency: stone.
     let (chip_icon_class, chip_text_class) = if has_node {
         (
             "material-symbols-outlined text-amber-600 dark:text-amber-500",
@@ -234,6 +235,13 @@ pub fn KanbanTaskRow(
             "font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400 \
              truncate max-w-[12rem]",
         )
+    };
+    let row_title = match parent_kind {
+        common::task::TaskParent::Node(_) => "Click to open the task in its parent node",
+        common::task::TaskParent::NoProject => "No Project: click to fix it in Data health",
+        common::task::TaskParent::Unavailable => {
+            "You no longer have access to this task\u{2019}s node"
+        }
     };
 
     // Display state — title shows the latest known value (may be edited).
@@ -367,6 +375,9 @@ pub fn KanbanTaskRow(
         if let Some(f) = focused_ctx {
             f.0.set(Some(task_id));
         }
+        if !parent_reachable {
+            return;
+        }
         let target = crate::components::task_common::task_href(task_id.0, node_id.map(|n| n.0));
         navigate.get_value()(&target, Default::default());
     };
@@ -416,11 +427,7 @@ pub fn KanbanTaskRow(
                 s
             }
             data-task-id=task_id.0.to_string()
-            title=if has_node {
-                "Click to open the task in its parent node"
-            } else {
-                "No Project: click to fix it in Data health"
-            }
+            title=row_title
         >
             // Checkbox — toggles Open ↔ Done
             <TaskCheckbox
