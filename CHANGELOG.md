@@ -25,6 +25,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   of type still applies that type's default.
 
 ### Security
+- **The production proxy moves to nginx's stable branch (1.30), and every
+  deploy pulls it.** It ran nginx 1.29.6, an end-of-life mainline release
+  with fixed CVEs, among them TLS session-ticket forgery (CVE-2026-97629,
+  CVE-2026-95101) and buffer overflows in script evaluation and the proxy
+  module. The image tag floated (`nginx:alpine`), but the deploy never
+  pulled it again, so it never updated. It is now pinned to
+  `nginx:1.30-alpine` (1.30.6 today; patches arrive with the minor), and
+  `release.yml` pulls it on every release.
+
+### Security
 - **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of
   nested image wiki links with `ENABLE_WIKILINKS`). It runs in the browser
   only, and we don't enable that option, so it wasn't exploitable here. The
