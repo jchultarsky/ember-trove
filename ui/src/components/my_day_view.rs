@@ -82,6 +82,8 @@ pub fn MyDayView() -> impl IntoView {
     let editing_id: RwSignal<Option<TaskId>> = RwSignal::new(None);
     provide_context(FocusedTaskId(focused_id));
     provide_context(EditingTaskId(editing_id));
+    // Unsaved editor values outlive a row remount (#250).
+    crate::components::task_row::EditStash::provide();
 
     // Saved inline-editor heights for the rows.
     TaskEditorHeights::provide();

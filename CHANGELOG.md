@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **An open task editor keeps your unsaved text when its list reloads**
+  (#250). On a Project's task panel, anything that reloads the tasks
+  closed the editor and dropped the typed text without Undo: ☀ on any
+  task, ticking one, or a quick capture with `n`. My Day kept the editor
+  open but reset its text to the saved task.
+  - The panel now tracks the task being edited the way My Day does
+    (`EditingTaskId`).
+  - Both lists keep a changed draft across the reload (`EditStash`).
+  - One task is edited at a time on the panel, as on My Day.
 - **An unknown URL, `/admin` among them, no longer freezes the app on a
   bare "Loading..."** (#246). The router's fallback was a `<Redirect>`,
   which panics when it renders (WASM `unreachable`), so the page never got

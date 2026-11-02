@@ -391,6 +391,50 @@ impl TaskEditDraft {
         );
     }
 
+    fn typed(&self) -> Option<[String; 4]> {
+        Some([
+            self.title.try_get_untracked()?,
+            self.priority.try_get_untracked()?,
+            self.due.try_get_untracked()?,
+            self.recurrence.try_get_untracked()?,
+        ])
+    }
+
+    /// Keep this row's unsaved edit across a remount of the row (#250). On
+    /// mount, take back what a predecessor left in the list's `EditStash`;
+    /// on cleanup, leave the typed values there if this row's editor is
+    /// open (`editing`) and changed. A list re-renders by cleaning up the
+    /// old rows before building the new ones, so the stash is written
+    /// before it is read. No `EditStash` in context: does nothing.
+    pub fn keep_across_remount(
+        self,
+        task_id: TaskId,
+        editing: impl Fn() -> bool + Send + Sync + 'static,
+    ) {
+        let Some(stash) = use_context::<crate::components::task_row::EditStash>() else {
+            return;
+        };
+        if let Some([t, p, d, r]) = stash.0.try_update_value(|m| m.remove(&task_id)).flatten() {
+            self.title.set(t);
+            self.priority.set(p);
+            self.due.set(d);
+            self.recurrence.set(r);
+        }
+        on_cleanup(move || {
+            if !editing() {
+                return;
+            }
+            // Cleanups run before the row's signals are dropped; `try_`
+            // all the same.
+            let Some(typed) = self.typed() else {
+                return;
+            };
+            if self.saved.try_with_value(|saved| *saved != typed) == Some(true) {
+                stash.0.try_update_value(|m| m.insert(task_id, typed));
+            }
+        });
+    }
+
     /// The PATCH for the current values (`None` = blank title, don't save),
     /// and remember them as saved so a later Cancel keeps them.
     pub fn take_request(&self) -> Option<UpdateTaskRequest> {

@@ -189,7 +189,14 @@ test('node panel: ☀ stays available while editing a task and applies immediate
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.locator('button[title="Edit task"]').click();
     // ☀ isn't Save-gated: it acts while the editor is open.
-    await expect(row.getByTestId('task-editor')).toBeVisible();
+    const editor = row.getByTestId('task-editor');
+    await expect(editor).toBeVisible();
+    // An unsaved edit. The refetch that ☀ causes rebuilt the row, which
+    // closed the editor and lost the text (#250).
+    await editor.locator('textarea').fill(`${title} reworded`);
+    const refetched = page.waitForResponse(
+      (r) => r.request().method() === 'GET' && r.url().endsWith(`/api/nodes/${node.id}/tasks`),
+    );
     const sun = row.getByRole('button', { name: 'Add to My Day' });
     await expect(sun).toHaveAttribute('aria-pressed', 'false');
     await sun.click();
@@ -203,8 +210,54 @@ test('node panel: ☀ stays available while editing a task and applies immediate
         return tasks.find((t) => t.id === task.id)?.focus_date ?? null;
       })
       .toBe(localISO(0));
-    // (Not asserted: that the editor is still open. The panel's refetch
-    // remounts every row today, which closes it; tracked as its own fix.)
+    await refetched;
+    // The editor is still open, with the text as typed, and nothing saved.
+    await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
+    expect((await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.title).toBe(title);
+    await editor.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(async () => (await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.title)
+      .toBe(`${title} reworded`);
+  });
+});
+
+test('My Day: an open edit survives a quick capture reloading the list', async ({
+  page,
+  request,
+}) => {
+  await withProject(request, 'e2e myday keep node', async (node) => {
+    const title = `e2e myday keep ${Date.now()}`;
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+      data: { title, focus_date: localISO(0) },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    await page.goto('/tasks/my-day');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    const editor = row.getByTestId('task-editor');
+    await editor.locator('textarea').fill(`${title} reworded`);
+
+    // A quick capture bumps the task refresh: both zones reload and every
+    // row is rebuilt (the task sits in Today, from /api/my-day).
+    const refetched = Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().endsWith('/api/tasks/all')),
+      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('/api/my-day?')),
+    ]);
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('n');
+    await page.getByPlaceholder(/What’s on your mind/).fill(`e2e cap ${title}`);
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await refetched;
+
+    await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
+    // Cancel still goes back to the saved title.
+    await editor.getByRole('button', { name: 'Cancel' }).click();
+    await expect(row).toContainText(title);
+    const captures: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
+    for (const c of captures.filter((c) => c.body === `e2e cap ${title}`)) {
+      await request.delete(`/api/captures/${c.id}`);
+    }
   });
 });
 

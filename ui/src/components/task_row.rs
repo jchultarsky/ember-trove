@@ -78,6 +78,24 @@ pub struct FocusedTaskId(pub RwSignal<Option<TaskId>>);
 #[derive(Clone, Copy)]
 pub struct EditingTaskId(pub RwSignal<Option<TaskId>>);
 
+/// Unsaved inline-edit values that outlive a row. A list re-renders every
+/// row when it refetches (☀ on any task, ticking one, a quick capture),
+/// and the remounted row's draft used to start from the saved task: the
+/// typed text was gone (#250). A row unmounting mid-edit leaves its typed
+/// values here; its successor takes them back
+/// (`TaskEditDraft::keep_across_remount`). Provided beside
+/// `EditingTaskId` by each list.
+#[derive(Clone, Copy)]
+pub struct EditStash(pub StoredValue<std::collections::HashMap<TaskId, [String; 4]>>);
+
+impl EditStash {
+    pub fn provide() {
+        provide_context(EditStash(
+            StoredValue::new(std::collections::HashMap::new()),
+        ));
+    }
+}
+
 /// Saved per-task inline-edit heights (px), keyed by task id. Provided as a
 /// context by the surrounding view so each row can open its editor at the
 /// previously-saved size.
@@ -193,6 +211,9 @@ pub fn KanbanTaskRow(
     // Inline edit form state.  Mirrors the original MyDayTaskRow layout
     // minus the focus_date field (focus is binary, owned by zone-swap).
     let draft = TaskEditDraft::from_task(&task);
+    draft.keep_across_remount(task_id, move || {
+        editing_id_sig.try_get_untracked() == Some(Some(task_id))
+    });
 
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
