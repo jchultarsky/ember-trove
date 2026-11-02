@@ -124,7 +124,7 @@ pub fn NodePicker(
     #[prop(optional)]
     on_commit: Option<Callback<()>>,
     /// Focus the search input as soon as it mounts (panels that open
-    /// straight into a search: Inbox and triage attach, Add to Favorites).
+    /// straight into a search: Data health's Move, Add to Favorites).
     #[prop(optional)]
     autofocus: bool,
     /// Offer only nodes of this kind. The task pickers pass Project: only

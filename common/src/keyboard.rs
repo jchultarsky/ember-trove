@@ -74,7 +74,7 @@ pub const GLOBAL: &[GlobalShortcut] = &[
         cmd: false,
         in_overlay: false,
         display: "n",
-        desc: "Quick capture (Inbox)",
+        desc: "Quick capture",
     },
     GlobalShortcut {
         action: GlobalAction::GoGraph,

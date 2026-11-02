@@ -26,8 +26,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - Colour is never the only signal: the "Captures" heading and the
     capture glyph (⚡, the same as Quick capture's) stay. The sticky-note
     glyph remains Notes' own.
-  - Presentation only: no API, data or behaviour change. The rename to
-    "Captures" and grid keyboard navigation come in part B.
+  - Presentation only: no API, data or behaviour change.
+- **The Inbox is now Captures** (#240, part B; programme slice S4c). The
+  page is named for what it holds: Tasks → Captures, at `/tasks/captures`.
+  - `/tasks/inbox` and `/inbox` redirect there and keep their query, so a
+    share from an installed app (which still lands on
+    `/tasks/inbox?captured=1`) is confirmed as before.
+  - It holds captures only. The task list, its "Process" triage mode and
+    its add-task form are gone: a task needs its Project (ONTOLOGY §9.3).
+    A task left without one is listed by Data health ("Move to a
+    Project"); its My Day chip reads "No Project" and opens Data health.
+  - An empty wall says "Nothing captured".
+  - The words follow: "Added to Captures" (quick capture, the share sheet,
+    the calendar), "Go to Captures" in the palette, `n` is "Quick capture"
+    in help, the home-screen shortcut, help text. The service worker's
+    cache moves to v12.
+  - No API change: `GET /api/tasks/inbox` stays until tasks without a
+    Project are refused (S5c).
+
+### Added
+- **The Notes page hands loose text to Captures** (#234, Muse's v3.5.0
+  friction item). Its hint used to say "press n to capture it", but `n`
+  opened an empty composer. "Capture it" now turns the text in the box
+  into a capture, clears the box and offers Open.
 
 ## [3.6.0] - 2026-11-01
 

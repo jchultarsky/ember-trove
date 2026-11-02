@@ -25,7 +25,7 @@ async function badButtonNames(page: Page): Promise<string[]> {
   return bad;
 }
 
-test('My Day, Inbox and a full node page have no unnamed buttons', async ({ page, request }) => {
+test('My Day, Captures and a full node page have no unnamed buttons', async ({ page, request }) => {
   const stamp = Date.now();
   // A node with every section populated: body, a task, a note.
   const node = await createNode(request, `e2e a11y node ${stamp}`, {
@@ -36,12 +36,12 @@ test('My Day, Inbox and a full node page have no unnamed buttons', async ({ page
   expect(
     (await request.post(`/api/nodes/${node.id}/notes`, { data: { body: `e2e a11y note ${stamp}`, color: 'default' } })).ok(),
   ).toBeTruthy();
-  const inbox = await request.post('/api/tasks', { data: { title: `e2e a11y inbox ${stamp}` } });
-  expect(inbox.ok()).toBeTruthy();
-  const inboxTask = await inbox.json();
+  const made = await request.post('/api/captures', { data: { body: `e2e a11y capture ${stamp}` } });
+  expect(made.ok()).toBeTruthy();
+  const capture = await made.json();
   try {
-    await page.goto('/tasks/inbox');
-    await expect(page.locator(`[data-task-id="${inboxTask.id}"]`)).toBeVisible();
+    await page.goto('/tasks/captures');
+    await expect(page.getByTestId('capture').filter({ hasText: `e2e a11y capture ${stamp}` })).toBeVisible();
     expect(await badButtonNames(page)).toEqual([]);
 
     await page.goto(`/nodes/${node.id}`);
@@ -53,7 +53,7 @@ test('My Day, Inbox and a full node page have no unnamed buttons', async ({ page
     await expect(page.locator('main')).toBeVisible();
     expect(await badButtonNames(page)).toEqual([]);
   } finally {
-    await request.delete(`/api/tasks/${inboxTask.id}`);
+    await request.delete(`/api/captures/${capture.id}`);
     await request.delete(`/api/nodes/${node.id}`);
   }
 });

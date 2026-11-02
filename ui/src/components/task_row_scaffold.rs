@@ -1,8 +1,7 @@
 //! Shared display-mode skeleton for task rows.
 //!
-//! My Day (`task_row.rs`), the Inbox (`inbox_view.rs`), and the node task
-//! panel (`task_panel.rs`) are all "lists of tasks" and share one geometry
-//! contract:
+//! My Day (`task_row.rs`) and the node task panel (`task_panel.rs`) are
+//! both "lists of tasks" and share one geometry contract:
 //!
 //! ```text
 //! [checkbox] [ title line  (dot + title)          ] [action cluster]
@@ -229,37 +228,15 @@ pub fn PriorityPicker(
     }
 }
 
-/// [`TaskEditor`] title-box density: `Compact` for list rows (My Day, the
-/// node panel), `Comfortable` for the Inbox's roomier cards. Only the
-/// textarea differs; the controls are identical everywhere.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EditorDensity {
-    #[default]
-    Compact,
-    Comfortable,
-}
-
-impl EditorDensity {
-    fn textarea_class(self) -> &'static str {
-        match self {
-            EditorDensity::Compact => {
-                "w-full bg-stone-100 dark:bg-stone-800 text-sm \
-                 text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
-                 min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500"
-            }
-            EditorDensity::Comfortable => {
-                "w-full text-sm rounded-lg border border-amber-400 \
-                 bg-white dark:bg-stone-800 px-3 py-2 resize-y min-h-[44px] \
-                 text-stone-900 dark:text-stone-100 \
-                 focus:outline-none focus:ring-1 focus:ring-amber-400"
-            }
-        }
-    }
-}
+/// [`TaskEditor`]'s title box. (The Inbox's roomier variant went with the
+/// Inbox's task list, S4c.)
+const EDITOR_TEXTAREA_CLASS: &str = "w-full bg-stone-100 dark:bg-stone-800 text-sm \
+     text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
+     min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500";
 
 /// The one inline task editor (#132): title, priority, due date, repeat,
-/// Save / Cancel — the same controls and keys in My Day, the Inbox and the
-/// node panel. The draft semantics live here too: Cancel resets every
+/// Save / Cancel — the same controls and keys in My Day and the node
+/// panel. The draft semantics live here too: Cancel resets every
 /// field, Escape discards with "Edit discarded · Undo" (`TaskEditDraft`),
 /// and Save hands the list the PATCH. Escape and Ctrl/⌘+Enter work from
 /// any control, not just the title box. Each list keeps only its open
@@ -280,7 +257,6 @@ pub fn TaskEditor(
     /// Reopen it, from the Undo toast. Must tolerate a row that was
     /// refetched away meanwhile (`try_set`).
     reopen: Arc<dyn Fn() + Send + Sync>,
-    #[prop(optional)] density: EditorDensity,
 ) -> impl IntoView {
     let save = Callback::new(move |()| {
         if let Some(req) = draft.take_request() {
@@ -329,7 +305,7 @@ pub fn TaskEditor(
                 on_submit=save
                 on_escape=escape
                 on_resize=TaskEditorHeights::on_resize(task_id)
-                class=density.textarea_class().to_string()
+                class=EDITOR_TEXTAREA_CLASS.to_string()
             />
             <div class="flex items-center gap-2 flex-wrap">
                 <PriorityPicker value=draft.priority />

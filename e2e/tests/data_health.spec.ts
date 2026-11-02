@@ -82,18 +82,16 @@ test('the page lists data that breaks the model, linked to where it lives', asyn
     expect(await subjectsOf(request, 'orphan_task')).toContain(orphan.id);
     expect(await subjectsOf(otherRequest, 'orphan_task')).not.toContain(orphan.id);
 
-    // The page shows them, each in its rule's card, linking to the item.
+    // The page shows them, each in its rule's card. A task with no Project
+    // lives only here since S4c (#240), so it is named without a link.
     await page.goto('/data-health');
     await expect(page.getByRole('heading', { name: 'Data health' })).toBeVisible();
     const orphanCard = page.getByTestId('data-health-orphan_task');
-    await expect(orphanCard.locator(`a[href="/tasks/inbox?task=${orphan.id}"]`)).toBeVisible();
+    await expect(orphanCard).toContainText(orphan.title);
+    await expect(orphanCard.locator('a[href*="/tasks/inbox"]')).toHaveCount(0);
     // Each card explains its rule and how to fix it.
     await expect(orphanCard).toContainText('A task belongs to exactly one Project.');
     await expect(orphanCard).toContainText('To fix:');
-
-    // A link opens the item where it lives.
-    await orphanCard.locator(`a[href="/tasks/inbox?task=${orphan.id}"]`).click();
-    await expect(page).toHaveURL(new RegExp(`/tasks/inbox\\?task=${orphan.id}`));
   } finally {
     await wipe(request);
   }

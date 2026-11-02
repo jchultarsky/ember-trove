@@ -683,3 +683,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-31 | Captures are owner-only, with no admin bypass; in backups, never in search, export or webhooks | Owner, S4a planning (#234) |
 | 2026-10-31 | The calendar's day composer makes the chosen Project's task due that day, or else a capture led by the date | Owner, S4a planning (#234) |
 | 2026-10-31 | Converting a capture offers a node (with an optional home), a note on a node, or a Task in a Project; Event and Person join with their slices. A Task's title must fit (500 characters): the text is reworded, never cut | Owner, S4b planning (#234) |
+| 2026-11-01 | The captures' place is named Captures (the Inbox until then) and holds captures only; a Task without a Project is listed by Data health, not by Captures. Captures are never searched: a glance at the wall is the point | Owner, on #240 (S4c) |

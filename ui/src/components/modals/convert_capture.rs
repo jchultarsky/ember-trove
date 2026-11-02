@@ -60,7 +60,7 @@ pub fn ConvertCaptureDialog(
     capture_id: CaptureId,
     text: String,
     show: RwSignal<bool>,
-    /// Bumped after a conversion, so the Inbox reloads without it.
+    /// Bumped after a conversion, so the Captures wall reloads without it.
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
     let (first, rest) = split_title(&text);

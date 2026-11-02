@@ -1,4 +1,4 @@
-//! `/captures` (#234): the caller's Inbox captures. Owner-only server-side.
+//! `/captures` (#234): the caller's captures. Owner-only server-side.
 
 use common::{
     capture::{Capture, CaptureRequest, ConvertCaptureRequest, Converted},

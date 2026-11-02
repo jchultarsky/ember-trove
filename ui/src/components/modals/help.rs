@@ -6,8 +6,8 @@
 //! * **Shortcuts** — full keyboard reference, grouped by surface.
 //! * **Concepts**  — what each data type and field actually means.  This
 //!   is the highest-ROI tab: the user shouldn't have to reverse-engineer
-//!   `focus_date` vs `due_date`, PARA grouping rules, or what "Inbox"
-//!   means in this app.
+//!   `focus_date` vs `due_date`, PARA grouping rules, or what a
+//!   capture is in this app.
 //! * **Workflow** — how to actually use the app day-to-day.
 //!
 //! Content is intentionally short and structured (headings + bullets, no
@@ -102,33 +102,6 @@ const MY_DAY: &[Shortcut] = &[
     },
 ];
 
-const INBOX_TRIAGE: &[Shortcut] = &[
-    Shortcut {
-        key: "t",
-        description: "Add to today",
-    },
-    Shortcut {
-        key: "s",
-        description: "Schedule a due date",
-    },
-    Shortcut {
-        key: "a",
-        description: "Attach to a node",
-    },
-    Shortcut {
-        key: "d",
-        description: "Delete (undo via toast)",
-    },
-    Shortcut {
-        key: "j / k",
-        description: "Skip / go back",
-    },
-    Shortcut {
-        key: "Escape",
-        description: "Exit triage",
-    },
-];
-
 // View-specific groups. The "Anywhere" group is prepended at render time from
 // `common::keyboard::GLOBAL` (see `ShortcutsTab`); these still migrate to the
 // registry with the Phase 2 scope model.
@@ -136,10 +109,6 @@ const SHORTCUT_GROUPS: &[ShortcutGroup] = &[
     ShortcutGroup {
         title: "My Day Kanban",
         items: MY_DAY,
-    },
-    ShortcutGroup {
-        title: "Inbox triage (Process)",
-        items: INBOX_TRIAGE,
     },
     ShortcutGroup {
         title: "Node view",
@@ -166,8 +135,8 @@ const CONCEPTS: &[Concept] = &[
     },
     Concept {
         title: "Tasks",
-        body: "Discrete actionable work. A task is either standalone (in the Inbox, \
-               with no parent node) or attached to a Node — usually a Project. Has \
+        body: "Discrete actionable work, always in a Project. A task left without \
+               one shows up in Data health, which offers to move it. Has \
                status (open/in-progress/done/cancelled), priority, focus_date, due_date, \
                and an optional recurrence rule.",
     },
@@ -204,14 +173,14 @@ const CONCEPTS: &[Concept] = &[
                nodes.",
     },
     Concept {
-        title: "Inbox",
-        body: "Where input waits to be processed. Quick capture (n, the palette, \
-               the iOS Share Sheet) lands a capture here: text, not yet a task or a \
-               note, kept until you turn it into exactly one thing or delete it on \
-               purpose. Convert (the arrow on a capture) makes it a node, a note on a \
-               node, or a task in a Project, and the capture goes. Tasks without a \
-               Project also wait here; the My Day Kanban \
-               backlog shows them with an \"Inbox\" chip.",
+        title: "Captures",
+        body: "Where input waits to be processed (Tasks \u{2192} Captures). Quick \
+               capture (n, the palette, the iOS Share Sheet) sticks a note on the \
+               wall: text, not yet a task or a note, kept until you turn it into \
+               exactly one thing or delete it on purpose. Convert (the arrow on a \
+               capture) makes it a node, a note on a node, or a task in a Project, \
+               and the capture goes. Each shows how long it has waited: aim for an \
+               empty wall.",
     },
     Concept {
         title: "Carryover",
@@ -285,10 +254,10 @@ const WORKFLOW_STEPS: &[WorkflowStep] = &[
     },
     WorkflowStep {
         heading: "Capture quickly when something interrupts",
-        body: "Press n anywhere → one textarea → Cmd+Enter to land it in the \
-               Inbox. On iPhone, share text or a URL from any app to \"Trove\" via \
-               the iOS Share Sheet — the PWA handles it the same way. Triage in \
-               the Kanban backlog or /tasks/inbox later.",
+        body: "Press n anywhere → one textarea → Cmd+Enter to stick it on the \
+               Captures wall. On iPhone, share text or a URL from any app to \"Trove\" \
+               via the iOS Share Sheet — the PWA handles it the same way. Turn each \
+               capture into one thing at Tasks \u{2192} Captures later.",
     },
     WorkflowStep {
         heading: "Find anything — Cmd-K",

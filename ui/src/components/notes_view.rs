@@ -12,7 +12,7 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
 use crate::components::resizable_editor::ResizableEditor;
-use crate::components::toast::ToastState;
+use crate::components::toast::{ToastAction, ToastLevel, ToastState};
 use crate::markdown::render_markdown_plain;
 
 /// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
@@ -68,6 +68,7 @@ pub fn NotesView() -> impl IntoView {
     let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
     let posting = RwSignal::new(false);
     let error = RwSignal::<Option<String>>::new(None);
+    let nav = expect_context::<crate::app::NavRequest>().0;
 
     // ── Delete state ────────────────────────────────────────────────────────
     // Instant delete + undo toast (the API soft-deletes, so the toast's Undo
@@ -226,7 +227,7 @@ pub fn NotesView() -> impl IntoView {
         // `disabled` doesn't cover the keyboard) would leave it stuck.
         let Some((node_id, _)) = selected_node.get_untracked() else {
             error.set(Some(
-                "Pick a node for this note, or press n to capture it.".to_string(),
+                "Pick a node for this note, or capture it instead.".to_string(),
             ));
             return;
         };
@@ -252,6 +253,42 @@ pub fn NotesView() -> impl IntoView {
         });
     };
 
+    // Text that belongs to no node yet is a capture (§9.1): hand it over
+    // as typed, then clear the box (Muse's v3.5.0 friction item, #234: "press
+    // n" opened the composer empty). On failure the text stays put.
+    let do_capture = move || {
+        let text = body.get_untracked().trim().to_string();
+        if text.is_empty() || posting.get_untracked() {
+            return;
+        }
+        posting.set(true);
+        error.set(None);
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::api::create_capture(&text).await {
+                Ok(_) => {
+                    body.try_set(String::new());
+                    selected_node.try_set(None);
+                    if let Some(ts) = toast_state {
+                        ts.push_with_action(
+                            ToastLevel::Success,
+                            crate::components::captures_view::CAPTURED_TOAST,
+                            ToastAction {
+                                label: "Open",
+                                on_click: std::sync::Arc::new(move || {
+                                    nav.try_set(Some("/tasks/captures".to_string()));
+                                }),
+                            },
+                        );
+                    }
+                }
+                Err(e) => {
+                    error.try_set(Some(e.to_string()));
+                }
+            }
+            posting.try_set(false);
+        });
+    };
+
     view! {
         <div class="flex flex-col h-full">
             <PageHeader icon="sticky_note_2" title="Notes" />
@@ -267,9 +304,20 @@ pub fn NotesView() -> impl IntoView {
                     <div class="flex-1 min-w-0 max-w-[20rem]">
                         <NodePicker selected=selected_node placeholder="Note on a node\u{2026}" />
                     </div>
-                    // Input that belongs nowhere yet is a capture (§9.1).
+                    // Input that belongs nowhere yet is a capture (§9.1). A
+                    // link inside the sentence, so word-only (leptos.md).
                     <span class="text-xs text-stone-400 dark:text-stone-500">
-                        "No node yet? Press "<kbd class="font-mono">"n"</kbd>" to capture it."
+                        "No node yet? "
+                        <button
+                            type="button"
+                            class="underline underline-offset-2 text-stone-600 dark:text-stone-300
+                                hover:text-ember disabled:opacity-40 disabled:cursor-not-allowed
+                                disabled:no-underline"
+                            disabled=move || posting.get() || body.get().trim().is_empty()
+                            on:click=move |_| do_capture()
+                        >
+                            "Capture it"
+                        </button>
                     </span>
                     <button
                         class="inline-flex items-center justify-center gap-1.5 ml-auto px-3 py-1.5 rounded-lg bg-ember text-white text-sm font-medium

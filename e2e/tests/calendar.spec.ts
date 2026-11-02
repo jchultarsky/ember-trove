@@ -50,7 +50,7 @@ test('a day without a Project makes a capture led by the date', async ({ page, r
   await input.fill(title);
   await input.press('Enter');
 
-  await expect(page.locator('[role="status"]').getByText(/Captured for/)).toBeVisible();
+  await expect(page.locator('[role="status"]').getByText(/Added to Captures, dated/)).toBeVisible();
   const captures: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
   const made = captures.find((c) => c.body.endsWith(`: ${title}`));
   expect(made?.body).toMatch(/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{1,2} [A-Z][a-z]{2}: /);

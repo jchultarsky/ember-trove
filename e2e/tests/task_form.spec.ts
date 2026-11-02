@@ -1,4 +1,11 @@
-import { test, expect, createNode, localISO, type Locator } from './fixtures';
+import {
+  test,
+  expect,
+  createNode,
+  localISO,
+  type APIRequestContext,
+  type Locator,
+} from './fixtures';
 
 /**
  * The shared add-task form (`NewTaskForm`): the ☀ toggle commits the new task
@@ -7,6 +14,29 @@ import { test, expect, createNode, localISO, type Locator } from './fixtures';
  */
 
 type Task = { id: string; title: string; focus_date: string | null };
+
+/**
+ * Run `body` with a fresh Project, then delete its tasks and the Project.
+ * (These tests used the Inbox's form and rows until S4c, #240: a task now
+ * lives in a Project.)
+ */
+async function withProject(
+  request: APIRequestContext,
+  name: string,
+  body: (node: { id: string }) => Promise<void>,
+) {
+  const node = await createNode(request, `${name} ${Date.now()}`, { node_type: 'project' });
+  try {
+    await body(node);
+  } finally {
+    const tasks: Task[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
+    for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+}
+
+const nodeTasks = async (request: APIRequestContext, nodeId: string): Promise<Task[]> =>
+  (await request.get(`/api/nodes/${nodeId}/tasks`)).json();
 
 test('node page: adding a task with ☀ on puts it in My Day', async ({ page, request }) => {
   const stamp = Date.now();
@@ -38,36 +68,33 @@ test('node page: adding a task with ☀ on puts it in My Day', async ({ page, re
   }
 });
 
-test('inbox: ☀ is off by default and resets after adding', async ({ page, request }) => {
-  const stamp = Date.now();
-  const first = `e2e form plain ${stamp}`;
-  try {
-    await page.goto('/tasks/inbox');
+test('node page: ☀ is off by default and resets after adding', async ({ page, request }) => {
+  await withProject(request, 'e2e form plain node', async (node) => {
+    const stamp = Date.now();
+    const first = `e2e form plain ${stamp}`;
+    await page.goto(`/nodes/${node.id}`);
+    await page.locator('button[title="Add task"]').first().click();
     const form = page.getByTestId('new-task-form');
     const sun = form.getByRole('button', { name: 'Add to My Day' });
     await expect(sun).toHaveAttribute('aria-pressed', 'false');
 
-    // On for one task, then the form resets to off for the next.
+    // On for one task, then the form is off again for the next.
     await sun.click();
     await form.getByPlaceholder('Task title…').fill(first);
     await form.getByPlaceholder('Task title…').press('Enter');
     await expect(page.locator('[data-task-id]', { hasText: first })).toBeVisible();
-    await expect(sun).toHaveAttribute('aria-pressed', 'false');
 
     const second = `e2e form plain-2 ${stamp}`;
+    await page.locator('button[title="Add task"]').first().click();
+    await expect(sun).toHaveAttribute('aria-pressed', 'false');
     await form.getByPlaceholder('Task title…').fill(second);
     await form.getByPlaceholder('Task title…').press('Enter');
     await expect(page.locator('[data-task-id]', { hasText: second })).toBeVisible();
 
-    const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
-    expect(inbox.find((t) => t.title === first)?.focus_date).toBe(localISO(0));
-    expect(inbox.find((t) => t.title === second)?.focus_date).toBeNull();
-  } finally {
-    const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
-    for (const t of inbox.filter((t) => t.title.includes(`${stamp}`))) {
-      await request.delete(`/api/tasks/${t.id}`);
-    }
-  }
+    const tasks = await nodeTasks(request, node.id);
+    expect(tasks.find((t) => t.title === first)?.focus_date).toBe(localISO(0));
+    expect(tasks.find((t) => t.title === second)?.focus_date).toBeNull();
+  });
 });
 
 // ── Due-date echo + past-date warning (#98 item 1) ──────────────────────────
@@ -123,8 +150,10 @@ test('editing a due date echoes it and warns before saving a past date', async (
   }
 });
 
-test('the add-task form echoes the due date and warns on a past one', async ({ page }) => {
-  await page.goto('/tasks/inbox');
+test('the add-task form echoes the due date and warns on a past one', async ({ page, request }) => {
+  await withProject(request, 'e2e form due node', async (node) => {
+  await page.goto(`/nodes/${node.id}`);
+  await page.locator('button[title="Add task"]').first().click();
   const field = page.getByTestId('new-task-form').getByTestId('due-date-field');
   const input = field.locator('input[type="date"]');
   await expect(field.getByTestId('due-hint')).toBeEmpty();
@@ -142,20 +171,21 @@ test('the add-task form echoes the due date and warns on a past one', async ({ p
   await input.fill('');
   await expect(field.getByTestId('due-hint')).toBeEmpty();
   await expect(field.getByTestId('due-warning')).toBeEmpty();
+  });
 });
 
 // ── Row ☀ action (task_actions::toggle_my_day + MyDayButton) ────────────────
 
-test('inbox: ☀ stays available while editing a task and applies immediately', async ({
+test('node panel: ☀ stays available while editing a task and applies immediately', async ({
   page,
   request,
 }) => {
-  const title = `e2e row sun ${Date.now()}`;
-  const created = await request.post('/api/tasks', { data: { title } });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
-  try {
-    await page.goto('/tasks/inbox');
+  await withProject(request, 'e2e row sun node', async (node) => {
+    const title = `e2e row sun ${Date.now()}`;
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, { data: { title } });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    await page.goto(`/nodes/${node.id}`);
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.locator('button[title="Edit task"]').click();
     // Edit hides Assign/Edit/Delete — but not ☀ (it isn't Save-gated).
@@ -169,30 +199,33 @@ test('inbox: ☀ stays available while editing a task and applies immediately', 
     );
     await expect
       .poll(async () => {
-        const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
-        return inbox.find((t) => t.id === task.id)?.focus_date ?? null;
+        const tasks = await nodeTasks(request, node.id);
+        return tasks.find((t) => t.id === task.id)?.focus_date ?? null;
       })
       .toBe(localISO(0));
-  } finally {
-    await request.delete(`/api/tasks/${task.id}`);
-  }
+  });
 });
 
 test('a double Enter in the add-task form creates the task once', async ({ page, request }) => {
-  const title = `e2e form double ${Date.now()}`;
-  try {
-    await page.goto('/tasks/inbox');
+  await withProject(request, 'e2e form double node', async (node) => {
+    const title = `e2e form double ${Date.now()}`;
+    await page.goto(`/nodes/${node.id}`);
+    await page.locator('button[title="Add task"]').first().click();
     const input = page.getByTestId('new-task-form').getByPlaceholder('Task title…');
     await input.fill(title);
-    await input.press('Enter');
-    await input.press('Enter');
+    // The second Enter lands before the first create returns (the form
+    // closes after a create, so it can't come later).
+    await input.evaluate((el) => {
+      for (let i = 0; i < 2; i++) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      }
+    });
     await expect(page.locator('[data-task-id]', { hasText: title })).toHaveCount(1);
-    const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
-    expect(inbox.filter((t) => t.title === title)).toHaveLength(1);
-  } finally {
-    const inbox: Task[] = await (await request.get('/api/tasks/inbox')).json();
-    for (const t of inbox.filter((t) => t.title === title)) await request.delete(`/api/tasks/${t.id}`);
-  }
+    // Let any second request land before counting.
+    await page.waitForTimeout(500);
+    const tasks = await nodeTasks(request, node.id);
+    expect(tasks.filter((t) => t.title === title)).toHaveLength(1);
+  });
 });
 
 // ── Inline task editor (shared TaskEditDraft) ─────────────────────────────────
@@ -252,20 +285,20 @@ test('node panel editor: opens on saved values, Cancel resets all, saves recurre
   }
 });
 
-test('inbox editor: opens on saved values and Cancel resets every field', async ({
+test('My Day editor: opens on saved values and Cancel resets every field', async ({
   page,
   request,
 }) => {
-  const title = `e2e inbox editor ${Date.now()}`;
-  const created = await request.post('/api/tasks', {
-    data: { title, priority: 'low', recurrence: 'yearly' },
-  });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
-  try {
-    await page.goto('/tasks/inbox');
+  await withProject(request, 'e2e myday editor node', async (node) => {
+    const title = `e2e myday editor ${Date.now()}`;
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+      data: { title, priority: 'low', recurrence: 'yearly', focus_date: localISO(0) },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    await page.goto('/tasks/my-day');
     const row = page.locator(`[data-task-id="${task.id}"]`);
-    await row.locator('button[title="Edit task"]').click();
+    await row.getByRole('button', { name: 'Edit task' }).click();
     const repeat = row.locator('select[title="Recurrence"]');
     await expectPriority(row, 'Low');
     await expect(repeat).toHaveValue('yearly');
@@ -275,24 +308,22 @@ test('inbox editor: opens on saved values and Cancel resets every field', async 
     await priorityOf(row).getByRole('radio', { name: 'High' }).click();
     await repeat.selectOption('');
     await row.getByRole('button', { name: 'Cancel' }).click();
-    await row.locator('button[title="Edit task"]').click();
+    await row.getByRole('button', { name: 'Edit task' }).click();
     await expectPriority(row, 'Low');
     await expect(repeat).toHaveValue('yearly');
-  } finally {
-    await request.delete(`/api/tasks/${task.id}`);
-  }
+  });
 });
 
 test('a resized task editor reopens at its new height (same session)', async ({
   page,
   request,
 }) => {
-  const title = `e2e editor height ${Date.now()}`;
-  const created = await request.post('/api/tasks', { data: { title } });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
-  try {
-    await page.goto('/tasks/inbox');
+  await withProject(request, 'e2e editor height node', async (node) => {
+    const title = `e2e editor height ${Date.now()}`;
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, { data: { title } });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    await page.goto(`/nodes/${node.id}`);
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.locator('button[title="Edit task"]').click();
     const editor = row.locator('textarea');
@@ -306,18 +337,16 @@ test('a resized task editor reopens at its new height (same session)', async ({
     // reopened editor snapped back to the old height.
     await row.locator('button[title="Edit task"]').click();
     await expect.poll(() => editor.evaluate((el) => (el as HTMLElement).offsetHeight)).toBe(160);
-  } finally {
-    await request.delete(`/api/tasks/${task.id}`);
-  }
+  });
 });
 
 // ── One editor everywhere (TaskEditor, #132) ──────────────────────────────────
 //
-// My Day, the Inbox and the node panel render the same editor: the same
+// My Day and the node panel render the same editor: the same
 // controls, arrow keys move the priority, and Escape / Ctrl+Enter work from
 // any control (they used to work only inside the title box).
 
-test('My Day, Inbox and the node panel share one task editor', async ({ page, request }) => {
+test('My Day and the node panel share one task editor', async ({ page, request }) => {
   const stamp = Date.now();
   const node = await createNode(request, `e2e one editor node ${stamp}`, { node_type: 'project' });
   const mk = async (url: string, data: Record<string, unknown>) => {
@@ -326,8 +355,7 @@ test('My Day, Inbox and the node panel share one task editor', async ({ page, re
     return (await r.json()) as FullTask;
   };
   const surfaces = [
-    { name: 'My Day', url: '/tasks/my-day', task: await mk('/api/tasks', { title: `e2e one editor myday ${stamp}`, focus_date: localISO(0) }) },
-    { name: 'Inbox', url: '/tasks/inbox', task: await mk('/api/tasks', { title: `e2e one editor inbox ${stamp}` }) },
+    { name: 'My Day', url: '/tasks/my-day', task: await mk(`/api/nodes/${node.id}/tasks`, { title: `e2e one editor myday ${stamp}`, focus_date: localISO(0) }) },
     { name: 'node panel', url: `/nodes/${node.id}`, task: await mk(`/api/nodes/${node.id}/tasks`, { title: `e2e one editor panel ${stamp}` }) },
   ];
   const priorityOnServer = async (id: string) => {
