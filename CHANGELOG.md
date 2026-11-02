@@ -17,6 +17,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     way. The Backup page marks automatic ones with a badge.
   - No sign-in and no new credential: the command needs a shell on the
     server, which already holds the database and storage credentials.
+- **A daily app backup** (`.github/workflows/backup.yml`, 07:43 UTC).
+  `deploy/app-backup.sh` makes it on the host, the same script the release
+  step now uses. Daily and after-deploy backups share the newest-10 limit,
+  so about ten days are kept. The schedule is an Actions workflow, so a
+  failed backup is a red run and an email, never silent.
+
+### Removed
+- **`deploy/backup.sh` and its nightly `pg_dump` cron.** It never ran: its
+  log redirect to `/var/log` wasn't writable by the `ubuntu` user, so cron
+  failed before the script started, silently, from March to November. The
+  README's "daily database dumps (30 days)" claim was false. The daily app
+  backup above replaces it.
 
 ### Security
 - **Automatic backups don't pile up.** Each backup holds a full copy of

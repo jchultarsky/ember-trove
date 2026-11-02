@@ -1,0 +1,48 @@
+# Daily app backup of prod.
+#
+# Why here and not in the host's crontab: the old nightly pg_dump cron
+# (deploy/backup.sh) never ran once in seven months. Its log redirect to
+# /var/log failed before the script started, and cron failures are silent.
+# As with cert-check.yml, the schedule lives where a failure turns a run red
+# and GitHub emails the maintainer (2026-11-02).
+#
+# deploy/app-backup.sh (on the host, updated by each deploy) makes the same
+# backup as Admin → Backup → Create and keeps the newest 10 automatic
+# backups, the after-deploy ones included: about ten days of history. This
+# log is public, so the script echoes only the backup id and counts.
+#
+# GitHub disables scheduled workflows after 60 days without a commit to the
+# repo; re-enable this one under Actions if that ever happens.
+name: Daily Backup
+
+on:
+  schedule:
+    - cron: "43 7 * * *" # daily, ~3 AM US Eastern; odd minute to avoid the top-of-hour spike
+  workflow_dispatch: {}
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  backup:
+    name: Back up prod
+    runs-on: ubuntu-latest
+    if: vars.DEPLOY_ENABLED == 'true'
+
+    # Shares the deploy's group, so a backup never runs while a release is
+    # restarting the API container.
+    concurrency:
+      group: production-ec2-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Back up via SSH
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          command_timeout: 10m
+          script: ~/ember-trove/deploy/app-backup.sh "Daily"
