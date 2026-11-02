@@ -166,6 +166,20 @@ test('an empty wall says so; a task with no Project is not a capture', async ({
   }
 });
 
+test('the + on the Captures page opens the composer, and the wall updates', async ({ page }) => {
+  // #252: the page had no way to add a capture except the `n` key.
+  const text = `${PREFIX}${Date.now()} from the plus button`;
+  await page.goto('/tasks/captures');
+  await page.getByRole('button', { name: 'New capture (n)' }).click();
+  const composer = page.getByRole('dialog', { name: 'Quick capture' });
+  const box = composer.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toBeFocused();
+  await box.fill(text);
+  await page.keyboard.press('ControlOrMeta+Enter');
+  await expect(composer).toHaveCount(0);
+  await expect(page.getByTestId('capture').filter({ hasText: text })).toBeVisible();
+});
+
 test('the Notes box hands loose text to Captures', async ({ page, request }) => {
   // Muse's v3.5.0 friction item (#234): "press n" opened the composer empty.
   const text = `${PREFIX}${Date.now()} from the notes box`;

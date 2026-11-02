@@ -206,8 +206,8 @@ const CONCEPTS: &[Concept] = &[
     Concept {
         title: "Captures",
         body: "Where input waits to be processed (Tasks \u{2192} Captures). Quick \
-               capture (n, the palette, the iOS Share Sheet) sticks a note on the \
-               wall: text, not yet a task or a note, kept until you turn it into \
+               capture (n, the + on that page, the palette, the iOS Share Sheet) \
+               sticks a note on the wall: text, not yet a task or a note, kept until you turn it into \
                exactly one thing or delete it on purpose. Convert (the arrow on a \
                capture) makes it a node, a note on a node, or a task in a Project, \
                and the capture goes. Each shows how long it has waited: aim for an \

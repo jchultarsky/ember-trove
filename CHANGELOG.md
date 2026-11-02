@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-11-02
+
+### Added
+- **A "+" on the Captures page** (#252). It opens the quick-capture
+  composer, the same as `n`; the new capture appears on the wall at once.
+  Until now only the keyboard (or the palette, the calendar, Notes) could
+  add one, and nothing on the page said so once a capture existed.
+
 ## [3.7.0] - 2026-11-02
 
 ### Fixed
