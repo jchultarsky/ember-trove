@@ -551,3 +551,43 @@ test('My Day and the node panel share one task editor', async ({ page, request }
     await request.delete(`/api/nodes/${node.id}`);
   }
 });
+
+// ── Row Copy action (#269) ──────────────────────────────────────────────────
+//
+// The e2e origin isn't a secure context, so `navigator.clipboard` is absent:
+// an init script installs a recording stub before the app boots.
+
+test('node panel: Copy puts the task title on the clipboard as plain text', async ({
+  page,
+  request,
+}) => {
+  await withProject(request, 'e2e row copy node', async (node) => {
+    const stamp = Date.now();
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+      data: { title: `Call **Ana** about [the plan](https://example.com) ${stamp}` },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+
+    await page.addInitScript(() => {
+      const w = window as unknown as { __copied: string[] };
+      w.__copied = [];
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: (t: string) => {
+            w.__copied.push(t);
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.goto(`/nodes/${node.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.getByRole('button', { name: 'Copy task' }).click();
+    await expect(page.getByText('Copied.')).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied))
+      .toEqual([`Call Ana about the plan ${stamp}`]);
+  });
+});
