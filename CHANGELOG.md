@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-11-02
+
 ### Fixed
 - **An open task editor keeps your unsaved text when its list reloads**
   (#250). On a Project's task panel, anything that reloads the tasks
