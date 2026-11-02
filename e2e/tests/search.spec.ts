@@ -70,7 +70,7 @@ test('header search keeps the query on /search and clears it on leaving', async 
   expect(resp.ok()).toBeTruthy();
   const node = await resp.json();
   try {
-    await page.goto('/tasks/inbox');
+    await page.goto('/tasks/captures');
     const searchBox = page.getByPlaceholder('Search… (Enter)');
     await searchBox.fill(token);
     await searchBox.press('Enter');

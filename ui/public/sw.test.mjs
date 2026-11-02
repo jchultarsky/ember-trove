@@ -140,7 +140,7 @@ test('API mutations pass straight through', async () => {
 
 // ── Web Share Target (#234) ──────────────────────────────────────────────────
 
-test('a share lands one capture and opens the Inbox', async () => {
+test('a share lands one capture and opens Captures', async () => {
   let sent;
   const sw = loadWorker((path, _req, init) => {
     sent = { path, body: JSON.parse(init.body) };
@@ -154,7 +154,7 @@ test('a share lands one capture and opens the Inbox', async () => {
     path: '/api/inbox/quick',
     body: { title: 'An article', body: 'worth reading\nhttps://example.com/a' },
   });
-  assert.deepEqual(res, { redirect: '/tasks/inbox?captured=1', status: 303 });
+  assert.deepEqual(res, { redirect: '/tasks/captures?captured=1', status: 303 });
 });
 
 test('a share while signed out says so instead of landing nowhere', async () => {

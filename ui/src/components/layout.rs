@@ -404,12 +404,16 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                         <Route path=path!("/")                 view=|| view! { <Redirect path="/tasks/my-day" /> } />
                         <Route path=path!("/tasks")            view=|| view! { <Redirect path="/tasks/my-day" /> } />
                         <Route path=path!("/tasks/my-day")     view=|| view! { <TasksView active=TasksTab::MyDay    /> } />
-                        <Route path=path!("/tasks/inbox")      view=|| view! { <TasksView active=TasksTab::Inbox    /> } />
+                        <Route path=path!("/tasks/captures")   view=|| view! { <TasksView active=TasksTab::Captures /> } />
                         <Route path=path!("/tasks/calendar")   view=|| view! { <TasksView active=TasksTab::Calendar /> } />
                         // Legacy URL redirects — preserve bookmarks, PWA shortcuts, and any
                         // external links dating back before the Tasks consolidation.
+                        // The Inbox became Captures (S4c, #240). Installed service
+                        // workers still send a share to `/tasks/inbox?captured=1`,
+                        // so these two keep the query.
+                        <Route path=path!("/tasks/inbox") view=|| view! { <GoTo path="/tasks/captures" keep_query=true /> } />
+                        <Route path=path!("/inbox")     view=|| view! { <GoTo path="/tasks/captures" keep_query=true /> } />
                         <Route path=path!("/my-day")    view=|| view! { <Redirect path="/tasks/my-day"    /> } />
-                        <Route path=path!("/inbox")     view=|| view! { <Redirect path="/tasks/inbox"     /> } />
                         <Route path=path!("/calendar")  view=|| view! { <Redirect path="/tasks/calendar"  /> } />
                         <Route path=path!("/dashboard") view=ProjectDashboard />
                         <Route path=path!("/graph")     view=GraphView />
@@ -435,7 +439,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
             </div>
 
             // Fast-capture modal — primary `n`-shortcut surface.  One
-            // textarea, lands a Task in the Inbox.  "More fields…" hands off
+            // textarea, lands a capture on the Captures wall.  "More fields…" hands off
             // to the structured CreateNodeModal below, pre-filled with the
             // user's draft so nothing is lost.
             {
@@ -570,8 +574,8 @@ fn SidebarHeader(collapsed: SidebarCollapsed) -> impl IntoView {
 fn section_title(path: &str) -> &'static str {
     if path.starts_with("/tasks/my-day") {
         "My Day"
-    } else if path.starts_with("/tasks/inbox") {
-        "Inbox"
+    } else if path.starts_with("/tasks/captures") {
+        "Captures"
     } else if path.starts_with("/tasks/calendar") {
         "Calendar"
     } else if path.starts_with("/dashboard") {
@@ -618,14 +622,38 @@ fn section_title(path: &str) -> &'static str {
 /// update, so the navigation is safe. Use this for the fallback and for
 /// any new redirect route.
 #[component]
-fn GoTo(path: &'static str) -> impl IntoView {
+fn GoTo(
+    path: &'static str,
+    /// Carry the current query string over (a renamed page whose old URL
+    /// still receives markers such as `?captured=1`).
+    #[prop(optional)]
+    keep_query: bool,
+) -> impl IntoView {
     let navigate = use_navigate();
+    let search = use_location().search;
     // Replace, so Back doesn't return to the URL that redirects again.
     let options = leptos_router::NavigateOptions {
         replace: true,
         ..Default::default()
     };
-    Effect::new(move |_| navigate(path, options.clone()));
+    Effect::new(move |_| {
+        let query = if keep_query {
+            search.get_untracked()
+        } else {
+            String::new()
+        };
+        navigate(&with_query(path, &query), options.clone());
+    });
+}
+
+/// `path` with `query` (with or without its leading `?`) appended.
+fn with_query(path: &str, query: &str) -> String {
+    let query = query.trim_start_matches('?');
+    if query.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{query}")
+    }
 }
 
 /// Auth gate: spinner → login redirect → render app.
@@ -653,5 +681,30 @@ fn AuthGate(auth_state: AuthState, children: ChildrenFn) -> impl IntoView {
             }.into_any()
         }
         AuthStatus::Authenticated(_) => children().into_any(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_redirect_can_carry_the_query() {
+        assert_eq!(with_query("/tasks/captures", ""), "/tasks/captures");
+        assert_eq!(with_query("/tasks/captures", "?"), "/tasks/captures");
+        assert_eq!(
+            with_query("/tasks/captures", "?captured=1"),
+            "/tasks/captures?captured=1"
+        );
+        assert_eq!(
+            with_query("/tasks/captures", "a=1&b=2"),
+            "/tasks/captures?a=1&b=2"
+        );
+    }
+
+    #[test]
+    fn the_captures_page_is_titled_captures() {
+        assert_eq!(section_title("/tasks/captures"), "Captures");
+        assert_eq!(section_title("/tasks/my-day"), "My Day");
     }
 }

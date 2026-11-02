@@ -1,8 +1,8 @@
 //! Fast-capture modal — the *primary* `n`-shortcut surface.
 //!
 //! One autofocused textarea, no other fields, no decisions.  Cmd/Ctrl+Enter
-//! sends the text to `POST /api/inbox/quick`, which lands a capture in the
-//! Inbox (ONTOLOGY §9.1, #234): unclassified, so no date or priority —
+//! sends the text to `POST /api/inbox/quick`, which lands a capture on the
+//! Captures wall (ONTOLOGY §9.1, #234): unclassified, so no date or priority —
 //! those come when it's processed.  Esc closes.  "More fields…" hands off
 //! to the structured `CreateNodeModal` when the thing is already a node.
 //!
@@ -10,7 +10,7 @@
 //!   - The structured modal asks for type + template + body + title — that's
 //!     the right surface for "I want to make a Project node," not for "I'm
 //!     about to lose this thought."
-//!   - Different submit target (capture in the Inbox vs. typed Node), different
+//!   - Different submit target (a capture vs. typed Node), different
 //!     post-success behaviour (toast + close vs. navigate to new node).
 //!   - The `n` shortcut should always be the friction floor.  Extending
 //!     CreateNodeModal would mean either gating on a flag (more code paths)
@@ -27,6 +27,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use super::{ModalPlacement, ModalShell};
+use crate::components::captures_view::CAPTURED_TOAST;
 use crate::{
     api::quick_capture,
     components::sticky_note::{CAPTURE_ICON, StickyPaper},
@@ -73,7 +74,7 @@ pub fn FastCaptureModal(
         }
     });
 
-    // The Inbox lists captures; it reloads on the app-wide refresh.
+    // The Captures wall reloads on the app-wide refresh.
     let task_refresh = expect_context::<crate::app::TaskRefresh>().0;
     let submit_pending = RwSignal::new(false);
     Effect::new(move |_| {
@@ -97,11 +98,11 @@ pub fn FastCaptureModal(
                     task_refresh.try_update(|n| *n += 1);
                     let msg = if resp.truncated {
                         format!(
-                            "Captured to Inbox (text was clipped to {} characters)",
+                            "{CAPTURED_TOAST} (text was clipped to {} characters)",
                             common::capture::MAX_LEN
                         )
                     } else {
-                        "Captured to Inbox".to_string()
+                        CAPTURED_TOAST.to_string()
                     };
                     push_toast(ToastLevel::Success, msg);
                     on_close.run(());

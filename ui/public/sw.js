@@ -34,7 +34,9 @@
 //   v10: Data health drops the multiple_homes rule (#228, migration 042).
 //   v11: captures (#234) — quick capture and the share target land a
 //        capture, not a task; evicts cached notes and inbox JSON.
-const CACHE_NAME = "ember-trove-v11";
+//   v12: the Inbox became Captures (#240) — the share target lands on
+//        /tasks/captures; evicts the shell that still routes to the Inbox.
+const CACHE_NAME = "ember-trove-v12";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
@@ -78,7 +80,7 @@ self.addEventListener("fetch", (event) => {
 
   // Web Share Target — iOS / Android shells POST here when the user shares
   // text/url into Trove from another app. We translate the multipart form
-  // into a /api/inbox/quick call and bounce the user to the Inbox view with
+  // into a /api/inbox/quick call and bounce the user to the Captures view with
   // a success or failure marker so the SPA can show a toast.
   if (request.method === "POST" && url.pathname === "/share") {
     event.respondWith(handleShareTarget(request));
@@ -171,8 +173,8 @@ async function logoutAndPurge(request) {
 // The Share Sheet posts a multipart form with the field names declared in
 // manifest.json's `share_target.params` (title / text / url). We forward them
 // to /api/inbox/quick (cookies travel automatically because this is same-
-// origin) and 303 the browser to /tasks/inbox so the SPA boots and shows the
-// new capture (#234). On failure we redirect to a route that the SPA recognises and
+// origin) and 303 the browser to /tasks/captures so the SPA boots and shows the
+// new capture (#234, #240). On failure we redirect to a route that the SPA recognises and
 // shows a toast for, instead of leaving the user on a blank /share URL.
 async function handleShareTarget(request) {
   try {
@@ -199,7 +201,7 @@ async function handleShareTarget(request) {
     if (!apiResp.ok) {
       return Response.redirect(`/?capture=failed&reason=${apiResp.status}`, 303);
     }
-    return Response.redirect("/tasks/inbox?captured=1", 303);
+    return Response.redirect("/tasks/captures?captured=1", 303);
   } catch (e) {
     return Response.redirect("/?capture=failed&reason=exception", 303);
   }

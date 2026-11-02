@@ -110,7 +110,7 @@ pub fn TaskPanel(
         {move || shown.get().then(|| view! {
         <SectionShell section=NodeSection::Tasks open=open count=count actions=add_button.clone()>
             {(!allowed).then(|| view! { <NotOnThisKind capability=Capability::Tasks can_fix=can_fix /> })}
-            // Add-task form — shared with the Inbox capture surface.
+            // Add-task form.
             {move || show_form.get().then(|| view! {
                 <div class="mb-4">
                     <NewTaskForm

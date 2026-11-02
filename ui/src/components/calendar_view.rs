@@ -131,7 +131,7 @@ fn MonthGrid(
                 }
                 None => crate::api::create_capture(&common::capture::dated(date, &title))
                     .await
-                    .map(|_| format!("Captured for {}", date.format("%a %-d %b"))),
+                    .map(|_| format!("Added to Captures, dated {}", date.format("%a %-d %b"))),
             };
             match done {
                 Ok(msg) => {

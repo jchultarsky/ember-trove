@@ -194,6 +194,9 @@ async fn create_standalone_task(
 }
 
 /// GET /tasks/inbox — standalone tasks (node_id IS NULL) for the authenticated user.
+///
+/// No page lists these since S4c (#240): Data health's `OrphanTask` rule
+/// does. The route stays until S5c forbids tasks without a Project.
 async fn list_inbox(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,

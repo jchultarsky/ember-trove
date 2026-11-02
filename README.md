@@ -478,9 +478,11 @@ details.
 | POST | `/api/notes` | A note on the node named in the body (`node_id` required; every note has a node) |
 | GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first) |
 
-### Captures (Inbox)
+### Captures
 
-A capture is unclassified input waiting in the Inbox (ONTOLOGY §9.1).
+A capture is unclassified input waiting on the Captures wall
+(`/tasks/captures`, ONTOLOGY §9.1; the Inbox until S4c, and `/tasks/inbox`
+still redirects there).
 Captures are owner-only: no other account, the admin included, can list or
 change them. They are in backups, and not in search, export or webhooks.
 

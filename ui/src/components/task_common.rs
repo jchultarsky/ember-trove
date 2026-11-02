@@ -1,5 +1,5 @@
-//! Shared task helpers — pure functions used by `task_panel`, `inbox_view`,
-//! `my_day_view`, and the reusable `TaskRowInner` component.
+//! Shared task helpers — pure functions used by `task_panel`, `my_day_view`,
+//! Data health, and the reusable `TaskRowInner` component.
 //!
 //! Centralises status / priority / recurrence parsing, formatting, and
 //! comparison so that every task-related view speaks the same language.
@@ -41,16 +41,18 @@ pub fn undo_restore_task(
 
 // ── Status ──────────────────────────────────────────────────────────────────
 
-/// Returns `true` for terminal statuses (Done, Cancelled).
-/// Where a task opens: on its node's page, or in the Inbox when it has no
-/// node. `?task=` scrolls to and highlights it there.
+/// Where a task opens: on its node's page, where `?task=` scrolls to and
+/// highlights it. A task with no Project has no list of its own any more
+/// (S4c, #240): it opens Data health, whose `OrphanTask` rule lists it with
+/// "Move to a Project".
 pub fn task_href(task: uuid::Uuid, node: Option<uuid::Uuid>) -> String {
     match node {
         Some(nid) => format!("/nodes/{nid}?task={task}"),
-        None => format!("/tasks/inbox?task={task}"),
+        None => "/data-health".to_string(),
     }
 }
 
+/// Returns `true` for terminal statuses (Done, Cancelled).
 pub fn status_done(s: &TaskStatus) -> bool {
     s.is_terminal()
 }

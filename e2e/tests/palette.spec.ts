@@ -83,7 +83,7 @@ test('? opens help; the Anywhere group renders from the shortcut registry', asyn
   // The Anywhere section and its registry-sourced rows.
   await expect(dialog.getByRole('heading', { name: 'Anywhere' })).toBeVisible();
   for (const desc of [
-    'Quick capture (Inbox)',
+    'Quick capture',
     'Graph view',
     'Open command palette',
     'Open command palette (alt)',

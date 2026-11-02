@@ -22,7 +22,7 @@
 //!
 //!   `j` / `↓`   focus next row (across both zones, in display order)
 //!   `k` / `↑`   focus previous row
-//!   `Enter`     open the focused task in its parent node (or Inbox)
+//!   `Enter`     open the focused task in its parent node (or Data health)
 //!   `Space`     toggle done on the focused task
 //!   `t`         toggle the focused task between Today and Backlog
 //!   `e`         open inline edit on the focused task
@@ -421,7 +421,7 @@ pub fn MyDayView() -> impl IntoView {
                                 title="Backlog"
                                 subtitle=subtitle
                                 zone=KanbanZone::Backlog
-                                empty_msg="No open tasks elsewhere — inbox zero across all projects."
+                                empty_msg="No open tasks elsewhere across your Projects."
                                 tasks=upcoming
                                 today=today
                                 refresh=task_refresh

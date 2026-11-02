@@ -17,8 +17,8 @@
 //! Two ways to interact with the row body:
 //! * **Click** the row body (anywhere outside the action buttons or the
 //!   inline edit form) → navigate to the parent node, scrolled and
-//!   briefly highlighted on the task.  Standalone tasks navigate to the
-//!   Inbox.  Action buttons call `stopPropagation()` so they never
+//!   briefly highlighted on the task.  A task with no Project opens Data
+//!   health, which lists it with "Move to a Project".  Action buttons call `stopPropagation()` so they never
 //!   trigger the row-click.
 //! * **Drag** the row body → HTML5 native drag.  `dataTransfer` carries
 //!   the task id; the destination zone fires the same PATCH the tap
@@ -86,7 +86,7 @@ pub struct TaskEditorHeights(pub RwSignal<std::collections::HashMap<uuid::Uuid, 
 
 impl TaskEditorHeights {
     /// Provide the map to this view's rows, filled from the saved editor
-    /// prefs. (My Day, Inbox and the node panel each had a copy.)
+    /// prefs. (My Day, the former Inbox and the node panel each had a copy.)
     pub fn provide() {
         let heights = RwSignal::new(std::collections::HashMap::new());
         provide_context(TaskEditorHeights(heights));
@@ -131,9 +131,9 @@ impl TaskEditorHeights {
 #[component]
 pub fn KanbanTaskRow(
     task: Task,
-    /// Pre-resolved parent node title; `None` for standalone (Inbox) tasks.
-    /// The row renders an "Inbox" chip when None, or `rocket_launch` + node
-    /// name when Some.
+    /// Pre-resolved parent node title; `None` for a task with no Project.
+    /// The row renders a muted "No Project" chip when None, or
+    /// `rocket_launch` + node name when Some.
     node_title: Option<String>,
     today: NaiveDate,
     zone: KanbanZone,
@@ -144,11 +144,26 @@ pub fn KanbanTaskRow(
     let priority = task.priority.clone();
     let due = task.due_date;
     let focus = task.focus_date;
-    let parent = node_title.unwrap_or_else(|| "Inbox".to_string());
-    let node_icon = if task.node_id.is_some() {
+    let has_node = task.node_id.is_some();
+    let parent = node_title.unwrap_or_else(|| "No Project".to_string());
+    let node_icon = if has_node {
         "rocket_launch"
     } else {
-        "inbox"
+        "link_off"
+    };
+    // A missing Project is a data problem, not urgency: stone, not amber.
+    let (chip_icon_class, chip_text_class) = if has_node {
+        (
+            "material-symbols-outlined text-amber-600 dark:text-amber-500",
+            "font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400 \
+             truncate max-w-[12rem]",
+        )
+    } else {
+        (
+            "material-symbols-outlined text-stone-400 dark:text-stone-500",
+            "font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400 \
+             truncate max-w-[12rem]",
+        )
     };
 
     // Display state — title shows the latest known value (may be edited).
@@ -269,7 +284,7 @@ pub fn KanbanTaskRow(
             },
         );
     };
-    // ── Row click → focus + navigate to parent (or Inbox) ────────────
+    // ── Row click → focus + navigate to parent (or Data health) ──────
     let on_row_click = move |_ev: web_sys::MouseEvent| {
         // Don't navigate while editing — clicks inside the edit form
         // would otherwise jump the user away mid-typing.
@@ -330,7 +345,11 @@ pub fn KanbanTaskRow(
                 s
             }
             data-task-id=task_id.0.to_string()
-            title="Click to open the task in its parent node"
+            title=if has_node {
+                "Click to open the task in its parent node"
+            } else {
+                "No Project: click to fix it in Data health"
+            }
         >
             // Checkbox — toggles Open ↔ Done
             <TaskCheckbox
@@ -375,10 +394,9 @@ pub fn KanbanTaskRow(
                         // Parent-node chip — amber, matching the zone
                         // accent / priority dots / focus flash.
                         <span class="inline-flex items-center gap-1 min-w-0">
-                            <span class="material-symbols-outlined text-amber-600 dark:text-amber-500"
+                            <span class=chip_icon_class aria-hidden="true"
                                   style="font-size:13px;">{node_icon}</span>
-                            <span class="font-semibold uppercase tracking-wide \
-                                         text-amber-700 dark:text-amber-400 truncate max-w-[12rem]">
+                            <span class=chip_text_class>
                                 {parent_disp}
                             </span>
                         </span>

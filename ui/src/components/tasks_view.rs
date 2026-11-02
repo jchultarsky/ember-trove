@@ -1,18 +1,19 @@
 //! Unified Tasks area: one route family (`/tasks/*`) with a tab bar above
-//! the existing My Day, Inbox, and Calendar views.  Consolidates three
-//! sidebar entries into one without changing the inner views.
+//! the My Day, Captures and Calendar views.  Consolidates three sidebar
+//! entries into one without changing the inner views.
 
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::{
-    calendar_view::CalendarView, inbox_view::InboxView, my_day_view::MyDayView,
+    calendar_view::CalendarView, captures_view::CapturesView, my_day_view::MyDayView,
+    sticky_note::CAPTURE_ICON,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TasksTab {
     MyDay,
-    Inbox,
+    Captures,
     Calendar,
 }
 
@@ -20,29 +21,29 @@ impl TasksTab {
     fn label(self) -> &'static str {
         match self {
             Self::MyDay => "My Day",
-            Self::Inbox => "Inbox",
+            Self::Captures => "Captures",
             Self::Calendar => "Calendar",
         }
     }
     fn icon(self) -> &'static str {
         match self {
             Self::MyDay => "wb_sunny",
-            Self::Inbox => "inbox",
+            Self::Captures => CAPTURE_ICON,
             Self::Calendar => "calendar_month",
         }
     }
     fn path(self) -> &'static str {
         match self {
             Self::MyDay => "/tasks/my-day",
-            Self::Inbox => "/tasks/inbox",
+            Self::Captures => "/tasks/captures",
             Self::Calendar => "/tasks/calendar",
         }
     }
     /// Tab to the right (wraps) — for ArrowRight on the tablist.
     fn next(self) -> Self {
         match self {
-            Self::MyDay => Self::Inbox,
-            Self::Inbox => Self::Calendar,
+            Self::MyDay => Self::Captures,
+            Self::Captures => Self::Calendar,
             Self::Calendar => Self::MyDay,
         }
     }
@@ -50,8 +51,8 @@ impl TasksTab {
     fn prev(self) -> Self {
         match self {
             Self::MyDay => Self::Calendar,
-            Self::Inbox => Self::MyDay,
-            Self::Calendar => Self::Inbox,
+            Self::Captures => Self::MyDay,
+            Self::Calendar => Self::Captures,
         }
     }
 }
@@ -64,7 +65,7 @@ pub fn TasksView(active: TasksTab) -> impl IntoView {
             <div class="flex-1 overflow-hidden flex flex-col min-h-0">
                 {match active {
                     TasksTab::MyDay    => view! { <MyDayView    /> }.into_any(),
-                    TasksTab::Inbox    => view! { <InboxView    /> }.into_any(),
+                    TasksTab::Captures => view! { <CapturesView /> }.into_any(),
                     TasksTab::Calendar => view! { <CalendarView /> }.into_any(),
                 }}
             </div>
@@ -92,7 +93,7 @@ fn TasksTabBar(active: TasksTab) -> impl IntoView {
              role="tablist" aria-label="Tasks views"
              on:keydown=on_keydown>
             <TabButton tab=TasksTab::MyDay    active=active />
-            <TabButton tab=TasksTab::Inbox    active=active />
+            <TabButton tab=TasksTab::Captures active=active />
             <TabButton tab=TasksTab::Calendar active=active />
         </div>
     }

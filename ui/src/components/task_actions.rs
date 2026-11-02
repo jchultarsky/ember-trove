@@ -1,7 +1,7 @@
 //! Shared task mutations — the one implementation behind every task list.
 //!
 //! My Day (`task_row.rs` + the `Space` shortcut in `my_day_view.rs`), the
-//! node task panel (`task_panel.rs`), and the Inbox (`inbox_view.rs`) used to
+//! node task panel (`task_panel.rs`), and the former Inbox used to
 //! carry their own copy of the done-toggle. The copies drifted: two compared
 //! against the string `"done"` (so a Cancelled task behaved three different
 //! ways) and two had no in-flight guard (a double-click raced two PATCHes).
@@ -199,7 +199,7 @@ pub fn delete_tasks_with_undo(
 ///
 /// `busy` is the row's in-flight guard, if it has one (a second click while a
 /// delete is in flight is ignored). `on_deleted` runs after a successful
-/// delete, for caller bookkeeping — Inbox triage advances to the next card.
+/// delete, for caller bookkeeping.
 pub fn delete_with_undo(
     task_id: TaskId,
     busy: Option<RwSignal<bool>>,
@@ -267,7 +267,7 @@ pub struct PatchOpts {
     /// empty = "Couldn't update".
     pub err_prefix: &'static str,
     /// List to refetch on success; `None` when the caller manages its own
-    /// view (Inbox triage advances its card stack instead).
+    /// view.
     pub refresh: Option<RwSignal<u32>>,
 }
 

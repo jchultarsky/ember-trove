@@ -1,9 +1,10 @@
 import { test, expect, createNode, type APIRequestContext, type Page } from './fixtures';
 
 /**
- * Captures (#234, ONTOLOGY §9.1): unclassified input in the Inbox. Quick
- * capture lands one; it can be reworded and deliberately deleted (with
- * Undo). Captures are owner-only, with no admin bypass. Every capture made
+ * Captures (#234, ONTOLOGY §9.1): unclassified input on the Captures wall
+ * (`/tasks/captures`, the Inbox until S4c, #240). Quick capture lands one;
+ * it can be reworded and deliberately deleted (with Undo). Captures are
+ * owner-only, with no admin bypass. Every capture made
  * here starts with PREFIX, and both identities' are wiped before AND after
  * each test (retry-safety, .claude/rules/e2e.md).
  */
@@ -35,16 +36,16 @@ async function captureByKey(page: Page, text: string) {
   await expect(box).toBeFocused();
   await box.fill(text);
   await page.keyboard.press('ControlOrMeta+Enter');
-  await expect(page.locator('[role="status"]').getByText(/Captured to Inbox/)).toBeVisible();
+  await expect(page.locator('[role="status"]').getByText(/Added to Captures/)).toBeVisible();
 }
 
-test('a capture lands in the Inbox, is reworded, deleted, and comes back with Undo', async ({
+test('a capture lands on the wall, is reworded, deleted, and comes back with Undo', async ({
   page,
 }) => {
   const text = `${PREFIX}${Date.now()} call the bank`;
   await captureByKey(page, text);
 
-  await page.goto('/tasks/inbox');
+  await page.goto('/tasks/captures');
   const row = page.getByTestId('captures').getByTestId('capture').filter({ hasText: text });
   await expect(row).toBeVisible();
   // #240: a fresh capture's age tag reads "today", with the words for a
@@ -79,10 +80,10 @@ test('a capture is its owner’s alone', async ({ page, request, otherRequest })
   expect((await otherRequest.delete(`/api/captures/${id}`)).status()).toBe(404);
   expect((await otherRequest.post(`/api/captures/${id}/restore`)).status()).toBe(404);
 
-  // Nor does their Inbox show it.
+  // Nor does their wall show it.
   await page.setExtraHTTPHeaders({ 'x-e2e-subject': 'other' });
-  await page.goto('/tasks/inbox');
-  await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+  await page.goto('/tasks/captures');
+  await expect(page.getByRole('heading', { name: 'Captures' })).toBeVisible();
   await expect(page.getByText(text)).toHaveCount(0);
   await page.setExtraHTTPHeaders({});
 });
@@ -114,7 +115,7 @@ test('a note needs a node; a loose thought is a capture', async ({ page, request
     // The keyboard path says why, and doesn't lock the box (review of #234:
     // it used to stay on "Posting…" for good).
     await compose.press('ControlOrMeta+Enter');
-    await expect(page.getByText('Pick a node for this note, or press n to capture it.')).toBeVisible();
+    await expect(page.getByText('Pick a node for this note, or capture it instead.')).toBeVisible();
     const picker = page.getByRole('combobox', { name: 'Note on a node…' });
     await picker.fill(`${PREFIX}note host ${stamp}`);
     await page.getByRole('option', { name: new RegExp(`note host ${stamp}`) }).click();
@@ -130,10 +131,67 @@ test('a note needs a node; a loose thought is a capture', async ({ page, request
   }
 });
 
+// ── The Captures view (S4c, #240) ───────────────────────────────────────────
+
+test('the old Inbox URLs land on Captures, the share marker included', async ({ page }) => {
+  // Installed service workers still send a share to /tasks/inbox?captured=1.
+  await page.goto('/tasks/inbox?captured=1');
+  await expect(page).toHaveURL(/\/tasks\/captures$/);
+  await expect(page.locator('[role="status"]').getByText('Added to Captures')).toBeVisible();
+  await expect(page).toHaveTitle('Captures — Ember Trove');
+
+  await page.goto('/inbox');
+  await expect(page).toHaveURL(/\/tasks\/captures$/);
+  await expect(page.getByRole('tab', { name: 'Captures' })).toHaveAttribute('aria-selected', 'true');
+});
+
+test('an empty wall says so; a task with no Project is not a capture', async ({
+  page,
+  otherRequest,
+}) => {
+  // The second identity's wall, emptied (it has nothing else to keep).
+  const theirs: { id: string }[] = await (await otherRequest.get('/api/captures')).json();
+  for (const c of theirs) await otherRequest.delete(`/api/captures/${c.id}`);
+  // A task with no Project: Data health lists it, the wall doesn't.
+  const title = `${PREFIX}${Date.now()} loose task`;
+  const task = await (await otherRequest.post('/api/tasks', { data: { title } })).json();
+  try {
+    await page.setExtraHTTPHeaders({ 'x-e2e-subject': 'other' });
+    await page.goto('/tasks/captures');
+    await expect(page.getByText('Nothing captured')).toBeVisible();
+    await expect(page.getByText(title)).toHaveCount(0);
+  } finally {
+    await page.setExtraHTTPHeaders({});
+    await otherRequest.delete(`/api/tasks/${task.id}`);
+  }
+});
+
+test('the Notes box hands loose text to Captures', async ({ page, request }) => {
+  // Muse's v3.5.0 friction item (#234): "press n" opened the composer empty.
+  const text = `${PREFIX}${Date.now()} from the notes box`;
+  await page.goto('/notes');
+  const compose = page.getByPlaceholder('Write a note…  (Ctrl+Enter to post)');
+  const captureIt = page.getByRole('button', { name: 'Capture it' });
+  await expect(captureIt).toBeDisabled();
+  await compose.fill(text);
+  await captureIt.click();
+
+  const toast = page.locator('[role="status"]');
+  await expect(toast.getByText('Added to Captures')).toBeVisible();
+  await expect(compose).toHaveValue('');
+  const mine: { body: string }[] = await (await request.get('/api/captures')).json();
+  expect(mine.filter((c) => c.body === text)).toHaveLength(1);
+
+  // The toast's Open goes to the wall.
+  await toast.getByRole('button', { name: 'Open' }).click();
+  await expect(page).toHaveURL(/\/tasks\/captures$/);
+  await expect(page.getByTestId('capture').filter({ hasText: text })).toBeVisible();
+});
+
 // ── Converting a capture (S4b, §9.1) ────────────────────────────────────────
 
 async function convertDialog(page: Page, text: string) {
-  await page.goto('/tasks/inbox');
+  await page.goto('/tasks/captures');
   const row = page.getByTestId('capture').filter({ hasText: text });
   await row.getByRole('button', { name: 'Convert capture' }).click();
   const dialog = page.getByRole('dialog', { name: 'Convert capture' });

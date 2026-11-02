@@ -1,4 +1,4 @@
-import { test, expect, type Page } from './fixtures';
+import { test, expect, createNode, type Page } from './fixtures';
 
 /**
  * Smoke suite — the flows that host-side tests structurally cannot cover
@@ -49,7 +49,7 @@ test.describe('app shell', () => {
 });
 
 test.describe('quick capture', () => {
-  test('lands a capture in the inbox, words kept as typed (#234)', async ({ page, request }) => {
+  test('lands a capture on the wall, words kept as typed (#234)', async ({ page, request }) => {
     const text = `e2e capture ${Date.now()} tomorrow p1`;
     await page.goto('/tasks/my-day');
     await focusNeutral(page);
@@ -62,7 +62,7 @@ test.describe('quick capture', () => {
     await expect(page.getByText('High priority')).toHaveCount(0);
 
     await page.keyboard.press('ControlOrMeta+Enter');
-    await expect(page.locator('[role="status"]').getByText(/Captured to Inbox/)).toBeVisible();
+    await expect(page.locator('[role="status"]').getByText(/Added to Captures/)).toBeVisible();
 
     // A capture, not a task: "tomorrow p1" is still in its text.
     const captures: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
@@ -75,30 +75,33 @@ test.describe('quick capture', () => {
 });
 
 test.describe('soft delete with undo', () => {
-  test('delete shows an undo toast; undo restores the task', async ({ page }) => {
+  test('delete shows an undo toast; undo restores the task', async ({ page, request }) => {
     const title = `e2e undo ${Date.now()}`;
-    await page.goto('/tasks/inbox');
+    const node = await createNode(request, `e2e undo node ${Date.now()}`, { node_type: 'project' });
+    try {
+      await page.goto(`/nodes/${node.id}`);
 
-    // Create via the inline form.
-    await page.getByPlaceholder('Task title…').fill(title);
-    await page.keyboard.press('Enter');
-    const row = page.locator('[data-task-id]', { hasText: title });
-    await expect(row).toBeVisible();
+      // Create via the task panel's form.
+      await page.locator('button[title="Add task"]').first().click();
+      await page.getByPlaceholder('Task title…').fill(title);
+      await page.keyboard.press('Enter');
+      const row = page.locator('[data-task-id]', { hasText: title });
+      await expect(row).toBeVisible();
 
-    // Delete → undo toast (v2.21.1 regression: this toast was silently
-    // dropped because use_context has no owner after .await).
-    await row.getByRole('button', { name: 'Delete' }).click();
-    const toast = page.locator('[role="status"]');
-    await expect(toast.getByText('Task deleted')).toBeVisible();
-    await expect(row).not.toBeVisible();
+      // Delete → undo toast (v2.21.1 regression: this toast was silently
+      // dropped because use_context has no owner after .await).
+      await row.getByRole('button', { name: 'Delete' }).click();
+      const toast = page.locator('[role="status"]');
+      await expect(toast.getByText('Task deleted')).toBeVisible();
+      await expect(row).not.toBeVisible();
 
-    // Undo → task returns.
-    await toast.getByRole('button', { name: 'Undo' }).click();
-    await expect(page.locator('[data-task-id]', { hasText: title })).toBeVisible();
-
-    // Clean up (delete again, let the toast lapse).
-    await page.locator('[data-task-id]', { hasText: title })
-      .getByRole('button', { name: 'Delete' }).click();
+      // Undo → task returns.
+      await toast.getByRole('button', { name: 'Undo' }).click();
+      await expect(page.locator('[data-task-id]', { hasText: title })).toBeVisible();
+    } finally {
+      // Deleting the Project takes its task with it.
+      await request.delete(`/api/nodes/${node.id}`);
+    }
   });
 });
 
@@ -109,8 +112,8 @@ test.describe('keyboard listener lifecycle', () => {
     // panicked, and poisoned all event dispatch.
     await page.goto('/tasks/my-day');
     await expect(page.getByRole('heading', { name: 'My Day' })).toBeVisible();
-    await page.getByRole('tab', { name: 'Inbox' }).click();
-    await expect(page).toHaveTitle('Inbox — Ember Trove');
+    await page.getByRole('tab', { name: 'Captures' }).click();
+    await expect(page).toHaveTitle('Captures — Ember Trove');
 
     await focusNeutral(page);
     await page.keyboard.press('j');

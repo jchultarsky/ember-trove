@@ -76,7 +76,7 @@ pub fn Sidebar(
             }}
             <div class="border-t border-stone-200 dark:border-stone-700 my-3" />
             // ── Section 1: Daily workflow ──────────────────────────────────────
-            // Tasks (My Day / Inbox / Calendar) share one sidebar entry; the
+            // Tasks (My Day / Captures / Calendar) share one sidebar entry; the
             // view itself exposes the three via a tab bar for clearer IA.
             // (The morning-ritual /plan entry was removed in v2.6.1 — the
             // Kanban surface made it redundant.)
