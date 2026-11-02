@@ -25,6 +25,9 @@
 //!   `d`              delete it (Undo in the toast)
 //!   `Escape`         drop the focus ring
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use common::capture::{Capture, CaptureAge};
 use common::grid_nav::{self, Cell, Step};
 use common::id::CaptureId;
@@ -57,9 +60,23 @@ enum CardCommand {
 struct WallKeys {
     /// The card with the focus ring.
     focused: RwSignal<Option<CaptureId>>,
-    /// A command for one card; that card clears it once it has acted.
-    command: RwSignal<Option<(CaptureId, CardCommand)>>,
+    /// How to reach each mounted card. A command is delivered at once or
+    /// not at all: one left in a signal for a card that wasn't mounted
+    /// (the wall showing a load error) fired when the card came back,
+    /// deleting it unasked (review of #240 B2).
+    cards: StoredValue<HashMap<CaptureId, CardHandle>>,
 }
+
+/// One mounted card's way in. `instance` tells this mount from a later one
+/// of the same capture (a reload remounts every card), so a card going
+/// away never unregisters its successor.
+#[derive(Clone, Copy)]
+struct CardHandle {
+    instance: u64,
+    run: Callback<CardCommand>,
+}
+
+static NEXT_CARD_INSTANCE: AtomicU64 = AtomicU64::new(0);
 
 #[component]
 pub fn CapturesView() -> impl IntoView {
@@ -76,18 +93,26 @@ pub fn CapturesView() -> impl IntoView {
 
     let keys = WallKeys {
         focused: RwSignal::new(None),
-        command: RwSignal::new(None),
+        cards: StoredValue::new(HashMap::new()),
     };
     // The cards' ids in display order, for the key handler.
     let order = RwSignal::new(Vec::<CaptureId>::new());
     Effect::new(move |_| {
-        // Still loading: keep the old order and the focus.
-        let Some(Ok(list)) = captures.get() else {
-            return;
+        // Still loading: keep the old order and the focus (a reload keeps
+        // the old value meanwhile).
+        let list = match captures.get() {
+            None => return,
+            Some(Ok(list)) => list,
+            // The error state shows no cards: nothing to aim at.
+            Some(Err(_)) => {
+                keys.focused.set(None);
+                order.set(Vec::new());
+                return;
+            }
         };
         let ids: Vec<CaptureId> = list.iter().map(|c| c.id).collect();
         // A converted or deleted card hands the ring to the one now in
-        // its place, so `d d d` clears a run of cards.
+        // its place.
         if let Some(gone) = keys.focused.get_untracked()
             && !ids.contains(&gone)
         {
@@ -145,7 +170,10 @@ pub fn CapturesView() -> impl IntoView {
             _ => return,
         };
         ev.prevent_default();
-        keys.command.set(Some((id, cmd)));
+        let card = keys.cards.with_value(|cards| cards.get(&id).copied());
+        if let Some(card) = card {
+            card.run.try_run(cmd);
+        }
     });
     // Dropping the handle doesn't detach it (leptos.md): a leaked listener
     // reads disposed signals and poisons event dispatch.
@@ -295,15 +323,10 @@ fn CaptureRow(
     let body = StoredValue::new(capture.body);
     let edit_ref: NodeRef<html::Textarea> = NodeRef::new();
 
-    // A key aimed at this card does what its button would.
-    Effect::new(move |_| {
-        let Some((target, cmd)) = keys.command.get() else {
-            return;
-        };
-        if target != id {
-            return;
-        }
-        keys.command.set(None);
+    // A key aimed at this card does what its button would. Registered
+    // while mounted only.
+    let instance = NEXT_CARD_INSTANCE.fetch_add(1, Ordering::Relaxed);
+    let run = Callback::new(move |cmd: CardCommand| {
         if busy.get_untracked() {
             return;
         }
@@ -312,6 +335,17 @@ fn CaptureRow(
             CardCommand::Edit => editing.set(true),
             CardCommand::Delete => delete_with_undo(id, busy, refresh, toast_state),
         }
+    });
+    keys.cards.update_value(|cards| {
+        cards.insert(id, CardHandle { instance, run });
+    });
+    on_cleanup(move || {
+        // `try_`: the wall may be going away too.
+        keys.cards.try_update_value(|cards| {
+            if cards.get(&id).is_some_and(|c| c.instance == instance) {
+                cards.remove(&id);
+            }
+        });
     });
     // The text box takes the focus when editing starts, by key or click
     // (NodeRef + Effect, leptos.md).
@@ -454,9 +488,11 @@ fn delete_with_undo(
     busy.set(true);
     wasm_bindgen_futures::spawn_local(async move {
         let result = crate::api::delete_capture(id).await;
-        busy.try_set(false);
         match result {
             Ok(()) => {
+                // Stays busy: the card is gone on the server and leaves at the
+                // reload. A second `d` meanwhile was a second DELETE, a 404
+                // and a false "Delete failed" (review of #240 B2).
                 refresh.try_update(|n| *n += 1);
                 push_undo_toast(
                     "Capture deleted",
@@ -476,7 +512,10 @@ fn delete_with_undo(
                     }),
                 );
             }
-            Err(e) => push_toast(ToastLevel::Error, format!("Delete failed: {e}")),
+            Err(e) => {
+                busy.try_set(false);
+                push_toast(ToastLevel::Error, format!("Delete failed: {e}"));
+            }
         }
     });
 }

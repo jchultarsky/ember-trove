@@ -236,6 +236,75 @@ test('d deletes the focused capture, Undo brings it back', async ({ page, reques
   await expect(card('three')).toBeVisible();
 });
 
+test('a quick d d deletes one capture, once', async ({ page, request }) => {
+  // Review of #240 B2: the second d sent a second DELETE before the wall
+  // reloaded, which 404ed into a false "Delete failed".
+  const card = await threeOnTheWall(page, request);
+  // Hold the wall's reload back, so the second d lands after the DELETE
+  // answered but before the card leaves: the window the bug lived in.
+  await page.route('**/api/captures', async (route) => {
+    if (route.request().method() === 'GET') await new Promise((r) => setTimeout(r, 1_000));
+    await route.continue();
+  });
+  let deletes = 0;
+  page.on('request', (r) => {
+    if (r.method() === 'DELETE' && /\/api\/captures\//.test(r.url())) deletes += 1;
+  });
+  await page.keyboard.press('j');
+  const deleted = page.waitForResponse(
+    (r) => r.request().method() === 'DELETE' && /\/api\/captures\//.test(r.url()),
+  );
+  await page.keyboard.press('d');
+  expect((await deleted).ok()).toBeTruthy();
+  await expect(card('three')).toBeVisible(); // still there: the reload is held
+  await page.keyboard.press('d');
+  await expect(card('three')).toHaveCount(0);
+  await expect(card('two')).toBeVisible();
+  expect(deletes, 'the second d sent no second DELETE').toBe(1);
+  await expect(page.getByText(/Delete failed/)).toHaveCount(0);
+  const left: { body: string }[] = await (await request.get('/api/captures')).json();
+  expect(left.filter((c) => c.body.includes(' keys ')).map((c) => c.body.split(' keys ')[1]).sort()).toEqual([
+    'one',
+    'two',
+  ]);
+});
+
+test('a key pressed while the wall shows an error does nothing later', async ({
+  page,
+  request,
+}) => {
+  // Review of #240 B2: the command waited in a signal while the cards were
+  // unmounted, and deleted the card when the next reload brought it back.
+  const card = await threeOnTheWall(page, request);
+  await page.keyboard.press('j');
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+
+  const quickCapture = async (text: string) => {
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('n');
+    await page.getByPlaceholder(/What’s on your mind/).fill(text);
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await expect(page.getByRole('dialog', { name: 'Quick capture' })).toHaveCount(0);
+  };
+  // The next reload fails: the wall shows its error and no cards.
+  await page.route('**/api/captures', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ status: 500, body: '{}' }) : route.continue(),
+  );
+  await quickCapture(`${PREFIX}${Date.now()} reload fails`);
+  await expect(page.getByText(/Couldn.t load captures/)).toBeVisible();
+  await page.locator('main').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('d');
+  await page.keyboard.press('Enter');
+
+  // The next reload works: the card is back, untouched, and no dialog opens.
+  await page.unroute('**/api/captures');
+  await quickCapture(`${PREFIX}${Date.now()} reload works`);
+  await expect(card('three')).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Convert capture' })).toHaveCount(0);
+  const left: { body: string }[] = await (await request.get('/api/captures')).json();
+  expect(left.filter((c) => c.body.includes(' keys '))).toHaveLength(3);
+});
+
 test('c converts and e edits the focused capture', async ({ page, request }) => {
   const card = await threeOnTheWall(page, request);
   await page.keyboard.press('j');
@@ -280,9 +349,14 @@ test('the wall’s keys never act behind a dialog', async ({ page, request }) =>
   await expect(composer).toBeVisible();
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.keyboard.press('d');
+  await page.keyboard.press('j');
   await composer.getByRole('button', { name: 'Close' }).click();
   await expect(composer).toHaveCount(0);
-  await expect(card('three')).toBeVisible();
+  // The j didn't move the ring, and the d deleted nothing (asked of the
+  // server: a leaked delete may not have reloaded the wall yet).
+  await expect(card('three')).toHaveAttribute('aria-current', 'true');
+  const left: { body: string }[] = await (await request.get('/api/captures')).json();
+  expect(left.filter((c) => c.body.includes(' keys '))).toHaveLength(3);
 });
 
 // ── Converting a capture (S4b, §9.1) ────────────────────────────────────────
