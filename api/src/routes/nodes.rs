@@ -115,8 +115,9 @@ async fn list_nodes(
     let (nodes, total) = state.nodes.list(params).await?;
     // `has_more` was computed as `page*per_page + nodes.len() < total`, which
     // double-counts the current page (returns false on page=1 of 57 with
-    // per_page=50, hiding 7 nodes from the graph view). Correct check: are
-    // there any rows beyond what's been seen so far?
+    // per_page=50, which hid 7 nodes from the graph view when it still paged
+    // through this route). Correct check: are there any rows beyond what's
+    // been seen so far?
     let seen = (page as u64 - 1) * (per_page as u64) + (nodes.len() as u64);
     let has_more = seen < total;
 
