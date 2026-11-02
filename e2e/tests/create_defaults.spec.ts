@@ -161,4 +161,25 @@ test.describe('creating a node applies the type default', () => {
     await expect(page).toHaveURL(/\/nodes\/new\?type=area/);
     await expect(typeSelect(page)).toHaveValue('area');
   });
+  test('the create dialog keeps a picked template (P1 #2 review)', async ({ page, request }) => {
+    // The type has a default; the person picks another template. The pick
+    // sets the type, which used to re-run the default and switch the picker
+    // back to it (the node then recorded the wrong template).
+    await createTemplate(request, `${PREFIX} article plain`, 'article', 'Default body', true);
+    const other = await createTemplate(request, `${PREFIX} article other`, 'article', 'Other body', false);
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('n');
+    await page.getByPlaceholder(/What’s on your mind/).fill('e2e default picked');
+    await page.getByRole('button', { name: /More fields/ }).click();
+    const dialog = page.getByRole('dialog', { name: 'Create node' });
+    await expect(dialog).toBeVisible();
+    const picker = dialog.locator('select:has(option:text-is("— No template —"))');
+    await expect(picker.locator(`option[value="${other.id}"]`)).toHaveCount(1);
+    await picker.selectOption(other.id);
+    await expect(picker).toHaveValue(other.id);
+    await expect(dialog.getByRole('textbox').last()).toHaveValue('Other body');
+    // Give any late effect a chance to undo it.
+    await page.waitForTimeout(500);
+    await expect(picker).toHaveValue(other.id);
+  });
 });

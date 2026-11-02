@@ -15,8 +15,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     - the node page reads the editor prefs once for its task and note
       panels.
   - The production proxy speaks HTTP/2 (`http2 on;`), so a page's requests
-    share one connection instead of queueing for six. The proxy image is
-    pinned to `nginx:1.29-alpine`, which supports the directive.
+    share one connection instead of queueing for six.
+
+### Fixed
+- **The create dialog keeps the template you pick.** Picking a template sets
+  the node type, which re-ran the type's default and switched the picker
+  back to it, so the node recorded the wrong template. A list that arrives
+  after the dialog opens no longer overrides a pick either. A real change
+  of type still applies that type's default.
 
 ### Security
 - **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of

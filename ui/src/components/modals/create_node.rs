@@ -74,6 +74,13 @@ pub fn CreateNodeModal(
         }
     });
 
+    // The person chose a template (or "no template") since the dialog opened.
+    // The default must then not take over: when the list arrives late (it is
+    // fetched on open), and when the pick itself sets the node type. A real
+    // change of type still applies that type's default (review of P1 #2).
+    let picker_touched = RwSignal::new(false);
+    let last_type = StoredValue::new(String::new());
+
     // Reset fields every time the modal opens.  Pre-fills:
     //   * `initial_body`  — fast-capture "More fields…" handoff (v2.4.0)
     //   * `initial_title` — palette "Create node titled '<query>'" (v2.8.0)
@@ -83,6 +90,7 @@ pub fn CreateNodeModal(
             body.set(initial_body.get_untracked());
             template_id_for_create.set(None);
             selected_template_value.set(String::new());
+            picker_touched.set(false);
             // Pre-select type from the active filter (falls back to "article").
             let default_type = node_type_filter
                 .and_then(|f| f.get_untracked())
@@ -101,6 +109,13 @@ pub fn CreateNodeModal(
     Effect::new(move |_| {
         let nt = node_type_str.get();
         let templates = available_templates.get();
+        let type_changed = last_type.with_value(|t| *t != nt);
+        last_type.set_value(nt.clone());
+        if type_changed {
+            picker_touched.set(false);
+        } else if picker_touched.get_untracked() {
+            return;
+        }
         // Same rule as the full-page editor (common::template, #111).
         if let Some(t) = common::node::NodeType::parse(&nt)
             .and_then(|nt| common::template::default_for_type(&templates, &nt))
@@ -265,6 +280,7 @@ pub fn CreateNodeModal(
                         prop:value=move || selected_template_value.get()
                         on:change=move |ev| {
                             let val = event_target_value(&ev);
+                            picker_touched.set(true);
                             selected_template_value.set(val.clone());
                             if val.is_empty() {
                                 template_id_for_create.set(None);
@@ -273,6 +289,9 @@ pub fn CreateNodeModal(
                                 if let Some(t) = templates.into_iter().find(|t| t.id == tid) {
                                     let type_str = t.node_type.as_str();
                                     body.set(t.body.clone());
+                                    // The pick sets the type: not a change of
+                                    // type for the default to answer.
+                                    last_type.set_value(type_str.to_string());
                                     node_type_str.set(type_str.to_string());
                                     template_id_for_create.set(Some(tid));
                                 }
