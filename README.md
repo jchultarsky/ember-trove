@@ -535,7 +535,7 @@ change them. They are in backups, and not in search, export or webhooks.
 |--------|------|-------------|
 | GET | `/api/admin/users` | List users |
 | POST | `/api/admin/users` | Create user |
-| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier admin backups and the daily database dumps (30 days) keep the data until they are deleted |
+| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier backups keep the data until they are deleted: an admin's until removed by hand, automatic ones until they fall out of the newest 10 |
 | GET | `/api/admin/users/{id}/deletion-preview` | What deleting the account would remove (counts only) |
 | GET | `/api/admin/users/roles` | List available roles |
 | PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
@@ -545,6 +545,30 @@ change them. They are in backups, and not in search, export or webhooks.
 | POST | `/api/admin/restore` | Restore from backup file |
 | GET | `/api/metrics` | Operational metrics snapshot: version, uptime, pool stats, row counts, request counts, and latency per route since start (`routes`: count, total, mean, p50, p95, p99, max). Shown on **Admin → Performance** (`/admin/performance`) |
 | GET | `/api/metrics/db` | The database's 15 slowest statements by total time, from `pg_stat_statements` (`enabled: false` when it isn't preloaded or created). Reading and writing statements only, as Postgres normalised them (`$1` for every value), with comments stripped |
+
+### Automatic backups
+
+The release workflow makes an app backup after every deploy, with a command
+the API binary runs on the server instead of serving:
+
+```bash
+docker exec deploy-api-1 ember-trove-api backup create --comment "After the v3.11.0 deploy"
+```
+
+- It's the same backup as **Admin → Backup → Create**, listed there with an
+  **Automatic** badge, and it restores the same way.
+- Only the **newest 10 automatic backups** are kept; each run deletes older
+  ones (archive and row). Backups an admin makes are never deleted this way.
+- It needs no sign-in: running it takes a shell on the server, which already
+  has the database and storage credentials. Nothing new listens on the
+  network.
+- The Actions log is public, so the release step echoes only the summary
+  (backup id and counts). The command's full output stays on the server in
+  `~/ember-trove-backups.log` (owner-only). In command mode the binary logs
+  errors only and skips OIDC discovery.
+- If storage refuses to delete an old archive, its key goes to the
+  `object_deletions` queue, which the daily task retries, so no archive
+  outlives its row unnoticed.
 
 ---
 

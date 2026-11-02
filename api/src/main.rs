@@ -2,6 +2,7 @@ mod admin;
 mod auth;
 mod backfill;
 mod backup;
+mod cli;
 mod config;
 mod error;
 mod notify;
@@ -37,10 +38,21 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // A server-side command (`backup create`) runs instead of serving. Parse
+    // first, so a typo fails before anything connects.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = cli::parse(&args).map_err(|usage| anyhow::anyhow!(usage))?;
+
+    // A command logs errors only, whatever RUST_LOG says: its output reaches
+    // the release workflow, and the startup lines name config (the SES
+    // sender, the Cognito pool) that has no business there.
+    let filter = if command.is_some() {
+        tracing_subscriber::EnvFilter::new("error")
+    } else {
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
+    };
     tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+        .with(filter)
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -62,7 +74,11 @@ async fn main() -> anyhow::Result<()> {
     backfill::run_all(&pool).await;
 
     // OIDC discovery — fetch endpoints and JWKS from Cognito (optional for local dev).
-    let oidc = if let (Some(issuer), Some(client_id), Some(client_secret)) = (
+    // A command signs no one in: skip discovery, so a Cognito hiccup can't
+    // fail a backup.
+    let oidc = if command.is_some() {
+        None
+    } else if let (Some(issuer), Some(client_id), Some(client_secret)) = (
         &config.oidc_issuer,
         &config.oidc_client_id,
         &config.oidc_client_secret,
@@ -192,6 +208,11 @@ async fn main() -> anyhow::Result<()> {
         pkce: Arc::new(PgPkceRepo::new(pool.clone())),
         pool,
     };
+
+    // A command runs once and exits: no background loops, no listener.
+    if let Some(command) = command {
+        return cli::run(command, &state).await;
+    }
 
     // Spawn a background task that sweeps expired PKCE entries every 5 minutes.
     // Without this, abandoned OAuth flows accumulate unboundedly in the table.
