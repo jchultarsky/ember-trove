@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The graph loads in one small request** (performance P1). `GET /api/graph`
+  returns every node it draws without its body (a 100-character plain-text
+  preview instead), plus the edges and saved positions. It replaces paging
+  through `GET /nodes` with full bodies, then `/edges` and `/graph/positions`.
+  - At 10× today's data: 15.7 MB in 24 requests became 1.7 MB in one, and a
+    throttled phone went from about 20 s to about 4 s (`docs/PERFORMANCE.md`).
+  - Each part keeps its existing scope: nodes as `GET /nodes` (owned or
+    shared, archived included), edges and positions as their own routes
+    (owned). Admins see all, as before.
+  - The preview helper moved to `common::markdown::plain_preview`.
+
 ### Security
 - **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of
   nested image wiki links with `ENABLE_WIKILINKS`). It runs in the browser

@@ -35,6 +35,44 @@ async function gotoGraph(page: Page) {
 }
 
 test.describe('graph view', () => {
+  test('loads in one request, without bodies, and still previews on hover', async ({
+    page,
+    request,
+  }) => {
+    // Performance P1: the graph used to page through every node's full
+    // body, then fetch edges and positions, one after another.
+    const stamp = Date.now();
+    const node = await createNode(request, `e2e graph slim ${stamp}`, {
+      body: `# A heading\n\nThe preview line ${stamp} for the graph.`,
+    });
+    const apiCalls: string[] = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.pathname.startsWith('/api/') && r.method() === 'GET') apiCalls.push(u.pathname);
+    });
+    try {
+      await gotoGraph(page);
+      await expect(nodeG(page, node.id)).toBeVisible();
+      expect(apiCalls.filter((p) => p === '/api/graph')).toHaveLength(1);
+      expect(
+        apiCalls.filter((p) => p === '/api/nodes' || p === '/api/edges' || p === '/api/graph/positions'),
+      ).toEqual([]);
+      const resp = await request.get('/api/graph');
+      expect(resp.ok()).toBeTruthy();
+      const data = await resp.json();
+      const mine = data.nodes.find((n: { id: string }) => n.id === node.id);
+      expect(mine).toBeTruthy();
+      expect(mine.body).toBeUndefined();
+      expect(mine.preview).toBe(`The preview line ${stamp} for the graph.`);
+
+      // The hover card shows the preview (SVG: dispatch, don't click; e2e.md).
+      await nodeG(page, node.id).dispatchEvent('mouseover');
+      await expect(page.getByText(`The preview line ${stamp} for the graph.`)).toBeVisible();
+    } finally {
+      await request.delete(`/api/nodes/${node.id}`);
+    }
+  });
+
   test('renders created nodes on the canvas', async ({ page, request }) => {
     const stamp = Date.now();
     const a = await createNode(request, `e2e graph a ${stamp}`);

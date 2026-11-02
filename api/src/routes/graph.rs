@@ -6,7 +6,7 @@ use axum::{
 };
 use common::{
     auth::AuthClaims,
-    graph::{NodePosition, SavePositionRequest, SavePositionsRequest},
+    graph::{GraphData, NodePosition, SavePositionRequest, SavePositionsRequest},
     id::NodeId,
 };
 use uuid::Uuid;
@@ -22,9 +22,32 @@ const MAX_BATCH_POSITIONS: usize = 2000;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(get_graph))
         .route("/positions", get(list_positions))
         .route("/positions", put(upsert_positions_batch))
         .route("/positions/{node_id}", put(upsert_position))
+}
+
+/// `GET /api/graph`: everything the graph view draws, in one request
+/// (performance P1): nodes without bodies, edges and saved positions. Each
+/// part keeps its own route's scope: nodes as `GET /nodes` (owned or
+/// shared), edges as `GET /edges` and positions as `GET /graph/positions`
+/// (owned). Admins (`None`) see all, as on those routes.
+async fn get_graph(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<GraphData>, ApiError> {
+    let subject = subject_scope(&claims);
+    let (nodes, edges, positions) = tokio::try_join!(
+        state.graph.list_nodes(subject),
+        state.edges.list_visible(subject),
+        state.graph.list_positions(subject),
+    )?;
+    Ok(Json(GraphData {
+        nodes,
+        edges,
+        positions,
+    }))
 }
 
 async fn list_positions(

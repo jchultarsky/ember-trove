@@ -9,10 +9,6 @@ use common::{
 use super::{delete_empty, get_json, post_empty, post_json, put_json};
 use crate::error::UiError;
 
-pub async fn fetch_all_edges() -> Result<Vec<Edge>, UiError> {
-    get_json("/edges").await
-}
-
 pub async fn fetch_edges_for_node(node_id: NodeId) -> Result<Vec<EdgeWithTitles>, UiError> {
     get_json(&format!("/nodes/{node_id}/edges")).await
 }
