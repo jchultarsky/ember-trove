@@ -174,3 +174,32 @@ also recreate `postgres`, restarting it for a few seconds. So:
   going after it.
 - A request that hits the 30 s timeout is recorded as its 408, with the full time.
 - A request whose client disconnects is not recorded.
+
+### #2 Fewer round trips at start (2026-11-02)
+
+- **Removed duplicate requests:**
+  - `/api/health`: the update banner reuses the app's version;
+  - `/templates`: the closed create dialogs no longer fetch it; it loads when one
+    opens;
+  - `/editor-prefs`: one fetch per node page, shared by the task and note panels.
+- **The proxy speaks HTTP/2** (`http2 on;`, nginx pinned to `1.30-alpine`, the stable branch;
+  1.29 is end-of-life).
+
+| | requests per page load (1×) |
+|---|---|
+| before | 8–16 |
+| after | **5–12** (3 fewer on every page, 4 on a node page) |
+
+**Page-ready times did not move locally** (phone-4g warm: My Day about 1.1 s,
+Captures about 0.6 s, before and after).
+- The duplicates ran in parallel with the requests a page waits on, so they weren't
+  on its critical path.
+- HTTP/2 can't be measured on the local stack: browsers only use it over TLS, and
+  the local stack is plain HTTP. Its effect (no queueing for six connections) shows
+  on prod.
+
+What does hold a phone up is a chain: sign-in resolves at about 0.42 s, then about
+0.7 s of requests that run one after another, roughly 4–5 round trips at 150 ms.
+**Next:** map that chain per page and shorten it, for example by starting page data
+alongside the sign-in check, or folding dependent requests into one.
+

@@ -158,24 +158,23 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     let force_open = RwSignal::new(
         crate::focus_note::pending_focus_note().and_then(|s| uuid::Uuid::parse_str(&s).ok()),
     );
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            let notes = prefs.into_iter().filter(|p| p.entity_kind == "note");
-            let (mut heights, mut folded) = (
-                std::collections::HashMap::new(),
-                std::collections::HashSet::new(),
-            );
-            for p in notes {
-                if let Some(h) = p.height {
-                    heights.insert(p.entity_id, h);
-                }
-                if p.collapsed {
-                    folded.insert(p.entity_id);
-                }
+    // The page's shared prefs (one fetch for the task and note panels).
+    crate::components::task_row::EditorPrefs::with(move |prefs| {
+        let notes = prefs.iter().filter(|p| p.entity_kind == "note");
+        let (mut heights, mut folded) = (
+            std::collections::HashMap::new(),
+            std::collections::HashSet::new(),
+        );
+        for p in notes {
+            if let Some(h) = p.height {
+                heights.insert(p.entity_id, h);
             }
-            editor_heights.set(heights);
-            collapsed_notes.set(folded);
+            if p.collapsed {
+                folded.insert(p.entity_id);
+            }
         }
+        editor_heights.try_set(heights);
+        collapsed_notes.try_set(folded);
     });
 
     // Whether a note is currently shown collapsed (saved state, unless it is
