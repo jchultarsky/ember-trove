@@ -82,6 +82,9 @@ pub fn MyDayView() -> impl IntoView {
     let editing_id: RwSignal<Option<TaskId>> = RwSignal::new(None);
     provide_context(FocusedTaskId(focused_id));
     provide_context(EditingTaskId(editing_id));
+    // The open editor's draft belongs to the view, not the row (#250).
+    crate::components::task_row::EditSession::provide(editing_id);
+    let session = expect_context::<crate::components::task_row::EditSession>();
 
     // Saved inline-editor heights for the rows.
     TaskEditorHeights::provide();
@@ -238,7 +241,8 @@ pub fn MyDayView() -> impl IntoView {
                     return;
                 };
                 ev.prevent_default();
-                editing_id.set(Some(flat[idx].task.id));
+                // Opens on the saved values, like the pencil.
+                session.open(&flat[idx].task);
             }
             "d" => {
                 let Some(idx) = cur_idx else {

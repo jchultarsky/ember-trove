@@ -78,6 +78,76 @@ pub struct FocusedTaskId(pub RwSignal<Option<TaskId>>);
 #[derive(Clone, Copy)]
 pub struct EditingTaskId(pub RwSignal<Option<TaskId>>);
 
+/// The draft of the one task being edited in a list, owned by the list
+/// (#250). A list re-renders every row when it refetches (☀ on any task,
+/// ticking one, a quick capture), and a row's own draft died with it: the
+/// panel's editor closed and lost its text, My Day's reverted to the saved
+/// task. A task can also move between My Day's zones mid-edit, two lists
+/// that reload apart. So the draft lives here, its signals created under
+/// the list's owner, and every row showing that task edits the same one.
+///
+/// Opening an editor (`open`) starts from the saved task; the draft then
+/// lives until another task's editor opens or the list goes away, so
+/// Escape's "Edit discarded · Undo" can still put the text back.
+#[derive(Clone, Copy)]
+pub struct EditSession {
+    owner: StoredValue<Option<Owner>>,
+    current: StoredValue<Option<(TaskId, TaskEditDraft)>>,
+    editing: RwSignal<Option<TaskId>>,
+}
+
+impl EditSession {
+    /// Provide the session for a list whose open editor is `editing`.
+    ///
+    /// The drafts get their own child owner. Storing the view's own owner
+    /// here instead made a cycle (a value it owns holding it strongly): the
+    /// page was never cleaned up, and My Day's key handler kept acting on
+    /// other pages (review of #250).
+    pub fn provide(editing: RwSignal<Option<TaskId>>) {
+        provide_context(EditSession {
+            owner: StoredValue::new(Owner::current().map(|_| Owner::new())),
+            current: StoredValue::new(None),
+            editing,
+        });
+    }
+
+    /// Open `task`'s editor on its saved values (the pencil, `e`, Edit).
+    /// A changed draft of the same task is kept: clicking Edit again on the
+    /// open editor, or after a failed Save, must not throw the text away
+    /// (`TaskEditDraft::worth_keeping`).
+    pub fn open(&self, task: &Task) {
+        let keep = matches!(
+            self.current.try_get_value().flatten(),
+            Some((id, draft)) if id == task.id && draft.worth_keeping(task)
+        );
+        if !keep {
+            self.replace(task);
+        }
+        self.editing.set(Some(task.id));
+    }
+
+    /// The draft `task`'s editor shows: the session's, or a fresh one if the
+    /// editor was opened another way (an Undo reopening it).
+    pub fn draft(&self, task: &Task) -> TaskEditDraft {
+        match self.current.try_get_value().flatten() {
+            Some((id, draft)) if id == task.id => draft,
+            _ => self.replace(task),
+        }
+    }
+
+    fn replace(&self, task: &Task) -> TaskEditDraft {
+        let draft = match self.owner.try_get_value().flatten() {
+            Some(owner) => owner.with(|| TaskEditDraft::from_task(task)),
+            None => TaskEditDraft::from_task(task),
+        };
+        if let Some(Some((_, old))) = self.current.try_get_value() {
+            old.dispose();
+        }
+        self.current.try_set_value(Some((task.id, draft)));
+        draft
+    }
+}
+
 /// Saved per-task inline-edit heights (px), keyed by task id. Provided as a
 /// context by the surrounding view so each row can open its editor at the
 /// previously-saved size.
@@ -176,7 +246,8 @@ pub fn KanbanTaskRow(
     // Optional because KanbanTaskRow could in principle be used outside
     // a Kanban (no consumer today, but the type is reusable).  When the
     // contexts aren't provided we fall back to local-only signals so
-    // mouse-driven UX still works.
+    // mouse-driven UX still works. The `EditSession` (the draft) is
+    // required: MyDayView provides it (#250).
     let focused_ctx: Option<FocusedTaskId> = use_context();
     let editing_ctx: Option<EditingTaskId> = use_context();
     let editing_local: RwSignal<Option<TaskId>> = RwSignal::new(None);
@@ -190,9 +261,10 @@ pub fn KanbanTaskRow(
     };
     let is_editing = move || editing_id_sig.get() == Some(task_id);
 
-    // Inline edit form state.  Mirrors the original MyDayTaskRow layout
-    // minus the focus_date field (focus is binary, owned by zone-swap).
-    let draft = TaskEditDraft::from_task(&task);
+    // Inline edit form state: the list's draft for this task (#250), so it
+    // outlives a rebuild of this row or a move to the other zone.
+    let session = expect_context::<EditSession>();
+    let saved_task = StoredValue::new(task.clone());
 
     let busy = RwSignal::new(false);
     let navigate = StoredValue::new(use_navigate());
@@ -258,10 +330,9 @@ pub fn KanbanTaskRow(
 
     let on_pencil = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        // Every field back to the last saved values (an abandoned edit of
-        // priority/due/recurrence used to survive), then open.
-        draft.reset();
-        editing_id_sig.set(Some(task_id));
+        // Opens on the saved values (an abandoned edit of priority/due/
+        // recurrence used to survive).
+        saved_task.with_value(|t| session.open(t));
     };
 
     let on_save = move |req: UpdateTaskRequest| {
@@ -361,6 +432,7 @@ pub fn KanbanTaskRow(
             <div class="flex-1 min-w-0">
                 {move || if is_editing() {
                     // ── Inline edit form (shared TaskEditor, #132) ───
+                    let draft = saved_task.with_value(|t| session.draft(t));
                     view! {
                         <div class="mt-1">
                             <TaskEditor

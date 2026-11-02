@@ -7,6 +7,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **An open task editor keeps your unsaved text when its list reloads**
+  (#250). On a Project's task panel, anything that reloads the tasks
+  closed the editor and dropped the typed text without Undo: ☀ on any
+  task, ticking one, or a quick capture with `n`. My Day kept the editor
+  open but reset its text to the saved task.
+  - The draft of the task being edited now belongs to the list, not the
+    row (`EditSession`): a rebuilt row, or the task moving between My
+    Day's Today and Backlog mid-edit, keeps editing the same text.
+  - Opening an editor (pencil, `e`, Edit) always starts from the saved
+    task, and Escape's "Edit discarded · Undo" still restores the text.
+  - One task is edited at a time on the panel, as on My Day.
 - **An unknown URL, `/admin` among them, no longer freezes the app on a
   bare "Loading..."** (#246). The router's fallback was a `<Redirect>`,
   which panics when it renders (WASM `unreachable`), so the page never got

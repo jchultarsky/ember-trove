@@ -5,6 +5,7 @@ import {
   localISO,
   type APIRequestContext,
   type Locator,
+  type Page,
 } from './fixtures';
 
 /**
@@ -33,6 +34,16 @@ async function withProject(
     for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
     await request.delete(`/api/nodes/${node.id}`);
   }
+}
+
+/**
+ * After a refetch's response: let the app read it and re-render (the
+ * response resolves on its headers, before the WASM has the body).
+ */
+async function settled(page: Page) {
+  await page.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))),
+  );
 }
 
 const nodeTasks = async (request: APIRequestContext, nodeId: string): Promise<Task[]> =>
@@ -189,7 +200,14 @@ test('node panel: ☀ stays available while editing a task and applies immediate
     const row = page.locator(`[data-task-id="${task.id}"]`);
     await row.locator('button[title="Edit task"]').click();
     // ☀ isn't Save-gated: it acts while the editor is open.
-    await expect(row.getByTestId('task-editor')).toBeVisible();
+    const editor = row.getByTestId('task-editor');
+    await expect(editor).toBeVisible();
+    // An unsaved edit. The refetch that ☀ causes rebuilt the row, which
+    // closed the editor and lost the text (#250).
+    await editor.locator('textarea').fill(`${title} reworded`);
+    const refetched = page.waitForResponse(
+      (r) => r.request().method() === 'GET' && r.url().endsWith(`/api/nodes/${node.id}/tasks`),
+    );
     const sun = row.getByRole('button', { name: 'Add to My Day' });
     await expect(sun).toHaveAttribute('aria-pressed', 'false');
     await sun.click();
@@ -203,8 +221,134 @@ test('node panel: ☀ stays available while editing a task and applies immediate
         return tasks.find((t) => t.id === task.id)?.focus_date ?? null;
       })
       .toBe(localISO(0));
-    // (Not asserted: that the editor is still open. The panel's refetch
-    // remounts every row today, which closes it; tracked as its own fix.)
+    await refetched;
+    await settled(page);
+    // The editor is still open, with the text as typed, and nothing saved.
+    await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
+    expect((await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.title).toBe(title);
+    await editor.getByRole('button', { name: 'Save' }).click();
+    await expect
+      .poll(async () => (await nodeTasks(request, node.id)).find((t) => t.id === task.id)?.title)
+      .toBe(`${title} reworded`);
+  });
+});
+
+test('My Day: an open edit survives a quick capture reloading the list', async ({
+  page,
+  request,
+}) => {
+  await withProject(request, 'e2e myday keep node', async (node) => {
+    const title = `e2e myday keep ${Date.now()}`;
+    try {
+      const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+        data: { title, focus_date: localISO(0) },
+      });
+      expect(created.ok()).toBeTruthy();
+      const task = await created.json();
+      await page.goto('/tasks/my-day');
+      const row = page.locator(`[data-task-id="${task.id}"]`);
+      await row.getByRole('button', { name: 'Edit task' }).click();
+      const editor = row.getByTestId('task-editor');
+      await editor.locator('textarea').fill(`${title} reworded`);
+
+      // A quick capture bumps the task refresh: both zones reload and every
+      // row is rebuilt (the task sits in Today, from /api/my-day).
+      const refetched = Promise.all([
+        page.waitForResponse((r) => r.request().method() === 'GET' && r.url().endsWith('/api/tasks/all')),
+        page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('/api/my-day?')),
+      ]);
+      await page.locator('main').click({ position: { x: 5, y: 5 } });
+      await page.keyboard.press('n');
+      await page.getByPlaceholder(/What’s on your mind/).fill(`e2e cap ${title}`);
+      await page.keyboard.press('ControlOrMeta+Enter');
+      await refetched;
+      await settled(page);
+
+      await expect(editor.locator('textarea')).toHaveValue(`${title} reworded`);
+      // Cancel still goes back to the saved title, and reopening shows it.
+      await editor.getByRole('button', { name: 'Cancel' }).click();
+      await row.getByRole('button', { name: 'Edit task' }).click();
+      await expect(editor.locator('textarea')).toHaveValue(title);
+    } finally {
+      const captures: { id: string; body: string }[] = await (
+        await request.get('/api/captures')
+      ).json();
+      for (const c of captures.filter((c) => c.body === `e2e cap ${title}`)) {
+        await request.delete(`/api/captures/${c.id}`);
+      }
+    }
+  });
+});
+
+test('My Day: an edit survives the task moving to the backlog', async ({ page, request }) => {
+  // Review of #250: the two zones reload apart, so a per-row copy of the
+  // draft raced the move.
+  await withProject(request, 'e2e myday move node', async (node) => {
+    const title = `e2e myday move ${Date.now()}`;
+    const created = await request.post(`/api/nodes/${node.id}/tasks`, {
+      data: { title, focus_date: localISO(0) },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    await page.goto('/tasks/my-day');
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await row.getByTestId('task-editor').locator('textarea').fill(`${title} moved`);
+    // Both zones reload, apart: the race the per-row copy lost.
+    const reloaded = Promise.all([
+      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().endsWith('/api/tasks/all')),
+      page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('/api/my-day?')),
+    ]);
+    await row.locator('button[title="Remove from today (back to backlog)"]').click();
+    await reloaded;
+    // The row is now the backlog's (only it has "Add to today").
+    await expect(row.locator('button[title="Add to today"]')).toBeVisible();
+    await settled(page);
+    // One row, still editing, with the text as typed.
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId('task-editor').locator('textarea')).toHaveValue(`${title} moved`);
+  });
+});
+
+test('node panel: Edit on the open editor keeps the typed text', async ({ page, request }) => {
+  // Review of #250: reopening rebuilt the draft from the saved task.
+  await withProject(request, 'e2e reopen keep node', async (node) => {
+    const title = `e2e reopen keep ${Date.now()}`;
+    const task = await (await request.post(`/api/nodes/${node.id}/tasks`, { data: { title } })).json();
+    await page.goto(`/nodes/${node.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await row.locator('button[title="Edit task"]').click();
+    const box = row.getByTestId('task-editor').locator('textarea');
+    await box.fill(`${title} typed`);
+    await row.locator('button[title="Edit task"]').click();
+    await expect(box).toHaveValue(`${title} typed`);
+    // Cancel, then Edit: the saved title.
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
+    await row.locator('button[title="Edit task"]').click();
+    await expect(box).toHaveValue(title);
+  });
+});
+
+test('leaving My Day takes its keys with it', async ({ page, request }) => {
+  // Review of #250: a draft owner stored in the page's own owner kept the
+  // page alive, and My Day's Space ticked its focused task on other pages.
+  await withProject(request, 'e2e myday leave node', async (node) => {
+    const title = `e2e myday leave ${Date.now()}`;
+    const task = await (
+      await request.post(`/api/nodes/${node.id}/tasks`, { data: { title, focus_date: localISO(0) } })
+    ).json();
+    await page.goto('/tasks/my-day');
+    // A row click sets the keyboard cursor and opens the task's Project.
+    await page.locator(`[data-task-id="${task.id}"]`).getByText(title).click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}`));
+    await expect(page.getByTestId('node-tasks')).toBeVisible({ timeout: 15_000 });
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press(' ');
+    await page.waitForTimeout(500);
+    const after = (await nodeTasks(request, node.id)).find((t) => t.id === task.id) as
+      | (Task & { status?: string })
+      | undefined;
+    expect(after?.status).toBe('open');
   });
 });
 

@@ -8,13 +8,12 @@ use crate::app::TaskRefresh;
 use crate::components::new_task_form::NewTaskForm;
 use crate::components::node_section::{NodeSection, NotOnThisKind, SectionShell, section_shown};
 use crate::components::task_actions::{
-    PatchOpts, RowSignals, TaskCtx, TaskEditDraft, delete_with_undo, patch_task, toggle_done,
-    toggle_my_day,
+    PatchOpts, RowSignals, TaskCtx, delete_with_undo, patch_task, toggle_done, toggle_my_day,
 };
 use crate::components::task_common::{
     is_in_my_day, sort_tasks_by_order, status_done, status_label,
 };
-use crate::components::task_row::TaskEditorHeights;
+use crate::components::task_row::{EditSession, EditingTaskId, TaskEditorHeights};
 use crate::components::task_row_scaffold::{
     MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, action_btn_class,
     due_badge_view, priority_dot_view,
@@ -46,6 +45,12 @@ pub fn TaskPanel(
 
     // Saved inline-editor heights for the rows.
     TaskEditorHeights::provide();
+    // Which row is editing, and its draft, live here, not in the row: a
+    // refetch re-renders every row, which closed an open editor and dropped
+    // its text (#250).
+    let editing_id = RwSignal::new(None);
+    provide_context(EditingTaskId(editing_id));
+    EditSession::provide(editing_id);
 
     // Filter: hide done/cancelled tasks by default; toggled by the user.
     let show_completed = RwSignal::new(false);
@@ -260,9 +265,12 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let busy = RwSignal::new(false);
     let focus_date = task.focus_date;
 
-    // Inline editing — title, priority, due date, recurrence.
-    let editing_title = RwSignal::new(false);
-    let draft = TaskEditDraft::from_task(&task);
+    // Inline editing — title, priority, due date, recurrence. The open
+    // editor and its draft survive a refetch (#250).
+    let editing_id = expect_context::<EditingTaskId>().0;
+    let editing = move || editing_id.get() == Some(task_id);
+    let session = expect_context::<EditSession>();
+    let saved_task = StoredValue::new(task.clone());
 
     // Save all editable fields at once (the panel refetches; no optimistic
     // display to roll back).
@@ -320,7 +328,8 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             // Title + meta
             <div class="flex-1 min-w-0">
                 // Title — display or inline edit form (title + priority + due + repeat)
-                {move || if editing_title.get() {
+                {move || if editing() {
+                    let draft = saved_task.with_value(|t| session.draft(t));
                     view! {
                         <div class="pb-1">
                             <TaskEditor
@@ -328,9 +337,13 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                 task_id=task_id
                                 due=due
                                 on_save=on_save
-                                close=Callback::new(move |()| editing_title.set(false))
+                                close=Callback::new(move |()| {
+                                    if editing_id.get_untracked() == Some(task_id) {
+                                        editing_id.set(None);
+                                    }
+                                })
                                 reopen=std::sync::Arc::new(move || {
-                                    editing_title.try_set(true);
+                                    editing_id.try_set(Some(task_id));
                                 })
                             />
                         </div>
@@ -381,7 +394,8 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                 <button
                     class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
                     title="Edit task"
-                    on:click=move |_| editing_title.set(true)
+                    // Opens on the saved values.
+                    on:click=move |_| saved_task.with_value(|t| session.open(t))
                 >
                     <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">{"edit"}</span>
                 </button>
