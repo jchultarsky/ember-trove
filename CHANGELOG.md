@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Task and note feeds no longer show the title of a node you lost access
+  to** (#230). After an owner revoked a share, a task or note the former
+  editor had added to that node still appeared in their My Day, calendar,
+  backlog and notes feed with the node's *current* title, renames
+  included. The feeds now join the node title only when the node is
+  visible to the caller (`repo::visible_to`, the dashboard's rule; admins
+  still see every title). The task or note itself stays: it is still
+  theirs. Its chip now reads "Node unavailable" (🔒) instead of a stale
+  title or "No Project", and a task row no longer links to a node page that
+  would only refuse.
+
 ### Fixed
 - **The app loads on a phone again without a minutes-long wait.** The
   production proxy strips `Accept-Encoding` from page requests so it can
