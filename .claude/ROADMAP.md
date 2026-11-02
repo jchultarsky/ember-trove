@@ -3,7 +3,24 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-01)
+## Current state (2026-11-02)
+
+- **v3.7.0 shipped: the Captures view (S4c of #204; #240 parts A and B,
+  PRs #244, #248, #249) and #250 (PR #251).** No migration.
+  - The Inbox is Captures (`/tasks/captures`; `/tasks/inbox` and `/inbox`
+    redirect and keep `?captured=1` for installed service workers). It holds
+    captures only, as a sticky-note wall with ages; task triage and the
+    Inbox add-task form are gone, so no UI path makes a task without a
+    Project. Data health lists those (`OrphanTask`).
+  - Wall keys: j/k and arrows (`common::grid_nav`), Enter/c, e, d; ignored
+    while any dialog is open (`keyboard::modal_open`).
+  - Notes' compose box: "Capture it" (Muse's v3.5.0 friction item).
+  - #250: an open task editor keeps its unsaved text through a list
+    reload. The list owns the draft (`EditSession`, a child owner; storing
+    the route's own owner made a cycle that kept My Day's key handler
+    alive on other pages, caught in review).
+  - Next: S5a (task status: `in_progress` → open, `waiting`,
+    `completed_at`).
 
 - **v3.6.0 shipped: account lifecycle (#239; PRs #241–#243).**
   - Migration 044: `suspended_accounts`, `object_deletions` and the
