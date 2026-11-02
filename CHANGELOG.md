@@ -7,6 +7,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Security
+- **pulldown-cmark 0.13.5 → 0.13.6** (RUSTSEC-2026-0433: quadratic parsing of
+  nested image wiki links with `ENABLE_WIKILINKS`). It runs in the browser
+  only, and we don't enable that option, so it wasn't exploitable here. The
+  bump keeps `cargo audit` clean; the new advisory was failing every PR.
+
+### Security
 - **Request logs no longer contain search terms or ids.** The per-request log
   line recorded the raw URI, query string included, so `GET /api/search?q=…`
   wrote the user's search text into the server log. It now records the
