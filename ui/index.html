@@ -7,6 +7,9 @@
     <link data-trunk rel="icon" type="image/svg+xml" href="public/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#ea580c" />
+    <!-- The app. Release builds go through wasm-opt -Os (Binaryen, pinned in
+         Trunk.toml and deploy/Dockerfile.ui): 35.6 MB became ~7 MB. -->
+    <link data-trunk rel="rust" href="Cargo.toml" data-wasm-opt="s" />
     <link data-trunk rel="copy-file" href="public/manifest.json" />
     <link data-trunk rel="copy-file" href="public/sw.js" />
     <!-- Fonts are self-hosted (ui/public/fonts/, @font-face in input.css):

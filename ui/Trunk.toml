@@ -9,6 +9,10 @@ backend = "http://localhost:3003/api/"
 
 [tools]
 tailwindcss = "4.2.1"
+# Release builds run wasm-opt (`data-wasm-opt` in index.html). The image
+# installs this exact Binaryen, checksum-verified (deploy/Dockerfile.ui);
+# elsewhere Trunk fetches this version.
+wasm_opt = "version_133"
 
 # Stamp the release version into the loading screen (#120).
 [[hooks]]
