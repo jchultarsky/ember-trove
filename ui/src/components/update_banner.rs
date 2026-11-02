@@ -2,9 +2,11 @@
 //!
 //! A tab can keep running an old bundle after a deploy, and then a shipped
 //! fix looks like it "doesn't work" (exactly what #129 recorded). The bundle
-//! knows its own version (`crate::version`); this checks the server's at
-//! startup, every 10 minutes, and whenever the window regains focus, and
-//! offers a reload when they differ. Navigations are network-first in the
+//! knows its own version (`crate::version`); this compares it with the
+//! server's, and offers a reload when they differ. The server's version is
+//! the app's `AppVersion`: `app.rs` fetches it at startup (this used to send
+//! a second request for it, performance P1 #2), and this re-checks it every
+//! 10 minutes and whenever the window regains focus. Navigations are network-first in the
 //! service worker, so the reload really loads the new release.
 //!
 //! The reload must not cost an open dialog its input (#170): the person
@@ -17,7 +19,8 @@ const RECHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 6
 
 #[component]
 pub fn UpdateBanner() -> impl IntoView {
-    let server = RwSignal::new(String::new());
+    // Shared with the sidebar header, which shows it.
+    let server = expect_context::<crate::app::AppVersion>().0;
     let check = move || {
         wasm_bindgen_futures::spawn_local(async move {
             let v = crate::api::fetch_api_version().await;
@@ -27,8 +30,6 @@ pub fn UpdateBanner() -> impl IntoView {
             }
         });
     };
-    check();
-
     if let Ok(handle) = set_interval_with_handle(check, RECHECK_EVERY) {
         on_cleanup(move || handle.clear());
     }

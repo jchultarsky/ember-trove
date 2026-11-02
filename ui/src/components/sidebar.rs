@@ -137,6 +137,7 @@ pub fn Sidebar(
                             <SidebarLink icon="group"          label="Users"       on_click=nav!("/admin/users")       collapsed=collapsed />
                             <SidebarLink icon="manage_accounts" label="Permissions" on_click=nav!("/admin/permissions") collapsed=collapsed />
                             <SidebarLink icon="backup"         label="Backup"      on_click=nav!("/admin/backup")      collapsed=collapsed />
+                            <SidebarLink icon="speed"          label="Performance" on_click=nav!("/admin/performance") collapsed=collapsed />
                             <SidebarLink
                                 icon="download"
                                 label="Export ZIP"

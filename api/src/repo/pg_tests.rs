@@ -71,6 +71,88 @@ async fn create_node(pool: &PgPool, owner: &str, title: &str) -> Node {
         .expect("node create")
 }
 
+// ── The graph's nodes (performance P1) ───────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn graph_nodes_follow_the_node_list_scope_and_carry_no_body(pool: PgPool) {
+    let graph = PgGraphRepo::new(pool.clone());
+    let mine = create_node(&pool, "owner-a", "A long").await;
+    let archived = create_node(&pool, "owner-a", "A archived").await;
+    let private = create_node(&pool, "owner-b", "B private").await;
+    let shared = create_node(&pool, "owner-b", "B shared").await;
+    // An 18 KB body (prod's largest), led by a heading the preview skips.
+    let long = format!("# Heading\n\n{}", "word ".repeat(3_600));
+    sqlx::query("UPDATE nodes SET body = $2 WHERE id = $1")
+        .bind(mine.id.0)
+        .bind(&long)
+        .execute(&pool)
+        .await
+        .expect("body");
+    sqlx::query("UPDATE nodes SET status = 'archived' WHERE id = $1")
+        .bind(archived.id.0)
+        .execute(&pool)
+        .await
+        .expect("archive");
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by)
+         VALUES ($1, 'owner-a', 'viewer', 'owner-b')",
+    )
+    .bind(shared.id.0)
+    .execute(&pool)
+    .await
+    .expect("share");
+    let tag: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO tags (owner_id, name, color) VALUES ('owner-a', 'red', '#ff0000') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("tag");
+    sqlx::query("INSERT INTO node_tags (node_id, tag_id) VALUES ($1, $2)")
+        .bind(mine.id.0)
+        .bind(tag.0)
+        .execute(&pool)
+        .await
+        .expect("tag a node");
+
+    let a = graph.list_nodes(Some("owner-a")).await.expect("a's graph");
+    let ids: std::collections::HashSet<_> = a.iter().map(|n| n.id).collect();
+    assert!(
+        ids.contains(&mine.id) && ids.contains(&archived.id),
+        "own, archived too"
+    );
+    assert!(
+        ids.contains(&shared.id),
+        "a node shared with A is on A's graph"
+    );
+    assert!(!ids.contains(&private.id), "B's private node never is");
+    assert_eq!(a.len(), 3);
+
+    let m = a.iter().find(|n| n.id == mine.id).unwrap();
+    let preview = m.preview.as_deref().unwrap_or_default();
+    assert!(
+        preview.starts_with("word word"),
+        "the heading is skipped: {preview}"
+    );
+    assert_eq!(
+        preview.chars().count(),
+        101,
+        "100 characters and the ellipsis"
+    );
+    assert_eq!(
+        m.tags,
+        vec![common::graph::GraphTag {
+            id: common::id::TagId(tag.0),
+            color: "#ff0000".to_string()
+        }]
+    );
+    let arch = a.iter().find(|n| n.id == archived.id).unwrap();
+    assert_eq!(arch.status, common::node::NodeStatus::Archived);
+
+    // An admin (None) sees every node.
+    let all = graph.list_nodes(None).await.expect("all");
+    assert_eq!(all.len(), 4);
+}
+
 // ── Node owner-scoping ────────────────────────────────────────────────────────
 
 #[sqlx::test(migrations = "../migrations")]
@@ -4453,4 +4535,81 @@ async fn a_drain_empties_a_queue_longer_than_one_batch(pool: PgPool) {
         scalar(&pool, "SELECT count(*) FROM object_deletions").await,
         0
     );
+}
+
+// ── Admin Performance page: database statements ──────────────────────────────
+
+/// `GET /api/metrics/db` lists only data statements (`SELECT`, `INSERT`,
+/// `UPDATE`, `DELETE`, `WITH`), whose values Postgres always replaces with
+/// `$1`. Utility statements (`SET`, `COMMENT`, `ALTER ROLE … PASSWORD`) keep
+/// their literal text, so they never reach the page, and comments, which
+/// normalisation keeps, are stripped. Without the extension
+/// the answer is "not enabled", not an error. CI's Postgres doesn't preload
+/// `pg_stat_statements`, so there only the first half runs; run it locally
+/// with `-c shared_preload_libraries=pg_stat_statements` for the rest.
+#[sqlx::test(migrations = "../migrations")]
+async fn db_statements_need_the_extension_and_list_only_data_statements(pool: PgPool) {
+    use crate::routes::metrics::top_statements;
+
+    let off = top_statements(&pool).await.unwrap();
+    assert!(!off.enabled, "a fresh database has no extension");
+    assert!(off.statements.is_empty());
+
+    let preload: String = sqlx::query_scalar("SELECT current_setting('shared_preload_libraries')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    if !preload.contains("pg_stat_statements") {
+        return;
+    }
+    // The statistics are cluster-wide: start clean, so the migrations this
+    // database just ran can't push the probes out of the top 15.
+    sqlx::raw_sql(
+        "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+         SELECT pg_stat_statements_reset();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "SET application_name = 'utility-secret-value';
+         COMMENT ON TABLE tags IS 'utility-secret-value';
+         SELECT count(*) FROM nodes WHERE title = 'literal-secret-value';
+         SELECT count(*) FROM tags /* comment-secret@example.com */ WHERE name = 'x';
+         SELECT id FROM edges -- line-secret@example.com
+         WHERE edge_type = 'contains';",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let on = top_statements(&pool).await.unwrap();
+    assert!(on.enabled);
+    assert!(
+        on.statements
+            .iter()
+            .any(|s| s.query.contains("FROM nodes WHERE title = $1")),
+        "the data statement is listed, normalised: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements
+            .iter()
+            .any(|s| s.query.contains("FROM tags WHERE name = $1")),
+        "the commented statement is listed, comment removed: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements.iter().all(|s| !s.query.contains("secret")),
+        "no literal value or utility statement: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements
+            .iter()
+            .all(|s| !s.query.contains("pg_stat_statements") && !s.query.contains("pg_extension")),
+        "the page's own queries aren't listed: {:?}",
+        on.statements
+    );
+    assert!(on.statements.len() <= common::metrics::TOP_STATEMENTS as usize);
 }

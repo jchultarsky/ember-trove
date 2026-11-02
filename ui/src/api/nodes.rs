@@ -13,33 +13,6 @@ use super::{
 };
 use crate::error::UiError;
 
-/// Fetch ALL nodes (every page) including archived. Used by the graph view,
-/// which must see the full node set so edges to nodes on later pages still
-/// have visible endpoints. Loops until the server reports `has_more=false`,
-/// with a hard cap to avoid pathological infinite loops if pagination ever
-/// reports inconsistent state.
-pub async fn fetch_nodes() -> Result<Vec<Node>, UiError> {
-    const PAGE_SIZE: u32 = 200;
-    const MAX_PAGES: u32 = 50;
-    let mut all = Vec::new();
-    let mut page: u32 = 1;
-    loop {
-        let url = format!(
-            "{}?include_archived=true&page={page}&per_page={PAGE_SIZE}",
-            api_url("/nodes"),
-        );
-        let resp = send_authed(|| get_request(&url)).await?;
-        let list: common::node::NodeListResponse = parse_json(resp).await?;
-        let returned = list.nodes.len();
-        all.extend(list.nodes);
-        if !list.has_more || returned == 0 || page >= MAX_PAGES {
-            break;
-        }
-        page += 1;
-    }
-    Ok(all)
-}
-
 /// Fetch nodes with optional status and tag_id filters.
 /// `status`: one of "draft", "published", "archived" or None for active statuses.
 /// `tag_id`: UUID string of a tag to filter by, or None for all.

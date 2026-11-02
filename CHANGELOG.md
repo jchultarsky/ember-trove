@@ -6,6 +6,67 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-11-02
+
+### Added
+- **Admin → Performance** (`/admin/performance`, admins only): the API's
+  timings since the last deploy and the database's slowest statements, so
+  checking speed no longer means reading raw JSON with a token.
+  - A summary (version, uptime, requests, 4xx and 5xx, database
+    connections in use, row counts) and a table of API routes with count,
+    total, p50, p95, p99 and max, sortable by column. Slow figures (from
+    250 ms) take the heat colours.
+  - The 15 slowest database statements from `pg_stat_statements` through a
+    new admin-only `GET /api/metrics/db`, or a note when the server doesn't
+    collect them.
+  - It refreshes only on the Refresh button, so an open tab adds no load.
+  - `GET /api/metrics` routes gain `total_ms`.
+
+### Security
+- **The statement list shows no data values.**
+  - It lists only reading and writing statements (`SELECT`, `INSERT`,
+    `UPDATE`, `DELETE`, `WITH`), which Postgres stores with every value
+    replaced by `$1`. Utility statements keep their literal text (`SET`,
+    `COMMENT`, `ALTER ROLE … PASSWORD`), so they are never listed.
+  - Comments survive Postgres's normalisation (a `-- for ann@example.com`
+    typed in psql would show), so the API strips them before the text
+    leaves the server. Table and column names stay; only admins see them.
+  - Both endpoints check the admin role before touching the database.
+
+### Changed
+- **The graph loads in one small request** (performance P1). `GET /api/graph`
+  returns every node it draws without its body (a 100-character plain-text
+  preview instead), plus the edges and saved positions. It replaces paging
+  through `GET /nodes` with full bodies, then `/edges` and `/graph/positions`.
+  - At 10× today's data: 15.7 MB in 24 requests became 1.7 MB in one, and a
+    throttled phone went from about 20 s to about 4 s (`docs/PERFORMANCE.md`).
+  - Each part keeps its existing scope: nodes as `GET /nodes` (owned or
+    shared, archived included), edges and positions as their own routes
+    (owned). Admins see all, as before.
+  - The preview helper moved to `common::markdown::plain_preview`.
+- **Fewer requests on every page, and HTTP/2** (performance P1 #2).
+  - Every page load sends 3 fewer API requests, a node page 4:
+    - the update banner reuses the version the app already fetched;
+    - the two always-mounted create dialogs fetch their templates when they
+      open, not at start (which also shows a template edited since);
+    - the node page reads the editor prefs once for its task and note
+      panels.
+  - The production proxy speaks HTTP/2 (`http2 on;`), so a page's requests
+    share one connection instead of queueing for six.
+
+### Fixed
+- **The create dialog keeps the template you pick.** Picking a template sets
+  the node type, which re-ran the type's default and switched the picker
+  back to it, so the node recorded the wrong template. A list that arrives
+  after the dialog opens no longer overrides a pick either. A real change
+  of type still applies that type's default.
+
+### Tooling
+- **CI's macOS build runs on pushes to develop and main only, and is no
+  longer a required check.** GitHub's arm64 macOS runners ran short and
+  left PRs blocked until the job was cancelled unstarted. Production runs
+  on Linux, and that build stays required on every PR.
+
 ## [3.9.0] - 2026-11-02
 
 ### Security
