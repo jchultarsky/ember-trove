@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **The app's WASM is about a fifth of its old size: 35.6 MB became
+  6.6 MB.** A browser downloads it whole after every release.
+  - 25 MB of it was the name section (debug symbol names). Release builds
+    now run Binaryen's `wasm-opt -Os`. Binaryen version_133 is pinned and
+    checksum-verified in `deploy/Dockerfile.ui`, like Trunk.
+  - The UI builds with its own Cargo profile, `wasm-release`
+    (`opt-level = "s"`, full LTO, one codegen unit). The API keeps
+    `release`. `opt-level = "z"` would save about 300 KB more gzipped, at
+    a runtime cost to the graph layout.
+  - Gzipped at the proxy, the download is about 2.5 MB.
+
 ## [3.8.0] - 2026-11-02
 
 ### Added
