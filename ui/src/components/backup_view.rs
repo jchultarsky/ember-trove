@@ -322,16 +322,30 @@ fn BackupRow(
     );
 
     let comment_text = job.comment.clone();
+    // Made by the server after a release; only the newest ten are kept.
+    let automatic = job.is_automatic();
 
     let confirm_delete = RwSignal::new(false);
     let deleting = RwSignal::new(false);
 
     view! {
-        <div class="border-b border-stone-100 dark:border-stone-800 last:border-0
+        <div data-testid="backup-row" class="border-b border-stone-100 dark:border-stone-800 last:border-0
             px-4 py-3 flex items-start gap-4 group hover:bg-stone-50 dark:hover:bg-stone-800/40">
             // Left: info
             <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-stone-800 dark:text-stone-200">{ts}</p>
+                <p class="text-sm font-medium text-stone-800 dark:text-stone-200">
+                    {ts}
+                    {automatic.then(|| view! {
+                        <span
+                            class="ml-2 align-middle px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide \
+                                bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400"
+                            title="Made by the server after a release. The newest 10 are kept."
+                            data-testid="automatic-badge"
+                        >
+                            "Automatic"
+                        </span>
+                    })}
+                </p>
                 {comment_text.map(|c| view! {
                     <p class="text-xs text-amber-600 dark:text-amber-400 mt-0.5 truncate italic">
                         {c}

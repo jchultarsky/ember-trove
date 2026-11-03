@@ -209,3 +209,23 @@ jobs:
             docker image prune -a -f || true
             docker builder prune -a -f || true
             df -h / | tail -1
+
+      # An app backup after every deploy, in the format the new version
+      # restores (2026-11-02). deploy/app-backup.sh runs the API's own
+      # command, as the admin's Backup button would, and keeps the newest 10
+      # automatic backups (an admin's are never deleted). The Daily Backup
+      # workflow calls the same script. Its own step, so a failed backup
+      # shows as such and not as a failed deploy.
+      #
+      # This log is public (public repo): the script echoes only its two
+      # summary lines, ids and counts, and keeps the full output on the
+      # server in ~/ember-trove-backups.log (owner-only).
+      - name: Back up after the deploy
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          command_timeout: 10m
+          envs: GITHUB_REF_NAME
+          script: ~/ember-trove/deploy/app-backup.sh "After the ${GITHUB_REF_NAME} deploy"

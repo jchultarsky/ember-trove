@@ -76,14 +76,13 @@ async fn delete_backup_handler(
     require_admin(&claims)?;
 
     // No per-creator check — any admin may delete any backup.
-    let job = state.backup.get(id).await.map_err(ApiError::from)?;
-
-    // Delete from S3 (best-effort).
-    if let Err(e) = state.object_store.delete(&job.s3_key).await {
-        tracing::warn!(key = %job.s3_key, "S3 delete during backup deletion failed: {e}");
-    }
-
-    state.backup.delete(id).await.map_err(ApiError::from)?;
+    svc::delete_backup(
+        state.backup.as_ref(),
+        state.object_store.as_ref(),
+        state.object_deletions.as_ref(),
+        id,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

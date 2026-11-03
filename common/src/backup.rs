@@ -117,6 +117,32 @@ pub struct BackupJob {
     pub comment: Option<String>,
 }
 
+/// `created_by` of a backup the server makes on its own: the
+/// `ember-trove-api backup create` command, which the release workflow runs
+/// after each deploy. A Cognito subject is a UUID, so it can't collide.
+pub const AUTOMATIC_ACTOR: &str = "automatic";
+
+/// How many automatic backups are kept. Each new one deletes the older ones
+/// beyond this. Backups an admin makes are never deleted this way: each
+/// holds a full copy, deleted accounts' data included, until someone
+/// removes it, so the automatic ones must not pile up.
+pub const AUTOMATIC_KEPT: usize = 10;
+
+impl BackupJob {
+    /// Made by the server, not by an admin.
+    pub fn is_automatic(&self) -> bool {
+        self.created_by == AUTOMATIC_ACTOR
+    }
+}
+
+/// The automatic backups past the newest `keep`, oldest last. Backups an
+/// admin made are never listed, whatever their age.
+pub fn automatic_to_prune(jobs: &[BackupJob], keep: usize) -> Vec<Uuid> {
+    let mut automatic: Vec<&BackupJob> = jobs.iter().filter(|j| j.is_automatic()).collect();
+    automatic.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+    automatic.into_iter().skip(keep).map(|j| j.id).collect()
+}
+
 /// Full data payload written as `data.json` inside the archive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupData {
@@ -221,5 +247,46 @@ mod tests {
         let data: BackupData = serde_json::from_str(json).expect("archive must parse");
         assert_eq!(data.activity.len(), 1);
         assert_eq!(data.activity[0].action, "an_action_from_the_future");
+    }
+
+    fn job(created_by: &str, minutes_ago: i64) -> BackupJob {
+        BackupJob {
+            id: Uuid::new_v4(),
+            created_by: created_by.into(),
+            created_at: Utc::now() - chrono::Duration::minutes(minutes_ago),
+            size_bytes: 1,
+            s3_key: "backups/x.tar.gz".into(),
+            node_count: 0,
+            edge_count: 0,
+            tag_count: 0,
+            note_count: 0,
+            task_count: 0,
+            attachment_count: 0,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn only_automatic_backups_past_the_newest_are_pruned() {
+        // 12 automatic (0 = newest … 11 = oldest) and 2 by an admin, both
+        // older than every automatic one.
+        let automatic: Vec<BackupJob> = (0..12).map(|m| job(AUTOMATIC_ACTOR, m)).collect();
+        let mut jobs = vec![job("f1eb2590-admin", 100), job("f1eb2590-admin", 200)];
+        jobs.extend(automatic.iter().rev().cloned()); // order must not matter
+        let pruned = automatic_to_prune(&jobs, 10);
+        assert_eq!(pruned, vec![automatic[10].id, automatic[11].id]);
+    }
+
+    #[test]
+    fn nothing_is_pruned_at_or_under_the_limit() {
+        let jobs: Vec<BackupJob> = (0..10).map(|m| job(AUTOMATIC_ACTOR, m)).collect();
+        assert!(automatic_to_prune(&jobs, AUTOMATIC_KEPT).is_empty());
+        assert!(automatic_to_prune(&[], AUTOMATIC_KEPT).is_empty());
+    }
+
+    #[test]
+    fn an_admin_backup_is_not_automatic() {
+        assert!(job(AUTOMATIC_ACTOR, 0).is_automatic());
+        assert!(!job("f1eb2590-0091-70e4-d9b3-24e4a23d24d1", 0).is_automatic());
     }
 }

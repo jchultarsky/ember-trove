@@ -4703,3 +4703,150 @@ async fn db_statements_need_the_extension_and_list_only_data_statements(pool: Pg
     );
     assert!(on.statements.len() <= common::metrics::TOP_STATEMENTS as usize);
 }
+
+// ── Automatic backups: keep the newest ten ───────────────────────────────────
+
+/// Records which archives were deleted.
+#[derive(Default)]
+struct RecordingStore(std::sync::Mutex<Vec<String>>);
+
+#[async_trait::async_trait]
+impl crate::object_store::ObjectStore for RecordingStore {
+    async fn put(&self, _: &str, _: bytes::Bytes, _: &str) -> Result<(), common::EmberTroveError> {
+        Ok(())
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, common::EmberTroveError> {
+        Ok(bytes::Bytes::new())
+    }
+    async fn delete(&self, key: &str) -> Result<(), common::EmberTroveError> {
+        self.0.lock().unwrap().push(key.to_string());
+        Ok(())
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, common::EmberTroveError> {
+        Ok(String::new())
+    }
+}
+
+/// Twelve automatic backups and two by an admin, the admin's the oldest of
+/// all: pruning to ten deletes the two oldest automatic ones (rows and
+/// archives) and never an admin's. A second prune deletes nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn pruning_keeps_the_newest_automatic_backups_and_every_admin_one(pool: PgPool) {
+    use common::backup::AUTOMATIC_ACTOR;
+
+    let insert = |by: &'static str, minutes_ago: i32, key: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO backup_jobs (created_by, created_at, s3_key)
+                 VALUES ($1, now() - make_interval(mins => $2), $3)",
+            )
+            .bind(by)
+            .bind(minutes_ago)
+            .bind(key)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    for m in 0..12 {
+        insert(AUTOMATIC_ACTOR, m, format!("backups/auto-{m}.tar.gz")).await;
+    }
+    insert("admin-sub", 500, "backups/admin-a.tar.gz".into()).await;
+    insert("admin-sub", 600, "backups/admin-b.tar.gz".into()).await;
+
+    let repo = super::backup::PgBackupRepo::new(pool.clone());
+    let outbox = super::object_deletion::PgObjectDeletionRepo::new(pool.clone());
+    let store = RecordingStore::default();
+    let pruned = crate::backup::prune_automatic(&repo, &store, &outbox, 10)
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2);
+
+    let mut deleted = store.0.lock().unwrap().clone();
+    deleted.sort();
+    assert_eq!(
+        deleted,
+        ["backups/auto-10.tar.gz", "backups/auto-11.tar.gz"]
+    );
+
+    let left: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM backup_jobs ORDER BY s3_key")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 12);
+    assert!(left.contains(&"backups/admin-a.tar.gz".to_string()));
+    assert!(left.contains(&"backups/admin-b.tar.gz".to_string()));
+    assert!(
+        !left
+            .iter()
+            .any(|k| k == "backups/auto-10.tar.gz" || k == "backups/auto-11.tar.gz")
+    );
+
+    assert_eq!(
+        crate::backup::prune_automatic(&repo, &store, &outbox, 10)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0,
+        "nothing queued when the store deletes"
+    );
+}
+
+/// A store that refuses every delete.
+struct RefusingStore;
+
+#[async_trait::async_trait]
+impl crate::object_store::ObjectStore for RefusingStore {
+    async fn put(&self, _: &str, _: bytes::Bytes, _: &str) -> Result<(), common::EmberTroveError> {
+        Ok(())
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, common::EmberTroveError> {
+        Ok(bytes::Bytes::new())
+    }
+    async fn delete(&self, _: &str) -> Result<(), common::EmberTroveError> {
+        Err(common::EmberTroveError::Internal(
+            "storage unavailable".into(),
+        ))
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, common::EmberTroveError> {
+        Ok(String::new())
+    }
+}
+
+/// An archive holds everyone's data, so one the store won't delete must not
+/// be forgotten with its row: its key goes to the `object_deletions` outbox,
+/// which the daily drain retries.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_archive_the_store_refuses_to_delete_is_queued(pool: PgPool) {
+    use common::backup::AUTOMATIC_ACTOR;
+
+    for m in 0..2 {
+        sqlx::query(
+            "INSERT INTO backup_jobs (created_by, created_at, s3_key)
+             VALUES ($1, now() - make_interval(mins => $2), $3)",
+        )
+        .bind(AUTOMATIC_ACTOR)
+        .bind(m)
+        .bind(format!("backups/auto-{m}.tar.gz"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let repo = super::backup::PgBackupRepo::new(pool.clone());
+    let outbox = super::object_deletion::PgObjectDeletionRepo::new(pool.clone());
+    let pruned = crate::backup::prune_automatic(&repo, &RefusingStore, &outbox, 1)
+        .await
+        .unwrap();
+    assert_eq!(pruned, 1);
+
+    let queued: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, ["backups/auto-1.tar.gz"]);
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM backup_jobs").await, 1);
+}
