@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Captures have room for longer text.**
+  - While you edit a capture, its card spans the whole row of the wall,
+    and the box opens tall enough for its text (up to 60% of the window).
+    A drag bar under it makes it taller, as in a note's editor. The other
+    cards fill in around it and return when you save or cancel.
+  - The quick-capture box has the same drag bar.
+  - Both use the notes' shared `ResizableEditor`, which gained a
+    `fit_to_text` option. Sizes aren't saved: captures are temporary.
+- **Converting a capture into a task uses the task form's fields:** the
+  same priority picker and due-date field (with its readable date and its
+  past-date warning) as adding a task in a Project. The dialog sent no
+  priority before; it now defaults to Medium, like the task form.
+
 ## [3.12.1] - 2026-11-03
 
 ### Fixed
