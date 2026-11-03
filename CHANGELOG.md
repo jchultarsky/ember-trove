@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Captures render their Markdown.** A card showed its text raw
+  (`**bold**`, `- item`, links); it now renders like a note, sanitised by
+  ammonia like every rendered body.
+  - A single line break stays a line break, as the text was typed and as
+    cards showed it before, so a shared page's title and link stay on two
+    lines.
+  - On the wall, Enter on a focused link in a card follows the link
+    instead of opening Convert.
+
 ## [3.12.0] - 2026-11-03
 
 ### Added
