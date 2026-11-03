@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-11-03
+
 ### Added
 - **Captures take a paper colour** (#273), the notes' palette: yellow (the
   default), amber, rose, lime, sky and violet.
