@@ -6,6 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-11-03
+
+### Added
+- **Captures take a paper colour** (#273), the notes' palette: yellow (the
+  default), amber, rose, lime, sky and violet.
+  - The quick-capture composer has a row of swatches under the sticky note,
+    which takes the chosen colour as you pick it.
+  - A card's edit mode has the same row, so a capture can be recoloured
+    later. Only the paper changes: the tape, shadow, tilt and wall stay, so
+    every colour still reads as a capture.
+  - Each swatch names its colour to screen readers and says whether it's
+    chosen; colour is never the only signal.
+  - `POST /captures`, `PATCH /captures/{id}` and `POST /inbox/quick` take an
+    optional `color`. Absent, a new capture is yellow and an edit keeps the
+    stored colour, so the share sheet and older clients are unaffected. An
+    unknown key is a 422, never stored.
+  - Migration 045 adds `captures.color` (default `'default'`, with a CHECK
+    on the six keys). Existing captures stay yellow. Backups carry the
+    colour; older archives restore as yellow.
+  - Picking a swatch puts the focus back in the text, so typing,
+    Ctrl+Enter and Escape keep working, and the wall's single-key
+    shortcuts never act on a card being edited (in Safari a clicked
+    button takes no focus, so a typed "d" could have deleted it).
+    Escape cancels an edit from a swatch or button too.
+
 ## [3.11.0] - 2026-11-02
 
 ### Added

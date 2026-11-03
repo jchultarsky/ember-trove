@@ -3,8 +3,12 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-02)
+## Current state (2026-11-03)
 
+- **v3.12.0 shipped: capture colours** (#273, PR #275). The notes' palette
+  on captures, picked in quick capture and in a card's edit mode; migration
+  045 (`captures.color`, CHECK on six keys). Review fixed a WebKit focus bug
+  (wall keys acting on a card mid-edit).
 - **v3.11.0 shipped: automatic backups** (PRs #274, #276). An app backup
   after every deploy and daily at 07:43 UTC (`backup.yml`), through
   `deploy/app-backup.sh`; the newest 10 automatic backups are kept. The

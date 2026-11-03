@@ -66,6 +66,77 @@ test('a capture lands on the wall, is reworded, deleted, and comes back with Und
   await expect(reworded).toBeVisible();
 });
 
+// #273: a capture's paper. `data-color` names it, since a test can't
+// judge a colour; the swatches are named buttons with aria-pressed.
+test('a capture takes a paper colour, and an edit can change or cancel it', async ({
+  page,
+  request,
+}) => {
+  const text = `${PREFIX}${Date.now()} sky idea`;
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  await page.locator('main').click();
+  await page.keyboard.press('n');
+  const box = page.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toBeFocused();
+  await box.fill(text);
+  const composer = page.getByRole('dialog');
+  const picker = composer.getByRole('group', { name: 'Paper colour' });
+  await expect(picker.getByRole('button', { name: 'Yellow' })).toHaveAttribute('aria-pressed', 'true');
+  await picker.getByRole('button', { name: 'Sky' }).click();
+  await expect(picker.getByRole('button', { name: 'Sky' })).toHaveAttribute('aria-pressed', 'true');
+  // The composer's paper follows the choice.
+  await expect(composer.locator('[data-color]')).toHaveAttribute('data-color', 'sky');
+  await composer.getByRole('button', { name: 'Capture', exact: true }).click();
+  await expect(page.locator('[role="status"]').getByText(/Added to Captures/)).toBeVisible();
+
+  const mine = async () =>
+    ((await (await request.get('/api/captures')).json()) as { id: string; body: string; color: string }[]).find(
+      (c) => c.body.startsWith(text),
+    );
+  const stored = async () => (await mine())?.color;
+  await expect.poll(stored).toBe('sky');
+  const id = (await mine())!.id;
+
+  await page.goto('/tasks/captures');
+  // By id: in edit mode the text is the textarea's value, which a
+  // `hasText` filter doesn't see.
+  const row = page.locator(`[data-capture-id="${id}"]`);
+  await expect(row).toContainText(text);
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'sky');
+
+  // Edit: pick Rose, then Escape from the swatch (focus left the text):
+  // the edit closes and the paper is still sky.
+  await row.getByRole('button', { name: 'Edit capture' }).click();
+  await row.getByRole('button', { name: 'Rose' }).click();
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'rose');
+  await page.keyboard.press('Escape');
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toHaveCount(0);
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'sky');
+  expect(await stored()).toBe('sky');
+
+  // Edit again. A pick hands the focus back to the text box. WebKit gives
+  // a clicked button no focus at all, so force that state (focus on the
+  // page): the wall's keys must still leave a card being edited alone.
+  await row.getByRole('button', { name: 'Edit capture' }).click();
+  await row.getByRole('button', { name: 'Rose' }).click();
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toBeFocused();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('d');
+  await page.keyboard.press('c');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toBeVisible();
+  expect(await stored()).toBe('sky');
+  await row.getByRole('button', { name: 'Save capture' }).click();
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toHaveCount(0);
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'rose');
+  await expect.poll(stored).toBe('rose');
+
+  // A client that only rewords (no colour in the request) keeps the paper.
+  const reworded = await request.patch(`/api/captures/${id}`, { data: { body: `${text} later` } });
+  expect((await reworded.json()).color).toBe('rose');
+});
+
 test('a capture is its owner’s alone', async ({ page, request, otherRequest }) => {
   const text = `${PREFIX}${Date.now()} private thought`;
   const made = await request.post('/api/captures', { data: { body: text } });

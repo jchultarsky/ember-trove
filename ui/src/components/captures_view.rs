@@ -40,7 +40,7 @@ use crate::app::TaskRefresh;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::page_header::PageHeader;
-use crate::components::sticky_note::{CAPTURE_ICON, StickyPaper};
+use crate::components::sticky_note::{CAPTURE_ICON, PaperPicker, StickyPaper};
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// The toast every way of adding a capture shows.
@@ -328,13 +328,20 @@ fn CaptureRow(
     let busy = RwSignal::new(false);
     let converting = RwSignal::new(false);
     let body = StoredValue::new(capture.body);
+    // The stored paper, and the one being picked while editing (#273). A
+    // signal, so a save shows the new paper at once, not after the refetch.
+    let stored_color = RwSignal::new(capture.color);
+    let draft_color = RwSignal::new(capture.color);
     let edit_ref: NodeRef<html::Textarea> = NodeRef::new();
 
     // A key aimed at this card does what its button would. Registered
     // while mounted only.
     let instance = NEXT_CARD_INSTANCE.fetch_add(1, Ordering::Relaxed);
     let run = Callback::new(move |cmd: CardCommand| {
-        if busy.get_untracked() {
+        // Never while editing: in WebKit a clicked swatch doesn't take the
+        // focus, so the next keystroke ("d" of a word) reaches the wall's
+        // keys with nothing editable focused (#273 review).
+        if busy.get_untracked() || editing.get_untracked() {
             return;
         }
         match cmd {
@@ -368,15 +375,25 @@ fn CaptureRow(
     let age = CaptureAge::between(capture.created_at, chrono::Utc::now());
     let age_title = format!("{} \u{00b7} {when}", age.describe());
 
+    // ✕ and Escape: the reworded text and the picked paper both go.
+    let cancel = move || {
+        draft.set(body.get_value());
+        draft_color.set(stored_color.get_untracked());
+        editing.set(false);
+    };
     let save = move || {
         let text = draft.get_untracked().trim().to_string();
         if text.is_empty() || busy.get_untracked() {
             return;
         }
+        let paper = draft_color.get_untracked();
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_capture(id, &text).await {
-                Ok(_) => {
+            match crate::api::update_capture(id, &text, paper).await {
+                Ok(saved) => {
+                    // Show what was saved now; the refetch only confirms it.
+                    body.try_set_value(saved.body);
+                    stored_color.try_set(saved.color);
                     editing.try_set(false);
                     refresh.try_update(|n| *n += 1);
                 }
@@ -400,7 +417,8 @@ fn CaptureRow(
             // A click puts the keyboard cursor here too, like My Day.
             on:click=move |_| keys.focused.set(Some(id))
         >
-        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()>
+        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()
+            color=Signal::derive(move || if editing.get() { draft_color.get() } else { stored_color.get() })>
             {move || if editing.get() {
                 view! {
                     <textarea
@@ -420,20 +438,33 @@ fn CaptureRow(
                                 // also act on it (.claude/rules/leptos.md).
                                 // Escape cancels, like ✕: the draft goes too.
                                 ev.stop_propagation();
-                                draft.set(body.get_value());
-                                editing.set(false);
+                                cancel();
                             }
                         }
                     ></textarea>
-                    <div class="flex items-center justify-end gap-1">
+                    // Escape from a swatch or button cancels too: after a
+                    // click on a swatch the textarea no longer has focus.
+                    <div class="flex items-center justify-end gap-1"
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if ev.key() == "Escape" {
+                                ev.stop_propagation();
+                                cancel();
+                            }
+                        }>
+                        // A pick hands the focus back to the text, so typing, Ctrl+Enter
+                        // and Escape keep working (WebKit leaves it on the page).
+                        <PaperPicker selected=draft_color
+                            on_pick=Callback::new(move |()| {
+                                if let Some(el) = edit_ref.get_untracked() {
+                                    let _ = el.focus();
+                                }
+                            }) />
+                        <span class="flex-1"></span>
                         <IconButton icon="check" label="Save capture" variant=IconButtonVariant::Save
                             disabled=Signal::derive(move || busy.get() || draft.get().trim().is_empty())
                             on_click=Callback::new(move |()| save()) />
                         <IconButton icon="close" label="Cancel"
-                            on_click=Callback::new(move |()| {
-                                draft.set(body.get_value());
-                                editing.set(false);
-                            }) />
+                            on_click=Callback::new(move |()| cancel()) />
                     </div>
                 }.into_any()
             } else {
