@@ -437,3 +437,12 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   device in `mcr.microsoft.com/playwright` against prod. Signed out, a
   healthy load redirects to Cognito; a stuck one stays on `/`.
 
+
+### A textarea measured in an Effect looks empty (2026-11-03)
+- **Symptom:** `ResizableEditor`'s `fit_to_text` never grew the capture
+  editor: `scrollHeight` read 78 (an empty box) though the text needed 248.
+- **Cause:** an `Effect` that tracks a `NodeRef` first runs once the element
+  exists, but before `prop:value` has put the text in it.
+- **Fix:** set the element's value from the signal (`set_value`) before
+  measuring. To debug it, log the measurement and read the browser console
+  on the local e2e stack (`http://localhost:8003` while `KEEP_STACK=1`).

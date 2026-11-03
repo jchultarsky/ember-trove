@@ -10,7 +10,9 @@
 //! Captures have their own identity (#240): a wall of sticky notes
 //! (`StickyPaper`), not task-style rows, each showing how long it has
 //! waited (`common::capture::CaptureAge`). A card renders its text as
-//! Markdown, line breaks kept (`crate::markdown::render_capture`).
+//! Markdown, line breaks kept (`crate::markdown::render_capture`). While
+//! one is edited it spans the whole row, in the notes' `ResizableEditor`
+//! opened to fit its text.
 //!
 //! ## Keyboard (#240 part B2)
 //!
@@ -42,6 +44,7 @@ use crate::app::TaskRefresh;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::page_header::PageHeader;
+use crate::components::resizable_editor::ResizableEditor;
 use crate::components::sticky_note::{CAPTURE_ICON, PaperPicker, StickyPaper};
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
@@ -216,7 +219,9 @@ pub fn CapturesView() -> impl IntoView {
                                 </p>
                                 // A wall, not a list (#240): scanning a corkboard.
                                 // The top padding leaves room for each card's tape.
-                                <ul class="grid gap-4 pt-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
+                                // Dense: the card being edited spans the row, and
+                                // the cards after it fill the gap it leaves.
+                                <ul class="grid grid-flow-row-dense gap-4 pt-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
                                     {list.into_iter().map(|c| view! {
                                         <CaptureRow capture=c refresh=refresh toast_state=toast_state keys=keys />
                                     }).collect_view()}
@@ -414,11 +419,16 @@ fn CaptureRow(
             data-testid="capture"
             data-capture-id=id.to_string()
             aria-current=move || is_focused().then_some("true")
-            class=move || if is_focused() {
-                "list-none rounded-sm ring-2 ring-ember ring-offset-4 \
-                 ring-offset-stone-50 dark:ring-offset-stone-950"
-            } else {
-                "list-none"
+            // Editing takes the whole row, so longer text has room.
+            class=move || {
+                let ring = if is_focused() {
+                    " rounded-sm ring-2 ring-ember ring-offset-4 \
+                     ring-offset-stone-50 dark:ring-offset-stone-950"
+                } else {
+                    ""
+                };
+                let span = if editing.get() { " col-span-full" } else { "" };
+                format!("list-none{ring}{span}")
             }
             // A click puts the keyboard cursor here too, like My Day.
             on:click=move |_| keys.focused.set(Some(id))
@@ -427,27 +437,21 @@ fn CaptureRow(
             color=Signal::derive(move || if editing.get() { draft_color.get() } else { stored_color.get() })>
             {move || if editing.get() {
                 view! {
-                    <textarea
+                    // Opens tall enough for its text; the bar under it
+                    // makes it taller. Ctrl+Enter saves; Escape cancels, like
+                    // ✕, and stops there (.claude/rules/leptos.md).
+                    <ResizableEditor
+                        value=draft
+                        placeholder=""
                         node_ref=edit_ref
-                        class="flex-1 min-h-[5rem] w-full rounded-sm border border-sticky-edge
+                        aria_label="Capture text"
+                        fit_to_text=true
+                        class="w-full min-h-[5rem] resize-y rounded-sm border border-sticky-edge
                                dark:border-sticky-dim-edge bg-white/40 dark:bg-black/20 px-2 py-1
                                text-stone-900 dark:text-stone-100"
-                        aria-label="Capture text"
-                        prop:value=move || draft.get()
-                        on:input=move |ev| draft.set(event_target_value(&ev))
-                        on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
-                                ev.prevent_default();
-                                save();
-                            } else if ev.key() == "Escape" {
-                                // Handled here; the window dispatcher must not
-                                // also act on it (.claude/rules/leptos.md).
-                                // Escape cancels, like ✕: the draft goes too.
-                                ev.stop_propagation();
-                                cancel();
-                            }
-                        }
-                    ></textarea>
+                        on_submit=Callback::new(move |()| save())
+                        on_escape=Callback::new(move |()| cancel())
+                    />
                     // Escape from a swatch or button cancels too: after a
                     // click on a swatch the textarea no longer has focus.
                     <div class="flex items-center justify-end gap-1"

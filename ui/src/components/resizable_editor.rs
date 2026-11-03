@@ -7,9 +7,10 @@
 //!
 //! When a drag ends with a changed height the new pixel height is reported
 //! via `on_resize`, so callers can persist it per-item (`editor-prefs` API).
-//! `initial_height` opens the editor at a previously-saved size. Used for
-//! every note surface and the task title editors so they stay visually and
-//! behaviourally consistent.
+//! `initial_height` opens the editor at a previously-saved size, and
+//! `fit_to_text` opens it tall enough for its text instead (captures, which
+//! save no size). Used for every note surface, the task title editors and
+//! the capture editors, so they stay visually and behaviourally consistent.
 
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
@@ -21,6 +22,10 @@ const DEFAULT_CLASS: &str = "w-full px-3 py-2 rounded-lg border border-stone-200
 
 /// Height floor in px — matches the `min-h-[64px]` on the default class.
 const MIN_HEIGHT: i32 = 64;
+
+/// `fit_to_text` opens the editor no taller than this share of the window;
+/// the bar takes it further.
+const FIT_MAX_VIEWPORT: f64 = 0.6;
 
 #[component]
 pub fn ResizableEditor(
@@ -42,6 +47,16 @@ pub fn ResizableEditor(
     /// Override the default textarea classes.
     #[prop(optional, into)]
     class: Option<String>,
+    /// The caller's handle on the textarea, to focus it.
+    #[prop(optional)]
+    node_ref: Option<NodeRef<leptos::html::Textarea>>,
+    /// The textarea's accessible name, when its placeholder isn't one.
+    #[prop(optional, into)]
+    aria_label: Option<String>,
+    /// Open tall enough to show all the text (up to [`FIT_MAX_VIEWPORT`] of
+    /// the window), never shorter than the class makes it.
+    #[prop(optional)]
+    fit_to_text: bool,
 ) -> impl IntoView {
     // Track the last reported height so a plain click (mouseup without a resize)
     // doesn't fire a redundant save.
@@ -51,7 +66,29 @@ pub fn ResizableEditor(
         .unwrap_or_default();
     let cls = class.unwrap_or_else(|| DEFAULT_CLASS.to_string());
 
-    let textarea_ref: NodeRef<leptos::html::Textarea> = NodeRef::new();
+    let textarea_ref = node_ref.unwrap_or_default();
+    // Fit once, when the textarea attaches (NodeRef + Effect, leptos.md);
+    // typing afterwards doesn't move it, so it never fights the bar.
+    Effect::new(move |_| {
+        if !fit_to_text {
+            return;
+        }
+        let Some(ta) = textarea_ref.get() else { return };
+        // `prop:value` hasn't reached the element yet when this first runs
+        // (it measured an empty box), so put the text in before measuring.
+        ta.set_value(&value.get_untracked());
+        let max = web_sys::window()
+            .and_then(|w| w.inner_height().ok())
+            .and_then(|h| h.as_f64())
+            .map_or(i32::MAX, |h| (h * FIT_MAX_VIEWPORT) as i32);
+        // scrollHeight leaves out the borders; the height (border-box)
+        // includes them.
+        let borders = ta.offset_height() - ta.client_height();
+        let want = (ta.scroll_height() + borders).min(max);
+        if want > ta.offset_height() {
+            let _ = web_sys::HtmlElement::style(&ta).set_property("height", &format!("{want}px"));
+        }
+    });
     // Drag state for the bottom bar: (pointer start y, textarea start height).
     // None when no drag is in progress.
     let drag: RwSignal<Option<(i32, i32)>> = RwSignal::new(None);
@@ -73,6 +110,7 @@ pub fn ResizableEditor(
                 class=cls
                 style=style
                 placeholder=placeholder
+                aria-label=aria_label
                 prop:value=move || value.get()
                 on:input=move |ev| value.set(event_target_value(&ev))
                 // Native corner-grip path: report the height after a drag.
