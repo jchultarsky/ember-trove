@@ -5,6 +5,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-03)
 
+- **v3.12.1 shipped: captures render Markdown** (PR #277). Same
+  sanitiser as notes; a single newline stays a line break
+  (`markdown::render_capture`); Enter on a focused link in a card follows it.
 - **v3.12.0 shipped: capture colours** (#273, PR #275). The notes' palette
   on captures, picked in quick capture and in a card's edit mode; migration
   045 (`captures.color`, CHECK on six keys). Review fixed a WebKit focus bug

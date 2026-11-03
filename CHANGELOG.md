@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.12.1] - 2026-11-03
+
 ### Fixed
 - **Captures render their Markdown.** A card showed its text raw
   (`**bold**`, `- item`, links); it now renders like a note, sanitised by
