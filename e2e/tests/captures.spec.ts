@@ -137,6 +137,43 @@ test('a capture takes a paper colour, and an edit can change or cancel it', asyn
   expect((await reworded.json()).color).toBe('rose');
 });
 
+test('a capture renders its Markdown, sanitised, line by line', async ({ page, request }) => {
+  const stamp = `${PREFIX}${Date.now()}`;
+  const body = [
+    `${stamp} **bold** first line`,
+    'second line',
+    '',
+    '- one',
+    '- [My Day](/tasks/my-day)',
+    '',
+    '<img src="x" onerror="window.__captureXss = 1">',
+  ].join('\n');
+  const made = await request.post('/api/captures', { data: { body } });
+  expect(made.status()).toBe(201);
+  const id = (await made.json()).id as string;
+
+  await page.goto('/tasks/captures');
+  const card = page.locator(`[data-capture-id="${id}"]`).getByTestId('capture-body');
+  await expect(card.locator('strong')).toHaveText('bold');
+  // A single newline stays a line break, as typed.
+  await expect(card.locator('br')).toHaveCount(1);
+  await expect(card.locator('li')).toHaveCount(2);
+  // ammonia drops the handler; nothing ran.
+  await expect(card.locator('img')).toHaveCount(1);
+  await expect(card.locator('img[onerror]')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __captureXss?: number }).__captureXss)).toBeUndefined();
+
+  // Enter on a link in the text follows the link; the wall's Enter
+  // (Convert) leaves it alone.
+  await page.locator(`[data-capture-id="${id}"]`).click({ position: { x: 4, y: 4 } });
+  const link = card.getByRole('link', { name: 'My Day' });
+  await link.focus();
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/tasks\/my-day$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
 test('a capture is its owner’s alone', async ({ page, request, otherRequest }) => {
   const text = `${PREFIX}${Date.now()} private thought`;
   const made = await request.post('/api/captures', { data: { body: text } });

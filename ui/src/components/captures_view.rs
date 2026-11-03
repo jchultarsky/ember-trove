@@ -9,7 +9,8 @@
 //!
 //! Captures have their own identity (#240): a wall of sticky notes
 //! (`StickyPaper`), not task-style rows, each showing how long it has
-//! waited (`common::capture::CaptureAge`).
+//! waited (`common::capture::CaptureAge`). A card renders its text as
+//! Markdown, line breaks kept (`crate::markdown::render_capture`).
 //!
 //! ## Keyboard (#240 part B2)
 //!
@@ -20,7 +21,8 @@
 //!   `j` / `→`        next capture (reading order)
 //!   `k` / `←`        previous capture
 //!   `↓` / `↑`        the card below / above (`common::grid_nav`)
-//!   `Enter` / `c`    convert the focused capture
+//!   `Enter` / `c`    convert the focused capture (Enter on a focused
+//!                    link in its text follows the link)
 //!   `e`              edit it
 //!   `d`              delete it (Undo in the toast)
 //!   `Escape`         drop the focus ring
@@ -159,6 +161,10 @@ pub fn CapturesView() -> impl IntoView {
         let Some(id) = cur.and_then(|i| ids.get(i)).copied() else {
             return;
         };
+        // Enter on a link in a card's text follows the link.
+        if key == "Enter" && crate::keyboard::active_element_is_link() {
+            return;
+        }
         let cmd = match key.as_str() {
             "Enter" | "c" => CardCommand::Convert,
             "e" => CardCommand::Edit,
@@ -470,9 +476,12 @@ fn CaptureRow(
             } else {
                 let age_title = age_title.clone();
                 view! {
-                    <p class="flex-1 whitespace-pre-wrap break-words">
-                        {body.get_value()}
-                    </p>
+                    // Markdown, sanitised by ammonia like every rendered body.
+                    <div data-testid="capture-body"
+                        class="flex-1 min-w-0 break-words overflow-x-auto prose prose-sm max-w-none
+                               dark:prose-invert prose-p:my-0.5 prose-ul:my-0.5 prose-ol:my-0.5
+                               prose-li:my-0 prose-headings:mt-1 prose-headings:mb-0.5"
+                        inner_html=crate::markdown::render_capture(&body.get_value()) />
                     <div class="flex items-center gap-1">
                         // The glyph + "Capture" keep the identity without colour.
                         <span class="material-symbols-outlined text-stone-500 dark:text-stone-400"
