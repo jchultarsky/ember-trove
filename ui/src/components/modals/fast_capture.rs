@@ -174,7 +174,12 @@ pub fn FastCaptureModal(
                 ></textarea>
                 </StickyPaper>
                 <div class="mt-3">
-                    <PaperPicker selected=color />
+                    <PaperPicker selected=color
+                        on_pick=Callback::new(move |()| {
+                            if let Some(el) = textarea_ref.get_untracked() {
+                                let _ = el.focus();
+                            }
+                        }) />
                 </div>
                 <Show when=move || error.get().is_some()>
                     <div class="mt-2 text-sm text-red-600 dark:text-red-400">

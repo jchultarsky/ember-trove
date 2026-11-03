@@ -63,8 +63,10 @@ pub fn StickyPaper(
             paper_class(color.get().unwrap_or_default())
         )
     };
+    // `data-color` names the paper for tests, which can't read a colour.
+    let key = move || color.get().unwrap_or_default().as_str();
     view! {
-        <div class=class>
+        <div class=class data-color=key>
             <span aria-hidden="true"
                 class="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 -rotate-2
                        h-4 w-14 rounded-[2px] bg-sticky-tape dark:bg-sticky-dim-tape
@@ -78,7 +80,13 @@ pub fn StickyPaper(
 /// group. Each swatch says its colour's name to assistive tech and whether
 /// it is chosen (`aria-pressed`), so colour is never the only signal.
 #[component]
-pub fn PaperPicker(selected: RwSignal<CaptureColor>) -> impl IntoView {
+pub fn PaperPicker(
+    selected: RwSignal<CaptureColor>,
+    /// Runs after a pick; the composers use it to put the focus back in
+    /// their text box.
+    #[prop(optional)]
+    on_pick: Option<Callback<()>>,
+) -> impl IntoView {
     view! {
         <div role="group" aria-label="Paper colour" data-testid="paper-picker"
             class="flex items-center gap-1.5">
@@ -100,7 +108,12 @@ pub fn PaperPicker(selected: RwSignal<CaptureColor>) -> impl IntoView {
                                 "hover:scale-110"
                             }
                         )
-                        on:click=move |_| selected.set(color)
+                        on:click=move |_| {
+                            selected.set(color);
+                            if let Some(cb) = on_pick {
+                                cb.run(());
+                            }
+                        }
                     ></button>
                 }
             }).collect_view()}

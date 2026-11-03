@@ -23,8 +23,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - Migration 045 adds `captures.color` (default `'default'`, with a CHECK
     on the six keys). Existing captures stay yellow. Backups carry the
     colour; older archives restore as yellow.
-  - Escape cancels a card's edit from a swatch or button too, not only
-    from the text.
+  - Picking a swatch puts the focus back in the text, so typing,
+    Ctrl+Enter and Escape keep working, and the wall's single-key
+    shortcuts never act on a card being edited (in Safari a clicked
+    button takes no focus, so a typed "d" could have deleted it).
+    Escape cancels an edit from a swatch or button too.
 
 ## [3.11.0] - 2026-11-02
 

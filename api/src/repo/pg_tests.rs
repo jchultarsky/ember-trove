@@ -3965,6 +3965,60 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
     assert_eq!(inbox, 0, "the live inbox task didn't survive the restore");
 }
 
+/// #273: a capture's colour survives a backup and restore. The archive's
+/// captures come from `list_all` (the backup's read) and go back through
+/// `restore_into`, whose INSERT must carry the colour, not fall back to
+/// the column default.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_keeps_each_captures_colour(pool: PgPool) {
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+    use common::backup::BackupData;
+    use common::capture::CaptureColor;
+
+    let captures = PgCaptureRepo::new(pool.clone());
+    let pink = captures
+        .create("alice", "pink idea", CaptureColor::Rose)
+        .await
+        .unwrap();
+    let plain = captures
+        .create("bob", "plain idea", CaptureColor::Default)
+        .await
+        .unwrap();
+    let data = BackupData {
+        nodes: vec![],
+        edges: vec![],
+        tags: vec![],
+        notes: vec![],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: vec![],
+        captures: captures.list_all().await.unwrap(),
+    };
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.unwrap();
+
+    let alice = captures.list("alice").await.unwrap();
+    assert_eq!(
+        alice.iter().map(|c| (c.id, c.color)).collect::<Vec<_>>(),
+        vec![(pink.id, CaptureColor::Rose)]
+    );
+    let bob = captures.list("bob").await.unwrap();
+    assert_eq!(
+        bob.iter().map(|c| (c.id, c.color)).collect::<Vec<_>>(),
+        vec![(plain.id, CaptureColor::Default)]
+    );
+}
+
 // ── The pool never hands out a connection inside a transaction ───────────────
 
 /// sqlx 0.8 leaves a connection inside a transaction when a request is
