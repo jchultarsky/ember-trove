@@ -33,7 +33,10 @@ async fn quick_capture(
         ));
     }
 
-    let capture = state.captures.create(&claims.sub, &text).await?;
+    let capture = state
+        .captures
+        .create(&claims.sub, &text, req.color.unwrap_or_default())
+        .await?;
 
     Ok((
         StatusCode::CREATED,

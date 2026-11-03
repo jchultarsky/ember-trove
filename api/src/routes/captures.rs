@@ -55,23 +55,25 @@ async fn create_capture(
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CaptureRequest>,
 ) -> Result<(StatusCode, Json<Capture>), ApiError> {
+    let color = req.color.unwrap_or_default();
     let body = valid_body(req)?;
-    let capture = state.captures.create(&claims.sub, &body).await?;
+    let capture = state.captures.create(&claims.sub, &body, color).await?;
     Ok((StatusCode::CREATED, Json(capture)))
 }
 
-/// PATCH /captures/{id} — reword a capture (owner only).
+/// PATCH /captures/{id} — reword or recolour a capture (owner only).
 async fn update_capture(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
     Json(req): Json<CaptureRequest>,
 ) -> Result<Json<Capture>, ApiError> {
+    let color = req.color;
     let body = valid_body(req)?;
     Ok(Json(
         state
             .captures
-            .update(CaptureId(id), &claims.sub, &body)
+            .update(CaptureId(id), &claims.sub, &body, color)
             .await?,
     ))
 }

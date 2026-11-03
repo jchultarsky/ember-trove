@@ -630,17 +630,27 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
         &self,
         owner: &str,
         body: &str,
+        color: common::capture::CaptureColor,
     ) -> Result<common::capture::Capture, EmberTroveError> {
-        Ok(stub_capture(Uuid::new_v4(), owner, body))
+        Ok(common::capture::Capture {
+            color,
+            ..stub_capture(Uuid::new_v4(), owner, body)
+        })
     }
+    /// Every stub capture is stored as lime (`STUB_STORED_COLOR`), so a
+    /// test sees whether an edit kept the paper or changed it.
     async fn update(
         &self,
         id: common::id::CaptureId,
         owner: &str,
         body: &str,
+        color: Option<common::capture::CaptureColor>,
     ) -> Result<common::capture::Capture, EmberTroveError> {
         stub_owned(id, owner)?;
-        Ok(stub_capture(id.0, owner, body))
+        Ok(common::capture::Capture {
+            color: color.unwrap_or(STUB_STORED_COLOR),
+            ..stub_capture(id.0, owner, body)
+        })
     }
     async fn delete(&self, id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveError> {
         stub_owned(id, owner)
@@ -716,11 +726,14 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
     }
 }
 
+const STUB_STORED_COLOR: common::capture::CaptureColor = common::capture::CaptureColor::Lime;
+
 fn stub_capture(id: Uuid, owner: &str, body: &str) -> common::capture::Capture {
     common::capture::Capture {
         id: common::id::CaptureId(id),
         owner_id: owner.to_string(),
         body: body.to_string(),
+        color: STUB_STORED_COLOR,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -3207,6 +3220,77 @@ async fn quick_capture_lands_a_capture_for_the_caller() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// #273: a capture takes a paper colour from the notes' palette when it is
+/// made (by the wall or the quick-capture composer) and when it is edited.
+/// An edit that names no colour keeps the stored one, and an unknown key
+/// is refused rather than stored.
+#[tokio::test]
+async fn a_capture_keeps_or_changes_its_colour() {
+    let mine = Uuid::new_v4();
+    let call = |method: &str, uri: String, body: serde_json::Value| {
+        capture_call(fake_claims(), json_req(method, &uri, body))
+    };
+    let (status, made) = call(
+        "POST",
+        "/captures".into(),
+        serde_json::json!({ "body": "x", "color": "rose" }),
+    )
+    .await;
+    assert_eq!(
+        (status, &made["color"]),
+        (StatusCode::CREATED, &serde_json::json!("rose"))
+    );
+    let (_, made) = call(
+        "POST",
+        "/captures".into(),
+        serde_json::json!({ "body": "x" }),
+    )
+    .await;
+    assert_eq!(made["color"], "default", "an old client gets the yellow");
+
+    let (status, quick) = call(
+        "POST",
+        "/inbox/quick".into(),
+        serde_json::json!({ "body": "x", "color": "sky" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(quick["id"].is_string());
+
+    let (_, kept) = call(
+        "PATCH",
+        format!("/captures/{mine}"),
+        serde_json::json!({ "body": "reworded" }),
+    )
+    .await;
+    assert_eq!(
+        kept["color"],
+        STUB_STORED_COLOR.as_str(),
+        "a reword keeps the paper"
+    );
+    let (_, changed) = call(
+        "PATCH",
+        format!("/captures/{mine}"),
+        serde_json::json!({ "body": "x", "color": "violet" }),
+    )
+    .await;
+    assert_eq!(changed["color"], "violet");
+
+    for (method, uri) in [
+        ("POST", "/captures".to_string()),
+        ("PATCH", format!("/captures/{mine}")),
+        ("POST", "/inbox/quick".to_string()),
+    ] {
+        let (status, _) = call(
+            method,
+            uri.clone(),
+            serde_json::json!({ "body": "x", "color": "url(x)" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
+    }
 }
 
 fn convert_req(capture: Uuid, body: serde_json::Value) -> Request<Body> {

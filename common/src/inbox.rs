@@ -52,6 +52,12 @@ pub struct QuickCaptureRequest {
     #[garde(skip)]
     #[serde(default)]
     pub priority: Option<TaskPriority>,
+
+    /// The capture's paper colour (#273), from the in-app composer. The
+    /// share sheet doesn't send one: the default yellow.
+    #[garde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<crate::capture::CaptureColor>,
 }
 
 /// Response body for `POST /api/inbox/quick`.
@@ -136,6 +142,7 @@ mod tests {
             body: Some(body.into()),
             due_date: due.and_then(|(y, m, d)| chrono::NaiveDate::from_ymd_opt(y, m, d)),
             priority: Some(TaskPriority::High),
+            color: None,
         }
     }
 

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
-    capture::Capture,
+    capture::{Capture, CaptureColor},
     id::{CaptureId, NodeId},
     node::{CreateNodeRequest, Node},
     note::{CreateNoteRequest, Note},
@@ -24,12 +24,19 @@ use uuid::Uuid;
 pub trait CaptureRepo: Send + Sync {
     /// The owner's captures, newest first.
     async fn list(&self, owner: &str) -> Result<Vec<Capture>, EmberTroveError>;
-    async fn create(&self, owner: &str, body: &str) -> Result<Capture, EmberTroveError>;
+    async fn create(
+        &self,
+        owner: &str,
+        body: &str,
+        color: CaptureColor,
+    ) -> Result<Capture, EmberTroveError>;
+    /// Reword a capture; `color: None` keeps its paper (#273).
     async fn update(
         &self,
         id: CaptureId,
         owner: &str,
         body: &str,
+        color: Option<CaptureColor>,
     ) -> Result<Capture, EmberTroveError>;
     /// Soft delete (tombstone), so the Undo toast can bring it back.
     async fn delete(&self, id: CaptureId, owner: &str) -> Result<(), EmberTroveError>;
@@ -98,6 +105,7 @@ struct Row {
     id: Uuid,
     owner_id: String,
     body: String,
+    color: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -108,13 +116,14 @@ impl From<Row> for Capture {
             id: CaptureId(r.id),
             owner_id: r.owner_id,
             body: r.body,
+            color: CaptureColor::from_key(&r.color),
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
     }
 }
 
-const COLUMNS: &str = "id, owner_id, body, created_at, updated_at";
+const COLUMNS: &str = "id, owner_id, body, color, created_at, updated_at";
 
 fn db(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
     move |e| EmberTroveError::Internal(format!("{what} failed: {e}"))
@@ -139,12 +148,19 @@ impl CaptureRepo for PgCaptureRepo {
         Ok(rows.into_iter().map(Capture::from).collect())
     }
 
-    async fn create(&self, owner: &str, body: &str) -> Result<Capture, EmberTroveError> {
+    async fn create(
+        &self,
+        owner: &str,
+        body: &str,
+        color: CaptureColor,
+    ) -> Result<Capture, EmberTroveError> {
         let row: Row = sqlx::query_as(&format!(
-            "INSERT INTO captures (owner_id, body) VALUES ($1, $2) RETURNING {COLUMNS}"
+            "INSERT INTO captures (owner_id, body, color) VALUES ($1, $2, $3) \
+             RETURNING {COLUMNS}"
         ))
         .bind(owner)
         .bind(body)
+        .bind(color.as_str())
         .fetch_one(&self.pool)
         .await
         .map_err(db("create capture"))?;
@@ -156,15 +172,17 @@ impl CaptureRepo for PgCaptureRepo {
         id: CaptureId,
         owner: &str,
         body: &str,
+        color: Option<CaptureColor>,
     ) -> Result<Capture, EmberTroveError> {
         let row: Option<Row> = sqlx::query_as(&format!(
-            "UPDATE captures SET body = $3 \
+            "UPDATE captures SET body = $3, color = COALESCE($4, color) \
              WHERE id = $1 AND owner_id = $2 AND deleted_at IS NULL \
              RETURNING {COLUMNS}"
         ))
         .bind(id.0)
         .bind(owner)
         .bind(body)
+        .bind(color.map(CaptureColor::as_str))
         .fetch_optional(&self.pool)
         .await
         .map_err(db("update capture"))?;
