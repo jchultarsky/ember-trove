@@ -24,6 +24,15 @@ pub fn active_element_is_editable() -> bool {
         .unwrap_or(false)
 }
 
+/// True when a link has the focus, so a page's Enter key leaves it to the
+/// browser (a capture's Markdown can hold links).
+pub fn active_element_is_link() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.active_element())
+        .is_some_and(|el| el.tag_name().eq_ignore_ascii_case("A"))
+}
+
 /// True while any modal is open. Every modal goes through `ModalShell`,
 /// which mounts its `aria-modal` panel only while shown, so a page's
 /// single-key shortcuts can't act on what lies behind a dialog (the
