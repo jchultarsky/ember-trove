@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-11-03
+
 ### Changed
 - **Captures have room for longer text.**
   - While you edit a capture, its card spans the whole row of the wall,
