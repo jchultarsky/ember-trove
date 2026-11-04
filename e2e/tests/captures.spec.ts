@@ -174,6 +174,70 @@ test('a capture renders its Markdown, sanitised, line by line', async ({ page, r
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
+/** Drags the "Drag to resize" bar inside `scope` down by `dy` pixels. */
+async function dragBar(page: Page, scope: ReturnType<Page['locator']>, dy: number) {
+  const bar = scope.getByTitle('Drag to resize');
+  const box = await bar.boundingBox();
+  if (!box) throw new Error('no drag bar');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + dy, { steps: 5 });
+  await page.mouse.up();
+}
+
+test('a capture edits across the whole row, fitted to its text, and the bar makes it taller', async ({
+  page,
+  request,
+}) => {
+  const stamp = `${PREFIX}${Date.now()}`;
+  const lines = Array.from({ length: 12 }, (_, i) => `${stamp} line ${i + 1}`).join('\n');
+  // Neighbours, so the edited card isn't alone on its row.
+  for (const n of ['left', 'right']) {
+    expect((await request.post('/api/captures', { data: { body: `${stamp} ${n}` } })).status()).toBe(201);
+  }
+  const made = await request.post('/api/captures', { data: { body: lines } });
+  const id = (await made.json()).id as string;
+
+  await page.goto('/tasks/captures');
+  const wall = page.getByTestId('captures').locator('ul');
+  const card = page.locator(`[data-capture-id="${id}"]`);
+  await expect(card).toBeVisible();
+  const wallWidth = (await wall.boundingBox())!.width;
+  expect((await card.boundingBox())!.width).toBeLessThan(wallWidth / 1.5);
+
+  await card.getByRole('button', { name: 'Edit capture' }).click();
+  const field = card.getByRole('textbox', { name: 'Capture text' });
+  await expect(field).toBeFocused();
+  // The whole row while editing.
+  await expect.poll(async () => (await card.boundingBox())!.width).toBeGreaterThan(wallWidth - 4);
+  // Opens tall enough for all twelve lines: nothing to scroll.
+  const fits = await field.evaluate((el) => el.scrollHeight <= el.clientHeight + 1);
+  expect(fits).toBe(true);
+
+  // The bar makes it taller.
+  const before = (await field.boundingBox())!.height;
+  await dragBar(page, card, 120);
+  expect((await field.boundingBox())!.height).toBeGreaterThan(before + 80);
+
+  // Escape: back to one column, text unchanged.
+  await field.press('Escape');
+  await expect(field).toHaveCount(0);
+  await expect.poll(async () => (await card.boundingBox())!.width).toBeLessThan(wallWidth / 1.5);
+});
+
+test('the quick capture box can be made taller', async ({ page }) => {
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  await page.locator('main').click();
+  await page.keyboard.press('n');
+  const box = page.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toBeFocused();
+  const before = (await box.boundingBox())!.height;
+  await dragBar(page, page.getByRole('dialog'), 120);
+  expect((await box.boundingBox())!.height).toBeGreaterThan(before + 80);
+  await page.keyboard.press('Escape');
+});
+
 test('a capture is its owner’s alone', async ({ page, request, otherRequest }) => {
   const text = `${PREFIX}${Date.now()} private thought`;
   const made = await request.post('/api/captures', { data: { body: text } });
@@ -546,14 +610,21 @@ test('a capture becomes a note on a node, or a task in a Project', async ({ page
     const convert = dialog.getByRole('button', { name: 'Convert' });
     await expect(convert).toBeDisabled(); // no Project yet (§9.3)
     await pick(page, 'Task in a Project…', `${PREFIX}proj ${stamp}`);
-    await dialog.getByLabel('Due date').fill('2026-11-07');
+    // The task form's own fields (#277 follow-up): the priority group and
+    // the due-date field, with its readable echo of the date.
+    await dialog.getByRole('radiogroup', { name: 'Priority' }).getByRole('radio', { name: 'High' }).click();
+    const due = dialog.getByTestId('due-date-field');
+    await due.locator('input[type="date"]').fill('2026-11-07');
+    await expect(due.getByTestId('due-hint')).toContainText('Nov 7');
     await convert.click();
     await expect(row).toHaveCount(0);
     await expect(page.locator('[role="status"]').getByText(/Added a task to/)).toBeVisible();
-    const tasks: { title: string; due_date: string }[] = await (
+    const tasks: { title: string; due_date: string; priority: string }[] = await (
       await request.get(`/api/nodes/${project.id}/tasks`)
     ).json();
-    expect(tasks.find((t) => t.title === task)?.due_date).toBe('2026-11-07');
+    const made = tasks.find((t) => t.title === task);
+    expect(made?.due_date).toBe('2026-11-07');
+    expect(made?.priority).toBe('high');
   } finally {
     await request.delete(`/api/nodes/${host.id}`);
     await request.delete(`/api/nodes/${project.id}`);

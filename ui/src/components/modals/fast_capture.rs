@@ -31,6 +31,7 @@ use super::{ModalPlacement, ModalShell};
 use crate::components::captures_view::CAPTURED_TOAST;
 use crate::{
     api::quick_capture,
+    components::resizable_editor::ResizableEditor,
     components::sticky_note::{CAPTURE_ICON, PaperPicker, StickyPaper},
     components::toast::{ToastLevel, push_toast},
 };
@@ -159,19 +160,16 @@ pub fn FastCaptureModal(
             </div>
             <div class="p-4 pt-6">
                 <StickyPaper class="p-3 pt-4" color=color>
-                <textarea
+                // The bar under it makes it taller, like a note's editor.
+                // Ctrl+Enter and Escape are the modal's (`on_key`, ModalShell).
+                <ResizableEditor
+                    value=text
+                    placeholder="What\u{2019}s on your mind? (Cmd/Ctrl+Enter to capture)"
                     node_ref=textarea_ref
                     class="w-full bg-transparent text-stone-900 dark:text-stone-100 \
                            placeholder-stone-500 dark:placeholder-stone-400 outline-none \
-                           resize-none text-base leading-relaxed min-h-[6rem]"
-                    placeholder="What\u{2019}s on your mind? (Cmd/Ctrl+Enter to capture)"
-                    rows="4"
-                    prop:value=move || text.get()
-                    on:input=move |ev| {
-                        let v = event_target_value(&ev);
-                        text.set(v);
-                    }
-                ></textarea>
+                           resize-y text-base leading-relaxed min-h-[6rem]"
+                />
                 </StickyPaper>
                 <div class="mt-3">
                     <PaperPicker selected=color
