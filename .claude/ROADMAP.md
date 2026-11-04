@@ -5,6 +5,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-03)
 
+- **v3.13.0 shipped: room for longer captures** (PR #278). A capture in
+  edit spans the whole row, opens fitted to its text (`ResizableEditor`
+  `fit_to_text`) and has a drag bar, as does quick capture. Convert to
+  Task reuses `PriorityPicker` + `DueDateField` and now sends a priority.
 - **v3.12.1 shipped: captures render Markdown** (PR #277). Same
   sanitiser as notes; a single newline stays a line break
   (`markdown::render_capture`); Enter on a focused link in a card follows it.
