@@ -151,7 +151,7 @@ jobs:
           restore-keys: ubuntu-cargo-cov-
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-llvm-cov
 
@@ -178,7 +178,7 @@ jobs:
           restore-keys: ubuntu-cargo-audit-
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-audit
 
@@ -208,7 +208,7 @@ jobs:
           restore-keys: ubuntu-cargo-deny-
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2
         with:
           tool: cargo-deny
 
