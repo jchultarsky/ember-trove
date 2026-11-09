@@ -76,6 +76,34 @@ struct NodePositionRow {
     y: f64,
 }
 
+/// Saved graph positions: one owner's, or everyone's with `None`. A free
+/// function so the backup can run it on its one snapshot transaction
+/// (`backup::read_snapshot`).
+pub(crate) async fn list_positions_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    subject: Option<&str>,
+) -> Result<Vec<NodePosition>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, NodePositionRow>(
+        "SELECT p.node_id, p.x, p.y
+         FROM node_positions p
+         JOIN nodes n ON n.id = p.node_id
+         WHERE ($1::text IS NULL OR n.owner_id = $1::text)",
+    )
+    .bind(subject)
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_positions failed: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| NodePosition {
+            node_id: NodeId(r.node_id),
+            x: r.x,
+            y: r.y,
+        })
+        .collect())
+}
+
 #[async_trait]
 impl GraphRepo for PgGraphRepo {
     async fn list_nodes(&self, subject: Option<&str>) -> Result<Vec<GraphNode>, EmberTroveError> {
@@ -138,25 +166,7 @@ impl GraphRepo for PgGraphRepo {
         &self,
         subject: Option<&str>,
     ) -> Result<Vec<NodePosition>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodePositionRow>(
-            "SELECT p.node_id, p.x, p.y
-             FROM node_positions p
-             JOIN nodes n ON n.id = p.node_id
-             WHERE ($1::text IS NULL OR n.owner_id = $1::text)",
-        )
-        .bind(subject)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_positions failed: {e}")))?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| NodePosition {
-                node_id: NodeId(r.node_id),
-                x: r.x,
-                y: r.y,
-            })
-            .collect())
+        list_positions_on(&self.pool, subject).await
     }
 
     async fn save_positions(

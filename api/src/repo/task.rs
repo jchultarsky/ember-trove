@@ -304,6 +304,52 @@ pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
     row.into_task()
 }
 
+/// Every live task, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Task>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, TaskRow>(&format!(
+        r#"
+        SELECT {SELECT_COLS}
+        FROM node_tasks
+        WHERE deleted_at IS NULL
+        ORDER BY created_at ASC
+        "#
+    ))
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all tasks failed: {e}")))?;
+
+    rows.into_iter().map(TaskRow::into_task).collect()
+}
+
+/// Which live task was scheduled by completing which (migration 032), for
+/// the backup (`backup::read_snapshot`). The `Task` DTO doesn't carry the
+/// link, so it travels beside the tasks. Only links between two live tasks:
+/// a link to a deleted task would name a row the archive doesn't hold.
+pub(crate) async fn recurrence_links_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<common::backup::RecurrenceLink>, EmberTroveError> {
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT t.id, t.recurrence_parent_id
+         FROM node_tasks t
+         JOIN node_tasks p ON p.id = t.recurrence_parent_id
+         WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL
+         ORDER BY t.created_at, t.id",
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list recurrence links failed: {e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|(task, parent)| common::backup::RecurrenceLink {
+            task_id: TaskId(task),
+            parent_id: TaskId(parent),
+        })
+        .collect())
+}
+
 #[async_trait]
 impl TaskRepo for PgTaskRepo {
     async fn create(
@@ -844,19 +890,7 @@ impl TaskRepo for PgTaskRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
-            SELECT {SELECT_COLS}
-            FROM node_tasks
-            WHERE deleted_at IS NULL
-            ORDER BY created_at ASC
-            "#
-        ))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all tasks failed: {e}")))?;
-
-        rows.into_iter().map(TaskRow::into_task).collect()
+        list_all_on(&self.pool).await
     }
 
     async fn reorder(

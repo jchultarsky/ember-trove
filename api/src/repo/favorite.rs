@@ -75,22 +75,30 @@ impl From<FavoriteRow> for Favorite {
     }
 }
 
+/// Every favourite, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Favorite>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, FavoriteRow>(
+        r#"
+        SELECT f.id, f.owner_id, f.node_id, f.url, f.label,
+               f.position, f.created_at
+        FROM user_favorites f
+        ORDER BY f.owner_id, f.position ASC
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all favorites failed: {e}")))?;
+
+    Ok(rows.into_iter().map(Favorite::from).collect())
+}
+
 #[async_trait]
 impl FavoriteRepo for PgFavoriteRepo {
     async fn list_all(&self) -> Result<Vec<Favorite>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, FavoriteRow>(
-            r#"
-            SELECT f.id, f.owner_id, f.node_id, f.url, f.label,
-                   f.position, f.created_at
-            FROM user_favorites f
-            ORDER BY f.owner_id, f.position ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all favorites failed: {e}")))?;
-
-        Ok(rows.into_iter().map(Favorite::from).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn list(&self, owner_id: &str) -> Result<Vec<Favorite>, EmberTroveError> {

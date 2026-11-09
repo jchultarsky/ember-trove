@@ -67,6 +67,24 @@ impl PgAttachmentRepo {
     }
 }
 
+/// Every attachment row. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Attachment>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, AttachmentRow>(
+        r#"
+        SELECT id, node_id, filename, content_type, size_bytes, s3_key, created_at
+        FROM attachments
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("attachment list_all: {e}")))?;
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
 #[async_trait]
 impl AttachmentRepo for PgAttachmentRepo {
     async fn create(
@@ -112,17 +130,7 @@ impl AttachmentRepo for PgAttachmentRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Attachment>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, AttachmentRow>(
-            r#"
-            SELECT id, node_id, filename, content_type, size_bytes, s3_key, created_at
-            FROM attachments
-            ORDER BY created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("attachment list_all: {e}")))?;
-        Ok(rows.into_iter().map(Into::into).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn get(&self, id: AttachmentId) -> Result<Attachment, EmberTroveError> {

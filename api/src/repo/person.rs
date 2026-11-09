@@ -135,6 +135,49 @@ fn person_not_found(id: PersonId) -> EmberTroveError {
     EmberTroveError::NotFound(format!("person {id} not found"))
 }
 
+/// Every person and membership, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on(
+    conn: &mut sqlx::PgConnection,
+) -> Result<(Vec<Person>, Vec<MembershipRecord>), EmberTroveError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: Uuid,
+        node_id: Uuid,
+        person_id: Uuid,
+        role: Option<String>,
+        note: Option<String>,
+        created_at: DateTime<Utc>,
+    }
+    let people = sqlx::query_as::<_, PersonRow>(&format!(
+        "SELECT {PERSON_COLS} FROM people ORDER BY created_at, id"
+    ))
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(internal("list all people"))?;
+    let members = sqlx::query_as::<_, Row>(
+        "SELECT id, node_id, person_id, role, note, created_at FROM node_people \
+         ORDER BY created_at, id",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(internal("list all memberships"))?;
+    Ok((
+        people.into_iter().map(Person::from).collect(),
+        members
+            .into_iter()
+            .map(|r| MembershipRecord {
+                id: MembershipId(r.id),
+                node_id: NodeId(r.node_id),
+                person_id: PersonId(r.person_id),
+                role: r.role,
+                note: r.note,
+                created_at: r.created_at,
+            })
+            .collect(),
+    ))
+}
+
 #[async_trait]
 impl PersonRepo for PgPersonRepo {
     async fn list(
@@ -469,41 +512,10 @@ impl PersonRepo for PgPersonRepo {
     }
 
     async fn list_all(&self) -> Result<(Vec<Person>, Vec<MembershipRecord>), EmberTroveError> {
-        #[derive(sqlx::FromRow)]
-        struct Row {
-            id: Uuid,
-            node_id: Uuid,
-            person_id: Uuid,
-            role: Option<String>,
-            note: Option<String>,
-            created_at: DateTime<Utc>,
-        }
-        let people = sqlx::query_as::<_, PersonRow>(&format!(
-            "SELECT {PERSON_COLS} FROM people ORDER BY created_at, id"
-        ))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(internal("list all people"))?;
-        let members = sqlx::query_as::<_, Row>(
-            "SELECT id, node_id, person_id, role, note, created_at FROM node_people \
-             ORDER BY created_at, id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(internal("list all memberships"))?;
-        Ok((
-            people.into_iter().map(Person::from).collect(),
-            members
-                .into_iter()
-                .map(|r| MembershipRecord {
-                    id: MembershipId(r.id),
-                    node_id: NodeId(r.node_id),
-                    person_id: PersonId(r.person_id),
-                    role: r.role,
-                    note: r.note,
-                    created_at: r.created_at,
-                })
-                .collect(),
-        ))
+        let mut conn =
+            self.pool.acquire().await.map_err(|e| {
+                EmberTroveError::Internal(format!("acquire connection failed: {e}"))
+            })?;
+        list_all_on(&mut conn).await
     }
 }

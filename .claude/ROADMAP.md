@@ -3,8 +3,16 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-03)
+## Current state (2026-11-09)
 
+- **Unreleased: backup and restore fixes from the full-codebase review
+  (#281, findings 1.1 to 1.4).** A backup is one `REPEATABLE READ`
+  snapshot; attachment files are stored under their attachment's id
+  (format 5; formats 3 and 4 still restore); restore replaces the People
+  registry; templates, saved searches, editor prefs, webhooks (without
+  their signing secrets) and recurrence links are backed up. The rest of
+  the review (security items, 1.5 onward, the two owner decisions) is
+  still to triage.
 - **v3.13.0 shipped: room for longer captures** (PR #278). A capture in
   edit spans the whole row, opens fitted to its text (`ResizableEditor`
   `fit_to_text`) and has a drag bar, as does quick capture. Convert to
