@@ -67,6 +67,21 @@ impl PgSearchPresetRepo {
     }
 }
 
+/// Every owner's saved searches, for the backup (`backup::read_snapshot`).
+/// Not on the trait: no route may read across owners.
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<SearchPreset>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, PresetRow>(
+        "SELECT id, owner_id, name, query, fuzzy, published_only, tag_ids, tag_op, created_at \
+         FROM search_presets ORDER BY created_at, id",
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list all search presets failed: {e}")))?;
+    Ok(rows.into_iter().map(PresetRow::into_preset).collect())
+}
+
 #[async_trait]
 impl SearchPresetRepo for PgSearchPresetRepo {
     async fn list(&self, owner_id: &str) -> Result<Vec<SearchPreset>, EmberTroveError> {

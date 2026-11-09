@@ -76,6 +76,47 @@ impl PgWebhookRepo {
     }
 }
 
+/// Every owner's webhooks as a backup holds them (`backup::read_snapshot`).
+/// SECURITY: the query never selects `secret`, only whether one is set, so
+/// a signing secret can't reach an archive (owner decision, 2026-11-09).
+/// Not on the trait: no route may read across owners.
+pub(crate) async fn list_all_for_backup<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<common::backup::BackupWebhook>, EmberTroveError> {
+    #[derive(FromRow)]
+    struct Row {
+        id: Uuid,
+        owner_id: String,
+        url: String,
+        had_secret: bool,
+        events: Vec<String>,
+        is_active: bool,
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    }
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT id, owner_id, url, (secret IS NOT NULL) AS had_secret, events, is_active, \
+                created_at, updated_at \
+         FROM webhooks ORDER BY created_at, id",
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list all webhooks: {e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| common::backup::BackupWebhook {
+            id: WebhookId(r.id),
+            owner_id: r.owner_id,
+            url: r.url,
+            had_secret: r.had_secret,
+            events: r.events,
+            is_active: r.is_active,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .collect())
+}
+
 #[async_trait]
 impl WebhookRepo for PgWebhookRepo {
     async fn list(&self, owner_id: &str) -> Result<Vec<Webhook>, EmberTroveError> {

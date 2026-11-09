@@ -133,6 +133,20 @@ fn not_found() -> EmberTroveError {
     EmberTroveError::NotFound("capture not found".to_string())
 }
 
+/// Every live capture, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Capture>, EmberTroveError> {
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {COLUMNS} FROM captures WHERE deleted_at IS NULL ORDER BY created_at, id"
+    ))
+    .fetch_all(ex)
+    .await
+    .map_err(db("list all captures"))?;
+    Ok(rows.into_iter().map(Capture::from).collect())
+}
+
 #[async_trait]
 impl CaptureRepo for PgCaptureRepo {
     async fn list(&self, owner: &str) -> Result<Vec<Capture>, EmberTroveError> {
@@ -230,13 +244,7 @@ impl CaptureRepo for PgCaptureRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Capture>, EmberTroveError> {
-        let rows: Vec<Row> = sqlx::query_as(&format!(
-            "SELECT {COLUMNS} FROM captures WHERE deleted_at IS NULL ORDER BY created_at, id"
-        ))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db("list all captures"))?;
-        Ok(rows.into_iter().map(Capture::from).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn convert(

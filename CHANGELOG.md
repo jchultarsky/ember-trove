@@ -6,12 +6,50 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Backups and restores, from the full-codebase review (#281).** Four
+  defects found by reading the code; none was reported by a user:
+  - **A restore could put one file's contents under another file.** Two
+    attachments on one node with the same name (two pasted `image.png`)
+    shared one path in the archive, and restore sent both to the first
+    one's storage key. A backup now stores each file under its
+    attachment's id. Backups already made restore correctly too: entries
+    that share a path are matched to their attachments in order, and a
+    file that can't be told apart is left alone, never guessed.
+  - **A backup wasn't a snapshot.** Each table was read in its own query.
+    A node created, or a tag deleted, while a backup ran could leave rows
+    pointing at nothing, and restoring that archive failed. Every table is
+    now read in one read-only `REPEATABLE READ` transaction.
+  - **Restore left the live People registry in place.** People added after
+    the backup survived it. Restore now replaces the registry, as it does
+    captures.
+  - **Backups left out templates, saved searches, editor sizes and
+    collapsed notes, webhooks, and which recurring task scheduled which.**
+    A restore onto an empty database lost them. They are in the archive
+    now, and a restore replaces them. An older backup doesn't have them,
+    so restoring one leaves the live ones as they are.
+
 ### Security
+- **Webhook signing secrets are never written to a backup** (owner
+  decision, 2026-11-09). An admin can download an archive, and a secret is
+  a credential. The backup records only that a webhook had one. Such a
+  webhook is restored switched off, and its owner enters a secret again to
+  switch it on. The restore preview says how many are affected.
+- The restore log no longer names a storage key when a file fails to
+  upload (the key holds the file name). It names the attachment's id.
 - **`cargo audit` ignores RUSTSEC-2026-0459** (`libsqlite3-sys` 0.30.1, a
   CVE in the SQLite it bundles), by owner decision on 2026-11-09. The crate
   is in `Cargo.lock` only through sqlx's optional SQLite support, which
   nothing here compiles: Ember Trove uses PostgreSQL only. The entry in
   `.cargo/audit.toml` is dated and goes away with the move to sqlx 0.9.
+
+### Changed
+- **Backups are format 5.** This release restores formats 3 to 5. A
+  release before it refuses a format-5 backup, so a rollback past this
+  version goes through the server snapshot, as before.
+- The trash (deleted notes, tasks and captures kept 30 days for Undo) is
+  still not backed up, on purpose: what was deleted stays deleted after a
+  restore.
 
 ## [3.13.0] - 2026-11-03
 

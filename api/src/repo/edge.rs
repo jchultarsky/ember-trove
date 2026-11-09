@@ -228,6 +228,25 @@ async fn lock_type(
     Ok(())
 }
 
+/// Every edge. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Edge>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, EdgeRow>(
+        r#"
+        SELECT id, source_id, target_id, edge_type::text, label, created_at
+        FROM edges
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list all edges failed: {e}")))?;
+
+    rows.into_iter().map(EdgeRow::into_edge).collect()
+}
+
 #[async_trait]
 impl EdgeRepo for PgEdgeRepo {
     async fn get(&self, id: EdgeId) -> Result<Edge, EmberTroveError> {
@@ -519,18 +538,7 @@ impl EdgeRepo for PgEdgeRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, EdgeRow>(
-            r#"
-            SELECT id, source_id, target_id, edge_type::text, label, created_at
-            FROM edges
-            ORDER BY created_at DESC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list all edges failed: {e}")))?;
-
-        rows.into_iter().map(EdgeRow::into_edge).collect()
+        list_all_on(&self.pool).await
     }
 
     async fn list_visible(&self, subject: Option<&str>) -> Result<Vec<Edge>, EmberTroveError> {

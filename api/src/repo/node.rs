@@ -197,8 +197,8 @@ struct NodeTagRow {
 
 /// Fetch all tags for a slice of node IDs in one query.
 /// Returns a map of node_id → Vec<Tag>.
-async fn fetch_tags_for_nodes(
-    pool: &PgPool,
+async fn fetch_tags_for_nodes<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
     node_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<Tag>>, EmberTroveError> {
     if node_ids.is_empty() {
@@ -214,7 +214,7 @@ async fn fetch_tags_for_nodes(
         "#,
     )
     .bind(node_ids)
-    .fetch_all(pool)
+    .fetch_all(ex)
     .await
     .map_err(|e| EmberTroveError::Internal(format!("fetch tags for nodes failed: {e}")))?;
 
@@ -283,6 +283,37 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
     })?;
 
     row.into_node()
+}
+
+/// Every node with its tags, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on(
+    conn: &mut sqlx::PgConnection,
+) -> Result<Vec<Node>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, NodeRow>(
+        r#"
+        SELECT id, owner_id, node_type::text, title, slug, body, metadata,
+               status::text, project_status, pinned, created_at, updated_at
+        FROM nodes
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all nodes failed: {e}")))?;
+
+    let mut nodes = rows
+        .into_iter()
+        .map(NodeRow::into_node)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
+    let mut tag_map = fetch_tags_for_nodes(&mut *conn, &node_ids).await?;
+    for node in &mut nodes {
+        node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
+    }
+
+    Ok(nodes)
 }
 
 #[async_trait]
@@ -817,30 +848,11 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodeRow>(
-            r#"
-            SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, project_status, pinned, created_at, updated_at
-            FROM nodes
-            ORDER BY created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all nodes failed: {e}")))?;
-
-        let mut nodes = rows
-            .into_iter()
-            .map(NodeRow::into_node)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
-        let mut tag_map = fetch_tags_for_nodes(&self.pool, &node_ids).await?;
-        for node in &mut nodes {
-            node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
-        }
-
-        Ok(nodes)
+        let mut conn =
+            self.pool.acquire().await.map_err(|e| {
+                EmberTroveError::Internal(format!("acquire connection failed: {e}"))
+            })?;
+        list_all_on(&mut conn).await
     }
 
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError> {

@@ -167,6 +167,26 @@ pub(crate) async fn insert_note<'e, E: sqlx::PgExecutor<'e>>(
     Ok(row.into_note())
 }
 
+/// Every live note, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Note>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, NoteRow>(
+        r#"
+        SELECT id, node_id, owner_id, body, color, created_at, updated_at
+        FROM node_notes
+        WHERE deleted_at IS NULL
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all notes failed: {e}")))?;
+
+    Ok(rows.into_iter().map(NoteRow::into_note).collect())
+}
+
 #[async_trait]
 impl NoteRepo for PgNoteRepo {
     async fn create(
@@ -268,19 +288,7 @@ impl NoteRepo for PgNoteRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NoteRow>(
-            r#"
-            SELECT id, node_id, owner_id, body, color, created_at, updated_at
-            FROM node_notes
-            WHERE deleted_at IS NULL
-            ORDER BY created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all notes failed: {e}")))?;
-
-        Ok(rows.into_iter().map(NoteRow::into_note).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn feed(
