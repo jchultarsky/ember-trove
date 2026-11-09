@@ -37,6 +37,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   switch it on. The restore preview says how many are affected.
 - The restore log no longer names a storage key when a file fails to
   upload (the key holds the file name). It names the attachment's id.
+- **`cargo audit` ignores RUSTSEC-2026-0459** (`libsqlite3-sys` 0.30.1, a
+  CVE in the SQLite it bundles), by owner decision on 2026-11-09. The crate
+  is in `Cargo.lock` only through sqlx's optional SQLite support, which
+  nothing here compiles: Ember Trove uses PostgreSQL only. The entry in
+  `.cargo/audit.toml` is dated and goes away with the move to sqlx 0.9.
 
 ### Changed
 - **Backups are format 5.** This release restores formats 3 to 5. A
