@@ -430,7 +430,7 @@ async fn project_dashboard(
 
     // Fetch counts, open tasks, per-node task activity, and Area
     // parents (PARA grouping, v2.9.0) in parallel.
-    let (counts_result, open_result, activity_result, area_result) = tokio::join!(
+    let (counts_result, open_result, activity_result, area_result, brief_result) = tokio::join!(
         state.tasks.counts_for_nodes(&node_ids),
         state
             .tasks
@@ -439,6 +439,8 @@ async fn project_dashboard(
         state
             .nodes
             .area_for_nodes(&node_ids, subject_scope(&claims)),
+        // Briefs (#282): the nodes are the caller's own projects.
+        state.briefs.for_nodes(&node_ids),
     );
 
     let counts_map: std::collections::HashMap<NodeId, TaskCounts> =
@@ -453,6 +455,9 @@ async fn project_dashboard(
         .into_iter()
         .map(|(project, area_id, area_title)| (project, (area_id, area_title)))
         .collect();
+
+    let mut brief_map: std::collections::HashMap<NodeId, common::brief::ProjectBrief> =
+        brief_result?.into_iter().map(|b| (b.node_id, b)).collect();
 
     let empty = TaskCounts {
         open: 0,
@@ -491,6 +496,7 @@ async fn project_dashboard(
                 pinned: n.pinned,
                 area_id,
                 area_title,
+                brief: brief_map.remove(&n.id),
             }
         })
         .collect();

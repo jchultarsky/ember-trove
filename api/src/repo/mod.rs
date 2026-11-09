@@ -4,6 +4,7 @@ pub mod account;
 pub mod activity;
 pub mod attachment;
 pub mod backup;
+pub mod brief;
 pub mod capture;
 pub mod data_health;
 pub mod edge;

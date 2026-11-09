@@ -380,7 +380,8 @@ async fn get_node_by_slug(
 /// are coalesced into it instead of logged again. Editor autosave PATCHes
 /// every few seconds of idle time; one "Edited" line per editing session is
 /// what the dashboard recap should show. (2026-06-10)
-const EDIT_ACTIVITY_COALESCE_MINUTES: i64 = 15;
+/// Shared with the Project Brief's in-place window (#282).
+const EDIT_ACTIVITY_COALESCE_MINUTES: i64 = common::activity::EDIT_COALESCE_MINUTES;
 
 /// Whether a body snapshot should be recorded in `node_versions`.
 ///

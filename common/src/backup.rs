@@ -191,6 +191,12 @@ pub struct BackupData {
     /// has none here: its captures are its notes without a node.
     #[serde(default)]
     pub captures: Vec<crate::capture::Capture>,
+    // ── Project Briefs (#282) ─────────────────────────────────────────────
+    /// Each project's current Brief. Replaced Briefs are History entries
+    /// and travel in `activity`. Archives made before Briefs have none, so
+    /// the format number is unchanged.
+    #[serde(default)]
+    pub briefs: Vec<crate::brief::ProjectBrief>,
 }
 
 /// Returned by the preview endpoint before a restore is confirmed.

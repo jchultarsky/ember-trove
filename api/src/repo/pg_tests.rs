@@ -1968,6 +1968,7 @@ async fn a_restore_brings_the_activity_log_back(pool: PgPool) {
         node_people: vec![],
         activity: activity.clone(),
         captures: vec![],
+        briefs: vec![],
     };
 
     let mut tx = pool.begin().await.expect("tx");
@@ -3159,6 +3160,7 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        briefs: vec![],
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3687,6 +3689,7 @@ async fn a_restore_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPo
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        briefs: vec![],
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3942,6 +3945,7 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        briefs: vec![],
     };
     let mut tx = pool.begin().await.unwrap();
     crate::backup::restore_into(&mut tx, &data)
@@ -4000,6 +4004,7 @@ async fn a_restore_keeps_each_captures_colour(pool: PgPool) {
         node_people: vec![],
         activity: vec![],
         captures: captures.list_all().await.unwrap(),
+        briefs: vec![],
     };
     let mut tx = pool.begin().await.unwrap();
     crate::backup::restore_into(&mut tx, &data)
@@ -4405,6 +4410,12 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
             ('{a}', 'task', gen_random_uuid(), 10), ('{b}', 'task', gen_random_uuid(), 10)"),
         format!("INSERT INTO suspended_accounts (subject_id, suspended_by) VALUES ('x', '{a}')"),
         format!("INSERT INTO backup_jobs (created_by, s3_key) VALUES ('{a}', 'backups/1.tar.gz')"),
+        // Briefs (#282): A wrote B's current Brief, B wrote one on A's
+        // node, and History holds a Brief A stated on B's node.
+        format!("INSERT INTO project_briefs (node_id, pitch, author_id) VALUES
+            ('{b_node}', 'a wrote this', '{a}'), ('{a_shared}', 'b wrote this', '{b}')"),
+        format!("INSERT INTO activity_log (node_id, subject_id, action, metadata) VALUES
+            ('{b_node}', '{b}', 'brief_superseded', '{{\"actor_name\": \"Bo\", \"author_id\": \"{a}\", \"pitch\": \"old\"}}')"),
     ] {
         sql(pool, &q).await;
     }
@@ -4442,7 +4453,7 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
     let columns: Vec<(String, String)> = sqlx::query_as(
         "SELECT table_name::text, column_name::text FROM information_schema.columns
          WHERE table_schema = 'public'
-           AND column_name IN ('owner_id', 'subject_id', 'created_by', 'granted_by', 'suspended_by')",
+           AND column_name IN ('owner_id', 'subject_id', 'created_by', 'granted_by', 'suspended_by', 'author_id')",
     )
     .fetch_all(&pool)
     .await
@@ -4502,7 +4513,8 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
         ("SELECT count(*) FROM user_favorites", 1), // B's url favorite
         ("SELECT count(*) FROM webhooks", 1),
         ("SELECT count(*) FROM editor_prefs", 1),
-        ("SELECT count(*) FROM activity_log", 4), // all on B's node
+        ("SELECT count(*) FROM activity_log", 5), // all on B's node
+        ("SELECT count(*) FROM project_briefs", 1), // A's on B's node
         ("SELECT count(*) FROM node_versions", 2),
         ("SELECT count(*) FROM attachments", 1),
         ("SELECT count(*) FROM edges", 0),
@@ -4519,6 +4531,16 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(version, DELETED_ACCOUNT);
+    // The Brief A wrote on B's project stays, its author anonymised (#282).
+    let (author, pitch): (String, String) =
+        sqlx::query_as("SELECT author_id, pitch FROM project_briefs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (author.as_str(), pitch.as_str()),
+        (DELETED_ACCOUNT, "a wrote this")
+    );
     let entries: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT subject_id, metadata FROM activity_log ORDER BY action, metadata::text COLLATE \"C\"",
     )
@@ -4903,4 +4925,234 @@ async fn an_archive_the_store_refuses_to_delete_is_queued(pool: PgPool) {
         .unwrap();
     assert_eq!(queued, ["backups/auto-1.tar.gz"]);
     assert_eq!(scalar(&pool, "SELECT count(*) FROM backup_jobs").await, 1);
+}
+
+// ── Project Briefs (#282) ────────────────────────────────────────────────────
+
+fn brief_actor(sub: &str) -> super::activity::ActivityActor {
+    super::activity::ActivityActor {
+        subject_id: sub.to_string(),
+        metadata: serde_json::json!({ "actor_name": sub }),
+    }
+}
+
+fn brief_fields(pitch: &str) -> common::brief::BriefFields {
+    common::brief::BriefFields {
+        headline: Some("Headline".into()),
+        pitch: pitch.into(),
+        points: vec!["one".into(), "two".into()],
+    }
+}
+
+#[allow(clippy::expect_used)]
+async fn brief_history(pool: &PgPool, node: common::id::NodeId) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT metadata FROM activity_log
+         WHERE node_id = $1 AND action = 'brief_superseded' ORDER BY created_at",
+    )
+    .bind(node.0)
+    .fetch_all(pool)
+    .await
+    .expect("history")
+}
+
+/// The owner's rule (#282 decision 2), end to end: a first save creates,
+/// the author's quick fix updates in place (no History), someone else's
+/// save supersedes (the old words land in History in the same commit), and
+/// an identical save writes nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_brief_coalesces_for_its_author_and_supersedes_for_others(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    use common::brief::BriefSave;
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Brief project").await.id;
+
+    let (first, mode) = repo
+        .save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::Create);
+    assert_eq!(first.points, ["one", "two"]);
+
+    let (fixed, mode) = repo
+        .save(
+            node,
+            &brief_fields("v1 fixed"),
+            Some(first.updated_at),
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::InPlace);
+    assert_eq!(fixed.stated_at, first.stated_at);
+    assert!(brief_history(&pool, node).await.is_empty());
+
+    let (theirs, mode) = repo
+        .save(
+            node,
+            &brief_fields("v2"),
+            Some(fixed.updated_at),
+            &brief_actor("editor-b"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::Supersede);
+    assert_eq!(theirs.author_id, "editor-b");
+    assert!(theirs.stated_at > fixed.stated_at);
+    let history = brief_history(&pool, node).await;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["pitch"], "v1 fixed");
+    assert_eq!(history[0]["author_id"], "owner-a");
+    assert_eq!(history[0]["actor_name"], "editor-b");
+
+    let (same, mode) = repo
+        .save(
+            node,
+            &brief_fields("v2"),
+            Some(theirs.updated_at),
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::Unchanged);
+    assert_eq!(same, theirs);
+    assert_eq!(brief_history(&pool, node).await.len(), 1);
+    assert_eq!(repo.get(node).await.unwrap(), Some(theirs));
+}
+
+/// A save from a stale editor is refused, never an overwrite: a wrong or
+/// missing version on an existing Brief, and a version for a Brief that's
+/// gone, are all 412 (#282).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_stale_brief_save_is_refused(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Stale brief").await.id;
+    let (b, _) = repo
+        .save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+
+    for expected in [None, Some(b.updated_at - Duration::seconds(1))] {
+        let err = repo
+            .save(node, &brief_fields("lost"), expected, &brief_actor("b"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EmberTroveError::PreconditionFailed(_)),
+            "{err:?}"
+        );
+    }
+    assert_eq!(repo.get(node).await.unwrap().unwrap().pitch, "v1");
+
+    let err = repo
+        .delete(
+            node,
+            Some(b.updated_at - Duration::seconds(1)),
+            &brief_actor("b"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::PreconditionFailed(_)));
+
+    repo.delete(node, Some(b.updated_at), &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    let err = repo
+        .save(
+            node,
+            &brief_fields("again"),
+            Some(b.updated_at),
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::PreconditionFailed(_)));
+}
+
+/// Removing a Brief keeps its words in History, marked removed; a second
+/// remove is a 404. Deleting the node takes the Brief with it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_removed_brief_stays_in_history_and_goes_with_its_node(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Removed brief").await.id;
+    repo.save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    repo.delete(node, None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    assert_eq!(repo.get(node).await.unwrap(), None);
+    let history = brief_history(&pool, node).await;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["removed"], true);
+    assert_eq!(history[0]["pitch"], "v1");
+    let err = repo
+        .delete(node, None, &brief_actor("owner-a"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)));
+
+    let other = create_node(&pool, "owner-a", "Cascade brief").await.id;
+    repo.save(other, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    assert_eq!(repo.for_nodes(&[node, other]).await.unwrap().len(), 1);
+    PgNodeRepo::new(pool.clone()).delete(other).await.unwrap();
+    assert!(repo.list_all().await.unwrap().is_empty());
+}
+
+/// Two first saves at once: one wins, the other gets 412, not a 500.
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_first_briefs_leave_one_winner(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = std::sync::Arc::new(PgBriefRepo::new(pool.clone()));
+    let node = create_node(&pool, "owner-a", "Race brief").await.id;
+    let (r1, r2) = (repo.clone(), repo.clone());
+    let a = tokio::spawn(async move {
+        r1.save(node, &brief_fields("a"), None, &brief_actor("a"))
+            .await
+    });
+    let b = tokio::spawn(async move {
+        r2.save(node, &brief_fields("b"), None, &brief_actor("b"))
+            .await
+    });
+    let results = [a.await.unwrap(), b.await.unwrap()];
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r, Err(EmberTroveError::PreconditionFailed(_))))
+    );
+}
+
+/// A backup carries Briefs and restore brings them back, skipping one whose
+/// node isn't in the archive (#282).
+#[sqlx::test(migrations = "../migrations")]
+async fn briefs_survive_a_backup_round_trip(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    use common::backup::BackupData;
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Backed up brief").await;
+    let (brief, _) = repo
+        .save(
+            node.id,
+            &brief_fields("kept"),
+            None,
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap();
+    let mut orphan = brief.clone();
+    orphan.node_id = common::id::NodeId(uuid::Uuid::new_v4());
+    let data: BackupData = serde_json::from_value(serde_json::json!({
+        "nodes": [node], "edges": [], "tags": [], "notes": [], "tasks": [],
+        "attachments": [], "briefs": [brief, orphan],
+    }))
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(repo.list_all().await.unwrap(), vec![brief]);
 }

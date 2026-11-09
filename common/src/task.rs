@@ -232,6 +232,10 @@ pub struct ProjectDashboardEntry {
     pub area_id: Option<crate::id::NodeId>,
     #[serde(default)]
     pub area_title: Option<String>,
+    /// The project's current Brief (#282), if it has one. When set, it is
+    /// the narrative and `status_section` is the legacy fallback.
+    #[serde(default)]
+    pub brief: Option<crate::brief::ProjectBrief>,
 }
 
 /// Deserialises `Option<Option<T>>` correctly:

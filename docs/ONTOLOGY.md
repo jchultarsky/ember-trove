@@ -101,6 +101,7 @@ Reference may hold material directly or be a *pointer* to an outside source
 | People (membership) | ✓ | — | — | — |
 | Status label (`project_status`) and terminal state (§4.1) | ✓ | — | — | — |
 | Project Plan (§10) | ✓ | — | — | — |
+| Brief (§10) | ✓ | — | — | — |
 
 ### 3.3 Rules that apply to all kinds
 
@@ -548,6 +549,17 @@ Two distinct concepts that are easily confused:
 History is distinct from a node's body *version history* — version
 snapshots are a text mechanism, not the semantic record of what occurred.
 
+- **Brief** (#282) — where a Project stands *now*: an optional one-line
+  headline, a pitch (the elevator speech) and a few points. A Project has
+  at most one current Brief, shared with the node (viewers read it,
+  editors write it). It sits beside the status label: the label is the
+  flag, the Brief the narrative. The body keeps the durable material.
+  A save by the same person within the edit window (15 minutes from when
+  the Brief was stated) corrects it in place; any later save, or one by
+  someone else, **supersedes** it, and the old Brief becomes a History
+  entry. Removing a Brief records it in History too. Its age is shown
+  wherever it renders; past a threshold it is marked stale, never hidden.
+
 ## 11. Events
 
 An **Event** is an occurrence, not a commitment: it happens whether or not
@@ -684,3 +696,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-31 | The calendar's day composer makes the chosen Project's task due that day, or else a capture led by the date | Owner, S4a planning (#234) |
 | 2026-10-31 | Converting a capture offers a node (with an optional home), a note on a node, or a Task in a Project; Event and Person join with their slices. A Task's title must fit (500 characters): the text is reworded, never cut | Owner, S4b planning (#234) |
 | 2026-11-01 | The captures' place is named Captures (the Inbox until then) and holds captures only; a Task without a Project is listed by Data health, not by Captures. Captures are never searched: a glance at the wall is the point | Owner, on #240 (S4c) |
+| 2026-11-09 | Project Brief: headline (optional) + pitch + points, Project-only; a save by the same author within the edit-coalesce window updates it in place, any other save supersedes it into History; Brief first, Focus in a later release | Owner, on #282 |

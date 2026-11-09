@@ -224,6 +224,9 @@ pub async fn create_backup(
     // Activity (#208): the History record (ONTOLOGY §10), all owners.
     let activity = state.activity.list_all().await.map_err(ApiError::from)?;
 
+    // Project Briefs (#282), all owners.
+    let briefs = state.briefs.list_all().await.map_err(ApiError::from)?;
+
     let entity_counts = EntityCounts {
         nodes: nodes.len() as u32,
         edges: edges.len() as u32,
@@ -262,6 +265,7 @@ pub async fn create_backup(
         node_people,
         activity,
         captures,
+        briefs,
     };
 
     // Build the tar.gz archive in memory.
@@ -954,6 +958,37 @@ pub(crate) async fn restore_into(
     // above cascaded the old log away, so this brings History back.
     let restored_nodes: HashSet<Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
     restore_activity(conn, &data.activity, &restored_nodes).await?;
+
+    // Project Briefs (#282). Like activity, a Brief whose node isn't in the
+    // archive (created mid-backup) is skipped rather than failing the FK.
+    for b in data
+        .briefs
+        .iter()
+        .filter(|b| restored_nodes.contains(&b.node_id.0))
+    {
+        sqlx::query(
+            r#"
+            INSERT INTO project_briefs
+                (node_id, headline, pitch, points, author_id, stated_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (node_id) DO UPDATE
+                SET headline = EXCLUDED.headline, pitch = EXCLUDED.pitch,
+                    points = EXCLUDED.points, author_id = EXCLUDED.author_id,
+                    stated_at = EXCLUDED.stated_at, updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(b.node_id.0)
+        .bind(&b.headline)
+        .bind(&b.pitch)
+        .bind(&b.points)
+        .bind(&b.author_id)
+        .bind(b.stated_at)
+        .bind(b.updated_at)
+        .execute(&mut *conn)
+        .await
+        // Never include the row: it's user content.
+        .map_err(|e| ApiError::Internal(format!("insert brief failed: {e}")))?;
+    }
 
     // The archive's files are back under their old keys: keep them out of
     // the deletion queue (the drain also skips any key a row names).
