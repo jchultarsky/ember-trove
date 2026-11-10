@@ -6,6 +6,8 @@
 
 use common::backup::{BackupJob, BackupPreview};
 use leptos::prelude::*;
+
+use crate::components::page_header::PageHeader;
 use uuid::Uuid;
 
 use crate::{
@@ -63,30 +65,27 @@ pub fn BackupView() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6">
-            // ── Page header ───────────────────────────────────────────────────
+        <div class="flex flex-col h-full">
+            // The shared page header (#281): this page built its own.
+            <PageHeader
+                icon="backup"
+                title="Backup & Restore"
+                subtitle=view! { "Create, manage and restore full data snapshots." }.into_any()
+            >
+                <button
+                    class="flex items-center gap-2 px-3 py-2 rounded-lg bg-ember
+                        text-white text-sm font-medium hover:bg-ember-strong
+                        transition-colors"
+                    on:click=move |_| show_create_form.set(true)
+                >
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">
+                        "backup"
+                    </span>
+                    "Create Backup"
+                </button>
+            </PageHeader>
+            <div class="flex-1 overflow-auto p-4 md:p-6">
             <div class="mb-6">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
-                            "Backup & Restore"
-                        </h1>
-                        <p class="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-                            "Create, manage and restore full data snapshots."
-                        </p>
-                    </div>
-                    <button
-                        class="flex items-center gap-2 px-3 py-2 rounded-lg bg-ember
-                            text-white text-sm font-medium hover:bg-ember-strong
-                            transition-colors"
-                        on:click=move |_| show_create_form.set(true)
-                    >
-                        <span class="material-symbols-outlined" style="font-size: 16px;">
-                            "backup"
-                        </span>
-                        "Create Backup"
-                    </button>
-                </div>
 
                 // ── Inline create form ───────────────────────────────────────
                 {move || show_create_form.get().then(|| view! {
@@ -248,16 +247,11 @@ pub fn BackupView() -> impl IntoView {
                             </div>
                         }.into_any(),
                         Ok(list) if list.is_empty() => view! {
-                            <div class="flex flex-col items-center gap-3 py-16 text-center">
-                                <span class="material-symbols-outlined
-                                    text-stone-300 dark:text-stone-700"
-                                    style="font-size: 48px;">
-                                    "backup"
-                                </span>
-                                <p class="text-sm text-stone-400 dark:text-stone-600">
-                                    "No backups yet. Click \"Create Backup\" to get started."
-                                </p>
-                            </div>
+                            <crate::components::empty_state::EmptyState
+                                icon="backup"
+                                message="No backups yet."
+                                hint="Create Backup makes the first one."
+                            />
                         }.into_any(),
                         Ok(list) => view! {
                             <div class="bg-white dark:bg-stone-900 rounded-xl
@@ -288,6 +282,7 @@ pub fn BackupView() -> impl IntoView {
                     })
                 }}
             </Transition>
+            </div>
         </div>
     }
 }
