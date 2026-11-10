@@ -34,6 +34,13 @@ jobs:
   check:
     name: check (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    # The macOS job never fails the run (owner decision, 2026-11-10). When
+    # GitHub has no arm64 macOS runner it cancels the job unstarted after 15
+    # minutes, and that turned an otherwise green run on develop red
+    # (run 42855627686). The cost: a real macOS-only break now shows as a
+    # failed job inside a green run, so look at the job, not only the run.
+    # Local development is on macOS and runs the same gates before a commit.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     strategy:
       fail-fast: false
       # macOS runs on pushes to develop and main only, and isn't a required
