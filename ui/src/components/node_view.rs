@@ -186,8 +186,12 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
 
                             view! {
                                 <div class="flex flex-col h-full">
-                                    <div class="flex items-center justify-between px-6 py-4 border-b border-stone-200 dark:border-stone-800">
-                                        <div class="flex items-center gap-3">
+                                    // At phone width the title takes the row and the
+                                    // icons and status chip wrap under it (#262): in one
+                                    // unwrapping row the title was squeezed to a few
+                                    // characters a line and the chip ran off the screen.
+                                    <div class="flex items-start sm:items-center justify-between gap-2 px-4 md:px-6 py-4 border-b border-stone-200 dark:border-stone-800">
+                                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
                                             <button
                                                 title="Back to nodes"
                                                 aria-label="Back to nodes"
@@ -196,7 +200,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             >
                                                 <span aria-hidden="true" class="material-symbols-outlined">"arrow_back"</span>
                                             </button>
-                                            <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
+                                            <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100 min-w-0 break-words max-w-full">
                                                 {n.title.clone()}
                                             </h1>
                                             // Type icon — same encoding as NodeList
@@ -230,7 +234,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             // node so switching nodes implicitly closes the menu.
                                             let menu_open = RwSignal::new(false);
                                             view! {
-                                                <div class="flex items-center gap-1">
+                                                <div class="flex items-center gap-1 shrink-0">
                                                     // Section outline — every size (#131; it replaces
                                                     // #123's Jump to tasks / notes buttons).
                                                     <crate::components::node_section::SectionOutline />

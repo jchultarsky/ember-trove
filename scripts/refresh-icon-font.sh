@@ -45,6 +45,17 @@ for f in glob.glob('ui/src/**/*.rs', recursive=True):
             for m in re.finditer(p, t):
                 names.add(m.group(1))
 
+    # helpers that return an icon name, in ANY file: `fn status_icon(..) ->
+    # &'static str { match .. { .. => "edit_note" } }`. The arm scan above
+    # only reads files that mention `material-symbols`, so a helper module
+    # with no markup of its own was skipped, and the Draft icon rendered as
+    # the raw text "edit_note" (found 2026-11-10). Only what follows `=>`
+    # counts: the patterns before it are inputs, not icon names.
+    for m in re.finditer(r"fn \w*icon\w*\([^)]*\)\s*->\s*&'static str\s*\{", t):
+        end = t.find('\n}', m.end())
+        for lit in re.findall(r'=>\s*"([a-z][a-z0-9_]{2,40})"', t[m.end():end]):
+            names.add(lit)
+
 # The scan over-collects (any lowercase literal in an arm can slip in).
 # Unknown names are rejected by the fonts API with HTTP 400, which fails
 # this script loudly — prune the offender below if that happens.
@@ -53,6 +64,10 @@ EOF
 )
 
 echo "Requesting subset for $(echo "$NAMES" | tr ',' '\n' | wc -l | tr -d ' ') names…"
+# The names in the subset, one per line, next to the sources that use them.
+# `cargo test -p ui` checks the icon helpers against it, so a name that is
+# returned in code but missing from the font fails a test and not a screen.
+echo "$NAMES" | tr ',' '\n' > ui/icon-names.txt
 UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 CSS=$(curl -fsS -A "$UA" "https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=${NAMES}&display=block")
 
