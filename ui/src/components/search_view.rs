@@ -535,7 +535,9 @@ pub fn SearchView() -> impl IntoView {
                     })}
                 </div>
 
-                <div class="flex items-center gap-3 ml-auto">
+                // Wraps at phone width (#262): the dates, the order and the
+                // two switches ran off the screen in one row.
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-2 ml-auto">
                     {move || loading.get().then_some(view! {
                         <span class="text-xs text-stone-400 dark:text-stone-500 animate-pulse">"Searching\u{2026}"</span>
                     })}

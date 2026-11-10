@@ -136,6 +136,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   typed. It now shows what those display, as a collapsed note's title
   already did.
 
+- **The Draft icon showed as "✎_NOTE"** on the node list, a node's
+  header, the dashboard and search. Its glyph was missing from the icon
+  font: the tool that builds the font only looked for icon names in files
+  with markup, and this one comes from a helper. The font has it again,
+  the tool reads such helpers, and a test fails when a type or status
+  icon is not in the font.
+- **Phone-width layout** (#262, the general pass):
+  - A node's title was squeezed beside its icons into a column a few
+    characters wide, and the status chip and actions ran off the screen.
+    The title now takes the width, with the icons and chip under it.
+  - The calendar's "Tasks by due date" wrapped to four lines beside the
+    month buttons, and the search page's dates, order and switches ran
+    off the screen. Both rows wrap now.
+  - No page scrolls sideways at 375px; a test checks fourteen of them.
 - **The node list reaches every node** (#257). It showed the 50 most
   recently changed nodes and nothing more, and its Articles, Projects,
   Areas and References pages filtered those 50 in the browser, so a kind's
