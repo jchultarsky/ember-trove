@@ -33,6 +33,17 @@ pub trait PermissionRepo: Send + Sync {
     /// List all permissions, optionally filtered to a specific node.
     async fn list_all(&self, node_id: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError>;
 
+    /// The grants `subject` may see, optionally on one node: their own,
+    /// and every grant on a node they hold Owner on. `None` is an admin:
+    /// every grant. Filtered in SQL (#259): the route used to read the
+    /// whole table and filter in Rust, so its cost grew with every
+    /// account's data and not with the caller's.
+    async fn list_visible(
+        &self,
+        node_id: Option<NodeId>,
+        subject: Option<&str>,
+    ) -> Result<Vec<Permission>, EmberTroveError>;
+
     /// Look up a single permission grant by its ID.
     async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError>;
 
@@ -202,6 +213,39 @@ impl PermissionRepo for PgPermissionRepo {
 
     async fn list_all(&self, node_id: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> {
         list_all_on(&self.pool, node_id).await
+    }
+
+    async fn list_visible(
+        &self,
+        node_id: Option<NodeId>,
+        subject: Option<&str>,
+    ) -> Result<Vec<Permission>, EmberTroveError> {
+        // SECURITY: the rule the route applied in Rust, now in the query:
+        // a row is the caller's own grant, or sits on a node the caller
+        // holds Owner on. Being the granter alone shows nothing.
+        let rows = sqlx::query_as::<_, PermissionRow>(
+            r#"
+            SELECT p.id, p.node_id, p.subject_id, p.role::text, p.granted_by, p.created_at
+            FROM permissions p
+            WHERE ($1::uuid IS NULL OR p.node_id = $1)
+              AND (
+                $2::text IS NULL
+                OR p.subject_id = $2::text
+                OR p.node_id IN (
+                    SELECT o.node_id FROM permissions o
+                    WHERE o.subject_id = $2::text AND o.role = 'owner'
+                )
+              )
+            ORDER BY p.created_at
+            "#,
+        )
+        .bind(node_id.map(|n| n.inner()))
+        .bind(subject)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("list visible permissions failed: {e}")))?;
+
+        rows.into_iter().map(|r| r.into_permission()).collect()
     }
 
     async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError> {

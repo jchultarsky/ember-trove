@@ -34,7 +34,10 @@ pub fn PageHeader(
 ) -> impl IntoView {
     view! {
         <div class="flex-shrink-0 px-4 md:px-6 py-4 border-b border-stone-200 dark:border-stone-800">
-            <div class="flex items-center gap-3">
+            // Wraps (#262): a wide right-hand cluster (the calendar's month
+            // navigation) drops under the title at phone width, where it
+            // used to squeeze the title to a few characters a line.
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
                 {icon
                     .map(|name| {
                         view! {
@@ -46,7 +49,7 @@ pub fn PageHeader(
                             </span>
                         }
                     })}
-                <div class="flex-1 min-w-0">
+                <div class="flex-1 min-w-[9rem]">
                     <h1 class="font-display text-lg font-semibold text-stone-900 dark:text-stone-100">
                         {move || title.get()}
                     </h1>

@@ -136,6 +136,32 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   typed. It now shows what those display, as a collapsed note's title
   already did.
 
+- **The Draft icon showed as "✎_NOTE"** on the node list, a node's
+  header, the dashboard and search. Its glyph was missing from the icon
+  font: the tool that builds the font only looked for icon names in files
+  with markup, and this one comes from a helper. The font has it again,
+  the tool reads such helpers, and a test fails when a type or status
+  icon is not in the font.
+- **Phone-width layout** (#262, the general pass):
+  - A node's title was squeezed beside its icons into a column a few
+    characters wide, and the status chip and actions ran off the screen.
+    The title now takes the width, with the icons and chip under it.
+  - The calendar's "Tasks by due date" wrapped to four lines beside the
+    month buttons, and the search page's dates, order and switches ran
+    off the screen. Both rows wrap now.
+  - No page scrolls sideways at 375px; a test checks fourteen of them.
+- **The node list reaches every node** (#257). It showed the 50 most
+  recently changed nodes and nothing more, and its Articles, Projects,
+  Areas and References pages filtered those 50 in the browser, so a kind's
+  page could miss nodes. The server now filters by kind and sorts, and the
+  list says "Showing 50 of 312" with **Load more** (each press doubles
+  what is shown). Sorting by title or by oldest first orders the whole
+  list, not the loaded page.
+  - `GET /api/nodes` takes `sort=modified_desc|modified_asc|title_asc|title_desc`.
+- **The sharing list reads only what it shows** (#259). `GET
+  /api/permissions` read every grant in the installation and filtered in
+  the API; the database filters now. The answer is the same.
+
 ### Tooling
 - One spelling of "the nodes this person can see" for the big lists
   (#281, 3.2): the node list, the title list and the graph each wrote it
@@ -149,6 +175,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   removed, with the three file-wide `allow(dead_code)` that hid them.
 
 ### Documentation
+- The API's rate limiter covers reads as well as writes (#258). Its
+  comment said writes only; the code never did that. The comment is
+  corrected; the limits are unchanged.
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted
   with it behind the counting confirmation (§6.1).

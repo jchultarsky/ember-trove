@@ -11,13 +11,13 @@ use axum::{
 use common::{
     auth::AuthClaims,
     id::PermissionId,
-    permission::{Permission, PermissionListParams, PermissionRole, UpdatePermissionRequest},
+    permission::{Permission, PermissionListParams, UpdatePermissionRequest},
 };
 use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{guard_canonical_owner, is_admin, require_owner},
+    auth::permissions::{guard_canonical_owner, require_owner, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -38,27 +38,14 @@ async fn list_permissions(
     Query(params): Query<PermissionListParams>,
 ) -> Result<Json<Vec<Permission>>, ApiError> {
     let node_id = params.node_id.map(common::id::NodeId);
-    let all_perms = state.permissions.list_all(node_id).await?;
-
-    // Admins see everything.
-    if is_admin(&claims) {
-        return Ok(Json(all_perms));
-    }
-
-    // Non-admin: only rows where the caller is the subject, the granter,
-    // or holds Owner role on the same node.
-    let owned_nodes: std::collections::HashSet<common::id::NodeId> = all_perms
-        .iter()
-        .filter(|p| p.subject_id == claims.sub && matches!(p.role, PermissionRole::Owner))
-        .map(|p| p.node_id)
-        .collect();
-
-    let filtered: Vec<Permission> = all_perms
-        .into_iter()
-        .filter(|p| p.subject_id == claims.sub || owned_nodes.contains(&p.node_id))
-        .collect();
-
-    Ok(Json(filtered))
+    // Filtered in SQL (#259): `list_visible` reads only the caller's rows
+    // and the rows on nodes they own. An admin's scope is `None`.
+    Ok(Json(
+        state
+            .permissions
+            .list_visible(node_id, subject_scope(&claims))
+            .await?,
+    ))
 }
 
 /// `PUT /permissions/{id}`

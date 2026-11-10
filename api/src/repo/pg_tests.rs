@@ -1490,6 +1490,7 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
             page: None,
             per_page: None,
             include_archived: false,
+            sort: Default::default(),
         })
         .await
         .expect("list");
@@ -5432,6 +5433,7 @@ async fn the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what(pool:
                     page: None,
                     per_page: None,
                     include_archived: true,
+                    sort: Default::default(),
                 })
                 .await
                 .expect("list");
@@ -5467,4 +5469,181 @@ async fn the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what(pool:
             "graph as {subject:?}"
         );
     }
+}
+
+// ── GET /permissions filters in SQL (#259) ───────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_permission_list_is_the_callers_grants_and_those_on_nodes_they_own(pool: PgPool) {
+    use super::permission::{PermissionRepo, PgPermissionRepo};
+    let perms = PgPermissionRepo::new(pool.clone());
+    let a1 = create_node(&pool, "alice", "perm a1").await.id;
+    let a2 = create_node(&pool, "alice", "perm a2").await.id;
+    let b1 = create_node(&pool, "bob", "perm b1").await.id;
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+         ($1, 'alice', 'owner', 'alice'), ($1, 'bob', 'editor', 'alice'), ($1, 'carol', 'viewer', 'alice'),
+         ($2, 'alice', 'owner', 'alice'),
+         ($3, 'bob', 'owner', 'bob'), ($3, 'alice', 'viewer', 'bob'), ($3, 'carol', 'viewer', 'alice')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(a1.0)
+    .bind(a2.0)
+    .bind(b1.0)
+    .execute(&pool)
+    .await
+    .expect("grants");
+
+    let seen = |node: Option<common::id::NodeId>, subject: Option<&'static str>| {
+        let perms = PgPermissionRepo::new(pool.clone());
+        async move {
+            let mut rows: Vec<(uuid::Uuid, String)> = perms
+                .list_visible(node, subject)
+                .await
+                .expect("list")
+                .into_iter()
+                .map(|p| (p.node_id.0, p.subject_id))
+                .collect();
+            rows.sort();
+            rows
+        }
+    };
+    let rows = |mut v: Vec<(uuid::Uuid, &str)>| {
+        v.sort();
+        v.into_iter()
+            .map(|(n, s)| (n, s.to_string()))
+            .collect::<Vec<_>>()
+    };
+
+    // Alice owns a1 and a2: every grant there, plus her own grant on b1.
+    // Having granted carol's row on b1 shows her nothing more.
+    assert_eq!(
+        seen(None, Some("alice")).await,
+        rows(vec![
+            (a1.0, "alice"),
+            (a1.0, "bob"),
+            (a1.0, "carol"),
+            (a2.0, "alice"),
+            (b1.0, "alice"),
+        ])
+    );
+    // Bob edits a1 (his own row only) and owns b1 (every row there).
+    assert_eq!(
+        seen(None, Some("bob")).await,
+        rows(vec![
+            (a1.0, "bob"),
+            (b1.0, "alice"),
+            (b1.0, "bob"),
+            (b1.0, "carol"),
+        ])
+    );
+    // Carol owns nothing: her own rows.
+    assert_eq!(
+        seen(None, Some("carol")).await,
+        rows(vec![(a1.0, "carol"), (b1.0, "carol")])
+    );
+    // One node only.
+    assert_eq!(seen(Some(a1), Some("bob")).await, rows(vec![(a1.0, "bob")]));
+    assert_eq!(seen(Some(a2), Some("bob")).await, rows(vec![]));
+    // An admin (`None`): everything, and it equals the unfiltered list.
+    assert_eq!(seen(None, None).await.len(), 7);
+    assert_eq!(
+        seen(None, None).await.len(),
+        perms.list_all(None).await.expect("all").len()
+    );
+}
+
+// ── The node list sorts and pages on the server (#257) ───────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_node_list_sorts_filters_by_type_and_pages_without_gaps(pool: PgPool) {
+    use common::node::{NodeListParams, NodeSort};
+    let repo = PgNodeRepo::new(pool.clone());
+    // Titles out of order, two kinds, one pinned, and two rows with the
+    // same `updated_at` (the id must break the tie the same way on every
+    // page).
+    for (kind, title) in [
+        ("article", "delta"),
+        ("article", "Alpha"),
+        ("project", "charlie"),
+        ("article", "Bravo"),
+        ("article", "echo"),
+    ] {
+        insert_raw_node(&pool, "alice", kind, title, "").await;
+    }
+    sqlx::query("UPDATE nodes SET pinned = true WHERE title = 'echo'")
+        .execute(&pool)
+        .await
+        .expect("pin");
+    // The `touch_updated_at` trigger would overwrite the stamp: switch it
+    // off for this statement, as a backfill does.
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::query("SET LOCAL ember.keep_updated_at = 'on'")
+        .execute(&mut *tx)
+        .await
+        .expect("keep");
+    sqlx::query(
+        "UPDATE nodes SET updated_at = '2001-01-01T00:00:00Z' WHERE title IN ('Alpha', 'Bravo')",
+    )
+    .execute(&mut *tx)
+    .await
+    .expect("tie");
+    tx.commit().await.expect("commit");
+
+    let page = |sort: NodeSort, node_type: Option<NodeType>, page: u32, per_page: u32| {
+        let repo = PgNodeRepo::new(pool.clone());
+        async move {
+            let (rows, total) = repo
+                .list(NodeListParams {
+                    node_type,
+                    status: None,
+                    project_status: None,
+                    tag_id: None,
+                    owner_id: Some("alice".into()),
+                    subject_id: None,
+                    page: Some(page),
+                    per_page: Some(per_page),
+                    include_archived: true,
+                    sort,
+                })
+                .await
+                .expect("list");
+            (rows.into_iter().map(|n| n.title).collect::<Vec<_>>(), total)
+        }
+    };
+
+    // By title, ignoring case; the pinned node first whatever the order.
+    let (titles, total) = page(NodeSort::TitleAsc, None, 1, 50).await;
+    assert_eq!(titles, ["echo", "Alpha", "Bravo", "charlie", "delta"]);
+    assert_eq!(total, 5);
+    let (titles, _) = page(NodeSort::TitleDesc, None, 1, 50).await;
+    assert_eq!(titles, ["echo", "delta", "charlie", "Bravo", "Alpha"]);
+
+    // The type filter is applied before paging: the count and the page are
+    // of Articles only (the browser used to filter one page of everything).
+    let (titles, total) = page(NodeSort::TitleAsc, Some(NodeType::Article), 1, 2).await;
+    assert_eq!(titles, ["echo", "Alpha"]);
+    assert_eq!(total, 4);
+    let (titles, _) = page(NodeSort::TitleAsc, Some(NodeType::Article), 2, 2).await;
+    assert_eq!(titles, ["Bravo", "delta"]);
+
+    // Paging through a tie neither repeats nor skips a row, in both orders.
+    for sort in [NodeSort::ModifiedAsc, NodeSort::ModifiedDesc] {
+        let mut seen = Vec::new();
+        for p in 1..=5 {
+            seen.extend(page(sort, None, p, 1).await.0);
+        }
+        let whole = page(sort, None, 1, 50).await.0;
+        assert_eq!(seen, whole, "{sort:?} page by page");
+        let mut unique = seen.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 5, "{sort:?}: every row once");
+    }
+    // Oldest first puts the two tied rows right after the pinned one.
+    let oldest = page(NodeSort::ModifiedAsc, None, 1, 50).await.0;
+    assert_eq!(oldest[0], "echo");
+    let mut tied = oldest[1..3].to_vec();
+    tied.sort();
+    assert_eq!(tied, ["Alpha", "Bravo"]);
 }
