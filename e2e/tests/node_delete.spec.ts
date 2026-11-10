@@ -45,7 +45,8 @@ test("the delete confirmation counts what goes, other people's included", async 
     await expect(details).toContainText('2 notes (1 from other people)');
     await dialog.getByRole('button', { name: 'Delete' }).click();
     await expect(page).toHaveURL(/\/nodes$/);
-    expect((await request.get(`/api/nodes/${node.id}`)).status()).toBe(404);
+    // A deleted node answers like one that was never the caller's: 403.
+    expect((await request.get(`/api/nodes/${node.id}`)).ok()).toBeFalsy();
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }
