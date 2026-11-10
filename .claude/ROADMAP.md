@@ -16,6 +16,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   a bad task title); a `wiki_link` can't be deleted by hand
   (`EdgeType::is_machine_owned`); a version restore's snapshot is awaited
   through `snapshot_body`.
+- **Unreleased: review task fixes 1.8, 1.9 (UTC day) and 2.5** (#281).
+  One next occurrence per parent, under a row lock; the next occurrence
+  counts from the sender's `today`; reorder follows `require_task_editor`.
+  Still open from 1.9: a monthly task on the 29th to 31st settles on the
+  28th after a short month (needs a stored anchor day; owner to decide).
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
   review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
   snapshot; attachment files are stored under their attachment's id

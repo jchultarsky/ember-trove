@@ -235,6 +235,19 @@ cargo check && cargo clippy -- -D warnings
   awaited. Never `tokio::spawn` a version write: it can land after the
   next save's.
 
+## Task rules (#281)
+
+- Who may change a task is `require_task_editor` (routes/tasks.rs): its
+  owner, an admin, or an editor of its node. `TaskRepo::reorder` applies
+  the same rule in SQL and skips the rest.
+- `TaskRepo::create_occurrence` locks the parent row and returns the live
+  occurrence it already has: a parent has at most one. Without the lock,
+  `two_completions_at_once_schedule_one_next_occurrence` fails.
+- "Today" for a recurring task's next occurrence is the sender's:
+  `UpdateTaskRequest.today`, read through `common::task::local_today`
+  (within a day of UTC, else UTC). `done_toggle` sends it. Never use the
+  server's UTC date for a user-facing day when the client can say.
+
 ## Node deletion preview (#281)
 
 - `GET /nodes/deletion-preview?ids=a,b` feeds the delete confirmation.
