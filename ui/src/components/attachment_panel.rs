@@ -114,7 +114,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                     Ok(fd) => fd,
                     Err(_) => {
                         failed += 1;
-                        upload_progress.set(Some((idx + 1, total)));
+                        let _ = upload_progress.try_set(Some((idx + 1, total)));
                         continue;
                     }
                 };
@@ -124,23 +124,32 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                     .is_err()
                 {
                     failed += 1;
-                    upload_progress.set(Some((idx + 1, total)));
+                    let _ = upload_progress.try_set(Some((idx + 1, total)));
                     continue;
                 }
                 if api::upload_attachment(node_id, form_data).await.is_err() {
                     failed += 1;
                 }
-                upload_progress.set(Some((idx + 1, total)));
+                // The uploads go on if the page is left; its signals don't
+                // (#281): `try_` access from here on.
+                let _ = upload_progress.try_set(Some((idx + 1, total)));
             }
-            upload_progress.set(None);
-            pending_files.set(vec![]);
-            if let Some(el) = file_input_ref.get_untracked() {
+            let _ = upload_progress.try_set(None);
+            let _ = pending_files.try_set(vec![]);
+            if let Some(Some(el)) = file_input_ref.try_get_untracked() {
                 el.set_value("");
             }
             if failed > 0 {
-                error_msg.set(Some(format!("{failed} file(s) failed to upload.")));
+                let message = format!("{failed} file(s) failed to upload.");
+                // Said even when the panel is gone.
+                if error_msg.try_set(Some(message.clone())).is_some() {
+                    crate::components::toast::push_toast(
+                        crate::components::toast::ToastLevel::Error,
+                        message,
+                    );
+                }
             }
-            refresh.update(|n| *n += 1);
+            let _ = refresh.try_update(|n| *n += 1);
         });
     };
 
@@ -388,8 +397,8 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                                 copied_att.set(Some(att_id));
                                                                 wasm_bindgen_futures::spawn_local(async move {
                                                                     gloo_timers::future::TimeoutFuture::new(2000).await;
-                                                                    if copied_att.get_untracked() == Some(att_id) {
-                                                                        copied_att.set(None);
+                                                                    if copied_att.try_get_untracked() == Some(Some(att_id)) {
+                                                                        let _ = copied_att.try_set(None);
                                                                     }
                                                                 });
                                                             }

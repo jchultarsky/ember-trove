@@ -474,7 +474,7 @@ pub fn NodeList() -> impl IntoView {
             }}
 
             <div class="flex-1 overflow-auto">
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <ul class="divide-y divide-stone-100 dark:divide-stone-800">
                         {(0..6).map(|_| view! {
                             <li class="px-6 py-4">
@@ -551,7 +551,7 @@ pub fn NodeList() -> impl IntoView {
                             }
                         })
                     }}
-                </Suspense>
+                </Transition>
             </div>
 
             // Bulk delete confirmation modal

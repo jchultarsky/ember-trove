@@ -25,6 +25,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   §5). `LoadError` replaces the empty state after a failed fetch in ten
   views; bulk delete, revoke, link delete and attachment delete report
   failure; attachment delete confirms.
+- **Unreleased: UI robustness** (#281, 1.6, 1.11, the `try_` sweep and
+  Suspense to Transition). Post-`.await` and forgotten-timer code uses
+  `try_` access in the five flagged components; a late image upload
+  settles its placeholder in the saved text; six page boundaries are
+  `<Transition>`; draft messages follow `write_edit_draft`'s result.
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
   review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
   snapshot; attachment files are stored under their attachment's id

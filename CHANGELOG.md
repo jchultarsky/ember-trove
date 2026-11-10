@@ -75,6 +75,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   "Remove link". It appeared only on hover, which the keyboard and touch
   screens can't do, and its name was "×".
 
+- **Leaving a page while something was still in flight could break the
+  app until a reload** (#281). A reply that arrived after its page was
+  gone touched state that no longer existed. Fixed for an image upload in
+  the editor, attachment uploads and copies, the notes search box, and
+  deleting a node or a person.
+  - **An image still uploading when the editor closed was left as
+    `![uploading-1…]()` in the text**, with the file attached but shown
+    nowhere. When the upload finishes, the image is put in its place in
+    the saved text, unless the text has changed since: then it stays under
+    Attachments and a message says so.
+- **Lists no longer jump back to the top when they refresh** (#281). My
+  Day (on every task you complete), the calendar, the node list, the tag
+  manager, backups and webhooks blanked and reloaded on each refresh.
+  They keep showing what they had until the new data arrives.
+- **"Your edits are kept on this device" is said only when true** (#281).
+  If the browser's storage is full or blocked, the editor now says the
+  edits could not be kept and to copy them, where it promised a local
+  copy that didn't exist.
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted

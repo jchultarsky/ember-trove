@@ -252,7 +252,7 @@ pub fn WebhooksView() -> impl IntoView {
             })}
 
             // ── Webhook list ─────────────────────────────────────────────────
-            <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading…"</p> }>
+            <Transition fallback=|| view! { <p class="text-sm text-stone-400">"Loading…"</p> }>
                 {move || webhooks.get().map(|hooks| {
                     let Ok(hooks) = hooks else {
                         return view! {
@@ -356,7 +356,7 @@ pub fn WebhooksView() -> impl IntoView {
                         }.into_any()
                     }
                 })}
-            </Suspense>
+            </Transition>
         </div>
 
         <DeleteConfirmModal

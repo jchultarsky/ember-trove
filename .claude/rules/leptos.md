@@ -125,6 +125,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **`draft::write_edit_draft` returns whether the draft was stored**
+  (#281, 1.11). Word any "kept on this device" through `kept_note(kept)`
+  in `node_editor.rs`; a full localStorage is a normal case.
+- **A request that outlives its component must finish the user's work
+  some other way** (#281, 1.6): the editor's image upload settles its
+  placeholder in the *saved* text through `settle_closed_upload`, with
+  `expected_updated_at`, when its signals are gone.
 - **A failed load is `LoadError`, never the empty state** (#281, 1.7;
   `load_error.rs`). Don't write `.and_then(|r| r.ok()).unwrap_or_default()`
   or `.await.unwrap_or_default()` on the data a view's empty state reads:

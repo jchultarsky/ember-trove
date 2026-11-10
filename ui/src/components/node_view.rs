@@ -90,16 +90,20 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
         let id = id;
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::delete_node(id).await {
+                // The page may be gone by the time this returns (the user
+                // went elsewhere): `try_` access, never a panic (#281).
                 Ok(_) => {
                     push_toast(ToastLevel::Success, "Node deleted.");
-                    refresh.update(|n| *n += 1);
-                    navigate.get_value()("/nodes", Default::default());
+                    let _ = refresh.try_update(|n| *n += 1);
+                    if let Some(go) = navigate.try_get_value() {
+                        go("/nodes", Default::default());
+                    }
                 }
                 Err(e) => {
                     push_toast(ToastLevel::Error, format!("Delete failed: {e}"));
                 }
             }
-            deleting.set(false);
+            let _ = deleting.try_set(false);
         });
     };
 
