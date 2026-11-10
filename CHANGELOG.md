@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.13.1] - 2026-11-09
+
 ### Fixed
 - **Backups and restores, from the full-codebase review (#281).** Four
   defects found by reading the code; none was reported by a user:
