@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-11-10
+
 ### Added
 - **Copy a task's text from the task list** (#269). Task rows are drag
   sources (reorder), so the mouse couldn't select their text, and the native
