@@ -263,7 +263,9 @@ cargo check && cargo clippy -- -D warnings
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.
 - `list_nodes` skips the `subject_id` filter for admins.
-- `is_owner`: `user.sub == n.owner_id || user.roles.contains("admin")`.
+- Ownership of a non-node resource is `require_resource_owner(claims, owner_id)`
+  (auth/permissions.rs): the owner, or an admin. People, captures and
+  memberships are the exceptions: owner only, no admin bypass.
 - Admin sub: `f1eb2590-0091-70e4-d9b3-24e4a23d24d1` (`julian@chultarsky.com`).
 
 ## AWS SDK / TLS
@@ -273,7 +275,7 @@ cargo check && cargo clippy -- -D warnings
   Do **not** re-enable the legacy `rustls` feature — it drags in the advisory-laden
   rustls 0.21 / rustls-webpki 0.101 chain that was deliberately eliminated (see
   `.cargo/audit.toml` history and `.claude/ERRORS.md`).
-- AWS SDK requires rustc ≥ 1.91.1; the pinned 1.96 toolchain clears it.
+- AWS SDK requires rustc ≥ 1.91.1; the pinned toolchain (`rust-toolchain.toml`) clears it.
 
 ## Cognito Hosted UI
 

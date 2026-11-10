@@ -25,7 +25,7 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   ```
 - **URL map:** `/tasks/my-day` · `/tasks/captures` · `/tasks/calendar` · `/dashboard` ·
   `/graph` · `/search` · `/notes` · `/people` · `/people/:id` · `/nodes` · `/nodes/new` · `/nodes/:id` ·
-  `/nodes/:id/edit` · `/tags` · `/templates` · `/admin/users` · `/admin/permissions` ·
+  `/nodes/:id/edit` · `/tags` · `/templates` · `/data-health` · `/webhooks` · `/admin/users` · `/admin/permissions` ·
   `/admin/backup` · `/admin/performance`. Legacy `/my-day`, `/inbox`, `/calendar` redirect to `/tasks/...`
   (bookmarks/PWA shortcuts predating v2.3.0). The Inbox became Captures (S4c,
   #240): `/tasks/inbox` and `/inbox` go to `/tasks/captures` through

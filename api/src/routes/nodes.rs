@@ -1284,8 +1284,10 @@ async fn restore_version(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve wiki-link titles in `body` to node IDs and sync `wiki_link` edges.
-/// SECURITY: titles resolve only among `owner_id`'s nodes (the source node's
-/// owner), so a link can never point into another user's private node.
+/// SECURITY: titles resolve among the nodes **visible to** `owner_id` (the
+/// source node's owner): their own first, then ones shared with them
+/// (`find_ids_by_titles`; ONTOLOGY §14 allows it). A link can never point
+/// into a node its author can't see.
 async fn sync_wikilinks(
     state: &AppState,
     source_id: NodeId,
@@ -1309,9 +1311,6 @@ async fn sync_wikilinks(
     Ok(())
 }
 
-/// Strip characters that could inject HTTP headers or break Content-Disposition.
-/// Keeps ASCII letters, digits, dots, dashes, underscores, and spaces.
-/// Truncates to 200 chars and falls back to "upload" if the result is empty.
 /// Duplicate a node — creates a copy with the same body, type, and tags.
 /// The new node's title is suffixed with " (copy)" and its status is reset
 /// to `Draft`.  The caller becomes the owner of the duplicate.
@@ -1385,6 +1384,9 @@ fn export_filename(slug: &str, updated_at: chrono::DateTime<chrono::Utc>, ext: &
     format!("{stem}-{}.{ext}", updated_at.format("%Y%m%dT%H%M"))
 }
 
+/// Strip characters that could inject HTTP headers or break Content-Disposition.
+/// Keeps ASCII letters, digits, dots, dashes, underscores, and spaces.
+/// Truncates to 200 chars and falls back to "upload" if the result is empty.
 fn sanitize_filename(raw: &str) -> String {
     let clean: String = raw
         .chars()
