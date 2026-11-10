@@ -205,6 +205,42 @@ struct NodeTagRow {
     created_at: DateTime<Utc>,
 }
 
+/// How many links each of `node_ids` has whose other end `subject` can see
+/// (`None` is an admin: every link). Only the page's nodes are counted; the
+/// list used to aggregate every edge in the database on each call.
+///
+/// SECURITY (ONTOLOGY §14: never show a count of hidden items): a count of
+/// all links told an editor of a shared node whether its owner had a node
+/// with a title they guessed. They wrote `[[the guess]]` into the body and
+/// the count rose exactly when it resolved.
+async fn visible_link_counts(
+    pool: &PgPool,
+    node_ids: &[Uuid],
+    subject: Option<&str>,
+) -> Result<HashMap<Uuid, u32>, EmberTroveError> {
+    if node_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(Uuid, i64)> = sqlx::query_as(&format!(
+        "SELECT e.this, COUNT(*) FROM ( \
+             SELECT source_id AS this, target_id AS other FROM edges WHERE source_id = ANY($1) \
+             UNION ALL \
+             SELECT target_id AS this, source_id AS other FROM edges WHERE target_id = ANY($1) \
+         ) e JOIN nodes o ON o.id = e.other \
+         WHERE {} GROUP BY e.this",
+        super::visible_to("o", 2)
+    ))
+    .bind(node_ids)
+    .bind(subject)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("count node links failed: {e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, n)| (id, u32::try_from(n).unwrap_or(u32::MAX)))
+        .collect())
+}
+
 /// Fetch all tags for a slice of node IDs in one query.
 /// Returns a map of node_id → Vec<Tag>.
 async fn fetch_tags_for_nodes<'e, E: sqlx::PgExecutor<'e>>(
@@ -394,15 +430,8 @@ impl NodeRepo for PgNodeRepo {
         let mut data_sql = String::from(
             "SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body, \
              n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at, \
-             COALESCE(ec.edge_count, 0)::bigint AS edge_count \
-             FROM nodes n \
-             LEFT JOIN ( \
-                 SELECT id, COUNT(*) AS edge_count FROM ( \
-                     SELECT source_id AS id FROM edges \
-                     UNION ALL \
-                     SELECT target_id AS id FROM edges \
-                 ) e GROUP BY id \
-             ) ec ON n.id = ec.id",
+             0::bigint AS edge_count \
+             FROM nodes n",
         );
 
         let mut conditions: Vec<String> = Vec::new();
@@ -526,8 +555,12 @@ impl NodeRepo for PgNodeRepo {
         // Batch-fetch tags for all returned nodes in a single query.
         let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
         let mut tag_map = fetch_tags_for_nodes(&self.pool, &node_ids).await?;
+        // And each one's link count, as this reader may see it.
+        let mut link_counts =
+            visible_link_counts(&self.pool, &node_ids, params.subject_id.as_deref()).await?;
         for node in &mut nodes {
             node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
+            node.edge_count = link_counts.remove(&node.id.0).unwrap_or(0);
         }
 
         Ok((nodes, total as u64))

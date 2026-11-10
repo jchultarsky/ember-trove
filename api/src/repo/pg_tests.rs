@@ -5814,6 +5814,65 @@ async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
     assert_eq!(order_of(alice_private).await, 9);
 }
 
+// ── A node's link count is of the links its reader can see ───────────────────
+
+/// SECURITY (ONTOLOGY §14, "never show a count of hidden items"): the node
+/// list's link count used to count every link. An editor of a shared node
+/// could write `[[A guessed title]]` into it and watch the count: it rose
+/// exactly when the owner had a node with that title.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_node_lists_link_count_leaves_out_links_to_hidden_nodes(pool: PgPool) {
+    let edges = PgEdgeRepo::new(pool.clone());
+    let shared = create_node(&pool, "owner-a", "count shared").await;
+    let also_shared = create_node(&pool, "owner-a", "count also shared").await;
+    let private = create_node(&pool, "owner-a", "count private").await;
+    let incoming = create_node(&pool, "owner-a", "count private source").await;
+    share(&pool, shared.id.0, "owner-b").await;
+    share(&pool, also_shared.id.0, "owner-b").await;
+    // Out to a node B can see and to one B can't, and one in from a node B
+    // can't see.
+    edges
+        .sync_wikilinks(shared.id, &[also_shared.id, private.id])
+        .await
+        .expect("out");
+    edges
+        .sync_wikilinks(incoming.id, &[shared.id])
+        .await
+        .expect("in");
+
+    let count_for = |subject: Option<&'static str>| {
+        let nodes = PgNodeRepo::new(pool.clone());
+        async move {
+            let (rows, _) = nodes
+                .list(common::node::NodeListParams {
+                    node_type: None,
+                    status: None,
+                    project_status: None,
+                    tag_id: None,
+                    owner_id: None,
+                    subject_id: subject.map(str::to_string),
+                    page: None,
+                    per_page: None,
+                    include_archived: true,
+                    sort: Default::default(),
+                })
+                .await
+                .expect("list");
+            rows.into_iter()
+                .map(|n| (n.title, n.edge_count))
+                .collect::<std::collections::HashMap<_, _>>()
+        }
+    };
+    // The owner, and an admin, see all three.
+    assert_eq!(count_for(Some("owner-a")).await["count shared"], 3);
+    assert_eq!(count_for(None).await["count shared"], 3);
+    // B sees the one link whose other end B can see.
+    let b = count_for(Some("owner-b")).await;
+    assert_eq!(b["count shared"], 1);
+    assert_eq!(b["count also shared"], 1);
+    assert!(!b.contains_key("count private"));
+}
+
 // ── One visibility rule for the big lists (#281, 3.2) ────────────────────────
 
 #[sqlx::test(migrations = "../migrations")]
@@ -5979,7 +6038,6 @@ async fn the_permission_list_is_the_callers_grants_and_those_on_nodes_they_own(p
 #[sqlx::test(migrations = "../migrations")]
 async fn the_node_list_sorts_filters_by_type_and_pages_without_gaps(pool: PgPool) {
     use common::node::{NodeListParams, NodeSort};
-    let repo = PgNodeRepo::new(pool.clone());
     // Titles out of order, two kinds, one pinned, and two rows with the
     // same `updated_at` (the id must break the tie the same way on every
     // page).

@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+The last items of the 2026-11-10 audit that needed no decision (#281).
+- **An id can no longer be tested for existence.** A request for a task,
+  file, link, grant, tag, template or node address that exists but isn't
+  yours used to be answered "not allowed", while one that doesn't exist
+  was "not found". Both are "not found" now, word for word. Someone who
+  can already see the thing (a viewer who tries to edit) is still told
+  "not allowed".
+- **A shared node's link count is of the links you can see.** It counted
+  every link, so an editor of a shared node could find out whether its
+  owner had a node with a title they guessed.
+- **Webhook deliveries are bounded:** at most 32 in flight at once across
+  the server, each given 20 seconds. One that waits more than 30 seconds
+  for its turn is dropped and logged.
+
+### Changed
+- The node list counts links for the nodes on the page only. It used to
+  count every link in the database on each load.
+
 ## [3.16.0] - 2026-11-10
 
 ### Added

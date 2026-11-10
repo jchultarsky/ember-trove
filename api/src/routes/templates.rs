@@ -13,7 +13,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{require_resource_owner, subject_scope},
+    auth::permissions::{or_missing, or_missing_row, require_resource_owner, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -40,13 +40,25 @@ async fn list_templates(
     Ok(Json(templates))
 }
 
+/// What a template that isn't there, or isn't the caller's, is called.
+const TEMPLATE: &str = "template";
+
 async fn get_template(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<NodeTemplate>, ApiError> {
-    let template = state.templates.get(TemplateId(id)).await?;
-    require_resource_owner(&claims, &template.created_by)?;
+    let template = state
+        .templates
+        .get(TemplateId(id))
+        .await
+        .map_err(or_missing_row(TEMPLATE))?;
+    // A template is seen by its owner only: anyone else's reads as missing.
+    or_missing(
+        require_resource_owner(&claims, &template.created_by),
+        false,
+        TEMPLATE,
+    )?;
     Ok(Json(template))
 }
 
@@ -67,8 +79,16 @@ async fn update_template(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTemplateRequest>,
 ) -> Result<Json<NodeTemplate>, ApiError> {
-    let existing = state.templates.get(TemplateId(id)).await?;
-    require_resource_owner(&claims, &existing.created_by)?;
+    let existing = state
+        .templates
+        .get(TemplateId(id))
+        .await
+        .map_err(or_missing_row(TEMPLATE))?;
+    or_missing(
+        require_resource_owner(&claims, &existing.created_by),
+        false,
+        TEMPLATE,
+    )?;
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
     let template = state.templates.update(TemplateId(id), req).await?;
@@ -80,8 +100,16 @@ async fn delete_template(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let existing = state.templates.get(TemplateId(id)).await?;
-    require_resource_owner(&claims, &existing.created_by)?;
+    let existing = state
+        .templates
+        .get(TemplateId(id))
+        .await
+        .map_err(or_missing_row(TEMPLATE))?;
+    or_missing(
+        require_resource_owner(&claims, &existing.created_by),
+        false,
+        TEMPLATE,
+    )?;
     state.templates.delete(TemplateId(id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -100,6 +128,7 @@ async fn set_default_template(
     let template = state
         .templates
         .set_default(TemplateId(id), &claims.sub)
-        .await?;
+        .await
+        .map_err(or_missing_row(TEMPLATE))?;
     Ok(Json(template))
 }

@@ -17,7 +17,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{guard_canonical_owner, require_owner, subject_scope},
+    auth::permissions::{guard_canonical_owner, missing, or_missing, require_owner, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -48,6 +48,9 @@ async fn list_permissions(
     ))
 }
 
+/// What a grant that isn't there, or isn't the caller's to know of, is called.
+const GRANT: &str = "permission";
+
 /// `PUT /permissions/{id}`
 ///
 /// Updates the role of an existing permission grant.
@@ -66,10 +69,15 @@ async fn update_permission(
         .permissions
         .find_by_id(PermissionId(id))
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("permission {id} not found")))?;
+        .ok_or_else(|| missing(GRANT))?;
 
-    // Require owner on the associated node
-    require_owner(state.permissions.as_ref(), &claims, perm.node_id).await?;
+    // Require owner on the associated node. The grant's own subject knows
+    // it exists; to anyone else who isn't an owner it reads as missing.
+    or_missing(
+        require_owner(state.permissions.as_ref(), &claims, perm.node_id).await,
+        perm.subject_id == claims.sub,
+        GRANT,
+    )?;
     // SECURITY: same canonical-owner backstop as the nested grant route.
     let node = state.nodes.get(perm.node_id).await?;
     guard_canonical_owner(&claims, &node.owner_id, &perm.subject_id, Some(&req.role))?;
@@ -96,10 +104,15 @@ async fn delete_permission(
         .permissions
         .find_by_id(PermissionId(id))
         .await?
-        .ok_or_else(|| ApiError::NotFound(format!("permission {id} not found")))?;
+        .ok_or_else(|| missing(GRANT))?;
 
-    // Require owner on the associated node
-    require_owner(state.permissions.as_ref(), &claims, perm.node_id).await?;
+    // Require owner on the associated node. The grant's own subject knows
+    // it exists; to anyone else who isn't an owner it reads as missing.
+    or_missing(
+        require_owner(state.permissions.as_ref(), &claims, perm.node_id).await,
+        perm.subject_id == claims.sub,
+        GRANT,
+    )?;
     // SECURITY: same canonical-owner backstop as the nested revoke route.
     let node = state.nodes.get(perm.node_id).await?;
     guard_canonical_owner(&claims, &node.owner_id, &perm.subject_id, None)?;

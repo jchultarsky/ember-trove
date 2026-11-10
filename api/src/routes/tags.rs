@@ -13,7 +13,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_resource_owner},
+    auth::permissions::{is_admin, or_missing, or_missing_row, require_resource_owner},
     error::ApiError,
     state::AppState,
 };
@@ -48,6 +48,9 @@ async fn create_tag(
     Ok((StatusCode::CREATED, Json(tag)))
 }
 
+/// What a tag that isn't there, or isn't the caller's, is called.
+const TAG: &str = "tag";
+
 async fn update_tag(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -55,8 +58,17 @@ async fn update_tag(
     Json(req): Json<UpdateTagRequest>,
 ) -> Result<Json<Tag>, ApiError> {
     // Only the tag owner or an admin may update.
-    let existing = state.tags.get(TagId(id)).await?;
-    require_resource_owner(&claims, &existing.owner_id)?;
+    let existing = state
+        .tags
+        .get(TagId(id))
+        .await
+        .map_err(or_missing_row(TAG))?;
+    // A tag is seen by its owner only: anyone else's reads as missing.
+    or_missing(
+        require_resource_owner(&claims, &existing.owner_id),
+        false,
+        TAG,
+    )?;
     let tag = state.tags.update(TagId(id), req).await?;
     Ok(Json(tag))
 }
@@ -66,8 +78,16 @@ async fn delete_tag(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let existing = state.tags.get(TagId(id)).await?;
-    require_resource_owner(&claims, &existing.owner_id)?;
+    let existing = state
+        .tags
+        .get(TagId(id))
+        .await
+        .map_err(or_missing_row(TAG))?;
+    or_missing(
+        require_resource_owner(&claims, &existing.owner_id),
+        false,
+        TAG,
+    )?;
     state.tags.delete(TagId(id)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
