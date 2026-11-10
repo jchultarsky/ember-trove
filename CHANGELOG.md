@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Copy a task's text from the task list** (#269). Task rows are drag
+  sources (reorder), so the mouse couldn't select their text, and the native
+  context menu had nothing to copy. Each row (a node's Tasks section and
+  My Day) now has a Copy icon action that puts the title on the clipboard
+  as the row shows it: plain text, without the Markdown source
+  (`markdown::markdown_inline_plain_text`). Drag-to-reorder is unchanged.
+
 ### Security
 - **nginx's general API limit now equals the API's own** (#258, owner
   decision 2026-11-10): 10 requests a second per IP with a burst of 100,
