@@ -9,9 +9,16 @@ Keep it current as part of each change (see `POLICY.md` §10).
   entries marked v3.14.0 below: correctness and conformance, the UI
   section, the docs, the reuse items, plus #257, #259 and the phone-width
   pass of #262. Still open from the review: the seven private security
-  findings (with the owner), and the monthly recurrence drift (needs a
-  migration; owner to decide). Open drafts: #283 (Project Brief part 1,
-  migration 046, backup format 6) and #271 (copy a task's text).
+  findings (with the owner). Open draft: #283 (Project Brief part 1,
+  migration 046, backup format 6).
+- **The monthly recurrence drift is not fixed, on purpose** (owner
+  decision 2026-11-10). A monthly task on the 29th to 31st moves to the
+  28th in February and stays there (#281, 1.9). A fix was built (a stored
+  day of the month, a migration, a backup format bump) and dropped
+  unmerged: ONTOLOGY §9 and slice S5b remove recurring tasks, so the
+  bug goes with the feature. Don't fix it before S5b.
+- **Unreleased: copy a task's text** (#269, PR #271): a Copy action on
+  each task row.
 
 - **v3.14.0: the delete confirmation counts what goes** (#281, owner
   decision). `GET /nodes/deletion-preview` counts the tasks, notes and
