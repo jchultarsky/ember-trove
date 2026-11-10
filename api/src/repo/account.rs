@@ -1,7 +1,7 @@
 //! Account lifecycle (#239): the suspended-account list, and purging an
 //! account's data.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use common::{
@@ -30,6 +30,20 @@ pub trait AccountRepo: Send + Sync {
 
     /// Drop the rows of accounts deleted before `cutoff`. Returns how many.
     async fn purge_deleted_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError>;
+
+    /// When each account's admin role was removed (Unix seconds), for
+    /// `auth::demoted`.
+    async fn demotions(&self) -> Result<HashMap<String, i64>, EmberTroveError>;
+
+    /// Record that the subject's admin role is being removed now, and
+    /// return the time recorded. A later demotion moves the time forward.
+    async fn record_demotion(&self, subject_id: &str) -> Result<i64, EmberTroveError>;
+
+    /// Drop demotions recorded before `cutoff`. Returns how many.
+    async fn purge_demotions_before(
         &self,
         cutoff: chrono::DateTime<chrono::Utc>,
     ) -> Result<u64, EmberTroveError>;
@@ -136,6 +150,45 @@ impl AccountRepo for PgAccountRepo {
             .map_err(|e| {
                 EmberTroveError::Internal(format!("purge deleted accounts failed: {e}"))
             })?;
+        Ok(done.rows_affected())
+    }
+
+    async fn demotions(&self) -> Result<HashMap<String, i64>, EmberTroveError> {
+        let rows: Vec<(String, chrono::DateTime<chrono::Utc>)> =
+            sqlx::query_as("SELECT subject_id, demoted_at FROM admin_demotions")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| {
+                    EmberTroveError::Internal(format!("list admin demotions failed: {e}"))
+                })?;
+        Ok(rows
+            .into_iter()
+            .map(|(subject, at)| (subject, demotion_second(at)))
+            .collect())
+    }
+
+    async fn record_demotion(&self, subject_id: &str) -> Result<i64, EmberTroveError> {
+        let at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "INSERT INTO admin_demotions (subject_id) VALUES ($1)
+             ON CONFLICT (subject_id) DO UPDATE SET demoted_at = now()
+             RETURNING demoted_at",
+        )
+        .bind(subject_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("record admin demotion failed: {e}")))?;
+        Ok(demotion_second(at))
+    }
+
+    async fn purge_demotions_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        let done = sqlx::query("DELETE FROM admin_demotions WHERE demoted_at < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("purge admin demotions failed: {e}")))?;
         Ok(done.rows_affected())
     }
 
@@ -272,6 +325,14 @@ impl AccountRepo for PgAccountRepo {
             subject_id,
         )
         .await?;
+        // Not counted with the settings: the person never saw this row.
+        // A deleted account is refused outright (`suspended_accounts`).
+        exec(
+            &mut tx,
+            "DELETE FROM admin_demotions WHERE subject_id = $1",
+            subject_id,
+        )
+        .await?;
         anonymise(&mut tx, subject_id, email).await?;
 
         let nodes = exec(&mut tx, "DELETE FROM nodes WHERE owner_id = $1", subject_id).await?;
@@ -319,6 +380,12 @@ const TASKS_HANDED_OVER: &str = "SELECT count(*) FROM node_tasks t JOIN nodes n 
 /// Files attached to their nodes.
 const FILES: &str = "SELECT count(*) FROM attachments a JOIN nodes n ON n.id = a.node_id
      WHERE n.owner_id = $1";
+
+/// A demotion's time as a token's `iat` is written: whole seconds. Rounded
+/// up, so a token issued earlier in that same second still counts as older.
+fn demotion_second(at: chrono::DateTime<chrono::Utc>) -> i64 {
+    at.timestamp() + i64::from(at.timestamp_subsec_nanos() > 0)
+}
 
 /// Per-account settings: table and the column naming the account. Fixed
 /// identifiers only; the subject is always a bind parameter.

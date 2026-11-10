@@ -111,6 +111,37 @@ pub fn coalesce_capture(title: Option<&str>, body: Option<&str>) -> (String, boo
     (format!("{truncated} …"), true)
 }
 
+/// The marker the service worker puts in the URL fragment after a share:
+/// `/?capture=1#shared=<percent-encoded JSON>` (`ui/public/sw.js`).
+pub const SHARED_FRAGMENT: &str = "#shared=";
+
+/// The text of a share, for the capture box. `json` is what the service
+/// worker put in the URL fragment (after percent-decoding): a share's
+/// `title` and `body`. They are joined as a capture joins them
+/// ([`coalesce_capture`]). `None` when it isn't that JSON or holds no text.
+///
+/// SECURITY: this text comes from outside the app (another app's share, or
+/// any link someone was sent). It only ever fills the capture box, as plain
+/// text, and is saved when the person presses Capture; never on its own.
+#[must_use]
+pub fn shared_capture_text(json: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Shared {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+    }
+    // An object only: serde would also read a struct from an array.
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let shared: Shared = value
+        .is_object()
+        .then(|| serde_json::from_value(value).ok())
+        .flatten()?;
+    let (text, _) = coalesce_capture(shared.title.as_deref(), shared.body.as_deref());
+    (!text.is_empty()).then_some(text)
+}
+
 /// What a quick capture saves (#234): its title and body joined
 /// ([`coalesce_capture`]), led by an old client's due date, since a capture
 /// has no date of its own. Empty when there is no text at all, whatever
@@ -244,5 +275,29 @@ mod tests {
         // String must remain valid UTF-8 (the assertion is implicit — if
         // truncation split a char this test would not compile/run cleanly).
         assert_eq!(out.chars().count(), QUICK_CAPTURE_MAX_LEN);
+    }
+
+    #[test]
+    fn a_share_becomes_the_capture_boxs_text() {
+        assert_eq!(
+            shared_capture_text(
+                r#"{"title":"An article","body":"worth reading\nhttps://example.com/a"}"#
+            )
+            .as_deref(),
+            Some("An article\nworth reading\nhttps://example.com/a")
+        );
+        assert_eq!(
+            shared_capture_text(r#"{"body":"only a link"}"#).as_deref(),
+            Some("only a link")
+        );
+        // Nothing to capture, or not what the worker writes: no text.
+        assert_eq!(shared_capture_text(r#"{"title":" ","body":""}"#), None);
+        assert_eq!(shared_capture_text("{}"), None);
+        assert_eq!(shared_capture_text("not json"), None);
+        assert_eq!(shared_capture_text(r#"["a"]"#), None);
+        // Clipped like any capture, never longer than one holds.
+        let long = format!(r#"{{"body":"{}"}}"#, "x".repeat(QUICK_CAPTURE_MAX_LEN + 50));
+        let text = shared_capture_text(&long).unwrap();
+        assert_eq!(text.chars().count(), QUICK_CAPTURE_MAX_LEN);
     }
 }

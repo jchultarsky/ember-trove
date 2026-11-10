@@ -1447,6 +1447,7 @@ fn test_state() -> AppState {
         editor_prefs: Arc::new(StubEditorPrefRepo),
         accounts: Arc::new(StubAccountRepo::default()),
         suspended: crate::auth::suspended::SuspendedSet::default(),
+        demoted: crate::auth::demoted::DemotedSet::default(),
         object_store: Arc::new(NullObjectStore),
         object_deletions: Arc::new(StubObjectDeletionRepo),
         draining: Arc::default(),
@@ -2619,6 +2620,42 @@ async fn revoke_permission_cannot_remove_the_canonical_owner() {
         nested_revoke(AZ_OWNED_NODE, AZ_PERM_CREATOR).await,
         StatusCode::FORBIDDEN
     );
+}
+
+/// SECURITY: inviting by email is a grant like any other. A *granted* Owner
+/// used to be able to invite the creator's own address as a viewer, which
+/// rewrote the creator's Owner row and locked them out of their node.
+#[tokio::test]
+async fn an_invite_cannot_downgrade_the_canonical_owner() {
+    let mut state = test_state();
+    state.cognito_admin = Some(Arc::new(FakeDirectory {
+        by_email: Some("creator"),
+        ..FakeDirectory::default()
+    }));
+    let invite = |role: &'static str| {
+        let state = state.clone();
+        async move {
+            Router::new()
+                .nest("/nodes", crate::routes::nodes::router())
+                .layer(axum::Extension(fake_claims()))
+                .with_state(state)
+                .oneshot(
+                    Request::post(format!("/nodes/{}/invite", Uuid::from_u128(AZ_OWNED_NODE)))
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({ "email": "creator@example.com", "role": role })
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    // The stub repo's `grant` is unimplemented: reaching it fails the test.
+    assert_eq!(invite("viewer").await, StatusCode::FORBIDDEN);
+    assert_eq!(invite("editor").await, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -4131,6 +4168,9 @@ impl crate::repo::object_deletion::ObjectDeletionRepo for StubObjectDeletionRepo
     }
 }
 
+/// When the stub account repo says a demotion happened (Unix seconds).
+const STUB_DEMOTED_AT: i64 = 1_800_000_000;
+
 #[derive(Default)]
 struct StubAccountRepo {
     rows: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -4153,6 +4193,22 @@ impl crate::repo::account::AccountRepo for StubAccountRepo {
         self.log.lock().unwrap().push(format!("row- {subject_id}"));
         self.rows.lock().unwrap().remove(subject_id);
         Ok(())
+    }
+    async fn demotions(&self) -> Result<std::collections::HashMap<String, i64>, EmberTroveError> {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn record_demotion(&self, subject_id: &str) -> Result<i64, EmberTroveError> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("demoted {subject_id}"));
+        Ok(STUB_DEMOTED_AT)
+    }
+    async fn purge_demotions_before(
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, EmberTroveError> {
+        Ok(0)
     }
     async fn mark_deleted(&self, subject_id: &str, _by: &str) -> Result<(), EmberTroveError> {
         self.log
@@ -4206,6 +4262,8 @@ struct FakeDirectory {
     log: StepLog,
     fail: Option<&'static str>,
     missing: bool,
+    /// The account id `find_user_by_email` answers with, for any email.
+    by_email: Option<&'static str>,
 }
 
 impl FakeDirectory {
@@ -4248,9 +4306,18 @@ impl crate::admin::UserDirectory for FakeDirectory {
     }
     async fn find_user_by_email(
         &self,
-        _: &str,
+        email: &str,
     ) -> Result<Option<common::admin::AdminUser>, crate::error::ApiError> {
-        Ok(None)
+        Ok(self.by_email.map(|id| common::admin::AdminUser {
+            id: id.to_string(),
+            username: email.to_string(),
+            email: Some(email.to_string()),
+            first_name: None,
+            last_name: None,
+            enabled: true,
+            realm_roles: vec![],
+            suspended: false,
+        }))
     }
     async fn email_of(&self, user: &str) -> Result<Option<String>, crate::error::ApiError> {
         self.log.lock().unwrap().push(format!("email {user}"));
@@ -4371,6 +4438,99 @@ async fn an_admin_cannot_suspend_delete_or_demote_themselves() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+/// SECURITY: a token already out lists the admin group until it expires.
+/// Removing the role must take it from those tokens at once, or the demoted
+/// admin keeps full rights for up to an hour, and can use them to give the
+/// role back to themselves.
+#[tokio::test]
+async fn removing_the_admin_role_takes_effect_before_cognito_is_asked() {
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let admin = vec!["admin".to_string(), "user".to_string()];
+    let before = Some(STUB_DEMOTED_AT - 60);
+    assert_eq!(
+        state.demoted.roles_for(U1, before, admin.clone()).await,
+        admin,
+        "still an admin before the change"
+    );
+
+    let (status, _) = admin_call(
+        &app,
+        "PUT",
+        &format!("/admin/users/{U1}/roles"),
+        r#"{"roles":["user"]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        steps(&log),
+        [format!("demoted {U1}"), format!("groups {U1}")],
+        "the demotion lands before Cognito is asked"
+    );
+    // The token from before the change is no longer an admin's; one issued
+    // afterwards is believed again (it carries the account's real groups).
+    assert_eq!(
+        state.demoted.roles_for(U1, before, admin.clone()).await,
+        ["user"]
+    );
+    assert_eq!(
+        state
+            .demoted
+            .roles_for(U1, Some(STUB_DEMOTED_AT + 1), admin.clone())
+            .await,
+        admin
+    );
+    // Nobody else is touched.
+    assert_eq!(
+        state.demoted.roles_for(U2, before, admin.clone()).await,
+        admin
+    );
+}
+
+#[tokio::test]
+async fn a_demotion_stands_when_cognito_fails_and_granting_admin_records_none() {
+    // Cognito fails after the demotion was recorded: the account is held
+    // to its newer tokens anyway (fails closed).
+    let (state, log) = lifecycle_state(FakeDirectory {
+        fail: Some("groups"),
+        ..FakeDirectory::default()
+    });
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(
+        &app,
+        "PUT",
+        &format!("/admin/users/{U1}/roles"),
+        r#"{"roles":[]}"#,
+    )
+    .await;
+    assert!(status.is_server_error(), "{status}");
+    assert_eq!(
+        steps(&log),
+        [format!("demoted {U1}"), format!("groups {U1}")]
+    );
+    let admin = vec!["admin".to_string()];
+    assert!(
+        state
+            .demoted
+            .roles_for(U1, Some(STUB_DEMOTED_AT - 1), admin.clone())
+            .await
+            .is_empty()
+    );
+
+    // Giving the role records nothing.
+    let (state, log) = lifecycle_state(FakeDirectory::default());
+    let app = admin_app_with(state.clone(), uuid_admin());
+    let (status, _) = admin_call(
+        &app,
+        "PUT",
+        &format!("/admin/users/{U2}/roles"),
+        r#"{"roles":["admin"]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(steps(&log), [format!("groups {U2}")]);
 }
 
 #[tokio::test]

@@ -998,13 +998,9 @@ async fn invite(
         ApiError::Internal("invite requires Cognito admin to be configured".to_string())
     })?;
 
-    // Fetch the node title for the notification email (best-effort; fall back gracefully).
-    let node_title = state
-        .nodes
-        .get(NodeId(id))
-        .await
-        .map(|n| n.title)
-        .unwrap_or_else(|_| "a node".to_string());
+    // The node: its creator for the guard below, its title for the email.
+    let node = state.nodes.get(NodeId(id)).await?;
+    let node_title = node.title;
 
     // Look up the email in Cognito.  If not found, create the user (Cognito
     // then sends a welcome / temp-password email automatically).
@@ -1027,6 +1023,12 @@ async fn invite(
             (new_user.id, None)
         }
     };
+
+    // SECURITY: an invite is a grant, and the grant is an upsert. Without
+    // this, a granted Owner could invite the creator's own address at a
+    // lower role and rewrite the creator's Owner row (2026-11-10). The same
+    // guard the other grant, update and revoke routes apply.
+    guard_canonical_owner(&claims, &node.owner_id, &subject_id, Some(&req.role))?;
 
     let role_str = match req.role {
         PermissionRole::Owner => "owner",

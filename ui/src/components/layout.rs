@@ -122,8 +122,12 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
             }
         });
     }
+    // What another app shared, waiting for the capture box to open with it.
+    let shared_prefill = RwSignal::new(None::<String>);
     // The home-screen "Quick capture" shortcut (manifest.json) opens
-    // `/?capture=1`: open the capture box. A share that failed comes back as
+    // `/?capture=1`: open the capture box. A share arrives the same way with
+    // its text in the fragment (`#shared=…`, sw.js): the box opens holding
+    // it, and nothing is saved until Capture is pressed. A share that failed comes back as
     // `/?capture=failed&reason=…` (sw.js): say so. Either way drop the
     // marker, so a reload doesn't repeat it. Nothing read these before #234,
     // so the shortcut did nothing and a failed share was silent.
@@ -140,7 +144,11 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                 return;
             };
             match capture.as_str() {
-                "1" => show_capture.set(true),
+                "1" => {
+                    // A share (`sw.js`) carries its text in the fragment.
+                    shared_prefill.set(shared_text_from_fragment());
+                    show_capture.set(true);
+                }
                 "failed" => crate::components::toast::push_toast(
                     crate::components::toast::ToastLevel::Error,
                     crate::components::format_helpers::share_failure(reason.as_deref()),
@@ -450,6 +458,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                 view! {
                     <FastCaptureModal
                         show=show_capture.read_only()
+                        prefill=shared_prefill
                         on_close=Callback::new(move |_| show_capture.set(false))
                         on_more_fields=Callback::new(move |draft: String| {
                             structured_prefill.set(draft);
@@ -646,6 +655,16 @@ fn GoTo(
         };
         navigate(&with_query(path, &query), options.clone());
     });
+}
+
+/// The text of a share, from the URL fragment the service worker set
+/// (`/?capture=1#shared=…`). A fragment never reaches the server or its
+/// logs. `None` when there is none or it isn't a share.
+fn shared_text_from_fragment() -> Option<String> {
+    let hash = web_sys::window()?.location().hash().ok()?;
+    let encoded = hash.strip_prefix(common::inbox::SHARED_FRAGMENT)?;
+    let json = js_sys::decode_uri_component(encoded).ok()?.as_string()?;
+    common::inbox::shared_capture_text(&json)
 }
 
 /// `path` with `query` (with or without its leading `?`) appended.
