@@ -54,8 +54,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   `GET /permissions` filters in SQL (#259). `NodeSort`,
   `node_list_limit` / `node_list_pages` in `common::node`;
   `api::fetch_node_list` in the UI; `PermissionRepo::list_visible`. #258
-  (rate limits on reads) has its comment corrected and waits on the owner
-  for the limits themselves.
+  (rate limits on reads) had its comment corrected.
+- **Unreleased: nginx's `/api/` limit equals the API's budget** (#258,
+  owner decision 2026-11-10): 10 r/s, burst 100. Tests in
+  `api/src/routes/mod.rs` read `deploy/nginx.prod.conf` and hold the two
+  together, and pin the sign-in zones.
 - **v3.14.0: "visible to" and plain text** (#281, 3.2 and 3.4).
   `visible_among_many` for the node list, title list and graph;
   `note::plain_line` for the graph preview. Section 3 of the review is
