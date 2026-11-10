@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling
+- **The macOS CI check no longer fails a run.** It runs on pushes to
+  `develop` and `main` only and was never a required check. GitHub cancels
+  it unstarted when it has no arm64 macOS runner, which marked a green run
+  red (2026-11-10). It is now `continue-on-error`: a real macOS-only break
+  shows as a failed job inside a green run.
+
 ## [3.15.0] - 2026-11-10
 
 ### Added
