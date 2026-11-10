@@ -87,12 +87,12 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     // methods only" (#258): tower_governor has no method filter by default
     // and none was ever set, so the code never did that.
     //
-    // In production every request comes through nginx, whose `/api/` limit
-    // (2 r/s, burst 30: deploy/nginx.prod.conf) is the stricter of the two
-    // and answers 429 first. This one is the backstop for a request that
-    // reaches the API some other way. Whether reads should be exempt here,
-    // or nginx's burst raised for pages that fan out, is the owner's
-    // decision and still open on #258: both loosen a limit.
+    // In production every request comes through nginx first, whose `/api/`
+    // limit is the same budget (deploy/nginx.prod.conf; the test
+    // `nginx_api_limit_matches_the_production_budget` holds the two
+    // together). It was 2 r/s with a burst of 30 until the owner's decision
+    // on #258 (2026-11-10): pages that fan out got a 429. This limiter also
+    // covers a request that reaches the API some other way.
     // SmartIpKeyExtractor reads X-Real-IP / X-Forwarded-For (set by nginx) and
     // falls back to ConnectInfo<SocketAddr> for direct connections.
     let budget = rate_limit_budget(
@@ -316,6 +316,57 @@ mod tests {
                 burst: 100
             }
         );
+    }
+
+    /// The number after `key` on the one line of the production nginx config
+    /// that contains every string in `on_line_with`.
+    fn nginx_number(on_line_with: &[&str], key: &str) -> u64 {
+        let conf = include_str!("../../../deploy/nginx.prod.conf");
+        let lines: Vec<&str> = conf
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter(|l| on_line_with.iter().all(|w| l.contains(w)))
+            .collect();
+        assert_eq!(lines.len(), 1, "one line with {on_line_with:?}: {lines:?}");
+        let after = lines[0].split(key).nth(1).unwrap();
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().unwrap()
+    }
+
+    /// nginx's general `/api/` limit equals the API's own (#258, owner
+    /// decision 2026-11-10). It was 2 r/s with a burst of 30, so a page that
+    /// fans out got a 429 from nginx long before the API's limit. SECURITY:
+    /// a change to either number has to be made in both places, on purpose.
+    #[test]
+    fn nginx_api_limit_matches_the_production_budget() {
+        let conf = include_str!("../../../deploy/nginx.prod.conf");
+        assert!(
+            conf.contains("zone=api:10m rate=10r/s;"),
+            "the api zone is stated per second"
+        );
+        let per_second = nginx_number(&["limit_req_zone", "zone=api:"], "rate=");
+        let burst = nginx_number(&["limit_req ", "zone=api "], "burst=");
+        assert_eq!(per_second, 1000 / PROD_RATE_LIMIT.replenish_ms);
+        assert_eq!(burst, u64::from(PROD_RATE_LIMIT.burst));
+    }
+
+    /// SECURITY: the sign-in routes keep their own, tighter nginx limits.
+    #[test]
+    fn nginx_auth_limits_stay_tighter_than_the_api_limit() {
+        // Both are per minute: 30 r/m is 0.5 r/s, 120 r/m is 2 r/s.
+        assert_eq!(nginx_number(&["limit_req_zone", "zone=auth:"], "rate="), 30);
+        assert_eq!(nginx_number(&["limit_req ", "zone=auth "], "burst="), 10);
+        assert_eq!(
+            nginx_number(&["limit_req_zone", "zone=authsession:"], "rate="),
+            120
+        );
+        assert_eq!(
+            nginx_number(&["limit_req ", "zone=authsession "], "burst="),
+            30
+        );
+        let conf = include_str!("../../../deploy/nginx.prod.conf");
+        assert!(conf.contains("zone=auth:10m rate=30r/m;"));
+        assert!(conf.contains("zone=authsession:10m rate=120r/m;"));
     }
 
     /// SECURITY: without the `e2e-bypass` feature (every release image), the
