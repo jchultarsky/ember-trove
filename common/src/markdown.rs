@@ -118,20 +118,14 @@ pub fn link_first_mention(body: &str, title: &str) -> Option<String> {
         return None;
     }
 
-    // Byte spans of existing [[...]] links — off-limits for rewriting.
-    let mut link_spans: Vec<(usize, usize)> = Vec::new();
-    let mut scan = 0;
-    while let Some(open_rel) = body[scan..].find("[[") {
-        let open = scan + open_rel;
-        match body[open + 2..].find("]]") {
-            Some(close_rel) => {
-                let end = open + 2 + close_rel + 2;
-                link_spans.push((open, end));
-                scan = end;
-            }
-            None => break,
-        }
-    }
+    // Off-limits for rewriting: existing links, by the one scanner (#281,
+    // 3.1), and code, where a `[[…]]` would be shown as typed.
+    let link_spans: Vec<(usize, usize)> = crate::wikilink::wikilinks(body)
+        .into_iter()
+        .map(|link| link.range)
+        .chain(crate::wikilink::code_ranges(body))
+        .map(|r| (r.start, r.end))
+        .collect();
 
     // ASCII case folding is byte-for-byte, so offsets into the folded copies
     // are valid for the originals (and char boundaries are preserved).
@@ -296,6 +290,18 @@ WIP.
             link_first_mention("[[Alpha]] and alpha again", "Alpha"),
             Some("[[Alpha]] and [[Alpha|alpha]] again".to_string())
         );
+    }
+
+    #[test]
+    fn link_mention_leaves_code_alone() {
+        // A mention inside code is shown as typed; linking it there would
+        // show the brackets (#281, 3.1 and 1.10).
+        assert_eq!(link_first_mention("run `alpha --fast`", "Alpha"), None);
+        assert_eq!(
+            link_first_mention("`alpha` is the alpha tool", "Alpha"),
+            Some("`alpha` is the [[Alpha|alpha]] tool".to_string())
+        );
+        assert_eq!(link_first_mention("```\nalpha\n```", "Alpha"), None);
     }
 
     #[test]

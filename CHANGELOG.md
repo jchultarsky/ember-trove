@@ -117,6 +117,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   the task** (#281), until the page reloaded. The page worked the rule
   out once when it drew the row; it follows the task's status now.
 
+- **`[[Title]]` written inside code is no longer a link** (#281, 1.10).
+  In an inline code span or a fenced code block, the page showed the
+  link's HTML as text, and the node gained a "linked here" connection to
+  the title. Code is now left exactly as typed, and no connection is made
+  for it. A node that has such a link in code loses that connection the
+  next time it is saved.
+- **Every part of the app reads `[[links]]` the same way** (#281, 3.1).
+  Five separate readers disagreed on the odd cases. Now, everywhere:
+  - `[[Title|]]` shows the title (it showed an empty link);
+  - `[[]]` and `[[|text]]` are plain text (they made an empty or
+    target-less link);
+  - a `[[` that isn't closed on its own line is plain text, and doesn't
+    turn everything up to the next `]]`, paragraphs later, into one link.
+
 ### Tooling
 - Reuse and dead code from the review (#281, 3.3, 3.5, 3.7), no behaviour
   change beyond the badge above: one admin-scope helper where seven

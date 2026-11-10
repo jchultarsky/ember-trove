@@ -195,18 +195,11 @@ fn clean_inline(line: &str) -> String {
 /// `[[target|display]]` → display, `[[target]]` → target,
 /// `![alt](url)` → alt, `[text](url)` → text. Anything else is kept verbatim.
 fn strip_links(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
+    // Wiki links first, by the one scanner (#281, 3.1).
+    let unlinked = crate::wikilink::replace_wikilinks(line, |link| link.display.to_string());
+    let mut out = String::with_capacity(unlinked.len());
+    let mut rest = unlinked.as_str();
     while !rest.is_empty() {
-        if let Some(after) = rest.strip_prefix("[[")
-            && let Some(end) = after.find("]]")
-        {
-            let inner = after.get(..end).unwrap_or_default();
-            let shown = inner.split_once('|').map_or(inner, |(_, display)| display);
-            out.push_str(shown);
-            rest = after.get(end + 2..).unwrap_or_default();
-            continue;
-        }
         // Images and links both keep their bracketed text.
         let after_open = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
         if let Some(after) = after_open
@@ -250,6 +243,18 @@ fn strip_lone_emphasis(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{UNTITLED_NOTE, note_title};
+
+    #[test]
+    fn a_wiki_link_reads_as_what_it_shows() {
+        // One scanner for every reader (#281, 3.1): the shown part is
+        // trimmed here too, and an empty one falls back to the title.
+        assert_eq!(
+            note_title("Ask [[Alice Smith| Alice ]] today"),
+            "Ask Alice today"
+        );
+        assert_eq!(note_title("About [[Project X|]]"), "About Project X");
+        assert_eq!(note_title("[[Plain]] link"), "Plain link");
+    }
 
     #[test]
     fn uses_the_first_non_empty_line() {

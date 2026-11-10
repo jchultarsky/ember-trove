@@ -224,6 +224,18 @@ cargo check && cargo clippy -- -D warnings
   crontab, so a failure is a red run and an email (the old `backup.sh`
   cron failed silently for seven months).
 
+## Wiki links (#281, 3.1)
+
+- `common::wikilink::wikilinks(text)` is the only scanner for `[[…]]`.
+  It gives each link's byte range, target and display, and skips code
+  (`code_ranges`). Edge sync, title resolution, the renderer, excerpts,
+  note previews and "link this mention" all go through it or
+  `replace_wikilinks`. Never write another `find("[[")` loop: the five
+  that existed disagreed on `[[]]`, `[[x|]]`, trimming and unclosed
+  openers.
+- A rule change there changes which `wiki_link` edges exist: sync runs on
+  the next save of each node.
+
 ## Request validation (#281, 1.5)
 
 - An update request validates like its create: `UpdateNodeRequest` and
