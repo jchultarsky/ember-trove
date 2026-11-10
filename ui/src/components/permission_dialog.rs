@@ -277,8 +277,16 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                             title="Revoke access"
                                                             on:click=move |_| {
                                                                 wasm_bindgen_futures::spawn_local(async move {
-                                                                    let _ = api::revoke_permission(node_id, perm_id).await;
-                                                                    refresh.update(|n| *n += 1);
+                                                                    // A failed revoke must be said (#281): the owner
+                                                                    // would believe access was removed. The dialog
+                                                                    // may be closed by now: `try_` access.
+                                                                    if let Err(e) = api::revoke_permission(node_id, perm_id).await {
+                                                                        crate::components::toast::push_toast(
+                                                                            crate::components::toast::ToastLevel::Error,
+                                                                            format!("Access was NOT removed: {e}"),
+                                                                        );
+                                                                    }
+                                                                    let _ = refresh.try_update(|n| *n += 1);
                                                                 });
                                                             }
                                                         >

@@ -81,7 +81,18 @@ pub fn ProjectDashboard() -> impl IntoView {
                     <crate::components::skeleton::SkeletonCards cards=3 />
                 }>
                     {move || {
-                        let data = entries.get().and_then(|r| r.ok()).unwrap_or_default();
+                        // A failed load is not "No projects yet" (#281, 1.7).
+                        let data = match entries.get() {
+                            Some(Err(_)) => return view! {
+                                <div class="flex-1 flex flex-col justify-center">
+                                    <crate::components::load_error::LoadError
+                                        what="your projects"
+                                        on_retry=Callback::new(move |()| dashboard_refresh.update(|n| *n += 1))
+                                    />
+                                </div>
+                            }.into_any(),
+                            other => other.and_then(Result::ok).unwrap_or_default(),
+                        };
                         if data.is_empty() {
                             return view! {
                                 <div class="flex-1 flex flex-col justify-center">

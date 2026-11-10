@@ -1738,8 +1738,18 @@ pub fn GraphView() -> impl IntoView {
                                         let eid = EdgeId(edge_id);
                                         edge_hover.set(None);
                                         spawn_local(async move {
-                                            if delete_edge(eid).await.is_ok() {
-                                                edges_sig.update(|v| v.retain(|e| e.id.0 != edge_id));
+                                            // Said, not swallowed (#281); the graph may be
+                                            // gone by now: `try_` access.
+                                            match delete_edge(eid).await {
+                                                Ok(()) => {
+                                                    let _ = edges_sig.try_update(|v| {
+                                                        v.retain(|e| e.id.0 != edge_id);
+                                                    });
+                                                }
+                                                Err(e) => crate::components::toast::push_toast(
+                                                    crate::components::toast::ToastLevel::Error,
+                                                    format!("Couldn\u{2019}t delete the link: {e}"),
+                                                ),
                                             }
                                         });
                                     }

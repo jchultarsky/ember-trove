@@ -128,11 +128,22 @@ pub fn TaskPanel(
 
             // Task list ──────────────────────────────────────────────────────
             // Empty state
-            {move || (open_tasks.get().is_empty() && done_tasks.get().is_empty()).then(|| view! {
-                <p class="text-sm text-stone-400 dark:text-stone-500 italic">
-                    "No tasks yet."
-                </p>
-            })}
+            {move || {
+                // A failed load is not "No tasks yet" (#281, 1.7).
+                if matches!(tasks_resource.get(), Some(Err(_))) {
+                    return view! {
+                        <crate::components::load_error::LoadError
+                            what="this node\u{2019}s tasks"
+                            on_retry=Callback::new(move |()| task_refresh.update(|n| *n += 1))
+                        />
+                    }.into_any();
+                }
+                (open_tasks.get().is_empty() && done_tasks.get().is_empty()).then(|| view! {
+                    <p class="text-sm text-stone-400 dark:text-stone-500 italic">
+                        "No tasks yet."
+                    </p>
+                }).into_any()
+            }}
 
             // Open tasks — draggable for reordering
             {move || open_tasks.get().into_iter().enumerate().map(|(idx, task)| view! {

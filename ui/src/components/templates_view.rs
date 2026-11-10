@@ -62,7 +62,8 @@ pub fn TemplatesView() -> impl IntoView {
 
     let templates = LocalResource::new(move || {
         let _ = refresh.get();
-        async move { crate::api::list_templates().await.unwrap_or_default() }
+        // The error is kept: a failed load is not "No templates yet" (#281, 1.7).
+        async move { crate::api::list_templates().await }
     });
 
     // Filter: None = all types, Some(nt) = only that type
@@ -341,6 +342,14 @@ pub fn TemplatesView() -> impl IntoView {
                 <crate::components::skeleton::SkeletonCards cards=6 />
             }>
                 {move || templates.get().map(|list| {
+                    let Ok(list) = list else {
+                        return view! {
+                            <crate::components::load_error::LoadError
+                                what="your templates"
+                                on_retry=Callback::new(move |()| refresh.update(|n| *n += 1))
+                            />
+                        }.into_any();
+                    };
                     let filter = type_filter.get();
                     let filtered: Vec<_> = list.iter()
                         .filter(|t| filter.as_ref().is_none_or(|f| t.node_type == *f))
