@@ -5262,3 +5262,132 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
             .expect("standalone");
     assert_eq!(standalone, 1);
 }
+
+// ── One next occurrence per completion (#281, 1.8) ───────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn two_completions_at_once_schedule_one_next_occurrence(pool: PgPool) {
+    // A double click, or two devices: both requests read the task as open
+    // and both scheduled the next occurrence. `create_occurrence` now
+    // locks the parent and returns the live occurrence it already has.
+    let live_children = |parent: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM node_tasks
+                 WHERE recurrence_parent_id = $1 AND deleted_at IS NULL",
+            )
+            .bind(parent)
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+    for round in 0..10 {
+        let parent = PgTaskRepo::new(pool.clone())
+            .create(None, "owner-a", task_req(&format!("daily {round}")))
+            .await
+            .expect("parent");
+        let (one, two) = (PgTaskRepo::new(pool.clone()), PgTaskRepo::new(pool.clone()));
+        let (r1, r2) = tokio::join!(
+            one.create_occurrence(parent.id, "owner-a", task_req("next")),
+            two.create_occurrence(parent.id, "owner-a", task_req("next")),
+        );
+        let (first, second) = (r1.expect("first"), r2.expect("second"));
+        assert_eq!(first.id, second.id, "both callers get the one occurrence");
+        assert_eq!(live_children(parent.id.0).await, 1, "round {round}");
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_retracted_or_deleted_occurrence_is_scheduled_again(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let parent = tasks
+        .create(None, "owner-a", task_req("weekly"))
+        .await
+        .expect("parent");
+    let first = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
+        .await
+        .expect("first");
+    // Reopening the parent retracts it; completing again schedules anew.
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-a")
+            .await
+            .expect("retract"),
+        1
+    );
+    let second = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
+        .await
+        .expect("second");
+    assert_ne!(first.id, second.id);
+    // A parent that is gone is an error, not a stray task.
+    let missing = common::id::TaskId(uuid::Uuid::new_v4());
+    assert!(
+        tasks
+            .create_occurrence(missing, "owner-a", task_req("weekly"))
+            .await
+            .is_err()
+    );
+}
+
+// ── Reorder follows the edit rule (#281, 2.5) ────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let shared = create_node(&pool, "alice", "reorder shared").await.id;
+    let private = create_node(&pool, "alice", "reorder private").await.id;
+    for q in [format!(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+            ('{0}', 'bob', 'editor', 'alice'), ('{0}', 'carol', 'viewer', 'alice')",
+        shared.0
+    )] {
+        sqlx::query(&q).execute(&pool).await.expect("seed");
+    }
+    let on = |node: common::id::NodeId, owner: &'static str, title: &'static str| {
+        let tasks = PgTaskRepo::new(pool.clone());
+        async move {
+            tasks
+                .create(Some(node), owner, task_req(title))
+                .await
+                .expect("task")
+                .id
+        }
+    };
+    let alice_shared = on(shared, "alice", "alice's on the shared node").await;
+    let alice_private = on(private, "alice", "alice's on her private node").await;
+    let order_of = |id: common::id::TaskId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i32>("SELECT sort_order FROM node_tasks WHERE id = $1")
+                .bind(id.0)
+                .fetch_one(&pool)
+                .await
+                .expect("order")
+        }
+    };
+    let both = [(alice_shared, 7), (alice_private, 7)];
+
+    // A viewer of the node moves nothing.
+    tasks.reorder(&both, Some("carol")).await.expect("carol");
+    assert_eq!(order_of(alice_shared).await, 0);
+    // An editor of the node moves the task there (they can already edit
+    // it), and nothing on a node they can't see.
+    tasks.reorder(&both, Some("bob")).await.expect("bob");
+    assert_eq!(order_of(alice_shared).await, 7);
+    assert_eq!(order_of(alice_private).await, 0);
+    // The owner moves their own; an admin (`None`) moves any.
+    tasks
+        .reorder(&[(alice_private, 3)], Some("alice"))
+        .await
+        .expect("alice");
+    assert_eq!(order_of(alice_private).await, 3);
+    tasks
+        .reorder(&[(alice_private, 9)], None)
+        .await
+        .expect("admin");
+    assert_eq!(order_of(alice_private).await, 9);
+}

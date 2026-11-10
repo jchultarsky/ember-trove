@@ -310,6 +310,25 @@ pub struct UpdateTaskRequest {
     )]
     #[garde(skip)]
     pub node_id: Option<Option<NodeId>>,
+    /// The sender's local date, sent with a completion (#281, 1.9). The
+    /// server only knows the UTC date, and the next occurrence of a
+    /// recurring task with no focus date is counted from "today": in a US
+    /// evening UTC is already tomorrow, so a daily task skipped a day.
+    /// Read through [`local_today`], which ignores an impossible value.
+    /// Never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[garde(skip)]
+    pub today: Option<NaiveDate>,
+}
+
+/// The date a request's sender calls today: their `hint` when it is a date
+/// some time zone could be on right now (within a day of the UTC date),
+/// otherwise the UTC date. A wrong or hostile hint can only move the
+/// sender's own next occurrence by a day.
+#[must_use]
+pub fn local_today(hint: Option<NaiveDate>, utc_today: NaiveDate) -> NaiveDate {
+    hint.filter(|d| (*d - utc_today).num_days().abs() <= 1)
+        .unwrap_or(utc_today)
 }
 
 /// A done-toggle expressed as PATCHes: the change, and the one that undoes it.
@@ -351,11 +370,14 @@ pub fn done_toggle(
         status: Some(current.clone()),
         ..Default::default()
     };
-    if next == TaskStatus::Done
-        && let Some(earlier) = focus_date.filter(|d| *d < today)
-    {
-        request.focus_date = Some(Some(today));
-        revert.focus_date = Some(Some(earlier));
+    if next == TaskStatus::Done {
+        // The server counts a recurring task's next occurrence from the
+        // viewer's day, not from UTC's (#281, 1.9).
+        request.today = Some(today);
+        if let Some(earlier) = focus_date.filter(|d| *d < today) {
+            request.focus_date = Some(Some(today));
+            revert.focus_date = Some(Some(earlier));
+        }
     }
     DoneToggle {
         next,
@@ -457,6 +479,41 @@ pub struct ReorderTaskEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTasksRequest {
     pub tasks: Vec<ReorderTaskEntry>,
+}
+
+#[cfg(test)]
+mod local_today_tests {
+    use super::{TaskStatus, done_toggle, local_today};
+    use chrono::NaiveDate;
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, d).expect("date")
+    }
+
+    #[test]
+    fn a_plausible_local_date_wins_over_utc() {
+        // 9 pm in New York on the 9th is already the 10th in UTC.
+        assert_eq!(local_today(Some(day(9)), day(10)), day(9));
+        // Ahead of UTC, and the same day.
+        assert_eq!(local_today(Some(day(11)), day(10)), day(11));
+        assert_eq!(local_today(Some(day(10)), day(10)), day(10));
+    }
+
+    #[test]
+    fn an_impossible_or_missing_date_falls_back_to_utc() {
+        assert_eq!(local_today(None, day(10)), day(10));
+        assert_eq!(local_today(Some(day(8)), day(10)), day(10));
+        assert_eq!(local_today(Some(day(12)), day(10)), day(10));
+    }
+
+    #[test]
+    fn completing_sends_the_viewers_day_and_reopening_does_not() {
+        let done = done_toggle(&TaskStatus::Open, None, day(9));
+        assert_eq!(done.request.today, Some(day(9)));
+        let reopen = done_toggle(&TaskStatus::Done, None, day(9));
+        assert_eq!(reopen.request.today, None);
+        assert_eq!(done.revert.today, None);
+    }
 }
 
 #[cfg(test)]

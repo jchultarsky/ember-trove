@@ -643,7 +643,7 @@ impl TaskRepo for StubTaskRepo {
     ) -> Result<Vec<MyDayTask>, EmberTroveError> {
         unimplemented!()
     }
-    async fn reorder(&self, _: &[(TaskId, i32)], _: &str) -> Result<(), EmberTroveError> {
+    async fn reorder(&self, _: &[(TaskId, i32)], _: Option<&str>) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
 }

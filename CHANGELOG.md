@@ -41,6 +41,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     answers now, the way a save is.
   - Duplicating a node logs a tag that couldn't be copied, where it
     dropped the failure before.
+  - **A recurring task completed twice at once got two next
+    occurrences.** A double click, or the same task ticked on two devices,
+    scheduled the next one twice. A task now has one next occurrence, and
+    the second request gets the first one's.
+  - **A daily task completed in the evening skipped a day.** With no day
+    set on the task, the next occurrence was counted from the server's UTC
+    date, which in the Americas is already tomorrow by evening. It is
+    counted from your own date now.
+  - **Dragging someone else's task on a shared node did nothing.** An
+    editor of a node can already edit its tasks; reordering them was
+    limited to each task's owner and failed silently. Reorder now follows
+    the same rule as editing.
 
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
