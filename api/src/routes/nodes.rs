@@ -393,6 +393,32 @@ fn version_snapshot_needed(latest_body: Option<&str>, new_body: &str) -> bool {
     latest_body != Some(new_body)
 }
 
+/// Records a snapshot of `body`, unless it is identical to the latest
+/// stored version (autosave repeats, title-only saves, restoring the
+/// newest version). Awaited by the caller, never spawned: a detached write
+/// can land after the next save's and put the history out of order
+/// (2026-06-10 for saves; #281, 1.12 for restores). A failure is logged and
+/// never fails the save that already happened.
+async fn snapshot_body(
+    versions: &dyn crate::repo::node_version::NodeVersionRepo,
+    node_id: NodeId,
+    body: &str,
+    created_by: &str,
+) {
+    let latest_body = match versions.list(node_id, 1).await {
+        Ok(found) => found.into_iter().next().map(|v| v.body),
+        Err(e) => {
+            tracing::warn!("latest version lookup failed (non-fatal): {e}");
+            None
+        }
+    };
+    if version_snapshot_needed(latest_body.as_deref(), body)
+        && let Err(e) = versions.record(node_id, body, created_by).await
+    {
+        tracing::warn!("node version snapshot failed (non-fatal): {e}");
+    }
+}
+
 /// Whether an `Edited` activity entry should be logged, or coalesced into
 /// `latest`, the node's last *Edited* entry (same subject, still inside the
 /// coalescing window).
@@ -464,26 +490,13 @@ async fn update_node(
         node.body.as_deref().unwrap_or(""),
     )
     .await?;
-    // Record a body snapshot unless identical to the latest stored version
-    // (autosave repeats and title/status-only saves). Awaited inline — the
-    // previous fire-and-forget spawn could write snapshots out of order when
-    // saves arrive seconds apart. Failure stays non-fatal. (2026-06-10)
-    let body_snap = node.body.clone().unwrap_or_default();
-    let latest_body = match state.node_versions.list(node.id, 1).await {
-        Ok(versions) => versions.into_iter().next().map(|v| v.body),
-        Err(e) => {
-            tracing::warn!("latest version lookup failed (non-fatal): {e}");
-            None
-        }
-    };
-    if version_snapshot_needed(latest_body.as_deref(), &body_snap)
-        && let Err(e) = state
-            .node_versions
-            .record(node.id, &body_snap, &claims.sub)
-            .await
-    {
-        tracing::warn!("node version snapshot failed (non-fatal): {e}");
-    }
+    snapshot_body(
+        state.node_versions.as_ref(),
+        node.id,
+        node.body.as_deref().unwrap_or(""),
+        &claims.sub,
+    )
+    .await;
     // A status-only save (the status chip) is already in History as
     // `status_changed`; an "Edited" line beside it would say it twice (#208).
     // Otherwise coalesce rapid consecutive edits by the same user into one
@@ -1248,16 +1261,15 @@ async fn restore_version(
         .update(NodeId(id), req, &ActivityActor::from_claims(&claims))
         .await?;
     sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;
-    // Snapshot the restored body.
-    let sub = claims.sub.clone();
-    let ver_repo = state.node_versions.clone();
-    let nid = node.id;
-    let body_snap = version.body.clone();
-    tokio::spawn(async move {
-        if let Err(e) = ver_repo.record(nid, &body_snap, &sub).await {
-            tracing::warn!("restore version snapshot failed (non-fatal): {e}");
-        }
-    });
+    // Snapshot the restored body, awaited like a save's (#281, 1.12): the
+    // spawn that was here could land after the next save's snapshot.
+    snapshot_body(
+        state.node_versions.as_ref(),
+        node.id,
+        &version.body,
+        &claims.sub,
+    )
+    .await;
     log_activity(
         &state,
         node.id,
@@ -1340,7 +1352,11 @@ async fn duplicate_node(
         .await
         .unwrap_or_default();
     for tag in tags {
-        let _ = state.tags.attach(dup.id, tag.id).await;
+        // Non-fatal, but never silent (#281, 1.12): the copy exists by now.
+        if let Err(e) = state.tags.attach(dup.id, tag.id).await {
+            tracing::warn!(node_id = %dup.id, tag_id = %tag.id, error = %e,
+                "copying a tag to the duplicate failed");
+        }
     }
 
     if let Some(ref body) = dup.body {
@@ -1489,6 +1505,65 @@ mod tests {
             metadata: json!({}),
             created_at: Utc::now() - TimeDelta::minutes(age_minutes),
         }
+    }
+
+    /// A version history kept in memory, newest last.
+    #[derive(Default)]
+    struct MemVersions(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl crate::repo::node_version::NodeVersionRepo for MemVersions {
+        async fn list_all(&self) -> Result<Vec<NodeVersion>, common::EmberTroveError> {
+            Ok(vec![])
+        }
+        async fn record(
+            &self,
+            _: NodeId,
+            body: &str,
+            _: &str,
+        ) -> Result<(), common::EmberTroveError> {
+            self.0.lock().expect("lock").push(body.to_string());
+            Ok(())
+        }
+        async fn list(
+            &self,
+            node_id: NodeId,
+            limit: i64,
+        ) -> Result<Vec<NodeVersion>, common::EmberTroveError> {
+            let bodies = self.0.lock().expect("lock");
+            Ok(bodies
+                .iter()
+                .rev()
+                .take(usize::try_from(limit).unwrap_or(0))
+                .map(|body| NodeVersion {
+                    id: NodeVersionId(Uuid::new_v4()),
+                    node_id,
+                    body: body.clone(),
+                    created_by: "someone".to_string(),
+                    created_at: Utc::now(),
+                })
+                .collect())
+        }
+        async fn get(&self, _: NodeVersionId) -> Result<NodeVersion, common::EmberTroveError> {
+            Err(common::EmberTroveError::NotFound("version".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_is_stored_before_the_call_returns_and_in_order() {
+        // #281, 1.12: restoring a version snapshotted in a detached task,
+        // so the write could land after the next save's. `snapshot_body`
+        // is awaited by both the save and the restore.
+        let versions = MemVersions::default();
+        let node = NodeId(Uuid::new_v4());
+        snapshot_body(&versions, node, "restored", "me").await;
+        assert_eq!(*versions.0.lock().expect("lock"), ["restored"]);
+        snapshot_body(&versions, node, "next save", "me").await;
+        assert_eq!(*versions.0.lock().expect("lock"), ["restored", "next save"]);
+        // The same body again (an autosave repeat, or restoring the newest
+        // version) adds nothing.
+        snapshot_body(&versions, node, "next save", "me").await;
+        assert_eq!(versions.0.lock().expect("lock").len(), 2);
     }
 
     #[test]

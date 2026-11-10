@@ -105,13 +105,32 @@ pub struct Node {
     pub edge_count: u32,
 }
 
+/// Maximum allowed markdown body length (1 MiB), on create and on update
+/// alike: a body that create accepted and update refused could never be
+/// saved again (#281, 1.5).
+const MAX_BODY_LEN: usize = 1_048_576;
+
+/// A title must have something to read: all spaces is as blank as empty.
+/// Shared by the node and task requests.
+pub(crate) fn not_blank(value: &str, _ctx: &()) -> garde::Result {
+    if value.trim().is_empty() {
+        return Err(garde::Error::new("must not be blank"));
+    }
+    Ok(())
+}
+
+/// [`not_blank`] for an optional field: absent means "leave unchanged".
+pub(crate) fn not_blank_if_set(value: &Option<String>, ctx: &()) -> garde::Result {
+    value.as_deref().map_or(Ok(()), |v| not_blank(v, ctx))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CreateNodeRequest {
-    #[garde(length(min = 1, max = 500))]
+    #[garde(length(min = 1, max = 500), custom(not_blank))]
     pub title: String,
     #[garde(skip)]
     pub node_type: NodeType,
-    #[garde(skip)]
+    #[garde(length(max = MAX_BODY_LEN))]
     pub body: Option<String>,
     #[garde(skip)]
     #[serde(default = "default_metadata")]
@@ -134,12 +153,11 @@ fn default_metadata() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
-/// Maximum allowed markdown body length (1 MiB).
-const MAX_BODY_LEN: usize = 1_048_576;
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, garde::Validate)]
 pub struct UpdateNodeRequest {
-    #[garde(length(max = 500))]
+    /// Absent leaves the title alone; a set title follows create's rules,
+    /// so an update can't blank it.
+    #[garde(length(min = 1, max = 500), custom(not_blank_if_set))]
     pub title: Option<String>,
     #[garde(length(max = MAX_BODY_LEN))]
     pub body: Option<String>,
@@ -311,6 +329,58 @@ impl NodeDeletionPreview {
             others_notes: self.others_notes + other.others_notes,
             files: self.files + other.files,
         }
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{CreateNodeRequest, MAX_BODY_LEN, NodeType, UpdateNodeRequest};
+    use garde::Validate;
+
+    fn create(title: &str, body: Option<String>) -> CreateNodeRequest {
+        CreateNodeRequest {
+            title: title.to_string(),
+            node_type: NodeType::Article,
+            body,
+            metadata: serde_json::json!({}),
+            status: None,
+            project_status: None,
+            template_id: None,
+        }
+    }
+
+    fn update(title: Option<&str>, body: Option<String>) -> UpdateNodeRequest {
+        UpdateNodeRequest {
+            title: title.map(str::to_string),
+            body,
+            metadata: None,
+            status: None,
+            project_status: None,
+            expected_updated_at: None,
+        }
+    }
+
+    #[test]
+    fn an_update_cannot_blank_a_title() {
+        // #281, 1.5: create required a title, update accepted "".
+        assert!(update(Some(""), None).validate().is_err());
+        assert!(update(Some("   "), None).validate().is_err());
+        assert!(update(Some("Kept"), None).validate().is_ok());
+        // Absent means "leave it".
+        assert!(update(None, None).validate().is_ok());
+        assert!(create("  ", None).validate().is_err());
+    }
+
+    #[test]
+    fn create_and_update_cap_the_body_alike() {
+        let at_cap = "a".repeat(MAX_BODY_LEN);
+        let over = "a".repeat(MAX_BODY_LEN + 1);
+        assert!(create("T", Some(at_cap.clone())).validate().is_ok());
+        assert!(update(None, Some(at_cap)).validate().is_ok());
+        // Create took any size, so a node could be made that no update
+        // would ever accept again.
+        assert!(create("T", Some(over.clone())).validate().is_err());
+        assert!(update(None, Some(over)).validate().is_err());
     }
 }
 

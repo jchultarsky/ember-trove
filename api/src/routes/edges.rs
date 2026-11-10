@@ -8,7 +8,7 @@ use common::{
     auth::AuthClaims,
     edge::{ConvertEdgeRequest, ConvertRefusal, CreateEdgeRequest, Edge, EndRights, convert_ends},
     id::{EdgeId, NodeId},
-    ontology::edge_kind_violation,
+    ontology::{EdgeRefusal, edge_kind_violation},
 };
 use garde::Validate;
 use uuid::Uuid;
@@ -88,6 +88,13 @@ async fn delete_edge(
         require_editor(state.permissions.as_ref(), &claims, edge.target_id).await?;
     } else {
         on_source?;
+    }
+    // §6.6 (#281, 2.1): a wiki link mirrors `[[Title]]` in the text. Deleted
+    // by hand it came back on the next save, with the text still linking.
+    // Refused only after the rights check, so a stranger learns nothing
+    // about the link's type.
+    if edge.edge_type.is_machine_owned() {
+        return Err(ApiError::Validation(EdgeRefusal::MachineOwned.message()));
     }
     state.edges.delete(EdgeId(id)).await?;
     Ok(StatusCode::NO_CONTENT)

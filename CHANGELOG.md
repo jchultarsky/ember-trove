@@ -18,6 +18,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - New endpoint: `GET /api/nodes/deletion-preview?ids=…`. It answers with
     counts only, for the nodes the caller may delete.
 
+### Fixed
+- **More from the full-codebase review (#281).**
+  - **A node's title could be blanked.** Saving a node with an empty
+    title was accepted, although creating one was not. An empty or
+    all-spaces title is now refused on create and on save, for nodes and
+    for tasks.
+  - **A task saved with an empty or over-long title answered "server
+    error".** The update skipped validation. It now answers with the
+    reason (422), as creating a task does.
+  - **A node could be created with a text too large to ever save again.**
+    Saving capped the text at 1 MiB but creating did not. Both cap it now.
+  - **A wiki link could be removed by hand, and came back on the next
+    save.** The link comes from `[[Title]]` in the text, so removing it
+    without editing the text did nothing lasting. The remove control is
+    gone from the node page and the graph for these links ("From the
+    text"), Data health no longer offers Remove for them, and the API
+    refuses the delete (422).
+  - **Restoring an older version could put the history out of order.**
+    The restored text was recorded in the background, so a save made right
+    after could be recorded first. It is recorded before the restore
+    answers now, the way a save is.
+  - Duplicating a node logs a tag that couldn't be copied, where it
+    dropped the failure before.
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted

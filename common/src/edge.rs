@@ -58,6 +58,16 @@ impl EdgeType {
         )
     }
 
+    /// A link the machine keeps, never a person (§6.6): a `wiki_link`
+    /// mirrors `[[Title]]` in the source's text. It can't be created,
+    /// deleted or converted by hand: sync would only put it back on the
+    /// next save. `POST /edges`, `DELETE /edges/{id}`, the Data health
+    /// buttons and the node page's remove button all use this one rule.
+    #[must_use]
+    pub fn is_machine_owned(&self) -> bool {
+        *self == EdgeType::WikiLink
+    }
+
     /// Whether an editor of the target alone may delete a link of this
     /// type (§14). True for a home, so one home never traps a child (#224),
     /// and for `related_to`, which has no direction (#226). Every other
@@ -215,7 +225,7 @@ pub fn convert_ends(
         return Err(ConvertRefusal::Forbidden);
     }
     if from == to
-        || *from == EdgeType::WikiLink
+        || from.is_machine_owned()
         || !matches!(to, EdgeType::References | EdgeType::RelatedTo)
     {
         return Err(ConvertRefusal::NotConvertible);
@@ -460,6 +470,8 @@ mod convert_tests {
                 matches!(t, Contains | RelatedTo),
                 "{t:?}"
             );
+            // Only the wiki link is kept by the machine (§6.6).
+            assert_eq!(t.is_machine_owned(), t == WikiLink, "{t:?}");
         }
     }
 

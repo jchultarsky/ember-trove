@@ -249,7 +249,10 @@ impl LinkRef {
     /// The reader may delete the link (the rule of `DELETE /edges/{id}`).
     #[must_use]
     pub fn removable(&self) -> bool {
-        self.source_owned || (self.edge_type.deletable_from_target() && self.target_owned)
+        // A machine-owned link is never removed by hand (§6.6): the API
+        // answers 422, so no button is offered.
+        !self.edge_type.is_machine_owned()
+            && (self.source_owned || (self.edge_type.deletable_from_target() && self.target_owned))
     }
 
     /// The reader may turn the link into `to` (the rule of
@@ -522,6 +525,11 @@ mod tests {
         assert!(link(DependsOn, true, false).removable());
         // Never to a structural type.
         assert!(!parent.convertible_to(&DependsOn));
+        // A wiki link is the machine's (§6.6; #281, 2.1): its owner on both
+        // ends still gets no Remove and no Convert.
+        let wiki = link(WikiLink, true, true);
+        assert!(!wiki.removable());
+        assert!(!wiki.convertible_to(&References) && !wiki.convertible_to(&RelatedTo));
     }
 
     #[test]
