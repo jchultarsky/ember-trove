@@ -376,14 +376,14 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |
 | GET | `/api/nodes/{id}/edges` | All edges involving this node |
 | GET | `/api/nodes/{id}/tags` | Tags attached to this node |
-| POST | `/api/nodes/{id}/tags/{tag_id}` | Attach a tag |
+| POST | `/api/nodes/{id}/tags/{tag_id}` | Attach one of the caller's own tags (editor) |
 | DELETE | `/api/nodes/{id}/tags/{tag_id}` | Detach a tag |
 | GET | `/api/nodes/{id}/attachments` | List attachments |
 | POST | `/api/nodes/{id}/attachments` | Upload attachment (multipart/form-data) |
-| GET | `/api/nodes/{id}/permissions` | List permission grants (viewer+) |
+| GET | `/api/nodes/{id}/permissions` | Permission grants: all of them for an owner, the caller's own otherwise |
 | POST | `/api/nodes/{id}/permissions` | Grant permission to a user |
 | POST | `/api/nodes/{id}/invite` | Invite user by email (owner-only); sends SES email |
-| GET | `/api/nodes/{id}/activity` | Audit log for this node |
+| GET | `/api/nodes/{id}/activity` | Audit log for this node (viewer+). Email addresses are shown to owners only |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
 | POST | `/api/nodes/{id}/duplicate` | Copy a node (body, type and tags) as a Draft titled "… (copy)", owned by the caller |
@@ -509,7 +509,7 @@ change them. They are in backups, and not in search, export or webhooks.
 | DELETE | `/api/captures/{id}` | Delete a capture (soft delete, restorable for 30 days) |
 | POST | `/api/captures/{id}/restore` | Un-delete a capture (backs the Undo toast) |
 | POST | `/api/captures/{id}/convert` | Turn a capture into exactly one thing, then delete it, in one transaction: `{"into":"node", node_type, title, body?, home?}`, `{"into":"note", node_id, body}` or `{"into":"task", node_id, title, due_date?, priority?}` (the node must be a Project). Needs editor rights on the node or home; answers `{"into", id, node_id?}` |
-| POST | `/api/inbox/quick` | Quick capture and the share target: `{title?, body?}` joined into one capture |
+| POST | `/api/inbox/quick` | Quick capture: `{title?, body?}` joined into one capture. A share from another app opens the capture box with its text; the app calls this when Capture is pressed |
 
 ### Editor prefs (per-user UI state)
 
@@ -557,7 +557,7 @@ change them. They are in backups, and not in search, export or webhooks.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET / POST | `/api/webhooks` | The caller's webhooks: list, or create one (URL, events, optional signing secret) |
+| GET / POST | `/api/webhooks` | The caller's webhooks: list, or create one (URL, events, optional signing secret). At most 20 per account |
 | PUT / DELETE | `/api/webhooks/{id}` | Change or delete one of the caller's webhooks |
 
 ### Export

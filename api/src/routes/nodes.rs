@@ -30,8 +30,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::permissions::{
-        guard_canonical_owner, is_admin, require_editor, require_owner, require_viewer,
-        subject_scope,
+        guard_canonical_owner, is_admin, require_editor, require_owner, require_resource_owner,
+        require_viewer, subject_scope,
     },
     error::ApiError,
     notify::maybe_notify_invite,
@@ -755,6 +755,18 @@ async fn attach_tag(
     Path((id, tag_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
+    // SECURITY: a tag is its owner's. Attaching one by id and reading the
+    // node's tags back showed anyone its name, colour and owner (ids leak
+    // through History). Someone else's tag answers like one that doesn't
+    // exist (2026-11-10).
+    let tag = state.tags.get(TagId(tag_id)).await;
+    match tag {
+        Ok(tag) if require_resource_owner(&claims, &tag.owner_id).is_ok() => {}
+        Ok(_) | Err(common::EmberTroveError::NotFound(_)) => {
+            return Err(ApiError::NotFound(format!("tag {tag_id} not found")));
+        }
+        Err(e) => return Err(e.into()),
+    }
     state.tags.attach(NodeId(id), TagId(tag_id)).await?;
     log_activity(
         &state,
@@ -906,7 +918,13 @@ async fn list_permissions(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<Permission>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
-    let perms = state.permissions.list(NodeId(id)).await?;
+    // SECURITY: the same rule as `GET /permissions?node_id=`: the node's
+    // owners see every grant, anyone else only their own. This route used
+    // to list every collaborator to any viewer (2026-11-10).
+    let perms = state
+        .permissions
+        .list_visible(Some(NodeId(id)), subject_scope(&claims))
+        .await?;
     Ok(Json(perms))
 }
 
@@ -1119,7 +1137,16 @@ async fn list_activity(
 ) -> Result<Json<Vec<ActivityEntry>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let entries = state.activity.list(NodeId(id), limit).await?;
+    let mut entries = state.activity.list(NodeId(id), limit).await?;
+    // SECURITY: names for everyone who can read the node; email addresses
+    // (actors' and invitees') for its owners only. Any failure to show
+    // ownership redacts.
+    if require_owner(state.permissions.as_ref(), &claims, NodeId(id))
+        .await
+        .is_err()
+    {
+        common::activity::redact_emails(&mut entries);
+    }
     Ok(Json(entries))
 }
 

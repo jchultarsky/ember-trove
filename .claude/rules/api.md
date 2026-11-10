@@ -291,6 +291,35 @@ cargo check && cargo clippy -- -D warnings
   removes. A new table that holds a node's content, and that a person
   would miss, joins that query and `NodeDeletionPreview::losses`.
 
+## Security rules from the 2026-11-10 audit
+
+- **Every grant path calls `guard_canonical_owner`**: grant, update,
+  revoke *and invite*. `PermissionRepo::grant` is an upsert, so any new
+  route that ends in it can rewrite the creator's row.
+- **A node's grants are listed with `list_visible`**, never `list`, in
+  anything a non-owner can call. `list` is for checks inside a route that
+  already required Owner.
+- **History for a non-owner goes through `common::activity::redact_emails`.**
+  New metadata that holds an address joins `EMAIL_KEYS`.
+- **An id in the path gets its own ownership check** even when the route
+  already checked the node: `attach_tag` loads the tag and answers a
+  foreign one like a missing one.
+- **A URL the app will open is `common::node_link::is_web_url`** (http or
+  https from the first character). The forms send
+  `with_web_scheme(typed)`.
+- **Roles come from the token, so removing `admin` needs
+  `auth::demoted`**: the route writes `admin_demotions`, then the
+  in-memory `DemotedSet`, then asks Cognito. `validate_and_map` drops
+  `admin` from a token issued at or before the demotion. The purge deletes
+  the row; the daily sweep drops rows older than a day.
+- **Webhooks**: create and update call `validate()`; at most
+  `MAX_WEBHOOKS_PER_OWNER` per account.
+- **The edge proxy sets `X-Forwarded-For $remote_addr`**, never
+  `$proxy_add_x_forwarded_for`: the API's limiter keys on that header.
+  Tests in `routes/mod.rs` read `deploy/nginx.prod.conf` and hold this
+  and the limits.
+- **`release.yml` prints no API log lines**: its log is public.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.

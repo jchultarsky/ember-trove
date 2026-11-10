@@ -19,15 +19,37 @@ pub struct Webhook {
     pub updated_at: DateTime<Utc>,
 }
 
+/// The most webhooks one account may register. Every change to a node or
+/// a task is posted to each of them, so without a cap one account could
+/// make the server send thousands of requests per edit (2026-11-10).
+pub const MAX_WEBHOOKS_PER_OWNER: usize = 20;
+/// The longest webhook URL and signing secret, in characters.
+pub const WEBHOOK_URL_MAX: usize = 2048;
+pub const WEBHOOK_SECRET_MAX: usize = 256;
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CreateWebhookRequest {
-    #[garde(skip)]
+    #[garde(length(chars, min = 1, max = WEBHOOK_URL_MAX))]
     pub url: String,
-    #[garde(skip)]
+    #[garde(inner(length(chars, max = WEBHOOK_SECRET_MAX)))]
     pub secret: Option<String>,
-    #[garde(skip)]
+    #[garde(custom(known_events))]
     #[serde(default = "default_events")]
     pub events: Vec<String>,
+}
+
+/// garde rule: every event is one of [`available_events`], and there are no
+/// more of them than exist. Delivery matches names exactly, so an unknown
+/// one could never fire; refusing it says so instead of storing it.
+pub fn known_events(events: &[String], (): &()) -> garde::Result {
+    let known = available_events();
+    if events.len() > known.len() {
+        return Err(garde::Error::new("too many events"));
+    }
+    match events.iter().find(|e| !known.contains(&e.as_str())) {
+        Some(_) => Err(garde::Error::new("unknown event")),
+        None => Ok(()),
+    }
 }
 
 // Canonical webhook event names. Delivery matches a fired event against each
@@ -81,6 +103,50 @@ mod tests {
     }
 
     #[test]
+    fn webhook_requests_are_bounded_and_name_real_events() {
+        let create = |url: &str, secret: Option<&str>, events: &[&str]| CreateWebhookRequest {
+            url: url.to_string(),
+            secret: secret.map(str::to_string),
+            events: events.iter().map(|e| (*e).to_string()).collect(),
+        };
+        assert!(
+            create("https://x.example/h", Some("s"), &[EVENT_NODE_CREATED])
+                .validate()
+                .is_ok()
+        );
+        assert!(create("https://x.example/h", None, &[]).validate().is_ok());
+        assert!(create("", None, &[]).validate().is_err());
+        let long = format!("https://x.example/{}", "a".repeat(WEBHOOK_URL_MAX));
+        assert!(create(&long, None, &[]).validate().is_err());
+        let secret = "s".repeat(WEBHOOK_SECRET_MAX + 1);
+        assert!(
+            create("https://x.example/h", Some(&secret), &[])
+                .validate()
+                .is_err()
+        );
+        assert!(
+            create("https://x.example/h", None, &["node.exploded"])
+                .validate()
+                .is_err()
+        );
+        let seven = [EVENT_NODE_CREATED; 7];
+        assert!(
+            create("https://x.example/h", None, &seven)
+                .validate()
+                .is_err()
+        );
+
+        let update = |events: &[&str]| UpdateWebhookRequest {
+            url: "https://x.example/h".to_string(),
+            secret: None,
+            events: events.iter().map(|e| (*e).to_string()).collect(),
+            is_active: true,
+        };
+        assert!(update(&[EVENT_TASK_DELETED]).validate().is_ok());
+        assert!(update(&["nope"]).validate().is_err());
+    }
+
+    #[test]
     fn update_request_secret_absent_null_and_value_deserialize_distinctly() {
         let base = r#""url":"https://x.example/h","events":[],"is_active":true"#;
         let absent: UpdateWebhookRequest =
@@ -122,7 +188,7 @@ mod tests {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct UpdateWebhookRequest {
-    #[garde(skip)]
+    #[garde(length(chars, min = 1, max = WEBHOOK_URL_MAX))]
     pub url: String,
     /// PATCH semantics via `deser_double_opt` (the `UpdateTaskRequest`
     /// pattern): field **absent** → keep the stored secret unchanged;
@@ -137,7 +203,7 @@ pub struct UpdateWebhookRequest {
     )]
     #[schema(value_type = Option<String>, nullable)]
     pub secret: Option<Option<String>>,
-    #[garde(skip)]
+    #[garde(custom(known_events))]
     pub events: Vec<String>,
     #[garde(skip)]
     pub is_active: bool,

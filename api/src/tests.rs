@@ -368,8 +368,19 @@ impl TagRepo for StubTagRepo {
     async fn create(&self, _: &str, _: CreateTagRequest) -> Result<Tag, EmberTroveError> {
         unimplemented!()
     }
-    async fn get(&self, _: TagId) -> Result<Tag, EmberTroveError> {
-        unimplemented!()
+    async fn get(&self, id: TagId) -> Result<Tag, EmberTroveError> {
+        let owner = match id.0.as_u128() {
+            AZ_MY_TAG => "test-sub",
+            AZ_FOREIGN_TAG => "someone-else",
+            _ => return Err(EmberTroveError::NotFound(format!("tag {id} not found"))),
+        };
+        Ok(Tag {
+            id,
+            owner_id: owner.to_string(),
+            name: "private name".to_string(),
+            color: "#000000".to_string(),
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn list(&self, _: &str) -> Result<Vec<Tag>, EmberTroveError> {
         unimplemented!()
@@ -383,8 +394,12 @@ impl TagRepo for StubTagRepo {
     async fn delete(&self, _: TagId) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
-    async fn attach(&self, _: NodeId, _: TagId) -> Result<(), EmberTroveError> {
-        unimplemented!()
+    async fn attach(&self, _: NodeId, tag: TagId) -> Result<(), EmberTroveError> {
+        // Only the caller's own tag may get here.
+        match tag.0.as_u128() {
+            AZ_MY_TAG => Ok(()),
+            other => panic!("authorization bypass: tag {other:#x} attached"),
+        }
     }
     async fn detach(&self, _: NodeId, _: TagId) -> Result<(), EmberTroveError> {
         unimplemented!()
@@ -436,6 +451,10 @@ const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
 const AZ_VIEW_TASK: u128 = 0xa2_0102;
 /// Someone else's task on a node the caller can edit.
 const AZ_EDIT_TASK: u128 = 0xa2_0103;
+
+/// The caller's own tag, and someone else's.
+const AZ_MY_TAG: u128 = 0xa2_0301;
+const AZ_FOREIGN_TAG: u128 = 0xa2_0302;
 
 const AZ_PERM_CREATOR: u128 = 0xa2_0201;
 const AZ_PERM_GUEST: u128 = 0xa2_0202;
@@ -901,10 +920,27 @@ impl PermissionRepo for StubPermissionRepo {
     }
     async fn list_visible(
         &self,
-        _: Option<NodeId>,
-        _: Option<&str>,
+        node: Option<NodeId>,
+        subject: Option<&str>,
     ) -> Result<Vec<Permission>, EmberTroveError> {
-        unimplemented!()
+        // The rule of `PgPermissionRepo::list_visible`: one's own rows, and
+        // every row on a node one holds Owner on. `None` is an admin.
+        let all = authz_permissions();
+        let owns = |n: NodeId| {
+            all.iter().any(|p| {
+                p.node_id == n
+                    && Some(p.subject_id.as_str()) == subject
+                    && p.role == PermissionRole::Owner
+            })
+        };
+        Ok(all
+            .iter()
+            .filter(|p| node.is_none_or(|n| p.node_id == n))
+            .filter(|p| {
+                subject.is_none() || Some(p.subject_id.as_str()) == subject || owns(p.node_id)
+            })
+            .cloned()
+            .collect())
     }
     async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError> {
         Ok(authz_permissions().into_iter().find(|p| p.id == id))
@@ -1197,8 +1233,20 @@ impl ActivityRepo for StubActivityRepo {
     ) -> Result<(), EmberTroveError> {
         Ok(())
     }
-    async fn list(&self, _: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
-        unimplemented!()
+    async fn list(&self, node: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+        Ok(vec![ActivityEntry {
+            id: common::id::ActivityId(Uuid::from_u128(1)),
+            node_id: node,
+            subject_id: "creator".to_string(),
+            action: ActivityAction::PermissionGranted,
+            metadata: serde_json::json!({
+                "actor_name": "Cre Ator",
+                "actor_email": "creator@example.com",
+                "invited_email": "guest@example.com",
+                "role": "viewer",
+            }),
+            created_at: chrono::Utc::now(),
+        }])
     }
     async fn list_recent_for_owner(
         &self,
@@ -1342,11 +1390,31 @@ impl SearchPresetRepo for StubSearchPresetRepo {
     }
 }
 
+/// The account whose webhook list is full (`StubWebhookRepo::list`).
+const HOOK_HOARDER: &str = "hook-hoarder";
+
 struct StubWebhookRepo;
 #[async_trait]
 impl WebhookRepo for StubWebhookRepo {
-    async fn list(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> {
-        unimplemented!()
+    async fn list(&self, owner: &str) -> Result<Vec<Webhook>, EmberTroveError> {
+        // One account is at the cap; everyone else has none.
+        let count = if owner == HOOK_HOARDER {
+            common::webhook::MAX_WEBHOOKS_PER_OWNER
+        } else {
+            0
+        };
+        Ok((0..count)
+            .map(|_| Webhook {
+                id: WebhookId(Uuid::new_v4()),
+                owner_id: owner.to_string(),
+                url: "https://hooks.example/h".to_string(),
+                secret: None,
+                events: vec![],
+                is_active: true,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            })
+            .collect())
     }
     async fn list_active_for_event(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> {
         // Handlers fire-and-forget webhook dispatch; nothing is subscribed.
@@ -2656,6 +2724,209 @@ async fn an_invite_cannot_downgrade_the_canonical_owner() {
     // The stub repo's `grant` is unimplemented: reaching it fails the test.
     assert_eq!(invite("viewer").await, StatusCode::FORBIDDEN);
     assert_eq!(invite("editor").await, StatusCode::FORBIDDEN);
+}
+
+/// GET a nested node route as the test caller, returning status and JSON.
+async fn nested_get(node: u128, tail: &str) -> (StatusCode, serde_json::Value) {
+    let resp = claims_app("/nodes", crate::routes::nodes::router())
+        .oneshot(
+            Request::get(format!("/nodes/{}/{tail}", Uuid::from_u128(node)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// SECURITY: a node's grants are its owners' to list. A viewer used to get
+/// every collaborator's id and role from the nested route, while
+/// `GET /permissions?node_id=` already gave them only their own row.
+#[tokio::test]
+async fn the_nested_permission_list_shows_a_viewer_only_their_own_grant() {
+    let subjects = |body: &serde_json::Value| -> Vec<String> {
+        body.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["subject_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (status, body) = nested_get(AZ_VIEW_NODE, "permissions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(subjects(&body), ["test-sub"]);
+    // An owner of the node still sees them all.
+    let (status, body) = nested_get(AZ_OWNED_NODE, "permissions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(subjects(&body), ["creator", "test-sub", "guest"]);
+    // A stranger is refused before anything is read.
+    let (status, _) = nested_get(AZ_FOREIGN_NODE, "permissions").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// SECURITY: History names who did what to everyone who can read the node,
+/// and shows email addresses (actors' and invitees') to its owners only.
+#[tokio::test]
+async fn history_shows_email_addresses_to_owners_only() {
+    let (status, body) = nested_get(AZ_VIEW_NODE, "activity").await;
+    assert_eq!(status, StatusCode::OK);
+    let meta = &body[0]["metadata"];
+    assert_eq!(meta["actor_name"], "Cre Ator");
+    assert_eq!(meta["role"], "viewer");
+    assert!(meta.get("actor_email").is_none(), "{meta}");
+    assert!(meta.get("invited_email").is_none(), "{meta}");
+    assert!(!body.to_string().contains("@example.com"), "{body}");
+
+    let (_, body) = nested_get(AZ_EDIT_NODE, "activity").await;
+    assert!(
+        !body.to_string().contains("@example.com"),
+        "an editor: {body}"
+    );
+
+    let (status, body) = nested_get(AZ_OWNED_NODE, "activity").await;
+    assert_eq!(status, StatusCode::OK);
+    let meta = &body[0]["metadata"];
+    assert_eq!(meta["actor_email"], "creator@example.com");
+    assert_eq!(meta["invited_email"], "guest@example.com");
+}
+
+/// SECURITY: a tag is its owner's. Attaching someone else's by id and
+/// reading the node's tags back showed its name, colour and owner; ids
+/// leak through History. A foreign tag answers exactly like a missing one.
+#[tokio::test]
+async fn only_ones_own_tag_can_be_attached() {
+    let attach = |node: u128, tag: u128| async move {
+        let resp = claims_app("/nodes", crate::routes::nodes::router())
+            .oneshot(
+                Request::post(format!(
+                    "/nodes/{}/tags/{}",
+                    Uuid::from_u128(node),
+                    Uuid::from_u128(tag)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        // The message names the id asked for; compare without it.
+        let body =
+            String::from_utf8_lossy(&bytes).replace(&Uuid::from_u128(tag).to_string(), "<id>");
+        (status, body)
+    };
+    assert_eq!(
+        attach(AZ_EDIT_NODE, AZ_MY_TAG).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let foreign = attach(AZ_EDIT_NODE, AZ_FOREIGN_TAG).await;
+    let missing = attach(AZ_EDIT_NODE, 0xdead).await;
+    assert_eq!(foreign.0, StatusCode::NOT_FOUND);
+    assert_eq!(foreign, missing, "a foreign tag reads as a missing one");
+    // The node's rights still come first.
+    assert_eq!(
+        attach(AZ_VIEW_NODE, AZ_MY_TAG).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+/// POST JSON to a route as `claims`, returning status and body text.
+async fn post_as(
+    claims: common::auth::AuthClaims,
+    mount: &str,
+    router: Router<crate::state::AppState>,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
+    let resp = Router::new()
+        .nest(mount, router)
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(
+            Request::post(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// SECURITY: every change is posted to each of an account's webhooks, so
+/// their number is capped, and a request is checked before any DNS lookup
+/// or write (the stub's `create` is unimplemented: reaching it fails).
+#[tokio::test]
+async fn webhooks_are_capped_per_account_and_validated_first() {
+    let hook = |events: serde_json::Value| serde_json::json!({ "url": "https://hooks.example/h", "events": events });
+    let hoarder = common::auth::AuthClaims {
+        sub: HOOK_HOARDER.to_string(),
+        ..fake_claims()
+    };
+    let (status, body) = post_as(
+        hoarder,
+        "/webhooks",
+        crate::routes::webhooks::router(),
+        "/webhooks",
+        hook(serde_json::json!(["node.created"])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.contains("at most 20"), "{body}");
+
+    // An event that doesn't exist, and an over-long URL: refused as given.
+    for bad in [
+        hook(serde_json::json!(["node.exploded"])),
+        serde_json::json!({ "url": format!("https://hooks.example/{}", "a".repeat(3000)) }),
+    ] {
+        let (status, body) = post_as(
+            fake_claims(),
+            "/webhooks",
+            crate::routes::webhooks::router(),
+            "/webhooks",
+            bad,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+}
+
+/// SECURITY: a link the app will open is http or https, checked by the API
+/// and not only by the form that sends it.
+#[tokio::test]
+async fn a_favourite_link_must_be_a_web_address() {
+    let fav = |url: &str| serde_json::json!({ "url": url, "label": "x" });
+    for bad in [
+        "javascript:alert(1)",
+        " javascript:alert(1)",
+        "data:text/html,x",
+        "example.com",
+    ] {
+        let (status, body) = post_as(
+            fake_claims(),
+            "/favorites",
+            crate::routes::favorites::router(),
+            "/favorites",
+            fav(bad),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad:?}: {body}");
+    }
+    let (status, _) = post_as(
+        fake_claims(),
+        "/favorites",
+        crate::routes::favorites::router(),
+        "/favorites",
+        fav("https://example.com/a"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 }
 
 #[tokio::test]

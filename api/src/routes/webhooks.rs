@@ -7,8 +7,9 @@ use axum::{
 use common::{
     auth::AuthClaims,
     id::WebhookId,
-    webhook::{CreateWebhookRequest, UpdateWebhookRequest, Webhook},
+    webhook::{CreateWebhookRequest, MAX_WEBHOOKS_PER_OWNER, UpdateWebhookRequest, Webhook},
 };
+use garde::Validate;
 use uuid::Uuid;
 
 use crate::{error::ApiError, ssrf::is_blocked_ip, state::AppState};
@@ -141,6 +142,16 @@ async fn create_webhook(
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateWebhookRequest>,
 ) -> Result<(StatusCode, Json<Webhook>), ApiError> {
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
+    // SECURITY: every change to a node or task is posted to each of the
+    // owner's hooks. Without a cap, one account could make the server send
+    // thousands of requests per edit, to any host.
+    if state.webhooks.list(&claims.sub).await?.len() >= MAX_WEBHOOKS_PER_OWNER {
+        return Err(ApiError::Validation(format!(
+            "an account can have at most {MAX_WEBHOOKS_PER_OWNER} webhooks"
+        )));
+    }
     validate_webhook_url(&req.url)?;
     validate_webhook_dns(&req.url).await?;
     let hook = state.webhooks.create(&claims.sub, req).await?;
@@ -155,6 +166,8 @@ async fn update_webhook(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateWebhookRequest>,
 ) -> Result<Json<Webhook>, ApiError> {
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     validate_webhook_url(&req.url)?;
     validate_webhook_dns(&req.url).await?;
     let hook = state

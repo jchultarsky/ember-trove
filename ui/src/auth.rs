@@ -63,6 +63,9 @@ fn init_auth(auth_state: AuthState) {
             }
             match probe(&mut renewed).await {
                 Ok(user_info) => {
+                    // Before anything renders: drop the last person's
+                    // recent titles and searches if this is someone else.
+                    crate::draft::note_signed_in_subject(&user_info.sub);
                     auth_state.set(AuthStatus::Authenticated(user_info));
                     return;
                 }
