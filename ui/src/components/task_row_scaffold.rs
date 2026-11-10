@@ -111,6 +111,34 @@ pub fn MyDayButton(
     }
 }
 
+/// The row Copy action (#269): puts the task's title on the clipboard as the
+/// row shows it (plain text, no Markdown source). Rows are drag sources, so a
+/// mouse can't select their text; this is the one-click path instead, and it
+/// leaves drag-to-reorder untouched. `title` is read on click, so an edited
+/// title copies its latest value.
+#[component]
+pub fn CopyTaskButton(#[prop(into)] title: Signal<String>) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            class=action_btn_class("hover:text-stone-600 dark:hover:text-stone-300")
+            title="Copy task"
+            aria-label="Copy task"
+            on:click=move |ev: web_sys::MouseEvent| {
+                ev.stop_propagation();
+                let text = crate::markdown::markdown_inline_plain_text(&title.get_untracked());
+                crate::components::format_helpers::copy_to_clipboard(&text);
+                crate::components::toast::push_toast(
+                    crate::components::toast::ToastLevel::Success,
+                    "Copied.",
+                );
+            }
+        >
+            <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"content_copy"</span>
+        </button>
+    }
+}
+
 /// The `<option>`s of every recurrence `<select>`: "No repeat" plus each rule
 /// with its one label (`task_common::recurrence_label`). The copies used to
 /// disagree ("Biweekly" vs "Every 2 weeks"). Each option carries its own

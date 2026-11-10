@@ -5,13 +5,22 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-10)
 
+- **v3.15.0 shipped: copy a task's text and the nginx API limit** (#269,
+  #258). No migration.
 - **v3.14.0 shipped: the full-codebase review's fixes** (#281), in the
   entries marked v3.14.0 below: correctness and conformance, the UI
   section, the docs, the reuse items, plus #257, #259 and the phone-width
   pass of #262. Still open from the review: the seven private security
-  findings (with the owner), and the monthly recurrence drift (needs a
-  migration; owner to decide). Open drafts: #283 (Project Brief part 1,
-  migration 046, backup format 6) and #271 (copy a task's text).
+  findings (with the owner). Open draft: #283 (Project Brief part 1,
+  migration 046, backup format 6).
+- **The monthly recurrence drift is not fixed, on purpose** (owner
+  decision 2026-11-10). A monthly task on the 29th to 31st moves to the
+  28th in February and stays there (#281, 1.9). A fix was built (a stored
+  day of the month, a migration, a backup format bump) and dropped
+  unmerged: ONTOLOGY §9 and slice S5b remove recurring tasks, so the
+  bug goes with the feature. Don't fix it before S5b.
+- **v3.15.0: copy a task's text** (#269, PR #271): a Copy action on
+  each task row.
 
 - **v3.14.0: the delete confirmation counts what goes** (#281, owner
   decision). `GET /nodes/deletion-preview` counts the tasks, notes and
@@ -54,8 +63,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   `GET /permissions` filters in SQL (#259). `NodeSort`,
   `node_list_limit` / `node_list_pages` in `common::node`;
   `api::fetch_node_list` in the UI; `PermissionRepo::list_visible`. #258
-  (rate limits on reads) has its comment corrected and waits on the owner
-  for the limits themselves.
+  (rate limits on reads) had its comment corrected.
+- **v3.15.0: nginx's `/api/` limit equals the API's budget** (#258,
+  owner decision 2026-11-10): 10 r/s, burst 100. Tests in
+  `api/src/routes/mod.rs` read `deploy/nginx.prod.conf` and hold the two
+  together, and pin the sign-in zones.
 - **v3.14.0: "visible to" and plain text** (#281, 3.2 and 3.4).
   `visible_among_many` for the node list, title list and graph;
   `note::plain_line` for the graph preview. Section 3 of the review is

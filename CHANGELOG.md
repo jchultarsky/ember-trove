@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-11-10
+
+### Added
+- **Copy a task's text from the task list** (#269). Task rows are drag
+  sources (reorder), so the mouse couldn't select their text, and the native
+  context menu had nothing to copy. Each row (a node's Tasks section and
+  My Day) now has a Copy icon action that puts the title on the clipboard
+  as the row shows it: plain text, without the Markdown source
+  (`markdown::markdown_inline_plain_text`). Drag-to-reorder is unchanged.
+
+### Security
+- **nginx's general API limit now equals the API's own** (#258, owner
+  decision 2026-11-10): 10 requests a second per IP with a burst of 100,
+  up from 2 a second with a burst of 30. A page that fans out (the graph, a
+  node page) could get a 429 from nginx well inside the API's limit. This
+  loosens a limit on signed-in traffic, on purpose. The sign-in routes
+  keep their own tighter limits, and a test now fails if nginx's API limit
+  and the API's budget differ, or if a sign-in limit changes. Takes effect
+  with the deploy: the proxy reads `deploy/nginx.prod.conf` when it is
+  recreated.
+
 ## [3.14.0] - 2026-11-10
 
 ### Changed
