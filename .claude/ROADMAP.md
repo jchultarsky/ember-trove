@@ -5,6 +5,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-10)
 
+- **v3.15.0 shipped: copy a task's text and the nginx API limit** (#269,
+  #258). No migration.
 - **v3.14.0 shipped: the full-codebase review's fixes** (#281), in the
   entries marked v3.14.0 below: correctness and conformance, the UI
   section, the docs, the reuse items, plus #257, #259 and the phone-width
@@ -17,7 +19,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
   day of the month, a migration, a backup format bump) and dropped
   unmerged: ONTOLOGY §9 and slice S5b remove recurring tasks, so the
   bug goes with the feature. Don't fix it before S5b.
-- **Unreleased: copy a task's text** (#269, PR #271): a Copy action on
+- **v3.15.0: copy a task's text** (#269, PR #271): a Copy action on
   each task row.
 
 - **v3.14.0: the delete confirmation counts what goes** (#281, owner
@@ -62,7 +64,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
   `node_list_limit` / `node_list_pages` in `common::node`;
   `api::fetch_node_list` in the UI; `PermissionRepo::list_visible`. #258
   (rate limits on reads) had its comment corrected.
-- **Unreleased: nginx's `/api/` limit equals the API's budget** (#258,
+- **v3.15.0: nginx's `/api/` limit equals the API's budget** (#258,
   owner decision 2026-11-10): 10 r/s, burst 100. Tests in
   `api/src/routes/mod.rs` read `deploy/nginx.prod.conf` and hold the two
   together, and pin the sign-in zones.
