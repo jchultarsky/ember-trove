@@ -107,8 +107,21 @@ impl NodeRepo for StubNodeRepo {
             ..fake_node("authz-node", owner)
         })
     }
-    async fn get_by_slug(&self, _: &str) -> Result<Node, EmberTroveError> {
-        unimplemented!()
+    async fn get_by_slug(&self, slug: &str) -> Result<Node, EmberTroveError> {
+        // Two slugs exist: a node the caller can't see and one they can view.
+        let node = match slug {
+            AZ_FOREIGN_SLUG => AZ_FOREIGN_NODE,
+            AZ_VIEW_SLUG => AZ_VIEW_NODE,
+            _ => {
+                return Err(EmberTroveError::NotFound(format!(
+                    "node with slug '{slug}' not found"
+                )));
+            }
+        };
+        Ok(Node {
+            id: az_node(node),
+            ..fake_node(slug, "someone-else")
+        })
     }
     async fn list(&self, params: NodeListParams) -> Result<(Vec<Node>, u64), EmberTroveError> {
         // One node owned by whoever was asked for (the project dashboard).
@@ -262,17 +275,17 @@ impl EdgeRepo for StubEdgeRepo {
         // Project (#224): a home and a plain link.
         let edge_type = match id.0.as_u128() {
             AZ_FOREIGN_HOME_EDGE | AZ_VISIBLE_HOME_EDGE => common::edge::EdgeType::Contains,
-            AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
+            AZ_FOREIGN_LINK_EDGE | AZ_HIDDEN_EDGE => common::edge::EdgeType::References,
             AZ_MY_WIKI_EDGE | AZ_FOREIGN_WIKI_EDGE => common::edge::EdgeType::WikiLink,
             AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
                 common::edge::EdgeType::RelatedTo
             }
             _ => return Err(EmberTroveError::NotFound(format!("edge {id}"))),
         };
-        let target = if id.0.as_u128() == AZ_STRANGERS_RELATED_EDGE {
-            AZ_VIEW_NODE
-        } else {
-            AZ_MY_PROJECT
+        let target = match id.0.as_u128() {
+            AZ_STRANGERS_RELATED_EDGE => AZ_VIEW_NODE,
+            AZ_HIDDEN_EDGE => AZ_FOREIGN_NODE,
+            _ => AZ_MY_PROJECT,
         };
         let source = match id.0.as_u128() {
             AZ_VISIBLE_HOME_EDGE => AZ_VIEW_NODE,
@@ -430,6 +443,15 @@ const AZ_MY_ARTICLE: u128 = 0xa2_0006;
 /// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
 const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
 const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
+/// A link between two nodes the caller can see neither of.
+const AZ_HIDDEN_EDGE: u128 = 0xa2_0e3f;
+/// Ids and slugs for the "a foreign thing reads as a missing one" test.
+const AZ_MISSING: u128 = 0xa2_dead;
+const AZ_FOREIGN_SLUG: &str = "someone-elses-node";
+const AZ_VIEW_SLUG: &str = "a-node-i-can-view";
+const AZ_FOREIGN_ATTACHMENT: u128 = 0xa2_0401;
+const AZ_VIEW_ATTACHMENT: u128 = 0xa2_0402;
+const AZ_FOREIGN_TEMPLATE: u128 = 0xa2_0501;
 const AZ_FOREIGN_RELATED_EDGE: u128 = 0xa2_0e32;
 /// A related link between two nodes the caller can't edit.
 const AZ_STRANGERS_RELATED_EDGE: u128 = 0xa2_0e33;
@@ -569,6 +591,9 @@ impl TaskRepo for StubTaskRepo {
         unimplemented!()
     }
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        if id.0.as_u128() == AZ_MISSING {
+            return Err(EmberTroveError::NotFound(format!("task {id} not found")));
+        }
         Ok(authz_task(id))
     }
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
@@ -599,7 +624,11 @@ impl TaskRepo for StubTaskRepo {
     // restore-handler tests below can drive the real handler through a bare
     // router slice with injected claims.
     async fn get_deleted(&self, id: TaskId) -> Result<Task, EmberTroveError> {
-        Ok(stub_task(id))
+        match id.0.as_u128() {
+            AZ_MISSING => Err(EmberTroveError::NotFound(format!("task {id} not found"))),
+            AZ_FOREIGN_TASK | AZ_VIEW_TASK => Ok(authz_task(id)),
+            _ => Ok(stub_task(id)),
+        }
     }
     async fn restore(&self, id: TaskId) -> Result<Task, EmberTroveError> {
         Ok(stub_task(id))
@@ -876,11 +905,27 @@ impl AttachmentRepo for StubAttachmentRepo {
         unimplemented!()
     }
     async fn get(&self, id: AttachmentId) -> Result<Attachment, EmberTroveError> {
-        // The stub "database" holds no attachments — handlers must surface
-        // this as 404 before any permission or S3 work.
-        Err(EmberTroveError::NotFound(format!(
-            "attachment {id} not found"
-        )))
+        // Two files exist: one on a node the caller can't see and one on a
+        // node they can only view. Anything else is a 404 before any
+        // permission or S3 work.
+        let node = match id.0.as_u128() {
+            AZ_FOREIGN_ATTACHMENT => AZ_FOREIGN_NODE,
+            AZ_VIEW_ATTACHMENT => AZ_VIEW_NODE,
+            _ => {
+                return Err(EmberTroveError::NotFound(format!(
+                    "attachment {id} not found"
+                )));
+            }
+        };
+        Ok(Attachment {
+            id,
+            node_id: az_node(node),
+            filename: "private.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            size_bytes: 1,
+            s3_key: "k".to_string(),
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn delete(&self, _: AttachmentId) -> Result<String, EmberTroveError> {
         unimplemented!()
@@ -1382,8 +1427,21 @@ impl TemplateRepo for StubTemplateRepo {
     async fn list(&self, _: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError> {
         unimplemented!()
     }
-    async fn get(&self, _: TemplateId) -> Result<NodeTemplate, EmberTroveError> {
-        unimplemented!()
+    async fn get(&self, id: TemplateId) -> Result<NodeTemplate, EmberTroveError> {
+        if id.0.as_u128() != AZ_FOREIGN_TEMPLATE {
+            return Err(EmberTroveError::NotFound("template not found".to_string()));
+        }
+        Ok(NodeTemplate {
+            id,
+            name: "private template".to_string(),
+            description: None,
+            node_type: NodeType::Article,
+            body: "private body".to_string(),
+            is_default: false,
+            created_by: "someone-else".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        })
     }
     async fn create(
         &self,
@@ -1403,7 +1461,10 @@ impl TemplateRepo for StubTemplateRepo {
         unimplemented!()
     }
     async fn set_default(&self, _: TemplateId, _: &str) -> Result<NodeTemplate, EmberTroveError> {
-        unimplemented!()
+        // The repo's own rule: not yours and not there are one answer.
+        Err(EmberTroveError::NotFound(
+            "template not found or not owned by current user".to_string(),
+        ))
     }
 }
 
@@ -2700,8 +2761,10 @@ async fn update_task_refuses_a_move_onto_an_editable_non_project() {
 
 #[tokio::test]
 async fn update_task_refuses_someone_elses_standalone_task() {
+    // Refused as "no such task": the caller has no way to know it exists
+    // (`a_foreign_thing_reads_exactly_like_a_missing_one`).
     let status = task_patch(AZ_FOREIGN_TASK, serde_json::json!({ "title": "x" })).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -2994,6 +3057,250 @@ async fn a_favourite_link_must_be_a_web_address() {
     assert_eq!(status, StatusCode::CREATED);
 }
 
+/// Send one request as the test caller through the whole router of a
+/// resource, returning status and body text.
+async fn by_id(
+    mount: &str,
+    router: Router<crate::state::AppState>,
+    method: &str,
+    uri: String,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
+    let resp = claims_app(mount, router)
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// SECURITY: a route that takes a thing's own id must not say whether the
+/// id is real to someone who may not see the thing. These routes answered
+/// 404 for an id that doesn't exist and 403 for one that does. Each pair
+/// below is the same request for a foreign id and for a missing one: the
+/// status and the body must match, and nothing may be written (a stub
+/// write reached by a foreign id panics or is unimplemented).
+#[tokio::test]
+async fn a_foreign_thing_reads_exactly_like_a_missing_one() {
+    use crate::routes::{attachments, edges, nodes, permissions, tags, tasks, templates};
+    let id = |n: u128| Uuid::from_u128(n);
+    let none = || serde_json::json!({});
+    let title = || serde_json::json!({ "title": "x" });
+    let tag = || serde_json::json!({ "name": "x", "color": "#000000" });
+    let template = || serde_json::json!({ "name": "x", "node_type": "article", "body": "b" });
+    let role = || serde_json::json!({ "role": "viewer" });
+    let convert = || serde_json::json!({ "edge_type": "related_to" });
+    type Case = (
+        &'static str,
+        fn() -> Router<crate::state::AppState>,
+        &'static str,
+        String,
+        String,
+        serde_json::Value,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "/tasks",
+            tasks::task_router,
+            "PATCH",
+            format!("/tasks/{}", id(AZ_FOREIGN_TASK)),
+            format!("/tasks/{}", id(AZ_MISSING)),
+            title(),
+        ),
+        (
+            "/tasks",
+            tasks::task_router,
+            "DELETE",
+            format!("/tasks/{}", id(AZ_FOREIGN_TASK)),
+            format!("/tasks/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/tasks",
+            tasks::task_router,
+            "POST",
+            format!("/tasks/{}/restore", id(AZ_FOREIGN_TASK)),
+            format!("/tasks/{}/restore", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/attachments",
+            attachments::router,
+            "GET",
+            format!("/attachments/{}/download", id(AZ_FOREIGN_ATTACHMENT)),
+            format!("/attachments/{}/download", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/attachments",
+            attachments::router,
+            "DELETE",
+            format!("/attachments/{}", id(AZ_FOREIGN_ATTACHMENT)),
+            format!("/attachments/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/edges",
+            edges::router,
+            "DELETE",
+            format!("/edges/{}", id(AZ_HIDDEN_EDGE)),
+            format!("/edges/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/edges",
+            edges::router,
+            "POST",
+            format!("/edges/{}/convert", id(AZ_HIDDEN_EDGE)),
+            format!("/edges/{}/convert", id(AZ_MISSING)),
+            convert(),
+        ),
+        (
+            "/permissions",
+            permissions::router,
+            "PUT",
+            format!("/permissions/{}", id(AZ_PERM_FOREIGN)),
+            format!("/permissions/{}", id(AZ_MISSING)),
+            role(),
+        ),
+        (
+            "/permissions",
+            permissions::router,
+            "DELETE",
+            format!("/permissions/{}", id(AZ_PERM_FOREIGN)),
+            format!("/permissions/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/tags",
+            tags::router,
+            "PUT",
+            format!("/tags/{}", id(AZ_FOREIGN_TAG)),
+            format!("/tags/{}", id(AZ_MISSING)),
+            tag(),
+        ),
+        (
+            "/tags",
+            tags::router,
+            "DELETE",
+            format!("/tags/{}", id(AZ_FOREIGN_TAG)),
+            format!("/tags/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/templates",
+            templates::router,
+            "GET",
+            format!("/templates/{}", id(AZ_FOREIGN_TEMPLATE)),
+            format!("/templates/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/templates",
+            templates::router,
+            "PUT",
+            format!("/templates/{}", id(AZ_FOREIGN_TEMPLATE)),
+            format!("/templates/{}", id(AZ_MISSING)),
+            template(),
+        ),
+        (
+            "/templates",
+            templates::router,
+            "DELETE",
+            format!("/templates/{}", id(AZ_FOREIGN_TEMPLATE)),
+            format!("/templates/{}", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/templates",
+            templates::router,
+            "PUT",
+            format!("/templates/{}/set-default", id(AZ_FOREIGN_TEMPLATE)),
+            format!("/templates/{}/set-default", id(AZ_MISSING)),
+            none(),
+        ),
+        (
+            "/nodes",
+            nodes::router,
+            "GET",
+            format!("/nodes/slug/{AZ_FOREIGN_SLUG}"),
+            "/nodes/slug/no-such-slug".to_string(),
+            none(),
+        ),
+    ];
+    for (mount, router, method, foreign, absent, body) in cases {
+        let got = by_id(mount, router(), method, foreign.clone(), body.clone()).await;
+        let want = by_id(mount, router(), method, absent, body).await;
+        assert_eq!(
+            got.0,
+            StatusCode::NOT_FOUND,
+            "{method} {foreign}: {}",
+            got.1
+        );
+        assert_eq!(got, want, "{method} {foreign}");
+        assert!(!got.1.contains("private"), "{method} {foreign}: {}", got.1);
+    }
+}
+
+/// The other half: someone who can already see the thing is told plainly
+/// that they may not change it, and may read what a viewer may read.
+#[tokio::test]
+async fn a_viewer_is_still_told_no_rather_than_not_found() {
+    use crate::routes::{attachments, edges, nodes, tasks};
+    let id = |n: u128| Uuid::from_u128(n);
+    let none = || serde_json::json!({});
+    for (mount, router, method, uri, body) in [
+        (
+            "/tasks",
+            tasks::task_router as fn() -> _,
+            "PATCH",
+            format!("/tasks/{}", id(AZ_VIEW_TASK)),
+            serde_json::json!({ "title": "x" }),
+        ),
+        (
+            "/tasks",
+            tasks::task_router,
+            "DELETE",
+            format!("/tasks/{}", id(AZ_VIEW_TASK)),
+            none(),
+        ),
+        (
+            "/attachments",
+            attachments::router,
+            "DELETE",
+            format!("/attachments/{}", id(AZ_VIEW_ATTACHMENT)),
+            none(),
+        ),
+        (
+            "/edges",
+            edges::router,
+            "DELETE",
+            format!("/edges/{}", id(AZ_STRANGERS_RELATED_EDGE)),
+            none(),
+        ),
+    ] {
+        let (status, body) = by_id(mount, router(), method, uri.clone(), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {body}");
+    }
+    let (status, body) = by_id(
+        "/nodes",
+        nodes::router(),
+        "GET",
+        format!("/nodes/slug/{AZ_VIEW_SLUG}"),
+        none(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 #[tokio::test]
 async fn standalone_permission_delete_applies_the_same_checks() {
     let delete = |perm: u128| async move {
@@ -3007,8 +3314,11 @@ async fn standalone_permission_delete_applies_the_same_checks() {
             .unwrap()
             .status()
     };
-    // Not an owner of the foreign node.
-    assert_eq!(delete(AZ_PERM_FOREIGN).await, StatusCode::FORBIDDEN);
+    // Someone else's grant on a node the caller doesn't own: no such grant.
+    assert_eq!(delete(AZ_PERM_FOREIGN).await, StatusCode::NOT_FOUND);
+    // The caller's own grant on a node they only view: they know it is
+    // there, so the refusal says so.
+    assert_eq!(delete(0xa2_0206).await, StatusCode::FORBIDDEN);
     // Canonical-owner backstop (the standalone route used to skip it).
     assert_eq!(delete(AZ_PERM_CREATOR).await, StatusCode::FORBIDDEN);
     assert_eq!(delete(AZ_PERM_GUEST).await, StatusCode::NO_CONTENT);

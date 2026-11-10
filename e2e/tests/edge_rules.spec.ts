@@ -215,8 +215,16 @@ test('a link converts in one step, only for someone who may change it', async ({
     const convert = (who: APIRequestContext, edge_type: string) =>
       who.post(`/api/edges/${id}/convert`, { data: { edge_type } });
 
-    // A stranger is refused before anything is judged.
-    expect((await convert(otherRequest, 'related_to')).status()).toBe(403);
+    // A stranger to both ends is refused before anything is judged, with
+    // the answer a link that doesn't exist gets (2026-11-10).
+    expect((await convert(otherRequest, 'related_to')).status()).toBe(404);
+    expect(
+      (
+        await otherRequest.post('/api/edges/00000000-0000-4000-8000-000000000000/convert', {
+          data: { edge_type: 'related_to' },
+        })
+      ).status(),
+    ).toBe(404);
     // Never into a structural type.
     expect((await convert(request, 'depends_on')).status()).toBe(422);
 

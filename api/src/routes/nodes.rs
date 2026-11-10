@@ -30,8 +30,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::permissions::{
-        guard_canonical_owner, is_admin, require_editor, require_owner, require_resource_owner,
-        require_viewer, subject_scope,
+        guard_canonical_owner, is_admin, or_missing, or_missing_row, require_editor, require_owner,
+        require_resource_owner, require_viewer, subject_scope,
     },
     error::ApiError,
     notify::maybe_notify_invite,
@@ -369,8 +369,18 @@ async fn get_node_by_slug(
     Path(slug): Path<String>,
 ) -> Result<Json<Node>, ApiError> {
     // Resolve slug → id first so we can check permissions.
-    let node = state.nodes.get_by_slug(&slug).await?;
-    require_viewer(state.permissions.as_ref(), &claims, node.id).await?;
+    // A slug is not an id the caller was given: one that belongs to a node
+    // they can't view answers like one that belongs to none.
+    let node = state
+        .nodes
+        .get_by_slug(&slug)
+        .await
+        .map_err(or_missing_row("node"))?;
+    or_missing(
+        require_viewer(state.permissions.as_ref(), &claims, node.id).await,
+        false,
+        "node",
+    )?;
     Ok(Json(node))
 }
 

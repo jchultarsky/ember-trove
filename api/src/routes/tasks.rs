@@ -22,7 +22,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_viewer, subject_scope},
+    auth::permissions::{
+        can_view, is_admin, missing, or_missing, or_missing_row, require_editor, require_viewer,
+        subject_scope,
+    },
     error::ApiError,
     routes::capability::require_capability,
     state::AppState,
@@ -141,11 +144,18 @@ async fn require_task_editor(
     if task.owner_id == claims.sub || is_admin(claims) {
         return Ok(());
     }
-    match task.node_id {
-        Some(node) => require_editor(state.permissions.as_ref(), claims, node).await,
-        None => Err(ApiError::Forbidden("access denied".to_string())),
-    }
+    // A refusal is a 403 only for someone who can see the task's node;
+    // for anyone else the task reads as missing (`permissions::or_missing`).
+    let Some(node) = task.node_id else {
+        return Err(missing(TASK));
+    };
+    let check = require_editor(state.permissions.as_ref(), claims, node).await;
+    let may_see = check.is_ok() || can_view(state.permissions.as_ref(), claims, node).await?;
+    or_missing(check, may_see, TASK)
 }
+
+/// What a task that isn't there, or isn't the caller's to know of, is called.
+const TASK: &str = "task";
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -247,7 +257,11 @@ async fn update_task(
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
     // Fetch the task to verify ownership / node permission.
-    let existing = state.tasks.get(TaskId(id)).await?;
+    let existing = state
+        .tasks
+        .get(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
     require_task_editor(&state, &claims, &existing).await?;
 
     // SECURITY: moving a task onto a node (node_id: Some(Some(_))) requires
@@ -310,7 +324,11 @@ async fn delete_task(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let existing = state.tasks.get(TaskId(id)).await?;
+    let existing = state
+        .tasks
+        .get(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
     require_task_editor(&state, &claims, &existing).await?;
     let (owner_id, node_id) = (existing.owner_id.clone(), existing.node_id);
     state.tasks.delete(TaskId(id)).await?;
@@ -332,7 +350,11 @@ async fn restore_task(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Task>, ApiError> {
-    let existing = state.tasks.get_deleted(TaskId(id)).await?;
+    let existing = state
+        .tasks
+        .get_deleted(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
     require_task_editor(&state, &claims, &existing).await?;
     let restored = state.tasks.restore(TaskId(id)).await?;
     dispatch(
