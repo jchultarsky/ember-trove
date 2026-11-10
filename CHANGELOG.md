@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-11-10
+
 ### Added
 - **Project Brief, backend (#282, part 1 of the Brief).** A Project can
   carry one current Brief: an optional one-line headline, a pitch and up
