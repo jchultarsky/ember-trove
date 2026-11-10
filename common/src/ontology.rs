@@ -23,11 +23,19 @@ pub enum Capability {
     ProjectStatus,
     /// The Project Plan (§10).
     Plan,
+    /// The Project Brief: where the project stands now (#282).
+    Brief,
 }
 
 impl Capability {
     /// Every capability. `all_lists_every_capability` ties it to the enum.
-    pub const ALL: [Self; 4] = [Self::Tasks, Self::People, Self::ProjectStatus, Self::Plan];
+    pub const ALL: [Self; 5] = [
+        Self::Tasks,
+        Self::People,
+        Self::ProjectStatus,
+        Self::Plan,
+        Self::Brief,
+    ];
 }
 
 impl Capability {
@@ -40,6 +48,7 @@ impl Capability {
             Self::People => "only Projects have people",
             Self::ProjectStatus => "only Projects have a project status",
             Self::Plan => "only Projects have a project plan",
+            Self::Brief => "only Projects have a brief",
         }
     }
 }
@@ -60,9 +69,11 @@ pub fn require(kind: &NodeType, capability: Capability) -> Result<(), &'static s
 #[must_use]
 pub fn allows(kind: &NodeType, capability: Capability) -> bool {
     match capability {
-        Capability::Tasks | Capability::People | Capability::ProjectStatus | Capability::Plan => {
-            *kind == NodeType::Project
-        }
+        Capability::Tasks
+        | Capability::People
+        | Capability::ProjectStatus
+        | Capability::Plan
+        | Capability::Brief => *kind == NodeType::Project,
     }
 }
 
@@ -594,6 +605,7 @@ mod tests {
                 Capability::People => 1,
                 Capability::ProjectStatus => 2,
                 Capability::Plan => 3,
+                Capability::Brief => 4,
             }
         }
         for (i, c) in Capability::ALL.into_iter().enumerate() {

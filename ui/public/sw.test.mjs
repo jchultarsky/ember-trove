@@ -19,6 +19,8 @@ function fakeResponse(body, { status = 200, type = 'basic' } = {}) {
   return {
     body, status, type, ok: status >= 200 && status < 300,
     clone() { return fakeResponse(body, { status, type }); },
+    async json() { return JSON.parse(body); },
+    async text() { return String(body); },
   };
 }
 
@@ -31,7 +33,7 @@ function loadWorker(network) {
     async put(req, res) { store.set(typeof req === 'string' ? new URL(req, ORIGIN).href : req.url, res); },
     async addAll() {},
     async keys() { return [...store.keys()].map((url) => ({ url })); },
-    async delete(req) { return store.delete(req.url); },
+    async delete(req) { return store.delete(typeof req === 'string' ? new URL(req, ORIGIN).href : req.url); },
   };
   const calls = [];
   const sandbox = {
@@ -99,9 +101,52 @@ test('hashed assets are cache-first; other static files revalidate', async () =>
   assert.equal(sw.calls.filter((u) => u.endsWith('.woff2')).length, 2, 'refreshed in the background');
 });
 
-test('auth endpoints are never cached', async () => {
+test('the session check is never cached', async () => {
   const sw = loadWorker(() => ok('{"sub":"x"}'));
-  assert.equal(await sw.dispatch('/api/auth/me'), undefined, 'not intercepted');
+  assert.equal((await sw.dispatch('/api/auth/me')).body, '{"sub":"x"}');
+  assert.deepEqual([...sw.store.keys()].filter((k) => k.includes('/api/')), []);
+  // Other auth endpoints are left to the network.
+  assert.equal(await sw.dispatch('/api/auth/refresh', { method: 'POST' }), undefined);
+});
+
+// SECURITY: closing the browser ends a session with no logout call. The next
+// person to sign in must not be served the last one's cached answers.
+test('a session check that says "signed out" purges cached data', async () => {
+  let signedIn = true;
+  const sw = loadWorker((path) => (path === '/api/auth/me'
+    ? (signedIn ? ok('{"sub":"alice"}') : fakeResponse('', { status: 401 }))
+    : ok(`net:${path}`)));
+  await sw.dispatch('/api/auth/me');
+  await sw.dispatch('/api/nodes/1');
+  await sw.dispatch('/fonts/inter-latin.woff2');
+  signedIn = false;
+  assert.equal((await sw.dispatch('/api/auth/me')).status, 401);
+  // The data and the note of whose it was are both gone.
+  assert.deepEqual([...sw.store.keys()], [`${ORIGIN}/fonts/inter-latin.woff2`]);
+});
+
+test('a different person signing in purges the last one\'s cached data', async () => {
+  let who = 'alice';
+  const sw = loadWorker((path) => (path === '/api/auth/me' ? ok(`{"sub":"${who}"}`) : ok(`${who}:${path}`)));
+  await sw.dispatch('/api/auth/me');
+  await sw.dispatch('/api/nodes/1');
+  // The same person again: nothing is thrown away.
+  await sw.dispatch('/api/auth/me');
+  assert.equal([...sw.store.keys()].filter((k) => k.includes('/api/')).length, 1);
+  who = 'bob';
+  await sw.dispatch('/api/auth/me');
+  assert.deepEqual([...sw.store.keys()].filter((k) => k.includes('/api/')), []);
+});
+
+test('a session check that fails to parse still answers', async () => {
+  const sw = loadWorker(() => ok('not json'));
+  assert.equal((await sw.dispatch('/api/auth/me')).body, 'not json');
+});
+
+test('admin data is never kept on the device', async () => {
+  const sw = loadWorker((path) => ok(`net:${path}`));
+  assert.equal(await sw.dispatch('/api/admin/backups/1/download'), undefined, 'not intercepted');
+  assert.equal(await sw.dispatch('/api/admin/users'), undefined);
   assert.equal(sw.store.size, 0);
 });
 
@@ -140,31 +185,39 @@ test('API mutations pass straight through', async () => {
 
 // ── Web Share Target (#234) ──────────────────────────────────────────────────
 
-test('a share lands one capture and opens Captures', async () => {
-  let sent;
-  const sw = loadWorker((path, _req, init) => {
-    sent = { path, body: JSON.parse(init.body) };
-    return fakeResponse('{}', { status: 201 });
-  });
+// SECURITY: any website can make a browser POST a form to /share. The worker
+// must not turn that into a write: a request it makes carries the session.
+test('a share writes nothing: it opens the capture box with the text', async () => {
+  const sw = loadWorker(() => { throw new Error('the worker must not call the network on a share'); });
   const res = await sw.dispatch('/share', {
     method: 'POST',
     form: { title: 'An article', text: 'worth reading', url: 'https://example.com/a' },
   });
-  assert.deepEqual(sent, {
-    path: '/api/inbox/quick',
-    body: { title: 'An article', body: 'worth reading\nhttps://example.com/a' },
+  assert.deepEqual(sw.calls, []);
+  assert.equal(res.status, 303);
+  const [path, fragment] = res.redirect.split('#shared=');
+  assert.equal(path, '/?capture=1');
+  assert.deepEqual(JSON.parse(decodeURIComponent(fragment)), {
+    title: 'An article',
+    body: 'worth reading\nhttps://example.com/a',
   });
-  assert.deepEqual(res, { redirect: '/tasks/captures?captured=1', status: 303 });
 });
 
-test('a share while signed out says so instead of landing nowhere', async () => {
-  const sw = loadWorker(() => fakeResponse('', { status: 401 }));
-  const res = await sw.dispatch('/share', { method: 'POST', form: { text: 'x' } });
-  assert.deepEqual(res, { redirect: '/?capture=failed&reason=auth', status: 303 });
+test('a share with nothing in it says so', async () => {
+  const sw = loadWorker(() => { throw new Error('no network'); });
+  const res = await sw.dispatch('/share', { method: 'POST', form: { title: ' ', text: '' } });
+  assert.deepEqual(res, { redirect: '/?capture=failed&reason=empty', status: 303 });
 });
 
-test('a share the server refuses names the status', async () => {
-  const sw = loadWorker(() => fakeResponse('', { status: 422 }));
-  const res = await sw.dispatch('/share', { method: 'POST', form: { title: ' ' } });
-  assert.deepEqual(res, { redirect: '/?capture=failed&reason=422', status: 303 });
+test('a share that is too long is clipped, not dropped', async () => {
+  const sw = loadWorker(() => { throw new Error('no network'); });
+  const res = await sw.dispatch('/share', { method: 'POST', form: { text: 'x'.repeat(25000) } });
+  const shared = JSON.parse(decodeURIComponent(res.redirect.split('#shared=')[1]));
+  assert.equal(shared.body.length, 10000);
+});
+
+test('a share the worker cannot read says so', async () => {
+  const sw = loadWorker(() => ok('x'));
+  const res = await sw.dispatch('/share', { method: 'POST' }); // no formData
+  assert.deepEqual(res, { redirect: '/?capture=failed&reason=exception', status: 303 });
 });

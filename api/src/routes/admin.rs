@@ -158,17 +158,25 @@ async fn set_user_roles(
 ) -> Result<StatusCode, ApiError> {
     require_admin(&claims)?;
     let id = account_id(&id)?;
+    let directory = cognito_client(&state)?;
     if !req.roles.iter().any(|r| r == ADMIN_ROLE) {
         refuse_own_account(&claims, &id, "You can't remove your own admin role.")?;
+        // SECURITY: the account's tokens already out still list the admin
+        // group until they expire. Record the demotion first (row, then
+        // the in-memory set, as for a suspension), so those tokens lose
+        // the role at once, before Cognito is even asked. If Cognito then
+        // fails, the account is merely held to its newer tokens. Recorded
+        // for any change that leaves an account without the role: it costs
+        // nothing when the account never had it.
+        let demoted_at = state.accounts.record_demotion(&id).await?;
+        state.demoted.insert(&id, demoted_at).await;
     }
-    cognito_client(&state)?
-        .set_user_groups(&id, &req.roles)
-        .await?;
+    directory.set_user_groups(&id, &req.roles).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The Cognito group that makes an account an admin.
-const ADMIN_ROLE: &str = "admin";
+const ADMIN_ROLE: &str = crate::auth::demoted::ADMIN_ROLE;
 
 /// What a suspend that only half-landed tells the admin. The account is
 /// already refused by the API; Cognito's sign-in block didn't confirm.

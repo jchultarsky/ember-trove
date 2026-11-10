@@ -117,7 +117,7 @@ cargo check && cargo clippy -- -D warnings
   owners.
 - `/inbox/quick` keeps its path and wire format for installed service
   workers; `common::inbox::capture_text` builds the text.
-- Restore accepts formats 3 to 5 (`OLDEST_RESTORABLE`). A format-3 note
+- Restore accepts formats 3 to 6 (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
   rule). Restore also clears the live captures, nodeless tasks and people,
   which the `nodes` cascade never reached.
@@ -177,7 +177,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5)
+## What a backup holds (#281, format 5; Briefs made it 6)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -201,6 +201,10 @@ cargo check && cargo clippy -- -D warnings
   admin can download one. `repo::webhook::list_all_for_backup` never
   selects `secret`, and `BackupWebhook` has no field for it. A webhook
   that signed is restored switched off (`BackupWebhook::restored_active`).
+- **Project Briefs (#282, format 6)** are `briefs: Vec<ProjectBrief>`,
+  read by `repo::brief::list_all_on` inside the snapshot. A plain `Vec`,
+  not an `Option`: a Brief hangs on its node, the nodes are replaced by
+  any restore, so an older archive can't leave live Briefs behind.
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps
@@ -290,6 +294,35 @@ cargo check && cargo clippy -- -D warnings
 - `NodeRepo::deletion_preview` counts the rows the `nodes` cascade
   removes. A new table that holds a node's content, and that a person
   would miss, joins that query and `NodeDeletionPreview::losses`.
+
+## Security rules from the 2026-11-10 audit
+
+- **Every grant path calls `guard_canonical_owner`**: grant, update,
+  revoke *and invite*. `PermissionRepo::grant` is an upsert, so any new
+  route that ends in it can rewrite the creator's row.
+- **A node's grants are listed with `list_visible`**, never `list`, in
+  anything a non-owner can call. `list` is for checks inside a route that
+  already required Owner.
+- **History for a non-owner goes through `common::activity::redact_emails`.**
+  New metadata that holds an address joins `EMAIL_KEYS`.
+- **An id in the path gets its own ownership check** even when the route
+  already checked the node: `attach_tag` loads the tag and answers a
+  foreign one like a missing one.
+- **A URL the app will open is `common::node_link::is_web_url`** (http or
+  https from the first character). The forms send
+  `with_web_scheme(typed)`.
+- **Roles come from the token, so removing `admin` needs
+  `auth::demoted`**: the route writes `admin_demotions`, then the
+  in-memory `DemotedSet`, then asks Cognito. `validate_and_map` drops
+  `admin` from a token issued at or before the demotion. The purge deletes
+  the row; the daily sweep drops rows older than a day.
+- **Webhooks**: create and update call `validate()`; at most
+  `MAX_WEBHOOKS_PER_OWNER` per account.
+- **The edge proxy sets `X-Forwarded-For $remote_addr`**, never
+  `$proxy_add_x_forwarded_for`: the API's limiter keys on that header.
+  Tests in `routes/mod.rs` read `deploy/nginx.prod.conf` and hold this
+  and the limits.
+- **`release.yml` prints no API log lines**: its log is public.
 
 ## Admin permission model
 

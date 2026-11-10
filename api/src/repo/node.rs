@@ -652,7 +652,7 @@ impl NodeRepo for PgNodeRepo {
         // (`deleted_at`) goes too, but it is already deleted to its owner,
         // so it is not counted.
         let ids: Vec<Uuid> = ids.iter().map(|id| id.0).collect();
-        let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        let row: (i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
             "SELECT
                (SELECT COUNT(*) FROM nodes WHERE id = ANY($1)),
                (SELECT COUNT(*) FROM node_tasks
@@ -663,7 +663,8 @@ impl NodeRepo for PgNodeRepo {
                  WHERE node_id = ANY($1) AND deleted_at IS NULL),
                (SELECT COUNT(*) FROM node_notes
                  WHERE node_id = ANY($1) AND deleted_at IS NULL AND owner_id <> $2),
-               (SELECT COUNT(*) FROM attachments WHERE node_id = ANY($1))",
+               (SELECT COUNT(*) FROM attachments WHERE node_id = ANY($1)),
+               (SELECT COUNT(*) FROM project_briefs WHERE node_id = ANY($1))",
         )
         .bind(&ids)
         .bind(caller)
@@ -678,6 +679,7 @@ impl NodeRepo for PgNodeRepo {
             notes: n(row.3),
             others_notes: n(row.4),
             files: n(row.5),
+            briefs: n(row.6),
         })
     }
 

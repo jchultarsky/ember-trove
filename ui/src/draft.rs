@@ -253,9 +253,56 @@ pub fn clear_all_drafts() {
     }
 }
 
+// ── What else a person leaves on the device ─────────────────────────────
+
+/// Who the recent list and the search history on this device belong to.
+const LAST_SUBJECT_KEY: &str = "ember_trove_last_subject";
+
+/// Remove the recent-nodes list and the search history: one person's node
+/// titles and queries. Called on logout, with the drafts.
+pub fn clear_device_history() {
+    let Some(s) = storage() else { return };
+    for key in [
+        crate::recent::LS_KEY,
+        crate::components::search_view::HISTORY_KEY,
+    ] {
+        let _ = s.remove_item(key);
+    }
+}
+
+/// Should the recent list and search history be dropped for the person now
+/// signed in? Yes unless they are known to be this person's. Unknown
+/// counts as someone else's: they were not keyed by person before
+/// 2026-11-10, so whose they are can't be told.
+fn history_is_someone_elses(last_subject: Option<&str>, subject: &str) -> bool {
+    last_subject != Some(subject)
+}
+
+/// Call when the signed-in person is known, before anything is shown.
+///
+/// SECURITY: a session usually ends by closing the browser, with no logout
+/// to clear anything. The next person to sign in on this browser was shown
+/// the last one's recent node titles and search queries.
+pub fn note_signed_in_subject(subject: &str) {
+    let Some(s) = storage() else { return };
+    let last = s.get_item(LAST_SUBJECT_KEY).ok().flatten();
+    if history_is_someone_elses(last.as_deref(), subject) {
+        clear_device_history();
+        let _ = s.set_item(LAST_SUBJECT_KEY, subject);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_history_is_kept_only_for_the_person_it_belongs_to() {
+        assert!(!history_is_someone_elses(Some("alice"), "alice"));
+        assert!(history_is_someone_elses(Some("alice"), "bob"));
+        // Never recorded: can't be shown to be theirs.
+        assert!(history_is_someone_elses(None, "alice"));
+    }
 
     fn draft(title: &str, body: &str) -> CreateDraft {
         CreateDraft {

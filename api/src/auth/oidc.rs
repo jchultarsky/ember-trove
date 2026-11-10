@@ -128,6 +128,10 @@ pub struct OidcClaims {
     #[serde(default)]
     pub token_use: Option<String>,
     pub exp: i64,
+    /// When the token was issued (Unix seconds). Compared with the time an
+    /// account's admin role was removed (`auth::demoted`).
+    #[serde(default)]
+    pub iat: Option<i64>,
 }
 
 /// OIDC client that handles discovery, code exchange, and JWT validation.
@@ -577,6 +581,11 @@ mod tests {
         assert_eq!(claims.token_use.as_deref(), Some("id"));
         assert_eq!(claims.groups, Some(vec!["admin".to_string()]));
         assert_eq!(claims.exp, 1_790_003_600);
+        // Read for `auth::demoted`; a token without it parses, as `None`.
+        assert_eq!(claims.iat, Some(1_790_000_000));
+        let bare: super::OidcClaims =
+            serde_json::from_value(serde_json::json!({ "sub": "s", "exp": 1 })).expect("parses");
+        assert_eq!(bare.iat, None);
     }
 
     /// Same contract for `/.well-known/openid-configuration`: new optional

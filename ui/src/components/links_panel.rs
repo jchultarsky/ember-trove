@@ -45,13 +45,9 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
             add_error.set(Some("Name and URL are required.".to_string()));
             return;
         }
-        // Prefix with https:// if the user omitted a scheme, so the browser
-        // opens an absolute URL rather than a relative path.
-        let url = if !url.starts_with("http://") && !url.starts_with("https://") {
-            format!("https://{url}")
-        } else {
-            url
-        };
+        // `https://` in front of a bare address, so the browser opens an
+        // absolute URL; the API accepts http and https links only.
+        let url = common::node_link::with_web_scheme(&url);
         let req = CreateNodeLinkRequest { name, url };
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::create_node_link(node_id, &req).await {
@@ -78,11 +74,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
             edit_error.set(Some("Name and URL are required.".to_string()));
             return;
         }
-        let url = if !url.starts_with("http://") && !url.starts_with("https://") {
-            format!("https://{url}")
-        } else {
-            url
-        };
+        let url = common::node_link::with_web_scheme(&url);
         let req = UpdateNodeLinkRequest {
             name: Some(name),
             url: Some(url),

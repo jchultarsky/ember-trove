@@ -55,7 +55,10 @@ pub struct EntityCounts {
 /// saved searches, editor prefs, webhooks (without their secrets) and
 /// recurrence links. An older release would restore a format-5 archive
 /// without any attachment bytes, so the number moves and it refuses.
-pub const SCHEMA_VERSION: u32 = 5;
+/// 6 (#282): the archive carries Project Briefs. An older release would
+/// restore it without them and say nothing, so the number moves
+/// (`.claude/rules/api.md`, "What a backup holds").
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -351,6 +354,13 @@ pub struct BackupData {
     /// Which task scheduled which occurrence. Empty in older archives.
     #[serde(default)]
     pub recurrence_links: Vec<RecurrenceLink>,
+    // ── Format 6: Project Briefs (#282) ───────────────────────────────────
+    /// Each project's current Brief. Replaced Briefs are History entries
+    /// and travel in `activity`. A Brief belongs to its node, so restoring
+    /// an older archive (which has none) leaves no Brief behind: the nodes
+    /// it hung on are replaced.
+    #[serde(default)]
+    pub briefs: Vec<crate::brief::ProjectBrief>,
 }
 
 impl BackupData {

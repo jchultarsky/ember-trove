@@ -4411,6 +4411,12 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
             ('{a}', 'task', gen_random_uuid(), 10), ('{b}', 'task', gen_random_uuid(), 10)"),
         format!("INSERT INTO suspended_accounts (subject_id, suspended_by) VALUES ('x', '{a}')"),
         format!("INSERT INTO backup_jobs (created_by, s3_key) VALUES ('{a}', 'backups/1.tar.gz')"),
+        // Briefs (#282): A wrote B's current Brief, B wrote one on A's
+        // node, and History holds a Brief A stated on B's node.
+        format!("INSERT INTO project_briefs (node_id, pitch, author_id) VALUES
+            ('{b_node}', 'a wrote this', '{a}'), ('{a_shared}', 'b wrote this', '{b}')"),
+        format!("INSERT INTO activity_log (node_id, subject_id, action, metadata) VALUES
+            ('{b_node}', '{b}', 'brief_superseded', '{{\"actor_name\": \"Bo\", \"author_id\": \"{a}\", \"pitch\": \"old\"}}')"),
     ] {
         sql(pool, &q).await;
     }
@@ -4427,9 +4433,21 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
     use common::admin::{DELETED_ACCOUNT, PurgeCounts};
     let (a_shared, _, b_node) = seed_two_accounts(&pool).await;
     let repo = PgAccountRepo::new(pool.clone());
+    // Both once lost an admin role: A's record goes, B's stays, and neither
+    // is counted as a setting.
+    repo.record_demotion(PURGE_A).await.unwrap();
+    repo.record_demotion(PURGE_B).await.unwrap();
 
     let preview = repo.deletion_preview(PURGE_A).await.unwrap();
     let removed = repo.purge(PURGE_A, Some("ann@example.com")).await.unwrap();
+    assert_eq!(
+        repo.demotions()
+            .await
+            .unwrap()
+            .into_keys()
+            .collect::<Vec<_>>(),
+        [PURGE_B]
+    );
     let expected = PurgeCounts {
         nodes: 2,
         shared_nodes: 1,
@@ -4448,7 +4466,7 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
     let columns: Vec<(String, String)> = sqlx::query_as(
         "SELECT table_name::text, column_name::text FROM information_schema.columns
          WHERE table_schema = 'public'
-           AND column_name IN ('owner_id', 'subject_id', 'created_by', 'granted_by', 'suspended_by')",
+           AND column_name IN ('owner_id', 'subject_id', 'created_by', 'granted_by', 'suspended_by', 'author_id')",
     )
     .fetch_all(&pool)
     .await
@@ -4508,7 +4526,8 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
         ("SELECT count(*) FROM user_favorites", 1), // B's url favorite
         ("SELECT count(*) FROM webhooks", 1),
         ("SELECT count(*) FROM editor_prefs", 1),
-        ("SELECT count(*) FROM activity_log", 4), // all on B's node
+        ("SELECT count(*) FROM activity_log", 5), // all on B's node
+        ("SELECT count(*) FROM project_briefs", 1), // A's on B's node
         ("SELECT count(*) FROM node_versions", 2),
         ("SELECT count(*) FROM attachments", 1),
         ("SELECT count(*) FROM edges", 0),
@@ -4525,6 +4544,16 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(version, DELETED_ACCOUNT);
+    // The Brief A wrote on B's project stays, its author anonymised (#282).
+    let (author, pitch): (String, String) =
+        sqlx::query_as("SELECT author_id, pitch FROM project_briefs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        (author.as_str(), pitch.as_str()),
+        (DELETED_ACCOUNT, "a wrote this")
+    );
     let entries: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT subject_id, metadata FROM activity_log ORDER BY action, metadata::text COLLATE \"C\"",
     )
@@ -4911,6 +4940,326 @@ async fn an_archive_the_store_refuses_to_delete_is_queued(pool: PgPool) {
     assert_eq!(scalar(&pool, "SELECT count(*) FROM backup_jobs").await, 1);
 }
 
+// ── Project Briefs (#282) ────────────────────────────────────────────────────
+
+fn brief_actor(sub: &str) -> super::activity::ActivityActor {
+    super::activity::ActivityActor {
+        subject_id: sub.to_string(),
+        metadata: serde_json::json!({ "actor_name": sub }),
+    }
+}
+
+fn brief_fields(pitch: &str) -> common::brief::BriefFields {
+    common::brief::BriefFields {
+        headline: Some("Headline".into()),
+        pitch: pitch.into(),
+        points: vec!["one".into(), "two".into()],
+    }
+}
+
+#[allow(clippy::expect_used)]
+async fn brief_history(pool: &PgPool, node: common::id::NodeId) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT metadata FROM activity_log
+         WHERE node_id = $1 AND action = 'brief_superseded' ORDER BY created_at",
+    )
+    .bind(node.0)
+    .fetch_all(pool)
+    .await
+    .expect("history")
+}
+
+/// The owner's rule (#282 decision 2), end to end: a first save creates,
+/// the author's quick fix updates in place (no History), someone else's
+/// save supersedes (the old words land in History in the same commit), and
+/// an identical save writes nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_brief_coalesces_for_its_author_and_supersedes_for_others(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    use common::brief::BriefSave;
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Brief project").await.id;
+
+    let (first, mode) = repo
+        .save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::Create);
+    assert_eq!(first.points, ["one", "two"]);
+
+    let (fixed, mode) = repo
+        .save(
+            node,
+            &brief_fields("v1 fixed"),
+            Some(first.updated_at),
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::InPlace);
+    assert_eq!(fixed.stated_at, first.stated_at);
+    assert!(brief_history(&pool, node).await.is_empty());
+
+    let (theirs, mode) = repo
+        .save(
+            node,
+            &brief_fields("v2"),
+            Some(fixed.updated_at),
+            &brief_actor("editor-b"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::Supersede);
+    assert_eq!(theirs.author_id, "editor-b");
+    assert!(theirs.stated_at > fixed.stated_at);
+    let history = brief_history(&pool, node).await;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["pitch"], "v1 fixed");
+    assert_eq!(history[0]["author_id"], "owner-a");
+    assert_eq!(history[0]["actor_name"], "editor-b");
+
+    let (same, mode) = repo
+        .save(
+            node,
+            &brief_fields("v2"),
+            Some(theirs.updated_at),
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mode, BriefSave::Unchanged);
+    assert_eq!(same, theirs);
+    assert_eq!(brief_history(&pool, node).await.len(), 1);
+    assert_eq!(repo.get(node).await.unwrap(), Some(theirs));
+}
+
+/// A save from a stale editor is refused, never an overwrite: a wrong or
+/// missing version on an existing Brief, and a version for a Brief that's
+/// gone, are all 412 (#282).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_stale_brief_save_is_refused(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Stale brief").await.id;
+    let (b, _) = repo
+        .save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+
+    for expected in [None, Some(b.updated_at - Duration::seconds(1))] {
+        let err = repo
+            .save(node, &brief_fields("lost"), expected, &brief_actor("b"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EmberTroveError::PreconditionFailed(_)),
+            "{err:?}"
+        );
+    }
+    assert_eq!(repo.get(node).await.unwrap().unwrap().pitch, "v1");
+
+    let err = repo
+        .delete(
+            node,
+            Some(b.updated_at - Duration::seconds(1)),
+            &brief_actor("b"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::PreconditionFailed(_)));
+
+    repo.delete(node, Some(b.updated_at), &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    let err = repo
+        .save(
+            node,
+            &brief_fields("again"),
+            Some(b.updated_at),
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::PreconditionFailed(_)));
+}
+
+/// Removing a Brief keeps its words in History, marked removed; a second
+/// remove is a 404. Deleting the node takes the Brief with it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_removed_brief_stays_in_history_and_goes_with_its_node(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Removed brief").await.id;
+    let (stated, _) = repo
+        .save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    // A remove names the version it removes, like a save: without one, or
+    // with an old one, nothing is removed.
+    for stale in [None, Some(stated.updated_at - chrono::Duration::seconds(1))] {
+        let err = repo
+            .delete(node, stale, &brief_actor("owner-a"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EmberTroveError::PreconditionFailed(_)),
+            "{stale:?}: {err:?}"
+        );
+    }
+    assert!(repo.get(node).await.unwrap().is_some());
+    repo.delete(node, Some(stated.updated_at), &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    assert_eq!(repo.get(node).await.unwrap(), None);
+    let history = brief_history(&pool, node).await;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0]["removed"], true);
+    assert_eq!(history[0]["pitch"], "v1");
+    let err = repo
+        .delete(node, None, &brief_actor("owner-a"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)));
+
+    let other = create_node(&pool, "owner-a", "Cascade brief").await.id;
+    repo.save(other, &brief_fields("v1"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap();
+    assert_eq!(repo.for_nodes(&[node, other]).await.unwrap().len(), 1);
+    PgNodeRepo::new(pool.clone()).delete(other).await.unwrap();
+    assert!(repo.list_all().await.unwrap().is_empty());
+}
+
+/// Two first saves at once: one wins, the other gets 412, not a 500.
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_first_briefs_leave_one_winner(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = std::sync::Arc::new(PgBriefRepo::new(pool.clone()));
+    let node = create_node(&pool, "owner-a", "Race brief").await.id;
+    let (r1, r2) = (repo.clone(), repo.clone());
+    let a = tokio::spawn(async move {
+        r1.save(node, &brief_fields("a"), None, &brief_actor("a"))
+            .await
+    });
+    let b = tokio::spawn(async move {
+        r2.save(node, &brief_fields("b"), None, &brief_actor("b"))
+            .await
+    });
+    let results = [a.await.unwrap(), b.await.unwrap()];
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r, Err(EmberTroveError::PreconditionFailed(_))))
+    );
+}
+
+/// Two people replace the same Brief from the same version: one wins, the
+/// other gets 412, and History holds the old Brief once. The row lock in
+/// `locked` is what makes it so: without it both pass the version check,
+/// both save, and the first winner's words are replaced unseen (this test
+/// then fails within its ten rounds).
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_replacements_of_a_brief_leave_one_winner(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    for round in 0..10 {
+        let node = create_node(&pool, "owner-a", &format!("Race replace {round}"))
+            .await
+            .id;
+        let (first, _) = PgBriefRepo::new(pool.clone())
+            .save(node, &brief_fields("first"), None, &brief_actor("owner-a"))
+            .await
+            .unwrap();
+        let (one, two) = (
+            PgBriefRepo::new(pool.clone()),
+            PgBriefRepo::new(pool.clone()),
+        );
+        let (b, c) = (brief_fields("b"), brief_fields("c"));
+        let (actor_b, actor_c) = (brief_actor("b"), brief_actor("c"));
+        let (r1, r2) = tokio::join!(
+            one.save(node, &b, Some(first.updated_at), &actor_b),
+            two.save(node, &c, Some(first.updated_at), &actor_c),
+        );
+        let results = [r1, r2];
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "round {round}: one save wins"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r, Err(EmberTroveError::PreconditionFailed(_)))),
+            "round {round}: the other is told it is stale"
+        );
+        let history = brief_history(&pool, node).await;
+        assert_eq!(history.len(), 1, "round {round}: one History entry");
+        assert_eq!(history[0]["pitch"], "first");
+    }
+}
+
+/// A Brief on a node that is gone is a 404, not a foreign-key 500.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_brief_for_a_node_that_is_gone_is_not_found(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = PgBriefRepo::new(pool.clone());
+    let gone = common::id::NodeId(uuid::Uuid::new_v4());
+    let err = repo
+        .save(gone, &brief_fields("x"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)), "{err:?}");
+    let err = repo
+        .delete(gone, None, &brief_actor("owner-a"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)), "{err:?}");
+}
+
+/// The column refuses a NULL point: one would fail every read of the row.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_brief_point_cannot_be_null(pool: PgPool) {
+    let node = create_node(&pool, "owner-a", "Null point").await.id;
+    let bad = sqlx::query(
+        "INSERT INTO project_briefs (node_id, pitch, points, author_id)
+         VALUES ($1, 'p', ARRAY['a', NULL]::text[], 'owner-a')",
+    )
+    .bind(node.0)
+    .execute(&pool)
+    .await;
+    assert!(bad.is_err());
+}
+
+/// A backup carries Briefs and restore brings them back, skipping one whose
+/// node isn't in the archive (#282).
+#[sqlx::test(migrations = "../migrations")]
+async fn briefs_survive_a_backup_round_trip(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    use common::backup::BackupData;
+    let repo = PgBriefRepo::new(pool.clone());
+    let node = create_node(&pool, "owner-a", "Backed up brief").await;
+    let (brief, _) = repo
+        .save(
+            node.id,
+            &brief_fields("kept"),
+            None,
+            &brief_actor("owner-a"),
+        )
+        .await
+        .unwrap();
+    let mut orphan = brief.clone();
+    orphan.node_id = common::id::NodeId(uuid::Uuid::new_v4());
+    let data: BackupData = serde_json::from_value(serde_json::json!({
+        "nodes": [node], "edges": [], "tags": [], "notes": [], "tasks": [],
+        "attachments": [], "briefs": [brief, orphan],
+    }))
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(repo.list_all().await.unwrap(), vec![brief]);
+}
+
 // ── Backups: one snapshot, and everything in it (#281) ───────────────────────
 
 #[sqlx::test(migrations = "../migrations")]
@@ -4925,6 +5274,14 @@ async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
     super::tag::list_all_on(&mut *tx).await.expect("first read");
 
     // Meanwhile, committed on another connection.
+    sqlx::query(
+        "INSERT INTO project_briefs (node_id, pitch, points, author_id)
+         VALUES ($1, 'stated mid-backup', '{}', 'alice')",
+    )
+    .bind(before.id.0)
+    .execute(&pool)
+    .await
+    .expect("a late brief");
     let late = create_node(&pool, "alice", "created mid-backup").await;
     raw_task(&pool, "alice", Some(late.id.0), "its task").await;
     raw_task(
@@ -4943,6 +5300,10 @@ async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
         "nor is any task written after it began: {:?}",
         data.tasks
     );
+
+    // A Brief written after the snapshot began is not in it either (#282):
+    // Briefs are read inside the same transaction as their nodes.
+    assert!(data.briefs.is_empty(), "no Brief existed at the snapshot");
 
     // Read-only: a backup can't change anything, even by mistake.
     let write = sqlx::query("DELETE FROM nodes").execute(&mut *tx).await;
@@ -5170,6 +5531,55 @@ async fn an_older_archive_leaves_what_it_never_carried(pool: PgPool) {
     assert_eq!(secret.as_deref(), Some("the-signing-secret"));
 }
 
+// ── Removed admin roles (migration 047) ──────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_demotion_is_recorded_moves_forward_and_is_swept(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    assert!(repo.demotions().await.unwrap().is_empty());
+
+    let now = chrono::Utc::now().timestamp();
+    let first = repo.record_demotion("sub-a").await.unwrap();
+    // Whole seconds, never earlier than the moment itself: a token issued
+    // in the same second must still count as older.
+    assert!((now..=now + 2).contains(&first), "{first} vs {now}");
+    assert_eq!(
+        repo.demotions().await.unwrap(),
+        std::collections::HashMap::from([("sub-a".to_string(), first)])
+    );
+
+    // Demoted again later: the time moves forward, the row stays one.
+    sqlx::query("UPDATE admin_demotions SET demoted_at = now() - interval '2 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let old = repo.demotions().await.unwrap()["sub-a"];
+    let again = repo.record_demotion("sub-a").await.unwrap();
+    assert!(again > old);
+    assert_eq!(repo.demotions().await.unwrap().len(), 1);
+
+    // The sweep drops only rows no live token can predate.
+    repo.record_demotion("sub-b").await.unwrap();
+    sqlx::query(
+        "UPDATE admin_demotions SET demoted_at = now() - interval '2 days'
+         WHERE subject_id = 'sub-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cutoff = chrono::Utc::now() - chrono::TimeDelta::days(1);
+    assert_eq!(repo.purge_demotions_before(cutoff).await.unwrap(), 1);
+    assert_eq!(
+        repo.demotions()
+            .await
+            .unwrap()
+            .into_keys()
+            .collect::<Vec<_>>(),
+        ["sub-b"]
+    );
+}
+
 // ── The delete confirmation's counts (#281, owner decision) ──────────────────
 
 #[sqlx::test(migrations = "../migrations")]
@@ -5199,6 +5609,11 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
             ('{d}', 'one.pdf', '{d}/1/one.pdf'), ('{d}', 'two.pdf', '{d}/2/two.pdf'),
             ('{s}', 'kept.pdf', '{s}/3/kept.pdf')"
         ),
+        // A Brief on each (#282): the doomed node's goes with it.
+        format!(
+            "INSERT INTO project_briefs (node_id, pitch, points, author_id) VALUES
+            ('{d}', 'doomed', '{{}}', 'alice'), ('{s}', 'spared', '{{}}', 'alice')"
+        ),
     ] {
         sqlx::query(&q).execute(&pool).await.expect("seed");
     }
@@ -5216,6 +5631,7 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
             notes: 3,
             others_notes: 2,
             files: 2,
+            briefs: 1,
         }
     );
     // "Other people" is relative to who asks.
@@ -5256,6 +5672,11 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
         assert_eq!(live(table, d).await, 0, "{table} on the deleted node");
         assert_eq!(live(table, s).await, 1, "{table} on the other node");
     }
+    let briefs: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT node_id FROM project_briefs")
+        .fetch_all(&pool)
+        .await
+        .expect("briefs");
+    assert_eq!(briefs, [s], "the deleted node's Brief went with it");
     let standalone: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM node_tasks WHERE node_id IS NULL")
             .fetch_one(&pool)

@@ -353,6 +353,10 @@ pub struct NodeDeletionPreview {
     pub others_notes: u64,
     /// Attached files.
     pub files: u64,
+    /// Project Briefs (#282): a Project's current Brief goes with it.
+    /// Absent in an answer from before Briefs.
+    #[serde(default)]
+    pub briefs: u64,
 }
 
 impl NodeDeletionPreview {
@@ -381,6 +385,9 @@ impl NodeDeletionPreview {
         if self.files > 0 {
             out.push(count(self.files, "file", "files"));
         }
+        if self.briefs > 0 {
+            out.push(count(self.briefs, "brief", "briefs"));
+        }
         out
     }
 
@@ -401,6 +408,7 @@ impl NodeDeletionPreview {
             notes: self.notes + other.notes,
             others_notes: self.others_notes + other.others_notes,
             files: self.files + other.files,
+            briefs: self.briefs + other.briefs,
         }
     }
 }
@@ -511,13 +519,15 @@ mod deletion_preview_tests {
             notes: 1,
             others_notes: 1,
             files: 3,
+            briefs: 1,
         };
         assert_eq!(
             p.losses(),
             [
                 "5 tasks (2 from other people)",
                 "1 note (1 from other people)",
-                "3 files"
+                "3 files",
+                "1 brief"
             ]
         );
     }
@@ -554,6 +564,7 @@ mod deletion_preview_tests {
             notes: 3,
             others_notes: 0,
             files: 1,
+            briefs: 0,
         };
         let sum = a.plus(a);
         assert_eq!(sum.nodes, 2);

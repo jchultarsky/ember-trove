@@ -5,7 +5,7 @@ use sqlx::PgPool;
 
 use crate::{
     admin::UserDirectory,
-    auth::{AuthConfig, oidc::OidcClient, suspended::SuspendedSet},
+    auth::{AuthConfig, demoted::DemotedSet, oidc::OidcClient, suspended::SuspendedSet},
     config::Config,
     notify::SesNotifier,
     object_store::ObjectStore,
@@ -27,6 +27,8 @@ pub struct AppState {
     pub accounts: Arc<dyn AccountRepo>,
     /// The same list in memory, checked on every request (#239).
     pub suspended: SuspendedSet,
+    /// When each account lost its admin role, checked on every request.
+    pub demoted: DemotedSet,
     pub nodes: Arc<dyn NodeRepo>,
     pub edges: Arc<dyn EdgeRepo>,
     pub tags: Arc<dyn TagRepo>,
@@ -38,6 +40,8 @@ pub struct AppState {
     pub permissions: Arc<dyn PermissionRepo>,
     /// People and memberships (#147). Owner-scoped, no admin bypass.
     pub people: Arc<dyn PersonRepo>,
+    /// Project Briefs (#282). Keyed by node; routes check node rights.
+    pub briefs: Arc<dyn crate::repo::brief::BriefRepo>,
     pub search: Arc<dyn SearchRepo>,
     pub graph: Arc<dyn GraphRepo>,
     pub backup: Arc<dyn BackupRepo>,

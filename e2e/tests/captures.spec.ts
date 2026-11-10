@@ -272,6 +272,56 @@ test('a share that failed says so', async ({ page }) => {
   await expect(page).not.toHaveURL(/capture=failed/);
 });
 
+// SECURITY (2026-11-10): a share never saves by itself. Any website can make
+// a browser post a form to /share, and the service worker used to turn that
+// into a capture. Now a share only opens the capture box holding its text
+// (sw.js sends the browser here; the worker itself is tested in
+// ui/public/sw.test.mjs).
+test('a share fills the capture box and saves nothing until Capture', async ({ page, request }) => {
+  const mine = async (): Promise<string[]> =>
+    ((await (await request.get('/api/captures')).json()) as { body: string }[]).map((c) => c.body);
+  const title = `${PREFIX}${Date.now()} shared article`;
+  const text = `${title}\nhttps://example.com/a?b=1&c=é`;
+  const shared = encodeURIComponent(
+    JSON.stringify({ title, body: 'https://example.com/a?b=1&c=é' }),
+  );
+  await page.goto(`/?capture=1#shared=${shared}`);
+
+  const composer = page.getByRole('dialog', { name: 'Quick capture' });
+  const box = composer.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toHaveValue(text);
+  await expect(composer.getByTestId('shared-hint')).toBeVisible();
+  // The words are out of the address bar, and nothing was saved.
+  await expect(page).not.toHaveURL(/shared=/);
+  expect((await mine()).filter((b) => b.includes(title))).toEqual([]);
+
+  // Closing the box drops the share: still nothing saved.
+  await composer.getByRole('button', { name: 'Close' }).click();
+  await expect(composer).toHaveCount(0);
+  expect((await mine()).filter((b) => b.includes(title))).toEqual([]);
+
+  // Opened by hand afterwards, the box is empty and says nothing of a share.
+  await page.locator('main').click();
+  await page.keyboard.press('n');
+  await expect(box).toHaveValue('');
+  await expect(composer.getByTestId('shared-hint')).toHaveCount(0);
+  await composer.getByRole('button', { name: 'Close' }).click();
+
+  // Pressing Capture is what saves it.
+  await page.goto(`/?capture=1#shared=${shared}`);
+  await expect(box).toHaveValue(text);
+  await composer.getByRole('button', { name: /Capture/ }).click();
+  await expect(page.locator('[role="status"]').getByText(/Added to Captures/)).toBeVisible();
+  expect((await mine()).filter((b) => b.includes(title))).toEqual([text]);
+});
+
+test('a link with something else in its fragment just opens the capture box', async ({ page }) => {
+  await page.goto('/?capture=1#shared=not-json');
+  const composer = page.getByRole('dialog', { name: 'Quick capture' });
+  await expect(composer.getByPlaceholder(/What’s on your mind/)).toHaveValue('');
+  await expect(composer.getByTestId('shared-hint')).toHaveCount(0);
+});
+
 test('a note needs a node; a loose thought is a capture', async ({ page, request }) => {
   // The API refuses a note without one (422).
   expect((await request.post('/api/notes', { data: { body: `${PREFIX}loose` } })).status()).toBe(422);

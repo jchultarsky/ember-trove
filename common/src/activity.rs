@@ -4,6 +4,11 @@ use utoipa::ToSchema;
 
 use crate::id::{ActivityId, NodeId};
 
+/// Saves by the same person within this many minutes are one session: the
+/// node edit log coalesces them into one "Edited" line (2026-06-10), and a
+/// Project Brief is updated in place instead of superseded (#282).
+pub const EDIT_COALESCE_MINUTES: i64 = 15;
+
 /// A single entry in a node's activity log.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ActivityEntry {
@@ -16,6 +21,24 @@ pub struct ActivityEntry {
     /// Optional context — actor name/email, role, tag name, etc.
     pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
+}
+
+/// The metadata keys that hold an email address: the actor's, and the
+/// address an invite was sent to.
+pub const EMAIL_KEYS: [&str; 2] = ["actor_email", "invited_email"];
+
+/// Remove the email addresses from History entries, for a reader who is
+/// not the node's owner. A node's viewers and editors see who did what by
+/// name; the addresses of everyone who ever acted on the node, or was
+/// invited to it, are the owner's to see (2026-11-10).
+pub fn redact_emails(entries: &mut [ActivityEntry]) {
+    for entry in entries {
+        if let Some(meta) = entry.metadata.as_object_mut() {
+            for key in EMAIL_KEYS {
+                meta.remove(key);
+            }
+        }
+    }
 }
 
 /// Activity entry enriched with the parent node's title — used by the
@@ -64,11 +87,14 @@ pub enum ActivityAction {
     /// A node's project status changed (#208): History, ONTOLOGY §10.
     /// Metadata carries `from` and `to` (labels, either may be null).
     StatusChanged,
+    /// A Project Brief was replaced (#282): History, ONTOLOGY §10. The
+    /// metadata holds the old Brief (`brief::superseded_metadata`).
+    BriefSuperseded,
 }
 
 impl ActivityAction {
     /// Every action this build knows, in declaration order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Created,
         Self::Edited,
         Self::TagAdded,
@@ -80,6 +106,7 @@ impl ActivityAction {
         Self::Exported,
         Self::CreatedFromTemplate,
         Self::StatusChanged,
+        Self::BriefSuperseded,
     ];
 
     /// The database strings of [`Self::ALL`]. Reads filter on these in SQL
@@ -105,6 +132,7 @@ impl ActivityAction {
             Self::Exported => "exported",
             Self::CreatedFromTemplate => "created_from_template",
             Self::StatusChanged => "status_changed",
+            Self::BriefSuperseded => "brief_superseded",
         }
     }
 
@@ -121,6 +149,7 @@ impl ActivityAction {
             "exported" => Some(Self::Exported),
             "created_from_template" => Some(Self::CreatedFromTemplate),
             "status_changed" => Some(Self::StatusChanged),
+            "brief_superseded" => Some(Self::BriefSuperseded),
             _ => None,
         }
     }
@@ -140,6 +169,7 @@ impl ActivityAction {
             Self::Exported => "download",
             Self::CreatedFromTemplate => "content_copy",
             Self::StatusChanged => "flag",
+            Self::BriefSuperseded => "edit_note",
         }
     }
 
@@ -159,6 +189,7 @@ impl ActivityAction {
             Self::CreatedFromTemplate => "created from template",
             // Lowercase like the rest: the dashboard recap prints it inline.
             Self::StatusChanged => "changed status",
+            Self::BriefSuperseded => "updated the brief",
         }
     }
 }
@@ -211,6 +242,7 @@ mod tests {
                 ActivityAction::Exported => 8,
                 ActivityAction::CreatedFromTemplate => 9,
                 ActivityAction::StatusChanged => 10,
+                ActivityAction::BriefSuperseded => 11,
             }
         }
         for (i, a) in ActivityAction::ALL.iter().enumerate() {
@@ -249,5 +281,12 @@ mod tests {
     fn status_changed_is_stored_as_status_changed() {
         assert_eq!(ActivityAction::StatusChanged.as_str(), "status_changed");
         assert_eq!(ActivityAction::StatusChanged.label(), "changed status");
+    }
+
+    #[test]
+    fn brief_superseded_is_stored_as_brief_superseded() {
+        let a = ActivityAction::BriefSuperseded;
+        assert_eq!(a.as_str(), "brief_superseded");
+        assert_eq!(ActivityAction::from_db_str("brief_superseded"), Some(a));
     }
 }

@@ -8,7 +8,7 @@ use common::auth::AuthClaims;
 
 use crate::{error::ApiError, state::AppState};
 
-use super::oidc::OidcClient;
+use super::{demoted::DemotedSet, oidc::OidcClient};
 
 pub const SESSION_COOKIE: &str = "ember_trove_session";
 
@@ -44,7 +44,7 @@ pub async fn require_auth(
         .ok_or_else(|| ApiError::Internal("OIDC not configured — auth is disabled".to_string()))?;
 
     let token = extract_token(&jar, &request)?;
-    let claims = validate_and_map(oidc, &token).await?;
+    let claims = validate_and_map(oidc, &token, &state.demoted).await?;
 
     request.extensions_mut().insert(claims);
     Ok(next.run(request).await)
@@ -116,10 +116,21 @@ fn extract_token(jar: &PrivateCookieJar, request: &Request) -> Result<String, Ap
 /// Validate the JWT (ID token) and map OIDC claims to our `AuthClaims`.
 ///
 /// `cognito:groups` becomes the roles list; absent means no groups (empty vec).
-async fn validate_and_map(oidc: &OidcClient, token: &str) -> Result<AuthClaims, ApiError> {
+///
+/// SECURITY: the groups are the token's, as of when it was issued. A token
+/// from before its account's admin role was removed loses that role here
+/// (`auth::demoted`); otherwise a demoted admin stayed one until the token
+/// expired, and could give the role back to themselves meanwhile.
+async fn validate_and_map(
+    oidc: &OidcClient,
+    token: &str,
+    demoted: &DemotedSet,
+) -> Result<AuthClaims, ApiError> {
     let claims = oidc.validate_token(token).await?;
 
-    let roles = claims.groups.unwrap_or_default();
+    let roles = demoted
+        .roles_for(&claims.sub, claims.iat, claims.groups.unwrap_or_default())
+        .await;
 
     Ok(AuthClaims {
         sub: claims.sub,

@@ -140,6 +140,23 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
   `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`
   autocomplete is the exception: it looks backwards from the cursor.
+- **Rendered Markdown never keeps a class the writer chose** (2026-11-10).
+  `markdown::sanitizer` allows `wikilink` on `<a>` and
+  `wikilink-unresolved` on `<span>` through `add_allowed_classes`, and
+  nothing else: the app's own stylesheet has classes that cover the
+  screen. A renderer that needs a new class adds it there, by name.
+- **The service worker never writes** (2026-11-10). Any site can make a
+  browser post to an address the worker answers, and the worker's own
+  requests carry the session. A share goes to the app as
+  `/?capture=1#shared=…`; `layout.rs` reads it into the capture box and
+  the person presses Capture. Anything else that arrives from outside
+  the app gets the same treatment: shown, then confirmed.
+- **Data that outlives a session is keyed or cleared**: logout calls
+  `draft::clear_all_drafts` and `draft::clear_device_history`;
+  `draft::note_signed_in_subject` clears the history when the person
+  changes. A new localStorage key that holds a person's content joins one
+  of them. `sw.js` purges cached API answers on a 401 from `/auth/me` and
+  on a change of person, and never caches `/api/admin/*`.
 - **Accessibility basics** (#281):
   - A row or card with `on:click` needs a keyboard way in: make its
     title a real `<button type="button">` (its click bubbles to the row's
