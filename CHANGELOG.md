@@ -107,6 +107,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     names, where a screen reader read only "edit text".
   - Error messages that appear in a form are announced when they appear.
 
+- **Backup, Users, Permissions, Templates and Webhooks have the same page
+  header as the rest of the app** (#281): the icon, the title in the
+  display face and the rule under it. Each built its own. Their "nothing
+  here yet" messages, and those of the tag manager and a filtered node
+  list, use the shared empty state.
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted

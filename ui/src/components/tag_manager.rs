@@ -282,19 +282,11 @@ pub fn TagManager() -> impl IntoView {
                         tags.get().map(|result| {
                             match result {
                                 Ok(tag_list) if tag_list.is_empty() => view! {
-                                    <div class="flex flex-col items-center justify-center
-                                                gap-3 py-16">
-                                        <span
-                                            class="material-symbols-outlined
-                                                   text-stone-300 dark:text-stone-700"
-                                            style="font-size: 48px;"
-                                        >
-                                            "label_off"
-                                        </span>
-                                        <p class="text-sm text-stone-400 dark:text-stone-600">
-                                            "No tags yet. Create one above."
-                                        </p>
-                                    </div>
+                                    <crate::components::empty_state::EmptyState
+                                        icon="label_off"
+                                        message="No tags yet."
+                                        hint="Create one above."
+                                    />
                                 }.into_any(),
 
                                 Ok(tag_list) => {

@@ -515,16 +515,8 @@ pub fn NodeList() -> impl IntoView {
                                     };
                                     if filtered.is_empty() {
                                         return view! {
-                                            <div class="flex flex-col items-center justify-center h-full gap-3 p-12">
-                                                <span
-                                                    class="material-symbols-outlined text-stone-300 dark:text-stone-700"
-                                                    style="font-size: 48px;"
-                                                >
-                                                    "description"
-                                                </span>
-                                                <p class="text-stone-400 dark:text-stone-600 text-sm text-center">
-                                                    "No nodes found."
-                                                </p>
+                                            <div class="h-full flex flex-col justify-center">
+                                                <EmptyState icon="description" message="No nodes found." />
                                             </div>
                                         }.into_any();
                                     }

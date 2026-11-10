@@ -14,6 +14,8 @@ use common::{
 };
 use leptos::prelude::*;
 
+use crate::components::page_header::PageHeader;
+
 use crate::components::toast::{ToastLevel, push_toast};
 use leptos_router::hooks::use_navigate;
 
@@ -109,14 +111,10 @@ pub fn BulkPermissionsView() -> impl IntoView {
     // ── View ──────────────────────────────────────────────────────────────────
 
     view! {
-        <div class="flex-1 flex flex-col min-h-0 p-4 md:p-6">
-
-            // ── Header ─────────────────────────────────────────────────────
-            <div class="flex items-center justify-between mb-6">
-                <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
-                    "Permission Management"
-                </h1>
-            </div>
+        <div class="flex flex-col h-full">
+            // The shared page header (#281): this page built its own.
+            <PageHeader icon="manage_accounts" title="Permission Management" />
+            <div class="flex-1 flex flex-col min-h-0 overflow-auto p-4 md:p-6">
 
             // ── Filter input ───────────────────────────────────────────────
             <div class="mb-4">
@@ -216,6 +214,7 @@ pub fn BulkPermissionsView() -> impl IntoView {
                         }
                     }}
                 </Transition>
+            </div>
             </div>
         </div>
     }
