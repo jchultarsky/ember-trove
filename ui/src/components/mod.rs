@@ -18,6 +18,7 @@ pub mod graph_view;
 pub mod icon_button;
 pub mod layout;
 pub mod links_panel;
+pub mod load_error;
 pub mod local_graph;
 pub mod modals;
 pub mod my_day_view;

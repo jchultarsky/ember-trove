@@ -146,6 +146,8 @@ pub fn NotesView() -> impl IntoView {
     let loading = RwSignal::new(true);
     let loading_more = RwSignal::new(false);
     let req_v = RwSignal::new(0u32);
+    // The last fresh load failed: show that, never "No notes yet" (#281, 1.7).
+    let load_failed = RwSignal::new(false);
 
     let parse_node_filter = |nf: &str| uuid::Uuid::parse_str(nf).ok().map(NodeId);
 
@@ -171,13 +173,15 @@ pub fn NotesView() -> impl IntoView {
                 sort_v,
                 1,
             )
-            .await
-            .unwrap_or_default();
-            // Commit only if this is still the latest request.
-            if req_v.get_untracked() == v {
-                has_more.set(res.len() as u32 == crate::api::FEED_PAGE_SIZE);
-                displayed.set(res);
-                loading.set(false);
+            .await;
+            // Commit only if this is still the latest request. The view may
+            // be gone by now: `try_` access, never a panic (leptos.md).
+            if req_v.try_get_untracked() == Some(v) {
+                let _ = load_failed.try_set(res.is_err());
+                let res = res.unwrap_or_default();
+                let _ = has_more.try_set(res.len() as u32 == crate::api::FEED_PAGE_SIZE);
+                let _ = displayed.try_set(res);
+                let _ = loading.try_set(false);
             }
         });
     });
@@ -205,15 +209,23 @@ pub fn NotesView() -> impl IntoView {
                 sort_v,
                 next,
             )
-            .await
-            .unwrap_or_default();
-            if req_v.get_untracked() == v {
-                let got = res.len() as u32;
-                has_more.set(got == crate::api::FEED_PAGE_SIZE);
-                displayed.update(|d| d.extend(res));
-                page.set(next);
+            .await;
+            match res {
+                Ok(res) if req_v.try_get_untracked() == Some(v) => {
+                    let got = res.len() as u32;
+                    let _ = has_more.try_set(got == crate::api::FEED_PAGE_SIZE);
+                    let _ = displayed.try_update(|d| d.extend(res));
+                    let _ = page.try_set(next);
+                }
+                // A newer request took over: its results are the ones shown.
+                Ok(_) => {}
+                // "Load more" stays, so the same page can be asked again.
+                Err(e) => crate::components::toast::push_toast(
+                    ToastLevel::Error,
+                    format!("Couldn\u{2019}t load more notes: {e}"),
+                ),
             }
-            loading_more.set(false);
+            let _ = loading_more.try_set(false);
         });
     };
 
@@ -424,6 +436,16 @@ pub fn NotesView() -> impl IntoView {
                             if loading.get() {
                                 return view! {
                                     <crate::components::skeleton::SkeletonList rows=6 />
+                                }.into_any();
+                            }
+                            if load_failed.get() {
+                                return view! {
+                                    <div class="flex-1 flex flex-col justify-center">
+                                        <crate::components::load_error::LoadError
+                                            what="your notes"
+                                            on_retry=Callback::new(move |()| reload.update(|n| *n += 1))
+                                        />
+                                    </div>
                                 }.into_any();
                             }
                             let msg = if any_filter_active() {

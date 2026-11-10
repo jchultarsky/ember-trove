@@ -942,7 +942,13 @@ fn PersonView(id: PersonId) -> impl IntoView {
                                     {list.into_iter().map(|u| view! { <UsageRow usage=u /> }).collect_view()}
                                 </ul>
                             }.into_any(),
-                            Err(_) => ().into_any(),
+                            // Not "Not on any node yet", and not nothing (#281, 1.7).
+                            Err(_) => view! {
+                                <crate::components::load_error::LoadError
+                                    what="where this person appears"
+                                    on_retry=Callback::new(move |()| version.update(|n| *n += 1))
+                                />
+                            }.into_any(),
                         })}
                     </Suspense>
                 </section>

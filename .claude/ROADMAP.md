@@ -21,6 +21,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
   counts from the sender's `today`; reorder follows `require_task_editor`.
   Still open from 1.9: a monthly task on the 29th to 31st settles on the
   28th after a short month (needs a stored anchor day; owner to decide).
+- **Unreleased: failures are shown** (#281, 1.7 and the dropped errors of
+  §5). `LoadError` replaces the empty state after a failed fetch in ten
+  views; bulk delete, revoke, link delete and attachment delete report
+  failure; attachment delete confirms.
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
   review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
   snapshot; attachment files are stored under their attachment's id

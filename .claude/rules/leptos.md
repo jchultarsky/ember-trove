@@ -125,6 +125,15 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **A failed load is `LoadError`, never the empty state** (#281, 1.7;
+  `load_error.rs`). Don't write `.and_then(|r| r.ok()).unwrap_or_default()`
+  or `.await.unwrap_or_default()` on the data a view's empty state reads:
+  match `Some(Err(_))` first and render `<LoadError what=… on_retry=…/>`.
+  Defaulting is fine only for a secondary read (a counter, a keyboard
+  index) beside a view that shows the error.
+- **An action's error is shown, never `let _ =`** (#281). A dropped error
+  on revoke, delete or save tells the person it worked. Toast it. After
+  the `.await`, use `try_` access.
 - **Deleting a node goes through `DeleteConfirmModal` with `details`**
   (#281): `details=node_delete_details(show, ids)` loads the counts of
   what goes with the node and keeps Delete off until they are shown. A new

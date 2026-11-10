@@ -707,13 +707,20 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                         })}
                                                     </button>
                                                     {by_hand.then(|| view! {
+                                                    // Always visible and muted, never hover-only: a
+                                                    // hover-only control is out of reach of the keyboard
+                                                    // and of touch (#281; leptos.md on group-hover).
                                                     <button
-                                                        class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600
-                                                            text-xs transition-opacity"
+                                                        class="text-stone-300 hover:text-red-600 dark:text-stone-600
+                                                            dark:hover:text-red-400 text-xs transition-colors shrink-0 px-1"
+                                                        title="Remove link"
+                                                        aria-label="Remove link"
                                                         on:click=move |_| {
                                                             wasm_bindgen_futures::spawn_local(async move {
                                                                 match crate::api::delete_edge(edge_id).await {
-                                                                    Ok(_) => refresh_edges.update(|n| *n += 1),
+                                                                    Ok(_) => {
+                                                                        let _ = refresh_edges.try_update(|n| *n += 1);
+                                                                    }
                                                                     Err(e) => crate::components::toast::push_toast(
                                                                         crate::components::toast::ToastLevel::Error,
                                                                         format!("Couldn't remove edge: {e}"),

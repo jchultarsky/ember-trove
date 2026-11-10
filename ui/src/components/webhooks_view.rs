@@ -27,7 +27,8 @@ pub fn WebhooksView() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     let webhooks = LocalResource::new(move || {
         let _ = refresh.get();
-        async move { crate::api::list_webhooks().await.unwrap_or_default() }
+        // The error is kept: a failed load is not "No webhooks yet" (#281, 1.7).
+        async move { crate::api::list_webhooks().await }
     });
 
     // editing: None = list only; Some(None) = create form; Some(Some(hook)) = edit form.
@@ -253,6 +254,14 @@ pub fn WebhooksView() -> impl IntoView {
             // ── Webhook list ─────────────────────────────────────────────────
             <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading…"</p> }>
                 {move || webhooks.get().map(|hooks| {
+                    let Ok(hooks) = hooks else {
+                        return view! {
+                            <crate::components::load_error::LoadError
+                                what="your webhooks"
+                                on_retry=Callback::new(move |()| refresh.update(|n| *n += 1))
+                            />
+                        }.into_any();
+                    };
                     if hooks.is_empty() && editing.get().is_none() {
                         view! {
                             <p class="text-sm text-stone-500 dark:text-stone-400"

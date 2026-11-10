@@ -54,6 +54,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     limited to each task's owner and failed silently. Reorder now follows
     the same rule as editing.
 
+- **A failed load no longer looks like an empty page** (#281). After a
+  server error or a dropped connection, My Day, the calendar, the notes
+  feed, templates, webhooks, a node's notes and tasks, the project
+  dashboard and a person's page showed their "nothing here yet" text, as
+  if the data were gone. They now say what couldn't be loaded, that
+  nothing was changed, and offer **Try again**.
+- **Failures that were reported as success, or not at all** (#281):
+  - Deleting several nodes always said "Deleted N node(s)" as a success,
+    even for none. It now says how many were deleted and how many
+    couldn't be.
+  - Removing someone's access in the sharing dialog dropped an error, so
+    access could appear removed when it wasn't. A failure now says
+    "Access was NOT removed".
+  - Deleting a link in the graph, and deleting an attachment, failed
+    silently. Both report the failure now.
+- **Deleting an attachment asks first.** It removes the file for good and
+  had no confirmation.
+- The remove control on a node page's links is always visible and named
+  "Remove link". It appeared only on hover, which the keyboard and touch
+  screens can't do, and its name was "×".
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted

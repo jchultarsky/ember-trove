@@ -575,7 +575,15 @@ pub fn NodeList() -> impl IntoView {
                                 ok += 1;
                             }
                         }
-                        push_toast(ToastLevel::Success, format!("Deleted {ok} node(s)."));
+                        let (all, message) = crate::components::load_error::bulk_delete_outcome(
+                            ok,
+                            ids.len(),
+                            "node",
+                        );
+                        push_toast(
+                            if all { ToastLevel::Success } else { ToastLevel::Error },
+                            message,
+                        );
                         selected_ids.set(HashSet::new());
                         refresh.update(|n| *n += 1);
                     });
