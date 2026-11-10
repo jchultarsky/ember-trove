@@ -112,6 +112,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                             class="flex-1 px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
                                 bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none
                                 focus:ring-1 focus:ring-amber-500"
+                            aria-label="Email address to share with"
                             placeholder="Email address\u{2026}"
                             prop:value=move || email_input.get()
                             on:input=move |ev| email_input.set(event_target_value(&ev))
@@ -146,7 +147,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         </span>
                     </div>
                     {move || error_msg.get().map(|msg| view! {
-                        <div class="text-xs text-red-500">{msg}</div>
+                        <div role="alert" class="text-xs text-red-500">{msg}</div>
                     })}
                 </div>
             })}
@@ -277,8 +278,16 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                             title="Revoke access"
                                                             on:click=move |_| {
                                                                 wasm_bindgen_futures::spawn_local(async move {
-                                                                    let _ = api::revoke_permission(node_id, perm_id).await;
-                                                                    refresh.update(|n| *n += 1);
+                                                                    // A failed revoke must be said (#281): the owner
+                                                                    // would believe access was removed. The dialog
+                                                                    // may be closed by now: `try_` access.
+                                                                    if let Err(e) = api::revoke_permission(node_id, perm_id).await {
+                                                                        crate::components::toast::push_toast(
+                                                                            crate::components::toast::ToastLevel::Error,
+                                                                            format!("Access was NOT removed: {e}"),
+                                                                        );
+                                                                    }
+                                                                    let _ = refresh.try_update(|n| *n += 1);
                                                                 });
                                                             }
                                                         >

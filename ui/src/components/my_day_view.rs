@@ -47,6 +47,7 @@ use leptos::{ev, prelude::*};
 use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
+use crate::components::load_error::LoadError;
 use crate::components::page_header::PageHeader;
 use crate::components::task_actions::{
     PatchOpts, TaskCtx, delete_with_undo, patch_task, toggle_done,
@@ -342,13 +343,20 @@ pub fn MyDayView() -> impl IntoView {
             <div class="flex-1 overflow-auto p-4 md:p-6 space-y-6">
 
                 // Top zone: focus_date == today
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <crate::components::skeleton::SkeletonList rows=3 />
                 }>
                     {move || {
-                        let raw = today_tasks.get()
-                            .and_then(|r| r.ok())
-                            .unwrap_or_default();
+                        // A failed load is not an empty day (#281, 1.7).
+                        let raw = match today_tasks.get() {
+                            Some(Err(_)) => return view! {
+                                <LoadError
+                                    what="today\u{2019}s tasks"
+                                    on_retry=Callback::new(move |()| task_refresh.update(|n| *n += 1))
+                                />
+                            }.into_any(),
+                            other => other.and_then(Result::ok).unwrap_or_default(),
+                        };
                         let scoped: Vec<MyDayTask> = raw.into_iter()
                             .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
                             .collect();
@@ -363,20 +371,26 @@ pub fn MyDayView() -> impl IntoView {
                                 refresh=task_refresh
                                 accent_class="bg-amber-50/30 dark:bg-amber-950/10 border-amber-200 dark:border-amber-900/40"
                             />
-                        }
+                        }.into_any()
                     }}
-                </Suspense>
+                </Transition>
 
                 <div class="border-t border-dashed border-stone-300 dark:border-stone-700"></div>
 
                 // Bottom zone: every open task NOT focused on today
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <crate::components::skeleton::SkeletonList rows=8 />
                 }>
                     {move || {
-                        let raw = all_open.get()
-                            .and_then(|r| r.ok())
-                            .unwrap_or_default();
+                        let raw = match all_open.get() {
+                            Some(Err(_)) => return view! {
+                                <LoadError
+                                    what="your backlog"
+                                    on_retry=Callback::new(move |()| task_refresh.update(|n| *n += 1))
+                                />
+                            }.into_any(),
+                            other => other.and_then(Result::ok).unwrap_or_default(),
+                        };
                         let scoped: Vec<MyDayTask> = raw.into_iter()
                             .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
                             .collect();
@@ -431,9 +445,9 @@ pub fn MyDayView() -> impl IntoView {
                                 refresh=task_refresh
                                 accent_class="bg-stone-50/40 dark:bg-stone-900/30 border-stone-200 dark:border-stone-700"
                             />
-                        }
+                        }.into_any()
                     }}
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }

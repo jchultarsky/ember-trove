@@ -147,10 +147,27 @@ async fn put_unless_changed(
     }
 }
 
+/// What to say about the local copy of unsaved edits, by whether the
+/// draft write succeeded (#281, 1.11). `false` covers a full or blocked
+/// localStorage and drafts being off (no signed-in user): the edits are
+/// then only in the open editor.
+fn kept_note(kept: bool) -> &'static str {
+    if kept {
+        "Your edits are kept on this device"
+    } else {
+        "Your edits could NOT be kept on this device (its storage is full or blocked): \
+         they are only in this editor, so copy them before you leave"
+    }
+}
+
 /// Shown when a save was refused because the node changed elsewhere.
-const CHANGED_ELSEWHERE_MSG: &str = "This node was changed somewhere else since you opened \
-     it. Your edits are kept on this device. Retry saves them over that change (it stays \
-     in History).";
+fn changed_elsewhere_msg(kept: bool) -> String {
+    format!(
+        "This node was changed somewhere else since you opened it. {}. Retry saves them \
+         over that change (it stays in History).",
+        kept_note(kept)
+    )
+}
 
 /// The editor snapshot as a storable edit-mode draft (#161), with the
 /// fingerprints of the server text it started from (`own_fps`), so a later
@@ -331,6 +348,91 @@ mod tests {
 
 /// Returns `true` if the browser viewport is ≥ 768 px wide (≈ tablet or larger).
 /// Defaults to `true` (preview visible) if `window` is unavailable.
+/// `body` with the first `placeholder` turned into `replacement`, or `None`
+/// when the placeholder isn't there (nothing to settle).
+fn settle_placeholder(body: &str, placeholder: &str, replacement: &str) -> Option<String> {
+    body.contains(placeholder)
+        .then(|| body.replacen(placeholder, replacement, 1))
+}
+
+/// An image finished (or failed) uploading after its editor closed (#281,
+/// 1.6). The closing save kept `![uploading-N…]()` in the text, with the
+/// uploaded file attached but shown nowhere. Put the image (or nothing)
+/// where the placeholder is in the **saved** text.
+///
+/// The write carries the version it read, so it can never land over a
+/// newer save: if the text moved on, the image stays an attachment and
+/// the toast says where it is.
+async fn settle_closed_upload(node_id: NodeId, placeholder: &str, replacement: &str) {
+    let uploaded = !replacement.is_empty();
+    let settled = async {
+        let node = crate::api::fetch_node(node_id).await.ok()?;
+        let body = settle_placeholder(node.body.as_deref()?, placeholder, replacement)?;
+        let req = UpdateNodeRequest {
+            title: None,
+            body: Some(body),
+            metadata: None,
+            status: None,
+            project_status: None,
+            expected_updated_at: Some(node.updated_at),
+        };
+        crate::api::update_node(node_id, &req).await.ok()
+    }
+    .await
+    .is_some();
+    match (uploaded, settled) {
+        (true, true) => push_toast(
+            ToastLevel::Success,
+            "The image finished uploading and is in the node\u{2019}s text.",
+        ),
+        (true, false) => push_toast(
+            ToastLevel::Error,
+            "The image was uploaded but couldn\u{2019}t be placed in the text. \
+             It is under the node\u{2019}s Attachments.",
+        ),
+        // A failed upload is toasted by the caller.
+        (false, _) => {}
+    }
+}
+
+#[cfg(test)]
+mod kept_note_tests {
+    use super::{changed_elsewhere_msg, kept_note};
+
+    #[test]
+    fn the_editor_promises_a_local_copy_only_when_there_is_one() {
+        // #281, 1.11: a full localStorage was ignored and the promise made.
+        assert_eq!(kept_note(true), "Your edits are kept on this device");
+        assert!(kept_note(false).contains("could NOT be kept"));
+        assert!(kept_note(false).contains("copy them"));
+        assert!(changed_elsewhere_msg(true).contains("are kept on this device. Retry"));
+        assert!(!changed_elsewhere_msg(false).contains("are kept on this device"));
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::settle_placeholder;
+
+    #[test]
+    fn a_placeholder_becomes_the_image_or_nothing_once() {
+        let saved = "Intro\n![uploading-1\u{2026}]()\nOutro ![uploading-1\u{2026}]()";
+        let placeholder = "![uploading-1\u{2026}]()";
+        // The uploaded image takes the first placeholder's place.
+        assert_eq!(
+            settle_placeholder(saved, placeholder, "![cat.png](/api/attachments/1)").as_deref(),
+            Some("Intro\n![cat.png](/api/attachments/1)\nOutro ![uploading-1\u{2026}]()")
+        );
+        // A failed upload removes it.
+        assert_eq!(
+            settle_placeholder("a ![uploading-1\u{2026}]() b", placeholder, "").as_deref(),
+            Some("a  b")
+        );
+        // A text that moved on has nothing to settle: no write is made.
+        assert_eq!(settle_placeholder("rewritten", placeholder, "x"), None);
+    }
+}
+
 fn is_wide_viewport() -> bool {
     web_sys::window()
         .and_then(|w| w.inner_width().ok())
@@ -561,10 +663,14 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Drafts are keyed by user and node; with no signed-in user (or in
     // create mode, which has its own draft) they are off.
     let draft_slot = StoredValue::new(node.and_then(|id| Some((subject.clone()?, id.to_string()))));
-    let keep_draft = move |snap: &Snapshot| {
-        if let Some(Some((sub, id))) = draft_slot.try_get_value() {
-            let base = own_fps.try_get_value().unwrap_or_default();
-            crate::draft::write_edit_draft(&sub, &id, &draft_of(snap, base));
+    // Whether the draft is on this device now (see `kept_note`).
+    let keep_draft = move |snap: &Snapshot| -> bool {
+        match draft_slot.try_get_value() {
+            Some(Some((sub, id))) => {
+                let base = own_fps.try_get_value().unwrap_or_default();
+                crate::draft::write_edit_draft(&sub, &id, &draft_of(snap, base))
+            }
+            _ => false,
         }
     };
     let drop_draft = move || {
@@ -604,19 +710,27 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             } else {
                 "Create again to retry"
             };
-            error_msg.try_set(Some(format!(
-                "The save took too long and was stopped. Your edits are kept on this \
-                 device; {retry}."
-            )));
-            if let (Some(Some((sub, id))), Some(t), Some(b), Some(st)) = (
+            // Keep the draft first: the message says whether that worked.
+            let kept = if let (Some(Some((sub, id))), Some(t), Some(b), Some(st)) = (
                 draft_slot.try_get_value(),
                 title.try_get_untracked(),
                 body.try_get_untracked(),
                 status.try_get_untracked(),
             ) {
                 let base = own_fps.try_get_value().unwrap_or_default();
-                crate::draft::write_edit_draft(&sub, &id, &draft_of(&(t, b, st), base));
-            }
+                crate::draft::write_edit_draft(&sub, &id, &draft_of(&(t, b, st), base))
+            } else {
+                false
+            };
+            // Create mode keeps its own draft as you type (`write_draft`).
+            let note = if node.is_some() {
+                kept_note(kept)
+            } else {
+                "Your text is still in this editor"
+            };
+            error_msg.try_set(Some(format!(
+                "The save took too long and was stopped. {note}; {retry}."
+            )));
         })
         .forget();
         g
@@ -723,29 +837,35 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
         let placeholder_clone = placeholder.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::upload_attachment(node_id, form_data).await {
-                Ok(att) => {
-                    let url = crate::api::attachment_download_url(att.id);
-                    let final_md = format!("![{filename}]({url})");
-                    let updated = body
-                        .get_untracked()
-                        .replacen(&placeholder_clone, &final_md, 1);
-                    body.set(updated.clone());
-                    if let Some(el) = textarea_ref.get() {
+            let result = crate::api::upload_attachment(node_id, form_data).await;
+            // What the placeholder becomes: the image, or nothing on failure.
+            let replacement = match &result {
+                Ok(att) => format!(
+                    "![{filename}]({})",
+                    crate::api::attachment_download_url(att.id)
+                ),
+                Err(_) => String::new(),
+            };
+            // The editor may have closed while the file uploaded (#281,
+            // 1.6): its signals are gone, and a plain read would panic. Its
+            // closing save kept the placeholder, so settle that in the
+            // saved text instead.
+            match body.try_get_untracked() {
+                Some(current) => {
+                    let updated = current.replacen(&placeholder_clone, &replacement, 1);
+                    let _ = body.try_set(updated.clone());
+                    if let Some(Some(el)) = textarea_ref.try_get_untracked() {
                         el.set_value(&updated);
                     }
                 }
-                Err(e) => {
-                    // Remove the placeholder on failure.
-                    let updated = body.get_untracked().replacen(&placeholder_clone, "", 1);
-                    body.set(updated.clone());
-                    if let Some(el) = textarea_ref.get() {
-                        el.set_value(&updated);
-                    }
-                    push_toast(ToastLevel::Error, format!("Image upload failed: {e}"));
+                None => {
+                    settle_closed_upload(node_id, &placeholder_clone, &replacement).await;
                 }
             }
-            img_uploading.set(false);
+            if let Err(e) = result {
+                push_toast(ToastLevel::Error, format!("Image upload failed: {e}"));
+            }
+            let _ = img_uploading.try_set(false);
         });
     };
 
@@ -883,8 +1003,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         }
         saving.set(true);
         save_state.set(SaveState::Saving);
-        // Until the server confirms, these edits live on the device too.
-        keep_draft(&snap);
+        // Until the server confirms, these edits live on the device too
+        // (when its storage takes them; a failure is said if the save fails).
+        let _ = keep_draft(&snap);
         own_fps.update_value(|v| v.push(fp(&snap)));
         let own = own_fps.get_value();
         let expected = base_version.get_untracked();
@@ -931,14 +1052,14 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     // loop on retries (an offline session would hammer the
                     // API). Retry, the next keystroke or coming back online
                     // starts a fresh attempt; the unmount flush is a last resort.
-                    keep_draft(&snapshot_now());
+                    let kept = keep_draft(&snapshot_now());
                     save_state.try_set(SaveState::Failed);
                     let manual = nav_after_save.try_get_untracked() == Some(true);
                     nav_after_save.try_set(false);
                     match e {
                         SaveError::ChangedElsewhere(v) => {
                             conflict_version.try_set(Some(v));
-                            error_msg.try_set(Some(CHANGED_ELSEWHERE_MSG.to_string()));
+                            error_msg.try_set(Some(changed_elsewhere_msg(kept)));
                         }
                         SaveError::Other(e) if manual => {
                             error_msg.try_set(Some(format!("{e}")));
@@ -991,7 +1112,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     // A reload (the update banner), the login redirect after
                     // a refused session refresh, or a closed tab must not
                     // drop the edits (#161).
-                    keep_draft(&snapshot_now());
+                    let _ = keep_draft(&snapshot_now());
                     ev.prevent_default();
                     // Some browsers require a return value for the prompt.
                     ev.set_return_value("Unsaved changes");
@@ -1018,9 +1139,9 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         // Read the draft slot and versions now: they go with the owner.
         let slot = draft_slot.try_get_value().flatten();
         let mut own = own_fps.try_get_value().unwrap_or_default();
-        if let Some((sub, nid)) = &slot {
-            crate::draft::write_edit_draft(sub, nid, &draft_of(&snap, own.clone()));
-        }
+        let kept = slot.as_ref().is_some_and(|(sub, nid)| {
+            crate::draft::write_edit_draft(sub, nid, &draft_of(&snap, own.clone()))
+        });
         let expected = base_version.try_get_untracked().flatten();
         own.push(fp(&snap));
         wasm_bindgen_futures::spawn_local(async move {
@@ -1046,10 +1167,20 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     if let Some(ts) = toast_state {
                         ts.push(
                             ToastLevel::Error,
-                            format!(
-                                "Couldn't save your last edits: {why}. They're kept on this \
-                                 device and offered back when you reopen the node."
-                            ),
+                            // The editor is closed by now: say truthfully
+                            // whether the edits survive (#281, 1.11).
+                            if kept {
+                                format!(
+                                    "Couldn't save your last edits: {why}. They're kept on \
+                                     this device and offered back when you reopen the node."
+                                )
+                            } else {
+                                format!(
+                                    "Couldn't save your last edits: {why}. They could NOT be \
+                                     kept on this device either (its storage is full or \
+                                     blocked), so they are lost."
+                                )
+                            },
                         );
                     }
                 }
@@ -1482,7 +1613,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             </div>
             // Error banner
             {move || error_msg.get().map(|msg| view! {
-                <div class="px-6 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
+                <div role="alert" class="px-6 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
                     {msg}
                 </div>
             })}

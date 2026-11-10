@@ -80,6 +80,8 @@ struct EdgeHover {
     tgt_id: Uuid,
     /// `related_to`: shown as ↔, drawn without an arrowhead (#226).
     symmetric: bool,
+    /// A wiki link (§6.6): the card offers no Delete, the API refuses it.
+    machine_owned: bool,
 }
 
 // ── Node-type helpers ────────────────────────────────────────────────────────
@@ -1017,7 +1019,7 @@ pub fn GraphView() -> impl IntoView {
                 }
                 if let Some(err) = error_msg.get() {
                     return view! {
-                        <div class="flex items-center justify-center h-full text-red-400">
+                        <div role="alert" class="flex items-center justify-center h-full text-red-400">
                             <span class="text-sm">{err}</span>
                         </div>
                     }
@@ -1107,6 +1109,7 @@ pub fn GraphView() -> impl IntoView {
                             src_id: src,
                             tgt_id: tgt,
                             symmetric: edge.edge_type.is_symmetric(),
+                            machine_owned: edge.edge_type.is_machine_owned(),
                         };
                         let hover_info_out = hover_info.clone();
 
@@ -1726,6 +1729,8 @@ pub fn GraphView() -> impl IntoView {
                                     }
                                 })}
                                 // Delete button — pointer-events: auto so it's clickable.
+                                // Not for a wiki link: it follows the text (#281, 2.1).
+                                {(!h.machine_owned).then(|| view! {
                                 <g
                                     style="pointer-events: auto; cursor: pointer;"
                                     on:click=move |ev: MouseEvent| {
@@ -1733,8 +1738,18 @@ pub fn GraphView() -> impl IntoView {
                                         let eid = EdgeId(edge_id);
                                         edge_hover.set(None);
                                         spawn_local(async move {
-                                            if delete_edge(eid).await.is_ok() {
-                                                edges_sig.update(|v| v.retain(|e| e.id.0 != edge_id));
+                                            // Said, not swallowed (#281); the graph may be
+                                            // gone by now: `try_` access.
+                                            match delete_edge(eid).await {
+                                                Ok(()) => {
+                                                    let _ = edges_sig.try_update(|v| {
+                                                        v.retain(|e| e.id.0 != edge_id);
+                                                    });
+                                                }
+                                                Err(e) => crate::components::toast::push_toast(
+                                                    crate::components::toast::ToastLevel::Error,
+                                                    format!("Couldn\u{2019}t delete the link: {e}"),
+                                                ),
                                             }
                                         });
                                     }
@@ -1757,6 +1772,17 @@ pub fn GraphView() -> impl IntoView {
                                         "Delete edge"
                                     </text>
                                 </g>
+                                })}
+                                {h.machine_owned.then(|| view! {
+                                    <text
+                                        x=format!("{:.1}", cx)
+                                        y=format!("{:.1}", y_btn_text)
+                                        style="text-anchor: middle; font-size: 8.5px; \
+                                               font-style: italic; fill: #a3a3a3;"
+                                    >
+                                        "From the text"
+                                    </text>
+                                })}
                             </g>
                         }
                         .into_any()

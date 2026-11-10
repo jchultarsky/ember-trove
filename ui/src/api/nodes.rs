@@ -1,8 +1,8 @@
 use common::{
     id::NodeId,
     node::{
-        CreateNodeRequest, Node, NodeListResponse, NodeTitleEntry, ProjectStatusCount,
-        UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeDeletionPreview, NodeListResponse, NodeSort, NodeTitleEntry,
+        ProjectStatusCount, UpdateNodeRequest,
     },
 };
 use gloo_net::http::Request;
@@ -13,42 +13,69 @@ use super::{
 };
 use crate::error::UiError;
 
-/// Fetch nodes with optional status and tag_id filters.
-/// `status`: one of "draft", "published", "archived" or None for active statuses.
-/// `tag_id`: UUID string of a tag to filter by, or None for all.
-/// `include_archived`: when false (default for the node list), archived nodes are excluded
-///   unless `status` is explicitly set to "archived" on the server side.
-/// `project_status`: a project status (#143) to match, case-insensitively.
-pub async fn fetch_nodes_filtered(
-    status: Option<&str>,
-    project_status: Option<&str>,
-    tag_id: Option<uuid::Uuid>,
-    include_archived: bool,
-) -> Result<Vec<Node>, UiError> {
-    let mut params: Vec<String> = Vec::new();
-    if let Some(s) = status {
-        params.push(format!("status={}", js_sys::encode_uri_component(s)));
+/// The node list's filters and order, as `GET /api/nodes` takes them.
+/// Everything is applied by the server, before paging (#257): the type
+/// filter used to run in the browser over one page of every kind, so a
+/// type's list could miss nodes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NodeListQuery {
+    /// "draft", "published" or "archived"; `None` for the active ones.
+    pub status: Option<String>,
+    /// A project status (#143), matched case-insensitively.
+    pub project_status: Option<String>,
+    pub tag_id: Option<uuid::Uuid>,
+    /// Archived nodes too (they are left out by default).
+    pub include_archived: bool,
+    /// One kind only: "article", "project", "area", "reference".
+    pub node_type: Option<String>,
+    pub sort: NodeSort,
+}
+
+/// The first `limit` nodes for `query`, and how many there are in all.
+/// Asked in whole pages (`common::node::node_list_pages`).
+pub async fn fetch_node_list(
+    query: &NodeListQuery,
+    limit: u32,
+) -> Result<(Vec<Node>, u64), UiError> {
+    let mut filters: Vec<String> = Vec::new();
+    if let Some(s) = &query.status {
+        filters.push(format!("status={}", js_sys::encode_uri_component(s)));
     }
-    if let Some(ps) = project_status {
-        params.push(format!(
+    if let Some(ps) = &query.project_status {
+        filters.push(format!(
             "project_status={}",
             js_sys::encode_uri_component(ps)
         ));
     }
-    if let Some(tid) = tag_id {
-        params.push(format!("tag_id={tid}"));
+    if let Some(tid) = query.tag_id {
+        filters.push(format!("tag_id={tid}"));
     }
-    if include_archived {
-        params.push("include_archived=true".to_owned());
+    if query.include_archived {
+        filters.push("include_archived=true".to_owned());
     }
-    let url = if params.is_empty() {
-        api_url("/nodes")
-    } else {
-        format!("{}?{}", api_url("/nodes"), params.join("&"))
-    };
-    let resp = send_authed(|| get_request(&url)).await?;
-    let list: NodeListResponse = parse_json(resp).await?;
-    Ok(list.nodes)
+    if let Some(nt) = &query.node_type {
+        filters.push(format!("node_type={}", js_sys::encode_uri_component(nt)));
+    }
+    filters.push(format!("sort={}", query.sort.as_str()));
+
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut total = 0u64;
+    for (page, per_page) in common::node::node_list_pages(limit) {
+        let url = format!(
+            "{}?{}&page={page}&per_page={per_page}",
+            api_url("/nodes"),
+            filters.join("&")
+        );
+        let resp = send_authed(|| get_request(&url)).await?;
+        let list: NodeListResponse = parse_json(resp).await?;
+        total = list.total;
+        let more = list.has_more;
+        nodes.extend(list.nodes);
+        if !more {
+            break;
+        }
+    }
+    Ok((nodes, total))
 }
 
 /// `GET /api/nodes/project-statuses`: the caller's own statuses, most used
@@ -107,6 +134,28 @@ pub async fn set_node_pinned(id: NodeId, pinned: bool) -> Result<Node, UiError> 
 
 pub async fn delete_node(id: NodeId) -> Result<(), UiError> {
     delete_empty(&format!("/nodes/{id}")).await
+}
+
+/// Ids per `GET /nodes/deletion-preview`: under the server's cap
+/// (`DELETION_PREVIEW_MAX_NODES`) and a short enough URL for any proxy.
+const DELETION_PREVIEW_BATCH: usize = 50;
+
+/// What deleting these nodes would destroy with them (#281): asked in
+/// batches and summed. Nodes that aren't the caller's to delete are left
+/// out by the server (`NodeDeletionPreview::kept`).
+pub async fn node_deletion_preview(ids: &[NodeId]) -> Result<NodeDeletionPreview, UiError> {
+    let mut total = NodeDeletionPreview::default();
+    for batch in ids.chunks(DELETION_PREVIEW_BATCH) {
+        let list = batch
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let part: NodeDeletionPreview =
+            get_json(&format!("/nodes/deletion-preview?ids={list}")).await?;
+        total = total.plus(part);
+    }
+    Ok(total)
 }
 
 pub async fn duplicate_node(id: NodeId) -> Result<Node, UiError> {

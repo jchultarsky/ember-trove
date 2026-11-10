@@ -232,7 +232,7 @@ pub fn TagManager() -> impl IntoView {
                     // Colour picker (palette + native escape hatch)
                     <ColorPicker value=new_color />
                     {move || error_msg.get().map(|msg| view! {
-                        <p class="text-xs text-red-500">{msg}</p>
+                        <p role="alert" class="text-xs text-red-500">{msg}</p>
                     })}
                 </div>
             })}
@@ -266,7 +266,7 @@ pub fn TagManager() -> impl IntoView {
 
             // ── Tag list ───────────────────────────────────────────────────────
             <div class="flex-1 overflow-auto">
-                <Suspense fallback=|| view! {
+                <Transition fallback=|| view! {
                     <div class="divide-y divide-stone-100 dark:divide-stone-800">
                         {(0..5).map(|_| view! {
                             <div class="flex items-center gap-3 px-6 py-3">
@@ -282,19 +282,11 @@ pub fn TagManager() -> impl IntoView {
                         tags.get().map(|result| {
                             match result {
                                 Ok(tag_list) if tag_list.is_empty() => view! {
-                                    <div class="flex flex-col items-center justify-center
-                                                gap-3 py-16">
-                                        <span
-                                            class="material-symbols-outlined
-                                                   text-stone-300 dark:text-stone-700"
-                                            style="font-size: 48px;"
-                                        >
-                                            "label_off"
-                                        </span>
-                                        <p class="text-sm text-stone-400 dark:text-stone-600">
-                                            "No tags yet. Create one above."
-                                        </p>
-                                    </div>
+                                    <crate::components::empty_state::EmptyState
+                                        icon="label_off"
+                                        message="No tags yet."
+                                        hint="Create one above."
+                                    />
                                 }.into_any(),
 
                                 Ok(tag_list) => {
@@ -411,6 +403,7 @@ pub fn TagManager() -> impl IntoView {
                                                                                 {display_name}
                                                                             </span>
                                                                             <span
+                                                                                aria-hidden="true"
                                                                                 class="material-symbols-outlined
                                                                                        text-stone-300 dark:text-stone-600
                                                                                        opacity-0 group-hover:opacity-100
@@ -420,10 +413,9 @@ pub fn TagManager() -> impl IntoView {
                                                                                 "arrow_forward"
                                                                             </span>
                                                                         </button>
-                                                                        // Edit / delete — hover only
-                                                                        <div class="flex items-center gap-1 ml-2
-                                                                                    opacity-0 group-hover:opacity-100
-                                                                                    transition-opacity flex-shrink-0">
+                                                                        // Edit / delete: always visible, so the keyboard
+                                                                        // and touch reach them (#281; leptos.md).
+                                                                        <div class="flex items-center gap-1 ml-2 flex-shrink-0">
                                                                             <button
                                                                                 class="p-1 rounded text-stone-400
                                                                                        hover:text-stone-600
@@ -478,7 +470,7 @@ pub fn TagManager() -> impl IntoView {
                             }
                         })
                     }}
-                </Suspense>
+                </Transition>
             </div>
         </div>
 

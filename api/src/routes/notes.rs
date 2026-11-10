@@ -17,7 +17,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_viewer},
+    auth::permissions::{require_editor, require_viewer, subject_scope},
     error::ApiError,
     repo::note::NoteFeedFilter,
     state::AppState,
@@ -132,11 +132,7 @@ async fn note_feed(
     Extension(claims): Extension<AuthClaims>,
     axum::extract::Query(params): axum::extract::Query<NoteFeedParams>,
 ) -> Result<Json<Vec<FeedNote>>, ApiError> {
-    let owner_id = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let owner_id = subject_scope(&claims);
 
     // Bound the feed query (was unbounded — a full-table scan, and the admin
     // path returns every owner's notes). Generous cap avoids truncating a

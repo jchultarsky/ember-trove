@@ -8,6 +8,8 @@
 
 use common::webhook::{CreateWebhookRequest, UpdateWebhookRequest, Webhook, available_events};
 use leptos::prelude::*;
+
+use crate::components::page_header::PageHeader;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::components::modals::delete_confirm::DeleteConfirmModal;
@@ -27,7 +29,8 @@ pub fn WebhooksView() -> impl IntoView {
     let refresh = RwSignal::new(0u32);
     let webhooks = LocalResource::new(move || {
         let _ = refresh.get();
-        async move { crate::api::list_webhooks().await.unwrap_or_default() }
+        // The error is kept: a failed load is not "No webhooks yet" (#281, 1.7).
+        async move { crate::api::list_webhooks().await }
     });
 
     // editing: None = list only; Some(None) = create form; Some(Some(hook)) = edit form.
@@ -116,9 +119,9 @@ pub fn WebhooksView() -> impl IntoView {
     };
 
     view! {
-        <div class="max-w-3xl mx-auto p-6">
-            <div class="flex items-center justify-between mb-1">
-                <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">"Webhooks"</h1>
+        <div class="flex flex-col h-full">
+            // The shared page header (#281): this page built its own.
+            <PageHeader icon="webhook" title="Webhooks">
                 <button
                     aria-label="New webhook"
                     title="New webhook"
@@ -129,7 +132,8 @@ pub fn WebhooksView() -> impl IntoView {
                 >
                     <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">"add"</span>
                 </button>
-            </div>
+            </PageHeader>
+            <div class="flex-1 overflow-auto p-4 md:p-6 w-full max-w-3xl mx-auto">
             <p class="text-sm text-stone-500 dark:text-stone-400 mb-6">
                 "POST notifications to your endpoints when nodes or tasks change. \
                  Payloads are HMAC-signed when a secret is set (X-Webhook-Signature)."
@@ -251,14 +255,25 @@ pub fn WebhooksView() -> impl IntoView {
             })}
 
             // ── Webhook list ─────────────────────────────────────────────────
-            <Suspense fallback=|| view! { <p class="text-sm text-stone-400">"Loading…"</p> }>
+            <Transition fallback=|| view! { <p class="text-sm text-stone-400">"Loading…"</p> }>
                 {move || webhooks.get().map(|hooks| {
+                    let Ok(hooks) = hooks else {
+                        return view! {
+                            <crate::components::load_error::LoadError
+                                what="your webhooks"
+                                on_retry=Callback::new(move |()| refresh.update(|n| *n += 1))
+                            />
+                        }.into_any();
+                    };
                     if hooks.is_empty() && editing.get().is_none() {
                         view! {
-                            <p class="text-sm text-stone-500 dark:text-stone-400"
-                               data-testid="webhooks-empty">
-                                "No webhooks yet. Create one to get notified when your nodes and tasks change."
-                            </p>
+                            <div data-testid="webhooks-empty">
+                                <crate::components::empty_state::EmptyState
+                                    icon="webhook"
+                                    message="No webhooks yet."
+                                    hint="Create one to get notified when your nodes and tasks change."
+                                />
+                            </div>
                         }.into_any()
                     } else {
                         view! {
@@ -347,7 +362,8 @@ pub fn WebhooksView() -> impl IntoView {
                         }.into_any()
                     }
                 })}
-            </Suspense>
+            </Transition>
+            </div>
         </div>
 
         <DeleteConfirmModal

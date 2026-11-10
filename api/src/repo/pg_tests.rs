@@ -1490,6 +1490,7 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
             page: None,
             per_page: None,
             include_archived: false,
+            sort: Default::default(),
         })
         .await
         .expect("list");
@@ -5167,4 +5168,482 @@ async fn an_older_archive_leaves_what_it_never_carried(pool: PgPool) {
         .await
         .expect("webhook");
     assert_eq!(secret.as_deref(), Some("the-signing-secret"));
+}
+
+// ── The delete confirmation's counts (#281, owner decision) ──────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
+    use common::node::NodeDeletionPreview;
+    let repo = PgNodeRepo::new(pool.clone());
+    let doomed = create_node(&pool, "alice", "preview doomed").await.id;
+    let spared = create_node(&pool, "alice", "preview spared").await.id;
+    let (d, s) = (doomed.0, spared.0);
+    for q in [
+        // On the doomed node: 3 live tasks (1 is bob's) and 1 in the trash;
+        // 3 live notes (2 are bob's) and 1 in the trash; 2 files.
+        format!(
+            "INSERT INTO node_tasks (node_id, owner_id, title, deleted_at) VALUES
+            ('{d}', 'alice', 'a1', NULL), ('{d}', 'alice', 'a2', NULL),
+            ('{d}', 'bob', 'b1', NULL), ('{d}', 'bob', 'trashed', now()),
+            ('{s}', 'bob', 'elsewhere', NULL), (NULL, 'alice', 'standalone', NULL)"
+        ),
+        format!(
+            "INSERT INTO node_notes (node_id, owner_id, body, deleted_at) VALUES
+            ('{d}', 'alice', 'a', NULL), ('{d}', 'bob', 'b1', NULL),
+            ('{d}', 'bob', 'b2', NULL), ('{d}', 'bob', 'trashed', now()),
+            ('{s}', 'alice', 'elsewhere', NULL)"
+        ),
+        format!(
+            "INSERT INTO attachments (node_id, filename, s3_key) VALUES
+            ('{d}', 'one.pdf', '{d}/1/one.pdf'), ('{d}', 'two.pdf', '{d}/2/two.pdf'),
+            ('{s}', 'kept.pdf', '{s}/3/kept.pdf')"
+        ),
+    ] {
+        sqlx::query(&q).execute(&pool).await.expect("seed");
+    }
+
+    let preview = repo
+        .deletion_preview(&[doomed], "alice")
+        .await
+        .expect("preview");
+    assert_eq!(
+        preview,
+        NodeDeletionPreview {
+            nodes: 1,
+            tasks: 3,
+            others_tasks: 1,
+            notes: 3,
+            others_notes: 2,
+            files: 2,
+        }
+    );
+    // "Other people" is relative to who asks.
+    let as_bob = repo
+        .deletion_preview(&[doomed], "bob")
+        .await
+        .expect("as bob");
+    assert_eq!((as_bob.others_tasks, as_bob.others_notes), (2, 1));
+    // A node that doesn't exist adds nothing, and is not counted as a node.
+    let with_missing = repo
+        .deletion_preview(&[doomed, common::id::NodeId(uuid::Uuid::new_v4())], "alice")
+        .await
+        .expect("with a missing node");
+    assert_eq!(with_missing, preview);
+
+    // The counts are the rows the delete removes: every live task, note
+    // and file on the node goes, and nothing anywhere else does.
+    let live = |table: &'static str, node: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            let trash = if table == "attachments" {
+                ""
+            } else {
+                " AND deleted_at IS NULL"
+            };
+            sqlx::query_scalar::<_, i64>(&format!(
+                "SELECT COUNT(*) FROM {table} WHERE node_id = $1{trash}"
+            ))
+            .bind(node)
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+    assert_eq!(live("node_tasks", d).await, 3);
+    repo.delete(doomed).await.expect("delete");
+    for table in ["node_tasks", "node_notes", "attachments"] {
+        assert_eq!(live(table, d).await, 0, "{table} on the deleted node");
+        assert_eq!(live(table, s).await, 1, "{table} on the other node");
+    }
+    let standalone: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM node_tasks WHERE node_id IS NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("standalone");
+    assert_eq!(standalone, 1);
+}
+
+// ── One next occurrence per completion (#281, 1.8) ───────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn two_completions_at_once_schedule_one_next_occurrence(pool: PgPool) {
+    // A double click, or two devices: both requests read the task as open
+    // and both scheduled the next occurrence. `create_occurrence` now
+    // locks the parent and returns the live occurrence it already has.
+    let live_children = |parent: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM node_tasks
+                 WHERE recurrence_parent_id = $1 AND deleted_at IS NULL",
+            )
+            .bind(parent)
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+    for round in 0..10 {
+        let parent = PgTaskRepo::new(pool.clone())
+            .create(None, "owner-a", task_req(&format!("daily {round}")))
+            .await
+            .expect("parent");
+        let (one, two) = (PgTaskRepo::new(pool.clone()), PgTaskRepo::new(pool.clone()));
+        let (r1, r2) = tokio::join!(
+            one.create_occurrence(parent.id, "owner-a", task_req("next")),
+            two.create_occurrence(parent.id, "owner-a", task_req("next")),
+        );
+        let (first, second) = (r1.expect("first"), r2.expect("second"));
+        assert_eq!(first.id, second.id, "both callers get the one occurrence");
+        assert_eq!(live_children(parent.id.0).await, 1, "round {round}");
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_retracted_or_deleted_occurrence_is_scheduled_again(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let parent = tasks
+        .create(None, "owner-a", task_req("weekly"))
+        .await
+        .expect("parent");
+    let first = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
+        .await
+        .expect("first");
+    // Reopening the parent retracts it; completing again schedules anew.
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-a")
+            .await
+            .expect("retract"),
+        1
+    );
+    let second = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
+        .await
+        .expect("second");
+    assert_ne!(first.id, second.id);
+    // A parent that is gone is an error, not a stray task.
+    let missing = common::id::TaskId(uuid::Uuid::new_v4());
+    assert!(
+        tasks
+            .create_occurrence(missing, "owner-a", task_req("weekly"))
+            .await
+            .is_err()
+    );
+}
+
+// ── Reorder follows the edit rule (#281, 2.5) ────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let shared = create_node(&pool, "alice", "reorder shared").await.id;
+    let private = create_node(&pool, "alice", "reorder private").await.id;
+    for q in [format!(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+            ('{0}', 'bob', 'editor', 'alice'), ('{0}', 'carol', 'viewer', 'alice')",
+        shared.0
+    )] {
+        sqlx::query(&q).execute(&pool).await.expect("seed");
+    }
+    let on = |node: common::id::NodeId, owner: &'static str, title: &'static str| {
+        let tasks = PgTaskRepo::new(pool.clone());
+        async move {
+            tasks
+                .create(Some(node), owner, task_req(title))
+                .await
+                .expect("task")
+                .id
+        }
+    };
+    let alice_shared = on(shared, "alice", "alice's on the shared node").await;
+    let alice_private = on(private, "alice", "alice's on her private node").await;
+    let order_of = |id: common::id::TaskId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i32>("SELECT sort_order FROM node_tasks WHERE id = $1")
+                .bind(id.0)
+                .fetch_one(&pool)
+                .await
+                .expect("order")
+        }
+    };
+    let both = [(alice_shared, 7), (alice_private, 7)];
+
+    // A viewer of the node moves nothing.
+    tasks.reorder(&both, Some("carol")).await.expect("carol");
+    assert_eq!(order_of(alice_shared).await, 0);
+    // An editor of the node moves the task there (they can already edit
+    // it), and nothing on a node they can't see.
+    tasks.reorder(&both, Some("bob")).await.expect("bob");
+    assert_eq!(order_of(alice_shared).await, 7);
+    assert_eq!(order_of(alice_private).await, 0);
+    // The owner moves their own; an admin (`None`) moves any.
+    tasks
+        .reorder(&[(alice_private, 3)], Some("alice"))
+        .await
+        .expect("alice");
+    assert_eq!(order_of(alice_private).await, 3);
+    tasks
+        .reorder(&[(alice_private, 9)], None)
+        .await
+        .expect("admin");
+    assert_eq!(order_of(alice_private).await, 9);
+}
+
+// ── One visibility rule for the big lists (#281, 3.2) ────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what(pool: PgPool) {
+    // The node list, the title list and the graph each spelled "visible to
+    // the caller" their own way; they share `visible_among_many` now.
+    let nodes = PgNodeRepo::new(pool.clone());
+    let graph = PgGraphRepo::new(pool.clone());
+    let own = create_node(&pool, "alice", "vis own").await.id;
+    let shared = create_node(&pool, "bob", "vis shared with alice").await.id;
+    let foreign = create_node(&pool, "bob", "vis bob's alone").await.id;
+    // Two grants on one node for the same person must not list it twice
+    // (the old title query needed DISTINCT for this).
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+         ($1, 'alice', 'owner', 'alice'), ($2, 'alice', 'viewer', 'bob'),
+         ($2, 'alice', 'editor', 'bob'), ($2, 'bob', 'owner', 'bob'), ($3, 'bob', 'owner', 'bob')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(own.0)
+    .bind(shared.0)
+    .bind(foreign.0)
+    .execute(&pool)
+    .await
+    .expect("grants");
+
+    let listed = |subject: Option<&'static str>| {
+        let nodes = PgNodeRepo::new(pool.clone());
+        async move {
+            let (rows, total) = nodes
+                .list(common::node::NodeListParams {
+                    node_type: None,
+                    status: None,
+                    project_status: None,
+                    tag_id: None,
+                    owner_id: None,
+                    subject_id: subject.map(str::to_string),
+                    page: None,
+                    per_page: None,
+                    include_archived: true,
+                    sort: Default::default(),
+                })
+                .await
+                .expect("list");
+            assert_eq!(rows.len() as u64, total, "the count follows the same rule");
+            let mut ids: Vec<_> = rows.into_iter().map(|n| n.id).collect();
+            ids.sort_by_key(|id| id.0);
+            ids
+        }
+    };
+    let sorted = |mut ids: Vec<common::id::NodeId>| {
+        ids.sort_by_key(|id| id.0);
+        ids
+    };
+
+    for (subject, expected) in [
+        (Some("alice"), sorted(vec![own, shared])),
+        (Some("bob"), sorted(vec![shared, foreign])),
+        (Some("carol"), vec![]),
+        // An admin's scope is `None`: everything.
+        (None, sorted(vec![own, shared, foreign])),
+    ] {
+        assert_eq!(listed(subject).await, expected, "node list as {subject:?}");
+        let titles = nodes.list_titles(subject).await.expect("titles");
+        assert_eq!(
+            sorted(titles.iter().map(|t| t.id).collect()),
+            expected,
+            "title list as {subject:?}"
+        );
+        let on_graph = graph.list_nodes(subject).await.expect("graph");
+        assert_eq!(
+            sorted(on_graph.iter().map(|n| n.id).collect()),
+            expected,
+            "graph as {subject:?}"
+        );
+    }
+}
+
+// ── GET /permissions filters in SQL (#259) ───────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_permission_list_is_the_callers_grants_and_those_on_nodes_they_own(pool: PgPool) {
+    use super::permission::{PermissionRepo, PgPermissionRepo};
+    let perms = PgPermissionRepo::new(pool.clone());
+    let a1 = create_node(&pool, "alice", "perm a1").await.id;
+    let a2 = create_node(&pool, "alice", "perm a2").await.id;
+    let b1 = create_node(&pool, "bob", "perm b1").await.id;
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+         ($1, 'alice', 'owner', 'alice'), ($1, 'bob', 'editor', 'alice'), ($1, 'carol', 'viewer', 'alice'),
+         ($2, 'alice', 'owner', 'alice'),
+         ($3, 'bob', 'owner', 'bob'), ($3, 'alice', 'viewer', 'bob'), ($3, 'carol', 'viewer', 'alice')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(a1.0)
+    .bind(a2.0)
+    .bind(b1.0)
+    .execute(&pool)
+    .await
+    .expect("grants");
+
+    let seen = |node: Option<common::id::NodeId>, subject: Option<&'static str>| {
+        let perms = PgPermissionRepo::new(pool.clone());
+        async move {
+            let mut rows: Vec<(uuid::Uuid, String)> = perms
+                .list_visible(node, subject)
+                .await
+                .expect("list")
+                .into_iter()
+                .map(|p| (p.node_id.0, p.subject_id))
+                .collect();
+            rows.sort();
+            rows
+        }
+    };
+    let rows = |mut v: Vec<(uuid::Uuid, &str)>| {
+        v.sort();
+        v.into_iter()
+            .map(|(n, s)| (n, s.to_string()))
+            .collect::<Vec<_>>()
+    };
+
+    // Alice owns a1 and a2: every grant there, plus her own grant on b1.
+    // Having granted carol's row on b1 shows her nothing more.
+    assert_eq!(
+        seen(None, Some("alice")).await,
+        rows(vec![
+            (a1.0, "alice"),
+            (a1.0, "bob"),
+            (a1.0, "carol"),
+            (a2.0, "alice"),
+            (b1.0, "alice"),
+        ])
+    );
+    // Bob edits a1 (his own row only) and owns b1 (every row there).
+    assert_eq!(
+        seen(None, Some("bob")).await,
+        rows(vec![
+            (a1.0, "bob"),
+            (b1.0, "alice"),
+            (b1.0, "bob"),
+            (b1.0, "carol"),
+        ])
+    );
+    // Carol owns nothing: her own rows.
+    assert_eq!(
+        seen(None, Some("carol")).await,
+        rows(vec![(a1.0, "carol"), (b1.0, "carol")])
+    );
+    // One node only.
+    assert_eq!(seen(Some(a1), Some("bob")).await, rows(vec![(a1.0, "bob")]));
+    assert_eq!(seen(Some(a2), Some("bob")).await, rows(vec![]));
+    // An admin (`None`): everything, and it equals the unfiltered list.
+    assert_eq!(seen(None, None).await.len(), 7);
+    assert_eq!(
+        seen(None, None).await.len(),
+        perms.list_all(None).await.expect("all").len()
+    );
+}
+
+// ── The node list sorts and pages on the server (#257) ───────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_node_list_sorts_filters_by_type_and_pages_without_gaps(pool: PgPool) {
+    use common::node::{NodeListParams, NodeSort};
+    let repo = PgNodeRepo::new(pool.clone());
+    // Titles out of order, two kinds, one pinned, and two rows with the
+    // same `updated_at` (the id must break the tie the same way on every
+    // page).
+    for (kind, title) in [
+        ("article", "delta"),
+        ("article", "Alpha"),
+        ("project", "charlie"),
+        ("article", "Bravo"),
+        ("article", "echo"),
+    ] {
+        insert_raw_node(&pool, "alice", kind, title, "").await;
+    }
+    sqlx::query("UPDATE nodes SET pinned = true WHERE title = 'echo'")
+        .execute(&pool)
+        .await
+        .expect("pin");
+    // The `touch_updated_at` trigger would overwrite the stamp: switch it
+    // off for this statement, as a backfill does.
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::query("SET LOCAL ember.keep_updated_at = 'on'")
+        .execute(&mut *tx)
+        .await
+        .expect("keep");
+    sqlx::query(
+        "UPDATE nodes SET updated_at = '2001-01-01T00:00:00Z' WHERE title IN ('Alpha', 'Bravo')",
+    )
+    .execute(&mut *tx)
+    .await
+    .expect("tie");
+    tx.commit().await.expect("commit");
+
+    let page = |sort: NodeSort, node_type: Option<NodeType>, page: u32, per_page: u32| {
+        let repo = PgNodeRepo::new(pool.clone());
+        async move {
+            let (rows, total) = repo
+                .list(NodeListParams {
+                    node_type,
+                    status: None,
+                    project_status: None,
+                    tag_id: None,
+                    owner_id: Some("alice".into()),
+                    subject_id: None,
+                    page: Some(page),
+                    per_page: Some(per_page),
+                    include_archived: true,
+                    sort,
+                })
+                .await
+                .expect("list");
+            (rows.into_iter().map(|n| n.title).collect::<Vec<_>>(), total)
+        }
+    };
+
+    // By title, ignoring case; the pinned node first whatever the order.
+    let (titles, total) = page(NodeSort::TitleAsc, None, 1, 50).await;
+    assert_eq!(titles, ["echo", "Alpha", "Bravo", "charlie", "delta"]);
+    assert_eq!(total, 5);
+    let (titles, _) = page(NodeSort::TitleDesc, None, 1, 50).await;
+    assert_eq!(titles, ["echo", "delta", "charlie", "Bravo", "Alpha"]);
+
+    // The type filter is applied before paging: the count and the page are
+    // of Articles only (the browser used to filter one page of everything).
+    let (titles, total) = page(NodeSort::TitleAsc, Some(NodeType::Article), 1, 2).await;
+    assert_eq!(titles, ["echo", "Alpha"]);
+    assert_eq!(total, 4);
+    let (titles, _) = page(NodeSort::TitleAsc, Some(NodeType::Article), 2, 2).await;
+    assert_eq!(titles, ["Bravo", "delta"]);
+
+    // Paging through a tie neither repeats nor skips a row, in both orders.
+    for sort in [NodeSort::ModifiedAsc, NodeSort::ModifiedDesc] {
+        let mut seen = Vec::new();
+        for p in 1..=5 {
+            seen.extend(page(sort, None, p, 1).await.0);
+        }
+        let whole = page(sort, None, 1, 50).await.0;
+        assert_eq!(seen, whole, "{sort:?} page by page");
+        let mut unique = seen.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 5, "{sort:?}: every row once");
+    }
+    // Oldest first puts the two tied rows right after the pinned one.
+    let oldest = page(NodeSort::ModifiedAsc, None, 1, 50).await.0;
+    assert_eq!(oldest[0], "echo");
+    let mut tied = oldest[1..3].to_vec();
+    tied.sort();
+    assert_eq!(tied, ["Alpha", "Bravo"]);
 }

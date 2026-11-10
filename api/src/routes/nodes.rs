@@ -13,8 +13,9 @@ use common::{
     edge::{EdgeType, EdgeWithTitles, Home, HomeNode, NodeHome, SetHomeRequest},
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
-        CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeLookupHit, NodeLookupParams,
-        NodeTitleEntry, ProjectStatusCount, UpdateNodeRequest,
+        CreateNodeRequest, DELETION_PREVIEW_MAX_NODES, Node, NodeDeletionPreview, NodeListParams,
+        NodeListResponse, NodeLookupHit, NodeLookupParams, NodeTitleEntry, ProjectStatusCount,
+        UpdateNodeRequest,
     },
     node_version::NodeVersion,
     ontology::{Capability, allows, edge_kind_violation},
@@ -48,6 +49,7 @@ pub fn router() -> Router<AppState> {
         .route("/lookup", get(lookup_titles))
         .route("/resolve-titles", get(resolve_titles))
         .route("/project-statuses", get(project_statuses))
+        .route("/deletion-preview", get(deletion_preview))
         .route("/slug/{slug}", get(get_node_by_slug))
         .route("/{id}", get(get_node).put(update_node).delete(delete_node))
         .route("/{id}/neighbors", get(neighbors))
@@ -140,11 +142,7 @@ async fn list_titles(
     // nodes they own or have been explicitly granted a permission on —
     // otherwise wiki-link autocomplete would enumerate every node in the
     // system, including nodes never shared with the caller.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let titles = state.nodes.list_titles(subject).await?;
     Ok(Json(titles))
 }
@@ -391,6 +389,32 @@ fn version_snapshot_needed(latest_body: Option<&str>, new_body: &str) -> bool {
     latest_body != Some(new_body)
 }
 
+/// Records a snapshot of `body`, unless it is identical to the latest
+/// stored version (autosave repeats, title-only saves, restoring the
+/// newest version). Awaited by the caller, never spawned: a detached write
+/// can land after the next save's and put the history out of order
+/// (2026-06-10 for saves; #281, 1.12 for restores). A failure is logged and
+/// never fails the save that already happened.
+async fn snapshot_body(
+    versions: &dyn crate::repo::node_version::NodeVersionRepo,
+    node_id: NodeId,
+    body: &str,
+    created_by: &str,
+) {
+    let latest_body = match versions.list(node_id, 1).await {
+        Ok(found) => found.into_iter().next().map(|v| v.body),
+        Err(e) => {
+            tracing::warn!("latest version lookup failed (non-fatal): {e}");
+            None
+        }
+    };
+    if version_snapshot_needed(latest_body.as_deref(), body)
+        && let Err(e) = versions.record(node_id, body, created_by).await
+    {
+        tracing::warn!("node version snapshot failed (non-fatal): {e}");
+    }
+}
+
 /// Whether an `Edited` activity entry should be logged, or coalesced into
 /// `latest`, the node's last *Edited* entry (same subject, still inside the
 /// coalescing window).
@@ -462,26 +486,13 @@ async fn update_node(
         node.body.as_deref().unwrap_or(""),
     )
     .await?;
-    // Record a body snapshot unless identical to the latest stored version
-    // (autosave repeats and title/status-only saves). Awaited inline — the
-    // previous fire-and-forget spawn could write snapshots out of order when
-    // saves arrive seconds apart. Failure stays non-fatal. (2026-06-10)
-    let body_snap = node.body.clone().unwrap_or_default();
-    let latest_body = match state.node_versions.list(node.id, 1).await {
-        Ok(versions) => versions.into_iter().next().map(|v| v.body),
-        Err(e) => {
-            tracing::warn!("latest version lookup failed (non-fatal): {e}");
-            None
-        }
-    };
-    if version_snapshot_needed(latest_body.as_deref(), &body_snap)
-        && let Err(e) = state
-            .node_versions
-            .record(node.id, &body_snap, &claims.sub)
-            .await
-    {
-        tracing::warn!("node version snapshot failed (non-fatal): {e}");
-    }
+    snapshot_body(
+        state.node_versions.as_ref(),
+        node.id,
+        node.body.as_deref().unwrap_or(""),
+        &claims.sub,
+    )
+    .await;
     // A status-only save (the status chip) is already in History as
     // `status_changed`; an "Edited" line beside it would say it twice (#208).
     // Otherwise coalesce rapid consecutive edits by the same user into one
@@ -546,6 +557,60 @@ async fn delete_node(
         );
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DeletionPreviewParams {
+    /// Node ids separated by commas (`Query` can't take a repeated param).
+    ids: String,
+}
+
+/// `GET /nodes/deletion-preview?ids=a,b` — what deleting these nodes would
+/// destroy with them: tasks, notes and files, and how many of the tasks and
+/// notes are other accounts' (owner decision, 2026-11-09, #281). The UI
+/// shows it in the delete confirmation.
+///
+/// SECURITY: each node passes the same check as `DELETE /nodes/:id`
+/// before anything is counted. A node the caller may not delete is left
+/// out, exactly like one that doesn't exist, so the answer can't be used to
+/// probe for a node or to size someone else's. Counts only.
+async fn deletion_preview(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(params): Query<DeletionPreviewParams>,
+) -> Result<Json<NodeDeletionPreview>, ApiError> {
+    let mut ids: Vec<Uuid> = Vec::new();
+    for part in params.ids.split(',').map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        let id = Uuid::parse_str(part).map_err(|_| {
+            ApiError::Validation("ids must be node ids separated by commas".to_string())
+        })?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > DELETION_PREVIEW_MAX_NODES {
+        return Err(ApiError::Validation(format!(
+            "at most {DELETION_PREVIEW_MAX_NODES} nodes per request"
+        )));
+    }
+    let mut mine: Vec<NodeId> = Vec::with_capacity(ids.len());
+    for id in ids {
+        match require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await {
+            Ok(()) => mine.push(NodeId(id)),
+            // Only a 403 means "not yours"; any other error is a failure.
+            Err(ApiError::Forbidden(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if mine.is_empty() {
+        return Ok(Json(NodeDeletionPreview::default()));
+    }
+    Ok(Json(
+        state.nodes.deletion_preview(&mine, &claims.sub).await?,
+    ))
 }
 
 async fn neighbors(
@@ -1192,16 +1257,15 @@ async fn restore_version(
         .update(NodeId(id), req, &ActivityActor::from_claims(&claims))
         .await?;
     sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;
-    // Snapshot the restored body.
-    let sub = claims.sub.clone();
-    let ver_repo = state.node_versions.clone();
-    let nid = node.id;
-    let body_snap = version.body.clone();
-    tokio::spawn(async move {
-        if let Err(e) = ver_repo.record(nid, &body_snap, &sub).await {
-            tracing::warn!("restore version snapshot failed (non-fatal): {e}");
-        }
-    });
+    // Snapshot the restored body, awaited like a save's (#281, 1.12): the
+    // spawn that was here could land after the next save's snapshot.
+    snapshot_body(
+        state.node_versions.as_ref(),
+        node.id,
+        &version.body,
+        &claims.sub,
+    )
+    .await;
     log_activity(
         &state,
         node.id,
@@ -1216,8 +1280,10 @@ async fn restore_version(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve wiki-link titles in `body` to node IDs and sync `wiki_link` edges.
-/// SECURITY: titles resolve only among `owner_id`'s nodes (the source node's
-/// owner), so a link can never point into another user's private node.
+/// SECURITY: titles resolve among the nodes **visible to** `owner_id` (the
+/// source node's owner): their own first, then ones shared with them
+/// (`find_ids_by_titles`; ONTOLOGY §14 allows it). A link can never point
+/// into a node its author can't see.
 async fn sync_wikilinks(
     state: &AppState,
     source_id: NodeId,
@@ -1241,9 +1307,6 @@ async fn sync_wikilinks(
     Ok(())
 }
 
-/// Strip characters that could inject HTTP headers or break Content-Disposition.
-/// Keeps ASCII letters, digits, dots, dashes, underscores, and spaces.
-/// Truncates to 200 chars and falls back to "upload" if the result is empty.
 /// Duplicate a node — creates a copy with the same body, type, and tags.
 /// The new node's title is suffixed with " (copy)" and its status is reset
 /// to `Draft`.  The caller becomes the owner of the duplicate.
@@ -1284,7 +1347,11 @@ async fn duplicate_node(
         .await
         .unwrap_or_default();
     for tag in tags {
-        let _ = state.tags.attach(dup.id, tag.id).await;
+        // Non-fatal, but never silent (#281, 1.12): the copy exists by now.
+        if let Err(e) = state.tags.attach(dup.id, tag.id).await {
+            tracing::warn!(node_id = %dup.id, tag_id = %tag.id, error = %e,
+                "copying a tag to the duplicate failed");
+        }
     }
 
     if let Some(ref body) = dup.body {
@@ -1313,6 +1380,9 @@ fn export_filename(slug: &str, updated_at: chrono::DateTime<chrono::Utc>, ext: &
     format!("{stem}-{}.{ext}", updated_at.format("%Y%m%dT%H%M"))
 }
 
+/// Strip characters that could inject HTTP headers or break Content-Disposition.
+/// Keeps ASCII letters, digits, dots, dashes, underscores, and spaces.
+/// Truncates to 200 chars and falls back to "upload" if the result is empty.
 fn sanitize_filename(raw: &str) -> String {
     let clean: String = raw
         .chars()
@@ -1433,6 +1503,65 @@ mod tests {
             metadata: json!({}),
             created_at: Utc::now() - TimeDelta::minutes(age_minutes),
         }
+    }
+
+    /// A version history kept in memory, newest last.
+    #[derive(Default)]
+    struct MemVersions(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait::async_trait]
+    impl crate::repo::node_version::NodeVersionRepo for MemVersions {
+        async fn list_all(&self) -> Result<Vec<NodeVersion>, common::EmberTroveError> {
+            Ok(vec![])
+        }
+        async fn record(
+            &self,
+            _: NodeId,
+            body: &str,
+            _: &str,
+        ) -> Result<(), common::EmberTroveError> {
+            self.0.lock().expect("lock").push(body.to_string());
+            Ok(())
+        }
+        async fn list(
+            &self,
+            node_id: NodeId,
+            limit: i64,
+        ) -> Result<Vec<NodeVersion>, common::EmberTroveError> {
+            let bodies = self.0.lock().expect("lock");
+            Ok(bodies
+                .iter()
+                .rev()
+                .take(usize::try_from(limit).unwrap_or(0))
+                .map(|body| NodeVersion {
+                    id: NodeVersionId(Uuid::new_v4()),
+                    node_id,
+                    body: body.clone(),
+                    created_by: "someone".to_string(),
+                    created_at: Utc::now(),
+                })
+                .collect())
+        }
+        async fn get(&self, _: NodeVersionId) -> Result<NodeVersion, common::EmberTroveError> {
+            Err(common::EmberTroveError::NotFound("version".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_is_stored_before_the_call_returns_and_in_order() {
+        // #281, 1.12: restoring a version snapshotted in a detached task,
+        // so the write could land after the next save's. `snapshot_body`
+        // is awaited by both the save and the restore.
+        let versions = MemVersions::default();
+        let node = NodeId(Uuid::new_v4());
+        snapshot_body(&versions, node, "restored", "me").await;
+        assert_eq!(*versions.0.lock().expect("lock"), ["restored"]);
+        snapshot_body(&versions, node, "next save", "me").await;
+        assert_eq!(*versions.0.lock().expect("lock"), ["restored", "next save"]);
+        // The same body again (an autosave repeat, or restoring the newest
+        // version) adds nothing.
+        snapshot_body(&versions, node, "next save", "me").await;
+        assert_eq!(versions.0.lock().expect("lock").len(), 2);
     }
 
     #[test]

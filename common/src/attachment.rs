@@ -14,9 +14,3 @@ pub struct Attachment {
     pub s3_key: String,
     pub created_at: DateTime<Utc>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct AttachmentUploadResponse {
-    pub attachment: Attachment,
-    pub download_url: String,
-}

@@ -123,6 +123,35 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Past its due date and still to do. Done and Cancelled are never
+/// overdue. The one rule for every badge and list (#281, 3.5: it was
+/// written three times in the UI, and one copy read the status only once,
+/// so its badge stayed red after the task was ticked).
+#[must_use]
+pub fn is_overdue(status: &TaskStatus, due: Option<NaiveDate>, today: NaiveDate) -> bool {
+    !status.is_terminal() && due.is_some_and(|d| d < today)
+}
+
+impl Task {
+    /// See [`is_overdue`].
+    #[must_use]
+    pub fn is_overdue(&self, today: NaiveDate) -> bool {
+        is_overdue(&self.status, self.due_date, today)
+    }
+
+    /// Whether the task is in `today`'s My Day, by the server's
+    /// carry-forward rule (`list_my_day`): focused on `today` exactly, or
+    /// focused on an earlier day and not yet finished.
+    #[must_use]
+    pub fn in_my_day(&self, today: NaiveDate) -> bool {
+        match self.focus_date {
+            Some(d) if d == today => true,
+            Some(d) if d < today => !self.status.is_terminal(),
+            _ => false,
+        }
+    }
+}
+
 /// Lightweight task summary attached to a project in the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskCounts {
@@ -248,7 +277,7 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CreateTaskRequest {
-    #[garde(length(min = 1, max = 500))]
+    #[garde(length(min = 1, max = 500), custom(crate::node::not_blank))]
     pub title: String,
     /// If absent, the task is standalone (no node association).
     #[garde(skip)]
@@ -267,10 +296,16 @@ pub struct CreateTaskRequest {
 
 /// Every field is optional; `Default` is the no-op PATCH, so callers write
 /// `UpdateTaskRequest { status: Some(s), ..Default::default() }`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+///
+/// Validated like [`CreateTaskRequest`] (#281, 1.5): an empty title used to
+/// reach the database's CHECK and come back as a 500.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, Validate)]
 pub struct UpdateTaskRequest {
+    #[garde(length(min = 1, max = 500), custom(crate::node::not_blank_if_set))]
     pub title: Option<String>,
+    #[garde(skip)]
     pub status: Option<TaskStatus>,
+    #[garde(skip)]
     pub priority: Option<TaskPriority>,
     /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(d))` = set to date
     #[serde(
@@ -278,6 +313,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub focus_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(d))` = set to date
     #[serde(
@@ -285,6 +321,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub due_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(None)` = clear recurrence · `Some(Some(r))` = set
     #[serde(
@@ -292,6 +329,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub recurrence: Option<Option<RecurrenceRule>>,
     /// `None` = leave unchanged · `Some(None)` = detach from node · `Some(Some(id))` = associate
     #[serde(
@@ -299,7 +337,27 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub node_id: Option<Option<NodeId>>,
+    /// The sender's local date, sent with a completion (#281, 1.9). The
+    /// server only knows the UTC date, and the next occurrence of a
+    /// recurring task with no focus date is counted from "today": in a US
+    /// evening UTC is already tomorrow, so a daily task skipped a day.
+    /// Read through [`local_today`], which ignores an impossible value.
+    /// Never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[garde(skip)]
+    pub today: Option<NaiveDate>,
+}
+
+/// The date a request's sender calls today: their `hint` when it is a date
+/// some time zone could be on right now (within a day of the UTC date),
+/// otherwise the UTC date. A wrong or hostile hint can only move the
+/// sender's own next occurrence by a day.
+#[must_use]
+pub fn local_today(hint: Option<NaiveDate>, utc_today: NaiveDate) -> NaiveDate {
+    hint.filter(|d| (*d - utc_today).num_days().abs() <= 1)
+        .unwrap_or(utc_today)
 }
 
 /// A done-toggle expressed as PATCHes: the change, and the one that undoes it.
@@ -341,11 +399,14 @@ pub fn done_toggle(
         status: Some(current.clone()),
         ..Default::default()
     };
-    if next == TaskStatus::Done
-        && let Some(earlier) = focus_date.filter(|d| *d < today)
-    {
-        request.focus_date = Some(Some(today));
-        revert.focus_date = Some(Some(earlier));
+    if next == TaskStatus::Done {
+        // The server counts a recurring task's next occurrence from the
+        // viewer's day, not from UTC's (#281, 1.9).
+        request.today = Some(today);
+        if let Some(earlier) = focus_date.filter(|d| *d < today) {
+            request.focus_date = Some(Some(today));
+            revert.focus_date = Some(Some(earlier));
+        }
     }
     DoneToggle {
         next,
@@ -447,6 +508,85 @@ pub struct ReorderTaskEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTasksRequest {
     pub tasks: Vec<ReorderTaskEntry>,
+}
+
+#[cfg(test)]
+mod overdue_tests {
+    use super::{TaskStatus, is_overdue};
+    use chrono::NaiveDate;
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, d).expect("date")
+    }
+
+    #[test]
+    fn overdue_is_unfinished_and_strictly_past_due() {
+        let today = day(10);
+        assert!(is_overdue(&TaskStatus::Open, Some(day(9)), today));
+        assert!(is_overdue(&TaskStatus::InProgress, Some(day(9)), today));
+        // Due today is not overdue yet; no due date never is.
+        assert!(!is_overdue(&TaskStatus::Open, Some(today), today));
+        assert!(!is_overdue(&TaskStatus::Open, None, today));
+        // Finished one way or the other: never overdue.
+        assert!(!is_overdue(&TaskStatus::Done, Some(day(1)), today));
+        assert!(!is_overdue(&TaskStatus::Cancelled, Some(day(1)), today));
+    }
+}
+
+#[cfg(test)]
+mod local_today_tests {
+    use super::{TaskStatus, done_toggle, local_today};
+    use chrono::NaiveDate;
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, d).expect("date")
+    }
+
+    #[test]
+    fn a_plausible_local_date_wins_over_utc() {
+        // 9 pm in New York on the 9th is already the 10th in UTC.
+        assert_eq!(local_today(Some(day(9)), day(10)), day(9));
+        // Ahead of UTC, and the same day.
+        assert_eq!(local_today(Some(day(11)), day(10)), day(11));
+        assert_eq!(local_today(Some(day(10)), day(10)), day(10));
+    }
+
+    #[test]
+    fn an_impossible_or_missing_date_falls_back_to_utc() {
+        assert_eq!(local_today(None, day(10)), day(10));
+        assert_eq!(local_today(Some(day(8)), day(10)), day(10));
+        assert_eq!(local_today(Some(day(12)), day(10)), day(10));
+    }
+
+    #[test]
+    fn completing_sends_the_viewers_day_and_reopening_does_not() {
+        let done = done_toggle(&TaskStatus::Open, None, day(9));
+        assert_eq!(done.request.today, Some(day(9)));
+        let reopen = done_toggle(&TaskStatus::Done, None, day(9));
+        assert_eq!(reopen.request.today, None);
+        assert_eq!(done.revert.today, None);
+    }
+}
+
+#[cfg(test)]
+mod update_validation_tests {
+    use super::UpdateTaskRequest;
+    use garde::Validate;
+
+    #[test]
+    fn a_task_update_cannot_blank_or_overfill_the_title() {
+        let with = |title: &str| UpdateTaskRequest {
+            title: Some(title.to_string()),
+            ..Default::default()
+        };
+        // #281, 1.5: these reached the database's CHECK and answered 500.
+        assert!(with("").validate().is_err());
+        assert!(with("  ").validate().is_err());
+        assert!(with(&"a".repeat(501)).validate().is_err());
+        assert!(with(&"a".repeat(500)).validate().is_ok());
+        // The no-op PATCH, and one that doesn't touch the title.
+        assert!(UpdateTaskRequest::default().validate().is_ok());
+    }
 }
 
 #[cfg(test)]

@@ -58,7 +58,6 @@ pub mod permission;
 pub mod person;
 pub mod picker;
 pub mod project_status;
-pub mod quickadd;
 pub mod save_watch;
 pub mod search;
 pub mod session_retry;

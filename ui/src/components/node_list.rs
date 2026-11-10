@@ -2,14 +2,16 @@ use std::collections::HashSet;
 
 use common::{
     id::{NodeId, TagId},
-    node::Node,
+    node::{Node, NodeSort},
     tag::Tag,
 };
 use leptos::prelude::*;
+
+use crate::api::NodeListQuery;
 use uuid::Uuid;
 
 use crate::components::empty_state::EmptyState;
-use crate::components::modals::delete_confirm::DeleteConfirmModal;
+use crate::components::modals::delete_confirm::{DeleteConfirmModal, node_delete_details};
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
@@ -19,48 +21,18 @@ use leptos_router::hooks::use_navigate;
 
 // ── Sorting ────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SortKey {
-    NameAsc,
-    NameDesc,
-    ModifiedDesc,
-    ModifiedAsc,
-}
-
-impl SortKey {
-    fn label(self) -> &'static str {
-        match self {
-            SortKey::NameAsc => "Title A→Z",
-            SortKey::NameDesc => "Title Z→A",
-            SortKey::ModifiedDesc => "Newest first",
-            SortKey::ModifiedAsc => "Oldest first",
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            SortKey::NameAsc | SortKey::NameDesc => "sort_by_alpha",
-            SortKey::ModifiedDesc | SortKey::ModifiedAsc => "schedule",
-        }
-    }
-
-    fn sort_nodes(self, mut nodes: Vec<Node>) -> Vec<Node> {
-        match self {
-            SortKey::NameAsc => nodes.sort_by_key(|n| n.title.to_lowercase()),
-            SortKey::NameDesc => nodes.sort_by_key(|n| std::cmp::Reverse(n.title.to_lowercase())),
-            SortKey::ModifiedDesc => nodes.sort_by_key(|n| std::cmp::Reverse(n.updated_at)),
-            SortKey::ModifiedAsc => nodes.sort_by_key(|n| n.updated_at),
-        }
-        nodes
+/// The icon beside a sort order's label (the labels are `NodeSort::label`).
+fn sort_icon(sort: NodeSort) -> &'static str {
+    match sort {
+        NodeSort::TitleAsc | NodeSort::TitleDesc => "sort_by_alpha",
+        NodeSort::ModifiedDesc | NodeSort::ModifiedAsc => "schedule",
     }
 }
 
-const SORT_OPTIONS: &[SortKey] = &[
-    SortKey::ModifiedDesc,
-    SortKey::ModifiedAsc,
-    SortKey::NameAsc,
-    SortKey::NameDesc,
-];
+/// "Load more" presses that count for `query` (none after a filter change).
+fn presses_untracked(more: RwSignal<(NodeListQuery, u32)>, query: &NodeListQuery) -> u32 {
+    more.with_untracked(|(for_query, n)| if for_query == query { *n } else { 0 })
+}
 
 // ── NodeList ───────────────────────────────────────────────────────────────────
 
@@ -78,7 +50,11 @@ pub fn NodeList() -> impl IntoView {
     let project_status_filter: RwSignal<Option<String>> = RwSignal::new(None);
     let on_projects = move || node_type_filter.get().as_deref() == Some("project");
     let show_archived = RwSignal::new(false);
-    let sort_key = RwSignal::new(SortKey::ModifiedDesc);
+    let sort_key = RwSignal::new(NodeSort::ModifiedDesc);
+    // How many times "Load more" was pressed, and for which filters: a
+    // change of filter, kind or order starts from the first page again
+    // without a second fetch (#257).
+    let more: RwSignal<(NodeListQuery, u32)> = RwSignal::new((NodeListQuery::default(), 0));
     let show_sort_menu = RwSignal::new(false);
 
     // Bulk selection state — shared between NodeList (action bar) and NodeCards (checkboxes).
@@ -87,21 +63,25 @@ pub fn NodeList() -> impl IntoView {
     let show_remove_menu = RwSignal::new(false);
     let confirm_bulk_delete = RwSignal::new(false);
 
+    // Every filter and the order go to the server, which applies them
+    // before paging (#257).
+    let query = Memo::new(move |_| NodeListQuery {
+        status: status_filter.get(),
+        project_status: project_status_filter.get().filter(|_| on_projects()),
+        tag_id: tag_filter.get().map(|t| t.id.0),
+        include_archived: show_archived.get(),
+        node_type: node_type_filter.get(),
+        sort: sort_key.get(),
+    });
+    let presses = move || {
+        let q = query.get();
+        more.with(|(for_query, n)| if *for_query == q { *n } else { 0 })
+    };
     let nodes = LocalResource::new(move || {
         let _ = refresh.get();
-        let status = status_filter.get();
-        let project_status = project_status_filter.get().filter(|_| on_projects());
-        let tag = tag_filter.get();
-        let include_archived = show_archived.get();
-        async move {
-            crate::api::fetch_nodes_filtered(
-                status.as_deref(),
-                project_status.as_deref(),
-                tag.map(|t| t.id.0),
-                include_archived,
-            )
-            .await
-        }
+        let q = query.get();
+        let limit = common::node::node_list_limit(presses());
+        async move { crate::api::fetch_node_list(&q, limit).await }
     });
 
     // All available tags — used by the per-card tag picker.
@@ -148,7 +128,7 @@ pub fn NodeList() -> impl IntoView {
                             on:click=move |_| show_sort_menu.update(|v| *v = !*v)
                         >
                             <span class="material-symbols-outlined" style="font-size: 14px;">
-                                {move || sort_key.get().icon()}
+                                {move || sort_icon(sort_key.get())}
                             </span>
                             {move || sort_key.get().label()}
                             <span class="material-symbols-outlined" style="font-size: 14px;">"expand_more"</span>
@@ -161,7 +141,7 @@ pub fn NodeList() -> impl IntoView {
                             <div class="absolute right-0 top-full mt-1 z-20 w-44
                                 bg-white dark:bg-stone-900 rounded-xl shadow-xl
                                 border border-stone-200 dark:border-stone-700 overflow-hidden">
-                                {SORT_OPTIONS.iter().map(|&opt| {
+                                {NodeSort::ALL.iter().map(|&opt| {
                                     view! {
                                         <button
                                             class=move || {
@@ -179,7 +159,7 @@ pub fn NodeList() -> impl IntoView {
                                             }
                                         >
                                             <span class="material-symbols-outlined" style="font-size: 14px;">
-                                                {opt.icon()}
+                                                {sort_icon(opt)}
                                             </span>
                                             {opt.label()}
                                         </button>
@@ -474,7 +454,7 @@ pub fn NodeList() -> impl IntoView {
             }}
 
             <div class="flex-1 overflow-auto">
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <ul class="divide-y divide-stone-100 dark:divide-stone-800">
                         {(0..6).map(|_| view! {
                             <li class="px-6 py-4">
@@ -496,42 +476,16 @@ pub fn NodeList() -> impl IntoView {
                     {move || {
                         nodes.get().map(|result| {
                             match result {
-                                Ok(list) if list.is_empty() => view! {
+                                Ok((list, _)) if list.is_empty() => view! {
                                     <div class="h-full flex flex-col justify-center">
                                         <EmptyState icon="description" message="No nodes found." />
                                     </div>
                                 }.into_any(),
-                                Ok(list) => {
-                                    // Client-side type filter applied after fetch.
-                                    let type_f = node_type_filter.get();
-                                    let filtered: Vec<Node> = if let Some(ref nt) = type_f {
-                                        list.into_iter()
-                                            .filter(|n| {
-                                                n.node_type.as_str() == nt.as_str()
-                                            })
-                                            .collect()
-                                    } else {
-                                        list
-                                    };
-                                    if filtered.is_empty() {
-                                        return view! {
-                                            <div class="flex flex-col items-center justify-center h-full gap-3 p-12">
-                                                <span
-                                                    class="material-symbols-outlined text-stone-300 dark:text-stone-700"
-                                                    style="font-size: 48px;"
-                                                >
-                                                    "description"
-                                                </span>
-                                                <p class="text-stone-400 dark:text-stone-600 text-sm text-center">
-                                                    "No nodes found."
-                                                </p>
-                                            </div>
-                                        }.into_any();
-                                    }
-                                    // Pinned nodes always float to the top,
-                                    // then secondary sort by the chosen SortKey.
-                                    let mut sorted = sort_key.get().sort_nodes(filtered);
-                                    sorted.sort_by_key(|n| !n.pinned); // stable: false < true, so pinned (true) → !true = false sorts first
+                                // The server filtered by kind and sorted
+                                // (pinned first), so the rows are shown as
+                                // they came (#257).
+                                Ok((list, total)) => {
+                                    let shown = list.len() as u64;
                                     // Snapshot available tags (empty vec if resource hasn't resolved yet).
                                     let available_tags = all_tags
                                         .get()
@@ -539,10 +493,32 @@ pub fn NodeList() -> impl IntoView {
                                         .unwrap_or_default();
                                     view! {
                                         <NodeCards
-                                            nodes=sorted
+                                            nodes=list
                                             available_tags=available_tags
                                             selected_ids=selected_ids
                                         />
+                                        {(shown < total).then(|| view! {
+                                            <div class="flex items-center justify-center gap-3 px-4 py-4
+                                                        text-xs text-stone-500 dark:text-stone-400"
+                                                 data-testid="node-list-more">
+                                                <span>{format!("Showing {shown} of {total}")}</span>
+                                                <button
+                                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                                           border border-stone-300 dark:border-stone-700
+                                                           text-stone-700 dark:text-stone-300 font-medium
+                                                           hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                                                    on:click=move |_| {
+                                                        let q = query.get_untracked();
+                                                        let n = presses_untracked(more, &q);
+                                                        more.set((q, n + 1));
+                                                    }
+                                                >
+                                                    <span class="material-symbols-outlined" style="font-size:14px;"
+                                                          aria-hidden="true">"expand_more"</span>
+                                                    "Load more"
+                                                </button>
+                                            </div>
+                                        })}
                                     }.into_any()
                                 }
                                 Err(e) => view! {
@@ -551,7 +527,7 @@ pub fn NodeList() -> impl IntoView {
                             }
                         })
                     }}
-                </Suspense>
+                </Transition>
             </div>
 
             // Bulk delete confirmation modal
@@ -575,12 +551,26 @@ pub fn NodeList() -> impl IntoView {
                                 ok += 1;
                             }
                         }
-                        push_toast(ToastLevel::Success, format!("Deleted {ok} node(s)."));
+                        let (all, message) = crate::components::load_error::bulk_delete_outcome(
+                            ok,
+                            ids.len(),
+                            "node",
+                        );
+                        push_toast(
+                            if all { ToastLevel::Success } else { ToastLevel::Error },
+                            message,
+                        );
                         selected_ids.set(HashSet::new());
                         refresh.update(|n| *n += 1);
                     });
                 })
                 on_cancel=Callback::new(move |()| confirm_bulk_delete.set(false))
+                details=node_delete_details(
+                    confirm_bulk_delete.into(),
+                    Signal::derive(move || {
+                        selected_ids.get().iter().map(|&u| NodeId(u)).collect()
+                    }),
+                )
             />
         </div>
     }
@@ -673,10 +663,15 @@ fn NodeCards(
                                     </span>
 
                                     // Title
-                                    <span class="text-sm font-medium text-stone-900
-                                                 dark:text-stone-100 truncate">
+                                    // A real button: the row was click-only, so the
+                                    // keyboard couldn't open a node (#281). Its click
+                                    // bubbles to the row's handler above.
+                                    <button type="button"
+                                        class="text-sm font-medium text-stone-900 text-left
+                                               dark:text-stone-100 truncate cursor-pointer
+                                               focus-visible:outline-2 focus-visible:outline-amber-500 rounded">
                                         {node.title.clone()}
-                                    </span>
+                                    </button>
 
                                     // Status icon — semantic colour, with tooltip
                                     <span

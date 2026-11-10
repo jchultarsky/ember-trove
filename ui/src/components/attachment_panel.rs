@@ -19,6 +19,9 @@ fn is_previewable(content_type: &str) -> bool {
 #[component]
 pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
     let refresh = RwSignal::new(0u32);
+    // The file a Delete click is asking about (#281): deleting removes it
+    // from storage for good, so it is confirmed first and a failure is said.
+    let pending_delete: RwSignal<Option<(AttachmentId, String)>> = RwSignal::new(None);
     let error_msg = RwSignal::new(Option::<String>::None);
     let drag_over = RwSignal::new(false);
     let file_input_ref = NodeRef::<Input>::new();
@@ -111,7 +114,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                     Ok(fd) => fd,
                     Err(_) => {
                         failed += 1;
-                        upload_progress.set(Some((idx + 1, total)));
+                        let _ = upload_progress.try_set(Some((idx + 1, total)));
                         continue;
                     }
                 };
@@ -121,23 +124,32 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                     .is_err()
                 {
                     failed += 1;
-                    upload_progress.set(Some((idx + 1, total)));
+                    let _ = upload_progress.try_set(Some((idx + 1, total)));
                     continue;
                 }
                 if api::upload_attachment(node_id, form_data).await.is_err() {
                     failed += 1;
                 }
-                upload_progress.set(Some((idx + 1, total)));
+                // The uploads go on if the page is left; its signals don't
+                // (#281): `try_` access from here on.
+                let _ = upload_progress.try_set(Some((idx + 1, total)));
             }
-            upload_progress.set(None);
-            pending_files.set(vec![]);
-            if let Some(el) = file_input_ref.get_untracked() {
+            let _ = upload_progress.try_set(None);
+            let _ = pending_files.try_set(vec![]);
+            if let Some(Some(el)) = file_input_ref.try_get_untracked() {
                 el.set_value("");
             }
             if failed > 0 {
-                error_msg.set(Some(format!("{failed} file(s) failed to upload.")));
+                let message = format!("{failed} file(s) failed to upload.");
+                // Said even when the panel is gone.
+                if error_msg.try_set(Some(message.clone())).is_some() {
+                    crate::components::toast::push_toast(
+                        crate::components::toast::ToastLevel::Error,
+                        message,
+                    );
+                }
             }
-            refresh.update(|n| *n += 1);
+            let _ = refresh.try_update(|n| *n += 1);
         });
     };
 
@@ -287,7 +299,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
 
                 // ── Error message ─────────────────────────────────────────────
                 {move || error_msg.get().map(|msg| view! {
-                    <div class="mb-2 text-xs text-red-500">{msg}</div>
+                    <div role="alert" class="mb-2 text-xs text-red-500">{msg}</div>
                 })}
 
                 // ── Attachment list ───────────────────────────────────────────
@@ -385,8 +397,8 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                                 copied_att.set(Some(att_id));
                                                                 wasm_bindgen_futures::spawn_local(async move {
                                                                     gloo_timers::future::TimeoutFuture::new(2000).await;
-                                                                    if copied_att.get_untracked() == Some(att_id) {
-                                                                        copied_att.set(None);
+                                                                    if copied_att.try_get_untracked() == Some(Some(att_id)) {
+                                                                        let _ = copied_att.try_set(None);
                                                                     }
                                                                 });
                                                             }
@@ -423,11 +435,9 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                                                             class="p-0.5 text-stone-400 hover:text-red-500
                                                                    cursor-pointer transition-colors"
                                                             title="Delete attachment"
-                                                            on:click=move |_| {
-                                                                wasm_bindgen_futures::spawn_local(async move {
-                                                                    let _ = api::delete_attachment(att_id).await;
-                                                                    refresh.update(|n| *n += 1);
-                                                                });
+                                                            on:click={
+                                                                let filename = filename.clone();
+                                                                move |_| pending_delete.set(Some((att_id, filename.clone())))
                                                             }
                                                         >
                                                             <span aria-hidden="true" class="material-symbols-outlined"
@@ -478,6 +488,31 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
                         })
                     }}
                 </Suspense>
+                <crate::components::modals::delete_confirm::DeleteConfirmModal
+                    show=Signal::derive(move || pending_delete.get().is_some())
+                    item_name=Signal::derive(move || {
+                        pending_delete.get().map(|(_, name)| name).unwrap_or_default()
+                    })
+                    on_cancel=Callback::new(move |()| pending_delete.set(None))
+                    on_confirm=Callback::new(move |()| {
+                        let Some((att_id, name)) = pending_delete.get_untracked() else {
+                            return;
+                        };
+                        pending_delete.set(None);
+                        wasm_bindgen_futures::spawn_local(async move {
+                            // The node page may be gone by now: `try_` access.
+                            match api::delete_attachment(att_id).await {
+                                Ok(()) => {
+                                    let _ = refresh.try_update(|n| *n += 1);
+                                }
+                                Err(e) => crate::components::toast::push_toast(
+                                    crate::components::toast::ToastLevel::Error,
+                                    format!("Couldn\u{2019}t delete {name}: {e}"),
+                                ),
+                            }
+                        });
+                    })
+                />
         </crate::components::node_section::SectionShell>
     }
 }

@@ -14,13 +14,6 @@ pub async fn list_permissions(
     get_json(&format!("/nodes/{node_id}/permissions")).await
 }
 
-pub async fn grant_permission(
-    node_id: NodeId,
-    req: &common::permission::GrantPermissionRequest,
-) -> Result<common::permission::Permission, UiError> {
-    post_json(&format!("/nodes/{node_id}/permissions"), req).await
-}
-
 pub async fn revoke_permission(
     node_id: NodeId,
     perm_id: common::id::PermissionId,

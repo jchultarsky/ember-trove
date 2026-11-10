@@ -79,3 +79,32 @@ pub fn EdgeTypeOptions(value: leptos::prelude::RwSignal<String>) -> impl leptos:
         })
         .collect_view()
 }
+
+#[cfg(test)]
+mod icon_font_tests {
+    use super::{status_icon, type_icon};
+
+    /// The names bundled in the self-hosted icon font, written by
+    /// `scripts/refresh-icon-font.sh`.
+    const BUNDLED: &str = include_str!("../../icon-names.txt");
+
+    #[test]
+    fn every_type_and_status_icon_is_in_the_font_subset() {
+        // The font holds only the glyphs the script finds in the sources. A
+        // name it misses renders as raw text: the Draft icon showed
+        // "edit_note" on every list (found 2026-11-10), because this module
+        // has no markup for the scan to notice. Run the script after adding
+        // an icon; this test fails until you do.
+        let bundled: Vec<&str> = BUNDLED.lines().collect();
+        let used = ["article", "project", "area", "reference"]
+            .map(type_icon)
+            .into_iter()
+            .chain(["draft", "published", "archived"].map(status_icon));
+        for name in used {
+            assert!(
+                bundled.contains(&name),
+                "icon `{name}` is not in ui/icon-names.txt: run scripts/refresh-icon-font.sh"
+            );
+        }
+    }
+}

@@ -140,17 +140,22 @@ pub fn read_edit_draft(subject: &str, node_id: &str) -> Option<EditDraft> {
     Some(d)
 }
 
-/// Keep unsaved edits of `node_id`. Silently no-ops on any storage error.
-pub fn write_edit_draft(subject: &str, node_id: &str, draft: &EditDraft) {
+/// Keep unsaved edits of `node_id`. Returns whether the draft is on this
+/// device now: `false` when storage is full, blocked or absent, or after
+/// logout. The editor must not promise "kept on this device" on a `false`
+/// (#281, 1.11; the result used to be dropped).
+#[must_use = "say \"kept on this device\" only when this returned true"]
+pub fn write_edit_draft(subject: &str, node_id: &str, draft: &EditDraft) -> bool {
     if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
+        return false;
     }
     let draft = EditDraft {
         saved_at: Some(now_ms()),
         ..draft.clone()
     };
-    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(&draft)) {
-        let _ = s.set_item(&edit_draft_key(subject, node_id), &json);
+    match (storage(), serde_json::to_string(&draft)) {
+        (Some(s), Ok(json)) => s.set_item(&edit_draft_key(subject, node_id), &json).is_ok(),
+        _ => false,
     }
 }
 

@@ -63,6 +63,12 @@ cargo check && cargo clippy -- -D warnings
 - The loop check is a recursive CTE with `UNION`, so a legacy loop
   terminates. The home check skips the same parent, so a repeat stays a
   409 duplicate.
+- `DELETE /edges/:id` refuses a `wiki_link` with 422 (#281, §6.6): it
+  mirrors `[[Title]]` in the text, and sync would put it back. The check
+  comes **after** the rights check, so a stranger still gets 403 and
+  learns nothing about the type. `EdgeType::is_machine_owned` is the one
+  rule; create, convert, `LinkRef::removable` and the UI's remove
+  controls all read it.
 - `DELETE /edges/:id` for `contains` and `related_to` accepts an editor of
   **either** end (one home must never trap a child; `related_to` has no
   direction). Other types stay source-editor only. The rule is
@@ -218,11 +224,80 @@ cargo check && cargo clippy -- -D warnings
   crontab, so a failure is a red run and an email (the old `backup.sh`
   cron failed silently for seven months).
 
+## "Visible to" in SQL (#281, 3.2)
+
+- Two spellings only, both in `repo/mod.rs`:
+  - `visible_to(alias, n)`: a per-row `EXISTS`. For a query that touches
+    few nodes (a join from tasks or notes, a title lookup).
+  - `visible_among_many(alias, n)`: `id IN (grants UNION own)`, hashed
+    once. For a query that returns many of the caller's nodes (node list,
+    title list, graph). Measured 2026-11-10 on 20,000 nodes: about twice
+    as fast as `visible_to` there.
+- A query scoped to `owner_id` alone is owned-only on purpose (graph edges
+  and positions, search, the notes feed). Don't "fix" it to visible.
+- `the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what`
+  holds the three big lists to one answer.
+- One line of Markdown as plain text is `common::note::plain_line`
+  (3.4); `markdown::plain_preview` and `note_title` both use it.
+
+## Wiki links (#281, 3.1)
+
+- `common::wikilink::wikilinks(text)` is the only scanner for `[[…]]`.
+  It gives each link's byte range, target and display, and skips code
+  (`code_ranges`). Edge sync, title resolution, the renderer, excerpts,
+  note previews and "link this mention" all go through it or
+  `replace_wikilinks`. Never write another `find("[[")` loop: the five
+  that existed disagreed on `[[]]`, `[[x|]]`, trimming and unclosed
+  openers.
+- A rule change there changes which `wiki_link` edges exist: sync runs on
+  the next save of each node.
+
+## Request validation (#281, 1.5)
+
+- An update request validates like its create: `UpdateNodeRequest` and
+  `UpdateTaskRequest` derive `garde::Validate`, and the route calls
+  `validate()` before anything else. A rule a create has (title length,
+  `not_blank`, the 1 MiB body cap) belongs on the update too, or the
+  database's CHECK answers it as a 500.
+- A node's body snapshot goes through `snapshot_body` (routes/nodes.rs),
+  awaited. Never `tokio::spawn` a version write: it can land after the
+  next save's.
+
+## Task rules (#281)
+
+- Who may change a task is `require_task_editor` (routes/tasks.rs): its
+  owner, an admin, or an editor of its node. `TaskRepo::reorder` applies
+  the same rule in SQL and skips the rest.
+- A list's admin scope is `subject_scope(&claims)`, never an inline
+  `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
+  `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
+  `common::task::is_overdue` and `Task::in_my_day`.
+- `TaskRepo::create_occurrence` locks the parent row and returns the live
+  occurrence it already has: a parent has at most one. Without the lock,
+  `two_completions_at_once_schedule_one_next_occurrence` fails.
+- "Today" for a recurring task's next occurrence is the sender's:
+  `UpdateTaskRequest.today`, read through `common::task::local_today`
+  (within a day of UTC, else UTC). `done_toggle` sends it. Never use the
+  server's UTC date for a user-facing day when the client can say.
+
+## Node deletion preview (#281)
+
+- `GET /nodes/deletion-preview?ids=a,b` feeds the delete confirmation.
+  Each id passes `require_owner`, the check `DELETE /nodes/:id` makes,
+  before anything is counted. A node that fails it is left out, the same
+  as one that doesn't exist: only a 403 means "not yours", any other error
+  propagates. The answer is counts only (`NodeDeletionPreview`).
+- `NodeRepo::deletion_preview` counts the rows the `nodes` cascade
+  removes. A new table that holds a node's content, and that a person
+  would miss, joins that query and `NodeDeletionPreview::losses`.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.
 - `list_nodes` skips the `subject_id` filter for admins.
-- `is_owner`: `user.sub == n.owner_id || user.roles.contains("admin")`.
+- Ownership of a non-node resource is `require_resource_owner(claims, owner_id)`
+  (auth/permissions.rs): the owner, or an admin. People, captures and
+  memberships are the exceptions: owner only, no admin bypass.
 - Admin sub: `f1eb2590-0091-70e4-d9b3-24e4a23d24d1` (`julian@chultarsky.com`).
 
 ## AWS SDK / TLS
@@ -232,7 +307,7 @@ cargo check && cargo clippy -- -D warnings
   Do **not** re-enable the legacy `rustls` feature — it drags in the advisory-laden
   rustls 0.21 / rustls-webpki 0.101 chain that was deliberately eliminated (see
   `.cargo/audit.toml` history and `.claude/ERRORS.md`).
-- AWS SDK requires rustc ≥ 1.91.1; the pinned 1.96 toolchain clears it.
+- AWS SDK requires rustc ≥ 1.91.1; the pinned toolchain (`rust-toolchain.toml`) clears it.
 
 ## Cognito Hosted UI
 

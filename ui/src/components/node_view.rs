@@ -8,7 +8,7 @@ use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::activity_panel::ActivityPanel;
 use crate::components::attachment_panel::AttachmentPanel;
 use crate::components::links_panel::LinksPanel;
-use crate::components::modals::delete_confirm::DeleteConfirmModal;
+use crate::components::modals::delete_confirm::{DeleteConfirmModal, node_delete_details};
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
@@ -90,16 +90,20 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
         let id = id;
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::delete_node(id).await {
+                // The page may be gone by the time this returns (the user
+                // went elsewhere): `try_` access, never a panic (#281).
                 Ok(_) => {
                     push_toast(ToastLevel::Success, "Node deleted.");
-                    refresh.update(|n| *n += 1);
-                    navigate.get_value()("/nodes", Default::default());
+                    let _ = refresh.try_update(|n| *n += 1);
+                    if let Some(go) = navigate.try_get_value() {
+                        go("/nodes", Default::default());
+                    }
                 }
                 Err(e) => {
                     push_toast(ToastLevel::Error, format!("Delete failed: {e}"));
                 }
             }
-            deleting.set(false);
+            let _ = deleting.try_set(false);
         });
     };
 
@@ -182,8 +186,12 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
 
                             view! {
                                 <div class="flex flex-col h-full">
-                                    <div class="flex items-center justify-between px-6 py-4 border-b border-stone-200 dark:border-stone-800">
-                                        <div class="flex items-center gap-3">
+                                    // At phone width the title takes the row and the
+                                    // icons and status chip wrap under it (#262): in one
+                                    // unwrapping row the title was squeezed to a few
+                                    // characters a line and the chip ran off the screen.
+                                    <div class="flex items-start sm:items-center justify-between gap-2 px-4 md:px-6 py-4 border-b border-stone-200 dark:border-stone-800">
+                                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0 flex-1">
                                             <button
                                                 title="Back to nodes"
                                                 aria-label="Back to nodes"
@@ -192,7 +200,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             >
                                                 <span aria-hidden="true" class="material-symbols-outlined">"arrow_back"</span>
                                             </button>
-                                            <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
+                                            <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100 min-w-0 break-words max-w-full">
                                                 {n.title.clone()}
                                             </h1>
                                             // Type icon — same encoding as NodeList
@@ -226,7 +234,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             // node so switching nodes implicitly closes the menu.
                                             let menu_open = RwSignal::new(false);
                                             view! {
-                                                <div class="flex items-center gap-1">
+                                                <div class="flex items-center gap-1 shrink-0">
                                                     // Section outline — every size (#131; it replaces
                                                     // #123's Jump to tasks / notes buttons).
                                                     <crate::components::node_section::SectionOutline />
@@ -435,6 +443,10 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
             item_name=Signal::derive(move || delete_item_name.get())
             on_confirm=Callback::new(move |_| do_delete())
             on_cancel=Callback::new(move |_| show_delete_confirm.set(false))
+            details=node_delete_details(
+                show_delete_confirm.into(),
+                Signal::derive(move || vec![id]),
+            )
         />
     }
 }
@@ -639,7 +651,7 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                         </div>
                     })}
                     {move || error_msg.get().map(|msg| view! {
-                        <div class="text-xs text-red-500">{msg}</div>
+                        <div role="alert" class="text-xs text-red-500">{msg}</div>
                     })}
                 </div>
             })}
@@ -683,6 +695,9 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                 "\u{2190}"
                                             };
                                             let edge_type_label = edge.edge_type.label();
+                                            // A wiki link mirrors [[Title]] in the text (§6.6):
+                                            // no remove control, the API refuses it (#281).
+                                            let by_hand = !edge.edge_type.is_machine_owned();
                                             let label = edge.label.clone().unwrap_or_default();
                                             view! {
                                                 <div class="flex items-center justify-between py-1.5 px-2 rounded
@@ -699,13 +714,21 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                             <span class="italic text-stone-400 shrink-0">{format!("({label})")}</span>
                                                         })}
                                                     </button>
+                                                    {by_hand.then(|| view! {
+                                                    // Always visible and muted, never hover-only: a
+                                                    // hover-only control is out of reach of the keyboard
+                                                    // and of touch (#281; leptos.md on group-hover).
                                                     <button
-                                                        class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600
-                                                            text-xs transition-opacity"
+                                                        class="text-stone-300 hover:text-red-600 dark:text-stone-600
+                                                            dark:hover:text-red-400 text-xs transition-colors shrink-0 px-1"
+                                                        title="Remove link"
+                                                        aria-label="Remove link"
                                                         on:click=move |_| {
                                                             wasm_bindgen_futures::spawn_local(async move {
                                                                 match crate::api::delete_edge(edge_id).await {
-                                                                    Ok(_) => refresh_edges.update(|n| *n += 1),
+                                                                    Ok(_) => {
+                                                                        let _ = refresh_edges.try_update(|n| *n += 1);
+                                                                    }
                                                                     Err(e) => crate::components::toast::push_toast(
                                                                         crate::components::toast::ToastLevel::Error,
                                                                         format!("Couldn't remove edge: {e}"),
@@ -716,6 +739,7 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                     >
                                                         "\u{00d7}"
                                                     </button>
+                                                    })}
                                                 </div>
                                             }
                                         }).collect::<Vec<_>>()}

@@ -254,7 +254,7 @@ All API configuration is provided via environment variables.
 |----------|----------|-------------|
 | `DATABASE_URL` | Always | PostgreSQL connection string |
 | `COOKIE_KEY` | Always | 128 hex chars (64 bytes) for cookie encryption; must be a real random key (rejected if weak/all-identical) — `openssl rand -hex 64` |
-| `COOKIE_SECURE` | Prod | Set `true` in production (HTTPS only) |
+| `COOKIE_SECURE` | No | Cookies are `Secure` (HTTPS only) by default. Set `false` only for local HTTP development; the dev `docker-compose.yml` does |
 | `FRONTEND_URL` | Always | Browser-facing URL of the UI |
 | `API_EXTERNAL_URL` | Always | Browser-facing URL of the API |
 | `HOST` | No | Bind address (default: `0.0.0.0`) |
@@ -322,7 +322,7 @@ make verify             # or ./scripts/verify.sh — runs the full suite below
   Docker stack (auth bypassed via the `e2e-bypass` cargo feature, ephemeral DB; no local
   Node required — Playwright runs in its official image). Also a CI job. See
   [`e2e/README.md`](e2e/README.md).
-- **Coverage:** `make coverage` (CI reports it via `cargo llvm-cov`; currently report-only).
+- **Coverage:** `make coverage`. CI enforces a line-coverage floor with `cargo llvm-cov --fail-under-lines` (see `.github/workflows/ci.yml` for the number; the UI crate is excluded).
 - **Dependencies:** [Dependabot](.github/dependabot.yml) proposes weekly `cargo` and
   `github-actions` updates against `develop`; Actions are pinned to commit SHAs.
 - **Git Flow:** branch from `develop`; never commit directly to `main`/`develop`. See
@@ -360,15 +360,17 @@ All routes are nested under `/api`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/nodes` | List nodes (status, tag_id, tag_ids, pinned, pagination) |
+| GET | `/api/nodes` | List nodes the caller can see. Filters: `node_type`, `status`, `project_status`, `tag_id`, `include_archived`. `sort`: `modified_desc` (default), `modified_asc`, `title_asc`, `title_desc`; pinned nodes first. `page`, `per_page` (default 50, at most 200); the answer has `total` and `has_more` |
 | POST | `/api/nodes` | Create node (auto-grants Owner permission to creator) |
 | GET | `/api/nodes/{id}` | Get node by UUID |
 | GET | `/api/nodes/slug/{slug}` | Get node by slug |
+| GET | `/api/nodes/titles` | Every title the caller can see (id, title, slug). For full enumerations only; pickers use `lookup` |
 | GET | `/api/nodes/resolve-titles?titles=[…]` | Resolve wiki-link titles (a JSON array, ≤100) to node ids among nodes the caller can see; keys lowercased |
 | GET | `/api/nodes/project-statuses` | The caller's own project statuses with counts, most used first (status picker suggestions; owner-only) |
 | GET | `/api/nodes/lookup?q=&limit=&node_type=` | Title lookup for the node pickers: titles containing `q`, exact > prefix > other; own + shared nodes (admins: all); `limit` 1–20, default 8; optional `node_type` keeps one kind (the task pickers ask for `project`) |
 | PUT | `/api/nodes/{id}` | Update node (snapshots version on save). Optional `expected_updated_at`: apply only if the node is still at that version, else **412** and nothing is written (the editor sends it, #161) |
-| DELETE | `/api/nodes/{id}` | Delete node (cascading) |
+| DELETE | `/api/nodes/{id}` | Delete node, with its tasks, notes and files (children it contains are kept) |
+| GET | `/api/nodes/deletion-preview?ids=a,b` | What deleting these nodes would destroy: counts of tasks, notes and files, and how many are other accounts'. Only nodes the caller may delete are counted (at most 100 ids) |
 | PUT | `/api/nodes/{id}/pin` | Toggle pinned state (owner-only) |
 | GET | `/api/nodes/{id}/neighbors` | Linked neighbour nodes |
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |
@@ -384,6 +386,11 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/activity` | Audit log for this node |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
+| POST | `/api/nodes/{id}/duplicate` | Copy a node (body, type and tags) as a Draft titled "… (copy)", owned by the caller |
+| GET | `/api/nodes/{id}/export?format=markdown\|json` | Download one node: Markdown with YAML front matter (default), or the JSON node (viewer+) |
+| DELETE | `/api/nodes/{id}/permissions/{perm_id}` | Revoke a grant on this node |
+| GET / POST | `/api/nodes/{id}/links` | A node's saved web links: list, or add one |
+| PUT / DELETE | `/api/nodes/{id}/links/{link_id}` | Change or remove a saved link |
 
 ### People
 
@@ -407,9 +414,9 @@ details.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/edges` | List all edges |
+| GET | `/api/edges` | Edges whose two ends the caller owns (admins: all edges) |
 | POST | `/api/edges` | Create edge |
-| DELETE | `/api/edges/{id}` | Delete edge |
+| DELETE | `/api/edges/{id}` | Delete edge. A `wiki_link` is refused (422): it follows `[[Title]]` in the text |
 | GET | `/api/nodes/{id}/home` | The node's one home; one the caller can't see is shown unnamed, and only to the node's editors |
 | PUT | `/api/nodes/{id}/home` | Set the home (`parent_id`), or remove it (`null`) |
 | POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |
@@ -462,10 +469,17 @@ details.
 |--------|------|-------------|
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
 | POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
-| PUT | `/api/tasks/{id}` | Update task (toggle, rename, set focus date) |
+| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
-| GET | `/api/tasks/my-day` | Tasks scheduled for today (current user) |
+| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day (default: today in UTC; the UI sends the local date) |
+| GET | `/api/tasks/all` | Every open task of the caller, with its node's title (the My Day backlog) |
+| POST | `/api/tasks` | Create a task from the body: on the Project named by `node_id`, or on none (still allowed; Data health lists such tasks) |
+| GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |
+| PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
+| GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
+| GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status and top open tasks |
+| GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
 
 ### Notes
 
@@ -526,8 +540,31 @@ change them. They are in backups, and not in search, export or webhooks.
 |--------|------|-------------|
 | GET | `/api/templates` | List node templates (owner-scoped) |
 | POST | `/api/templates` | Create a template |
+| GET | `/api/templates/{id}` | Read one template |
 | PUT | `/api/templates/{id}` | Update a template |
 | DELETE | `/api/templates/{id}` | Delete a template |
+| PUT | `/api/templates/{id}/set-default` | Make it the default for its node type |
+
+### Favorites
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET / POST | `/api/favorites` | The caller's sidebar favorites: list, or add one |
+| DELETE | `/api/favorites/{id}` | Remove a favorite |
+| PATCH | `/api/favorites/reorder` | Save the favorites' order |
+
+### Webhooks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET / POST | `/api/webhooks` | The caller's webhooks: list, or create one (URL, events, optional signing secret) |
+| PUT / DELETE | `/api/webhooks/{id}` | Change or delete one of the caller's webhooks |
+
+### Export
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/export` | Download a ZIP of every node the caller can see (admins: all nodes), one Markdown file each |
 
 ### Admin (admin role required)
 
@@ -541,8 +578,11 @@ change them. They are in backups, and not in search, export or webhooks.
 | PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
 | POST | `/api/admin/users/{id}/suspend` | Suspend: no sign-in, open sessions refused at once, data kept |
 | POST | `/api/admin/users/{id}/reactivate` | Lift a suspension |
-| GET | `/api/admin/backup` | Stream full-system backup (NDJSON) |
-| POST | `/api/admin/restore` | Restore from backup file |
+| GET / POST | `/api/admin/backups` | List backups, or create one (optional comment) |
+| DELETE | `/api/admin/backups/{id}` | Delete a backup and its archive |
+| GET | `/api/admin/backups/{id}/download` | Download a backup's archive |
+| GET | `/api/admin/backups/{id}/preview` | What restoring it would do: counts and warnings, nothing written |
+| POST | `/api/admin/backups/{id}/restore` | Replace the live data with the backup's |
 | GET | `/api/metrics` | Operational metrics snapshot: version, uptime, pool stats, row counts, request counts, and latency per route since start (`routes`: count, total, mean, p50, p95, p99, max). Shown on **Admin → Performance** (`/admin/performance`) |
 | GET | `/api/metrics/db` | The database's 15 slowest statements by total time, from `pg_stat_statements` (`enabled: false` when it isn't preloaded or created). Reading and writing statements only, as Postgres normalised them (`$1` for every value), with comments stripped |
 
@@ -593,7 +633,7 @@ docker exec deploy-api-1 ember-trove-api backup create --comment "Daily"
 
 | Type | Description |
 |------|-------------|
-| `article` | Blog post, essay, or atomic note |
+| `article` | Long-form writing: an essay, a write-up, documentation |
 | `project` | Active initiative with tasks and references |
 | `area` | Sphere of responsibility (ongoing) |
 | `reference` | Material you keep and cite: a paper, bookmark, asset or external source. (Resource merged into it in 3.0.0.) |

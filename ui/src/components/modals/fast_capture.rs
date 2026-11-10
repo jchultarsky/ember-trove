@@ -180,7 +180,7 @@ pub fn FastCaptureModal(
                         }) />
                 </div>
                 <Show when=move || error.get().is_some()>
-                    <div class="mt-2 text-sm text-red-600 dark:text-red-400">
+                    <div role="alert" class="mt-2 text-sm text-red-600 dark:text-red-400">
                         {move || error.get().unwrap_or_default()}
                     </div>
                 </Show>

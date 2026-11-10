@@ -6,6 +6,203 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.14.0] - 2026-11-10
+
+### Changed
+- **Deleting a node first shows what goes with it** (owner decision on
+  #281). A node's tasks, notes and files are deleted with it, including
+  tasks and notes other people added to a shared node. The confirmation
+  now counts them, for example "5 tasks (2 from other people)", and Delete
+  stays off until the counts are on screen. If the count can't be loaded,
+  the dialog says so and Delete stays off. Deleting several nodes from the
+  list counts across all of them, and says how many of the selected nodes
+  are not yours to delete.
+  - New endpoint: `GET /api/nodes/deletion-preview?ids=…`. It answers with
+    counts only, for the nodes the caller may delete.
+
+### Fixed
+- **More from the full-codebase review (#281).**
+  - **A node's title could be blanked.** Saving a node with an empty
+    title was accepted, although creating one was not. An empty or
+    all-spaces title is now refused on create and on save, for nodes and
+    for tasks.
+  - **A task saved with an empty or over-long title answered "server
+    error".** The update skipped validation. It now answers with the
+    reason (422), as creating a task does.
+  - **A node could be created with a text too large to ever save again.**
+    Saving capped the text at 1 MiB but creating did not. Both cap it now.
+  - **A wiki link could be removed by hand, and came back on the next
+    save.** The link comes from `[[Title]]` in the text, so removing it
+    without editing the text did nothing lasting. The remove control is
+    gone from the node page and the graph for these links ("From the
+    text"), Data health no longer offers Remove for them, and the API
+    refuses the delete (422).
+  - **Restoring an older version could put the history out of order.**
+    The restored text was recorded in the background, so a save made right
+    after could be recorded first. It is recorded before the restore
+    answers now, the way a save is.
+  - Duplicating a node logs a tag that couldn't be copied, where it
+    dropped the failure before.
+  - **A recurring task completed twice at once got two next
+    occurrences.** A double click, or the same task ticked on two devices,
+    scheduled the next one twice. A task now has one next occurrence, and
+    the second request gets the first one's.
+  - **A daily task completed in the evening skipped a day.** With no day
+    set on the task, the next occurrence was counted from the server's UTC
+    date, which in the Americas is already tomorrow by evening. It is
+    counted from your own date now.
+  - **Dragging someone else's task on a shared node did nothing.** An
+    editor of a node can already edit its tasks; reordering them was
+    limited to each task's owner and failed silently. Reorder now follows
+    the same rule as editing.
+
+- **A failed load no longer looks like an empty page** (#281). After a
+  server error or a dropped connection, My Day, the calendar, the notes
+  feed, templates, webhooks, a node's notes and tasks, the project
+  dashboard and a person's page showed their "nothing here yet" text, as
+  if the data were gone. They now say what couldn't be loaded, that
+  nothing was changed, and offer **Try again**.
+- **Failures that were reported as success, or not at all** (#281):
+  - Deleting several nodes always said "Deleted N node(s)" as a success,
+    even for none. It now says how many were deleted and how many
+    couldn't be.
+  - Removing someone's access in the sharing dialog dropped an error, so
+    access could appear removed when it wasn't. A failure now says
+    "Access was NOT removed".
+  - Deleting a link in the graph, and deleting an attachment, failed
+    silently. Both report the failure now.
+- **Deleting an attachment asks first.** It removes the file for good and
+  had no confirmation.
+- The remove control on a node page's links is always visible and named
+  "Remove link". It appeared only on hover, which the keyboard and touch
+  screens can't do, and its name was "×".
+
+- **Leaving a page while something was still in flight could break the
+  app until a reload** (#281). A reply that arrived after its page was
+  gone touched state that no longer existed. Fixed for an image upload in
+  the editor, attachment uploads and copies, the notes search box, and
+  deleting a node or a person.
+  - **An image still uploading when the editor closed was left as
+    `![uploading-1…]()` in the text**, with the file attached but shown
+    nowhere. When the upload finishes, the image is put in its place in
+    the saved text, unless the text has changed since: then it stays under
+    Attachments and a message says so.
+- **Lists no longer jump back to the top when they refresh** (#281). My
+  Day (on every task you complete), the calendar, the node list, the tag
+  manager, backups and webhooks blanked and reloaded on each refresh.
+  They keep showing what they had until the new data arrives.
+- **"Your edits are kept on this device" is said only when true** (#281).
+  If the browser's storage is full or blocked, the editor now says the
+  edits could not be kept and to copy them, where it promised a local
+  copy that didn't exist.
+
+- **Keyboard and screen-reader access** (#281).
+  - Rows and cards that only a mouse could open can now be reached with
+    Tab and opened with Enter: nodes in the node list, people, project
+    cards on the dashboard, the nodes in a node's small graph, and the
+    days of the calendar.
+  - Controls that appeared only on hover are always visible: edit and
+    delete on a node's links and in the tag manager, and "remove" on a
+    recent search. Touch screens and the keyboard couldn't reach them.
+  - The fields of the change-password, new-user and template forms are
+    tied to their labels, and the sharing and link forms' fields have
+    names, where a screen reader read only "edit text".
+  - Error messages that appear in a form are announced when they appear.
+
+- **Backup, Users, Permissions, Templates and Webhooks have the same page
+  header as the rest of the app** (#281): the icon, the title in the
+  display face and the rule under it. Each built its own. Their "nothing
+  here yet" messages, and those of the tag manager and a filtered node
+  list, use the shared empty state.
+
+- **A task's "overdue" badge on a node page stayed red after you ticked
+  the task** (#281), until the page reloaded. The page worked the rule
+  out once when it drew the row; it follows the task's status now.
+
+- **`[[Title]]` written inside code is no longer a link** (#281, 1.10).
+  In an inline code span or a fenced code block, the page showed the
+  link's HTML as text, and the node gained a "linked here" connection to
+  the title. Code is now left exactly as typed, and no connection is made
+  for it. A node that has such a link in code loses that connection the
+  next time it is saved.
+- **Every part of the app reads `[[links]]` the same way** (#281, 3.1).
+  Five separate readers disagreed on the odd cases. Now, everywhere:
+  - `[[Title|]]` shows the title (it showed an empty link);
+  - `[[]]` and `[[|text]]` are plain text (they made an empty or
+    target-less link);
+  - a `[[` that isn't closed on its own line is plain text, and doesn't
+    turn everything up to the next `]]`, paragraphs later, into one link.
+
+- **The graph's hover card reads like the rendered text** (#281, 3.4). It
+  showed `[[Title|text]]`, link syntax, `~~`, list markers and `>` as
+  typed. It now shows what those display, as a collapsed note's title
+  already did.
+
+- **The Draft icon showed as "✎_NOTE"** on the node list, a node's
+  header, the dashboard and search. Its glyph was missing from the icon
+  font: the tool that builds the font only looked for icon names in files
+  with markup, and this one comes from a helper. The font has it again,
+  the tool reads such helpers, and a test fails when a type or status
+  icon is not in the font.
+- **Phone-width layout** (#262, the general pass):
+  - A node's title was squeezed beside its icons into a column a few
+    characters wide, and the status chip and actions ran off the screen.
+    The title now takes the width, with the icons and chip under it.
+  - The calendar's "Tasks by due date" wrapped to four lines beside the
+    month buttons, and the search page's dates, order and switches ran
+    off the screen. Both rows wrap now.
+  - No page scrolls sideways at 375px; a test checks fourteen of them.
+- **The node list reaches every node** (#257). It showed the 50 most
+  recently changed nodes and nothing more, and its Articles, Projects,
+  Areas and References pages filtered those 50 in the browser, so a kind's
+  page could miss nodes. The server now filters by kind and sorts, and the
+  list says "Showing 50 of 312" with **Load more** (each press doubles
+  what is shown). Sorting by title or by oldest first orders the whole
+  list, not the loaded page.
+  - `GET /api/nodes` takes `sort=modified_desc|modified_asc|title_asc|title_desc`.
+- **The sharing list reads only what it shows** (#259). `GET
+  /api/permissions` read every grant in the installation and filtered in
+  the API; the database filters now. The answer is the same.
+
+### Tooling
+- One spelling of "the nodes this person can see" for the big lists
+  (#281, 3.2): the node list, the title list and the graph each wrote it
+  their own way. They share `visible_among_many`, and a test checks the
+  three agree. The title list is also about 40% faster on 20,000 nodes.
+- Reuse and dead code from the review (#281, 3.3, 3.5, 3.7), no behaviour
+  change beyond the badge above: one admin-scope helper where seven
+  routes wrote the rule out; one overdue rule and one My Day rule in
+  `common::task`; one priority ordering for the five task queries; the
+  unused quick-add parser, an unused type and API call, and two stubs
+  removed, with the three file-wide `allow(dead_code)` that hid them.
+
+### Documentation
+- The API's rate limiter covers reads as well as writes (#258). Its
+  comment said writes only; the code never did that. The comment is
+  corrected; the limits are unchanged.
+- `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
+  archived nodes stay searchable (§3.3), and what a node holds is deleted
+  with it behind the counting confirmation (§6.1).
+- **Docs corrected against the code** (#281, the review's documentation
+  section):
+  - README API table: task update is `PATCH`, My Day is `/api/my-day`,
+    `GET /api/edges` returns the caller's own edges, and the backup
+    endpoints are the `/api/admin/backups` ones (the table listed two
+    routes that don't exist). Added the endpoints it left out: favorites,
+    webhooks, export, a node's links, duplicate and export, titles,
+    calendar, dashboard, and the rest of the task routes.
+  - `COOKIE_SECURE` is on by default; only local HTTP development turns it
+    off. README and `docs/deploy-aws.md` said to set it in production.
+  - `docs/deploy-aws.md` lists `S3_ENDPOINT`, `SES_FROM_EMAIL`, `HOST`
+    and `PORT`.
+  - Coverage is an enforced floor in CI, not report-only. An Article is
+    long-form writing, not an "atomic note".
+  - `docs/ONTOLOGY.md` now states two rules the code already had: no edge
+    joins a node to itself (§6), and only a Project's owner changes its
+    people (§7.2, §14).
+  - Four code comments and three lines of `.claude/rules` that no longer
+    matched the code.
+
 ## [3.13.1] - 2026-11-09
 
 ### Fixed
