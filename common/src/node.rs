@@ -185,6 +185,75 @@ pub struct UpdateNodeRequest {
     pub expected_updated_at: Option<DateTime<Utc>>,
 }
 
+/// The order of `GET /nodes` (#257). Pinned nodes come first in every
+/// order. The server sorts, because the list is paged: sorting one page in
+/// the browser ordered only the rows that happened to be loaded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeSort {
+    /// Most recently changed first.
+    #[default]
+    ModifiedDesc,
+    ModifiedAsc,
+    /// By title, ignoring case.
+    TitleAsc,
+    TitleDesc,
+}
+
+impl NodeSort {
+    /// Every order, in the order the sort menu lists them.
+    pub const ALL: [NodeSort; 4] = [
+        NodeSort::ModifiedDesc,
+        NodeSort::ModifiedAsc,
+        NodeSort::TitleAsc,
+        NodeSort::TitleDesc,
+    ];
+
+    /// The query-string value (`?sort=title_asc`), the same as serde's.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeSort::ModifiedDesc => "modified_desc",
+            NodeSort::ModifiedAsc => "modified_asc",
+            NodeSort::TitleAsc => "title_asc",
+            NodeSort::TitleDesc => "title_desc",
+        }
+    }
+
+    /// The label in the sort menu.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            NodeSort::ModifiedDesc => "Newest first",
+            NodeSort::ModifiedAsc => "Oldest first",
+            NodeSort::TitleAsc => "Title A\u{2192}Z",
+            NodeSort::TitleDesc => "Title Z\u{2192}A",
+        }
+    }
+}
+
+/// How many nodes the list shows after `more` presses of "Load more":
+/// it starts at one page and doubles, so a long list is reached in a few
+/// steps and few requests (#257).
+#[must_use]
+pub fn node_list_limit(more: u32) -> u32 {
+    NODE_LIST_FIRST.saturating_mul(1u32.checked_shl(more).unwrap_or(u32::MAX))
+}
+
+/// The node list's first page.
+pub const NODE_LIST_FIRST: u32 = 50;
+/// The most rows one `GET /nodes` returns (`per_page` is capped to it).
+pub const NODE_LIST_MAX_PER_PAGE: u32 = 200;
+
+/// The requests that fetch the first `limit` rows: `(page, per_page)`
+/// pairs with one `per_page` throughout, so the pages don't overlap.
+#[must_use]
+pub fn node_list_pages(limit: u32) -> Vec<(u32, u32)> {
+    let per_page = limit.clamp(1, NODE_LIST_MAX_PER_PAGE);
+    let pages = limit.div_ceil(per_page).max(1);
+    (1..=pages).map(|page| (page, per_page)).collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct NodeListParams {
     pub node_type: Option<NodeType>,
@@ -204,6 +273,9 @@ pub struct NodeListParams {
     /// nodes are excluded from results.  Pass `include_archived=true` to opt in.
     #[serde(default)]
     pub include_archived: bool,
+    /// The order (#257). Absent: most recently changed first.
+    #[serde(default)]
+    pub sort: NodeSort,
 }
 
 /// One node-picker match from `GET /nodes/lookup`: a node whose **title**
@@ -330,6 +402,47 @@ impl NodeDeletionPreview {
             others_notes: self.others_notes + other.others_notes,
             files: self.files + other.files,
         }
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::{NodeSort, node_list_limit, node_list_pages};
+
+    #[test]
+    fn the_sort_names_match_the_wire() {
+        for sort in NodeSort::ALL {
+            let wire = serde_json::to_value(sort).expect("json");
+            assert_eq!(wire, sort.as_str(), "{sort:?}");
+            assert!(!sort.label().is_empty());
+        }
+        assert_eq!(NodeSort::default(), NodeSort::ModifiedDesc);
+    }
+
+    #[test]
+    fn load_more_doubles_from_one_page() {
+        assert_eq!(node_list_limit(0), 50);
+        assert_eq!(node_list_limit(1), 100);
+        assert_eq!(node_list_limit(3), 400);
+        // Never overflows, however often it is pressed.
+        assert_eq!(node_list_limit(40), u32::MAX);
+    }
+
+    #[test]
+    fn the_pages_cover_the_limit_without_overlap() {
+        assert_eq!(node_list_pages(50), [(1, 50)]);
+        assert_eq!(node_list_pages(100), [(1, 100)]);
+        assert_eq!(node_list_pages(200), [(1, 200)]);
+        assert_eq!(node_list_pages(400), [(1, 200), (2, 200)]);
+        assert_eq!(node_list_pages(800).len(), 4);
+        // Every step of Load more is whole pages of one size.
+        for more in 0..8 {
+            let limit = super::node_list_limit(more);
+            let pages = node_list_pages(limit);
+            let total: u32 = pages.iter().map(|(_, per)| per).sum();
+            assert_eq!(total, limit, "limit {limit}");
+        }
+        assert_eq!(node_list_pages(0), [(1, 1)]);
     }
 }
 

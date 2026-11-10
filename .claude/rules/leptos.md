@@ -125,6 +125,10 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **A paged list is filtered and sorted by the server** (#257). The node
+  list sends its kind, filters and `NodeSort` in `NodeListQuery`
+  (`api::fetch_node_list`) and shows the rows as they come. Filtering or
+  sorting a page in the browser orders only what happened to be loaded.
 - **Wiki links are read by `common::wikilink` only** (#281, 3.1). The
   renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
   `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`
