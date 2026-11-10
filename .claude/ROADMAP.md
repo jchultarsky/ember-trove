@@ -11,6 +11,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   accounts'; `DeleteConfirmModal` takes them as `details`
   (`node_delete_details`) and keeps Delete off until they load. ONTOLOGY
   §3.3 and §6.1 record both review decisions.
+- **Unreleased: review fixes 1.5, 1.12 and 2.1** (#281). Updates
+  validate like creates (no blank titles, the body cap on both, a 422 for
+  a bad task title); a `wiki_link` can't be deleted by hand
+  (`EdgeType::is_machine_owned`); a version restore's snapshot is awaited
+  through `snapshot_body`.
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
   review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
   snapshot; attachment files are stored under their attachment's id

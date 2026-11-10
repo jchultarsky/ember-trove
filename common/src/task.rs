@@ -248,7 +248,7 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CreateTaskRequest {
-    #[garde(length(min = 1, max = 500))]
+    #[garde(length(min = 1, max = 500), custom(crate::node::not_blank))]
     pub title: String,
     /// If absent, the task is standalone (no node association).
     #[garde(skip)]
@@ -267,10 +267,16 @@ pub struct CreateTaskRequest {
 
 /// Every field is optional; `Default` is the no-op PATCH, so callers write
 /// `UpdateTaskRequest { status: Some(s), ..Default::default() }`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
+///
+/// Validated like [`CreateTaskRequest`] (#281, 1.5): an empty title used to
+/// reach the database's CHECK and come back as a 500.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema, Validate)]
 pub struct UpdateTaskRequest {
+    #[garde(length(min = 1, max = 500), custom(crate::node::not_blank_if_set))]
     pub title: Option<String>,
+    #[garde(skip)]
     pub status: Option<TaskStatus>,
+    #[garde(skip)]
     pub priority: Option<TaskPriority>,
     /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(d))` = set to date
     #[serde(
@@ -278,6 +284,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub focus_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(None)` = clear · `Some(Some(d))` = set to date
     #[serde(
@@ -285,6 +292,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub due_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(None)` = clear recurrence · `Some(Some(r))` = set
     #[serde(
@@ -292,6 +300,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub recurrence: Option<Option<RecurrenceRule>>,
     /// `None` = leave unchanged · `Some(None)` = detach from node · `Some(Some(id))` = associate
     #[serde(
@@ -299,6 +308,7 @@ pub struct UpdateTaskRequest {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
+    #[garde(skip)]
     pub node_id: Option<Option<NodeId>>,
 }
 
@@ -447,6 +457,27 @@ pub struct ReorderTaskEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTasksRequest {
     pub tasks: Vec<ReorderTaskEntry>,
+}
+
+#[cfg(test)]
+mod update_validation_tests {
+    use super::UpdateTaskRequest;
+    use garde::Validate;
+
+    #[test]
+    fn a_task_update_cannot_blank_or_overfill_the_title() {
+        let with = |title: &str| UpdateTaskRequest {
+            title: Some(title.to_string()),
+            ..Default::default()
+        };
+        // #281, 1.5: these reached the database's CHECK and answered 500.
+        assert!(with("").validate().is_err());
+        assert!(with("  ").validate().is_err());
+        assert!(with(&"a".repeat(501)).validate().is_err());
+        assert!(with(&"a".repeat(500)).validate().is_ok());
+        // The no-op PATCH, and one that doesn't touch the title.
+        assert!(UpdateTaskRequest::default().validate().is_ok());
+    }
 }
 
 #[cfg(test)]

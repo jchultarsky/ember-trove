@@ -410,7 +410,7 @@ details.
 |--------|------|-------------|
 | GET | `/api/edges` | List all edges |
 | POST | `/api/edges` | Create edge |
-| DELETE | `/api/edges/{id}` | Delete edge |
+| DELETE | `/api/edges/{id}` | Delete edge. A `wiki_link` is refused (422): it follows `[[Title]]` in the text |
 | GET | `/api/nodes/{id}/home` | The node's one home; one the caller can't see is shown unnamed, and only to the node's editors |
 | PUT | `/api/nodes/{id}/home` | Set the home (`parent_id`), or remove it (`null`) |
 | POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |

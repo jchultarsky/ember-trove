@@ -687,6 +687,9 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                 "\u{2190}"
                                             };
                                             let edge_type_label = edge.edge_type.label();
+                                            // A wiki link mirrors [[Title]] in the text (§6.6):
+                                            // no remove control, the API refuses it (#281).
+                                            let by_hand = !edge.edge_type.is_machine_owned();
                                             let label = edge.label.clone().unwrap_or_default();
                                             view! {
                                                 <div class="flex items-center justify-between py-1.5 px-2 rounded
@@ -703,6 +706,7 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                             <span class="italic text-stone-400 shrink-0">{format!("({label})")}</span>
                                                         })}
                                                     </button>
+                                                    {by_hand.then(|| view! {
                                                     <button
                                                         class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600
                                                             text-xs transition-opacity"
@@ -720,6 +724,7 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                                                     >
                                                         "\u{00d7}"
                                                     </button>
+                                                    })}
                                                 </div>
                                             }
                                         }).collect::<Vec<_>>()}

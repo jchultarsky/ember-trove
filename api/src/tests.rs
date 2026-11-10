@@ -263,6 +263,7 @@ impl EdgeRepo for StubEdgeRepo {
         let edge_type = match id.0.as_u128() {
             AZ_FOREIGN_HOME_EDGE | AZ_VISIBLE_HOME_EDGE => common::edge::EdgeType::Contains,
             AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
+            AZ_MY_WIKI_EDGE | AZ_FOREIGN_WIKI_EDGE => common::edge::EdgeType::WikiLink,
             AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
                 common::edge::EdgeType::RelatedTo
             }
@@ -273,10 +274,10 @@ impl EdgeRepo for StubEdgeRepo {
         } else {
             AZ_MY_PROJECT
         };
-        let source = if id.0.as_u128() == AZ_VISIBLE_HOME_EDGE {
-            AZ_VIEW_NODE
-        } else {
-            AZ_FOREIGN_NODE
+        let source = match id.0.as_u128() {
+            AZ_VISIBLE_HOME_EDGE => AZ_VIEW_NODE,
+            AZ_MY_WIKI_EDGE => AZ_MY_ARTICLE,
+            _ => AZ_FOREIGN_NODE,
         };
         Ok(Edge {
             id,
@@ -287,7 +288,12 @@ impl EdgeRepo for StubEdgeRepo {
             created_at: chrono::Utc::now(),
         })
     }
-    async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> {
+    async fn delete(&self, id: EdgeId) -> Result<(), EmberTroveError> {
+        // A wiki link is machine-owned (§6.6): a delete must never get here.
+        assert!(
+            !matches!(id.0.as_u128(), AZ_MY_WIKI_EDGE | AZ_FOREIGN_WIKI_EDGE),
+            "a wiki link reached the repo's delete"
+        );
         Ok(())
     }
     async fn convert(
@@ -418,6 +424,10 @@ const AZ_VISIBLE_HOME_EDGE: u128 = 0xa2_0e34;
 /// and the caller edits the child; AZ_VIEW_NODE's is hidden too, but the
 /// caller only views the child; AZ_EDIT_NODE's (AZ_OWNED_NODE) is visible.
 const AZ_HIDDEN_HOME_EDGE: u128 = 0xa2_0e35;
+/// A wiki link from the caller's own Article into their Project, and one
+/// from a node they can't touch (#281, 2.1).
+const AZ_MY_WIKI_EDGE: u128 = 0xa2_0e37;
+const AZ_FOREIGN_WIKI_EDGE: u128 = 0xa2_0e38;
 const AZ_SEEN_HOME_EDGE: u128 = 0xa2_0e36;
 
 /// Someone else's standalone task.
@@ -2507,6 +2517,16 @@ async fn update_task_owner_can_edit_their_own_task() {
 }
 
 #[tokio::test]
+async fn update_task_refuses_a_blank_or_overlong_title_as_422() {
+    // #281, 1.5: PATCH skipped validation, so these reached the database's
+    // CHECK and answered 500.
+    for title in ["", "   ", &"a".repeat(501)] {
+        let status = task_patch(0xa2_0199, serde_json::json!({ "title": title })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "title {title:?}");
+    }
+}
+
+#[tokio::test]
 async fn update_task_cannot_move_a_task_onto_a_node_without_access() {
     // Regression (v2.31.1): only the task's *current* node was checked, so
     // an owner could re-parent their task onto any node id.
@@ -2765,6 +2785,37 @@ async fn a_home_can_be_released_from_the_childs_side() {
     );
     // Any other link still belongs to its source's editors.
     assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_wiki_link_cannot_be_deleted_by_hand() {
+    // #281, 2.1 (ONTOLOGY §6.6): the edge mirrors `[[Title]]` in the text.
+    // Deleted by hand it came back on the next save. The stub's delete
+    // panics if a wiki link reaches it.
+    let delete = |edge: u128| async move {
+        let resp = claims_app("/edges", crate::routes::edges::router())
+            .oneshot(
+                Request::delete(format!("/edges/{}", Uuid::from_u128(edge)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    };
+    // The caller edits the source: refused for what the link is.
+    let (status, body) = delete(AZ_MY_WIKI_EDGE).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("can't be added or removed by hand"), "{body}");
+    // Rights still come first: a stranger to the source gets the same 403
+    // as for any link, and learns nothing about its type.
+    let (status, body) = delete(AZ_FOREIGN_WIKI_EDGE).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(!body.contains("wiki"), "{body}");
 }
 
 /// `POST /edges/{id}/convert` (#228): rights first (to delete the old link

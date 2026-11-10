@@ -145,7 +145,7 @@ impl EdgeRefusal {
     pub fn message(&self) -> String {
         match self {
             Self::MachineOwned => {
-                "wiki links come from [[Title]] in a node's text; they can't be added by hand"
+                "wiki links come from [[Title]] in a node's text; they can't be added or removed by hand"
                     .to_string()
             }
             Self::ContainedReference => {

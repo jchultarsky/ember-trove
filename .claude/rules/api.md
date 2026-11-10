@@ -63,6 +63,12 @@ cargo check && cargo clippy -- -D warnings
 - The loop check is a recursive CTE with `UNION`, so a legacy loop
   terminates. The home check skips the same parent, so a repeat stays a
   409 duplicate.
+- `DELETE /edges/:id` refuses a `wiki_link` with 422 (#281, §6.6): it
+  mirrors `[[Title]]` in the text, and sync would put it back. The check
+  comes **after** the rights check, so a stranger still gets 403 and
+  learns nothing about the type. `EdgeType::is_machine_owned` is the one
+  rule; create, convert, `LinkRef::removable` and the UI's remove
+  controls all read it.
 - `DELETE /edges/:id` for `contains` and `related_to` accepts an editor of
   **either** end (one home must never trap a child; `related_to` has no
   direction). Other types stay source-editor only. The rule is
@@ -217,6 +223,17 @@ cargo check && cargo clippy -- -D warnings
   concurrency group). Schedules live in Actions, never the host's
   crontab, so a failure is a red run and an email (the old `backup.sh`
   cron failed silently for seven months).
+
+## Request validation (#281, 1.5)
+
+- An update request validates like its create: `UpdateNodeRequest` and
+  `UpdateTaskRequest` derive `garde::Validate`, and the route calls
+  `validate()` before anything else. A rule a create has (title length,
+  `not_blank`, the 1 MiB body cap) belongs on the update too, or the
+  database's CHECK answers it as a 500.
+- A node's body snapshot goes through `snapshot_body` (routes/nodes.rs),
+  awaited. Never `tokio::spawn` a version write: it can land after the
+  next save's.
 
 ## Node deletion preview (#281)
 

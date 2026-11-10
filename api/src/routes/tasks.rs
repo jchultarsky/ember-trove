@@ -225,6 +225,9 @@ async fn update_task(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTaskRequest>,
 ) -> Result<Json<Task>, ApiError> {
+    // The request's own shape first: it says nothing about any task.
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     // Fetch the task to verify ownership / node permission.
     let existing = state.tasks.get(TaskId(id)).await?;
     if existing.owner_id != claims.sub && !is_admin(&claims) {
