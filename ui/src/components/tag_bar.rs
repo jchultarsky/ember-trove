@@ -175,7 +175,7 @@ pub fn TagBar(node_id: NodeId) -> impl IntoView {
 
             // Error message
             {move || error_msg.get().map(|msg| view! {
-                <span class="text-xs text-red-500">{msg}</span>
+                <span role="alert" class="text-xs text-red-500">{msg}</span>
             })}
         </div>
     }

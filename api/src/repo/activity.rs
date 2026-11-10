@@ -167,6 +167,25 @@ impl ActivityRow {
     }
 }
 
+/// Every activity row, verbatim. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<ActivityRecord>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, ActivityRow>(
+        r#"
+        SELECT id, node_id, subject_id, action, metadata, created_at
+        FROM activity_log
+        ORDER BY created_at, id
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all activity failed: {e}")))?;
+
+    Ok(rows.into_iter().map(ActivityRow::into_record).collect())
+}
+
 #[async_trait]
 impl ActivityRepo for PgActivityRepo {
     async fn record(
@@ -263,18 +282,7 @@ impl ActivityRepo for PgActivityRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<ActivityRecord>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, ActivityRow>(
-            r#"
-            SELECT id, node_id, subject_id, action, metadata, created_at
-            FROM activity_log
-            ORDER BY created_at, id
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all activity failed: {e}")))?;
-
-        Ok(rows.into_iter().map(ActivityRow::into_record).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn latest_of(

@@ -25,7 +25,7 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   ```
 - **URL map:** `/tasks/my-day` · `/tasks/captures` · `/tasks/calendar` · `/dashboard` ·
   `/graph` · `/search` · `/notes` · `/people` · `/people/:id` · `/nodes` · `/nodes/new` · `/nodes/:id` ·
-  `/nodes/:id/edit` · `/tags` · `/templates` · `/admin/users` · `/admin/permissions` ·
+  `/nodes/:id/edit` · `/tags` · `/templates` · `/data-health` · `/webhooks` · `/admin/users` · `/admin/permissions` ·
   `/admin/backup` · `/admin/performance`. Legacy `/my-day`, `/inbox`, `/calendar` redirect to `/tasks/...`
   (bookmarks/PWA shortcuts predating v2.3.0). The Inbox became Captures (S4c,
   #240): `/tasks/inbox` and `/inbox` go to `/tasks/captures` through
@@ -125,6 +125,42 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **Wiki links are read by `common::wikilink` only** (#281, 3.1). The
+  renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
+  `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`
+  autocomplete is the exception: it looks backwards from the cursor.
+- **Accessibility basics** (#281):
+  - A row or card with `on:click` needs a keyboard way in: make its
+    title a real `<button type="button">` (its click bubbles to the row's
+    handler, so there is one navigation), or give a non-HTML target
+    (an SVG `<g>`, a calendar cell) `tabindex="0"`, a `role`, an
+    `aria-label` and an Enter handler.
+  - No `opacity-0 group-hover:opacity-100` on a control. Always visible
+    and muted.
+  - A `<label>` has `for=` and its control the matching `id`; an input
+    with only a placeholder gets an `aria-label`.
+  - An error that appears after an action has `role="alert"`.
+- **`draft::write_edit_draft` returns whether the draft was stored**
+  (#281, 1.11). Word any "kept on this device" through `kept_note(kept)`
+  in `node_editor.rs`; a full localStorage is a normal case.
+- **A request that outlives its component must finish the user's work
+  some other way** (#281, 1.6): the editor's image upload settles its
+  placeholder in the *saved* text through `settle_closed_upload`, with
+  `expected_updated_at`, when its signals are gone.
+- **A failed load is `LoadError`, never the empty state** (#281, 1.7;
+  `load_error.rs`). Don't write `.and_then(|r| r.ok()).unwrap_or_default()`
+  or `.await.unwrap_or_default()` on the data a view's empty state reads:
+  match `Some(Err(_))` first and render `<LoadError what=… on_retry=…/>`.
+  Defaulting is fine only for a secondary read (a counter, a keyboard
+  index) beside a view that shows the error.
+- **An action's error is shown, never `let _ =`** (#281). A dropped error
+  on revoke, delete or save tells the person it worked. Toast it. After
+  the `.await`, use `try_` access.
+- **Deleting a node goes through `DeleteConfirmModal` with `details`**
+  (#281): `details=node_delete_details(show, ids)` loads the counts of
+  what goes with the node and keeps Delete off until they are shown. A new
+  place that deletes nodes must pass it; never call `api::delete_node`
+  behind a bare confirm.
 - **Context newtypes** to prevent collisions:
   `#[derive(Clone, Copy)] struct ShowCapture(pub RwSignal<bool>);` (see `ui/src/app.rs`).
 - **Required context = `expect_context::<T>()`, never `use_context::<T>().expect(..)`.**

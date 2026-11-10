@@ -390,9 +390,16 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         <p class="text-xs text-stone-400">"Loading…"</p>
                     }>
                         {move || {
-                            let notes = notes_resource.get()
-                                .and_then(|r| r.ok())
-                                .unwrap_or_default();
+                            // A failed load is not "No notes yet" (#281, 1.7).
+                            let notes = match notes_resource.get() {
+                                Some(Err(_)) => return view! {
+                                    <crate::components::load_error::LoadError
+                                        what="this node\u{2019}s notes"
+                                        on_retry=Callback::new(move |()| refresh.update(|n| *n += 1))
+                                    />
+                                }.into_any(),
+                                other => other.and_then(Result::ok).unwrap_or_default(),
+                            };
 
                             if notes.is_empty() {
                                 return view! {
@@ -611,7 +618,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                     resize-y min-h-[80px] focus:outline-none".to_string()
                                                             />
                                                             {move || save_error.get().map(|msg| view! {
-                                                                <p class="text-xs text-red-500 mt-1">{msg}</p>
+                                                                <p role="alert" class="text-xs text-red-500 mt-1">{msg}</p>
                                                             })}
                                                             <div class="flex items-center justify-between mt-2">
                                                                 <ColorPicker selected=edit_color />

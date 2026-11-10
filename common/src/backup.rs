@@ -9,14 +9,17 @@ use crate::{
     edge::Edge,
     favorite::Favorite,
     graph::NodePosition,
+    id::{AttachmentId, TaskId, WebhookId},
     node::Node,
     node_link::NodeLink,
     node_version::NodeVersion,
     note::Note,
     permission::Permission,
     person::{MembershipRecord, Person},
+    search::SearchPreset,
     tag::Tag,
     task::Task,
+    template::NodeTemplate,
 };
 
 /// Entity count summary embedded in the manifest and returned for previews.
@@ -46,13 +49,154 @@ pub struct EntityCounts {
 /// are refused with a clear message rather than half-read (owner decision,
 /// 2026-10-31); a rollback goes through the server snapshot instead.
 /// 4 (#234): captures have their own list, and every note has a node.
-pub const SCHEMA_VERSION: u32 = 4;
+/// 5 (#281): an attachment's bytes are stored under its id
+/// ([`attachment_entry_path`]), no longer under its node and file name,
+/// which two attachments can share. The archive also carries templates,
+/// saved searches, editor prefs, webhooks (without their secrets) and
+/// recurrence links. An older release would restore a format-5 archive
+/// without any attachment bytes, so the number moves and it refuses.
+/// 6 (#282): the archive carries Project Briefs. An older release would
+/// restore it without them and say nothing, so the number moves
+/// (`.claude/rules/api.md`, "What a backup holds").
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
 /// losslessly (`capture::from_nodeless_note`), so the backups taken just
-/// before 3.5.0 stay restorable.
+/// before 3.5.0 stay restorable. Formats 3 and 4 keep their attachment
+/// bytes under the old paths, which [`match_attachment_entries`] still reads.
 pub const OLDEST_RESTORABLE: u32 = 3;
+
+/// Where an attachment's bytes sit in a format-5 archive: under its id,
+/// which is unique. The path holds no file name.
+pub fn attachment_entry_path(id: AttachmentId) -> String {
+    format!("attachments/{}", id.0)
+}
+
+/// Where formats 3 and 4 put an attachment's bytes. Two attachments on one
+/// node with the same file name share this path (#281).
+fn legacy_attachment_entry_path(a: &Attachment) -> String {
+    format!("attachments/{}/{}", a.node_id.0, a.filename)
+}
+
+/// For each file entry of an archive, given as `(path, byte length)` in
+/// archive order, the index of the attachment whose bytes it holds, or
+/// `None` when that can't be told. Restore uploads only what this names,
+/// so one attachment's bytes never land under another's key (#281).
+///
+/// - A format-5 path names the attachment by id.
+/// - An old path can be shared by several attachments. The backup wrote
+///   their entries in the order of `attachments`, so when every one of them
+///   has an entry they pair up in order. When some are missing (the backup
+///   skips a file it couldn't fetch), an entry is matched only if its length
+///   fits exactly one attachment still unmatched.
+pub fn match_attachment_entries(
+    attachments: &[Attachment],
+    entries: &[(&str, u64)],
+) -> Vec<Option<usize>> {
+    use std::collections::HashMap;
+
+    let by_id: HashMap<String, usize> = attachments
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (attachment_entry_path(a.id), i))
+        .collect();
+    let mut sharing_path: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, a) in attachments.iter().enumerate() {
+        sharing_path
+            .entry(legacy_attachment_entry_path(a))
+            .or_default()
+            .push(i);
+    }
+
+    let mut matched: Vec<Option<usize>> = vec![None; entries.len()];
+    let mut old_entries: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (e, (path, _)) in entries.iter().enumerate() {
+        if let Some(&a) = by_id.get(*path) {
+            matched[e] = Some(a);
+        } else if let Some(group) = old_entries.iter_mut().find(|(p, _)| p == path) {
+            group.1.push(e);
+        } else {
+            old_entries.push((path, vec![e]));
+        }
+    }
+
+    for (path, group) in old_entries {
+        let Some(candidates) = sharing_path.get(path) else {
+            continue;
+        };
+        if group.len() == candidates.len() {
+            for (&e, &a) in group.iter().zip(candidates) {
+                matched[e] = Some(a);
+            }
+            continue;
+        }
+        let mut free: Vec<usize> = candidates.clone();
+        for e in group {
+            let fits: Vec<usize> = free
+                .iter()
+                .copied()
+                .filter(|&a| u64::try_from(attachments[a].size_bytes).ok() == Some(entries[e].1))
+                .collect();
+            if let [only] = fits[..] {
+                matched[e] = Some(only);
+                free.retain(|&a| a != only);
+            }
+        }
+    }
+    matched
+}
+
+/// One owner's saved editor state for a task or a note, as an archive holds
+/// it: `EditorPref` plus the owner, which the API never sends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupEditorPref {
+    pub owner_id: String,
+    /// `"task"` or `"note"`.
+    pub entity_kind: String,
+    pub entity_id: Uuid,
+    #[serde(default)]
+    pub height: Option<i32>,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+/// A webhook as an archive holds it. SECURITY: there is no `secret` field,
+/// on purpose (owner decision, 2026-11-09): an admin can download an
+/// archive, and a signing secret is a credential, not content. The archive
+/// records only that one was set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupWebhook {
+    pub id: WebhookId,
+    pub owner_id: String,
+    pub url: String,
+    pub events: Vec<String>,
+    pub is_active: bool,
+    /// The webhook signed its payloads. Its secret is not in the archive.
+    #[serde(default)]
+    pub had_secret: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl BackupWebhook {
+    /// Whether the restored webhook delivers. One that signed its payloads
+    /// comes back switched off: without its secret it would send unsigned
+    /// payloads to a receiver that expects signed ones. Its owner enters the
+    /// secret again and switches it on.
+    pub fn restored_active(&self) -> bool {
+        self.is_active && !self.had_secret
+    }
+}
+
+/// A recurring task's occurrence and the task whose completion scheduled it
+/// (`node_tasks.recurrence_parent_id`). Without it, reopening a restored
+/// completed task can't retract the occurrence it scheduled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecurrenceLink {
+    pub task_id: TaskId,
+    pub parent_id: TaskId,
+}
 
 /// A note as an archive holds it. Before format 4 a note could have no
 /// node; those are captures now (#234). Everything a `Note` has, with an
@@ -144,7 +288,7 @@ pub fn automatic_to_prune(jobs: &[BackupJob], keep: usize) -> Vec<Uuid> {
 }
 
 /// Full data payload written as `data.json` inside the archive.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BackupData {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -191,12 +335,44 @@ pub struct BackupData {
     /// has none here: its captures are its notes without a node.
     #[serde(default)]
     pub captures: Vec<crate::capture::Capture>,
-    // ── Project Briefs (#282) ─────────────────────────────────────────────
+    // ── Format 5 (#281) ───────────────────────────────────────────────────
+    // `None` means the archive is older and never carried the list. Restore
+    // then leaves the live rows alone, as it always did; `Some`, even when
+    // empty, replaces them.
+    /// Node templates, all owners.
+    #[serde(default)]
+    pub node_templates: Option<Vec<NodeTemplate>>,
+    /// Saved searches, all owners.
+    #[serde(default)]
+    pub search_presets: Option<Vec<SearchPreset>>,
+    /// Editor heights and collapsed notes, all owners.
+    #[serde(default)]
+    pub editor_prefs: Option<Vec<BackupEditorPref>>,
+    /// Webhooks, all owners, without their signing secrets.
+    #[serde(default)]
+    pub webhooks: Option<Vec<BackupWebhook>>,
+    /// Which task scheduled which occurrence. Empty in older archives.
+    #[serde(default)]
+    pub recurrence_links: Vec<RecurrenceLink>,
+    // ── Format 6: Project Briefs (#282) ───────────────────────────────────
     /// Each project's current Brief. Replaced Briefs are History entries
-    /// and travel in `activity`. Archives made before Briefs have none, so
-    /// the format number is unchanged.
+    /// and travel in `activity`. A Brief belongs to its node, so restoring
+    /// an older archive (which has none) leaves no Brief behind: the nodes
+    /// it hung on are replaced.
     #[serde(default)]
     pub briefs: Vec<crate::brief::ProjectBrief>,
+}
+
+impl BackupData {
+    /// How many webhooks come back switched off because their signing
+    /// secret isn't in the archive ([`BackupWebhook::restored_active`]).
+    pub fn webhooks_switched_off(&self) -> usize {
+        self.webhooks
+            .iter()
+            .flatten()
+            .filter(|w| w.is_active && !w.restored_active())
+            .count()
+    }
 }
 
 /// Returned by the preview endpoint before a restore is confirmed.
@@ -232,6 +408,165 @@ mod tests {
         let data: BackupData = serde_json::from_str(json).expect("old archive must parse");
         assert!(data.nodes.is_empty() && data.permissions.is_empty());
         assert!(data.activity.is_empty(), "no activity in an old archive");
+        // What format 5 added is absent, not empty: restore must leave the
+        // live templates, presets, prefs and webhooks alone.
+        assert!(data.node_templates.is_none() && data.search_presets.is_none());
+        assert!(data.editor_prefs.is_none() && data.webhooks.is_none());
+        assert!(data.recurrence_links.is_empty());
+    }
+
+    fn attachment(node: Uuid, name: &str, size: i64) -> Attachment {
+        Attachment {
+            id: AttachmentId(Uuid::new_v4()),
+            node_id: crate::id::NodeId(node),
+            filename: name.into(),
+            content_type: "image/png".into(),
+            size_bytes: size,
+            s3_key: format!("{node}/{}/{name}", Uuid::new_v4()),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn two_attachments_with_one_name_have_their_own_entries() {
+        // #281: two pasted `image.png` on one node.
+        let node = Uuid::new_v4();
+        let atts = [
+            attachment(node, "image.png", 10),
+            attachment(node, "image.png", 20),
+        ];
+        let (p0, p1) = (
+            attachment_entry_path(atts[0].id),
+            attachment_entry_path(atts[1].id),
+        );
+        assert_ne!(p0, p1);
+        assert!(!p0.contains("image.png"), "no file name in the path");
+        // Archive order doesn't matter for format-5 paths.
+        let entries = [(p1.as_str(), 20), (p0.as_str(), 10)];
+        assert_eq!(
+            match_attachment_entries(&atts, &entries),
+            vec![Some(1), Some(0)]
+        );
+    }
+
+    #[test]
+    fn an_old_archives_shared_path_pairs_up_in_order() {
+        // Formats 3 and 4: both entries have the same path, in the order of
+        // `attachments`. Restore used to send both to the first one's key.
+        let node = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let atts = [
+            attachment(node, "image.png", 10),
+            attachment(other, "notes.pdf", 5),
+            attachment(node, "image.png", 10),
+        ];
+        let shared = format!("attachments/{node}/image.png");
+        let alone = format!("attachments/{other}/notes.pdf");
+        let entries = [
+            (shared.as_str(), 10),
+            (alone.as_str(), 5),
+            (shared.as_str(), 10),
+        ];
+        assert_eq!(
+            match_attachment_entries(&atts, &entries),
+            vec![Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn a_missing_old_entry_is_matched_by_length_or_not_at_all() {
+        let node = Uuid::new_v4();
+        let shared = format!("attachments/{node}/image.png");
+        // The backup skipped one of two files it couldn't fetch. The lengths
+        // differ, so the one entry is the second attachment's.
+        let atts = [
+            attachment(node, "image.png", 10),
+            attachment(node, "image.png", 20),
+        ];
+        assert_eq!(
+            match_attachment_entries(&atts, &[(shared.as_str(), 20)]),
+            vec![Some(1)]
+        );
+        // Same length: it could be either, so it is uploaded to neither.
+        let same = [
+            attachment(node, "image.png", 10),
+            attachment(node, "image.png", 10),
+        ];
+        assert_eq!(
+            match_attachment_entries(&same, &[(shared.as_str(), 10)]),
+            vec![None]
+        );
+        // A length that fits nothing, and a path no attachment has.
+        assert_eq!(
+            match_attachment_entries(&atts, &[(shared.as_str(), 99), ("attachments/x/y", 1)]),
+            vec![None, None]
+        );
+    }
+
+    fn webhook(is_active: bool, had_secret: bool) -> BackupWebhook {
+        BackupWebhook {
+            id: WebhookId(Uuid::new_v4()),
+            owner_id: "someone".into(),
+            url: "https://example.com/hook".into(),
+            events: vec!["node.created".into()],
+            is_active,
+            had_secret,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn a_webhook_that_signed_comes_back_switched_off() {
+        assert!(
+            webhook(true, false).restored_active(),
+            "unsigned: as it was"
+        );
+        assert!(
+            !webhook(true, true).restored_active(),
+            "signed: off until re-keyed"
+        );
+        assert!(!webhook(false, false).restored_active());
+        assert!(!webhook(false, true).restored_active());
+        let data = BackupData {
+            webhooks: Some(vec![
+                webhook(true, true),
+                webhook(true, false),
+                webhook(false, true),
+            ]),
+            ..BackupData::default()
+        };
+        assert_eq!(
+            data.webhooks_switched_off(),
+            1,
+            "only the active signed one changes"
+        );
+        assert_eq!(BackupData::default().webhooks_switched_off(), 0);
+    }
+
+    #[test]
+    fn an_archived_webhook_has_no_secret_field() {
+        // The type is the guard: nothing can put a secret into data.json.
+        let json = serde_json::to_value(webhook(true, true)).expect("serialises");
+        let keys: Vec<&str> = json
+            .as_object()
+            .expect("object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert!(
+            !keys
+                .iter()
+                .any(|k| k.contains("secret") && *k != "had_secret"),
+            "{keys:?}"
+        );
+        // An archive that somehow carries one is read without it.
+        let with_secret = r#"{"id":"00000000-0000-0000-0000-000000000001","owner_id":"o",
+            "url":"https://example.com","events":[],"is_active":true,"had_secret":true,
+            "secret":"s3cr3t","created_at":"2026-01-01T00:00:00Z",
+            "updated_at":"2026-01-01T00:00:00Z"}"#;
+        let read: BackupWebhook = serde_json::from_str(with_secret).expect("parses");
+        assert!(!format!("{read:?}").contains("s3cr3t"));
     }
 
     #[test]

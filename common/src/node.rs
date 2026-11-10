@@ -94,8 +94,9 @@ pub struct Node {
     pub metadata: serde_json::Value,
     pub status: NodeStatus,
     /// A project's status token ("Active", "On hold"; #143), or `None`.
-    /// Not the lifecycle `status` above. Kept across type changes; the UI
-    /// edits it on projects. Validated by `crate::project_status::normalize`.
+    /// Not the lifecycle `status` above. Only a Project may have one set
+    /// (a node's type never changes, §3.3); the UI edits it on Projects.
+    /// Validated by `crate::project_status::normalize`.
     #[serde(default)]
     pub project_status: Option<String>,
     pub tags: Vec<Tag>,
@@ -105,13 +106,32 @@ pub struct Node {
     pub edge_count: u32,
 }
 
+/// Maximum allowed markdown body length (1 MiB), on create and on update
+/// alike: a body that create accepted and update refused could never be
+/// saved again (#281, 1.5).
+const MAX_BODY_LEN: usize = 1_048_576;
+
+/// A title must have something to read: all spaces is as blank as empty.
+/// Shared by the node and task requests.
+pub(crate) fn not_blank(value: &str, _ctx: &()) -> garde::Result {
+    if value.trim().is_empty() {
+        return Err(garde::Error::new("must not be blank"));
+    }
+    Ok(())
+}
+
+/// [`not_blank`] for an optional field: absent means "leave unchanged".
+pub(crate) fn not_blank_if_set(value: &Option<String>, ctx: &()) -> garde::Result {
+    value.as_deref().map_or(Ok(()), |v| not_blank(v, ctx))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Validate)]
 pub struct CreateNodeRequest {
-    #[garde(length(min = 1, max = 500))]
+    #[garde(length(min = 1, max = 500), custom(not_blank))]
     pub title: String,
     #[garde(skip)]
     pub node_type: NodeType,
-    #[garde(skip)]
+    #[garde(length(max = MAX_BODY_LEN))]
     pub body: Option<String>,
     #[garde(skip)]
     #[serde(default = "default_metadata")]
@@ -134,12 +154,11 @@ fn default_metadata() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
-/// Maximum allowed markdown body length (1 MiB).
-const MAX_BODY_LEN: usize = 1_048_576;
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, garde::Validate)]
 pub struct UpdateNodeRequest {
-    #[garde(length(max = 500))]
+    /// Absent leaves the title alone; a set title follows create's rules,
+    /// so an update can't blank it.
+    #[garde(length(min = 1, max = 500), custom(not_blank_if_set))]
     pub title: Option<String>,
     #[garde(length(max = MAX_BODY_LEN))]
     pub body: Option<String>,
@@ -237,6 +256,210 @@ pub struct NodeListResponse {
     pub page: u32,
     pub per_page: u32,
     pub has_more: bool,
+}
+
+/// The most nodes one `GET /nodes/deletion-preview` may ask about.
+pub const DELETION_PREVIEW_MAX_NODES: usize = 100;
+
+/// What deleting nodes destroys along with them, for the confirmation
+/// (owner decision, 2026-11-09, #281): a node's tasks, notes and files are
+/// deleted with it, other accounts' included, so the person deleting sees
+/// the numbers first. Counts only: nothing here names a task, a note or
+/// who wrote it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NodeDeletionPreview {
+    /// Of the nodes asked about, how many exist and are the caller's to
+    /// delete. The other counts cover only these.
+    pub nodes: u64,
+    /// Live tasks on them (the trash is not counted).
+    pub tasks: u64,
+    /// Of `tasks`, those added by an account other than the caller.
+    pub others_tasks: u64,
+    /// Live notes on them.
+    pub notes: u64,
+    /// Of `notes`, those written by an account other than the caller.
+    pub others_notes: u64,
+    /// Attached files.
+    pub files: u64,
+    /// Project Briefs (#282): a Project's current Brief goes with it.
+    /// Absent in an answer from before Briefs.
+    #[serde(default)]
+    pub briefs: u64,
+}
+
+impl NodeDeletionPreview {
+    /// One entry per kind of content that would be lost, in words:
+    /// "5 tasks (2 from other people)". Empty when nothing would be.
+    #[must_use]
+    pub fn losses(&self) -> Vec<String> {
+        fn count(n: u64, one: &str, many: &str) -> String {
+            format!("{n} {}", if n == 1 { one } else { many })
+        }
+        fn with_others(n: u64, others: u64, one: &str, many: &str) -> String {
+            let all = count(n, one, many);
+            if others == 0 {
+                all
+            } else {
+                format!("{all} ({others} from other people)")
+            }
+        }
+        let mut out = Vec::new();
+        if self.tasks > 0 {
+            out.push(with_others(self.tasks, self.others_tasks, "task", "tasks"));
+        }
+        if self.notes > 0 {
+            out.push(with_others(self.notes, self.others_notes, "note", "notes"));
+        }
+        if self.files > 0 {
+            out.push(count(self.files, "file", "files"));
+        }
+        if self.briefs > 0 {
+            out.push(count(self.briefs, "brief", "briefs"));
+        }
+        out
+    }
+
+    /// How many of the `asked` nodes would stay: missing, or not the
+    /// caller's to delete.
+    #[must_use]
+    pub fn kept(&self, asked: usize) -> u64 {
+        (asked as u64).saturating_sub(self.nodes)
+    }
+
+    /// The sum of two previews of different nodes (the UI asks in batches).
+    #[must_use]
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            nodes: self.nodes + other.nodes,
+            tasks: self.tasks + other.tasks,
+            others_tasks: self.others_tasks + other.others_tasks,
+            notes: self.notes + other.notes,
+            others_notes: self.others_notes + other.others_notes,
+            files: self.files + other.files,
+            briefs: self.briefs + other.briefs,
+        }
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{CreateNodeRequest, MAX_BODY_LEN, NodeType, UpdateNodeRequest};
+    use garde::Validate;
+
+    fn create(title: &str, body: Option<String>) -> CreateNodeRequest {
+        CreateNodeRequest {
+            title: title.to_string(),
+            node_type: NodeType::Article,
+            body,
+            metadata: serde_json::json!({}),
+            status: None,
+            project_status: None,
+            template_id: None,
+        }
+    }
+
+    fn update(title: Option<&str>, body: Option<String>) -> UpdateNodeRequest {
+        UpdateNodeRequest {
+            title: title.map(str::to_string),
+            body,
+            metadata: None,
+            status: None,
+            project_status: None,
+            expected_updated_at: None,
+        }
+    }
+
+    #[test]
+    fn an_update_cannot_blank_a_title() {
+        // #281, 1.5: create required a title, update accepted "".
+        assert!(update(Some(""), None).validate().is_err());
+        assert!(update(Some("   "), None).validate().is_err());
+        assert!(update(Some("Kept"), None).validate().is_ok());
+        // Absent means "leave it".
+        assert!(update(None, None).validate().is_ok());
+        assert!(create("  ", None).validate().is_err());
+    }
+
+    #[test]
+    fn create_and_update_cap_the_body_alike() {
+        let at_cap = "a".repeat(MAX_BODY_LEN);
+        let over = "a".repeat(MAX_BODY_LEN + 1);
+        assert!(create("T", Some(at_cap.clone())).validate().is_ok());
+        assert!(update(None, Some(at_cap)).validate().is_ok());
+        // Create took any size, so a node could be made that no update
+        // would ever accept again.
+        assert!(create("T", Some(over.clone())).validate().is_err());
+        assert!(update(None, Some(over)).validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod deletion_preview_tests {
+    use super::NodeDeletionPreview;
+
+    #[test]
+    fn losses_name_each_kind_and_how_much_is_other_peoples() {
+        let p = NodeDeletionPreview {
+            nodes: 1,
+            tasks: 5,
+            others_tasks: 2,
+            notes: 1,
+            others_notes: 1,
+            files: 3,
+            briefs: 1,
+        };
+        assert_eq!(
+            p.losses(),
+            [
+                "5 tasks (2 from other people)",
+                "1 note (1 from other people)",
+                "3 files",
+                "1 brief"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kind_with_nothing_to_lose_is_left_out() {
+        let p = NodeDeletionPreview {
+            nodes: 1,
+            tasks: 1,
+            ..Default::default()
+        };
+        assert_eq!(p.losses(), ["1 task"]);
+        assert!(NodeDeletionPreview::default().losses().is_empty());
+    }
+
+    #[test]
+    fn kept_counts_the_nodes_that_are_not_the_callers_to_delete() {
+        let p = NodeDeletionPreview {
+            nodes: 2,
+            ..Default::default()
+        };
+        assert_eq!(p.kept(5), 3);
+        assert_eq!(p.kept(2), 0);
+        // Never negative, whatever the server answered.
+        assert_eq!(p.kept(1), 0);
+    }
+
+    #[test]
+    fn batches_add_up() {
+        let a = NodeDeletionPreview {
+            nodes: 1,
+            tasks: 2,
+            others_tasks: 1,
+            notes: 3,
+            others_notes: 0,
+            files: 1,
+            briefs: 0,
+        };
+        let sum = a.plus(a);
+        assert_eq!(sum.nodes, 2);
+        assert_eq!(
+            sum.losses(),
+            ["4 tasks (2 from other people)", "6 notes", "2 files"]
+        );
+    }
 }
 
 #[cfg(test)]

@@ -42,6 +42,30 @@ pub(crate) fn visible_to(alias: &str, param: u8) -> String {
     )
 }
 
+/// The same rule as [`visible_to`], written for a query that returns
+/// **many** of the subject's nodes at once (the node list, the graph, the
+/// title list): `id IN (their grants UNION their own)`, which Postgres
+/// hashes once instead of probing per row.
+///
+/// Measured on 20,000 nodes, 2026-11-10 (#281, 3.2): about twice as fast as
+/// `visible_to` for those scans (6 ms against 15 ms for the node list, 3
+/// against 6 for the graph). `visible_to` stays the choice where a query
+/// touches few nodes (a join from tasks or notes, a title lookup): it
+/// probes only the rows it meets. These two are the only spellings of the
+/// rule; a query that scopes to `owner_id` alone is owned-only on purpose
+/// (graph edges and positions, search, the notes feed).
+///
+/// SECURITY: as for `visible_to`, `alias` and `param` come from the code,
+/// never from a request; the subject is always a bind parameter.
+pub(crate) fn visible_among_many(alias: &str, param: u8) -> String {
+    format!(
+        "(${param}::text IS NULL OR {alias}.id IN ( \
+         SELECT node_id FROM permissions WHERE subject_id = ${param}::text \
+         UNION \
+         SELECT id FROM nodes WHERE owner_id = ${param}::text))"
+    )
+}
+
 /// Escape SQL `LIKE`/`ILIKE` metacharacters (`\`, `%`, `_`) so a user-supplied
 /// substring is matched literally. Pair with `ESCAPE '\'` in the query.
 /// Shared by the notes feed and fuzzy search.

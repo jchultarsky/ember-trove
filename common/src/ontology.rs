@@ -3,9 +3,9 @@
 //! What each node kind may carry (§3.2), which kind may be the home of
 //! which (§3.3), and where a graph of edges loops back on itself (§6). The
 //! data-health report (#208) uses them to find existing data that breaks the
-//! model. The write gates of later slices (S2a, S3a) are to use them too,
-//! replacing today's hand-written `== NodeType::Project` checks, so the
-//! report and the enforcement can't disagree.
+//! model, and the API's write gates use the same functions (capabilities
+//! since S2a, edge rules since S3a), so the report and the enforcement
+//! can't disagree.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -156,7 +156,7 @@ impl EdgeRefusal {
     pub fn message(&self) -> String {
         match self {
             Self::MachineOwned => {
-                "wiki links come from [[Title]] in a node's text; they can't be added by hand"
+                "wiki links come from [[Title]] in a node's text; they can't be added or removed by hand"
                     .to_string()
             }
             Self::ContainedReference => {

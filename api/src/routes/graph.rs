@@ -12,7 +12,7 @@ use common::{
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_viewer, subject_scope},
+    auth::permissions::{require_viewer, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -56,11 +56,7 @@ async fn list_positions(
 ) -> Result<Json<Vec<NodePosition>>, ApiError> {
     // SECURITY: scope to the caller's own nodes so positions can't be used to
     // enumerate other owners' node IDs. Admins (None) see all.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let positions = state.graph.list_positions(subject).await?;
     Ok(Json(positions))
 }
@@ -78,11 +74,7 @@ async fn upsert_positions_batch(
     // SECURITY: the repo write is owner-scoped (rows for nodes the caller
     // doesn't own are dropped), so a client can't tamper with other owners'
     // graph layouts. Admins (None) may write any node's position.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let tuples: Vec<(Uuid, f64, f64)> = req
         .positions
         .into_iter()

@@ -200,6 +200,23 @@ fn MonthGrid(
                             class=format!("{cell_class} cursor-pointer")
                             data-date=date.to_string()
                             title="Add a task or a capture for this day"
+                            // Reachable by keyboard (#281): the day was click-only.
+                            // Only keys on the cell itself count, so typing in its
+                            // composer or pressing a task inside is left alone.
+                            tabindex="0"
+                            role="button"
+                            aria-label=format!("Add a task or a capture for {}", date.format("%A, %B %-d"))
+                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                let on_cell = ev.target() == ev.current_target();
+                                if on_cell && (ev.key() == "Enter" || ev.key() == " ") {
+                                    ev.prevent_default();
+                                    if composing.get_untracked() != Some(date) {
+                                        compose_title.set(String::new());
+                                        compose_project.set(None);
+                                        composing.set(Some(date));
+                                    }
+                                }
+                            }
                             on:click=move |_| {
                                 if composing.get_untracked() != Some(date) {
                                     compose_title.set(String::new());
@@ -379,7 +396,7 @@ pub fn CalendarView() -> impl IntoView {
 
             // Two-month calendar grid
             <div class="flex-1 overflow-auto p-4">
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <div class="flex items-center justify-center h-32 text-stone-400 text-sm">
                         "Loading\u{2026}"
                     </div>
@@ -395,8 +412,18 @@ pub fn CalendarView() -> impl IntoView {
                     let m1 = month_sig.get();
                     let y2 = year2.get();
                     let m2 = month2.get();
+                    // A month that failed to load is not a month with no
+                    // tasks (#281, 1.7): say so above the grid.
+                    let failed = matches!(tasks_resource.get(), Some(Err(_)))
+                        || matches!(tasks_resource_2.get(), Some(Err(_)));
 
                     view! {
+                        {failed.then(|| view! {
+                            <crate::components::load_error::LoadError
+                                what="this calendar\u{2019}s tasks"
+                                on_retry=Callback::new(move |()| task_refresh.update(|n| *n += 1))
+                            />
+                        })}
                         <div class="grid grid-cols-1 gap-8">
                             <MonthGrid year=y1 month=m1 tasks=tasks_1 today=today
                                 composing=composing refresh=task_refresh />
@@ -405,7 +432,7 @@ pub fn CalendarView() -> impl IntoView {
                         </div>
                     }
                 }}
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }

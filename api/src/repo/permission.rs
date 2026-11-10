@@ -113,6 +113,28 @@ pub(crate) async fn insert_grant<'e, E: sqlx::PgExecutor<'e>>(
     row.into_permission()
 }
 
+/// Every grant, or one node's. A free function so the backup can run it on
+/// its one snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    node_id: Option<NodeId>,
+) -> Result<Vec<Permission>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, PermissionRow>(
+        r#"
+        SELECT id, node_id, subject_id, role::text, granted_by, created_at
+        FROM permissions
+        WHERE ($1::uuid IS NULL OR node_id = $1)
+        ORDER BY created_at
+        "#,
+    )
+    .bind(node_id.map(|n| n.inner()))
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all permissions failed: {e}")))?;
+
+    rows.into_iter().map(|r| r.into_permission()).collect()
+}
+
 #[async_trait]
 impl PermissionRepo for PgPermissionRepo {
     async fn grant(
@@ -179,20 +201,7 @@ impl PermissionRepo for PgPermissionRepo {
     }
 
     async fn list_all(&self, node_id: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, PermissionRow>(
-            r#"
-            SELECT id, node_id, subject_id, role::text, granted_by, created_at
-            FROM permissions
-            WHERE ($1::uuid IS NULL OR node_id = $1)
-            ORDER BY created_at
-            "#,
-        )
-        .bind(node_id.map(|n| n.inner()))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all permissions failed: {e}")))?;
-
-        rows.into_iter().map(|r| r.into_permission()).collect()
+        list_all_on(&self.pool, node_id).await
     }
 
     async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError> {

@@ -275,7 +275,7 @@ test('a home is chosen, changed and removed from the child', async ({ page, requ
 
     // Removing the home's link from the list below updates the row too
     // (one refresh for the whole section).
-    await page.getByRole('button', { name: '×' }).click();
+    await page.getByRole('button', { name: 'Remove link', exact: true }).click();
     await expect(row).toContainText('None: it stands alone');
     expect((await homeOf(request, project.id)).home).toBeNull();
 

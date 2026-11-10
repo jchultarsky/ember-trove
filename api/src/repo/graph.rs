@@ -76,24 +76,51 @@ struct NodePositionRow {
     y: f64,
 }
 
+/// Saved graph positions: one owner's, or everyone's with `None`. A free
+/// function so the backup can run it on its one snapshot transaction
+/// (`backup::read_snapshot`).
+pub(crate) async fn list_positions_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    subject: Option<&str>,
+) -> Result<Vec<NodePosition>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, NodePositionRow>(
+        "SELECT p.node_id, p.x, p.y
+         FROM node_positions p
+         JOIN nodes n ON n.id = p.node_id
+         WHERE ($1::text IS NULL OR n.owner_id = $1::text)",
+    )
+    .bind(subject)
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_positions failed: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| NodePosition {
+            node_id: NodeId(r.node_id),
+            x: r.x,
+            y: r.y,
+        })
+        .collect())
+}
+
 #[async_trait]
 impl GraphRepo for PgGraphRepo {
     async fn list_nodes(&self, subject: Option<&str>) -> Result<Vec<GraphNode>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, GraphNodeRow>(
+        let sql = format!(
             "SELECT n.id, n.title, n.node_type::text AS node_type, n.status::text AS status,
                     n.pinned, substring(n.body FROM 1 FOR $2) AS body_head
              FROM nodes n
-             WHERE $1::text IS NULL
-                OR n.id IN (SELECT node_id FROM permissions WHERE subject_id = $1
-                            UNION
-                            SELECT id FROM nodes WHERE owner_id = $1)
+             WHERE {visible}
              ORDER BY n.pinned DESC, n.updated_at DESC",
-        )
-        .bind(subject)
-        .bind(PREVIEW_SOURCE_CHARS)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("graph nodes failed: {e}")))?;
+            visible = super::visible_among_many("n", 1),
+        );
+        let rows = sqlx::query_as::<_, GraphNodeRow>(&sql)
+            .bind(subject)
+            .bind(PREVIEW_SOURCE_CHARS)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("graph nodes failed: {e}")))?;
 
         let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
         let mut tags: HashMap<Uuid, Vec<GraphTag>> = HashMap::new();
@@ -138,25 +165,7 @@ impl GraphRepo for PgGraphRepo {
         &self,
         subject: Option<&str>,
     ) -> Result<Vec<NodePosition>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodePositionRow>(
-            "SELECT p.node_id, p.x, p.y
-             FROM node_positions p
-             JOIN nodes n ON n.id = p.node_id
-             WHERE ($1::text IS NULL OR n.owner_id = $1::text)",
-        )
-        .bind(subject)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_positions failed: {e}")))?;
-
-        Ok(rows
-            .into_iter()
-            .map(|r| NodePosition {
-                node_id: NodeId(r.node_id),
-                x: r.x,
-                y: r.y,
-            })
-            .collect())
+        list_positions_on(&self.pool, subject).await
     }
 
     async fn save_positions(

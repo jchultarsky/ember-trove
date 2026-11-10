@@ -845,7 +845,13 @@ fn PersonRow(
             data-testid="person-row"
             data-new=move || highlighted.get().then_some("true")
             on:click=move |_| navigate(&format!("/people/{id}"), Default::default())>
-            <div class="text-sm font-medium text-stone-900 dark:text-stone-100">{person.display_name.clone()}</div>
+            // A real button: the row was click-only (#281). Its click
+            // bubbles to the row's handler.
+            <button type="button"
+                class="block text-left text-sm font-medium text-stone-900 dark:text-stone-100 cursor-pointer
+                       focus-visible:outline-2 focus-visible:outline-amber-500 rounded">
+                {person.display_name.clone()}
+            </button>
             <div class="flex flex-wrap items-center gap-x-3 text-xs text-stone-500">
                 {(!subtitle.is_empty()).then(|| view! { <span>{subtitle}</span> })}
                 {email.map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> })}
@@ -901,7 +907,12 @@ fn PersonView(id: PersonId) -> impl IntoView {
         }
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::delete_person(id).await {
-                Ok(()) => navigate.get_value()("/people", Default::default()),
+                // The page may be gone by now: `try_` access (#281).
+                Ok(()) => {
+                    if let Some(go) = navigate.try_get_value() {
+                        go("/people", Default::default());
+                    }
+                }
                 Err(e) => push_toast(ToastLevel::Error, format!("Couldn't delete: {e}")),
             }
         });
@@ -942,7 +953,13 @@ fn PersonView(id: PersonId) -> impl IntoView {
                                     {list.into_iter().map(|u| view! { <UsageRow usage=u /> }).collect_view()}
                                 </ul>
                             }.into_any(),
-                            Err(_) => ().into_any(),
+                            // Not "Not on any node yet", and not nothing (#281, 1.7).
+                            Err(_) => view! {
+                                <crate::components::load_error::LoadError
+                                    what="where this person appears"
+                                    on_retry=Callback::new(move |()| version.update(|n| *n += 1))
+                                />
+                            }.into_any(),
                         })}
                     </Suspense>
                 </section>

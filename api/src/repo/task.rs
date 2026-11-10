@@ -32,6 +32,11 @@ pub trait TaskRepo: Send + Sync {
     /// Create the next occurrence of a recurring task, linked to `parent` —
     /// the instance whose completion scheduled it — so that reopening
     /// `parent` can retract it ([`TaskRepo::retract_occurrence`]).
+    ///
+    /// A parent has at most one live occurrence (#281, 1.8). Two
+    /// completions that arrive together (a double click, two devices) both
+    /// read the task as open, and both call this: the parent row is locked,
+    /// and the second caller gets the occurrence the first one made.
     async fn create_occurrence(
         &self,
         parent: TaskId,
@@ -134,10 +139,15 @@ pub trait TaskRepo: Send + Sync {
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError>;
 
     /// Bulk update sort_order for drag-to-reorder; only touches rows owned by `owner_id`.
+    /// Sets `sort_order` on the tasks `subject` may edit, by the rule of
+    /// `PATCH /tasks/:id`: their own, or one on a node they edit (#281,
+    /// 2.5; it was owner-only, so an editor's drag on a shared node's
+    /// task was silently dropped). `None` is an admin. Any other id is
+    /// skipped without an error, as before.
     async fn reorder(
         &self,
         updates: &[(TaskId, i32)],
-        owner_id: &str,
+        subject: Option<&str>,
     ) -> Result<(), EmberTroveError>;
 }
 
@@ -217,6 +227,14 @@ impl TaskRow {
         })
     }
 }
+
+/// A task's priority as an `ORDER BY` rank: high, medium, low. One
+/// definition for every task list (#281, 3.5; it was written out five
+/// times). `T_` is the same for queries that alias `node_tasks` as `t`.
+const PRIORITY_RANK: &str =
+    "CASE priority::text WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END";
+const T_PRIORITY_RANK: &str =
+    "CASE t.priority::text WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END";
 
 const SELECT_COLS: &str = r#"
     id, node_id, owner_id, title,
@@ -304,6 +322,52 @@ pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
     row.into_task()
 }
 
+/// Every live task, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Task>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, TaskRow>(&format!(
+        r#"
+        SELECT {SELECT_COLS}
+        FROM node_tasks
+        WHERE deleted_at IS NULL
+        ORDER BY created_at ASC
+        "#
+    ))
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all tasks failed: {e}")))?;
+
+    rows.into_iter().map(TaskRow::into_task).collect()
+}
+
+/// Which live task was scheduled by completing which (migration 032), for
+/// the backup (`backup::read_snapshot`). The `Task` DTO doesn't carry the
+/// link, so it travels beside the tasks. Only links between two live tasks:
+/// a link to a deleted task would name a row the archive doesn't hold.
+pub(crate) async fn recurrence_links_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<common::backup::RecurrenceLink>, EmberTroveError> {
+    let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT t.id, t.recurrence_parent_id
+         FROM node_tasks t
+         JOIN node_tasks p ON p.id = t.recurrence_parent_id
+         WHERE t.deleted_at IS NULL AND p.deleted_at IS NULL
+         ORDER BY t.created_at, t.id",
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list recurrence links failed: {e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|(task, parent)| common::backup::RecurrenceLink {
+            task_id: TaskId(task),
+            parent_id: TaskId(parent),
+        })
+        .collect())
+}
+
 #[async_trait]
 impl TaskRepo for PgTaskRepo {
     async fn create(
@@ -321,7 +385,37 @@ impl TaskRepo for PgTaskRepo {
         owner_id: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError> {
-        self.insert(None, owner_id, req, Some(parent)).await
+        let db = |what: &'static str| {
+            move |e: sqlx::Error| EmberTroveError::Internal(format!("{what} failed: {e}"))
+        };
+        let mut tx = self.pool.begin().await.map_err(db("begin occurrence"))?;
+        // The lock that makes the check below and the insert one step.
+        let locked: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM node_tasks WHERE id = $1 FOR UPDATE")
+                .bind(parent.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db("lock occurrence parent"))?;
+        if locked.is_none() {
+            return Err(EmberTroveError::NotFound(format!(
+                "task {parent} not found"
+            )));
+        }
+        let existing = sqlx::query_as::<_, TaskRow>(&format!(
+            "SELECT {SELECT_COLS} FROM node_tasks \
+             WHERE recurrence_parent_id = $1 AND deleted_at IS NULL \
+             ORDER BY created_at, id LIMIT 1"
+        ))
+        .bind(parent.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db("find occurrence"))?;
+        if let Some(row) = existing {
+            return row.into_task();
+        }
+        let task = insert_task(&mut *tx, None, owner_id, &req, Some(parent)).await?;
+        tx.commit().await.map_err(db("commit occurrence"))?;
+        Ok(task)
     }
 
     async fn retract_occurrence(
@@ -509,11 +603,7 @@ impl TaskRepo for PgTaskRepo {
               )
             ORDER BY
                 t.sort_order ASC,
-                CASE t.priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {T_PRIORITY_RANK},
                 t.node_id NULLS FIRST,
                 t.created_at
             "#,
@@ -539,11 +629,7 @@ impl TaskRepo for PgTaskRepo {
               AND node_id IS NULL
             ORDER BY
                 sort_order ASC,
-                CASE priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {PRIORITY_RANK},
                 created_at ASC
             "#
         ))
@@ -578,11 +664,7 @@ impl TaskRepo for PgTaskRepo {
               AND t.due_date >= $2
               AND t.due_date <= $3
             ORDER BY t.due_date,
-                CASE t.priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {T_PRIORITY_RANK},
                 t.created_at
             "#,
             visible = super::visible_to("n", 4),
@@ -623,11 +705,7 @@ impl TaskRepo for PgTaskRepo {
               AND t.status::text NOT IN ('done', 'cancelled')
             ORDER BY
                 t.due_date ASC NULLS LAST,
-                CASE t.priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {T_PRIORITY_RANK},
                 t.created_at ASC
             "#,
             visible = super::visible_to("n", 2),
@@ -721,7 +799,7 @@ impl TaskRepo for PgTaskRepo {
         }
 
         // Use a window function to rank tasks per node and fetch limit+1 to detect "has more".
-        let rows = sqlx::query_as::<_, SummaryRow>(
+        let rows = sqlx::query_as::<_, SummaryRow>(&format!(
             r#"
             SELECT node_id, id, title, status::text AS status, priority::text AS priority,
                    due_date, rn
@@ -730,11 +808,7 @@ impl TaskRepo for PgTaskRepo {
                        ROW_NUMBER() OVER (
                            PARTITION BY node_id
                            ORDER BY
-                               CASE priority::text
-                                   WHEN 'high'   THEN 0
-                                   WHEN 'medium' THEN 1
-                                   WHEN 'low'    THEN 2
-                               END,
+                               {PRIORITY_RANK},
                                due_date NULLS LAST,
                                sort_order ASC,
                                created_at ASC
@@ -746,8 +820,8 @@ impl TaskRepo for PgTaskRepo {
             ) ranked
             WHERE rn <= $2
             ORDER BY node_id, rn
-            "#,
-        )
+            "#
+        ))
         .bind(&ids)
         .bind(limit_per_node + 1) // fetch one extra to detect overflow
         .fetch_all(&self.pool)
@@ -844,25 +918,13 @@ impl TaskRepo for PgTaskRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
-            SELECT {SELECT_COLS}
-            FROM node_tasks
-            WHERE deleted_at IS NULL
-            ORDER BY created_at ASC
-            "#
-        ))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all tasks failed: {e}")))?;
-
-        rows.into_iter().map(TaskRow::into_task).collect()
+        list_all_on(&self.pool).await
     }
 
     async fn reorder(
         &self,
         updates: &[(TaskId, i32)],
-        owner_id: &str,
+        subject: Option<&str>,
     ) -> Result<(), EmberTroveError> {
         if updates.is_empty() {
             return Ok(());
@@ -880,13 +942,22 @@ impl TaskRepo for PgTaskRepo {
                     unnest($2::int4[])  AS sort_order
             ) AS u
             WHERE node_tasks.id = u.id
-              AND node_tasks.owner_id = $3
               AND node_tasks.deleted_at IS NULL
+              AND (
+                $3::text IS NULL
+                OR node_tasks.owner_id = $3::text
+                OR EXISTS (
+                    SELECT 1 FROM permissions p
+                    WHERE p.node_id = node_tasks.node_id
+                      AND p.subject_id = $3::text
+                      AND p.role::text IN ('owner', 'editor')
+                )
+              )
             "#,
         )
         .bind(&ids)
         .bind(&orders)
-        .bind(owner_id)
+        .bind(subject)
         .execute(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("reorder tasks failed: {e}")))?;

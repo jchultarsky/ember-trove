@@ -129,6 +129,24 @@ fn scheduled_on(
     req
 }
 
+/// Who may change a task: its owner, an admin, or an editor of the node it
+/// is on. One rule for update, delete and restore (#281, 3.3; it was
+/// written out three times), and the one `TaskRepo::reorder` applies in
+/// SQL.
+async fn require_task_editor(
+    state: &AppState,
+    claims: &AuthClaims,
+    task: &Task,
+) -> Result<(), ApiError> {
+    if task.owner_id == claims.sub || is_admin(claims) {
+        return Ok(());
+    }
+    match task.node_id {
+        Some(node) => require_editor(state.permissions.as_ref(), claims, node).await,
+        None => Err(ApiError::Forbidden("access denied".to_string())),
+    }
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 async fn list_tasks(
@@ -225,16 +243,12 @@ async fn update_task(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTaskRequest>,
 ) -> Result<Json<Task>, ApiError> {
+    // The request's own shape first: it says nothing about any task.
+    req.validate()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     // Fetch the task to verify ownership / node permission.
     let existing = state.tasks.get(TaskId(id)).await?;
-    if existing.owner_id != claims.sub && !is_admin(&claims) {
-        // Not the owner — check node-level permission if attached to a node.
-        if let Some(nid) = existing.node_id {
-            require_editor(state.permissions.as_ref(), &claims, nid).await?;
-        } else {
-            return Err(ApiError::Forbidden("access denied".to_string()));
-        }
-    }
+    require_task_editor(&state, &claims, &existing).await?;
 
     // SECURITY: moving a task onto a node (node_id: Some(Some(_))) requires
     // editor access to the DESTINATION — the check above only covers the
@@ -251,7 +265,8 @@ async fn update_task(
     let effect = series_effect(
         &existing,
         req.status.as_ref(),
-        chrono::Utc::now().date_naive(),
+        // The sender's day when they sent a plausible one (#281, 1.9).
+        common::task::local_today(req.today, chrono::Utc::now().date_naive()),
     );
 
     let updated = state.tasks.update(TaskId(id), req).await?;
@@ -296,13 +311,7 @@ async fn delete_task(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let existing = state.tasks.get(TaskId(id)).await?;
-    if existing.owner_id != claims.sub && !is_admin(&claims) {
-        if let Some(nid) = existing.node_id {
-            require_editor(state.permissions.as_ref(), &claims, nid).await?;
-        } else {
-            return Err(ApiError::Forbidden("access denied".to_string()));
-        }
-    }
+    require_task_editor(&state, &claims, &existing).await?;
     let (owner_id, node_id) = (existing.owner_id.clone(), existing.node_id);
     state.tasks.delete(TaskId(id)).await?;
     dispatch(
@@ -324,13 +333,7 @@ async fn restore_task(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Task>, ApiError> {
     let existing = state.tasks.get_deleted(TaskId(id)).await?;
-    if existing.owner_id != claims.sub && !is_admin(&claims) {
-        if let Some(nid) = existing.node_id {
-            require_editor(state.permissions.as_ref(), &claims, nid).await?;
-        } else {
-            return Err(ApiError::Forbidden("access denied".to_string()));
-        }
-    }
+    require_task_editor(&state, &claims, &existing).await?;
     let restored = state.tasks.restore(TaskId(id)).await?;
     dispatch(
         state.webhooks.clone(),
@@ -342,14 +345,20 @@ async fn restore_task(
     Ok(Json(restored))
 }
 
-/// PUT /tasks/reorder — bulk update sort_order for drag-to-reorder in My Day.
+/// PUT /tasks/reorder — bulk update sort_order for drag-to-reorder in My Day
+/// and a node's task list.
 async fn reorder_tasks(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<ReorderTasksRequest>,
 ) -> Result<StatusCode, ApiError> {
     let updates: Vec<(TaskId, i32)> = req.tasks.iter().map(|e| (e.id, e.sort_order)).collect();
-    state.tasks.reorder(&updates, &claims.sub).await?;
+    // The repo applies the edit rule per task (owner, admin, or an editor
+    // of its node) and skips the rest.
+    state
+        .tasks
+        .reorder(&updates, subject_scope(&claims))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

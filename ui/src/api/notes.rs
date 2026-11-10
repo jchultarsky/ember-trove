@@ -72,6 +72,3 @@ pub async fn fetch_notes_feed(
     parts.push(format!("page={}", page.max(1)));
     get_json(&format!("/notes/feed?{}", parts.join("&"))).await
 }
-
-#[allow(dead_code)]
-pub fn _use_note_id(_: NoteId) {}

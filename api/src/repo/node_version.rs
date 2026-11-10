@@ -63,18 +63,26 @@ impl PgNodeVersionRepo {
     }
 }
 
+/// Every stored node version. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<NodeVersion>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, NodeVersionRow>(
+        "SELECT id, node_id, body, created_by, created_at
+         FROM node_versions ORDER BY created_at ASC",
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all node_versions failed: {e}")))?;
+
+    Ok(rows.into_iter().map(NodeVersionRow::into_version).collect())
+}
+
 #[async_trait]
 impl NodeVersionRepo for PgNodeVersionRepo {
     async fn list_all(&self) -> Result<Vec<NodeVersion>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodeVersionRow>(
-            "SELECT id, node_id, body, created_by, created_at
-             FROM node_versions ORDER BY created_at ASC",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all node_versions failed: {e}")))?;
-
-        Ok(rows.into_iter().map(NodeVersionRow::into_version).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn record(

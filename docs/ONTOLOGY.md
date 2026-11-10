@@ -128,7 +128,10 @@ Reference may hold material directly or be a *pointer* to an outside source
   meaningful for Articles) with one effect: a `depends_on` on an Article is
   satisfied once the Article is Published (§6.4). Archived hides a node from
   lists and navigation, and an archived Reference no longer satisfies a
-  `depends_on`.
+  `depends_on`. It does **not** hide the node from search: archiving takes
+  finished or cancelled work out of view to declutter lists and
+  prioritising, and is never a way to make information unfindable. A list
+  can show archived nodes on request.
 
 ## 4. Anatomy of a Project
 
@@ -248,6 +251,10 @@ Edge types acquire semantics **one at a time, by explicit decision** — a
 type means exactly what this section says, no more and no less; behavior may
 branch on edge type only where a meaning is settled here.
 
+**No edge of any type joins a node to itself.** The database refuses a
+self-loop for every type, not only for the types whose longer loops are
+checked (§6.1, §6.4, §6.5).
+
 ### 6.1 `contains` — "has its home in"
 
 Directional structural belonging: the child is part of the parent's scope,
@@ -269,6 +276,11 @@ and the parent is where the child is found.
   container does **not** cascade-delete its children. (Project completion
   and cancellation *do* cascade state downward — §4.1 — which is a state
   rule, not a deletion rule.)
+- What a node **holds** is deleted with it, for good: its Tasks, its notes
+  and its files, including Tasks and notes written by other accounts. So
+  the delete confirmation first counts what would be lost, the deleter's
+  own and other people's, and offers Delete only once the counts are
+  shown. It gives counts only, never titles or names (§14).
 
 ### 6.2 `related_to` — bidirectional traversal, nothing more
 
@@ -384,6 +396,11 @@ is involved in this Project, in this capacity." Membership is Project-only
 (Areas, Articles, and References have no People). In the graph, memberships
 are projected as people→project edges, and a Person vertex is labeled
 **name + email** — the email is the discriminator, consistent with §7.1.
+
+Only the Project's **owner** adds, changes or removes its memberships. An
+editor of a shared Project can't, and neither can the admin: a membership
+points into the owner's own People registry, which no one else can see
+(§14).
 
 ### 7.3 Mentions
 
@@ -655,7 +672,8 @@ model's semantics never widen what anyone can see or change.
   never contact details, and never a way into the owner's registry. A
   mention of a deleted Person renders as unresolved.
 - **Memberships** (§7.2). Accounts a Project is shared with see a member's
-  name and Role only, never contact details.
+  name and Role only, never contact details. Only the Project's owner
+  writes memberships: not its editors, and not the admin.
 - **Company personal-operations data** (§8.1). Account numbers, key links,
   and contact details are shown only to the owner. They are never logged,
   never indexed for search, never sent in webhooks or exports, and are
@@ -696,4 +714,7 @@ model's semantics never widen what anyone can see or change.
 | 2026-10-31 | The calendar's day composer makes the chosen Project's task due that day, or else a capture led by the date | Owner, S4a planning (#234) |
 | 2026-10-31 | Converting a capture offers a node (with an optional home), a note on a node, or a Task in a Project; Event and Person join with their slices. A Task's title must fit (500 characters): the text is reworded, never cut | Owner, S4b planning (#234) |
 | 2026-11-01 | The captures' place is named Captures (the Inbox until then) and holds captures only; a Task without a Project is listed by Data health, not by Captures. Captures are never searched: a glance at the wall is the point | Owner, on #240 (S4c) |
+| 2026-11-09 | Archived nodes stay searchable: archiving declutters lists and navigation, and never makes information unfindable | Owner, on the full review (#281) |
+| 2026-11-09 | Deleting a node keeps the hard delete of its Tasks, notes and files, other accounts' included, behind a confirmation that counts them first (not the trash, and not unguarded) | Owner, on the full review (#281) |
+| 2026-11-09 | Written down from the code, no behaviour change: no self-loop for any edge type (§6); memberships are written by the Project's owner only (§7.2, §14) | Full review (#281), findings 2.3 and 2.4 |
 | 2026-11-09 | Project Brief: headline (optional) + pitch + points, Project-only; a save by the same author within the edit-coalesce window updates it in place, any other save supersedes it into History; Brief first, Focus in a later release | Owner, on #282 |

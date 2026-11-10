@@ -262,12 +262,21 @@ impl BriefRepo for PgBriefRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<ProjectBrief>, EmberTroveError> {
-        let rows: Vec<Row> = sqlx::query_as(&format!(
-            "SELECT {COLUMNS} FROM project_briefs ORDER BY node_id"
-        ))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db("list"))?;
-        Ok(rows.into_iter().map(Into::into).collect())
+        list_all_on(&self.pool).await
     }
+}
+
+/// Every Brief. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`; #281): a table read
+/// outside that snapshot can disagree with the nodes it points at.
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<ProjectBrief>, EmberTroveError> {
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {COLUMNS} FROM project_briefs ORDER BY node_id"
+    ))
+    .fetch_all(ex)
+    .await
+    .map_err(db("list"))?;
+    Ok(rows.into_iter().map(Into::into).collect())
 }
