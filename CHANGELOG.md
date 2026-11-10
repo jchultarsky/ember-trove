@@ -117,6 +117,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted
   with it behind the counting confirmation (§6.1).
+- **Docs corrected against the code** (#281, the review's documentation
+  section):
+  - README API table: task update is `PATCH`, My Day is `/api/my-day`,
+    `GET /api/edges` returns the caller's own edges, and the backup
+    endpoints are the `/api/admin/backups` ones (the table listed two
+    routes that don't exist). Added the endpoints it left out: favorites,
+    webhooks, export, a node's links, duplicate and export, titles,
+    calendar, dashboard, and the rest of the task routes.
+  - `COOKIE_SECURE` is on by default; only local HTTP development turns it
+    off. README and `docs/deploy-aws.md` said to set it in production.
+  - `docs/deploy-aws.md` lists `S3_ENDPOINT`, `SES_FROM_EMAIL`, `HOST`
+    and `PORT`.
+  - Coverage is an enforced floor in CI, not report-only. An Article is
+    long-form writing, not an "atomic note".
+  - `docs/ONTOLOGY.md` now states two rules the code already had: no edge
+    joins a node to itself (§6), and only a Project's owner changes its
+    people (§7.2, §14).
+  - Four code comments and three lines of `.claude/rules` that no longer
+    matched the code.
 
 ## [3.13.1] - 2026-11-09
 

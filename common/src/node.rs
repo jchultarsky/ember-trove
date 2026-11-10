@@ -94,8 +94,9 @@ pub struct Node {
     pub metadata: serde_json::Value,
     pub status: NodeStatus,
     /// A project's status token ("Active", "On hold"; #143), or `None`.
-    /// Not the lifecycle `status` above. Kept across type changes; the UI
-    /// edits it on projects. Validated by `crate::project_status::normalize`.
+    /// Not the lifecycle `status` above. Only a Project may have one set
+    /// (a node's type never changes, §3.3); the UI edits it on Projects.
+    /// Validated by `crate::project_status::normalize`.
     #[serde(default)]
     pub project_status: Option<String>,
     pub tags: Vec<Tag>,
