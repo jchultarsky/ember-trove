@@ -155,8 +155,8 @@ Impact is what the measurements above show; effort and risk are estimates.
 - moving the graph layout to a worker: about 120–240 ms from scratch at 2,000
   nodes, and a normal load (all pinned) is a quarter of that.
 
-**Still to measure on prod after this release:** per-route latency from `/api/metrics`
-after a day or two of real use, and `pg_stat_statements` there.
+**Measured on prod since:** `pg_stat_statements`, on 2026-11-10 (see "Production,
+eight days" below). **Still to read on prod:** per-route latency from `/api/metrics`.
 Both are on **Admin → Performance** (`/admin/performance`) from the release after
 3.9.0. Production has collected statement statistics since 3.9.0 (2026-11-02).
 
@@ -226,3 +226,58 @@ What does hold a phone up is a chain: sign-in resolves at about 0.42 s, then abo
 **Next:** map that chain per page and shorten it, for example by starting page data
 alongside the sign-in check, or folding dependent requests into one.
 
+## Production, eight days (2026-11-10)
+
+`scripts/perf/pg-top.sh` against production: every statement the database ran from
+2026-11-02 18:49 UTC to 2026-11-10 17:50 UTC. Statements are normalised, so no values
+were read. Size at the time: 308 nodes, 300 tasks, 131 edges, 549 notes, about 2,150
+saved body versions, 22 MB on disk.
+
+| | |
+|---|---|
+| Distinct statements | 141 |
+| Calls | 39,040 |
+| Of those, housekeeping (the pool's connection check, the suspended-accounts refresh) | 30,433, at 0.01 ms each |
+| **Total execution time, all statements** | **3.9 s** |
+| Statements averaging over 10 ms | 2 |
+
+| Statement | Calls | Mean | Max | Share of all time |
+|---|---|---|---|---|
+| Backup: read every saved body version | 19 | 87 ms | 117 ms | 42% |
+| Node list with tag filters | 25 | 12 ms | 23 ms | 8% |
+| Backup: read every node | 19 | 8.6 ms | 17 ms | 4% |
+| Save a node | 31 | 3.6 ms | 17 ms | 3% |
+| Add a note | 23 | 4.4 ms | 11 ms | 3% |
+| Everything else | | under 5 ms; under 1 ms outside the backup | | |
+
+**What it says.**
+- **The database is not where the time goes.** Eight days of real use cost 3.9 s
+  of execution in total. The call above ("the SQL rewrites are not worth doing
+  now") holds on real data, not only on the synthetic set.
+- **The largest single cost is the backup**, which runs daily and after each
+  deploy, off the request path. Its read of saved body versions grows with every
+  save. At 87 ms it needs nothing; look again if it passes a second.
+- A statement's text changes when a release rewrites it, and the new text starts a
+  new row. The node list above is the query from before 3.14.0; its replacement has
+  too few calls yet to compare.
+
+**Not measured: per-route latency.** Its counters live in the API process and start
+again at every deploy. There were three deploys on 2026-11-10, so the page held
+under an hour of traffic. Read **Admin → Performance** after a few days without a
+deploy.
+
+### What is left, re-ranked (2026-11-10)
+
+Done since the first ranking: #1, #2, and the paging half of #5 (3.14.0, #257).
+With the database ruled out, what remains is bytes sent and round trips, on a phone.
+
+| Order | Item | Why here |
+|---|---|---|
+| 1 | **The chain after sign-in** (see P1 #2): about 0.7 s of requests that run one after another on a phone | on every page load; the largest fixed delay measured |
+| 2 | **#3 My Day backlog**: every open task, full row, on each load | the most-opened page; grows with the task count |
+| 3 | **#4 Targeted refreshes**: a capture reloads the task lists | small change, removes whole requests |
+| 4 | **#5, the other half**: excerpts in the node list instead of bodies | the list pages now, and each page still carries full bodies |
+| 5 | **#6 API compression**, after the BREACH check | divides every figure above by about five; needs the security check first |
+| 6 | **#8 Minimap throttle** | small, the graph page only |
+| 7 | **#9 `statement_timeout`** | safety, not speed; still unset |
+| 8 | **#7 Cold start** (brotli, lazy loading) | the largest piece of work for the least-frequent case |
