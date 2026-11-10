@@ -44,6 +44,15 @@ async fn create_favorite(
     if let Some(node_id) = req.node_id {
         require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     }
+    // A link favourite is opened by the app: http and https only, as for a
+    // node's links (`common::node_link::is_web_url`).
+    if let Some(url) = &req.url
+        && !common::node_link::is_web_url(url)
+    {
+        return Err(ApiError::Validation(
+            "url: must start with http:// or https://".to_string(),
+        ));
+    }
     let fav = state.favorites.create(&claims.sub, req).await?;
     Ok((StatusCode::CREATED, Json(fav)))
 }

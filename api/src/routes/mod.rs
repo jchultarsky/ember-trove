@@ -350,6 +350,25 @@ mod tests {
         assert_eq!(burst, u64::from(PROD_RATE_LIMIT.burst));
     }
 
+    /// SECURITY: the limiter keys on the first `X-Forwarded-For` address
+    /// (`SmartIpKeyExtractor`). The edge proxy must state the address it
+    /// saw, never pass on what the client sent: with
+    /// `$proxy_add_x_forwarded_for` a client could spend someone else's
+    /// allowance, or use a fresh one per request.
+    #[test]
+    fn the_edge_proxy_never_forwards_a_client_supplied_address() {
+        let conf = include_str!("../../../deploy/nginx.prod.conf");
+        let set: Vec<&str> = conf
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("proxy_set_header") && l.contains("X-Forwarded-For"))
+            .collect();
+        assert_eq!(set.len(), 4, "every proxied location sets it: {set:?}");
+        for line in set {
+            assert!(line.ends_with("$remote_addr;"), "{line}");
+        }
+    }
+
     /// SECURITY: the sign-in routes keep their own, tighter nginx limits.
     #[test]
     fn nginx_auth_limits_stay_tighter_than_the_api_limit() {

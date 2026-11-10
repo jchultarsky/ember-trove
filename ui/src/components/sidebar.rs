@@ -30,6 +30,8 @@ pub fn Sidebar(
         // them on the device after logout (#161). Logging out with a save
         // still pending loses that edit: confidentiality over convenience.
         crate::draft::clear_all_drafts();
+        // Recent node titles and search queries go too.
+        crate::draft::clear_device_history();
         wasm_bindgen_futures::spawn_local(async move {
             if let Ok(url) = crate::api::fetch_logout_url().await
                 && let Some(window) = web_sys::window()

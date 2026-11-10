@@ -57,7 +57,9 @@ fn result_title(title: &str, highlighted: Option<&str>, query: &str) -> AnyView 
 
 // ── Search history (localStorage) ────────────────────────────────────────────
 
-const HISTORY_KEY: &str = "ember_trove_search_history";
+/// Holds what was searched for: cleared with the session
+/// (`draft::clear_device_history`).
+pub const HISTORY_KEY: &str = "ember_trove_search_history";
 const HISTORY_MAX: usize = 20;
 
 fn load_history() -> Vec<String> {

@@ -23,6 +23,24 @@ pub struct ActivityEntry {
     pub created_at: DateTime<Utc>,
 }
 
+/// The metadata keys that hold an email address: the actor's, and the
+/// address an invite was sent to.
+pub const EMAIL_KEYS: [&str; 2] = ["actor_email", "invited_email"];
+
+/// Remove the email addresses from History entries, for a reader who is
+/// not the node's owner. A node's viewers and editors see who did what by
+/// name; the addresses of everyone who ever acted on the node, or was
+/// invited to it, are the owner's to see (2026-11-10).
+pub fn redact_emails(entries: &mut [ActivityEntry]) {
+    for entry in entries {
+        if let Some(meta) = entry.metadata.as_object_mut() {
+            for key in EMAIL_KEYS {
+                meta.remove(key);
+            }
+        }
+    }
+}
+
 /// Activity entry enriched with the parent node's title — used by the
 /// v2.9.0 dashboard recap section so the UI doesn't have to fetch the
 /// node separately for every line.

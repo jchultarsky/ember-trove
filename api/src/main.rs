@@ -168,9 +168,19 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("loading suspended accounts failed: {e}"))?,
     );
 
+    // Removed admin roles. Also stops startup when it can't be read:
+    // serving without it would give a demoted admin the role back.
+    let demoted = auth::demoted::DemotedSet::new(
+        accounts
+            .demotions()
+            .await
+            .map_err(|e| anyhow::anyhow!("loading admin demotions failed: {e}"))?,
+    );
+
     let state = AppState {
         accounts,
         suspended,
+        demoted,
         started_at: std::time::Instant::now(),
         request_metrics: Arc::new(routes::metrics::RequestMetrics::default()),
         nodes: Arc::new(PgNodeRepo::new(pool.clone())),
@@ -239,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let accounts = state.accounts.clone();
         let suspended = state.suspended.clone();
+        let demoted = state.demoted.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(auth::suspended::REFRESH_INTERVAL);
             interval.tick().await; // the first tick is immediate; startup just loaded it
@@ -249,6 +260,12 @@ async fn main() -> anyhow::Result<()> {
                         ?e,
                         "suspended accounts refresh failed; keeping the last list"
                     );
+                }
+                match accounts.demotions().await {
+                    Ok(rows) => demoted.merge(rows).await,
+                    Err(e) => {
+                        tracing::warn!(?e, "admin demotions refresh failed; keeping the last");
+                    }
                 }
             }
         });
@@ -313,6 +330,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!(?e, "deleted-account row purge failed"),
+                }
+                // A demotion row matters only while a token from before it
+                // can be alive: the same day.
+                if let Err(e) = accounts.purge_demotions_before(token_cutoff).await {
+                    tracing::warn!(?e, "admin demotion row purge failed");
                 }
                 // Retry stored files that couldn't be deleted yet (#239).
                 object_store::outbox::drain(object_deletions.as_ref(), object_store.as_ref()).await;

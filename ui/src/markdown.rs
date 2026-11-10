@@ -112,13 +112,19 @@ fn sanitize_style(value: &str) -> Option<String> {
 /// - Adds `<span>`, `<div>`, `<input>` (for task-list checkboxes)
 /// - Permits `style` on block/inline elements, with its VALUE filtered to a
 ///   safe CSS-property allowlist (see [`sanitize_style`])
-/// - Permits `class` and `data-node-id` on `<a>` (WikiLink integration)
-/// - Permits `class` on `<span>` (WikiLink unresolved spans)
+/// - Permits `data-node-id` on `<a>` and one class each on `<a>` and
+///   `<span>`: the two the WikiLink renderer writes
+///
+/// SECURITY: `class` is never allowed as a free attribute. The app's own
+/// stylesheet has classes that cover the screen (the loader's `etl-root`,
+/// Tailwind's `fixed inset-0`), so any class a writer could choose is the
+/// overlay `sanitize_style` exists to stop (2026-11-10).
 fn sanitizer() -> ammonia::Builder<'static> {
     let mut b = ammonia::Builder::new();
     b.add_tags(&["span", "div", "input"]);
-    b.add_tag_attributes("a", &["class", "data-node-id"]);
-    b.add_tag_attributes("span", &["class"]);
+    b.add_tag_attributes("a", &["data-node-id"]);
+    b.add_allowed_classes("a", &["wikilink"]);
+    b.add_allowed_classes("span", &["wikilink-unresolved"]);
     b.add_tag_attributes("input", &["type", "checked", "disabled"]);
     b.add_tag_attributes("img", &["src", "alt", "width", "height", "style"]);
     for &tag in STYLED_ELEMENTS {
@@ -557,6 +563,53 @@ mod tests {
         // a shared page's title and its link stay on two lines.
         assert!(html.contains("Ann</strong><br"), "{html}");
         assert!(!render_markdown_plain("a\nb").contains("<br"));
+    }
+
+    /// SECURITY: `class` is as good as `style` for an overlay. The app's own
+    /// stylesheet has classes that cover the whole screen (the loader's
+    /// `etl-root`, Tailwind's `fixed inset-0`), so a shared note carrying
+    /// `<a class="etl-root" href="https://evil.example">` would put a
+    /// clickable page over the reader's app. Only the two classes the
+    /// renderer itself writes survive.
+    #[test]
+    fn user_written_classes_are_stripped_from_every_renderer() {
+        let hostile = concat!(
+            r#"<a class="etl-root fixed inset-0 z-50" href="https://example.com">sign in</a> "#,
+            r#"<span class="etl-root fixed inset-0">x</span> "#,
+            r#"<a class="wikilink etl-root" data-node-id="n">w</a> "#,
+            r#"<span class="wikilink-unresolved fixed">u</span>"#,
+        );
+        let outputs = [
+            render_markdown(hostile, &HashMap::new()),
+            render_markdown_plain(hostile),
+            render_capture(hostile),
+            render_markdown_inline(hostile),
+        ];
+        for html in outputs {
+            for bad in ["etl-root", "fixed", "inset-0", "z-50"] {
+                assert!(!html.contains(bad), "{bad} survived: {html}");
+            }
+            // The text and the link itself stay.
+            assert!(html.contains("sign in"), "{html}");
+            assert!(html.contains(r#"href="https://example.com""#), "{html}");
+            // The renderer's own two classes are the ones allowed.
+            assert!(html.contains(r#"class="wikilink""#), "{html}");
+            assert!(html.contains(r#"class="wikilink-unresolved""#), "{html}");
+        }
+    }
+
+    #[test]
+    fn wikilinks_keep_their_classes_through_the_sanitiser() {
+        let id = NodeId(uuid::Uuid::new_v4());
+        // Keys are lower case: links match without regard to case.
+        let map = HashMap::from([("rust".to_string(), id)]);
+        let html = render_markdown("[[Rust]] and [[Nowhere]]", &map);
+        assert!(html.contains(r#"class="wikilink""#), "{html}");
+        assert!(
+            html.contains(&format!(r#"data-node-id="{}""#, id.0)),
+            "{html}"
+        );
+        assert!(html.contains(r#"class="wikilink-unresolved""#), "{html}");
     }
 
     #[test]

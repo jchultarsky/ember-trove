@@ -196,7 +196,11 @@ jobs:
               echo "Attempt $i: API not ready yet, retrying..."
               if [ "$i" -eq 12 ]; then
                 echo "ERROR: API did not become healthy after 60s"
-                docker logs deploy-api-1 --tail 20
+                # This log is public. The API's own lines can name the
+                # instance's settings or carry error detail, so they stay
+                # on the host (as deploy/app-backup.sh does for backups).
+                docker logs deploy-api-1 --tail 200 > ~/ember-trove-deploy-failure.log 2>&1 || true
+                echo "The API's last log lines are in ~/ember-trove-deploy-failure.log on the server."
                 exit 1
               fi
             done

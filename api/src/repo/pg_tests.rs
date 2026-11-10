@@ -4433,9 +4433,21 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
     use common::admin::{DELETED_ACCOUNT, PurgeCounts};
     let (a_shared, _, b_node) = seed_two_accounts(&pool).await;
     let repo = PgAccountRepo::new(pool.clone());
+    // Both once lost an admin role: A's record goes, B's stays, and neither
+    // is counted as a setting.
+    repo.record_demotion(PURGE_A).await.unwrap();
+    repo.record_demotion(PURGE_B).await.unwrap();
 
     let preview = repo.deletion_preview(PURGE_A).await.unwrap();
     let removed = repo.purge(PURGE_A, Some("ann@example.com")).await.unwrap();
+    assert_eq!(
+        repo.demotions()
+            .await
+            .unwrap()
+            .into_keys()
+            .collect::<Vec<_>>(),
+        [PURGE_B]
+    );
     let expected = PurgeCounts {
         nodes: 2,
         shared_nodes: 1,
@@ -5517,6 +5529,55 @@ async fn an_older_archive_leaves_what_it_never_carried(pool: PgPool) {
         .await
         .expect("webhook");
     assert_eq!(secret.as_deref(), Some("the-signing-secret"));
+}
+
+// ── Removed admin roles (migration 047) ──────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_demotion_is_recorded_moves_forward_and_is_swept(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    let repo = PgAccountRepo::new(pool.clone());
+    assert!(repo.demotions().await.unwrap().is_empty());
+
+    let now = chrono::Utc::now().timestamp();
+    let first = repo.record_demotion("sub-a").await.unwrap();
+    // Whole seconds, never earlier than the moment itself: a token issued
+    // in the same second must still count as older.
+    assert!((now..=now + 2).contains(&first), "{first} vs {now}");
+    assert_eq!(
+        repo.demotions().await.unwrap(),
+        std::collections::HashMap::from([("sub-a".to_string(), first)])
+    );
+
+    // Demoted again later: the time moves forward, the row stays one.
+    sqlx::query("UPDATE admin_demotions SET demoted_at = now() - interval '2 days'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let old = repo.demotions().await.unwrap()["sub-a"];
+    let again = repo.record_demotion("sub-a").await.unwrap();
+    assert!(again > old);
+    assert_eq!(repo.demotions().await.unwrap().len(), 1);
+
+    // The sweep drops only rows no live token can predate.
+    repo.record_demotion("sub-b").await.unwrap();
+    sqlx::query(
+        "UPDATE admin_demotions SET demoted_at = now() - interval '2 days'
+         WHERE subject_id = 'sub-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cutoff = chrono::Utc::now() - chrono::TimeDelta::days(1);
+    assert_eq!(repo.purge_demotions_before(cutoff).await.unwrap(), 1);
+    assert_eq!(
+        repo.demotions()
+            .await
+            .unwrap()
+            .into_keys()
+            .collect::<Vec<_>>(),
+        ["sub-b"]
+    );
 }
 
 // ── The delete confirmation's counts (#281, owner decision) ──────────────────

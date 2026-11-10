@@ -1,3 +1,4 @@
+pub mod demoted;
 pub mod middleware;
 pub mod oidc;
 pub mod permissions;

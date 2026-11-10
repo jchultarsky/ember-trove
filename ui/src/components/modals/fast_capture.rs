@@ -41,6 +41,9 @@ use crate::{
 ///
 /// Props:
 ///   * `show` — visibility signal (typically `ShowCapture(...).0.read_only()`)
+///   * `prefill` — text to open with, taken (and cleared) when the modal
+///     opens: what another app shared (`sw.js`). It is only ever put in the
+///     box; nothing is saved until the person presses Capture.
 ///   * `on_close` — fired on Esc, backdrop click, successful save, or
 ///     when the user clicks "More fields…"
 ///   * `on_more_fields` — fired when the user clicks "More fields…".  The
@@ -50,10 +53,13 @@ use crate::{
 #[component]
 pub fn FastCaptureModal(
     #[prop(into)] show: Signal<bool>,
+    prefill: RwSignal<Option<String>>,
     on_close: Callback<()>,
     on_more_fields: Callback<String>,
 ) -> impl IntoView {
     let text = RwSignal::new(String::new());
+    // Opened with text from a share: say where the words came from.
+    let shared = RwSignal::new(false);
     let color = RwSignal::new(common::capture::CaptureColor::default());
     let loading = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -62,7 +68,9 @@ pub fn FastCaptureModal(
     // Reset every time the modal opens.
     Effect::new(move |_| {
         if show.get() {
-            text.set(String::new());
+            let given = prefill.try_update_untracked(Option::take).flatten();
+            shared.set(given.is_some());
+            text.set(given.unwrap_or_default());
             color.set(common::capture::CaptureColor::default());
             error.set(None);
             loading.set(false);
@@ -179,6 +187,12 @@ pub fn FastCaptureModal(
                             }
                         }) />
                 </div>
+                <Show when=move || shared.get()>
+                    <p data-testid="shared-hint"
+                        class="mt-2 text-sm text-stone-600 dark:text-stone-300">
+                        "Shared from another app. It isn\u{2019}t saved until you press Capture."
+                    </p>
+                </Show>
                 <Show when=move || error.get().is_some()>
                     <div role="alert" class="mt-2 text-sm text-red-600 dark:text-red-400">
                         {move || error.get().unwrap_or_default()}

@@ -66,7 +66,8 @@ pub fn AddFavoriteModal(
             }
             CreateFavoriteRequest {
                 node_id: None,
-                url: Some(u.trim().to_string()),
+                // The API accepts http and https links only.
+                url: Some(common::node_link::with_web_scheme(&u)),
                 label: l.trim().to_string(),
             }
         };

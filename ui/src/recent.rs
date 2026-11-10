@@ -8,7 +8,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const LS_KEY: &str = "ember_trove_recent";
+/// Holds node titles: cleared with the session (`draft::clear_device_history`).
+pub const LS_KEY: &str = "ember_trove_recent";
 const MAX_ENTRIES: usize = 10;
 
 /// A single entry in the recent-nodes list.

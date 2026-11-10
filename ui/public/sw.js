@@ -38,7 +38,7 @@
 //        /tasks/captures; evicts the shell that still routes to the Inbox.
 //   v13: the graph loads from one GET /api/graph (performance P1) — evicts
 //        cached graph data in the old shapes.
-const CACHE_NAME = "ember-trove-v13";
+const CACHE_NAME = "ember-trove-v14";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
@@ -81,9 +81,9 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
 
   // Web Share Target — iOS / Android shells POST here when the user shares
-  // text/url into Trove from another app. We translate the multipart form
-  // into a /api/inbox/quick call and bounce the user to the Captures view with
-  // a success or failure marker so the SPA can show a toast.
+  // text/url into Trove from another app. The worker writes nothing itself:
+  // it hands the text to the app, which opens the capture box with it and
+  // waits for the person to press Capture (see handleShareTarget).
   if (request.method === "POST" && url.pathname === "/share") {
     event.respondWith(handleShareTarget(request));
     return;
@@ -95,8 +95,18 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Auth endpoints (session checks, callbacks) — never cached.
+  // The session check: never cached, and it is where the worker learns the
+  // session ended or someone else signed in (see sessionCheck).
+  if (url.pathname === "/api/auth/me" && request.method === "GET") {
+    event.respondWith(sessionCheck(request));
+    return;
+  }
+
+  // Other auth endpoints (callbacks, refresh) — never cached.
   if (url.pathname.startsWith("/api/auth/")) return;
+
+  // Admin data (user lists, backup archives) is never kept on the device.
+  if (url.pathname.startsWith("/api/admin/")) return;
 
   // API mutations — network only, never cache.
   if (url.pathname.startsWith("/api/") && request.method !== "GET") return;
@@ -162,6 +172,37 @@ async function purgeApiCache() {
   );
 }
 
+// SECURITY: cached API answers are one person's data. The session cookie has
+// no lifetime of its own, so a session usually ends by closing the browser,
+// with no logout call and no API 401 to purge on: the next person to sign in
+// on this browser would have been served the last one's cached data when
+// offline. So the session check purges on a 401, and whenever the person
+// signed in is not the one the cache was filled for (2026-11-10).
+const SUBJECT_MARKER = "/__trove/cache-subject";
+
+async function sessionCheck(request) {
+  const response = await fetch(request);
+  try {
+    if (response.status === 401) {
+      await purgeApiCache();
+      const cache = await caches.open(CACHE_NAME);
+      await cache.delete(SUBJECT_MARKER);
+    } else if (response.ok) {
+      const sub = String((await response.clone().json()).sub || "");
+      const cache = await caches.open(CACHE_NAME);
+      const marker = await cache.match(SUBJECT_MARKER);
+      const before = marker ? await marker.text() : null;
+      if (before !== sub) {
+        if (before !== null) await purgeApiCache();
+        await cache.put(SUBJECT_MARKER, new Response(sub));
+      }
+    }
+  } catch {
+    // Bookkeeping must never fail the session check itself.
+  }
+  return response;
+}
+
 async function logoutAndPurge(request) {
   try {
     return await fetch(request);
@@ -173,37 +214,31 @@ async function logoutAndPurge(request) {
 
 // ── Web Share Target handler ─────────────────────────────────────────────────
 // The Share Sheet posts a multipart form with the field names declared in
-// manifest.json's `share_target.params` (title / text / url). We forward them
-// to /api/inbox/quick (cookies travel automatically because this is same-
-// origin) and 303 the browser to /tasks/captures so the SPA boots and shows the
-// new capture (#234, #240). On failure we redirect to a route that the SPA recognises and
-// shows a toast for, instead of leaving the user on a blank /share URL.
+// manifest.json's `share_target.params` (title / text / url).
+//
+// SECURITY: the worker must not write on a share. Any website can make a
+// browser POST a form to /share; this worker would answer it, and a request
+// the worker makes itself carries the session cookie, SameSite=Strict or not.
+// It used to call /api/inbox/quick here, so any page could put its own text
+// in a signed-in person's captures (2026-11-10). Now the text goes to the app
+// in the URL fragment (never sent to the server), the app opens the capture
+// box with it, and nothing is saved until the person presses Capture.
+const SHARE_FIELD_MAX = 10000; // capture::MAX_LEN; the app clips to it too.
+
 async function handleShareTarget(request) {
   try {
     const form = await request.formData();
-    const title = (form.get("title") || "").toString();
-    const text = (form.get("text") || "").toString();
-    const url = (form.get("url") || "").toString();
-
-    // Combine `text` and `url` into the body field — the API server then
-    // coalesces them with the title (see common::inbox::coalesce_capture).
-    const body = [text, url].filter((s) => s.trim().length > 0).join("\n");
-
-    const apiResp = await fetch("/api/inbox/quick", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, body }),
-    });
-
-    if (apiResp.status === 401) {
-      // Session expired or never logged in. Send the user to the SPA root
-      // so AuthGate can run the login flow; flag the failure for the toast.
-      return Response.redirect("/?capture=failed&reason=auth", 303);
+    const field = (name) => (form.get(name) || "").toString().slice(0, SHARE_FIELD_MAX);
+    const title = field("title");
+    const body = [field("text"), field("url")]
+      .filter((s) => s.trim().length > 0)
+      .join("\n")
+      .slice(0, SHARE_FIELD_MAX);
+    if (title.trim().length === 0 && body.length === 0) {
+      return Response.redirect("/?capture=failed&reason=empty", 303);
     }
-    if (!apiResp.ok) {
-      return Response.redirect(`/?capture=failed&reason=${apiResp.status}`, 303);
-    }
-    return Response.redirect("/tasks/captures?captured=1", 303);
+    const shared = encodeURIComponent(JSON.stringify({ title, body }));
+    return Response.redirect(`/?capture=1#shared=${shared}`, 303);
   } catch (e) {
     return Response.redirect("/?capture=failed&reason=exception", 303);
   }
