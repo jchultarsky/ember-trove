@@ -371,10 +371,13 @@ fn ProjectCard(
                     </button>
                     <span class="material-symbols-outlined text-amber-500 flex-shrink-0"
                         style="font-size: 16px;">{"rocket_launch"}</span>
-                    <span class="font-medium text-stone-800 dark:text-stone-200 truncate
+                    // A real button: the card was click-only (#281). Its
+                    // click bubbles to the card's handler.
+                    <button type="button" class="font-medium text-stone-800 dark:text-stone-200 truncate text-left
+                        cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-500 rounded
                         group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">
                         {entry.title.clone()}
-                    </span>
+                    </button>
                     {entry.project_status.clone().map(|s| view! {
                         <crate::components::project_status::ProjectStatusBadge status=s />
                     })}

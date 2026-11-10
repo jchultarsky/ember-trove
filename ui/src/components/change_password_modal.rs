@@ -132,10 +132,10 @@ pub fn ChangePasswordModal(
                     <div class="space-y-3">
                         // Current password
                         <div class="space-y-1">
-                            <label class="text-xs font-medium text-stone-600 dark:text-stone-400">
+                            <label class="text-xs font-medium text-stone-600 dark:text-stone-400" for="cp-current-password">
                                 "Current password"
                             </label>
-                            <input
+                            <input id="cp-current-password"
                                 node_ref=current_ref
                                 type="password"
                                 autocomplete="current-password"
@@ -149,10 +149,10 @@ pub fn ChangePasswordModal(
                         </div>
                         // New password
                         <div class="space-y-1">
-                            <label class="text-xs font-medium text-stone-600 dark:text-stone-400">
+                            <label class="text-xs font-medium text-stone-600 dark:text-stone-400" for="cp-new-password">
                                 "New password"
                             </label>
-                            <input
+                            <input id="cp-new-password"
                                 type="password"
                                 autocomplete="new-password"
                                 class="w-full rounded-lg border border-stone-200 dark:border-stone-700
@@ -165,10 +165,10 @@ pub fn ChangePasswordModal(
                         </div>
                         // Confirm new password
                         <div class="space-y-1">
-                            <label class="text-xs font-medium text-stone-600 dark:text-stone-400">
+                            <label class="text-xs font-medium text-stone-600 dark:text-stone-400" for="cp-confirm-new-password">
                                 "Confirm new password"
                             </label>
-                            <input
+                            <input id="cp-confirm-new-password"
                                 type="password"
                                 autocomplete="new-password"
                                 class="w-full rounded-lg border border-stone-200 dark:border-stone-700
@@ -184,7 +184,7 @@ pub fn ChangePasswordModal(
                         </div>
 
                         {move || error.get().map(|msg| view! {
-                            <p class="text-xs text-red-500 dark:text-red-400">{msg}</p>
+                            <p role="alert" class="text-xs text-red-500 dark:text-red-400">{msg}</p>
                         })}
 
                         // Actions

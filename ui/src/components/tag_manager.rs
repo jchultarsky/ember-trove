@@ -232,7 +232,7 @@ pub fn TagManager() -> impl IntoView {
                     // Colour picker (palette + native escape hatch)
                     <ColorPicker value=new_color />
                     {move || error_msg.get().map(|msg| view! {
-                        <p class="text-xs text-red-500">{msg}</p>
+                        <p role="alert" class="text-xs text-red-500">{msg}</p>
                     })}
                 </div>
             })}
@@ -411,6 +411,7 @@ pub fn TagManager() -> impl IntoView {
                                                                                 {display_name}
                                                                             </span>
                                                                             <span
+                                                                                aria-hidden="true"
                                                                                 class="material-symbols-outlined
                                                                                        text-stone-300 dark:text-stone-600
                                                                                        opacity-0 group-hover:opacity-100
@@ -420,10 +421,9 @@ pub fn TagManager() -> impl IntoView {
                                                                                 "arrow_forward"
                                                                             </span>
                                                                         </button>
-                                                                        // Edit / delete — hover only
-                                                                        <div class="flex items-center gap-1 ml-2
-                                                                                    opacity-0 group-hover:opacity-100
-                                                                                    transition-opacity flex-shrink-0">
+                                                                        // Edit / delete: always visible, so the keyboard
+                                                                        // and touch reach them (#281; leptos.md).
+                                                                        <div class="flex items-center gap-1 ml-2 flex-shrink-0">
                                                                             <button
                                                                                 class="p-1 rounded text-stone-400
                                                                                        hover:text-stone-600

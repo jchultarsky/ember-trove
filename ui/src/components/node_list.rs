@@ -687,10 +687,15 @@ fn NodeCards(
                                     </span>
 
                                     // Title
-                                    <span class="text-sm font-medium text-stone-900
-                                                 dark:text-stone-100 truncate">
+                                    // A real button: the row was click-only, so the
+                                    // keyboard couldn't open a node (#281). Its click
+                                    // bubbles to the row's handler above.
+                                    <button type="button"
+                                        class="text-sm font-medium text-stone-900 text-left
+                                               dark:text-stone-100 truncate cursor-pointer
+                                               focus-visible:outline-2 focus-visible:outline-amber-500 rounded">
                                         {node.title.clone()}
-                                    </span>
+                                    </button>
 
                                     // Status icon — semantic colour, with tooltip
                                     <span

@@ -94,6 +94,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   edits could not be kept and to copy them, where it promised a local
   copy that didn't exist.
 
+- **Keyboard and screen-reader access** (#281).
+  - Rows and cards that only a mouse could open can now be reached with
+    Tab and opened with Enter: nodes in the node list, people, project
+    cards on the dashboard, the nodes in a node's small graph, and the
+    days of the calendar.
+  - Controls that appeared only on hover are always visible: edit and
+    delete on a node's links and in the tag manager, and "remove" on a
+    recent search. Touch screens and the keyboard couldn't reach them.
+  - The fields of the change-password, new-user and template forms are
+    tied to their labels, and the sharing and link forms' fields have
+    names, where a screen reader read only "edit text".
+  - Error messages that appear in a form are announced when they appear.
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted

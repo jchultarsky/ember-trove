@@ -1613,7 +1613,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             </div>
             // Error banner
             {move || error_msg.get().map(|msg| view! {
-                <div class="px-6 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
+                <div role="alert" class="px-6 py-2 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
                     {msg}
                 </div>
             })}

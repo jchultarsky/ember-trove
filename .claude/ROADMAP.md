@@ -30,6 +30,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   `try_` access in the five flagged components; a late image upload
   settles its placeholder in the saved text; six page boundaries are
   `<Transition>`; draft messages follow `write_edit_draft`'s result.
+- **Unreleased: accessibility basics** (#281, UI section). Row titles are
+  buttons, the local graph and calendar days take the keyboard, no
+  hover-only controls remain, labels are tied to inputs, inline errors are
+  alerts. Still open from that section: the admin and settings views
+  don't use `PageHeader` / `EmptyState`.
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
   review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
   snapshot; attachment files are stored under their attachment's id

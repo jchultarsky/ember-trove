@@ -207,7 +207,7 @@ pub fn AddFavoriteModal(
 
             // Error banner
             {move || error.get().map(|e| view! {
-                <p class="mt-3 text-xs text-red-500 dark:text-red-400">{e}</p>
+                <p role="alert" class="mt-3 text-xs text-red-500 dark:text-red-400">{e}</p>
             })}
 
             // Actions

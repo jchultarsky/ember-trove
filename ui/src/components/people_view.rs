@@ -845,7 +845,13 @@ fn PersonRow(
             data-testid="person-row"
             data-new=move || highlighted.get().then_some("true")
             on:click=move |_| navigate(&format!("/people/{id}"), Default::default())>
-            <div class="text-sm font-medium text-stone-900 dark:text-stone-100">{person.display_name.clone()}</div>
+            // A real button: the row was click-only (#281). Its click
+            // bubbles to the row's handler.
+            <button type="button"
+                class="block text-left text-sm font-medium text-stone-900 dark:text-stone-100 cursor-pointer
+                       focus-visible:outline-2 focus-visible:outline-amber-500 rounded">
+                {person.display_name.clone()}
+            </button>
             <div class="flex flex-wrap items-center gap-x-3 text-xs text-stone-500">
                 {(!subtitle.is_empty()).then(|| view! { <span>{subtitle}</span> })}
                 {email.map(|e| view! { <ContactAction kind=ContactKind::Email point=e /> })}

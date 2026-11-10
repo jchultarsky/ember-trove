@@ -112,6 +112,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                             class="flex-1 px-2 py-1 text-xs rounded-lg border border-stone-300 dark:border-stone-600
                                 bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none
                                 focus:ring-1 focus:ring-amber-500"
+                            aria-label="Email address to share with"
                             placeholder="Email address\u{2026}"
                             prop:value=move || email_input.get()
                             on:input=move |ev| email_input.set(event_target_value(&ev))
@@ -146,7 +147,7 @@ pub fn PermissionPanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         </span>
                     </div>
                     {move || error_msg.get().map(|msg| view! {
-                        <div class="text-xs text-red-500">{msg}</div>
+                        <div role="alert" class="text-xs text-red-500">{msg}</div>
                     })}
                 </div>
             })}
