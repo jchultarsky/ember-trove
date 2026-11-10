@@ -331,7 +331,7 @@ pub fn CreateNodeModal(
 
             // Error banner
             {move || error.get().map(|msg| view! {
-                <p class="text-sm text-red-500 dark:text-red-400">{msg}</p>
+                <p role="alert" class="text-sm text-red-500 dark:text-red-400">{msg}</p>
             })}
 
             // Actions

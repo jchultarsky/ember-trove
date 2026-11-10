@@ -346,7 +346,7 @@ pub fn NotesView() -> impl IntoView {
                     </button>
                 </div>
                 {move || error.get().map(|e| view! {
-                    <p class="text-red-500 text-xs">{format!("Error: {e}")}</p>
+                    <p role="alert" class="text-red-500 text-xs">{format!("Error: {e}")}</p>
                 })}
             </div>
 

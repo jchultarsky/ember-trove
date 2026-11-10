@@ -139,10 +139,10 @@ pub fn AdminView() -> impl IntoView {
 
                         // Row 1: email (used as Cognito username)
                         <div>
-                            <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">
+                            <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1" for="new-user-email">
                                 "Email *"
                             </label>
-                            <input
+                            <input id="new-user-email"
                                 type="email"
                                 class="w-full px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-600
                                     bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -155,10 +155,10 @@ pub fn AdminView() -> impl IntoView {
                         // Row 2: first + last name
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">
+                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1" for="new-user-first-name">
                                     "First Name"
                                 </label>
-                                <input
+                                <input id="new-user-first-name"
                                     type="text"
                                     class="w-full px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-600
                                         bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -168,10 +168,10 @@ pub fn AdminView() -> impl IntoView {
                                 />
                             </div>
                             <div>
-                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">
+                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1" for="new-user-last-name">
                                     "Last Name"
                                 </label>
-                                <input
+                                <input id="new-user-last-name"
                                     type="text"
                                     class="w-full px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-600
                                         bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -249,7 +249,7 @@ pub fn AdminView() -> impl IntoView {
 
                         // Error message
                         {move || create_error.get().map(|msg| view! {
-                            <div class="text-xs text-red-500 pt-1">{msg}</div>
+                            <div role="alert" class="text-xs text-red-500 pt-1">{msg}</div>
                         })}
                     </div>
                 }
@@ -557,7 +557,7 @@ fn UserRow(
                                 "Cancel"
                             </button>
                             {move || roles_error.get().map(|msg| view! {
-                                <span class="text-xs text-red-500">{msg}</span>
+                                <span role="alert" class="text-xs text-red-500">{msg}</span>
                             })}
                         </div>
                     </div>

@@ -647,7 +647,7 @@ fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoV
                         </div>
                     })}
                     {move || error_msg.get().map(|msg| view! {
-                        <div class="text-xs text-red-500">{msg}</div>
+                        <div role="alert" class="text-xs text-red-500">{msg}</div>
                     })}
                 </div>
             })}

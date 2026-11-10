@@ -249,10 +249,10 @@ pub fn TemplatesView() -> impl IntoView {
                             {if is_new { "New Template" } else { "Edit Template" }}
                         </h2>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-name">
                                 "Name"
                             </label>
-                            <input
+                            <input id="template-name"
                                 type="text"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
@@ -264,10 +264,10 @@ pub fn TemplatesView() -> impl IntoView {
                             />
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-description-optional">
                                 "Description (optional)"
                             </label>
-                            <input
+                            <input id="template-description-optional"
                                 type="text"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
@@ -279,10 +279,10 @@ pub fn TemplatesView() -> impl IntoView {
                             />
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-node-type">
                                 "Node Type"
                             </label>
-                            <select
+                            <select id="template-node-type"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
                                        text-sm text-stone-900 dark:text-stone-100
@@ -306,10 +306,10 @@ pub fn TemplatesView() -> impl IntoView {
                             </select>
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-body-markdown">
                                 "Body (Markdown)"
                             </label>
-                            <textarea
+                            <textarea id="template-body-markdown"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
                                        text-sm text-stone-900 dark:text-stone-100 font-mono

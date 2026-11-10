@@ -200,6 +200,23 @@ fn MonthGrid(
                             class=format!("{cell_class} cursor-pointer")
                             data-date=date.to_string()
                             title="Add a task or a capture for this day"
+                            // Reachable by keyboard (#281): the day was click-only.
+                            // Only keys on the cell itself count, so typing in its
+                            // composer or pressing a task inside is left alone.
+                            tabindex="0"
+                            role="button"
+                            aria-label=format!("Add a task or a capture for {}", date.format("%A, %B %-d"))
+                            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                let on_cell = ev.target() == ev.current_target();
+                                if on_cell && (ev.key() == "Enter" || ev.key() == " ") {
+                                    ev.prevent_default();
+                                    if composing.get_untracked() != Some(date) {
+                                        compose_title.set(String::new());
+                                        compose_project.set(None);
+                                        composing.set(Some(date));
+                                    }
+                                }
+                            }
                             on:click=move |_| {
                                 if composing.get_untracked() != Some(date) {
                                     compose_title.set(String::new());

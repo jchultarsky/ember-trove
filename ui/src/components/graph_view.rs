@@ -1019,7 +1019,7 @@ pub fn GraphView() -> impl IntoView {
                 }
                 if let Some(err) = error_msg.get() {
                     return view! {
-                        <div class="flex items-center justify-center h-full text-red-400">
+                        <div role="alert" class="flex items-center justify-center h-full text-red-400">
                             <span class="text-sm">{err}</span>
                         </div>
                     }

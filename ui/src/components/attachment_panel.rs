@@ -299,7 +299,7 @@ pub fn AttachmentPanel(node_id: NodeId) -> impl IntoView {
 
                 // ── Error message ─────────────────────────────────────────────
                 {move || error_msg.get().map(|msg| view! {
-                    <div class="mb-2 text-xs text-red-500">{msg}</div>
+                    <div role="alert" class="mb-2 text-xs text-red-500">{msg}</div>
                 })}
 
                 // ── Attachment list ───────────────────────────────────────────

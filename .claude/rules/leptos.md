@@ -125,6 +125,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **Accessibility basics** (#281):
+  - A row or card with `on:click` needs a keyboard way in: make its
+    title a real `<button type="button">` (its click bubbles to the row's
+    handler, so there is one navigation), or give a non-HTML target
+    (an SVG `<g>`, a calendar cell) `tabindex="0"`, a `role`, an
+    `aria-label` and an Enter handler.
+  - No `opacity-0 group-hover:opacity-100` on a control. Always visible
+    and muted.
+  - A `<label>` has `for=` and its control the matching `id`; an input
+    with only a placeholder gets an `aria-label`.
+  - An error that appears after an action has `role="alert"`.
 - **`draft::write_edit_draft` returns whether the draft was stored**
   (#281, 1.11). Word any "kept on this device" through `kept_note(kept)`
   in `node_editor.rs`; a full localStorage is a normal case.
