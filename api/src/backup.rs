@@ -228,6 +228,8 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
     let captures = repo::capture::list_all_on(&mut *conn).await?;
     let tasks = repo::task::list_all_on(&mut *conn).await?;
     let recurrence_links = repo::task::recurrence_links_on(&mut *conn).await?;
+    // Project Briefs (#282), all owners, in the same snapshot as their nodes.
+    let briefs = repo::brief::list_all_on(&mut *conn).await?;
     let edges = repo::edge::list_all_on(&mut *conn).await?;
     let attachments = repo::attachment::list_all_on(&mut *conn).await?;
     let node_links = repo::node_link::list_all_on(&mut *conn).await?;
@@ -267,6 +269,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         editor_prefs: Some(editor_prefs),
         webhooks: Some(webhooks),
         recurrence_links,
+        briefs,
     })
 }
 
@@ -1067,6 +1070,38 @@ pub(crate) async fn restore_into(
     // above cascaded the old log away, so this brings History back.
     let restored_nodes: HashSet<Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
     restore_activity(conn, &data.activity, &restored_nodes).await?;
+
+    // Project Briefs (#282). A Brief whose node isn't in the archive is
+    // skipped rather than failing the FK. A backup reads one snapshot now
+    // (#281), so that can only be a hand-built or damaged archive.
+    for b in data
+        .briefs
+        .iter()
+        .filter(|b| restored_nodes.contains(&b.node_id.0))
+    {
+        sqlx::query(
+            r#"
+            INSERT INTO project_briefs
+                (node_id, headline, pitch, points, author_id, stated_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (node_id) DO UPDATE
+                SET headline = EXCLUDED.headline, pitch = EXCLUDED.pitch,
+                    points = EXCLUDED.points, author_id = EXCLUDED.author_id,
+                    stated_at = EXCLUDED.stated_at, updated_at = EXCLUDED.updated_at
+            "#,
+        )
+        .bind(b.node_id.0)
+        .bind(&b.headline)
+        .bind(&b.pitch)
+        .bind(&b.points)
+        .bind(&b.author_id)
+        .bind(b.stated_at)
+        .bind(b.updated_at)
+        .execute(&mut *conn)
+        .await
+        // Never include the row: it's user content.
+        .map_err(|e| ApiError::Internal(format!("insert brief failed: {e}")))?;
+    }
 
     // The archive's files are back under their old keys: keep them out of
     // the deletion queue (the drain also skips any key a row names).

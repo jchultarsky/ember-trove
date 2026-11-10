@@ -2,6 +2,7 @@ pub mod admin;
 pub mod attachments;
 pub mod auth;
 pub mod backup;
+pub mod briefs;
 pub(crate) mod capability;
 pub mod captures;
 pub mod data_health;
@@ -176,6 +177,7 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
         .nest("/favorites", favorites::router())
         .nest("/people", people::router())
         .nest("/nodes/{node_id}/people", people::node_router())
+        .nest("/nodes/{node_id}/brief", briefs::node_router())
         .nest("/templates", templates::router())
         .nest("/search-presets", search_presets::router())
         .nest("/nodes/{node_id}/links", node_links::router())

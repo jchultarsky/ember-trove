@@ -355,6 +355,9 @@ async fn anonymise(
         ("node_versions", "created_by"),
         ("suspended_accounts", "suspended_by"),
         ("backup_jobs", "created_by"),
+        // Briefs they wrote on other people's projects (#282); those on
+        // their own projects go with the nodes.
+        ("project_briefs", "author_id"),
     ] {
         let sql = format!("UPDATE {table} SET {column} = $2 WHERE {column} = $1");
         sqlx::query(&sql)

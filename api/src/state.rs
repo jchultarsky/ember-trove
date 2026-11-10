@@ -38,6 +38,8 @@ pub struct AppState {
     pub permissions: Arc<dyn PermissionRepo>,
     /// People and memberships (#147). Owner-scoped, no admin bypass.
     pub people: Arc<dyn PersonRepo>,
+    /// Project Briefs (#282). Keyed by node; routes check node rights.
+    pub briefs: Arc<dyn crate::repo::brief::BriefRepo>,
     pub search: Arc<dyn SearchRepo>,
     pub graph: Arc<dyn GraphRepo>,
     pub backup: Arc<dyn BackupRepo>,

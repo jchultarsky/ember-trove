@@ -70,6 +70,9 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
             let label = |k: &str| entry.metadata.get(k).and_then(|v| v.as_str());
             Some(status_change_summary(label("from"), label("to")))
         }
+        // The replaced Brief's headline, else the start of its pitch (#282).
+        // Shown as plain text: Leptos escapes it, no markdown is rendered.
+        ActivityAction::BriefSuperseded => common::brief::superseded_summary(&entry.metadata),
         _ => None,
     }
 }
@@ -99,7 +102,7 @@ fn action_colour(action: &ActivityAction) -> &'static str {
         ActivityAction::CreatedFromTemplate => {
             "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
         }
-        ActivityAction::StatusChanged => {
+        ActivityAction::StatusChanged | ActivityAction::BriefSuperseded => {
             "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300"
         }
     }
