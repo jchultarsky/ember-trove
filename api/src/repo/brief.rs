@@ -100,10 +100,25 @@ fn stale() -> EmberTroveError {
 }
 
 /// The current Brief, row-locked for the rest of the transaction.
+///
+/// The node is locked first (`FOR KEY SHARE`, the lock the History
+/// entry's foreign key takes anyway). A node delete, an account purge and a
+/// restore all lock the node and then reach the Brief through the cascade;
+/// taking the Brief first could deadlock with them, and Postgres would
+/// abort one side as a 500. A node that is gone is a clean 404.
 async fn locked(
     conn: &mut PgConnection,
     node: NodeId,
 ) -> Result<Option<ProjectBrief>, EmberTroveError> {
+    let exists: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM nodes WHERE id = $1 FOR KEY SHARE")
+            .bind(node.0)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(db("lock node"))?;
+    if exists.is_none() {
+        return Err(EmberTroveError::NotFound("node not found".to_string()));
+    }
     let row: Option<Row> = sqlx::query_as(&format!(
         "SELECT {COLUMNS} FROM project_briefs WHERE node_id = $1 FOR UPDATE"
     ))
@@ -248,7 +263,9 @@ impl BriefRepo for PgBriefRepo {
         let Some(cur) = locked(&mut tx, node).await? else {
             return Err(EmberTroveError::NotFound("brief not found".to_string()));
         };
-        if expected.is_some_and(|e| e != cur.updated_at) {
+        // Like a save: the caller names the version it is removing. A
+        // delete with none would remove words someone else just stated.
+        if expected != Some(cur.updated_at) {
             return Err(stale());
         }
         record_superseded(&mut tx, &cur, actor, true).await?;

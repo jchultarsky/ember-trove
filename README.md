@@ -374,7 +374,7 @@ All routes are nested under `/api`.
 | PUT | `/api/nodes/{id}/pin` | Toggle pinned state (owner-only) |
 | GET | `/api/nodes/{id}/brief` | The Project's current Brief (headline, pitch, points), or `null` (viewer) |
 | PUT | `/api/nodes/{id}/brief` | Save the Brief (editor, Projects only). The author's own save within 15 min of stating it updates in place; any other save moves the old Brief into History. Send `expected_updated_at` (the version edited; omit for a first Brief), else **412** |
-| DELETE | `/api/nodes/{id}/brief?expected_updated_at=` | Remove the Brief (editor); its words stay in History |
+| DELETE | `/api/nodes/{id}/brief?expected_updated_at=` | Remove the Brief (editor); its words stay in History. `expected_updated_at` is required: a missing or older version is a **412** |
 | GET | `/api/nodes/{id}/neighbors` | Linked neighbour nodes |
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |
 | GET | `/api/nodes/{id}/edges` | All edges involving this node |

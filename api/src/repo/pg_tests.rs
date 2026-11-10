@@ -5078,10 +5078,24 @@ async fn a_removed_brief_stays_in_history_and_goes_with_its_node(pool: PgPool) {
     use super::brief::{BriefRepo, PgBriefRepo};
     let repo = PgBriefRepo::new(pool.clone());
     let node = create_node(&pool, "owner-a", "Removed brief").await.id;
-    repo.save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
+    let (stated, _) = repo
+        .save(node, &brief_fields("v1"), None, &brief_actor("owner-a"))
         .await
         .unwrap();
-    repo.delete(node, None, &brief_actor("owner-a"))
+    // A remove names the version it removes, like a save: without one, or
+    // with an old one, nothing is removed.
+    for stale in [None, Some(stated.updated_at - chrono::Duration::seconds(1))] {
+        let err = repo
+            .delete(node, stale, &brief_actor("owner-a"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, EmberTroveError::PreconditionFailed(_)),
+            "{stale:?}: {err:?}"
+        );
+    }
+    assert!(repo.get(node).await.unwrap().is_some());
+    repo.delete(node, Some(stated.updated_at), &brief_actor("owner-a"))
         .await
         .unwrap();
     assert_eq!(repo.get(node).await.unwrap(), None);
@@ -5126,6 +5140,82 @@ async fn concurrent_first_briefs_leave_one_winner(pool: PgPool) {
             .iter()
             .any(|r| matches!(r, Err(EmberTroveError::PreconditionFailed(_))))
     );
+}
+
+/// Two people replace the same Brief from the same version: one wins, the
+/// other gets 412, and History holds the old Brief once. The row lock in
+/// `locked` is what makes it so: without it both pass the version check,
+/// both save, and the first winner's words are replaced unseen (this test
+/// then fails within its ten rounds).
+#[sqlx::test(migrations = "../migrations")]
+async fn concurrent_replacements_of_a_brief_leave_one_winner(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    for round in 0..10 {
+        let node = create_node(&pool, "owner-a", &format!("Race replace {round}"))
+            .await
+            .id;
+        let (first, _) = PgBriefRepo::new(pool.clone())
+            .save(node, &brief_fields("first"), None, &brief_actor("owner-a"))
+            .await
+            .unwrap();
+        let (one, two) = (
+            PgBriefRepo::new(pool.clone()),
+            PgBriefRepo::new(pool.clone()),
+        );
+        let (b, c) = (brief_fields("b"), brief_fields("c"));
+        let (actor_b, actor_c) = (brief_actor("b"), brief_actor("c"));
+        let (r1, r2) = tokio::join!(
+            one.save(node, &b, Some(first.updated_at), &actor_b),
+            two.save(node, &c, Some(first.updated_at), &actor_c),
+        );
+        let results = [r1, r2];
+        assert_eq!(
+            results.iter().filter(|r| r.is_ok()).count(),
+            1,
+            "round {round}: one save wins"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| matches!(r, Err(EmberTroveError::PreconditionFailed(_)))),
+            "round {round}: the other is told it is stale"
+        );
+        let history = brief_history(&pool, node).await;
+        assert_eq!(history.len(), 1, "round {round}: one History entry");
+        assert_eq!(history[0]["pitch"], "first");
+    }
+}
+
+/// A Brief on a node that is gone is a 404, not a foreign-key 500.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_brief_for_a_node_that_is_gone_is_not_found(pool: PgPool) {
+    use super::brief::{BriefRepo, PgBriefRepo};
+    let repo = PgBriefRepo::new(pool.clone());
+    let gone = common::id::NodeId(uuid::Uuid::new_v4());
+    let err = repo
+        .save(gone, &brief_fields("x"), None, &brief_actor("owner-a"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)), "{err:?}");
+    let err = repo
+        .delete(gone, None, &brief_actor("owner-a"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)), "{err:?}");
+}
+
+/// The column refuses a NULL point: one would fail every read of the row.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_brief_point_cannot_be_null(pool: PgPool) {
+    let node = create_node(&pool, "owner-a", "Null point").await.id;
+    let bad = sqlx::query(
+        "INSERT INTO project_briefs (node_id, pitch, points, author_id)
+         VALUES ($1, 'p', ARRAY['a', NULL]::text[], 'owner-a')",
+    )
+    .bind(node.0)
+    .execute(&pool)
+    .await;
+    assert!(bad.is_err());
 }
 
 /// A backup carries Briefs and restore brings them back, skipping one whose

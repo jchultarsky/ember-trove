@@ -217,9 +217,18 @@ pub fn superseded_metadata(old: &ProjectBrief) -> serde_json::Value {
 }
 
 /// How History names a superseded Brief: its headline, else the start of
-/// its pitch, else its first point. `None` when the metadata holds none.
+/// its pitch, else its first point, after "was:" (or "removed, was:"), so
+/// the old words are not read as the new ones. `None` when the metadata
+/// holds none.
 #[must_use]
 pub fn superseded_summary(metadata: &serde_json::Value) -> Option<String> {
+    let removed = metadata.get("removed").and_then(serde_json::Value::as_bool) == Some(true);
+    let lead = if removed { "removed, was: " } else { "was: " };
+    superseded_words(metadata).map(|words| format!("{lead}{words}"))
+}
+
+/// The replaced Brief's own words, cut to one short line.
+fn superseded_words(metadata: &serde_json::Value) -> Option<String> {
     const MAX: usize = 120;
     let text = |k: &str| {
         metadata
@@ -482,17 +491,25 @@ mod tests {
         let mut b = brief("a", 0, now);
         assert_eq!(
             superseded_summary(&superseded_metadata(&b)).as_deref(),
-            Some("Waiting on vendor")
+            Some("was: Waiting on vendor")
+        );
+        // A removed Brief says so: the line must not read as a new Brief.
+        let mut removed = superseded_metadata(&b);
+        removed["removed"] = serde_json::Value::Bool(true);
+        assert_eq!(
+            superseded_summary(&removed).as_deref(),
+            Some("removed, was: Waiting on vendor")
         );
         b.headline = None;
         b.pitch = format!("{}\nsecond line", "p".repeat(200));
         let s = superseded_summary(&superseded_metadata(&b)).unwrap();
-        assert_eq!(s.chars().count(), 120);
-        assert!(s.ends_with('\u{2026}'));
+        let words = s.strip_prefix("was: ").unwrap();
+        assert_eq!(words.chars().count(), 120);
+        assert!(words.ends_with('\u{2026}'));
         b.pitch = String::new();
         assert_eq!(
             superseded_summary(&superseded_metadata(&b)).as_deref(),
-            Some("Security review")
+            Some("was: Security review")
         );
         assert_eq!(superseded_summary(&serde_json::json!({})), None);
     }

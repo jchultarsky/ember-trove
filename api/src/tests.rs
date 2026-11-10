@@ -4914,6 +4914,34 @@ async fn a_stale_brief_save_is_a_412() {
     assert_eq!(status, StatusCode::PRECONDITION_FAILED);
 }
 
+/// SECURITY: someone with no rights on a node gets, for every Brief route,
+/// exactly what they get for a node that doesn't exist: same status, same
+/// body. Otherwise the answer says whether an id is a real node.
+#[tokio::test]
+async fn a_stranger_cannot_tell_a_node_from_a_missing_one_through_its_brief() {
+    let missing = Uuid::new_v4().as_u128();
+    for (method, query, body) in [
+        ("GET", "", serde_json::json!({})),
+        ("PUT", "", serde_json::json!({ "pitch": "p" })),
+        (
+            "PUT",
+            "",
+            serde_json::json!({ "pitch": "p", "expected_updated_at": "2026-01-01T00:00:00Z" }),
+        ),
+        ("DELETE", "", serde_json::json!({})),
+        (
+            "DELETE",
+            "?expected_updated_at=2026-01-01T00:00:00Z",
+            serde_json::json!({}),
+        ),
+    ] {
+        let foreign = brief_call(fake_claims(), method, AZ_FOREIGN_NODE, query, body.clone()).await;
+        let absent = brief_call(fake_claims(), method, missing, query, body).await;
+        assert_eq!(foreign, absent, "{method} {query}");
+        assert_eq!(foreign.0, StatusCode::FORBIDDEN, "{method} {query}");
+    }
+}
+
 #[tokio::test]
 async fn only_an_editor_removes_a_brief() {
     for node in [AZ_VIEW_NODE, AZ_FOREIGN_NODE] {

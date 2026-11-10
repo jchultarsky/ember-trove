@@ -77,7 +77,8 @@ async fn save_brief(
 
 #[derive(Debug, serde::Deserialize)]
 struct DeleteParams {
-    /// The version being removed; a newer one is a 412.
+    /// The version being removed. Required once there is a Brief: a
+    /// missing or older one is a 412, as for a save.
     expected_updated_at: Option<DateTime<Utc>>,
 }
 
