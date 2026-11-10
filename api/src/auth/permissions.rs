@@ -135,6 +135,57 @@ pub async fn require_viewer(
     require_role(permissions, claims, node_id, PermissionRole::Viewer).await
 }
 
+// ── Things fetched by their own id ────────────────────────────────────────
+
+/// The one answer for "there is no such thing": a 404 that names the kind
+/// and nothing else. Routes that fetch something **by its own id** (a
+/// task, an attachment, a link, a grant, a tag, a template, a slug) give
+/// it both when the id doesn't exist and when it does but the caller may
+/// not know that ([`or_missing`]).
+///
+/// SECURITY: these routes used to answer 404 for an id that doesn't exist
+/// and 403 for one that does, so anyone signed in could test whether an id
+/// was real (2026-11-10). Ids are random, so this was hard to use; People,
+/// captures and favourites already answered alike.
+#[must_use]
+pub fn missing(what: &str) -> ApiError {
+    ApiError::NotFound(format!("{what} not found"))
+}
+
+/// For the fetch itself: a repo's "not found" becomes [`missing`], so the
+/// two cases can't be told apart by their wording either. Any other error
+/// is kept.
+pub fn or_missing_row<E: Into<ApiError>>(what: &'static str) -> impl Fn(E) -> ApiError {
+    move |e| match e.into() {
+        ApiError::NotFound(_) => missing(what),
+        other => other,
+    }
+}
+
+/// For the rights check that follows: a refusal stays a 403 only for a
+/// caller who `may_see` the thing anyway (a viewer told they can't edit).
+/// For anyone else it is [`missing`]. Other errors are kept.
+pub fn or_missing(check: Result<(), ApiError>, may_see: bool, what: &str) -> Result<(), ApiError> {
+    match check {
+        Err(ApiError::Forbidden(_)) if !may_see => Err(missing(what)),
+        other => other,
+    }
+}
+
+/// Whether the caller may view `node_id`. Only a refusal means "no"; a
+/// failure to find out (the database) is an error, not a quiet "no".
+pub async fn can_view(
+    permissions: &dyn PermissionRepo,
+    claims: &AuthClaims,
+    node_id: NodeId,
+) -> Result<bool, ApiError> {
+    match require_viewer(permissions, claims, node_id).await {
+        Ok(()) => Ok(true),
+        Err(ApiError::Forbidden(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

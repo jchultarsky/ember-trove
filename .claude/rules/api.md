@@ -317,7 +317,19 @@ cargo check && cargo clippy -- -D warnings
   `admin` from a token issued at or before the demotion. The purge deletes
   the row; the daily sweep drops rows older than a day.
 - **Webhooks**: create and update call `validate()`; at most
-  `MAX_WEBHOOKS_PER_OWNER` per account.
+  `MAX_WEBHOOKS_PER_OWNER` per account. Each delivery runs in
+  `webhook_dispatch::in_a_slot` (`MAX_IN_FLIGHT`). The client stays one
+  per hook: it carries that hook's pinned DNS answer, and a shared client
+  can't.
+- **A route that fetches something by its own id answers a foreign id
+  like a missing one**: `permissions::or_missing_row(WHAT)` on the fetch
+  and `or_missing(check, may_see, WHAT)` on the rights check. `may_see`
+  is whether the caller can already see the thing (`can_view` on its
+  node, or it being their own grant): only then is a refusal a 403. The
+  test `a_foreign_thing_reads_exactly_like_a_missing_one` lists every
+  such route; a new one joins it.
+- **A count shown beside a node counts only what its reader can see**:
+  the node list's link count is `visible_link_counts`.
 - **The edge proxy sets `X-Forwarded-For $remote_addr`**, never
   `$proxy_add_x_forwarded_for`: the API's limiter keys on that header.
   Tests in `routes/mod.rs` read `deploy/nginx.prod.conf` and hold this

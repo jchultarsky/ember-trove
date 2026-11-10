@@ -10,7 +10,7 @@ use common::{auth::AuthClaims, id::AttachmentId};
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{require_editor, require_viewer},
+    auth::permissions::{can_view, or_missing, or_missing_row, require_editor, require_viewer},
     error::ApiError,
     state::AppState,
 };
@@ -21,14 +21,26 @@ pub fn router() -> Router<AppState> {
         .route("/{id}", delete(delete_attachment))
 }
 
+/// What a file that isn't there, or isn't the caller's to know of, is called.
+const ATTACHMENT: &str = "attachment";
+
 /// Stream the attachment bytes directly from S3.
 async fn download(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let attachment = state.attachments.get(AttachmentId(id)).await?;
-    require_viewer(state.permissions.as_ref(), &claims, attachment.node_id).await?;
+    let attachment = state
+        .attachments
+        .get(AttachmentId(id))
+        .await
+        .map_err(or_missing_row(ATTACHMENT))?;
+    // Someone who can't view the node can't know the file exists.
+    or_missing(
+        require_viewer(state.permissions.as_ref(), &claims, attachment.node_id).await,
+        false,
+        ATTACHMENT,
+    )?;
     let data = state
         .object_store
         .get(&attachment.s3_key)
@@ -64,8 +76,15 @@ async fn delete_attachment(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let attachment = state.attachments.get(AttachmentId(id)).await?;
-    require_editor(state.permissions.as_ref(), &claims, attachment.node_id).await?;
+    let attachment = state
+        .attachments
+        .get(AttachmentId(id))
+        .await
+        .map_err(or_missing_row(ATTACHMENT))?;
+    let check = require_editor(state.permissions.as_ref(), &claims, attachment.node_id).await;
+    let may_see =
+        check.is_ok() || can_view(state.permissions.as_ref(), &claims, attachment.node_id).await?;
+    or_missing(check, may_see, ATTACHMENT)?;
     // The row's delete queues its file (the attachment trigger, #239); the
     // drain deletes it from storage, and retries daily if that fails.
     state.attachments.delete(AttachmentId(id)).await?;

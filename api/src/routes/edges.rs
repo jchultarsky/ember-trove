@@ -14,7 +14,10 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{require_editor, require_viewer, subject_scope},
+    auth::permissions::{
+        can_view, missing, or_missing, or_missing_row, require_editor, require_viewer,
+        subject_scope,
+    },
     error::ApiError,
     state::AppState,
 };
@@ -69,22 +72,35 @@ async fn create_edge(
     Ok((StatusCode::CREATED, Json(edge)))
 }
 
+/// What a link that isn't there, or isn't the caller's to know of, is called.
+const LINK: &str = "link";
+
 async fn delete_edge(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let edge = state.edges.get(EdgeId(id)).await?;
+    let edge = state
+        .edges
+        .get(EdgeId(id))
+        .await
+        .map_err(or_missing_row(LINK))?;
     let on_source = require_editor(state.permissions.as_ref(), &claims, edge.source_id).await;
-    if edge.edge_type.deletable_from_target() && on_source.is_err() {
+    let allowed = if edge.edge_type.deletable_from_target() && on_source.is_err() {
         // Either end may remove these (§14). A home can be released from
         // the child's side (#224): a node has only one, so its editor must
         // be able to free it even when the home is someone else's node.
         // `related_to` has no direction at all (#226).
-        require_editor(state.permissions.as_ref(), &claims, edge.target_id).await?;
+        require_editor(state.permissions.as_ref(), &claims, edge.target_id).await
     } else {
-        on_source?;
-    }
+        on_source
+    };
+    // A refusal is a 403 only for someone who can see one of the link's
+    // ends; to a stranger to both, the link reads as missing.
+    let may_see = allowed.is_ok()
+        || can_view(state.permissions.as_ref(), &claims, edge.source_id).await?
+        || can_view(state.permissions.as_ref(), &claims, edge.target_id).await?;
+    or_missing(allowed, may_see, LINK)?;
     // §6.6 (#281, 2.1): a wiki link mirrors `[[Title]]` in the text. Deleted
     // by hand it came back on the next save, with the text still linking.
     // Refused only after the rights check, so a stranger learns nothing
@@ -109,11 +125,18 @@ async fn convert_edge(
     Path(id): Path<Uuid>,
     Json(req): Json<ConvertEdgeRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let edge = state.edges.get(EdgeId(id)).await?;
+    let edge = state
+        .edges
+        .get(EdgeId(id))
+        .await
+        .map_err(or_missing_row(LINK))?;
     let source = end_rights(&state, &claims, edge.source_id).await?;
     let target = end_rights(&state, &claims, edge.target_id).await?;
+    let may_see = source.view || target.view;
     let swap =
         convert_ends(&edge.edge_type, &req.edge_type, source, target).map_err(|r| match r {
+            // To a stranger to both ends, the link reads as missing.
+            ConvertRefusal::Forbidden if !may_see => missing(LINK),
             ConvertRefusal::Forbidden => ApiError::Forbidden(r.message().to_string()),
             ConvertRefusal::NotConvertible => ApiError::Validation(r.message().to_string()),
         })?;
