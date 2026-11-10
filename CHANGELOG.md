@@ -32,6 +32,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   History entries) and by backup and restore. Brief text never appears in
   error messages or logs.
 
+## [3.14.0] - 2026-11-10
+
 ### Changed
 - **Deleting a node first shows what goes with it** (owner decision on
   #281). A node's tasks, notes and files are deleted with it, including
