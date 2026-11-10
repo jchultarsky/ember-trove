@@ -264,12 +264,10 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let task_id = task.id;
     // Captured at setup for the undo closure, which outlives this row.
     let toast_state = use_context::<ToastState>();
-    let is_done = status_done(&task.status);
     let prio = task.priority.clone();
     let due = task.due_date;
 
     let today = crate::components::format_helpers::local_today();
-    let overdue = due.map(|d| !is_done && d < today).unwrap_or(false);
     let in_my_day = RwSignal::new(is_in_my_day(&task, today));
 
     let status_sig = RwSignal::new(task.status.clone());
@@ -375,7 +373,12 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                     }
                     .into_any();
                     let meta_line = view! {
-                        {due.map(|d| due_badge_view(d, overdue))}
+                        // Reads the live status (#281, 3.5): computed once
+                        // at setup, the badge stayed red after a tick.
+                        {due.map(|d| move || due_badge_view(
+                            d,
+                            common::task::is_overdue(&status_sig.get(), Some(d), today),
+                        ))}
                         {has_recurrence.then(|| view! {
                             <span class="flex items-center gap-0.5 text-stone-400 dark:text-stone-500"
                                 title="Recurring task">

@@ -228,6 +228,14 @@ impl TaskRow {
     }
 }
 
+/// A task's priority as an `ORDER BY` rank: high, medium, low. One
+/// definition for every task list (#281, 3.5; it was written out five
+/// times). `T_` is the same for queries that alias `node_tasks` as `t`.
+const PRIORITY_RANK: &str =
+    "CASE priority::text WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END";
+const T_PRIORITY_RANK: &str =
+    "CASE t.priority::text WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END";
+
 const SELECT_COLS: &str = r#"
     id, node_id, owner_id, title,
     status::text    AS status,
@@ -595,11 +603,7 @@ impl TaskRepo for PgTaskRepo {
               )
             ORDER BY
                 t.sort_order ASC,
-                CASE t.priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {T_PRIORITY_RANK},
                 t.node_id NULLS FIRST,
                 t.created_at
             "#,
@@ -625,11 +629,7 @@ impl TaskRepo for PgTaskRepo {
               AND node_id IS NULL
             ORDER BY
                 sort_order ASC,
-                CASE priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {PRIORITY_RANK},
                 created_at ASC
             "#
         ))
@@ -664,11 +664,7 @@ impl TaskRepo for PgTaskRepo {
               AND t.due_date >= $2
               AND t.due_date <= $3
             ORDER BY t.due_date,
-                CASE t.priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {T_PRIORITY_RANK},
                 t.created_at
             "#,
             visible = super::visible_to("n", 4),
@@ -709,11 +705,7 @@ impl TaskRepo for PgTaskRepo {
               AND t.status::text NOT IN ('done', 'cancelled')
             ORDER BY
                 t.due_date ASC NULLS LAST,
-                CASE t.priority::text
-                    WHEN 'high'   THEN 0
-                    WHEN 'medium' THEN 1
-                    WHEN 'low'    THEN 2
-                END,
+                {T_PRIORITY_RANK},
                 t.created_at ASC
             "#,
             visible = super::visible_to("n", 2),
@@ -807,7 +799,7 @@ impl TaskRepo for PgTaskRepo {
         }
 
         // Use a window function to rank tasks per node and fetch limit+1 to detect "has more".
-        let rows = sqlx::query_as::<_, SummaryRow>(
+        let rows = sqlx::query_as::<_, SummaryRow>(&format!(
             r#"
             SELECT node_id, id, title, status::text AS status, priority::text AS priority,
                    due_date, rn
@@ -816,11 +808,7 @@ impl TaskRepo for PgTaskRepo {
                        ROW_NUMBER() OVER (
                            PARTITION BY node_id
                            ORDER BY
-                               CASE priority::text
-                                   WHEN 'high'   THEN 0
-                                   WHEN 'medium' THEN 1
-                                   WHEN 'low'    THEN 2
-                               END,
+                               {PRIORITY_RANK},
                                due_date NULLS LAST,
                                sort_order ASC,
                                created_at ASC
@@ -832,8 +820,8 @@ impl TaskRepo for PgTaskRepo {
             ) ranked
             WHERE rn <= $2
             ORDER BY node_id, rn
-            "#,
-        )
+            "#
+        ))
         .bind(&ids)
         .bind(limit_per_node + 1) // fetch one extra to detect overflow
         .fetch_all(&self.pool)

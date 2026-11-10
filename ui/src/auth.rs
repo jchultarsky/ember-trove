@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use common::auth::UserInfo;
 use leptos::prelude::*;
 

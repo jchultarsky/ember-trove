@@ -430,12 +430,10 @@ impl NodeRepo for PgNodeRepo {
 
         if params.subject_id.is_some() {
             // Restrict to nodes the caller owns or holds any permission on.
-            conditions.push(format!(
-                "n.id IN (\
-                    SELECT node_id FROM permissions WHERE subject_id = ${param_idx} \
-                    UNION \
-                    SELECT id FROM nodes WHERE owner_id = ${param_idx}\
-                )"
+            // `param_idx` counts this query's own filters: a handful.
+            conditions.push(super::visible_among_many(
+                "n",
+                u8::try_from(param_idx).unwrap_or(u8::MAX),
             ));
             param_idx += 1;
         }
@@ -798,33 +796,18 @@ impl NodeRepo for PgNodeRepo {
             slug: String,
         }
 
-        // Admin bypass: no filter.  Non-admin: scope to nodes owned by the
-        // caller OR shared with them via the permissions table.  DISTINCT
-        // avoids duplicates when a caller holds multiple permission rows
-        // for the same node.
-        let rows = match subject {
-            None => {
-                sqlx::query_as::<_, TitleRow>("SELECT id, title, slug FROM nodes ORDER BY title")
-                    .fetch_all(&self.pool)
-                    .await
-            }
-            Some(sub) => {
-                sqlx::query_as::<_, TitleRow>(
-                    r#"
-                    SELECT DISTINCT n.id, n.title, n.slug
-                    FROM nodes n
-                    LEFT JOIN permissions p
-                      ON p.node_id = n.id AND p.subject_id = $1
-                    WHERE n.owner_id = $1 OR p.subject_id IS NOT NULL
-                    ORDER BY n.title
-                    "#,
-                )
-                .bind(sub)
-                .fetch_all(&self.pool)
-                .await
-            }
-        }
-        .map_err(|e| EmberTroveError::Internal(format!("list_titles failed: {e}")))?;
+        // Admin (`None`): every node. Otherwise the nodes the caller owns
+        // or was granted, by the one rule (`visible_among_many`; #281, 3.2:
+        // this was a third spelling of it, a LEFT JOIN with DISTINCT).
+        let sql = format!(
+            "SELECT n.id, n.title, n.slug FROM nodes n WHERE {visible} ORDER BY n.title",
+            visible = super::visible_among_many("n", 1),
+        );
+        let rows = sqlx::query_as::<_, TitleRow>(&sql)
+            .bind(subject)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("list_titles failed: {e}")))?;
 
         Ok(rows
             .into_iter()

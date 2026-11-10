@@ -34,6 +34,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
   buttons, the local graph and calendar days take the keyboard, no
   hover-only controls remain, labels are tied to inputs, inline errors are
   alerts.
+- **Unreleased: one wiki-link scanner** (#281, 3.1 and 1.10).
+  `common::wikilink::wikilinks` replaces five hand-written scanners and
+  skips code spans and fences.
+- **Unreleased: "visible to" and plain text** (#281, 3.2 and 3.4).
+  `visible_among_many` for the node list, title list and graph;
+  `note::plain_line` for the graph preview. Section 3 of the review is
+  closed: 3.6's three parallels were looked at and left (the palette's
+  clamping is a behaviour choice; the other two aren't duplicates).
+- **Unreleased: reuse and dead code** (#281, 3.3, 3.5, 3.7).
+  `subject_scope` everywhere; `common::task::is_overdue` and
+  `Task::in_my_day`; `PRIORITY_RANK` in `repo/task.rs`; `common::quickadd`
+  deleted; no file-wide `allow(dead_code)` left in `ui/`.
 - **Unreleased: every top-level view uses `PageHeader` and `EmptyState`**
   (#281, UI section): backup, users, permissions, templates and webhooks
   were the last hand-built headers. The review's UI section is done.

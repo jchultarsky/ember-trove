@@ -13,7 +13,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_resource_owner},
+    auth::permissions::{require_resource_owner, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -35,11 +35,7 @@ async fn list_templates(
     Extension(claims): Extension<AuthClaims>,
 ) -> Result<Json<Vec<NodeTemplate>>, ApiError> {
     // SECURITY: scope to the caller's own templates; admins (None) see all.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let templates = state.templates.list(subject).await?;
     Ok(Json(templates))
 }

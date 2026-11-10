@@ -224,6 +224,34 @@ cargo check && cargo clippy -- -D warnings
   crontab, so a failure is a red run and an email (the old `backup.sh`
   cron failed silently for seven months).
 
+## "Visible to" in SQL (#281, 3.2)
+
+- Two spellings only, both in `repo/mod.rs`:
+  - `visible_to(alias, n)`: a per-row `EXISTS`. For a query that touches
+    few nodes (a join from tasks or notes, a title lookup).
+  - `visible_among_many(alias, n)`: `id IN (grants UNION own)`, hashed
+    once. For a query that returns many of the caller's nodes (node list,
+    title list, graph). Measured 2026-11-10 on 20,000 nodes: about twice
+    as fast as `visible_to` there.
+- A query scoped to `owner_id` alone is owned-only on purpose (graph edges
+  and positions, search, the notes feed). Don't "fix" it to visible.
+- `the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what`
+  holds the three big lists to one answer.
+- One line of Markdown as plain text is `common::note::plain_line`
+  (3.4); `markdown::plain_preview` and `note_title` both use it.
+
+## Wiki links (#281, 3.1)
+
+- `common::wikilink::wikilinks(text)` is the only scanner for `[[…]]`.
+  It gives each link's byte range, target and display, and skips code
+  (`code_ranges`). Edge sync, title resolution, the renderer, excerpts,
+  note previews and "link this mention" all go through it or
+  `replace_wikilinks`. Never write another `find("[[")` loop: the five
+  that existed disagreed on `[[]]`, `[[x|]]`, trimming and unclosed
+  openers.
+- A rule change there changes which `wiki_link` edges exist: sync runs on
+  the next save of each node.
+
 ## Request validation (#281, 1.5)
 
 - An update request validates like its create: `UpdateNodeRequest` and
@@ -240,6 +268,10 @@ cargo check && cargo clippy -- -D warnings
 - Who may change a task is `require_task_editor` (routes/tasks.rs): its
   owner, an admin, or an editor of its node. `TaskRepo::reorder` applies
   the same rule in SQL and skips the rest.
+- A list's admin scope is `subject_scope(&claims)`, never an inline
+  `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
+  `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
+  `common::task::is_overdue` and `Task::in_my_day`.
 - `TaskRepo::create_occurrence` locks the parent row and returns the live
   occurrence it already has: a parent has at most one. Without the lock,
   `two_completions_at_once_schedule_one_next_occurrence` fails.

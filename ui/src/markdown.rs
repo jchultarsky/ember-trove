@@ -318,31 +318,20 @@ const EXCERPT_LINK_CLASS: &str = "excerpt-link";
 /// Rewrite `[[target]]` / `[[target|display]]` as a Markdown link with the
 /// display text, so the excerpt renderer styles it like any other link.
 /// Brackets and backslashes in the display text are escaped so they can't
-/// close the link early. An unclosed `[[` is left as-is.
+/// close the link early. What counts as a link is `common::wikilink`'s rule.
 fn excerpt_wikilinks(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let mut rest = source;
-    while let Some(open) = rest.find("[[") {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + 2..];
-        let Some(close) = after.find("]]") else {
-            out.push_str(&rest[open..]);
-            return out;
-        };
-        let inner = &after[..close];
-        let display = inner.split_once('|').map_or(inner, |(_, d)| d).trim();
+    common::wikilink::replace_wikilinks(source, |link| {
+        let mut out = String::with_capacity(link.display.len() + 6);
         out.push('[');
-        for c in display.chars() {
+        for c in link.display.chars() {
             if matches!(c, '[' | ']' | '\\') {
                 out.push('\\');
             }
             out.push(c);
         }
         out.push_str("](#)");
-        rest = &after[close + 2..];
-    }
-    out.push_str(rest);
-    out
+        out
+    })
 }
 
 /// Strict sanitiser for excerpts: text-level markup and lists only. No

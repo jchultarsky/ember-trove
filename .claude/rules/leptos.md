@@ -125,6 +125,10 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **Wiki links are read by `common::wikilink` only** (#281, 3.1). The
+  renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
+  `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`
+  autocomplete is the exception: it looks backwards from the cursor.
 - **Accessibility basics** (#281):
   - A row or card with `on:click` needs a keyboard way in: make its
     title a real `<button type="button">` (its click bubbles to the row's

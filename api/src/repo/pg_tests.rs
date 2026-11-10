@@ -5391,3 +5391,80 @@ async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
         .expect("admin");
     assert_eq!(order_of(alice_private).await, 9);
 }
+
+// ── One visibility rule for the big lists (#281, 3.2) ────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what(pool: PgPool) {
+    // The node list, the title list and the graph each spelled "visible to
+    // the caller" their own way; they share `visible_among_many` now.
+    let nodes = PgNodeRepo::new(pool.clone());
+    let graph = PgGraphRepo::new(pool.clone());
+    let own = create_node(&pool, "alice", "vis own").await.id;
+    let shared = create_node(&pool, "bob", "vis shared with alice").await.id;
+    let foreign = create_node(&pool, "bob", "vis bob's alone").await.id;
+    // Two grants on one node for the same person must not list it twice
+    // (the old title query needed DISTINCT for this).
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+         ($1, 'alice', 'owner', 'alice'), ($2, 'alice', 'viewer', 'bob'),
+         ($2, 'alice', 'editor', 'bob'), ($2, 'bob', 'owner', 'bob'), ($3, 'bob', 'owner', 'bob')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(own.0)
+    .bind(shared.0)
+    .bind(foreign.0)
+    .execute(&pool)
+    .await
+    .expect("grants");
+
+    let listed = |subject: Option<&'static str>| {
+        let nodes = PgNodeRepo::new(pool.clone());
+        async move {
+            let (rows, total) = nodes
+                .list(common::node::NodeListParams {
+                    node_type: None,
+                    status: None,
+                    project_status: None,
+                    tag_id: None,
+                    owner_id: None,
+                    subject_id: subject.map(str::to_string),
+                    page: None,
+                    per_page: None,
+                    include_archived: true,
+                })
+                .await
+                .expect("list");
+            assert_eq!(rows.len() as u64, total, "the count follows the same rule");
+            let mut ids: Vec<_> = rows.into_iter().map(|n| n.id).collect();
+            ids.sort_by_key(|id| id.0);
+            ids
+        }
+    };
+    let sorted = |mut ids: Vec<common::id::NodeId>| {
+        ids.sort_by_key(|id| id.0);
+        ids
+    };
+
+    for (subject, expected) in [
+        (Some("alice"), sorted(vec![own, shared])),
+        (Some("bob"), sorted(vec![shared, foreign])),
+        (Some("carol"), vec![]),
+        // An admin's scope is `None`: everything.
+        (None, sorted(vec![own, shared, foreign])),
+    ] {
+        assert_eq!(listed(subject).await, expected, "node list as {subject:?}");
+        let titles = nodes.list_titles(subject).await.expect("titles");
+        assert_eq!(
+            sorted(titles.iter().map(|t| t.id).collect()),
+            expected,
+            "title list as {subject:?}"
+        );
+        let on_graph = graph.list_nodes(subject).await.expect("graph");
+        assert_eq!(
+            sorted(on_graph.iter().map(|n| n.id).collect()),
+            expected,
+            "graph as {subject:?}"
+        );
+    }
+}

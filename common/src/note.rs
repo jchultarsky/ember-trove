@@ -122,14 +122,22 @@ pub fn note_title(body: &str) -> String {
     body.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !is_fence_or_rule(line))
-        .map(|line| clean_inline(strip_block_prefix(line)))
+        .map(plain_line)
         .find(|text| !text.is_empty())
         .unwrap_or_else(|| UNTITLED_NOTE.to_string())
 }
 
+/// One line of Markdown as the text a reader sees: block marks (heading
+/// `#`s, `>`, list markers) and inline marks gone, links reduced to what
+/// they show. The one stripper for a note's title and a body's plain
+/// preview (#281, 3.4).
+pub(crate) fn plain_line(line: &str) -> String {
+    clean_inline(strip_block_prefix(line))
+}
+
 /// Code-fence delimiters (```` ``` ````, `~~~`) and thematic breaks (`---`,
 /// `***`, `___`, spaced variants) carry no title text.
-fn is_fence_or_rule(line: &str) -> bool {
+pub(crate) fn is_fence_or_rule(line: &str) -> bool {
     if line.starts_with("```") || line.starts_with("~~~") {
         return true;
     }
@@ -195,18 +203,11 @@ fn clean_inline(line: &str) -> String {
 /// `[[target|display]]` → display, `[[target]]` → target,
 /// `![alt](url)` → alt, `[text](url)` → text. Anything else is kept verbatim.
 fn strip_links(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
+    // Wiki links first, by the one scanner (#281, 3.1).
+    let unlinked = crate::wikilink::replace_wikilinks(line, |link| link.display.to_string());
+    let mut out = String::with_capacity(unlinked.len());
+    let mut rest = unlinked.as_str();
     while !rest.is_empty() {
-        if let Some(after) = rest.strip_prefix("[[")
-            && let Some(end) = after.find("]]")
-        {
-            let inner = after.get(..end).unwrap_or_default();
-            let shown = inner.split_once('|').map_or(inner, |(_, display)| display);
-            out.push_str(shown);
-            rest = after.get(end + 2..).unwrap_or_default();
-            continue;
-        }
         // Images and links both keep their bracketed text.
         let after_open = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
         if let Some(after) = after_open
@@ -250,6 +251,18 @@ fn strip_lone_emphasis(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{UNTITLED_NOTE, note_title};
+
+    #[test]
+    fn a_wiki_link_reads_as_what_it_shows() {
+        // One scanner for every reader (#281, 3.1): the shown part is
+        // trimmed here too, and an empty one falls back to the title.
+        assert_eq!(
+            note_title("Ask [[Alice Smith| Alice ]] today"),
+            "Ask Alice today"
+        );
+        assert_eq!(note_title("About [[Project X|]]"), "About Project X");
+        assert_eq!(note_title("[[Plain]] link"), "Plain link");
+    }
 
     #[test]
     fn uses_the_first_non_empty_line() {

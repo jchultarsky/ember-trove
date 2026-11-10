@@ -14,7 +14,7 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_viewer},
+    auth::permissions::{require_editor, require_viewer, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -33,11 +33,7 @@ async fn list_edges(
     // SECURITY: scope to edges whose endpoints the caller owns; do NOT rely on
     // client-side filtering for an authz boundary (it leaks node UUIDs). Admins
     // (None) see all edges.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let edges = state.edges.list_visible(subject).await?;
     Ok(Json(edges))
 }

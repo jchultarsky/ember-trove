@@ -113,6 +113,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   here yet" messages, and those of the tag manager and a filtered node
   list, use the shared empty state.
 
+- **A task's "overdue" badge on a node page stayed red after you ticked
+  the task** (#281), until the page reloaded. The page worked the rule
+  out once when it drew the row; it follows the task's status now.
+
+- **`[[Title]]` written inside code is no longer a link** (#281, 1.10).
+  In an inline code span or a fenced code block, the page showed the
+  link's HTML as text, and the node gained a "linked here" connection to
+  the title. Code is now left exactly as typed, and no connection is made
+  for it. A node that has such a link in code loses that connection the
+  next time it is saved.
+- **Every part of the app reads `[[links]]` the same way** (#281, 3.1).
+  Five separate readers disagreed on the odd cases. Now, everywhere:
+  - `[[Title|]]` shows the title (it showed an empty link);
+  - `[[]]` and `[[|text]]` are plain text (they made an empty or
+    target-less link);
+  - a `[[` that isn't closed on its own line is plain text, and doesn't
+    turn everything up to the next `]]`, paragraphs later, into one link.
+
+- **The graph's hover card reads like the rendered text** (#281, 3.4). It
+  showed `[[Title|text]]`, link syntax, `~~`, list markers and `>` as
+  typed. It now shows what those display, as a collapsed note's title
+  already did.
+
+### Tooling
+- One spelling of "the nodes this person can see" for the big lists
+  (#281, 3.2): the node list, the title list and the graph each wrote it
+  their own way. They share `visible_among_many`, and a test checks the
+  three agree. The title list is also about 40% faster on 20,000 nodes.
+- Reuse and dead code from the review (#281, 3.3, 3.5, 3.7), no behaviour
+  change beyond the badge above: one admin-scope helper where seven
+  routes wrote the rule out; one overdue rule and one My Day rule in
+  `common::task`; one priority ordering for the five task queries; the
+  unused quick-add parser, an unused type and API call, and two stubs
+  removed, with the three file-wide `allow(dead_code)` that hid them.
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted
