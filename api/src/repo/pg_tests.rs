@@ -5168,3 +5168,97 @@ async fn an_older_archive_leaves_what_it_never_carried(pool: PgPool) {
         .expect("webhook");
     assert_eq!(secret.as_deref(), Some("the-signing-secret"));
 }
+
+// ── The delete confirmation's counts (#281, owner decision) ──────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
+    use common::node::NodeDeletionPreview;
+    let repo = PgNodeRepo::new(pool.clone());
+    let doomed = create_node(&pool, "alice", "preview doomed").await.id;
+    let spared = create_node(&pool, "alice", "preview spared").await.id;
+    let (d, s) = (doomed.0, spared.0);
+    for q in [
+        // On the doomed node: 3 live tasks (1 is bob's) and 1 in the trash;
+        // 3 live notes (2 are bob's) and 1 in the trash; 2 files.
+        format!(
+            "INSERT INTO node_tasks (node_id, owner_id, title, deleted_at) VALUES
+            ('{d}', 'alice', 'a1', NULL), ('{d}', 'alice', 'a2', NULL),
+            ('{d}', 'bob', 'b1', NULL), ('{d}', 'bob', 'trashed', now()),
+            ('{s}', 'bob', 'elsewhere', NULL), (NULL, 'alice', 'standalone', NULL)"
+        ),
+        format!(
+            "INSERT INTO node_notes (node_id, owner_id, body, deleted_at) VALUES
+            ('{d}', 'alice', 'a', NULL), ('{d}', 'bob', 'b1', NULL),
+            ('{d}', 'bob', 'b2', NULL), ('{d}', 'bob', 'trashed', now()),
+            ('{s}', 'alice', 'elsewhere', NULL)"
+        ),
+        format!(
+            "INSERT INTO attachments (node_id, filename, s3_key) VALUES
+            ('{d}', 'one.pdf', '{d}/1/one.pdf'), ('{d}', 'two.pdf', '{d}/2/two.pdf'),
+            ('{s}', 'kept.pdf', '{s}/3/kept.pdf')"
+        ),
+    ] {
+        sqlx::query(&q).execute(&pool).await.expect("seed");
+    }
+
+    let preview = repo
+        .deletion_preview(&[doomed], "alice")
+        .await
+        .expect("preview");
+    assert_eq!(
+        preview,
+        NodeDeletionPreview {
+            nodes: 1,
+            tasks: 3,
+            others_tasks: 1,
+            notes: 3,
+            others_notes: 2,
+            files: 2,
+        }
+    );
+    // "Other people" is relative to who asks.
+    let as_bob = repo
+        .deletion_preview(&[doomed], "bob")
+        .await
+        .expect("as bob");
+    assert_eq!((as_bob.others_tasks, as_bob.others_notes), (2, 1));
+    // A node that doesn't exist adds nothing, and is not counted as a node.
+    let with_missing = repo
+        .deletion_preview(&[doomed, common::id::NodeId(uuid::Uuid::new_v4())], "alice")
+        .await
+        .expect("with a missing node");
+    assert_eq!(with_missing, preview);
+
+    // The counts are the rows the delete removes: every live task, note
+    // and file on the node goes, and nothing anywhere else does.
+    let live = |table: &'static str, node: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            let trash = if table == "attachments" {
+                ""
+            } else {
+                " AND deleted_at IS NULL"
+            };
+            sqlx::query_scalar::<_, i64>(&format!(
+                "SELECT COUNT(*) FROM {table} WHERE node_id = $1{trash}"
+            ))
+            .bind(node)
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+    assert_eq!(live("node_tasks", d).await, 3);
+    repo.delete(doomed).await.expect("delete");
+    for table in ["node_tasks", "node_notes", "attachments"] {
+        assert_eq!(live(table, d).await, 0, "{table} on the deleted node");
+        assert_eq!(live(table, s).await, 1, "{table} on the other node");
+    }
+    let standalone: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM node_tasks WHERE node_id IS NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("standalone");
+    assert_eq!(standalone, 1);
+}

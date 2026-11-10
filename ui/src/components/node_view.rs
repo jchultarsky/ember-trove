@@ -8,7 +8,7 @@ use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::activity_panel::ActivityPanel;
 use crate::components::attachment_panel::AttachmentPanel;
 use crate::components::links_panel::LinksPanel;
-use crate::components::modals::delete_confirm::DeleteConfirmModal;
+use crate::components::modals::delete_confirm::{DeleteConfirmModal, node_delete_details};
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
@@ -435,6 +435,10 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
             item_name=Signal::derive(move || delete_item_name.get())
             on_confirm=Callback::new(move |_| do_delete())
             on_cancel=Callback::new(move |_| show_delete_confirm.set(false))
+            details=node_delete_details(
+                show_delete_confirm.into(),
+                Signal::derive(move || vec![id]),
+            )
         />
     }
 }

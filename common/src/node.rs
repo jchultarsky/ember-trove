@@ -239,6 +239,147 @@ pub struct NodeListResponse {
     pub has_more: bool,
 }
 
+/// The most nodes one `GET /nodes/deletion-preview` may ask about.
+pub const DELETION_PREVIEW_MAX_NODES: usize = 100;
+
+/// What deleting nodes destroys along with them, for the confirmation
+/// (owner decision, 2026-11-09, #281): a node's tasks, notes and files are
+/// deleted with it, other accounts' included, so the person deleting sees
+/// the numbers first. Counts only: nothing here names a task, a note or
+/// who wrote it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct NodeDeletionPreview {
+    /// Of the nodes asked about, how many exist and are the caller's to
+    /// delete. The other counts cover only these.
+    pub nodes: u64,
+    /// Live tasks on them (the trash is not counted).
+    pub tasks: u64,
+    /// Of `tasks`, those added by an account other than the caller.
+    pub others_tasks: u64,
+    /// Live notes on them.
+    pub notes: u64,
+    /// Of `notes`, those written by an account other than the caller.
+    pub others_notes: u64,
+    /// Attached files.
+    pub files: u64,
+}
+
+impl NodeDeletionPreview {
+    /// One entry per kind of content that would be lost, in words:
+    /// "5 tasks (2 from other people)". Empty when nothing would be.
+    #[must_use]
+    pub fn losses(&self) -> Vec<String> {
+        fn count(n: u64, one: &str, many: &str) -> String {
+            format!("{n} {}", if n == 1 { one } else { many })
+        }
+        fn with_others(n: u64, others: u64, one: &str, many: &str) -> String {
+            let all = count(n, one, many);
+            if others == 0 {
+                all
+            } else {
+                format!("{all} ({others} from other people)")
+            }
+        }
+        let mut out = Vec::new();
+        if self.tasks > 0 {
+            out.push(with_others(self.tasks, self.others_tasks, "task", "tasks"));
+        }
+        if self.notes > 0 {
+            out.push(with_others(self.notes, self.others_notes, "note", "notes"));
+        }
+        if self.files > 0 {
+            out.push(count(self.files, "file", "files"));
+        }
+        out
+    }
+
+    /// How many of the `asked` nodes would stay: missing, or not the
+    /// caller's to delete.
+    #[must_use]
+    pub fn kept(&self, asked: usize) -> u64 {
+        (asked as u64).saturating_sub(self.nodes)
+    }
+
+    /// The sum of two previews of different nodes (the UI asks in batches).
+    #[must_use]
+    pub fn plus(self, other: Self) -> Self {
+        Self {
+            nodes: self.nodes + other.nodes,
+            tasks: self.tasks + other.tasks,
+            others_tasks: self.others_tasks + other.others_tasks,
+            notes: self.notes + other.notes,
+            others_notes: self.others_notes + other.others_notes,
+            files: self.files + other.files,
+        }
+    }
+}
+
+#[cfg(test)]
+mod deletion_preview_tests {
+    use super::NodeDeletionPreview;
+
+    #[test]
+    fn losses_name_each_kind_and_how_much_is_other_peoples() {
+        let p = NodeDeletionPreview {
+            nodes: 1,
+            tasks: 5,
+            others_tasks: 2,
+            notes: 1,
+            others_notes: 1,
+            files: 3,
+        };
+        assert_eq!(
+            p.losses(),
+            [
+                "5 tasks (2 from other people)",
+                "1 note (1 from other people)",
+                "3 files"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_kind_with_nothing_to_lose_is_left_out() {
+        let p = NodeDeletionPreview {
+            nodes: 1,
+            tasks: 1,
+            ..Default::default()
+        };
+        assert_eq!(p.losses(), ["1 task"]);
+        assert!(NodeDeletionPreview::default().losses().is_empty());
+    }
+
+    #[test]
+    fn kept_counts_the_nodes_that_are_not_the_callers_to_delete() {
+        let p = NodeDeletionPreview {
+            nodes: 2,
+            ..Default::default()
+        };
+        assert_eq!(p.kept(5), 3);
+        assert_eq!(p.kept(2), 0);
+        // Never negative, whatever the server answered.
+        assert_eq!(p.kept(1), 0);
+    }
+
+    #[test]
+    fn batches_add_up() {
+        let a = NodeDeletionPreview {
+            nodes: 1,
+            tasks: 2,
+            others_tasks: 1,
+            notes: 3,
+            others_notes: 0,
+            files: 1,
+        };
+        let sum = a.plus(a);
+        assert_eq!(sum.nodes, 2);
+        assert_eq!(
+            sum.losses(),
+            ["4 tasks (2 from other people)", "6 notes", "2 files"]
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use uuid::Uuid;
 
 use crate::components::empty_state::EmptyState;
-use crate::components::modals::delete_confirm::DeleteConfirmModal;
+use crate::components::modals::delete_confirm::{DeleteConfirmModal, node_delete_details};
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
@@ -581,6 +581,12 @@ pub fn NodeList() -> impl IntoView {
                     });
                 })
                 on_cancel=Callback::new(move |()| confirm_bulk_delete.set(false))
+                details=node_delete_details(
+                    confirm_bulk_delete.into(),
+                    Signal::derive(move || {
+                        selected_ids.get().iter().map(|&u| NodeId(u)).collect()
+                    }),
+                )
             />
         </div>
     }

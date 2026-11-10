@@ -218,6 +218,17 @@ cargo check && cargo clippy -- -D warnings
   crontab, so a failure is a red run and an email (the old `backup.sh`
   cron failed silently for seven months).
 
+## Node deletion preview (#281)
+
+- `GET /nodes/deletion-preview?ids=a,b` feeds the delete confirmation.
+  Each id passes `require_owner`, the check `DELETE /nodes/:id` makes,
+  before anything is counted. A node that fails it is left out, the same
+  as one that doesn't exist: only a 403 means "not yours", any other error
+  propagates. The answer is counts only (`NodeDeletionPreview`).
+- `NodeRepo::deletion_preview` counts the rows the `nodes` cascade
+  removes. A new table that holds a node's content, and that a person
+  would miss, joins that query and `NodeDeletionPreview::losses`.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.

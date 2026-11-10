@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Deleting a node first shows what goes with it** (owner decision on
+  #281). A node's tasks, notes and files are deleted with it, including
+  tasks and notes other people added to a shared node. The confirmation
+  now counts them, for example "5 tasks (2 from other people)", and Delete
+  stays off until the counts are on screen. If the count can't be loaded,
+  the dialog says so and Delete stays off. Deleting several nodes from the
+  list counts across all of them, and says how many of the selected nodes
+  are not yours to delete.
+  - New endpoint: `GET /api/nodes/deletion-preview?ids=…`. It answers with
+    counts only, for the nodes the caller may delete.
+
+### Documentation
+- `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
+  archived nodes stay searchable (§3.3), and what a node holds is deleted
+  with it behind the counting confirmation (§6.1).
+
 ## [3.13.1] - 2026-11-09
 
 ### Fixed
