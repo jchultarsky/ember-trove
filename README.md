@@ -368,7 +368,8 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/project-statuses` | The caller's own project statuses with counts, most used first (status picker suggestions; owner-only) |
 | GET | `/api/nodes/lookup?q=&limit=&node_type=` | Title lookup for the node pickers: titles containing `q`, exact > prefix > other; own + shared nodes (admins: all); `limit` 1–20, default 8; optional `node_type` keeps one kind (the task pickers ask for `project`) |
 | PUT | `/api/nodes/{id}` | Update node (snapshots version on save). Optional `expected_updated_at`: apply only if the node is still at that version, else **412** and nothing is written (the editor sends it, #161) |
-| DELETE | `/api/nodes/{id}` | Delete node (cascading) |
+| DELETE | `/api/nodes/{id}` | Delete node, with its tasks, notes and files (children it contains are kept) |
+| GET | `/api/nodes/deletion-preview?ids=a,b` | What deleting these nodes would destroy: counts of tasks, notes and files, and how many are other accounts'. Only nodes the caller may delete are counted (at most 100 ids) |
 | PUT | `/api/nodes/{id}/pin` | Toggle pinned state (owner-only) |
 | GET | `/api/nodes/{id}/neighbors` | Linked neighbour nodes |
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |

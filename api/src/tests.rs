@@ -136,6 +136,29 @@ impl NodeRepo for StubNodeRepo {
             _ => panic!("authorization bypass: node delete reached the repo for {id}"),
         }
     }
+    async fn deletion_preview(
+        &self,
+        ids: &[NodeId],
+        caller: &str,
+    ) -> Result<common::node::NodeDeletionPreview, EmberTroveError> {
+        // As for `delete`: only nodes the caller may delete may get here.
+        // The answer echoes what arrived, so a test can read it back.
+        for id in ids {
+            assert!(
+                matches!(
+                    id.0.as_u128(),
+                    AZ_OWNED_NODE | AZ_MY_PROJECT | AZ_MY_ARTICLE
+                ) || caller == "admin-sub",
+                "authorization bypass: deletion preview reached the repo for {id}"
+            );
+        }
+        Ok(common::node::NodeDeletionPreview {
+            nodes: ids.len() as u64,
+            tasks: 7,
+            others_tasks: 2,
+            ..Default::default()
+        })
+    }
     async fn neighbors(&self, _: NodeId, _: Option<&str>) -> Result<Vec<Node>, EmberTroveError> {
         unimplemented!()
     }
@@ -3701,6 +3724,87 @@ async fn deleting_a_node_writes_no_activity_entry() {
         activity.0.lock().expect("lock").is_empty(),
         "no activity write after the node is gone"
     );
+}
+
+/// `GET /nodes/deletion-preview?ids=…` as `claims`: status and JSON body.
+async fn deletion_preview_call(
+    claims: common::auth::AuthClaims,
+    ids: &str,
+) -> (StatusCode, serde_json::Value) {
+    let app = Router::new()
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state());
+    let resp = app
+        .oneshot(
+            Request::get(format!("/nodes/deletion-preview?ids={ids}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn the_deletion_preview_counts_only_nodes_the_caller_may_delete() {
+    // #281 (owner decision): the confirmation counts what a delete
+    // destroys. A node the caller edits, views, can't see, or that doesn't
+    // exist is left out before the repo is asked: the stub panics if one
+    // reaches it.
+    let ids = [
+        AZ_OWNED_NODE,
+        AZ_EDIT_NODE,
+        AZ_VIEW_NODE,
+        AZ_FOREIGN_NODE,
+        0xdead_beef,
+    ]
+    .map(|n| Uuid::from_u128(n).to_string())
+    .join(",");
+    let (status, body) = deletion_preview_call(fake_claims(), &ids).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["nodes"], 1, "only the node the caller owns");
+    assert_eq!(body["tasks"], 7);
+    assert_eq!(body["others_tasks"], 2);
+}
+
+#[tokio::test]
+async fn a_deletion_preview_of_nothing_deletable_is_all_zeroes() {
+    // Someone else's node and a missing one answer alike: nothing to probe.
+    for id in [AZ_FOREIGN_NODE, AZ_VIEW_NODE, 0xdead_beef] {
+        let (status, body) =
+            deletion_preview_call(fake_claims(), &Uuid::from_u128(id).to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_value::<common::node::NodeDeletionPreview>(body).unwrap(),
+            common::node::NodeDeletionPreview::default()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_deletion_preview_refuses_bad_ids_and_too_many() {
+    let (status, _) = deletion_preview_call(fake_claims(), "not-a-uuid").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let many = (0..=common::node::DELETION_PREVIEW_MAX_NODES as u128)
+        .map(|n| Uuid::from_u128(0xbb00_0000 + n).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let (status, _) = deletion_preview_call(fake_claims(), &many).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // A repeated id counts once, and blanks are skipped.
+    let owned = Uuid::from_u128(AZ_OWNED_NODE);
+    let (status, body) =
+        deletion_preview_call(fake_claims(), &format!("{owned},,{owned},%20")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["nodes"], 1);
 }
 
 #[tokio::test]

@@ -1,8 +1,8 @@
 use common::{
     id::NodeId,
     node::{
-        CreateNodeRequest, Node, NodeListResponse, NodeTitleEntry, ProjectStatusCount,
-        UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeDeletionPreview, NodeListResponse, NodeTitleEntry,
+        ProjectStatusCount, UpdateNodeRequest,
     },
 };
 use gloo_net::http::Request;
@@ -107,6 +107,28 @@ pub async fn set_node_pinned(id: NodeId, pinned: bool) -> Result<Node, UiError> 
 
 pub async fn delete_node(id: NodeId) -> Result<(), UiError> {
     delete_empty(&format!("/nodes/{id}")).await
+}
+
+/// Ids per `GET /nodes/deletion-preview`: under the server's cap
+/// (`DELETION_PREVIEW_MAX_NODES`) and a short enough URL for any proxy.
+const DELETION_PREVIEW_BATCH: usize = 50;
+
+/// What deleting these nodes would destroy with them (#281): asked in
+/// batches and summed. Nodes that aren't the caller's to delete are left
+/// out by the server (`NodeDeletionPreview::kept`).
+pub async fn node_deletion_preview(ids: &[NodeId]) -> Result<NodeDeletionPreview, UiError> {
+    let mut total = NodeDeletionPreview::default();
+    for batch in ids.chunks(DELETION_PREVIEW_BATCH) {
+        let list = batch
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let part: NodeDeletionPreview =
+            get_json(&format!("/nodes/deletion-preview?ids={list}")).await?;
+        total = total.plus(part);
+    }
+    Ok(total)
 }
 
 pub async fn duplicate_node(id: NodeId) -> Result<Node, UiError> {

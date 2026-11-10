@@ -5,8 +5,8 @@ use common::{
     activity::ActivityAction,
     id::{NodeId, TagId},
     node::{
-        CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeTitleEntry, NodeType,
-        UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeDeletionPreview, NodeListParams, NodeStatus, NodeTitleEntry,
+        NodeType, UpdateNodeRequest,
     },
     slug::slugify,
     tag::Tag,
@@ -40,6 +40,16 @@ pub trait NodeRepo: Send + Sync {
     ) -> Result<Node, EmberTroveError>;
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError>;
+
+    /// What deleting `ids` would destroy with them (#281): live tasks,
+    /// live notes and files, and how many of the tasks and notes belong to
+    /// an account other than `caller`. Counts only. The route passes only
+    /// nodes the caller may delete.
+    async fn deletion_preview(
+        &self,
+        ids: &[NodeId],
+        caller: &str,
+    ) -> Result<NodeDeletionPreview, EmberTroveError>;
 
     async fn neighbors(
         &self,
@@ -619,6 +629,44 @@ impl NodeRepo for PgNodeRepo {
         }
 
         Ok(())
+    }
+
+    async fn deletion_preview(
+        &self,
+        ids: &[NodeId],
+        caller: &str,
+    ) -> Result<NodeDeletionPreview, EmberTroveError> {
+        // These are the rows `DELETE FROM nodes` cascades to. The trash
+        // (`deleted_at`) goes too, but it is already deleted to its owner,
+        // so it is not counted.
+        let ids: Vec<Uuid> = ids.iter().map(|id| id.0).collect();
+        let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT
+               (SELECT COUNT(*) FROM nodes WHERE id = ANY($1)),
+               (SELECT COUNT(*) FROM node_tasks
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL),
+               (SELECT COUNT(*) FROM node_tasks
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL AND owner_id <> $2),
+               (SELECT COUNT(*) FROM node_notes
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL),
+               (SELECT COUNT(*) FROM node_notes
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL AND owner_id <> $2),
+               (SELECT COUNT(*) FROM attachments WHERE node_id = ANY($1))",
+        )
+        .bind(&ids)
+        .bind(caller)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("node deletion preview failed: {e}")))?;
+        let n = |v: i64| u64::try_from(v).unwrap_or(0);
+        Ok(NodeDeletionPreview {
+            nodes: n(row.0),
+            tasks: n(row.1),
+            others_tasks: n(row.2),
+            notes: n(row.3),
+            others_notes: n(row.4),
+            files: n(row.5),
+        })
     }
 
     async fn neighbors(

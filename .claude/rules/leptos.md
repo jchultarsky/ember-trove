@@ -125,6 +125,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one.
+- **Deleting a node goes through `DeleteConfirmModal` with `details`**
+  (#281): `details=node_delete_details(show, ids)` loads the counts of
+  what goes with the node and keeps Delete off until they are shown. A new
+  place that deletes nodes must pass it; never call `api::delete_node`
+  behind a bare confirm.
 - **Context newtypes** to prevent collisions:
   `#[derive(Clone, Copy)] struct ShowCapture(pub RwSignal<bool>);` (see `ui/src/app.rs`).
 - **Required context = `expect_context::<T>()`, never `use_context::<T>().expect(..)`.**

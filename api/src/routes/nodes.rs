@@ -13,8 +13,9 @@ use common::{
     edge::{EdgeType, EdgeWithTitles, Home, HomeNode, NodeHome, SetHomeRequest},
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
-        CreateNodeRequest, Node, NodeListParams, NodeListResponse, NodeLookupHit, NodeLookupParams,
-        NodeTitleEntry, ProjectStatusCount, UpdateNodeRequest,
+        CreateNodeRequest, DELETION_PREVIEW_MAX_NODES, Node, NodeDeletionPreview, NodeListParams,
+        NodeListResponse, NodeLookupHit, NodeLookupParams, NodeTitleEntry, ProjectStatusCount,
+        UpdateNodeRequest,
     },
     node_version::NodeVersion,
     ontology::{Capability, allows, edge_kind_violation},
@@ -48,6 +49,7 @@ pub fn router() -> Router<AppState> {
         .route("/lookup", get(lookup_titles))
         .route("/resolve-titles", get(resolve_titles))
         .route("/project-statuses", get(project_statuses))
+        .route("/deletion-preview", get(deletion_preview))
         .route("/slug/{slug}", get(get_node_by_slug))
         .route("/{id}", get(get_node).put(update_node).delete(delete_node))
         .route("/{id}/neighbors", get(neighbors))
@@ -546,6 +548,60 @@ async fn delete_node(
         );
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DeletionPreviewParams {
+    /// Node ids separated by commas (`Query` can't take a repeated param).
+    ids: String,
+}
+
+/// `GET /nodes/deletion-preview?ids=a,b` — what deleting these nodes would
+/// destroy with them: tasks, notes and files, and how many of the tasks and
+/// notes are other accounts' (owner decision, 2026-11-09, #281). The UI
+/// shows it in the delete confirmation.
+///
+/// SECURITY: each node passes the same check as `DELETE /nodes/:id`
+/// before anything is counted. A node the caller may not delete is left
+/// out, exactly like one that doesn't exist, so the answer can't be used to
+/// probe for a node or to size someone else's. Counts only.
+async fn deletion_preview(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Query(params): Query<DeletionPreviewParams>,
+) -> Result<Json<NodeDeletionPreview>, ApiError> {
+    let mut ids: Vec<Uuid> = Vec::new();
+    for part in params.ids.split(',').map(str::trim) {
+        if part.is_empty() {
+            continue;
+        }
+        let id = Uuid::parse_str(part).map_err(|_| {
+            ApiError::Validation("ids must be node ids separated by commas".to_string())
+        })?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > DELETION_PREVIEW_MAX_NODES {
+        return Err(ApiError::Validation(format!(
+            "at most {DELETION_PREVIEW_MAX_NODES} nodes per request"
+        )));
+    }
+    let mut mine: Vec<NodeId> = Vec::with_capacity(ids.len());
+    for id in ids {
+        match require_owner(state.permissions.as_ref(), &claims, NodeId(id)).await {
+            Ok(()) => mine.push(NodeId(id)),
+            // Only a 403 means "not yours"; any other error is a failure.
+            Err(ApiError::Forbidden(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if mine.is_empty() {
+        return Ok(Json(NodeDeletionPreview::default()));
+    }
+    Ok(Json(
+        state.nodes.deletion_preview(&mine, &claims.sub).await?,
+    ))
 }
 
 async fn neighbors(

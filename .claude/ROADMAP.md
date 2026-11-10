@@ -5,6 +5,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-09)
 
+- **Unreleased: the delete confirmation counts what goes** (#281, owner
+  decision). `GET /nodes/deletion-preview` counts the tasks, notes and
+  files of the nodes the caller may delete, and how many are other
+  accounts'; `DeleteConfirmModal` takes them as `details`
+  (`node_delete_details`) and keeps Delete off until they load. ONTOLOGY
+  §3.3 and §6.1 record both review decisions.
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
   review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
   snapshot; attachment files are stored under their attachment's id
@@ -13,9 +19,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   their signing secrets) and recurrence links are backed up. The rest of
   the review (security items, 1.5 onward) is still to triage. Its two
   owner decisions were made on 2026-11-09 (#281 comments): archived nodes
-  stay searchable (ONTOLOGY §3.3 to be clarified), and deleting a Project
-  keeps the hard delete behind a confirmation that counts what is lost,
-  other accounts' tasks and notes included. Neither is built yet.
+  stay searchable, and deleting a node keeps the hard delete behind a
+  confirmation that counts what is lost (see the entry above).
 - **v3.13.0 shipped: room for longer captures** (PR #278). A capture in
   edit spans the whole row, opens fitted to its text (`ResizableEditor`
   `fit_to_text`) and has a drag bar, as does quick capture. Convert to
