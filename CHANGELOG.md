@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.14.0] - 2026-11-10
+
 ### Changed
 - **Deleting a node first shows what goes with it** (owner decision on
   #281). A node's tasks, notes and files are deleted with it, including
