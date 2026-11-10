@@ -240,6 +240,10 @@ cargo check && cargo clippy -- -D warnings
 - Who may change a task is `require_task_editor` (routes/tasks.rs): its
   owner, an admin, or an editor of its node. `TaskRepo::reorder` applies
   the same rule in SQL and skips the rest.
+- A list's admin scope is `subject_scope(&claims)`, never an inline
+  `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
+  `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
+  `common::task::is_overdue` and `Task::in_my_day`.
 - `TaskRepo::create_occurrence` locks the parent row and returns the live
   occurrence it already has: a parent has at most one. Without the lock,
   `two_completions_at_once_schedule_one_next_occurrence` fails.

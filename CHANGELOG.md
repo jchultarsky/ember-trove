@@ -113,6 +113,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   here yet" messages, and those of the tag manager and a filtered node
   list, use the shared empty state.
 
+- **A task's "overdue" badge on a node page stayed red after you ticked
+  the task** (#281), until the page reloaded. The page worked the rule
+  out once when it drew the row; it follows the task's status now.
+
+### Tooling
+- Reuse and dead code from the review (#281, 3.3, 3.5, 3.7), no behaviour
+  change beyond the badge above: one admin-scope helper where seven
+  routes wrote the rule out; one overdue rule and one My Day rule in
+  `common::task`; one priority ordering for the five task queries; the
+  unused quick-add parser, an unused type and API call, and two stubs
+  removed, with the three file-wide `allow(dead_code)` that hid them.
+
 ### Documentation
 - `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
   archived nodes stay searchable (§3.3), and what a node holds is deleted

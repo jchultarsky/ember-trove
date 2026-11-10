@@ -105,11 +105,8 @@ pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
 /// focused on `today` exactly or still in a non-terminal state. This keeps
 /// the node-detail lightbulb in sync with what actually appears in My Day.
 pub fn is_in_my_day(task: &Task, today: chrono::NaiveDate) -> bool {
-    match task.focus_date {
-        Some(d) if d == today => true,
-        Some(d) if d < today => !status_done(&task.status),
-        _ => false,
-    }
+    // The rule lives in `common` (#281, 3.5).
+    task.in_my_day(today)
 }
 
 // ── Backlog partitioning ────────────────────────────────────────────────────
@@ -122,9 +119,7 @@ pub fn partition_overdue(
     tasks: Vec<MyDayTask>,
     today: chrono::NaiveDate,
 ) -> (Vec<MyDayTask>, Vec<MyDayTask>) {
-    tasks
-        .into_iter()
-        .partition(|t| !status_done(&t.task.status) && t.task.due_date.is_some_and(|d| d < today))
+    tasks.into_iter().partition(|t| t.task.is_overdue(today))
 }
 
 // ── Sorting ─────────────────────────────────────────────────────────────────

@@ -36,7 +36,7 @@
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{Task, TaskStatus, UpdateTaskRequest};
+use common::task::{Task, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -522,11 +522,11 @@ pub fn KanbanTaskRow(
                             </span>
                         </span>
                         {due.map(|d| {
-                            let overdue = d < today
-                                && !matches!(
-                                    status_sig.get_untracked(),
-                                    TaskStatus::Done | TaskStatus::Cancelled
-                                );
+                            let overdue = common::task::is_overdue(
+                                &status_sig.get_untracked(),
+                                Some(d),
+                                today,
+                            );
                             due_badge_view(d, overdue)
                         })}
                         // Carryover badge: the date IS the question; ✓

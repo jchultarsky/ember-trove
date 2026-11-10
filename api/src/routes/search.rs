@@ -4,7 +4,7 @@ use common::{
     search::{SearchQuery, SearchResponse},
 };
 
-use crate::{auth::permissions::is_admin, error::ApiError, state::AppState};
+use crate::{auth::permissions::subject_scope, error::ApiError, state::AppState};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", get(search))
@@ -17,11 +17,7 @@ async fn search(
 ) -> Result<Json<SearchResponse>, ApiError> {
     // SECURITY: scope results to the caller's own content. Admins (subject =
     // None) search across all owners; everyone else is restricted to their sub.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let response = state.search.search(&query, subject).await?;
     Ok(Json(response))
 }

@@ -123,6 +123,35 @@ pub struct Task {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Past its due date and still to do. Done and Cancelled are never
+/// overdue. The one rule for every badge and list (#281, 3.5: it was
+/// written three times in the UI, and one copy read the status only once,
+/// so its badge stayed red after the task was ticked).
+#[must_use]
+pub fn is_overdue(status: &TaskStatus, due: Option<NaiveDate>, today: NaiveDate) -> bool {
+    !status.is_terminal() && due.is_some_and(|d| d < today)
+}
+
+impl Task {
+    /// See [`is_overdue`].
+    #[must_use]
+    pub fn is_overdue(&self, today: NaiveDate) -> bool {
+        is_overdue(&self.status, self.due_date, today)
+    }
+
+    /// Whether the task is in `today`'s My Day, by the server's
+    /// carry-forward rule (`list_my_day`): focused on `today` exactly, or
+    /// focused on an earlier day and not yet finished.
+    #[must_use]
+    pub fn in_my_day(&self, today: NaiveDate) -> bool {
+        match self.focus_date {
+            Some(d) if d == today => true,
+            Some(d) if d < today => !self.status.is_terminal(),
+            _ => false,
+        }
+    }
+}
+
 /// Lightweight task summary attached to a project in the dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskCounts {
@@ -479,6 +508,29 @@ pub struct ReorderTaskEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct ReorderTasksRequest {
     pub tasks: Vec<ReorderTaskEntry>,
+}
+
+#[cfg(test)]
+mod overdue_tests {
+    use super::{TaskStatus, is_overdue};
+    use chrono::NaiveDate;
+
+    fn day(d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 11, d).expect("date")
+    }
+
+    #[test]
+    fn overdue_is_unfinished_and_strictly_past_due() {
+        let today = day(10);
+        assert!(is_overdue(&TaskStatus::Open, Some(day(9)), today));
+        assert!(is_overdue(&TaskStatus::InProgress, Some(day(9)), today));
+        // Due today is not overdue yet; no due date never is.
+        assert!(!is_overdue(&TaskStatus::Open, Some(today), today));
+        assert!(!is_overdue(&TaskStatus::Open, None, today));
+        // Finished one way or the other: never overdue.
+        assert!(!is_overdue(&TaskStatus::Done, Some(day(1)), today));
+        assert!(!is_overdue(&TaskStatus::Cancelled, Some(day(1)), today));
+    }
 }
 
 #[cfg(test)]

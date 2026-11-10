@@ -20,9 +20,8 @@
 //! `PUT /api/nodes/:id/pin`; on success the dashboard refreshes so
 //! the card slides up/down to its new sort position.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use common::activity::{ActivityAction, RecentActivityEntry, status_change_summary};
-use common::id::NodeId;
 use common::task::{ProjectDashboardEntry, TaskSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -524,8 +523,3 @@ fn CountBadge(count: u32, color: &'static str) -> impl IntoView {
         </span>
     }
 }
-
-// Suppress dead-code warning on unused import when the dashboard
-// later becomes tag-aware.
-#[allow(dead_code)]
-fn _phantom(_: NodeId, _: DateTime<Utc>) {}

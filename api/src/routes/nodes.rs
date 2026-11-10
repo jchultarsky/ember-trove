@@ -142,11 +142,7 @@ async fn list_titles(
     // nodes they own or have been explicitly granted a permission on —
     // otherwise wiki-link autocomplete would enumerate every node in the
     // system, including nodes never shared with the caller.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let titles = state.nodes.list_titles(subject).await?;
     Ok(Json(titles))
 }
