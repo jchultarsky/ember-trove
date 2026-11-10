@@ -122,14 +122,22 @@ pub fn note_title(body: &str) -> String {
     body.lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !is_fence_or_rule(line))
-        .map(|line| clean_inline(strip_block_prefix(line)))
+        .map(plain_line)
         .find(|text| !text.is_empty())
         .unwrap_or_else(|| UNTITLED_NOTE.to_string())
 }
 
+/// One line of Markdown as the text a reader sees: block marks (heading
+/// `#`s, `>`, list markers) and inline marks gone, links reduced to what
+/// they show. The one stripper for a note's title and a body's plain
+/// preview (#281, 3.4).
+pub(crate) fn plain_line(line: &str) -> String {
+    clean_inline(strip_block_prefix(line))
+}
+
 /// Code-fence delimiters (```` ``` ````, `~~~`) and thematic breaks (`---`,
 /// `***`, `___`, spaced variants) carry no title text.
-fn is_fence_or_rule(line: &str) -> bool {
+pub(crate) fn is_fence_or_rule(line: &str) -> bool {
     if line.starts_with("```") || line.starts_with("~~~") {
         return true;
     }

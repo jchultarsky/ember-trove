@@ -4,23 +4,28 @@
 //! keeping the `common` crate dependency-free of `pulldown-cmark`.
 
 /// A plain-text preview of a markdown body: its text lines (no headings,
-/// code fences or rules) joined with spaces, `**`, `__` and backticks
-/// dropped, cut to `max_chars` characters with "…" when longer. `None` when
-/// nothing is left. A heuristic, not a parser (this module has none); the
-/// graph's hover card shows it as plain text.
+/// code fences or rules) joined with spaces, cut to `max_chars` characters
+/// with "…" when longer. `None` when nothing is left. A heuristic, not a
+/// parser (this module has none); the graph's hover card shows it as plain
+/// text.
+///
+/// Each line is reduced by `note::plain_line`, the stripper a note's
+/// collapsed title uses (#281, 3.4): links and wiki links keep what they
+/// show, emphasis, strikethrough and code marks go, and so do list markers
+/// and quote marks. This function had its own, which left all of those
+/// but `**`, `__` and backticks in the text.
 pub fn plain_preview(body: &str, max_chars: usize) -> Option<String> {
-    let text = body
+    let clean = body
         .lines()
         .map(str::trim)
-        .filter(|l| {
-            !l.is_empty() && !l.starts_with('#') && !l.starts_with("```") && !l.starts_with("---")
-        })
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !crate::note::is_fence_or_rule(l))
+        .map(crate::note::plain_line)
+        .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
-    if text.is_empty() {
+    if clean.is_empty() {
         return None;
     }
-    let clean = text.replace("**", "").replace("__", "").replace('`', "");
     let mut chars = clean.chars();
     let taken: String = chars.by_ref().take(max_chars).collect();
     Some(if chars.next().is_some() {
@@ -331,6 +336,18 @@ WIP.
         assert_eq!(
             link_first_mention("[[Other|alpha thing]] end", "Alpha"),
             None
+        );
+    }
+
+    #[test]
+    fn a_plain_preview_reads_like_the_rendered_text() {
+        // #281, 3.4: the graph's hover card showed `[[T|x]]`, link syntax,
+        // `~~`, list markers and `>` as typed.
+        let body = "> Ask [[Alice Smith|Alice]] about the [plan](https://example.com).\n\
+                    - a ~~dropped~~ item\n1. first *step*";
+        assert_eq!(
+            plain_preview(body, 100).as_deref(),
+            Some("Ask Alice about the plan. a dropped item first step")
         );
     }
 

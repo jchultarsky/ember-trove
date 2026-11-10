@@ -131,7 +131,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - a `[[` that isn't closed on its own line is plain text, and doesn't
     turn everything up to the next `]]`, paragraphs later, into one link.
 
+- **The graph's hover card reads like the rendered text** (#281, 3.4). It
+  showed `[[Title|text]]`, link syntax, `~~`, list markers and `>` as
+  typed. It now shows what those display, as a collapsed note's title
+  already did.
+
 ### Tooling
+- One spelling of "the nodes this person can see" for the big lists
+  (#281, 3.2): the node list, the title list and the graph each wrote it
+  their own way. They share `visible_among_many`, and a test checks the
+  three agree. The title list is also about 40% faster on 20,000 nodes.
 - Reuse and dead code from the review (#281, 3.3, 3.5, 3.7), no behaviour
   change beyond the badge above: one admin-scope helper where seven
   routes wrote the rule out; one overdue rule and one My Day rule in
