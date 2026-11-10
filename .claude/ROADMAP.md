@@ -5,14 +5,26 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-10)
 
+- **v3.16.0 shipped: the Project Brief's backend and a security audit's
+  fixes.**
+  - The Brief (#282, part 1; PR #283): `project_briefs` (migration 046),
+    `GET/PUT/DELETE /api/nodes/{id}/brief`, History entries, purge and
+    backup (format 6). Its UI is part 2 and not built yet.
+  - Security (PR #302; migration 047 `admin_demotions`). The seven
+    findings of the 2026-11-09 review could not be recovered, so the code
+    was audited again on 2026-11-10 and what that found was fixed: see the
+    changelog's Security section and "Security rules from the 2026-11-10
+    audit" in `.claude/rules/api.md`. A few lower findings need an owner
+    decision first; by the owner's rule they are tracked in the developer
+    session, not in this public file.
+  - `docs/PERFORMANCE.md` has eight days of production statement
+    statistics and a re-ranked list. #262 is closed.
 - **v3.15.0 shipped: copy a task's text and the nginx API limit** (#269,
   #258). No migration.
 - **v3.14.0 shipped: the full-codebase review's fixes** (#281), in the
   entries marked v3.14.0 below: correctness and conformance, the UI
   section, the docs, the reuse items, plus #257, #259 and the phone-width
-  pass of #262. Still open from the review: the seven private security
-  findings (with the owner). Open draft: #283 (Project Brief part 1,
-  migration 046, backup format 6).
+  pass of #262. The review's security findings were handled in v3.16.0.
 - **The monthly recurrence drift is not fixed, on purpose** (owner
   decision 2026-11-10). A monthly task on the 29th to 31st moves to the
   28th in February and stays there (#281, 1.9). A fix was built (a stored
