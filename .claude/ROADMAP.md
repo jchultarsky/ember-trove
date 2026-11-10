@@ -5,6 +5,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-10)
 
+- **v3.16.1 shipped: the audit's last fixes that needed no decision**
+  (PR #303). By-id routes answer a foreign id like a missing one
+  (`permissions::or_missing`); the node list's link count is of visible
+  links (`visible_link_counts`); webhook deliveries run in bounded slots.
+  No migration.
 - **v3.16.0 shipped: the Project Brief's backend and a security audit's
   fixes.**
   - The Brief (#282, part 1; PR #283): `project_briefs` (migration 046),

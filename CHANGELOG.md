@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.16.1] - 2026-11-10
+
 ### Security
 The last items of the 2026-11-10 audit that needed no decision (#281).
 - **An id can no longer be tested for existence.** A request for a task,
