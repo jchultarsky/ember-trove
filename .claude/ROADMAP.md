@@ -37,6 +37,17 @@ Keep it current as part of each change (see `POLICY.md` §10).
 - **Unreleased: one wiki-link scanner** (#281, 3.1 and 1.10).
   `common::wikilink::wikilinks` replaces five hand-written scanners and
   skips code spans and fences.
+- **Unreleased: the icon font and the phone-width pass** (#262).
+  `edit_note` is back in the font subset (the scan reads `*icon*`
+  helpers; `ui/icon-names.txt` and a test guard it). The node header,
+  `PageHeader` and the search toolbar wrap at 375px;
+  `mobile_layout.spec.ts` keeps fourteen pages from scrolling sideways.
+- **Unreleased: the node list pages and sorts on the server** (#257), and
+  `GET /permissions` filters in SQL (#259). `NodeSort`,
+  `node_list_limit` / `node_list_pages` in `common::node`;
+  `api::fetch_node_list` in the UI; `PermissionRepo::list_visible`. #258
+  (rate limits on reads) has its comment corrected and waits on the owner
+  for the limits themselves.
 - **Unreleased: "visible to" and plain text** (#281, 3.2 and 3.4).
   `visible_among_many` for the node list, title list and graph;
   `note::plain_line` for the graph preview. Section 3 of the review is

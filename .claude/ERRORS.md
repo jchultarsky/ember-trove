@@ -461,3 +461,19 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
 - **Fix:** set the element's value from the signal (`set_value`) before
   measuring. To debug it, log the measurement and read the browser console
   on the local e2e stack (`http://localhost:8003` while `KEEP_STACK=1`).
+
+## An icon renders as its raw name ("✎_NOTE") — 2026-11-10
+
+- **Symptom:** the Draft status icon showed "edit" as a glyph followed by
+  the text "_NOTE" on every list, in production too.
+- **Cause:** the icon font is a subset built by
+  `scripts/refresh-icon-font.sh`, which collected names only from files
+  that mention `material-symbols`. `node_meta.rs` returns icon names from
+  helper functions and has no markup, so `edit_note` was dropped at the
+  next refresh. Nothing failed: a missing ligature just renders as text.
+- **Fix:** the script also reads every `fn *icon*() -> &'static str` in
+  any file (only what follows `=>`), and writes the names it bundles to
+  `ui/icon-names.txt`. `node_meta::icon_font_tests` fails when a type or
+  status icon isn't listed.
+- **Rule:** after adding an icon name anywhere, run the script and commit
+  the font, the two `?v=` stamps and `ui/icon-names.txt` together.

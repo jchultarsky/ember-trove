@@ -5,8 +5,8 @@ use common::{
     activity::ActivityAction,
     id::{NodeId, TagId},
     node::{
-        CreateNodeRequest, Node, NodeDeletionPreview, NodeListParams, NodeStatus, NodeTitleEntry,
-        NodeType, UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeDeletionPreview, NodeListParams, NodeSort, NodeStatus,
+        NodeTitleEntry, NodeType, UpdateNodeRequest,
     },
     slug::slugify,
     tag::Tag,
@@ -326,6 +326,16 @@ pub(crate) async fn list_all_on(
     Ok(nodes)
 }
 
+/// The `ORDER BY` terms for a list order. Fixed strings only.
+fn order_by(sort: NodeSort) -> &'static str {
+    match sort {
+        NodeSort::ModifiedDesc => "n.updated_at DESC, n.id",
+        NodeSort::ModifiedAsc => "n.updated_at ASC, n.id",
+        NodeSort::TitleAsc => "lower(n.title) ASC, n.id",
+        NodeSort::TitleDesc => "lower(n.title) DESC, n.id",
+    }
+}
+
 #[async_trait]
 impl NodeRepo for PgNodeRepo {
     async fn create(
@@ -470,9 +480,13 @@ impl NodeRepo for PgNodeRepo {
             .await
             .map_err(|e| EmberTroveError::Internal(format!("count query failed: {e}")))?;
 
-        // Get paginated data. Pinned nodes always sort first within any order.
+        // Get paginated data. Pinned nodes always sort first within any
+        // order. The order is one of four fixed strings (`order_by`), never
+        // text from the request, and ends on the id so that pages can't
+        // overlap or skip when two rows tie (#257).
         data_sql.push_str(&format!(
-            " ORDER BY n.pinned DESC, n.updated_at DESC LIMIT ${param_idx} OFFSET ${}",
+            " ORDER BY n.pinned DESC, {} LIMIT ${param_idx} OFFSET ${}",
+            order_by(params.sort),
             param_idx + 1
         ));
 

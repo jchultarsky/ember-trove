@@ -360,7 +360,7 @@ All routes are nested under `/api`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/nodes` | List nodes (status, tag_id, tag_ids, pinned, pagination) |
+| GET | `/api/nodes` | List nodes the caller can see. Filters: `node_type`, `status`, `project_status`, `tag_id`, `include_archived`. `sort`: `modified_desc` (default), `modified_asc`, `title_asc`, `title_desc`; pinned nodes first. `page`, `per_page` (default 50, at most 200); the answer has `total` and `has_more` |
 | POST | `/api/nodes` | Create node (auto-grants Owner permission to creator) |
 | GET | `/api/nodes/{id}` | Get node by UUID |
 | GET | `/api/nodes/slug/{slug}` | Get node by slug |

@@ -124,7 +124,18 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
      more…", "Save anyway", Undo).
 
   A new glyph renders as its raw name until it's in the font subset: run
-  `scripts/refresh-icon-font.sh` after adding one.
+  `scripts/refresh-icon-font.sh` after adding one, and commit the font,
+  the `?v=` stamps and `ui/icon-names.txt` together. An icon name returned
+  by a helper must come from a function whose name contains `icon`, so
+  the script finds it (ERRORS.md, 2026-11-10).
+- **Phone width is a gate** (#262): `e2e/tests/mobile_layout.spec.ts`
+  loads the main pages at 375px and fails on sideways scroll. A header row
+  that holds a title and controls needs `flex-wrap`, and the title a
+  minimum width, or the title is squeezed to a few characters a line.
+- **A paged list is filtered and sorted by the server** (#257). The node
+  list sends its kind, filters and `NodeSort` in `NodeListQuery`
+  (`api::fetch_node_list`) and shows the rows as they come. Filtering or
+  sorting a page in the browser orders only what happened to be loaded.
 - **Wiki links are read by `common::wikilink` only** (#281, 3.1). The
   renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
   `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`

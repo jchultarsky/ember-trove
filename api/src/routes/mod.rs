@@ -65,7 +65,8 @@ const E2E_RATE_LIMIT: RateLimitBudget = RateLimitBudget {
     burst: 10_000,
 };
 
-/// Choose the write rate-limit budget.
+/// Choose the rate-limit budget (it applies to every method; see
+/// `build_router`).
 ///
 /// SECURITY: the e2e budget needs BOTH the `e2e-bypass` cargo feature (which no
 /// release image is built with — the caller passes `cfg!`, a compile-time
@@ -81,9 +82,17 @@ fn rate_limit_budget(e2e_bypass_compiled: bool, bypass_env: Option<&str>) -> Rat
 
 pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     // --- Rate limiting -------------------------------------------------------
-    // PROD_RATE_LIMIT per peer IP (see rate_limit_budget for the e2e case).
-    // Only applies to mutating methods (POST/PUT/DELETE/PATCH) to keep read
-    // traffic snappy for a single-user PKM.
+    // PROD_RATE_LIMIT per peer IP (see rate_limit_budget for the e2e case),
+    // on EVERY method, reads included. This comment used to say "mutating
+    // methods only" (#258): tower_governor has no method filter by default
+    // and none was ever set, so the code never did that.
+    //
+    // In production every request comes through nginx, whose `/api/` limit
+    // (2 r/s, burst 30: deploy/nginx.prod.conf) is the stricter of the two
+    // and answers 429 first. This one is the backstop for a request that
+    // reaches the API some other way. Whether reads should be exempt here,
+    // or nginx's burst raised for pages that fan out, is the owner's
+    // decision and still open on #258: both loosen a limit.
     // SmartIpKeyExtractor reads X-Real-IP / X-Forwarded-For (set by nginx) and
     // falls back to ConnectInfo<SocketAddr> for direct connections.
     let budget = rate_limit_budget(
@@ -93,7 +102,7 @@ pub fn build_router(state: AppState) -> anyhow::Result<Router> {
     if budget != PROD_RATE_LIMIT {
         tracing::warn!(
             ?budget,
-            "e2e bypass armed: write rate limit relaxed (NEVER in production)"
+            "e2e bypass armed: rate limit relaxed (NEVER in production)"
         );
     }
     let governor_conf = GovernorConfigBuilder::default()

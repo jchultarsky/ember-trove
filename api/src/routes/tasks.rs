@@ -428,6 +428,7 @@ async fn project_dashboard(
         page: Some(1),
         per_page: Some(500),
         include_archived: false,
+        sort: Default::default(),
     };
     let (projects, _) = state.nodes.list(params).await?;
 

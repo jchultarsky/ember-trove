@@ -899,6 +899,13 @@ impl PermissionRepo for StubPermissionRepo {
     async fn list_all(&self, _: Option<NodeId>) -> Result<Vec<Permission>, EmberTroveError> {
         unimplemented!()
     }
+    async fn list_visible(
+        &self,
+        _: Option<NodeId>,
+        _: Option<&str>,
+    ) -> Result<Vec<Permission>, EmberTroveError> {
+        unimplemented!()
+    }
     async fn find_by_id(&self, id: PermissionId) -> Result<Option<Permission>, EmberTroveError> {
         Ok(authz_permissions().into_iter().find(|p| p.id == id))
     }
