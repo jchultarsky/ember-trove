@@ -36,7 +36,9 @@
 //        capture, not a task; evicts cached notes and inbox JSON.
 //   v12: the Inbox became Captures (#240) — the share target lands on
 //        /tasks/captures; evicts the shell that still routes to the Inbox.
-const CACHE_NAME = "ember-trove-v12";
+//   v13: the graph loads from one GET /api/graph (performance P1) — evicts
+//        cached graph data in the old shapes.
+const CACHE_NAME = "ember-trove-v13";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

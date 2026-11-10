@@ -3,6 +3,38 @@
 //! These helpers operate on raw markdown text without requiring a full parser,
 //! keeping the `common` crate dependency-free of `pulldown-cmark`.
 
+/// A plain-text preview of a markdown body: its text lines (no headings,
+/// code fences or rules) joined with spaces, cut to `max_chars` characters
+/// with "…" when longer. `None` when nothing is left. A heuristic, not a
+/// parser (this module has none); the graph's hover card shows it as plain
+/// text.
+///
+/// Each line is reduced by `note::plain_line`, the stripper a note's
+/// collapsed title uses (#281, 3.4): links and wiki links keep what they
+/// show, emphasis, strikethrough and code marks go, and so do list markers
+/// and quote marks. This function had its own, which left all of those
+/// but `**`, `__` and backticks in the text.
+pub fn plain_preview(body: &str, max_chars: usize) -> Option<String> {
+    let clean = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !crate::note::is_fence_or_rule(l))
+        .map(crate::note::plain_line)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if clean.is_empty() {
+        return None;
+    }
+    let mut chars = clean.chars();
+    let taken: String = chars.by_ref().take(max_chars).collect();
+    Some(if chars.next().is_some() {
+        format!("{taken}\u{2026}")
+    } else {
+        taken
+    })
+}
+
 /// Extract the content under a markdown heading whose text matches
 /// `heading` (case-insensitive).  Returns everything from the line after
 /// the heading up to (but not including) the next heading of equal or
@@ -91,20 +123,14 @@ pub fn link_first_mention(body: &str, title: &str) -> Option<String> {
         return None;
     }
 
-    // Byte spans of existing [[...]] links — off-limits for rewriting.
-    let mut link_spans: Vec<(usize, usize)> = Vec::new();
-    let mut scan = 0;
-    while let Some(open_rel) = body[scan..].find("[[") {
-        let open = scan + open_rel;
-        match body[open + 2..].find("]]") {
-            Some(close_rel) => {
-                let end = open + 2 + close_rel + 2;
-                link_spans.push((open, end));
-                scan = end;
-            }
-            None => break,
-        }
-    }
+    // Off-limits for rewriting: existing links, by the one scanner (#281,
+    // 3.1), and code, where a `[[…]]` would be shown as typed.
+    let link_spans: Vec<(usize, usize)> = crate::wikilink::wikilinks(body)
+        .into_iter()
+        .map(|link| link.range)
+        .chain(crate::wikilink::code_ranges(body))
+        .map(|r| (r.start, r.end))
+        .collect();
 
     // ASCII case folding is byte-for-byte, so offsets into the folded copies
     // are valid for the originals (and char boundaries are preserved).
@@ -272,6 +298,18 @@ WIP.
     }
 
     #[test]
+    fn link_mention_leaves_code_alone() {
+        // A mention inside code is shown as typed; linking it there would
+        // show the brackets (#281, 3.1 and 1.10).
+        assert_eq!(link_first_mention("run `alpha --fast`", "Alpha"), None);
+        assert_eq!(
+            link_first_mention("`alpha` is the alpha tool", "Alpha"),
+            Some("`alpha` is the [[Alpha|alpha]] tool".to_string())
+        );
+        assert_eq!(link_first_mention("```\nalpha\n```", "Alpha"), None);
+    }
+
+    #[test]
     fn link_mention_requires_word_boundaries() {
         assert_eq!(link_first_mention("the alphabet song", "alpha"), None);
         assert_eq!(link_first_mention("realpha", "alpha"), None);
@@ -298,6 +336,49 @@ WIP.
         assert_eq!(
             link_first_mention("[[Other|alpha thing]] end", "Alpha"),
             None
+        );
+    }
+
+    #[test]
+    fn a_plain_preview_reads_like_the_rendered_text() {
+        // #281, 3.4: the graph's hover card showed `[[T|x]]`, link syntax,
+        // `~~`, list markers and `>` as typed.
+        let body = "> Ask [[Alice Smith|Alice]] about the [plan](https://example.com).\n\
+                    - a ~~dropped~~ item\n1. first *step*";
+        assert_eq!(
+            plain_preview(body, 100).as_deref(),
+            Some("Ask Alice about the plan. a dropped item first step")
+        );
+    }
+
+    #[test]
+    fn a_plain_preview_keeps_text_lines_only() {
+        let body =
+            "# Heading\n\nSome **bold** text.\n\n```\ncode\n```\n---\nMore `code` and __more__.";
+        // The fence's inner line is text to this heuristic, as it was in the
+        // graph view it came from.
+        assert_eq!(
+            plain_preview(body, 100).as_deref(),
+            Some("Some bold text. code More code and more.")
+        );
+    }
+
+    #[test]
+    fn a_plain_preview_of_nothing_is_none() {
+        assert_eq!(plain_preview("", 100), None);
+        assert_eq!(plain_preview("# Only a heading\n\n---\n", 100), None);
+    }
+
+    #[test]
+    fn a_plain_preview_cuts_by_characters_not_bytes() {
+        let body = "é".repeat(150);
+        let p = plain_preview(&body, 100).unwrap_or_default();
+        assert_eq!(p.chars().count(), 101, "100 characters and the ellipsis");
+        assert!(p.ends_with('\u{2026}'));
+        assert_eq!(plain_preview("short", 100).as_deref(), Some("short"));
+        assert_eq!(
+            plain_preview(&"x".repeat(100), 100).map(|p| p.len()),
+            Some(100)
         );
     }
 }

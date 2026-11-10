@@ -157,6 +157,8 @@ Impact is what the measurements above show; effort and risk are estimates.
 
 **Still to measure on prod after this release:** per-route latency from `/api/metrics`
 after a day or two of real use, and `pg_stat_statements` there.
+Both are on **Admin → Performance** (`/admin/performance`) from the release after
+3.9.0. Production has collected statement statistics since 3.9.0 (2026-11-02).
 
 **Turning on `pg_stat_statements` on prod.** The release deploy recreates only `api`,
 `ui` and `proxy`. With the new Postgres `command` in the compose file, Compose may
@@ -174,3 +176,53 @@ also recreate `postgres`, restarting it for a few seconds. So:
   going after it.
 - A request that hits the 30 s timeout is recorded as its 408, with the full time.
 - A request whose client disconnects is not recorded.
+
+## P1 results
+
+### #1 One slim graph request (2026-11-02)
+
+`GET /api/graph` returns nodes without bodies (a 100-character plain-text preview
+instead), edges and positions in one response. It replaced paging through
+`GET /nodes`, then `/edges`, then `/graph/positions`.
+
+| graph page | before | after |
+|---|---|---|
+| 1×: API data | 1,558 kB, 11 requests | **174 kB**, 8 requests |
+| 1×: phone-4g ready (warm) | 3,112 ms | **1,121 ms** |
+| 10×: API data | 15,743 kB, 24 requests | **1,743 kB**, 8 requests |
+| 10×: phone-4g ready (cold / warm) | 22,732 / 19,726 ms | **7,946 / 4,144 ms** |
+| 10×: desktop ready (warm) | 788 ms | 539 ms |
+
+(The 8 requests are the page's: the graph's one, plus the app's own at start.)
+
+At 10× the phone is now held up by two things: the 1.7 MB transfer, which API
+compression (#6) cuts to about a fifth, and drawing 3,000 nodes on a 4× slower CPU.
+
+### #2 Fewer round trips at start (2026-11-02)
+
+- **Removed duplicate requests:**
+  - `/api/health`: the update banner reuses the app's version;
+  - `/templates`: the closed create dialogs no longer fetch it; it loads when one
+    opens;
+  - `/editor-prefs`: one fetch per node page, shared by the task and note panels.
+- **The proxy speaks HTTP/2** (`http2 on;`, nginx pinned to `1.30-alpine`, the stable branch;
+  1.29 is end-of-life).
+
+| | requests per page load (1×) |
+|---|---|
+| before | 8–16 |
+| after | **5–12** (3 fewer on every page, 4 on a node page) |
+
+**Page-ready times did not move locally** (phone-4g warm: My Day about 1.1 s,
+Captures about 0.6 s, before and after).
+- The duplicates ran in parallel with the requests a page waits on, so they weren't
+  on its critical path.
+- HTTP/2 can't be measured on the local stack: browsers only use it over TLS, and
+  the local stack is plain HTTP. Its effect (no queueing for six connections) shows
+  on prod.
+
+What does hold a phone up is a chain: sign-in resolves at about 0.42 s, then about
+0.7 s of requests that run one after another, roughly 4–5 round trips at 150 ms.
+**Next:** map that chain per page and shorten it, for example by starting page data
+alongside the sign-in check, or folding dependent requests into one.
+

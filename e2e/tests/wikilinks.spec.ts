@@ -75,3 +75,47 @@ test('the Notes feed filters by a node picked with the shared picker', async ({ 
     await request.delete(`/api/nodes/${b.id}`);
   }
 });
+
+test('a [[link]] written inside code is code, not a link (#281)', async ({ page, request }) => {
+  const stamp = Date.now();
+  const target = await createNode(request, `Code Target ${stamp}`);
+  const source = await createNode(request, `e2e wiki in code ${stamp}`, {
+    body:
+      `Type \`[[Code Target ${stamp}]]\` to link.\n\n` +
+      '```\n' +
+      `[[Code Target ${stamp}]]\n` +
+      '```\n\n' +
+      `A real one: [[Code Target ${stamp}]].`,
+  });
+  try {
+    // The API makes one connection, for the real link only. (Edges are
+    // synced on save: one edge, however many times the title is linked.)
+    const edges = await (await request.get(`/api/nodes/${source.id}/edges`)).json();
+    expect(edges.filter((e: { edge_type: string }) => e.edge_type === 'wiki_link')).toHaveLength(1);
+
+    await page.goto(`/nodes/${source.id}`);
+    // Exactly one rendered link, and the code shows the brackets as typed.
+    await expect(page.locator('a.wikilink', { hasText: `Code Target ${stamp}` })).toHaveCount(1);
+    await expect(page.locator('code', { hasText: `[[Code Target ${stamp}]]` })).toHaveCount(2);
+    // No link markup leaked into the page as text.
+    await expect(page.getByText('class="wikilink"')).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/nodes/${source.id}`);
+    await request.delete(`/api/nodes/${target.id}`);
+  }
+});
+
+test('a node whose only [[link]] is in code gets no connection (#281)', async ({ request }) => {
+  const stamp = Date.now();
+  const target = await createNode(request, `Only Code Target ${stamp}`);
+  const source = await createNode(request, `e2e wiki only in code ${stamp}`, {
+    body: `Just \`[[Only Code Target ${stamp}]]\` here.`,
+  });
+  try {
+    const edges = await (await request.get(`/api/nodes/${source.id}/edges`)).json();
+    expect(edges).toEqual([]);
+  } finally {
+    await request.delete(`/api/nodes/${source.id}`);
+    await request.delete(`/api/nodes/${target.id}`);
+  }
+});

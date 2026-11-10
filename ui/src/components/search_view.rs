@@ -631,7 +631,7 @@ pub fn SearchView() -> impl IntoView {
             // Results area
             <div class="flex-1 overflow-y-auto px-6 py-4">
                 {move || error_msg.get().map(|msg| view! {
-                    <div class="mb-4 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
+                    <div role="alert" class="mb-4 px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm">
                         {msg}
                     </div>
                 })}
@@ -905,7 +905,6 @@ pub fn SearchView() -> impl IntoView {
                                             <button
                                                 class="p-0.5 rounded text-stone-300 dark:text-stone-600
                                                        hover:text-stone-500 dark:hover:text-stone-400
-                                                       opacity-0 group-hover:opacity-100
                                                        transition-all cursor-pointer"
                                                 title="Remove"
                                                 on:click=move |_| {

@@ -599,7 +599,7 @@ All API configuration is set via environment variables in `deploy/.env.prod` and
 | `DATABASE_URL` | Always | PostgreSQL connection string (set in compose, not env file) |
 | `POSTGRES_PASSWORD` | Always | PostgreSQL password |
 | `COOKIE_KEY` | Always | 128 hex chars (64 bytes) for cookie encryption |
-| `COOKIE_SECURE` | Always | Set `true` in production |
+| `COOKIE_SECURE` | No | Cookies are `Secure` by default; leave it unset in production. `false` is for local HTTP development only |
 | `FRONTEND_URL` | Always | Browser-facing URL of the UI |
 | `API_EXTERNAL_URL` | Always | Browser-facing URL of the API |
 | `OIDC_ISSUER` | Auth | Cognito issuer: `https://cognito-idp.<region>.amazonaws.com/<pool-id>` |
@@ -613,6 +613,10 @@ All API configuration is set via environment variables in `deploy/.env.prod` and
 | `S3_ACCESS_KEY` | S3 | Bucket access key |
 | `S3_SECRET_KEY` | S3 | Bucket secret key |
 | `S3_REGION` | S3 | Bucket region |
+| `S3_ENDPOINT` | S3 | An S3-compatible endpoint URL. Omit for AWS S3 itself |
+| `SES_FROM_EMAIL` | Optional | From-address for invite emails (AWS SES v2). Unset: invites work, no email is sent |
+| `HOST` | No | Bind address (default `0.0.0.0`) |
+| `PORT` | No | Bind port (default `3003`) |
 | `RUST_LOG` | Optional | Log level: `error`, `warn`, `info`, `debug` (default: `info`) |
 
 ---

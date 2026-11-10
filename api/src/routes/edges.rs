@@ -8,13 +8,13 @@ use common::{
     auth::AuthClaims,
     edge::{ConvertEdgeRequest, ConvertRefusal, CreateEdgeRequest, Edge, EndRights, convert_ends},
     id::{EdgeId, NodeId},
-    ontology::edge_kind_violation,
+    ontology::{EdgeRefusal, edge_kind_violation},
 };
 use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{is_admin, require_editor, require_viewer},
+    auth::permissions::{require_editor, require_viewer, subject_scope},
     error::ApiError,
     state::AppState,
 };
@@ -33,11 +33,7 @@ async fn list_edges(
     // SECURITY: scope to edges whose endpoints the caller owns; do NOT rely on
     // client-side filtering for an authz boundary (it leaks node UUIDs). Admins
     // (None) see all edges.
-    let subject = if is_admin(&claims) {
-        None
-    } else {
-        Some(claims.sub.as_str())
-    };
+    let subject = subject_scope(&claims);
     let edges = state.edges.list_visible(subject).await?;
     Ok(Json(edges))
 }
@@ -88,6 +84,13 @@ async fn delete_edge(
         require_editor(state.permissions.as_ref(), &claims, edge.target_id).await?;
     } else {
         on_source?;
+    }
+    // §6.6 (#281, 2.1): a wiki link mirrors `[[Title]]` in the text. Deleted
+    // by hand it came back on the next save, with the text still linking.
+    // Refused only after the rights check, so a stranger learns nothing
+    // about the link's type.
+    if edge.edge_type.is_machine_owned() {
+        return Err(ApiError::Validation(EdgeRefusal::MachineOwned.message()));
     }
     state.edges.delete(EdgeId(id)).await?;
     Ok(StatusCode::NO_CONTENT)

@@ -1,8 +1,8 @@
 use common::{
     id::NodeId,
     node::{
-        CreateNodeRequest, Node, NodeListResponse, NodeTitleEntry, ProjectStatusCount,
-        UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeDeletionPreview, NodeListResponse, NodeTitleEntry,
+        ProjectStatusCount, UpdateNodeRequest,
     },
 };
 use gloo_net::http::Request;
@@ -12,33 +12,6 @@ use super::{
     put_json, send_authed,
 };
 use crate::error::UiError;
-
-/// Fetch ALL nodes (every page) including archived. Used by the graph view,
-/// which must see the full node set so edges to nodes on later pages still
-/// have visible endpoints. Loops until the server reports `has_more=false`,
-/// with a hard cap to avoid pathological infinite loops if pagination ever
-/// reports inconsistent state.
-pub async fn fetch_nodes() -> Result<Vec<Node>, UiError> {
-    const PAGE_SIZE: u32 = 200;
-    const MAX_PAGES: u32 = 50;
-    let mut all = Vec::new();
-    let mut page: u32 = 1;
-    loop {
-        let url = format!(
-            "{}?include_archived=true&page={page}&per_page={PAGE_SIZE}",
-            api_url("/nodes"),
-        );
-        let resp = send_authed(|| get_request(&url)).await?;
-        let list: common::node::NodeListResponse = parse_json(resp).await?;
-        let returned = list.nodes.len();
-        all.extend(list.nodes);
-        if !list.has_more || returned == 0 || page >= MAX_PAGES {
-            break;
-        }
-        page += 1;
-    }
-    Ok(all)
-}
 
 /// Fetch nodes with optional status and tag_id filters.
 /// `status`: one of "draft", "published", "archived" or None for active statuses.
@@ -134,6 +107,28 @@ pub async fn set_node_pinned(id: NodeId, pinned: bool) -> Result<Node, UiError> 
 
 pub async fn delete_node(id: NodeId) -> Result<(), UiError> {
     delete_empty(&format!("/nodes/{id}")).await
+}
+
+/// Ids per `GET /nodes/deletion-preview`: under the server's cap
+/// (`DELETION_PREVIEW_MAX_NODES`) and a short enough URL for any proxy.
+const DELETION_PREVIEW_BATCH: usize = 50;
+
+/// What deleting these nodes would destroy with them (#281): asked in
+/// batches and summed. Nodes that aren't the caller's to delete are left
+/// out by the server (`NodeDeletionPreview::kept`).
+pub async fn node_deletion_preview(ids: &[NodeId]) -> Result<NodeDeletionPreview, UiError> {
+    let mut total = NodeDeletionPreview::default();
+    for batch in ids.chunks(DELETION_PREVIEW_BATCH) {
+        let list = batch
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let part: NodeDeletionPreview =
+            get_json(&format!("/nodes/deletion-preview?ids={list}")).await?;
+        total = total.plus(part);
+    }
+    Ok(total)
 }
 
 pub async fn duplicate_node(id: NodeId) -> Result<Node, UiError> {

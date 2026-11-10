@@ -26,16 +26,14 @@ use web_sys::{MouseEvent, TouchEvent, WheelEvent};
 
 use common::{
     edge::{CreateEdgeRequest, Edge, EdgeType},
+    graph::GraphNode,
     graph_layout::{cluster_layout, fit_transform},
     id::{EdgeId, NodeId, TagId},
-    node::{Node, NodeType},
+    node::NodeType,
 };
 
 use crate::{
-    api::{
-        create_edge, delete_edge, fetch_all_edges, fetch_nodes, fetch_positions, save_position,
-        save_positions,
-    },
+    api::{create_edge, delete_edge, fetch_graph, save_position, save_positions},
     components::node_meta::{status_color_hex, status_label, type_icon, type_label},
 };
 use leptos_router::hooks::use_navigate;
@@ -82,6 +80,8 @@ struct EdgeHover {
     tgt_id: Uuid,
     /// `related_to`: shown as ↔, drawn without an arrowhead (#226).
     symmetric: bool,
+    /// A wiki link (§6.6): the card offers no Delete, the API refuses it.
+    machine_owned: bool,
 }
 
 // ── Node-type helpers ────────────────────────────────────────────────────────
@@ -260,23 +260,6 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-/// Strip Markdown syntax and return up to 100 chars as a plain-text preview.
-fn node_body_preview(body: &str) -> Option<String> {
-    let text: String = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| {
-            !l.is_empty() && !l.starts_with('#') && !l.starts_with("```") && !l.starts_with("---")
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    if text.is_empty() {
-        return None;
-    }
-    let clean = text.replace("**", "").replace("__", "").replace('`', "");
-    Some(truncate(&clean, 100))
-}
-
 /// Compute the SVG path `d` for an edge: starts at the source shape boundary,
 /// ends just before the target so the arrowhead is visible.
 fn compute_path(x1: f64, y1: f64, x2: f64, y2: f64) -> String {
@@ -358,7 +341,7 @@ pub fn GraphView() -> impl IntoView {
     let navigate = use_navigate();
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
-    let nodes_sig: RwSignal<Vec<Node>> = RwSignal::new(vec![]);
+    let nodes_sig: RwSignal<Vec<GraphNode>> = RwSignal::new(vec![]);
     let edges_sig: RwSignal<Vec<Edge>> = RwSignal::new(vec![]);
     let positions: RwSignal<HashMap<Uuid, (f64, f64)>> = RwSignal::new(HashMap::new());
 
@@ -464,13 +447,19 @@ pub fn GraphView() -> impl IntoView {
 
     Effect::new(move |_| {
         spawn_local(async move {
-            match fetch_nodes().await {
+            // One request for nodes, edges and positions (performance P1):
+            // it used to page through every node's full body, then fetch
+            // edges and positions one after the other.
+            match fetch_graph().await {
                 Err(e) => {
                     error_msg.set(Some(format!("{e}")));
                     loading.set(false);
                 }
-                Ok(nodes) => {
-                    let edges = fetch_all_edges().await.unwrap_or_default();
+                Ok(common::graph::GraphData {
+                    nodes,
+                    edges,
+                    positions: saved,
+                }) => {
                     let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
                     let edge_pairs: Vec<(Uuid, Uuid)> = edges
                         .iter()
@@ -486,12 +475,8 @@ pub fn GraphView() -> impl IntoView {
 
                     // Saved positions are authoritative on load: pin them all
                     // and let only never-placed nodes settle near neighbours.
-                    let seeds: HashMap<Uuid, (f64, f64)> = fetch_positions()
-                        .await
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|p| (p.node_id.0, (p.x, p.y)))
-                        .collect();
+                    let seeds: HashMap<Uuid, (f64, f64)> =
+                        saved.iter().map(|p| (p.node_id.0, (p.x, p.y))).collect();
                     let pinned: HashSet<Uuid> = seeds.keys().copied().collect();
                     let mut layout = cluster_layout(&node_ids, &edge_pairs, &seeds, &pinned);
                     if pinned.is_empty() {
@@ -1034,7 +1019,7 @@ pub fn GraphView() -> impl IntoView {
                 }
                 if let Some(err) = error_msg.get() {
                     return view! {
-                        <div class="flex items-center justify-center h-full text-red-400">
+                        <div role="alert" class="flex items-center justify-center h-full text-red-400">
                             <span class="text-sm">{err}</span>
                         </div>
                     }
@@ -1067,7 +1052,7 @@ pub fn GraphView() -> impl IntoView {
                 } else {
                     std::collections::HashSet::new()
                 };
-                let nodes: Vec<Node> = all_nodes
+                let nodes: Vec<GraphNode> = all_nodes
                     .into_iter()
                     .filter(|n| {
                         let type_visible = match &n.node_type {
@@ -1124,6 +1109,7 @@ pub fn GraphView() -> impl IntoView {
                             src_id: src,
                             tgt_id: tgt,
                             symmetric: edge.edge_type.is_symmetric(),
+                            machine_owned: edge.edge_type.is_machine_owned(),
                         };
                         let hover_info_out = hover_info.clone();
 
@@ -1200,7 +1186,7 @@ pub fn GraphView() -> impl IntoView {
                             title: node.title.clone(),
                             node_type: node.node_type.as_str().to_string(),
                             status: node.status.as_str().to_string(),
-                            body_preview: node.body.as_deref().and_then(node_body_preview),
+                            body_preview: node.preview.clone(),
                             node_id: node.id.0,
                         };
 
@@ -1743,6 +1729,8 @@ pub fn GraphView() -> impl IntoView {
                                     }
                                 })}
                                 // Delete button — pointer-events: auto so it's clickable.
+                                // Not for a wiki link: it follows the text (#281, 2.1).
+                                {(!h.machine_owned).then(|| view! {
                                 <g
                                     style="pointer-events: auto; cursor: pointer;"
                                     on:click=move |ev: MouseEvent| {
@@ -1750,8 +1738,18 @@ pub fn GraphView() -> impl IntoView {
                                         let eid = EdgeId(edge_id);
                                         edge_hover.set(None);
                                         spawn_local(async move {
-                                            if delete_edge(eid).await.is_ok() {
-                                                edges_sig.update(|v| v.retain(|e| e.id.0 != edge_id));
+                                            // Said, not swallowed (#281); the graph may be
+                                            // gone by now: `try_` access.
+                                            match delete_edge(eid).await {
+                                                Ok(()) => {
+                                                    let _ = edges_sig.try_update(|v| {
+                                                        v.retain(|e| e.id.0 != edge_id);
+                                                    });
+                                                }
+                                                Err(e) => crate::components::toast::push_toast(
+                                                    crate::components::toast::ToastLevel::Error,
+                                                    format!("Couldn\u{2019}t delete the link: {e}"),
+                                                ),
                                             }
                                         });
                                     }
@@ -1774,6 +1772,17 @@ pub fn GraphView() -> impl IntoView {
                                         "Delete edge"
                                     </text>
                                 </g>
+                                })}
+                                {h.machine_owned.then(|| view! {
+                                    <text
+                                        x=format!("{:.1}", cx)
+                                        y=format!("{:.1}", y_btn_text)
+                                        style="text-anchor: middle; font-size: 8.5px; \
+                                               font-style: italic; fill: #a3a3a3;"
+                                    >
+                                        "From the text"
+                                    </text>
+                                })}
                             </g>
                         }
                         .into_any()

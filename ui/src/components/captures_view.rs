@@ -9,7 +9,10 @@
 //!
 //! Captures have their own identity (#240): a wall of sticky notes
 //! (`StickyPaper`), not task-style rows, each showing how long it has
-//! waited (`common::capture::CaptureAge`).
+//! waited (`common::capture::CaptureAge`). A card renders its text as
+//! Markdown, line breaks kept (`crate::markdown::render_capture`). While
+//! one is edited it spans the whole row, in the notes' `ResizableEditor`
+//! opened to fit its text.
 //!
 //! ## Keyboard (#240 part B2)
 //!
@@ -20,7 +23,8 @@
 //!   `j` / `→`        next capture (reading order)
 //!   `k` / `←`        previous capture
 //!   `↓` / `↑`        the card below / above (`common::grid_nav`)
-//!   `Enter` / `c`    convert the focused capture
+//!   `Enter` / `c`    convert the focused capture (Enter on a focused
+//!                    link in its text follows the link)
 //!   `e`              edit it
 //!   `d`              delete it (Undo in the toast)
 //!   `Escape`         drop the focus ring
@@ -40,7 +44,8 @@ use crate::app::TaskRefresh;
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::page_header::PageHeader;
-use crate::components::sticky_note::{CAPTURE_ICON, StickyPaper};
+use crate::components::resizable_editor::ResizableEditor;
+use crate::components::sticky_note::{CAPTURE_ICON, PaperPicker, StickyPaper};
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
 
 /// The toast every way of adding a capture shows.
@@ -159,6 +164,10 @@ pub fn CapturesView() -> impl IntoView {
         let Some(id) = cur.and_then(|i| ids.get(i)).copied() else {
             return;
         };
+        // Enter on a link in a card's text follows the link.
+        if key == "Enter" && crate::keyboard::active_element_is_link() {
+            return;
+        }
         let cmd = match key.as_str() {
             "Enter" | "c" => CardCommand::Convert,
             "e" => CardCommand::Edit,
@@ -210,7 +219,9 @@ pub fn CapturesView() -> impl IntoView {
                                 </p>
                                 // A wall, not a list (#240): scanning a corkboard.
                                 // The top padding leaves room for each card's tape.
-                                <ul class="grid gap-4 pt-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
+                                // Dense: the card being edited spans the row, and
+                                // the cards after it fill the gap it leaves.
+                                <ul class="grid grid-flow-row-dense gap-4 pt-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
                                     {list.into_iter().map(|c| view! {
                                         <CaptureRow capture=c refresh=refresh toast_state=toast_state keys=keys />
                                     }).collect_view()}
@@ -328,13 +339,20 @@ fn CaptureRow(
     let busy = RwSignal::new(false);
     let converting = RwSignal::new(false);
     let body = StoredValue::new(capture.body);
+    // The stored paper, and the one being picked while editing (#273). A
+    // signal, so a save shows the new paper at once, not after the refetch.
+    let stored_color = RwSignal::new(capture.color);
+    let draft_color = RwSignal::new(capture.color);
     let edit_ref: NodeRef<html::Textarea> = NodeRef::new();
 
     // A key aimed at this card does what its button would. Registered
     // while mounted only.
     let instance = NEXT_CARD_INSTANCE.fetch_add(1, Ordering::Relaxed);
     let run = Callback::new(move |cmd: CardCommand| {
-        if busy.get_untracked() {
+        // Never while editing: in WebKit a clicked swatch doesn't take the
+        // focus, so the next keystroke ("d" of a word) reaches the wall's
+        // keys with nothing editable focused (#273 review).
+        if busy.get_untracked() || editing.get_untracked() {
             return;
         }
         match cmd {
@@ -368,15 +386,25 @@ fn CaptureRow(
     let age = CaptureAge::between(capture.created_at, chrono::Utc::now());
     let age_title = format!("{} \u{00b7} {when}", age.describe());
 
+    // ✕ and Escape: the reworded text and the picked paper both go.
+    let cancel = move || {
+        draft.set(body.get_value());
+        draft_color.set(stored_color.get_untracked());
+        editing.set(false);
+    };
     let save = move || {
         let text = draft.get_untracked().trim().to_string();
         if text.is_empty() || busy.get_untracked() {
             return;
         }
+        let paper = draft_color.get_untracked();
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::update_capture(id, &text).await {
-                Ok(_) => {
+            match crate::api::update_capture(id, &text, paper).await {
+                Ok(saved) => {
+                    // Show what was saved now; the refetch only confirms it.
+                    body.try_set_value(saved.body);
+                    stored_color.try_set(saved.color);
                     editing.try_set(false);
                     refresh.try_update(|n| *n += 1);
                 }
@@ -391,57 +419,73 @@ fn CaptureRow(
             data-testid="capture"
             data-capture-id=id.to_string()
             aria-current=move || is_focused().then_some("true")
-            class=move || if is_focused() {
-                "list-none rounded-sm ring-2 ring-ember ring-offset-4 \
-                 ring-offset-stone-50 dark:ring-offset-stone-950"
-            } else {
-                "list-none"
+            // Editing takes the whole row, so longer text has room.
+            class=move || {
+                let ring = if is_focused() {
+                    " rounded-sm ring-2 ring-ember ring-offset-4 \
+                     ring-offset-stone-50 dark:ring-offset-stone-950"
+                } else {
+                    ""
+                };
+                let span = if editing.get() { " col-span-full" } else { "" };
+                format!("list-none{ring}{span}")
             }
             // A click puts the keyboard cursor here too, like My Day.
             on:click=move |_| keys.focused.set(Some(id))
         >
-        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()>
+        <StickyPaper class="h-full min-h-[8rem] p-3 pt-4 text-sm flex flex-col gap-2" stale=age.is_stale()
+            color=Signal::derive(move || if editing.get() { draft_color.get() } else { stored_color.get() })>
             {move || if editing.get() {
                 view! {
-                    <textarea
+                    // Opens tall enough for its text; the bar under it
+                    // makes it taller. Ctrl+Enter saves; Escape cancels, like
+                    // ✕, and stops there (.claude/rules/leptos.md).
+                    <ResizableEditor
+                        value=draft
+                        placeholder=""
                         node_ref=edit_ref
-                        class="flex-1 min-h-[5rem] w-full rounded-sm border border-sticky-edge
+                        aria_label="Capture text"
+                        fit_to_text=true
+                        class="w-full min-h-[5rem] resize-y rounded-sm border border-sticky-edge
                                dark:border-sticky-dim-edge bg-white/40 dark:bg-black/20 px-2 py-1
                                text-stone-900 dark:text-stone-100"
-                        aria-label="Capture text"
-                        prop:value=move || draft.get()
-                        on:input=move |ev| draft.set(event_target_value(&ev))
+                        on_submit=Callback::new(move |()| save())
+                        on_escape=Callback::new(move |()| cancel())
+                    />
+                    // Escape from a swatch or button cancels too: after a
+                    // click on a swatch the textarea no longer has focus.
+                    <div class="flex items-center justify-end gap-1"
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
-                                ev.prevent_default();
-                                save();
-                            } else if ev.key() == "Escape" {
-                                // Handled here; the window dispatcher must not
-                                // also act on it (.claude/rules/leptos.md).
-                                // Escape cancels, like ✕: the draft goes too.
+                            if ev.key() == "Escape" {
                                 ev.stop_propagation();
-                                draft.set(body.get_value());
-                                editing.set(false);
+                                cancel();
                             }
-                        }
-                    ></textarea>
-                    <div class="flex items-center justify-end gap-1">
+                        }>
+                        // A pick hands the focus back to the text, so typing, Ctrl+Enter
+                        // and Escape keep working (WebKit leaves it on the page).
+                        <PaperPicker selected=draft_color
+                            on_pick=Callback::new(move |()| {
+                                if let Some(el) = edit_ref.get_untracked() {
+                                    let _ = el.focus();
+                                }
+                            }) />
+                        <span class="flex-1"></span>
                         <IconButton icon="check" label="Save capture" variant=IconButtonVariant::Save
                             disabled=Signal::derive(move || busy.get() || draft.get().trim().is_empty())
                             on_click=Callback::new(move |()| save()) />
                         <IconButton icon="close" label="Cancel"
-                            on_click=Callback::new(move |()| {
-                                draft.set(body.get_value());
-                                editing.set(false);
-                            }) />
+                            on_click=Callback::new(move |()| cancel()) />
                     </div>
                 }.into_any()
             } else {
                 let age_title = age_title.clone();
                 view! {
-                    <p class="flex-1 whitespace-pre-wrap break-words">
-                        {body.get_value()}
-                    </p>
+                    // Markdown, sanitised by ammonia like every rendered body.
+                    <div data-testid="capture-body"
+                        class="flex-1 min-w-0 break-words overflow-x-auto prose prose-sm max-w-none
+                               dark:prose-invert prose-p:my-0.5 prose-ul:my-0.5 prose-ol:my-0.5
+                               prose-li:my-0 prose-headings:mt-1 prose-headings:mb-0.5"
+                        inner_html=crate::markdown::render_capture(&body.get_value()) />
                     <div class="flex items-center gap-1">
                         // The glyph + "Capture" keep the identity without colour.
                         <span class="material-symbols-outlined text-stone-500 dark:text-stone-400"

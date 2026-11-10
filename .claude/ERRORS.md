@@ -437,3 +437,27 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   device in `mcr.microsoft.com/playwright` against prod. Signed out, a
   healthy load redirects to Cognito; a stuck one stays on `/`.
 
+
+### Several queries are not a snapshot (2026-11-09, #281)
+- **Symptom:** none seen yet; found in review. A backup made while someone
+  was writing could hold a task whose node it didn't hold, and restoring it
+  would fail on the foreign key and roll back.
+- **Cause:** `create_backup` read each table with its own pool query. Under
+  `READ COMMITTED` each query sees a later state than the one before.
+- **Fix:** one `REPEATABLE READ, READ ONLY` transaction for every read
+  (`backup::begin_snapshot` / `read_snapshot`). The snapshot is taken by
+  the first query, not by `BEGIN`: a test that wants a write to land
+  "during" the read must run one query first
+  (`a_backup_reads_every_table_as_of_one_instant`).
+- **Same review, same file:** a key built from user-visible names
+  (`attachments/<node>/<file name>`) isn't unique. Key archive entries by
+  the row's id.
+
+### A textarea measured in an Effect looks empty (2026-11-03)
+- **Symptom:** `ResizableEditor`'s `fit_to_text` never grew the capture
+  editor: `scrollHeight` read 78 (an empty box) though the text needed 248.
+- **Cause:** an `Effect` that tracks a `NodeRef` first runs once the element
+  exists, but before `prop:value` has put the text in it.
+- **Fix:** set the element's value from the signal (`set_value`) before
+  measuring. To debug it, log the measurement and read the browser console
+  on the local e2e stack (`http://localhost:8003` while `KEEP_STACK=1`).

@@ -66,6 +66,178 @@ test('a capture lands on the wall, is reworded, deleted, and comes back with Und
   await expect(reworded).toBeVisible();
 });
 
+// #273: a capture's paper. `data-color` names it, since a test can't
+// judge a colour; the swatches are named buttons with aria-pressed.
+test('a capture takes a paper colour, and an edit can change or cancel it', async ({
+  page,
+  request,
+}) => {
+  const text = `${PREFIX}${Date.now()} sky idea`;
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  await page.locator('main').click();
+  await page.keyboard.press('n');
+  const box = page.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toBeFocused();
+  await box.fill(text);
+  const composer = page.getByRole('dialog');
+  const picker = composer.getByRole('group', { name: 'Paper colour' });
+  await expect(picker.getByRole('button', { name: 'Yellow' })).toHaveAttribute('aria-pressed', 'true');
+  await picker.getByRole('button', { name: 'Sky' }).click();
+  await expect(picker.getByRole('button', { name: 'Sky' })).toHaveAttribute('aria-pressed', 'true');
+  // The composer's paper follows the choice.
+  await expect(composer.locator('[data-color]')).toHaveAttribute('data-color', 'sky');
+  await composer.getByRole('button', { name: 'Capture', exact: true }).click();
+  await expect(page.locator('[role="status"]').getByText(/Added to Captures/)).toBeVisible();
+
+  const mine = async () =>
+    ((await (await request.get('/api/captures')).json()) as { id: string; body: string; color: string }[]).find(
+      (c) => c.body.startsWith(text),
+    );
+  const stored = async () => (await mine())?.color;
+  await expect.poll(stored).toBe('sky');
+  const id = (await mine())!.id;
+
+  await page.goto('/tasks/captures');
+  // By id: in edit mode the text is the textarea's value, which a
+  // `hasText` filter doesn't see.
+  const row = page.locator(`[data-capture-id="${id}"]`);
+  await expect(row).toContainText(text);
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'sky');
+
+  // Edit: pick Rose, then Escape from the swatch (focus left the text):
+  // the edit closes and the paper is still sky.
+  await row.getByRole('button', { name: 'Edit capture' }).click();
+  await row.getByRole('button', { name: 'Rose' }).click();
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'rose');
+  await page.keyboard.press('Escape');
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toHaveCount(0);
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'sky');
+  expect(await stored()).toBe('sky');
+
+  // Edit again. A pick hands the focus back to the text box. WebKit gives
+  // a clicked button no focus at all, so force that state (focus on the
+  // page): the wall's keys must still leave a card being edited alone.
+  await row.getByRole('button', { name: 'Edit capture' }).click();
+  await row.getByRole('button', { name: 'Rose' }).click();
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toBeFocused();
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('d');
+  await page.keyboard.press('c');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toBeVisible();
+  expect(await stored()).toBe('sky');
+  await row.getByRole('button', { name: 'Save capture' }).click();
+  await expect(row.getByRole('textbox', { name: 'Capture text' })).toHaveCount(0);
+  await expect(row.locator('[data-color]')).toHaveAttribute('data-color', 'rose');
+  await expect.poll(stored).toBe('rose');
+
+  // A client that only rewords (no colour in the request) keeps the paper.
+  const reworded = await request.patch(`/api/captures/${id}`, { data: { body: `${text} later` } });
+  expect((await reworded.json()).color).toBe('rose');
+});
+
+test('a capture renders its Markdown, sanitised, line by line', async ({ page, request }) => {
+  const stamp = `${PREFIX}${Date.now()}`;
+  const body = [
+    `${stamp} **bold** first line`,
+    'second line',
+    '',
+    '- one',
+    '- [My Day](/tasks/my-day)',
+    '',
+    '<img src="x" onerror="window.__captureXss = 1">',
+  ].join('\n');
+  const made = await request.post('/api/captures', { data: { body } });
+  expect(made.status()).toBe(201);
+  const id = (await made.json()).id as string;
+
+  await page.goto('/tasks/captures');
+  const card = page.locator(`[data-capture-id="${id}"]`).getByTestId('capture-body');
+  await expect(card.locator('strong')).toHaveText('bold');
+  // A single newline stays a line break, as typed.
+  await expect(card.locator('br')).toHaveCount(1);
+  await expect(card.locator('li')).toHaveCount(2);
+  // ammonia drops the handler; nothing ran.
+  await expect(card.locator('img')).toHaveCount(1);
+  await expect(card.locator('img[onerror]')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __captureXss?: number }).__captureXss)).toBeUndefined();
+
+  // Enter on a link in the text follows the link; the wall's Enter
+  // (Convert) leaves it alone.
+  await page.locator(`[data-capture-id="${id}"]`).click({ position: { x: 4, y: 4 } });
+  const link = card.getByRole('link', { name: 'My Day' });
+  await link.focus();
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/tasks\/my-day$/);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+/** Drags the "Drag to resize" bar inside `scope` down by `dy` pixels. */
+async function dragBar(page: Page, scope: ReturnType<Page['locator']>, dy: number) {
+  const bar = scope.getByTitle('Drag to resize');
+  const box = await bar.boundingBox();
+  if (!box) throw new Error('no drag bar');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + dy, { steps: 5 });
+  await page.mouse.up();
+}
+
+test('a capture edits across the whole row, fitted to its text, and the bar makes it taller', async ({
+  page,
+  request,
+}) => {
+  const stamp = `${PREFIX}${Date.now()}`;
+  const lines = Array.from({ length: 12 }, (_, i) => `${stamp} line ${i + 1}`).join('\n');
+  // Neighbours, so the edited card isn't alone on its row.
+  for (const n of ['left', 'right']) {
+    expect((await request.post('/api/captures', { data: { body: `${stamp} ${n}` } })).status()).toBe(201);
+  }
+  const made = await request.post('/api/captures', { data: { body: lines } });
+  const id = (await made.json()).id as string;
+
+  await page.goto('/tasks/captures');
+  const wall = page.getByTestId('captures').locator('ul');
+  const card = page.locator(`[data-capture-id="${id}"]`);
+  await expect(card).toBeVisible();
+  const wallWidth = (await wall.boundingBox())!.width;
+  expect((await card.boundingBox())!.width).toBeLessThan(wallWidth / 1.5);
+
+  await card.getByRole('button', { name: 'Edit capture' }).click();
+  const field = card.getByRole('textbox', { name: 'Capture text' });
+  await expect(field).toBeFocused();
+  // The whole row while editing.
+  await expect.poll(async () => (await card.boundingBox())!.width).toBeGreaterThan(wallWidth - 4);
+  // Opens tall enough for all twelve lines: nothing to scroll.
+  const fits = await field.evaluate((el) => el.scrollHeight <= el.clientHeight + 1);
+  expect(fits).toBe(true);
+
+  // The bar makes it taller.
+  const before = (await field.boundingBox())!.height;
+  await dragBar(page, card, 120);
+  expect((await field.boundingBox())!.height).toBeGreaterThan(before + 80);
+
+  // Escape: back to one column, text unchanged.
+  await field.press('Escape');
+  await expect(field).toHaveCount(0);
+  await expect.poll(async () => (await card.boundingBox())!.width).toBeLessThan(wallWidth / 1.5);
+});
+
+test('the quick capture box can be made taller', async ({ page }) => {
+  await page.goto('/tasks/my-day');
+  await expect(page.locator('main')).toBeVisible();
+  await page.locator('main').click();
+  await page.keyboard.press('n');
+  const box = page.getByPlaceholder(/What’s on your mind/);
+  await expect(box).toBeFocused();
+  const before = (await box.boundingBox())!.height;
+  await dragBar(page, page.getByRole('dialog'), 120);
+  expect((await box.boundingBox())!.height).toBeGreaterThan(before + 80);
+  await page.keyboard.press('Escape');
+});
+
 test('a capture is its owner’s alone', async ({ page, request, otherRequest }) => {
   const text = `${PREFIX}${Date.now()} private thought`;
   const made = await request.post('/api/captures', { data: { body: text } });
@@ -438,14 +610,21 @@ test('a capture becomes a note on a node, or a task in a Project', async ({ page
     const convert = dialog.getByRole('button', { name: 'Convert' });
     await expect(convert).toBeDisabled(); // no Project yet (§9.3)
     await pick(page, 'Task in a Project…', `${PREFIX}proj ${stamp}`);
-    await dialog.getByLabel('Due date').fill('2026-11-07');
+    // The task form's own fields (#277 follow-up): the priority group and
+    // the due-date field, with its readable echo of the date.
+    await dialog.getByRole('radiogroup', { name: 'Priority' }).getByRole('radio', { name: 'High' }).click();
+    const due = dialog.getByTestId('due-date-field');
+    await due.locator('input[type="date"]').fill('2026-11-07');
+    await expect(due.getByTestId('due-hint')).toContainText('Nov 7');
     await convert.click();
     await expect(row).toHaveCount(0);
     await expect(page.locator('[role="status"]').getByText(/Added a task to/)).toBeVisible();
-    const tasks: { title: string; due_date: string }[] = await (
+    const tasks: { title: string; due_date: string; priority: string }[] = await (
       await request.get(`/api/nodes/${project.id}/tasks`)
     ).json();
-    expect(tasks.find((t) => t.title === task)?.due_date).toBe('2026-11-07');
+    const made = tasks.find((t) => t.title === task);
+    expect(made?.due_date).toBe('2026-11-07');
+    expect(made?.priority).toBe('high');
   } finally {
     await request.delete(`/api/nodes/${host.id}`);
     await request.delete(`/api/nodes/${project.id}`);

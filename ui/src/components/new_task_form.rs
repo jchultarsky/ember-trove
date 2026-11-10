@@ -156,7 +156,7 @@ pub fn NewTaskForm(
             </div>
 
             {move || add_error.get().map(|msg| view! {
-                <p class="text-xs text-red-500">{msg}</p>
+                <p role="alert" class="text-xs text-red-500">{msg}</p>
             })}
         </div>
     }

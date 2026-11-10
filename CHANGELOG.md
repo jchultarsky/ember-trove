@@ -6,6 +6,377 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Deleting a node first shows what goes with it** (owner decision on
+  #281). A node's tasks, notes and files are deleted with it, including
+  tasks and notes other people added to a shared node. The confirmation
+  now counts them, for example "5 tasks (2 from other people)", and Delete
+  stays off until the counts are on screen. If the count can't be loaded,
+  the dialog says so and Delete stays off. Deleting several nodes from the
+  list counts across all of them, and says how many of the selected nodes
+  are not yours to delete.
+  - New endpoint: `GET /api/nodes/deletion-preview?ids=…`. It answers with
+    counts only, for the nodes the caller may delete.
+
+### Fixed
+- **More from the full-codebase review (#281).**
+  - **A node's title could be blanked.** Saving a node with an empty
+    title was accepted, although creating one was not. An empty or
+    all-spaces title is now refused on create and on save, for nodes and
+    for tasks.
+  - **A task saved with an empty or over-long title answered "server
+    error".** The update skipped validation. It now answers with the
+    reason (422), as creating a task does.
+  - **A node could be created with a text too large to ever save again.**
+    Saving capped the text at 1 MiB but creating did not. Both cap it now.
+  - **A wiki link could be removed by hand, and came back on the next
+    save.** The link comes from `[[Title]]` in the text, so removing it
+    without editing the text did nothing lasting. The remove control is
+    gone from the node page and the graph for these links ("From the
+    text"), Data health no longer offers Remove for them, and the API
+    refuses the delete (422).
+  - **Restoring an older version could put the history out of order.**
+    The restored text was recorded in the background, so a save made right
+    after could be recorded first. It is recorded before the restore
+    answers now, the way a save is.
+  - Duplicating a node logs a tag that couldn't be copied, where it
+    dropped the failure before.
+  - **A recurring task completed twice at once got two next
+    occurrences.** A double click, or the same task ticked on two devices,
+    scheduled the next one twice. A task now has one next occurrence, and
+    the second request gets the first one's.
+  - **A daily task completed in the evening skipped a day.** With no day
+    set on the task, the next occurrence was counted from the server's UTC
+    date, which in the Americas is already tomorrow by evening. It is
+    counted from your own date now.
+  - **Dragging someone else's task on a shared node did nothing.** An
+    editor of a node can already edit its tasks; reordering them was
+    limited to each task's owner and failed silently. Reorder now follows
+    the same rule as editing.
+
+- **A failed load no longer looks like an empty page** (#281). After a
+  server error or a dropped connection, My Day, the calendar, the notes
+  feed, templates, webhooks, a node's notes and tasks, the project
+  dashboard and a person's page showed their "nothing here yet" text, as
+  if the data were gone. They now say what couldn't be loaded, that
+  nothing was changed, and offer **Try again**.
+- **Failures that were reported as success, or not at all** (#281):
+  - Deleting several nodes always said "Deleted N node(s)" as a success,
+    even for none. It now says how many were deleted and how many
+    couldn't be.
+  - Removing someone's access in the sharing dialog dropped an error, so
+    access could appear removed when it wasn't. A failure now says
+    "Access was NOT removed".
+  - Deleting a link in the graph, and deleting an attachment, failed
+    silently. Both report the failure now.
+- **Deleting an attachment asks first.** It removes the file for good and
+  had no confirmation.
+- The remove control on a node page's links is always visible and named
+  "Remove link". It appeared only on hover, which the keyboard and touch
+  screens can't do, and its name was "×".
+
+- **Leaving a page while something was still in flight could break the
+  app until a reload** (#281). A reply that arrived after its page was
+  gone touched state that no longer existed. Fixed for an image upload in
+  the editor, attachment uploads and copies, the notes search box, and
+  deleting a node or a person.
+  - **An image still uploading when the editor closed was left as
+    `![uploading-1…]()` in the text**, with the file attached but shown
+    nowhere. When the upload finishes, the image is put in its place in
+    the saved text, unless the text has changed since: then it stays under
+    Attachments and a message says so.
+- **Lists no longer jump back to the top when they refresh** (#281). My
+  Day (on every task you complete), the calendar, the node list, the tag
+  manager, backups and webhooks blanked and reloaded on each refresh.
+  They keep showing what they had until the new data arrives.
+- **"Your edits are kept on this device" is said only when true** (#281).
+  If the browser's storage is full or blocked, the editor now says the
+  edits could not be kept and to copy them, where it promised a local
+  copy that didn't exist.
+
+- **Keyboard and screen-reader access** (#281).
+  - Rows and cards that only a mouse could open can now be reached with
+    Tab and opened with Enter: nodes in the node list, people, project
+    cards on the dashboard, the nodes in a node's small graph, and the
+    days of the calendar.
+  - Controls that appeared only on hover are always visible: edit and
+    delete on a node's links and in the tag manager, and "remove" on a
+    recent search. Touch screens and the keyboard couldn't reach them.
+  - The fields of the change-password, new-user and template forms are
+    tied to their labels, and the sharing and link forms' fields have
+    names, where a screen reader read only "edit text".
+  - Error messages that appear in a form are announced when they appear.
+
+- **Backup, Users, Permissions, Templates and Webhooks have the same page
+  header as the rest of the app** (#281): the icon, the title in the
+  display face and the rule under it. Each built its own. Their "nothing
+  here yet" messages, and those of the tag manager and a filtered node
+  list, use the shared empty state.
+
+- **A task's "overdue" badge on a node page stayed red after you ticked
+  the task** (#281), until the page reloaded. The page worked the rule
+  out once when it drew the row; it follows the task's status now.
+
+- **`[[Title]]` written inside code is no longer a link** (#281, 1.10).
+  In an inline code span or a fenced code block, the page showed the
+  link's HTML as text, and the node gained a "linked here" connection to
+  the title. Code is now left exactly as typed, and no connection is made
+  for it. A node that has such a link in code loses that connection the
+  next time it is saved.
+- **Every part of the app reads `[[links]]` the same way** (#281, 3.1).
+  Five separate readers disagreed on the odd cases. Now, everywhere:
+  - `[[Title|]]` shows the title (it showed an empty link);
+  - `[[]]` and `[[|text]]` are plain text (they made an empty or
+    target-less link);
+  - a `[[` that isn't closed on its own line is plain text, and doesn't
+    turn everything up to the next `]]`, paragraphs later, into one link.
+
+- **The graph's hover card reads like the rendered text** (#281, 3.4). It
+  showed `[[Title|text]]`, link syntax, `~~`, list markers and `>` as
+  typed. It now shows what those display, as a collapsed note's title
+  already did.
+
+### Tooling
+- One spelling of "the nodes this person can see" for the big lists
+  (#281, 3.2): the node list, the title list and the graph each wrote it
+  their own way. They share `visible_among_many`, and a test checks the
+  three agree. The title list is also about 40% faster on 20,000 nodes.
+- Reuse and dead code from the review (#281, 3.3, 3.5, 3.7), no behaviour
+  change beyond the badge above: one admin-scope helper where seven
+  routes wrote the rule out; one overdue rule and one My Day rule in
+  `common::task`; one priority ordering for the five task queries; the
+  unused quick-add parser, an unused type and API call, and two stubs
+  removed, with the three file-wide `allow(dead_code)` that hid them.
+
+### Documentation
+- `docs/ONTOLOGY.md` records two owner decisions from the review (#281):
+  archived nodes stay searchable (§3.3), and what a node holds is deleted
+  with it behind the counting confirmation (§6.1).
+- **Docs corrected against the code** (#281, the review's documentation
+  section):
+  - README API table: task update is `PATCH`, My Day is `/api/my-day`,
+    `GET /api/edges` returns the caller's own edges, and the backup
+    endpoints are the `/api/admin/backups` ones (the table listed two
+    routes that don't exist). Added the endpoints it left out: favorites,
+    webhooks, export, a node's links, duplicate and export, titles,
+    calendar, dashboard, and the rest of the task routes.
+  - `COOKIE_SECURE` is on by default; only local HTTP development turns it
+    off. README and `docs/deploy-aws.md` said to set it in production.
+  - `docs/deploy-aws.md` lists `S3_ENDPOINT`, `SES_FROM_EMAIL`, `HOST`
+    and `PORT`.
+  - Coverage is an enforced floor in CI, not report-only. An Article is
+    long-form writing, not an "atomic note".
+  - `docs/ONTOLOGY.md` now states two rules the code already had: no edge
+    joins a node to itself (§6), and only a Project's owner changes its
+    people (§7.2, §14).
+  - Four code comments and three lines of `.claude/rules` that no longer
+    matched the code.
+
+## [3.13.1] - 2026-11-09
+
+### Fixed
+- **Backups and restores, from the full-codebase review (#281).** Four
+  defects found by reading the code; none was reported by a user:
+  - **A restore could put one file's contents under another file.** Two
+    attachments on one node with the same name (two pasted `image.png`)
+    shared one path in the archive, and restore sent both to the first
+    one's storage key. A backup now stores each file under its
+    attachment's id. Backups already made restore correctly too: entries
+    that share a path are matched to their attachments in order, and a
+    file that can't be told apart is left alone, never guessed.
+  - **A backup wasn't a snapshot.** Each table was read in its own query.
+    A node created, or a tag deleted, while a backup ran could leave rows
+    pointing at nothing, and restoring that archive failed. Every table is
+    now read in one read-only `REPEATABLE READ` transaction.
+  - **Restore left the live People registry in place.** People added after
+    the backup survived it. Restore now replaces the registry, as it does
+    captures.
+  - **Backups left out templates, saved searches, editor sizes and
+    collapsed notes, webhooks, and which recurring task scheduled which.**
+    A restore onto an empty database lost them. They are in the archive
+    now, and a restore replaces them. An older backup doesn't have them,
+    so restoring one leaves the live ones as they are.
+
+### Security
+- **Webhook signing secrets are never written to a backup** (owner
+  decision, 2026-11-09). An admin can download an archive, and a secret is
+  a credential. The backup records only that a webhook had one. Such a
+  webhook is restored switched off, and its owner enters a secret again to
+  switch it on. The restore preview says how many are affected.
+- The restore log no longer names a storage key when a file fails to
+  upload (the key holds the file name). It names the attachment's id.
+- **`cargo audit` ignores RUSTSEC-2026-0459** (`libsqlite3-sys` 0.30.1, a
+  CVE in the SQLite it bundles), by owner decision on 2026-11-09. The crate
+  is in `Cargo.lock` only through sqlx's optional SQLite support, which
+  nothing here compiles: Ember Trove uses PostgreSQL only. The entry in
+  `.cargo/audit.toml` is dated and goes away with the move to sqlx 0.9.
+
+### Changed
+- **Backups are format 5.** This release restores formats 3 to 5. A
+  release before it refuses a format-5 backup, so a rollback past this
+  version goes through the server snapshot, as before.
+- The trash (deleted notes, tasks and captures kept 30 days for Undo) is
+  still not backed up, on purpose: what was deleted stays deleted after a
+  restore.
+
+## [3.13.0] - 2026-11-03
+
+### Changed
+- **Captures have room for longer text.**
+  - While you edit a capture, its card spans the whole row of the wall,
+    and the box opens tall enough for its text (up to 60% of the window).
+    A drag bar under it makes it taller, as in a note's editor. The other
+    cards fill in around it and return when you save or cancel.
+  - The quick-capture box has the same drag bar.
+  - Both use the notes' shared `ResizableEditor`, which gained a
+    `fit_to_text` option. Sizes aren't saved: captures are temporary.
+- **Converting a capture into a task uses the task form's fields:** the
+  same priority picker and due-date field (with its readable date and its
+  past-date warning) as adding a task in a Project. The dialog sent no
+  priority before; it now defaults to Medium, like the task form.
+
+## [3.12.1] - 2026-11-03
+
+### Fixed
+- **Captures render their Markdown.** A card showed its text raw
+  (`**bold**`, `- item`, links); it now renders like a note, sanitised by
+  ammonia like every rendered body.
+  - A single line break stays a line break, as the text was typed and as
+    cards showed it before, so a shared page's title and link stay on two
+    lines.
+  - On the wall, Enter on a focused link in a card follows the link
+    instead of opening Convert.
+
+## [3.12.0] - 2026-11-03
+
+### Added
+- **Captures take a paper colour** (#273), the notes' palette: yellow (the
+  default), amber, rose, lime, sky and violet.
+  - The quick-capture composer has a row of swatches under the sticky note,
+    which takes the chosen colour as you pick it.
+  - A card's edit mode has the same row, so a capture can be recoloured
+    later. Only the paper changes: the tape, shadow, tilt and wall stay, so
+    every colour still reads as a capture.
+  - Each swatch names its colour to screen readers and says whether it's
+    chosen; colour is never the only signal.
+  - `POST /captures`, `PATCH /captures/{id}` and `POST /inbox/quick` take an
+    optional `color`. Absent, a new capture is yellow and an edit keeps the
+    stored colour, so the share sheet and older clients are unaffected. An
+    unknown key is a 422, never stored.
+  - Migration 045 adds `captures.color` (default `'default'`, with a CHECK
+    on the six keys). Existing captures stay yellow. Backups carry the
+    colour; older archives restore as yellow.
+  - Picking a swatch puts the focus back in the text, so typing,
+    Ctrl+Enter and Escape keep working, and the wall's single-key
+    shortcuts never act on a card being edited (in Safari a clicked
+    button takes no focus, so a typed "d" could have deleted it).
+    Escape cancels an edit from a swatch or button too.
+
+## [3.11.0] - 2026-11-02
+
+### Added
+- **An app backup after every deploy.** The API binary has a server-side
+  command, `ember-trove-api backup create [--comment TEXT]`, which makes the
+  same backup as the admin's button. The release workflow runs it after
+  each deploy, so a fresh backup in the new version's format no longer
+  waits for someone to press the button.
+  - The **newest 10 automatic backups** are kept; each run deletes older
+    ones, archive and row. Backups an admin makes are never deleted this
+    way. The Backup page marks automatic ones with a badge.
+  - No sign-in and no new credential: the command needs a shell on the
+    server, which already holds the database and storage credentials.
+- **A daily app backup** (`.github/workflows/backup.yml`, 07:43 UTC).
+  `deploy/app-backup.sh` makes it on the host, the same script the release
+  step now uses. Daily and after-deploy backups share the newest-10 limit,
+  so about ten days are kept. The schedule is an Actions workflow, so a
+  failed backup is a red run and an email, never silent.
+
+### Removed
+- **`deploy/backup.sh` and its nightly `pg_dump` cron.** It never ran: its
+  log redirect to `/var/log` wasn't writable by the `ubuntu` user, so cron
+  failed before the script started, silently, from March to November. The
+  README's "daily database dumps (30 days)" claim was false. The daily app
+  backup above replaces it.
+
+### Security
+- **Automatic backups don't pile up.** Each backup holds a full copy of
+  everyone's data, deleted accounts' included, until it is deleted. Keeping
+  only the newest 10 automatic ones bounds how long that data lingers.
+- **Nothing private reaches the public release log.** The repo's Actions
+  logs are public, so the backup step keeps the command's full output on
+  the server (`~/ember-trove-backups.log`, owner-only) and echoes only the
+  backup id and counts. In command mode the binary logs errors only.
+- **No backup archive outlives its row unnoticed.** If storage refuses to
+  delete an archive (pruning or the admin's Delete), its key goes to the
+  `object_deletions` queue for the daily retry instead of being forgotten.
+- **Logs no longer carry attachment file names.** A backup that can't read
+  an attachment logs the attachment's id, not its storage key, and an
+  archive error no longer names the file. Deleting a backup no longer logs
+  its key either.
+
+## [3.10.0] - 2026-11-02
+
+### Added
+- **Admin → Performance** (`/admin/performance`, admins only): the API's
+  timings since the last deploy and the database's slowest statements, so
+  checking speed no longer means reading raw JSON with a token.
+  - A summary (version, uptime, requests, 4xx and 5xx, database
+    connections in use, row counts) and a table of API routes with count,
+    total, p50, p95, p99 and max, sortable by column. Slow figures (from
+    250 ms) take the heat colours.
+  - The 15 slowest database statements from `pg_stat_statements` through a
+    new admin-only `GET /api/metrics/db`, or a note when the server doesn't
+    collect them.
+  - It refreshes only on the Refresh button, so an open tab adds no load.
+  - `GET /api/metrics` routes gain `total_ms`.
+
+### Security
+- **The statement list shows no data values.**
+  - It lists only reading and writing statements (`SELECT`, `INSERT`,
+    `UPDATE`, `DELETE`, `WITH`), which Postgres stores with every value
+    replaced by `$1`. Utility statements keep their literal text (`SET`,
+    `COMMENT`, `ALTER ROLE … PASSWORD`), so they are never listed.
+  - Comments survive Postgres's normalisation (a `-- for ann@example.com`
+    typed in psql would show), so the API strips them before the text
+    leaves the server. Table and column names stay; only admins see them.
+  - Both endpoints check the admin role before touching the database.
+
+### Changed
+- **The graph loads in one small request** (performance P1). `GET /api/graph`
+  returns every node it draws without its body (a 100-character plain-text
+  preview instead), plus the edges and saved positions. It replaces paging
+  through `GET /nodes` with full bodies, then `/edges` and `/graph/positions`.
+  - At 10× today's data: 15.7 MB in 24 requests became 1.7 MB in one, and a
+    throttled phone went from about 20 s to about 4 s (`docs/PERFORMANCE.md`).
+  - Each part keeps its existing scope: nodes as `GET /nodes` (owned or
+    shared, archived included), edges and positions as their own routes
+    (owned). Admins see all, as before.
+  - The preview helper moved to `common::markdown::plain_preview`.
+- **Fewer requests on every page, and HTTP/2** (performance P1 #2).
+  - Every page load sends 3 fewer API requests, a node page 4:
+    - the update banner reuses the version the app already fetched;
+    - the two always-mounted create dialogs fetch their templates when they
+      open, not at start (which also shows a template edited since);
+    - the node page reads the editor prefs once for its task and note
+      panels.
+  - The production proxy speaks HTTP/2 (`http2 on;`), so a page's requests
+    share one connection instead of queueing for six.
+
+### Fixed
+- **The create dialog keeps the template you pick.** Picking a template sets
+  the node type, which re-ran the type's default and switched the picker
+  back to it, so the node recorded the wrong template. A list that arrives
+  after the dialog opens no longer overrides a pick either. A real change
+  of type still applies that type's default.
+
+### Tooling
+- **CI's macOS build runs on pushes to develop and main only, and is no
+  longer a required check.** GitHub's arm64 macOS runners ran short and
+  left PRs blocked until the job was cancelled unstarted. Production runs
+  on Linux, and that build stays required on every PR.
+
+## [3.9.0] - 2026-11-02
+
 ### Security
 - **The production proxy moves to nginx's stable branch (1.30), and every
   deploy pulls it.** It ran nginx 1.29.6, an end-of-life mainline release

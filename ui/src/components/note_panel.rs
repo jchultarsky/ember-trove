@@ -158,24 +158,23 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
     let force_open = RwSignal::new(
         crate::focus_note::pending_focus_note().and_then(|s| uuid::Uuid::parse_str(&s).ok()),
     );
-    wasm_bindgen_futures::spawn_local(async move {
-        if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-            let notes = prefs.into_iter().filter(|p| p.entity_kind == "note");
-            let (mut heights, mut folded) = (
-                std::collections::HashMap::new(),
-                std::collections::HashSet::new(),
-            );
-            for p in notes {
-                if let Some(h) = p.height {
-                    heights.insert(p.entity_id, h);
-                }
-                if p.collapsed {
-                    folded.insert(p.entity_id);
-                }
+    // The page's shared prefs (one fetch for the task and note panels).
+    crate::components::task_row::EditorPrefs::with(move |prefs| {
+        let notes = prefs.iter().filter(|p| p.entity_kind == "note");
+        let (mut heights, mut folded) = (
+            std::collections::HashMap::new(),
+            std::collections::HashSet::new(),
+        );
+        for p in notes {
+            if let Some(h) = p.height {
+                heights.insert(p.entity_id, h);
             }
-            editor_heights.set(heights);
-            collapsed_notes.set(folded);
+            if p.collapsed {
+                folded.insert(p.entity_id);
+            }
         }
+        editor_heights.try_set(heights);
+        collapsed_notes.try_set(folded);
     });
 
     // Whether a note is currently shown collapsed (saved state, unless it is
@@ -391,9 +390,16 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                         <p class="text-xs text-stone-400">"Loading…"</p>
                     }>
                         {move || {
-                            let notes = notes_resource.get()
-                                .and_then(|r| r.ok())
-                                .unwrap_or_default();
+                            // A failed load is not "No notes yet" (#281, 1.7).
+                            let notes = match notes_resource.get() {
+                                Some(Err(_)) => return view! {
+                                    <crate::components::load_error::LoadError
+                                        what="this node\u{2019}s notes"
+                                        on_retry=Callback::new(move |()| refresh.update(|n| *n += 1))
+                                    />
+                                }.into_any(),
+                                other => other.and_then(Result::ok).unwrap_or_default(),
+                            };
 
                             if notes.is_empty() {
                                 return view! {
@@ -612,7 +618,7 @@ pub fn NotePanel(node_id: NodeId, is_owner: bool) -> impl IntoView {
                                                                     resize-y min-h-[80px] focus:outline-none".to_string()
                                                             />
                                                             {move || save_error.get().map(|msg| view! {
-                                                                <p class="text-xs text-red-500 mt-1">{msg}</p>
+                                                                <p role="alert" class="text-xs text-red-500 mt-1">{msg}</p>
                                                             })}
                                                             <div class="flex items-center justify-between mt-2">
                                                                 <ColorPicker selected=edit_color />

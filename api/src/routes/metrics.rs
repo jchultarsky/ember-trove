@@ -9,11 +9,16 @@
 //! - `counts.*`           — row counts for each core table
 //! - `requests.*`         — process-lifetime HTTP request counters by status class
 //! - `routes`             — latency per route since start (P0 of the performance
-//!   phase): count, mean, p50/p95/p99 (bucket bounds) and max, slowest total first
+//!   phase): count, total, mean, p50/p95/p99 (bucket bounds) and max, slowest
+//!   total first
 //! - `version`            — value of the `CARGO_PKG_VERSION` build-time env var
 //!
 //! A route is its matched pattern (`GET /api/nodes/{id}`), never the request's
 //! path or query, so no ids or search terms are kept.
+//!
+//! `GET /api/metrics/db` lists the database's slowest statements from
+//! `pg_stat_statements` (admin Performance page). The response types live in
+//! `common::metrics`, shared with the UI.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -27,13 +32,18 @@ use axum::{
     response::Response,
 };
 use common::auth::AuthClaims;
-use serde::Serialize;
+use common::metrics::{
+    DbMetrics, DbStatement, DbStatements, EntityCounts, Metrics, RequestCounts, RouteLatency,
+    STATEMENT_CHARS, TOP_STATEMENTS, compact_statement, strip_sql_comments,
+};
 
 use crate::{auth::permissions::require_admin, error::ApiError, state::AppState};
 
 pub fn router() -> axum::Router<AppState> {
     use axum::routing::get;
-    axum::Router::new().route("/", get(get_metrics))
+    axum::Router::new()
+        .route("/", get(get_metrics))
+        .route("/db", get(get_db_statements))
 }
 
 // ── Request counters ────────────────────────────────────────────────────────────
@@ -199,6 +209,7 @@ impl LatencyHistogram {
         RouteLatency {
             route: route.to_string(),
             count: self.count,
+            total_ms: ms(self.sum_us),
             mean_ms: self.sum_us.checked_div(self.count).map_or(0.0, ms),
             p50_ms: ms(self.percentile_us(0.50)),
             p95_ms: ms(self.percentile_us(0.95)),
@@ -206,56 +217,6 @@ impl LatencyHistogram {
             max_ms: ms(self.max_us),
         }
     }
-}
-
-// ── Response shape ────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct Metrics {
-    pub version: &'static str,
-    pub uptime_secs: u64,
-    pub db: DbMetrics,
-    pub counts: EntityCounts,
-    pub requests: RequestCounts,
-    pub routes: Vec<RouteLatency>,
-}
-
-/// One route's latency since start, in ms (0.1 ms resolution).
-#[derive(Debug, Serialize, PartialEq)]
-pub struct RouteLatency {
-    pub route: String,
-    pub count: u64,
-    pub mean_ms: f64,
-    pub p50_ms: f64,
-    pub p95_ms: f64,
-    pub p99_ms: f64,
-    pub max_ms: f64,
-}
-
-#[derive(Serialize)]
-pub struct RequestCounts {
-    pub total: u64,
-    pub status_2xx: u64,
-    pub status_3xx: u64,
-    pub status_4xx: u64,
-    pub status_5xx: u64,
-}
-
-#[derive(Serialize)]
-pub struct DbMetrics {
-    pub pool_size: u32,
-    pub pool_idle: u32,
-}
-
-#[derive(Serialize)]
-pub struct EntityCounts {
-    pub nodes: i64,
-    pub edges: i64,
-    pub tags: i64,
-    pub notes: i64,
-    pub tasks: i64,
-    pub attachments: i64,
-    pub favorites: i64,
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -285,7 +246,7 @@ async fn get_metrics(
     )?;
 
     Ok(Json(Metrics {
-        version: env!("CARGO_PKG_VERSION"),
+        version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_secs,
         db: DbMetrics {
             pool_size,
@@ -303,6 +264,73 @@ async fn get_metrics(
         requests: state.request_metrics.snapshot(),
         routes: state.request_metrics.routes_snapshot(),
     }))
+}
+
+async fn get_db_statements(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+) -> Result<Json<DbStatements>, ApiError> {
+    require_admin(&claims)?;
+    Ok(Json(top_statements(&state.pool).await?))
+}
+
+/// Statements of the data-changing and reading kinds only. Postgres replaces
+/// every value in these with `$1`; utility statements (`SET`, `COMMENT`,
+/// `ALTER ROLE … PASSWORD`) keep their literal text, so they are never
+/// listed. Comments survive normalisation, so `top_statements` strips them
+/// before anything leaves the server. The page's own two queries (the
+/// extension check and this one) are left out.
+const TOP_STATEMENTS_SQL: &str = r"
+SELECT query, calls, total_exec_time, mean_exec_time, max_exec_time, rows, shared_blks_read
+FROM pg_stat_statements
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+  AND query ~* '^\s*(select|insert|update|delete|with)\M'
+  AND query !~* '(pg_stat_statements|pg_extension)'
+ORDER BY total_exec_time DESC
+LIMIT $1";
+
+/// The database's slowest statements, or `enabled: false` when the server
+/// doesn't preload `pg_stat_statements` or the extension isn't created (the
+/// view errors in either case).
+pub async fn top_statements(pool: &sqlx::PgPool) -> Result<DbStatements, ApiError> {
+    let (preload, created): (String, bool) = sqlx::query_as(
+        "SELECT current_setting('shared_preload_libraries'), \
+                EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ApiError::Internal(format!("metrics: extension check failed: {e}")))?;
+    let preloaded = preload.split(',').any(|l| l.trim() == "pg_stat_statements");
+    if !(preloaded && created) {
+        return Ok(DbStatements {
+            enabled: false,
+            statements: Vec::new(),
+        });
+    }
+
+    let rows: Vec<(String, i64, f64, f64, f64, i64, i64)> = sqlx::query_as(TOP_STATEMENTS_SQL)
+        .bind(TOP_STATEMENTS)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| ApiError::Internal(format!("metrics: pg_stat_statements failed: {e}")))?;
+    let ms = |v: f64| (v * 10.0).round() / 10.0;
+    Ok(DbStatements {
+        enabled: true,
+        statements: rows
+            .into_iter()
+            .map(
+                |(query, calls, total, mean, max, rows, blks_read)| DbStatement {
+                    query: compact_statement(&strip_sql_comments(&query), STATEMENT_CHARS),
+                    calls,
+                    total_ms: ms(total),
+                    mean_ms: ms(mean),
+                    max_ms: ms(max),
+                    rows,
+                    blks_read,
+                },
+            )
+            .collect(),
+    })
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

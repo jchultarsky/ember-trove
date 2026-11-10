@@ -258,6 +258,21 @@ pub fn render_markdown_plain(source: &str) -> String {
     sanitizer().clean(&html_out).to_string()
 }
 
+/// Render a capture's text: [`render_markdown_plain`], except that a single
+/// newline stays a line break. A capture is typed line by line in a plain
+/// textarea and was shown that way before it rendered Markdown, and a
+/// shared page arrives as its title and link on two lines
+/// (`common::inbox::coalesce_capture`).
+pub fn render_capture(source: &str) -> String {
+    let events = Parser::new_ext(source, MD_OPTIONS).map(|ev| match ev {
+        Event::SoftBreak => Event::HardBreak,
+        ev => ev,
+    });
+    let mut html_out = String::new();
+    cmark_html::push_html(&mut html_out, events);
+    sanitizer().clean(&html_out).to_string()
+}
+
 /// Render Markdown **inline only** — emphasis, strong, strikethrough, inline
 /// code, and links — flattening every block wrapper (paragraphs, headings,
 /// lists, blockquotes, tables) and line breaks into spaces so the result stays
@@ -327,31 +342,20 @@ const EXCERPT_LINK_CLASS: &str = "excerpt-link";
 /// Rewrite `[[target]]` / `[[target|display]]` as a Markdown link with the
 /// display text, so the excerpt renderer styles it like any other link.
 /// Brackets and backslashes in the display text are escaped so they can't
-/// close the link early. An unclosed `[[` is left as-is.
+/// close the link early. What counts as a link is `common::wikilink`'s rule.
 fn excerpt_wikilinks(source: &str) -> String {
-    let mut out = String::with_capacity(source.len());
-    let mut rest = source;
-    while let Some(open) = rest.find("[[") {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + 2..];
-        let Some(close) = after.find("]]") else {
-            out.push_str(&rest[open..]);
-            return out;
-        };
-        let inner = &after[..close];
-        let display = inner.split_once('|').map_or(inner, |(_, d)| d).trim();
+    common::wikilink::replace_wikilinks(source, |link| {
+        let mut out = String::with_capacity(link.display.len() + 6);
         out.push('[');
-        for c in display.chars() {
+        for c in link.display.chars() {
             if matches!(c, '[' | ']' | '\\') {
                 out.push('\\');
             }
             out.push(c);
         }
         out.push_str("](#)");
-        rest = &after[close + 2..];
-    }
-    out.push_str(rest);
-    out
+        out
+    })
 }
 
 /// Strict sanitiser for excerpts: text-level markup and lists only. No
@@ -541,6 +545,32 @@ mod tests {
     fn plain_title_of_plain_text_is_unchanged() {
         assert_eq!(markdown_inline_plain_text("Example task"), "Example task");
         assert_eq!(markdown_inline_plain_text(""), "");
+    }
+
+    #[test]
+    fn capture_keeps_each_line_and_renders_markup() {
+        let html = render_capture("Call **Ann**\nabout the `deck`\n\n- one\n- [x] two");
+        assert!(html.contains("<strong>Ann</strong>"), "{html}");
+        assert!(html.contains("<code>deck</code>"), "{html}");
+        assert!(html.contains("<li>one</li>"), "{html}");
+        // A single newline stays a line break, as the textarea showed it:
+        // a shared page's title and its link stay on two lines.
+        assert!(html.contains("Ann</strong><br"), "{html}");
+        assert!(!render_markdown_plain("a\nb").contains("<br"));
+    }
+
+    #[test]
+    fn capture_is_sanitised() {
+        let html = render_capture(
+            "<script>alert(1)</script><img src=x onerror=alert(2)>\n\n[x](javascript:alert(3))",
+        );
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("onerror"), "{html}");
+        assert!(!html.contains("javascript:"), "{html}");
+        assert!(
+            html.contains("<a"),
+            "the link is parsed, and defanged: {html}"
+        );
     }
 
     #[test]

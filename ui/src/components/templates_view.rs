@@ -4,6 +4,8 @@ use common::{
 };
 use leptos::prelude::*;
 
+use crate::components::page_header::PageHeader;
+
 use crate::{
     app::TemplatePrefill,
     components::icon_button::{IconButton, IconButtonVariant},
@@ -62,7 +64,8 @@ pub fn TemplatesView() -> impl IntoView {
 
     let templates = LocalResource::new(move || {
         let _ = refresh.get();
-        async move { crate::api::list_templates().await.unwrap_or_default() }
+        // The error is kept: a failed load is not "No templates yet" (#281, 1.7).
+        async move { crate::api::list_templates().await }
     });
 
     // Filter: None = all types, Some(nt) = only that type
@@ -182,21 +185,20 @@ pub fn TemplatesView() -> impl IntoView {
     };
 
     view! {
-        <div class="flex-1 flex flex-col min-h-0 p-4 md:p-6">
-            // ── Header ────────────────────────────────────────────────────────
-            <div class="flex items-center justify-between mb-4">
-                <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
-                    "Templates"
-                </h1>
+        <div class="flex flex-col h-full">
+            // The shared page header (#281): this page built its own.
+            <PageHeader icon="content_copy" title="Templates">
                 <button
                     class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 dark:hover:text-stone-300
                            hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors cursor-pointer"
                     title="New Template"
+                    aria-label="New Template"
                     on:click=start_create
                 >
                     <span aria-hidden="true" class="material-symbols-outlined" style="font-size: 18px;">"add"</span>
                 </button>
-            </div>
+            </PageHeader>
+            <div class="flex-1 flex flex-col min-h-0 overflow-auto p-4 md:p-6">
 
             // ── Type filter tabs ──────────────────────────────────────────────
             <div class="flex items-center gap-1 mb-5 flex-wrap">
@@ -248,10 +250,10 @@ pub fn TemplatesView() -> impl IntoView {
                             {if is_new { "New Template" } else { "Edit Template" }}
                         </h2>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-name">
                                 "Name"
                             </label>
-                            <input
+                            <input id="template-name"
                                 type="text"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
@@ -263,10 +265,10 @@ pub fn TemplatesView() -> impl IntoView {
                             />
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-description-optional">
                                 "Description (optional)"
                             </label>
-                            <input
+                            <input id="template-description-optional"
                                 type="text"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
@@ -278,10 +280,10 @@ pub fn TemplatesView() -> impl IntoView {
                             />
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-node-type">
                                 "Node Type"
                             </label>
-                            <select
+                            <select id="template-node-type"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
                                        text-sm text-stone-900 dark:text-stone-100
@@ -305,10 +307,10 @@ pub fn TemplatesView() -> impl IntoView {
                             </select>
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1">
+                            <label class="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1" for="template-body-markdown">
                                 "Body (Markdown)"
                             </label>
-                            <textarea
+                            <textarea id="template-body-markdown"
                                 class="w-full px-3 py-2 rounded-lg border border-stone-200
                                        dark:border-stone-600 bg-white dark:bg-stone-800
                                        text-sm text-stone-900 dark:text-stone-100 font-mono
@@ -341,6 +343,14 @@ pub fn TemplatesView() -> impl IntoView {
                 <crate::components::skeleton::SkeletonCards cards=6 />
             }>
                 {move || templates.get().map(|list| {
+                    let Ok(list) = list else {
+                        return view! {
+                            <crate::components::load_error::LoadError
+                                what="your templates"
+                                on_retry=Callback::new(move |()| refresh.update(|n| *n += 1))
+                            />
+                        }.into_any();
+                    };
                     let filter = type_filter.get();
                     let filtered: Vec<_> = list.iter()
                         .filter(|t| filter.as_ref().is_none_or(|f| t.node_type == *f))
@@ -348,15 +358,19 @@ pub fn TemplatesView() -> impl IntoView {
                         .collect();
 
                     if filtered.is_empty() {
-                        return view! {
-                            <div class="text-sm text-stone-400 dark:text-stone-500">
-                                {if list.is_empty() {
-                                    "No templates yet. Create one to get started."
-                                } else {
-                                    "No templates match this filter."
-                                }}
-                            </div>
-                        }.into_any();
+                        return if list.is_empty() {
+                            view! {
+                                <crate::components::empty_state::EmptyState
+                                    icon="content_copy"
+                                    message="No templates yet."
+                                    hint="Create one to get started."
+                                />
+                            }.into_any()
+                        } else {
+                            view! {
+                                <crate::components::empty_state::EmptyState icon="content_copy" message="No templates match this filter." />
+                            }.into_any()
+                        };
                     }
                     view! {
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -511,6 +525,7 @@ pub fn TemplatesView() -> impl IntoView {
                     }.into_any()
                 })}
             </Transition>
+            </div>
         </div>
     }
 }

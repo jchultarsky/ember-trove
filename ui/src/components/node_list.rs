@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use uuid::Uuid;
 
 use crate::components::empty_state::EmptyState;
-use crate::components::modals::delete_confirm::DeleteConfirmModal;
+use crate::components::modals::delete_confirm::{DeleteConfirmModal, node_delete_details};
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
@@ -474,7 +474,7 @@ pub fn NodeList() -> impl IntoView {
             }}
 
             <div class="flex-1 overflow-auto">
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <ul class="divide-y divide-stone-100 dark:divide-stone-800">
                         {(0..6).map(|_| view! {
                             <li class="px-6 py-4">
@@ -515,16 +515,8 @@ pub fn NodeList() -> impl IntoView {
                                     };
                                     if filtered.is_empty() {
                                         return view! {
-                                            <div class="flex flex-col items-center justify-center h-full gap-3 p-12">
-                                                <span
-                                                    class="material-symbols-outlined text-stone-300 dark:text-stone-700"
-                                                    style="font-size: 48px;"
-                                                >
-                                                    "description"
-                                                </span>
-                                                <p class="text-stone-400 dark:text-stone-600 text-sm text-center">
-                                                    "No nodes found."
-                                                </p>
+                                            <div class="h-full flex flex-col justify-center">
+                                                <EmptyState icon="description" message="No nodes found." />
                                             </div>
                                         }.into_any();
                                     }
@@ -551,7 +543,7 @@ pub fn NodeList() -> impl IntoView {
                             }
                         })
                     }}
-                </Suspense>
+                </Transition>
             </div>
 
             // Bulk delete confirmation modal
@@ -575,12 +567,26 @@ pub fn NodeList() -> impl IntoView {
                                 ok += 1;
                             }
                         }
-                        push_toast(ToastLevel::Success, format!("Deleted {ok} node(s)."));
+                        let (all, message) = crate::components::load_error::bulk_delete_outcome(
+                            ok,
+                            ids.len(),
+                            "node",
+                        );
+                        push_toast(
+                            if all { ToastLevel::Success } else { ToastLevel::Error },
+                            message,
+                        );
                         selected_ids.set(HashSet::new());
                         refresh.update(|n| *n += 1);
                     });
                 })
                 on_cancel=Callback::new(move |()| confirm_bulk_delete.set(false))
+                details=node_delete_details(
+                    confirm_bulk_delete.into(),
+                    Signal::derive(move || {
+                        selected_ids.get().iter().map(|&u| NodeId(u)).collect()
+                    }),
+                )
             />
         </div>
     }
@@ -673,10 +679,15 @@ fn NodeCards(
                                     </span>
 
                                     // Title
-                                    <span class="text-sm font-medium text-stone-900
-                                                 dark:text-stone-100 truncate">
+                                    // A real button: the row was click-only, so the
+                                    // keyboard couldn't open a node (#281). Its click
+                                    // bubbles to the row's handler above.
+                                    <button type="button"
+                                        class="text-sm font-medium text-stone-900 text-left
+                                               dark:text-stone-100 truncate cursor-pointer
+                                               focus-visible:outline-2 focus-visible:outline-amber-500 rounded">
                                         {node.title.clone()}
-                                    </span>
+                                    </button>
 
                                     // Status icon — semantic colour, with tooltip
                                     <span

@@ -3,8 +3,94 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-02)
+## Current state (2026-11-09)
 
+- **Unreleased: the delete confirmation counts what goes** (#281, owner
+  decision). `GET /nodes/deletion-preview` counts the tasks, notes and
+  files of the nodes the caller may delete, and how many are other
+  accounts'; `DeleteConfirmModal` takes them as `details`
+  (`node_delete_details`) and keeps Delete off until they load. ONTOLOGY
+  §3.3 and §6.1 record both review decisions.
+- **Unreleased: review fixes 1.5, 1.12 and 2.1** (#281). Updates
+  validate like creates (no blank titles, the body cap on both, a 422 for
+  a bad task title); a `wiki_link` can't be deleted by hand
+  (`EdgeType::is_machine_owned`); a version restore's snapshot is awaited
+  through `snapshot_body`.
+- **Unreleased: review task fixes 1.8, 1.9 (UTC day) and 2.5** (#281).
+  One next occurrence per parent, under a row lock; the next occurrence
+  counts from the sender's `today`; reorder follows `require_task_editor`.
+  Still open from 1.9: a monthly task on the 29th to 31st settles on the
+  28th after a short month (needs a stored anchor day; owner to decide).
+- **Unreleased: failures are shown** (#281, 1.7 and the dropped errors of
+  §5). `LoadError` replaces the empty state after a failed fetch in ten
+  views; bulk delete, revoke, link delete and attachment delete report
+  failure; attachment delete confirms.
+- **Unreleased: UI robustness** (#281, 1.6, 1.11, the `try_` sweep and
+  Suspense to Transition). Post-`.await` and forgotten-timer code uses
+  `try_` access in the five flagged components; a late image upload
+  settles its placeholder in the saved text; six page boundaries are
+  `<Transition>`; draft messages follow `write_edit_draft`'s result.
+- **Unreleased: accessibility basics** (#281, UI section). Row titles are
+  buttons, the local graph and calendar days take the keyboard, no
+  hover-only controls remain, labels are tied to inputs, inline errors are
+  alerts.
+- **Unreleased: one wiki-link scanner** (#281, 3.1 and 1.10).
+  `common::wikilink::wikilinks` replaces five hand-written scanners and
+  skips code spans and fences.
+- **Unreleased: "visible to" and plain text** (#281, 3.2 and 3.4).
+  `visible_among_many` for the node list, title list and graph;
+  `note::plain_line` for the graph preview. Section 3 of the review is
+  closed: 3.6's three parallels were looked at and left (the palette's
+  clamping is a behaviour choice; the other two aren't duplicates).
+- **Unreleased: reuse and dead code** (#281, 3.3, 3.5, 3.7).
+  `subject_scope` everywhere; `common::task::is_overdue` and
+  `Task::in_my_day`; `PRIORITY_RANK` in `repo/task.rs`; `common::quickadd`
+  deleted; no file-wide `allow(dead_code)` left in `ui/`.
+- **Unreleased: every top-level view uses `PageHeader` and `EmptyState`**
+  (#281, UI section): backup, users, permissions, templates and webhooks
+  were the last hand-built headers. The review's UI section is done.
+- **v3.13.1 shipped: backup and restore fixes from the full-codebase
+  review** (PR #284; #281, findings 1.1 to 1.4). A backup is one `REPEATABLE READ`
+  snapshot; attachment files are stored under their attachment's id
+  (format 5; formats 3 and 4 still restore); restore replaces the People
+  registry; templates, saved searches, editor prefs, webhooks (without
+  their signing secrets) and recurrence links are backed up. The rest of
+  the review (security items, 1.5 onward) is still to triage. Its two
+  owner decisions were made on 2026-11-09 (#281 comments): archived nodes
+  stay searchable, and deleting a node keeps the hard delete behind a
+  confirmation that counts what is lost (see the entry above).
+- **v3.13.0 shipped: room for longer captures** (PR #278). A capture in
+  edit spans the whole row, opens fitted to its text (`ResizableEditor`
+  `fit_to_text`) and has a drag bar, as does quick capture. Convert to
+  Task reuses `PriorityPicker` + `DueDateField` and now sends a priority.
+- **v3.12.1 shipped: captures render Markdown** (PR #277). Same
+  sanitiser as notes; a single newline stays a line break
+  (`markdown::render_capture`); Enter on a focused link in a card follows it.
+- **v3.12.0 shipped: capture colours** (#273, PR #275). The notes' palette
+  on captures, picked in quick capture and in a card's edit mode; migration
+  045 (`captures.color`, CHECK on six keys). Review fixed a WebKit focus bug
+  (wall keys acting on a card mid-edit).
+- **v3.11.0 shipped: automatic backups** (PRs #274, #276). An app backup
+  after every deploy and daily at 07:43 UTC (`backup.yml`), through
+  `deploy/app-backup.sh`; the newest 10 automatic backups are kept. The
+  never-run `pg_dump` cron (`deploy/backup.sh`) and its one stale dump are
+  gone.
+- **v3.10.0 shipped: performance P1 #1 and #2, and an admin Performance
+  page.**
+  - The graph loads in one slim request (`GET /api/graph`, PR #266): 15.7 MB
+    → 1.7 MB at 10×.
+  - Fewer requests per page load, and HTTP/2 at the proxy (PR #268).
+  - Admin → Performance (`/admin/performance`, PR #272): route timings and
+    the slowest statements (`GET /api/metrics/db`, comments stripped).
+  - CI's macOS build runs on pushes only and isn't required (PR #270).
+- **v3.9.0 shipped: the performance phase's measurement (P0, PR #260), two
+  layout fixes from Muse (#261, #262), and pulldown-cmark 0.13.6
+  (RUSTSEC-2026-0433, PR #265). The proxy moves to nginx 1.30 stable, pulled
+  on every deploy (PR #267; 1.29 was end-of-life with CVEs).**
+  - Per-route API latency in `/api/metrics`. The request log names routes,
+    never raw URIs (it logged search terms). `pg_stat_statements` is on.
+  - Baseline and ranked fixes in `docs/PERFORMANCE.md`. P1 #1 (the slim
+    graph, #266) and #2 (fewer requests, HTTP/2) follow.
 - **v3.8.1 shipped: security fix #230 (PR #231), and the app loads fast on
   phones again (PRs #255, #256).**
   - Task and note feeds join a node's title only when the caller can see

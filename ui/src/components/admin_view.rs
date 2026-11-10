@@ -7,6 +7,8 @@
 use common::admin::{AdminUser, CreateAdminUserRequest, UpdateUserRolesRequest};
 use leptos::prelude::*;
 
+use crate::components::page_header::PageHeader;
+
 use crate::api;
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
@@ -102,17 +104,13 @@ pub fn AdminView() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6">
-            // ── Page header ───────────────────────────────────────────────────
-            <div class="flex items-center justify-between mb-6">
-                <div>
-                    <h1 class="text-lg font-semibold text-stone-900 dark:text-stone-100">
-                        "User Management"
-                    </h1>
-                    <p class="text-xs text-stone-500 dark:text-stone-400 mt-0.5">
-                        "Create and manage Cognito users and groups."
-                    </p>
-                </div>
+        <div class="flex flex-col h-full">
+            // The shared page header (#281): this page built its own.
+            <PageHeader
+                icon="group"
+                title="User Management"
+                subtitle=view! { "Create and manage Cognito users and groups." }.into_any()
+            >
                 <button
                     class="flex items-center gap-2 px-3 py-2 rounded-lg bg-ember
                         text-white text-sm font-medium hover:bg-ember-strong transition-colors"
@@ -121,12 +119,13 @@ pub fn AdminView() -> impl IntoView {
                         show_create.update(|v| *v = !*v);
                     }
                 >
-                    <span class="material-symbols-outlined" style="font-size: 16px;">
+                    <span class="material-symbols-outlined" style="font-size: 16px;" aria-hidden="true">
                         {move || if show_create.get() { "close" } else { "person_add" }}
                     </span>
                     {move || if show_create.get() { "Cancel" } else { "Add User" }}
                 </button>
-            </div>
+            </PageHeader>
+            <div class="flex-1 overflow-auto p-4 md:p-6">
 
             // ── Create user form ──────────────────────────────────────────────
             {move || show_create.get().then(|| {
@@ -139,10 +138,10 @@ pub fn AdminView() -> impl IntoView {
 
                         // Row 1: email (used as Cognito username)
                         <div>
-                            <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">
+                            <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1" for="new-user-email">
                                 "Email *"
                             </label>
-                            <input
+                            <input id="new-user-email"
                                 type="email"
                                 class="w-full px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-600
                                     bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -155,10 +154,10 @@ pub fn AdminView() -> impl IntoView {
                         // Row 2: first + last name
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <div>
-                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">
+                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1" for="new-user-first-name">
                                     "First Name"
                                 </label>
-                                <input
+                                <input id="new-user-first-name"
                                     type="text"
                                     class="w-full px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-600
                                         bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -168,10 +167,10 @@ pub fn AdminView() -> impl IntoView {
                                 />
                             </div>
                             <div>
-                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">
+                                <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1" for="new-user-last-name">
                                     "Last Name"
                                 </label>
-                                <input
+                                <input id="new-user-last-name"
                                     type="text"
                                     class="w-full px-3 py-1.5 text-sm rounded-lg border border-stone-300 dark:border-stone-600
                                         bg-transparent text-stone-900 dark:text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -249,7 +248,7 @@ pub fn AdminView() -> impl IntoView {
 
                         // Error message
                         {move || create_error.get().map(|msg| view! {
-                            <div class="text-xs text-red-500 pt-1">{msg}</div>
+                            <div role="alert" class="text-xs text-red-500 pt-1">{msg}</div>
                         })}
                     </div>
                 }
@@ -274,13 +273,7 @@ pub fn AdminView() -> impl IntoView {
                             </div>
                         }.into_any(),
                         Ok(list) if list.is_empty() => view! {
-                            <div class="flex flex-col items-center gap-3 py-16 text-center">
-                                <span class="material-symbols-outlined text-stone-300 dark:text-stone-700"
-                                    style="font-size: 48px;">"person_off"</span>
-                                <p class="text-sm text-stone-400 dark:text-stone-600">
-                                    "No users found in this pool."
-                                </p>
-                            </div>
+                            <crate::components::empty_state::EmptyState icon="person_off" message="No users found in this pool." />
                         }.into_any(),
                         Ok(list) => view! {
                             <div class="bg-white dark:bg-stone-900 rounded-xl border border-stone-200
@@ -306,6 +299,7 @@ pub fn AdminView() -> impl IntoView {
                     })
                 }}
             </Transition>
+            </div>
         </div>
     }
 }
@@ -557,7 +551,7 @@ fn UserRow(
                                 "Cancel"
                             </button>
                             {move || roles_error.get().map(|msg| view! {
-                                <span class="text-xs text-red-500">{msg}</span>
+                                <span role="alert" class="text-xs text-red-500">{msg}</span>
                             })}
                         </div>
                     </div>

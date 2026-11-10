@@ -36,7 +36,7 @@
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{Task, TaskStatus, UpdateTaskRequest};
+use common::task::{Task, UpdateTaskRequest};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
@@ -149,6 +149,50 @@ impl EditSession {
     }
 }
 
+/// The caller's saved editor prefs (heights, note collapse), fetched once
+/// for a page and shared by its panels. The node page's task and note
+/// panels each fetched them (performance P1 #2). A page with more than one
+/// reader calls `provide`; `with` falls back to its own fetch where no page
+/// did (My Day reads them once anyway).
+#[derive(Clone, Copy)]
+pub struct EditorPrefs(RwSignal<Option<Vec<common::editor_pref::EditorPref>>>);
+
+impl EditorPrefs {
+    pub fn provide() {
+        let prefs = RwSignal::new(None);
+        provide_context(EditorPrefs(prefs));
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(p) = crate::api::fetch_editor_prefs().await {
+                prefs.try_set(Some(p));
+            }
+        });
+    }
+
+    /// Run `apply` with the prefs once they're loaded: the page's shared
+    /// fetch if there is one, or a fetch of its own.
+    pub fn with(apply: impl Fn(&[common::editor_pref::EditorPref]) + 'static) {
+        match use_context::<EditorPrefs>() {
+            Some(EditorPrefs(prefs)) => {
+                Effect::new(move |_| prefs.with(|p| p.as_deref().map(&apply)));
+            }
+            None => wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(p) = crate::api::fetch_editor_prefs().await {
+                    apply(&p);
+                }
+            }),
+        }
+    }
+}
+
+/// Fetches the editor prefs once for everything inside it: the node page
+/// wraps its task and note panels in it, once per node it shows, so each
+/// node load reads fresh prefs, as each panel's own fetch did.
+#[component]
+pub fn EditorPrefsScope(children: Children) -> impl IntoView {
+    EditorPrefs::provide();
+    children()
+}
+
 /// Saved per-task inline-edit heights (px), keyed by task id. Provided as a
 /// context by the surrounding view so each row can open its editor at the
 /// previously-saved size.
@@ -161,16 +205,14 @@ impl TaskEditorHeights {
     pub fn provide() {
         let heights = RwSignal::new(std::collections::HashMap::new());
         provide_context(TaskEditorHeights(heights));
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(prefs) = crate::api::fetch_editor_prefs().await {
-                heights.try_set(
-                    prefs
-                        .into_iter()
-                        .filter(|p| p.entity_kind == "task")
-                        .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
-                        .collect(),
-                );
-            }
+        EditorPrefs::with(move |prefs| {
+            heights.try_set(
+                prefs
+                    .iter()
+                    .filter(|p| p.entity_kind == "task")
+                    .filter_map(|p| p.height.map(|h| (p.entity_id, h)))
+                    .collect(),
+            );
         });
     }
 
@@ -481,11 +523,11 @@ pub fn KanbanTaskRow(
                             </span>
                         </span>
                         {due.map(|d| {
-                            let overdue = d < today
-                                && !matches!(
-                                    status_sig.get_untracked(),
-                                    TaskStatus::Done | TaskStatus::Cancelled
-                                );
+                            let overdue = common::task::is_overdue(
+                                &status_sig.get_untracked(),
+                                Some(d),
+                                today,
+                            );
                             due_badge_view(d, overdue)
                         })}
                         // Carryover badge: the date IS the question; ✓

@@ -71,6 +71,88 @@ async fn create_node(pool: &PgPool, owner: &str, title: &str) -> Node {
         .expect("node create")
 }
 
+// ── The graph's nodes (performance P1) ───────────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn graph_nodes_follow_the_node_list_scope_and_carry_no_body(pool: PgPool) {
+    let graph = PgGraphRepo::new(pool.clone());
+    let mine = create_node(&pool, "owner-a", "A long").await;
+    let archived = create_node(&pool, "owner-a", "A archived").await;
+    let private = create_node(&pool, "owner-b", "B private").await;
+    let shared = create_node(&pool, "owner-b", "B shared").await;
+    // An 18 KB body (prod's largest), led by a heading the preview skips.
+    let long = format!("# Heading\n\n{}", "word ".repeat(3_600));
+    sqlx::query("UPDATE nodes SET body = $2 WHERE id = $1")
+        .bind(mine.id.0)
+        .bind(&long)
+        .execute(&pool)
+        .await
+        .expect("body");
+    sqlx::query("UPDATE nodes SET status = 'archived' WHERE id = $1")
+        .bind(archived.id.0)
+        .execute(&pool)
+        .await
+        .expect("archive");
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by)
+         VALUES ($1, 'owner-a', 'viewer', 'owner-b')",
+    )
+    .bind(shared.id.0)
+    .execute(&pool)
+    .await
+    .expect("share");
+    let tag: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO tags (owner_id, name, color) VALUES ('owner-a', 'red', '#ff0000') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("tag");
+    sqlx::query("INSERT INTO node_tags (node_id, tag_id) VALUES ($1, $2)")
+        .bind(mine.id.0)
+        .bind(tag.0)
+        .execute(&pool)
+        .await
+        .expect("tag a node");
+
+    let a = graph.list_nodes(Some("owner-a")).await.expect("a's graph");
+    let ids: std::collections::HashSet<_> = a.iter().map(|n| n.id).collect();
+    assert!(
+        ids.contains(&mine.id) && ids.contains(&archived.id),
+        "own, archived too"
+    );
+    assert!(
+        ids.contains(&shared.id),
+        "a node shared with A is on A's graph"
+    );
+    assert!(!ids.contains(&private.id), "B's private node never is");
+    assert_eq!(a.len(), 3);
+
+    let m = a.iter().find(|n| n.id == mine.id).unwrap();
+    let preview = m.preview.as_deref().unwrap_or_default();
+    assert!(
+        preview.starts_with("word word"),
+        "the heading is skipped: {preview}"
+    );
+    assert_eq!(
+        preview.chars().count(),
+        101,
+        "100 characters and the ellipsis"
+    );
+    assert_eq!(
+        m.tags,
+        vec![common::graph::GraphTag {
+            id: common::id::TagId(tag.0),
+            color: "#ff0000".to_string()
+        }]
+    );
+    let arch = a.iter().find(|n| n.id == archived.id).unwrap();
+    assert_eq!(arch.status, common::node::NodeStatus::Archived);
+
+    // An admin (None) sees every node.
+    let all = graph.list_nodes(None).await.expect("all");
+    assert_eq!(all.len(), 4);
+}
+
 // ── Node owner-scoping ────────────────────────────────────────────────────────
 
 #[sqlx::test(migrations = "../migrations")]
@@ -1886,6 +1968,7 @@ async fn a_restore_brings_the_activity_log_back(pool: PgPool) {
         node_people: vec![],
         activity: activity.clone(),
         captures: vec![],
+        ..BackupData::default()
     };
 
     let mut tx = pool.begin().await.expect("tx");
@@ -3077,6 +3160,7 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        ..BackupData::default()
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3605,6 +3689,7 @@ async fn a_restore_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPo
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        ..BackupData::default()
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3698,15 +3783,20 @@ async fn captures_are_reachable_by_their_owner_only(pool: PgPool) {
     use super::capture::{CaptureRepo, PgCaptureRepo};
 
     let repo = PgCaptureRepo::new(pool.clone());
-    let mine = repo.create("alice", "mine").await.unwrap();
-    repo.create("bob", "bob's").await.unwrap();
+    let mine = repo
+        .create("alice", "mine", common::capture::CaptureColor::Default)
+        .await
+        .unwrap();
+    repo.create("bob", "bob's", common::capture::CaptureColor::Default)
+        .await
+        .unwrap();
 
     let bodies =
         |v: Vec<common::capture::Capture>| v.into_iter().map(|c| c.body).collect::<Vec<_>>();
     assert_eq!(bodies(repo.list("alice").await.unwrap()), vec!["mine"]);
     // Bob — or an admin, who passes their own subject — can't touch it.
     for result in [
-        repo.update(mine.id, "bob", "taken").await.map(|_| ()),
+        repo.update(mine.id, "bob", "taken", None).await.map(|_| ()),
         repo.delete(mine.id, "bob").await,
     ] {
         assert!(
@@ -3715,7 +3805,7 @@ async fn captures_are_reachable_by_their_owner_only(pool: PgPool) {
         );
     }
     assert_eq!(
-        repo.update(mine.id, "alice", "reworded")
+        repo.update(mine.id, "alice", "reworded", None)
             .await
             .unwrap()
             .body,
@@ -3748,6 +3838,61 @@ async fn captures_are_reachable_by_their_owner_only(pool: PgPool) {
     );
 }
 
+/// #273: a capture's paper colour is stored, kept by a reword, changed by
+/// an edit that names one, and limited by migration 045's CHECK to
+/// exactly `CaptureColor::ALL` (the two lists must agree).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_captures_colour_is_stored_and_checked(pool: PgPool) {
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+    use common::capture::CaptureColor;
+
+    let repo = PgCaptureRepo::new(pool.clone());
+    let c = repo
+        .create("alice", "pink", CaptureColor::Rose)
+        .await
+        .unwrap();
+    assert_eq!(c.color, CaptureColor::Rose);
+    let kept = repo.update(c.id, "alice", "reworded", None).await.unwrap();
+    assert_eq!(kept.color, CaptureColor::Rose, "a reword keeps the paper");
+    let changed = repo
+        .update(c.id, "alice", "reworded", Some(CaptureColor::Sky))
+        .await
+        .unwrap();
+    assert_eq!(changed.color, CaptureColor::Sky);
+    assert_eq!(
+        repo.list("alice").await.unwrap()[0].color,
+        CaptureColor::Sky
+    );
+
+    // A row written without a colour (an old instance, raw SQL) is yellow.
+    sqlx::query("INSERT INTO captures (owner_id, body) VALUES ('alice', 'old')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        repo.list("alice")
+            .await
+            .unwrap()
+            .iter()
+            .any(|c| c.body == "old" && c.color == CaptureColor::Default)
+    );
+
+    // The CHECK accepts every key the enum has, and nothing else.
+    for color in CaptureColor::ALL {
+        sqlx::query("UPDATE captures SET color = $1 WHERE id = $2")
+            .bind(color.as_str())
+            .bind(c.id.0)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("{color:?} refused: {e}"));
+    }
+    let bad = sqlx::query("UPDATE captures SET color = 'chartreuse' WHERE id = $1")
+        .bind(c.id.0)
+        .execute(&pool)
+        .await;
+    assert!(bad.is_err(), "an unknown colour must be refused");
+}
+
 #[sqlx::test(migrations = "../migrations")]
 async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(pool: PgPool) {
     use super::capture::{CaptureRepo, PgCaptureRepo};
@@ -3757,7 +3902,14 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
     // What the live database holds before the restore: a capture and a
     // task with no Project. Neither is in the archive, so neither survives.
     let captures = PgCaptureRepo::new(pool.clone());
-    captures.create("alice", "live capture").await.unwrap();
+    captures
+        .create(
+            "alice",
+            "live capture",
+            common::capture::CaptureColor::Default,
+        )
+        .await
+        .unwrap();
     raw_task(&pool, "alice", None, "live inbox task").await;
 
     let host = create_node(&pool, "alice", "restore capture host").await;
@@ -3793,6 +3945,7 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        ..BackupData::default()
     };
     let mut tx = pool.begin().await.unwrap();
     crate::backup::restore_into(&mut tx, &data)
@@ -3814,6 +3967,61 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         .await
         .unwrap();
     assert_eq!(inbox, 0, "the live inbox task didn't survive the restore");
+}
+
+/// #273: a capture's colour survives a backup and restore. The archive's
+/// captures come from `list_all` (the backup's read) and go back through
+/// `restore_into`, whose INSERT must carry the colour, not fall back to
+/// the column default.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_keeps_each_captures_colour(pool: PgPool) {
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+    use common::backup::BackupData;
+    use common::capture::CaptureColor;
+
+    let captures = PgCaptureRepo::new(pool.clone());
+    let pink = captures
+        .create("alice", "pink idea", CaptureColor::Rose)
+        .await
+        .unwrap();
+    let plain = captures
+        .create("bob", "plain idea", CaptureColor::Default)
+        .await
+        .unwrap();
+    let data = BackupData {
+        nodes: vec![],
+        edges: vec![],
+        tags: vec![],
+        notes: vec![],
+        tasks: vec![],
+        attachments: vec![],
+        node_links: vec![],
+        favorites: vec![],
+        permissions: vec![],
+        node_versions: vec![],
+        node_positions: vec![],
+        people: vec![],
+        node_people: vec![],
+        activity: vec![],
+        captures: captures.list_all().await.unwrap(),
+        ..BackupData::default()
+    };
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.unwrap();
+
+    let alice = captures.list("alice").await.unwrap();
+    assert_eq!(
+        alice.iter().map(|c| (c.id, c.color)).collect::<Vec<_>>(),
+        vec![(pink.id, CaptureColor::Rose)]
+    );
+    let bob = captures.list("bob").await.unwrap();
+    assert_eq!(
+        bob.iter().map(|c| (c.id, c.color)).collect::<Vec<_>>(),
+        vec![(plain.id, CaptureColor::Default)]
+    );
 }
 
 // ── The pool never hands out a connection inside a transaction ───────────────
@@ -3901,7 +4109,14 @@ async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
     };
 
     // A node, filed into its home, owned by the capture's owner.
-    let c = repo.create("alice", "an article idea").await.unwrap();
+    let c = repo
+        .create(
+            "alice",
+            "an article idea",
+            common::capture::CaptureColor::Default,
+        )
+        .await
+        .unwrap();
     let Made::Node(node) = repo
         .convert(
             c.id,
@@ -3929,7 +4144,10 @@ async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
     assert_eq!((home, role.as_str()), (area.id.0, "owner"));
 
     // A note on a node.
-    let c = repo.create("alice", "met Ana").await.unwrap();
+    let c = repo
+        .create("alice", "met Ana", common::capture::CaptureColor::Default)
+        .await
+        .unwrap();
     let Made::Note(note) = repo
         .convert(
             c.id,
@@ -3953,7 +4171,14 @@ async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
     );
 
     // A Task in its Project.
-    let c = repo.create("alice", "call the bank").await.unwrap();
+    let c = repo
+        .create(
+            "alice",
+            "call the bank",
+            common::capture::CaptureColor::Default,
+        )
+        .await
+        .unwrap();
     let Made::Task { project: p, task } = repo
         .convert(
             c.id,
@@ -3994,7 +4219,10 @@ async fn a_failed_conversion_makes_nothing_and_keeps_the_capture(pool: PgPool) {
     };
 
     // A taken title: 409, the capture stays, no node, no grant.
-    let c = repo.create("alice", "taken").await.unwrap();
+    let c = repo
+        .create("alice", "taken", common::capture::CaptureColor::Default)
+        .await
+        .unwrap();
     assert!(matches!(
         repo.convert(c.id, "alice", into("Taken")).await,
         Err(EmberTroveError::AlreadyExists(_))
@@ -4037,7 +4265,10 @@ async fn a_failed_conversion_makes_nothing_and_keeps_the_capture(pool: PgPool) {
     ));
 
     // A binned capture (waiting on Undo) isn't converted either.
-    let binned = repo.create("alice", "binned").await.unwrap();
+    let binned = repo
+        .create("alice", "binned", common::capture::CaptureColor::Default)
+        .await
+        .unwrap();
     repo.delete(binned.id, "alice").await.unwrap();
     assert!(matches!(
         repo.convert(binned.id, "alice", into("Binned")).await,
@@ -4453,4 +4684,787 @@ async fn a_drain_empties_a_queue_longer_than_one_batch(pool: PgPool) {
         scalar(&pool, "SELECT count(*) FROM object_deletions").await,
         0
     );
+}
+
+// ── Admin Performance page: database statements ──────────────────────────────
+
+/// `GET /api/metrics/db` lists only data statements (`SELECT`, `INSERT`,
+/// `UPDATE`, `DELETE`, `WITH`), whose values Postgres always replaces with
+/// `$1`. Utility statements (`SET`, `COMMENT`, `ALTER ROLE … PASSWORD`) keep
+/// their literal text, so they never reach the page, and comments, which
+/// normalisation keeps, are stripped. Without the extension
+/// the answer is "not enabled", not an error. CI's Postgres doesn't preload
+/// `pg_stat_statements`, so there only the first half runs; run it locally
+/// with `-c shared_preload_libraries=pg_stat_statements` for the rest.
+#[sqlx::test(migrations = "../migrations")]
+async fn db_statements_need_the_extension_and_list_only_data_statements(pool: PgPool) {
+    use crate::routes::metrics::top_statements;
+
+    let off = top_statements(&pool).await.unwrap();
+    assert!(!off.enabled, "a fresh database has no extension");
+    assert!(off.statements.is_empty());
+
+    let preload: String = sqlx::query_scalar("SELECT current_setting('shared_preload_libraries')")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    if !preload.contains("pg_stat_statements") {
+        return;
+    }
+    // The statistics are cluster-wide: start clean, so the migrations this
+    // database just ran can't push the probes out of the top 15.
+    sqlx::raw_sql(
+        "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+         SELECT pg_stat_statements_reset();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(
+        "SET application_name = 'utility-secret-value';
+         COMMENT ON TABLE tags IS 'utility-secret-value';
+         SELECT count(*) FROM nodes WHERE title = 'literal-secret-value';
+         SELECT count(*) FROM tags /* comment-secret@example.com */ WHERE name = 'x';
+         SELECT id FROM edges -- line-secret@example.com
+         WHERE edge_type = 'contains';",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let on = top_statements(&pool).await.unwrap();
+    assert!(on.enabled);
+    assert!(
+        on.statements
+            .iter()
+            .any(|s| s.query.contains("FROM nodes WHERE title = $1")),
+        "the data statement is listed, normalised: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements
+            .iter()
+            .any(|s| s.query.contains("FROM tags WHERE name = $1")),
+        "the commented statement is listed, comment removed: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements.iter().all(|s| !s.query.contains("secret")),
+        "no literal value or utility statement: {:?}",
+        on.statements
+    );
+    assert!(
+        on.statements
+            .iter()
+            .all(|s| !s.query.contains("pg_stat_statements") && !s.query.contains("pg_extension")),
+        "the page's own queries aren't listed: {:?}",
+        on.statements
+    );
+    assert!(on.statements.len() <= common::metrics::TOP_STATEMENTS as usize);
+}
+
+// ── Automatic backups: keep the newest ten ───────────────────────────────────
+
+/// Records which archives were deleted.
+#[derive(Default)]
+struct RecordingStore(std::sync::Mutex<Vec<String>>);
+
+#[async_trait::async_trait]
+impl crate::object_store::ObjectStore for RecordingStore {
+    async fn put(&self, _: &str, _: bytes::Bytes, _: &str) -> Result<(), common::EmberTroveError> {
+        Ok(())
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, common::EmberTroveError> {
+        Ok(bytes::Bytes::new())
+    }
+    async fn delete(&self, key: &str) -> Result<(), common::EmberTroveError> {
+        self.0.lock().unwrap().push(key.to_string());
+        Ok(())
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, common::EmberTroveError> {
+        Ok(String::new())
+    }
+}
+
+/// Twelve automatic backups and two by an admin, the admin's the oldest of
+/// all: pruning to ten deletes the two oldest automatic ones (rows and
+/// archives) and never an admin's. A second prune deletes nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn pruning_keeps_the_newest_automatic_backups_and_every_admin_one(pool: PgPool) {
+    use common::backup::AUTOMATIC_ACTOR;
+
+    let insert = |by: &'static str, minutes_ago: i32, key: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO backup_jobs (created_by, created_at, s3_key)
+                 VALUES ($1, now() - make_interval(mins => $2), $3)",
+            )
+            .bind(by)
+            .bind(minutes_ago)
+            .bind(key)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    for m in 0..12 {
+        insert(AUTOMATIC_ACTOR, m, format!("backups/auto-{m}.tar.gz")).await;
+    }
+    insert("admin-sub", 500, "backups/admin-a.tar.gz".into()).await;
+    insert("admin-sub", 600, "backups/admin-b.tar.gz".into()).await;
+
+    let repo = super::backup::PgBackupRepo::new(pool.clone());
+    let outbox = super::object_deletion::PgObjectDeletionRepo::new(pool.clone());
+    let store = RecordingStore::default();
+    let pruned = crate::backup::prune_automatic(&repo, &store, &outbox, 10)
+        .await
+        .unwrap();
+    assert_eq!(pruned, 2);
+
+    let mut deleted = store.0.lock().unwrap().clone();
+    deleted.sort();
+    assert_eq!(
+        deleted,
+        ["backups/auto-10.tar.gz", "backups/auto-11.tar.gz"]
+    );
+
+    let left: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM backup_jobs ORDER BY s3_key")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 12);
+    assert!(left.contains(&"backups/admin-a.tar.gz".to_string()));
+    assert!(left.contains(&"backups/admin-b.tar.gz".to_string()));
+    assert!(
+        !left
+            .iter()
+            .any(|k| k == "backups/auto-10.tar.gz" || k == "backups/auto-11.tar.gz")
+    );
+
+    assert_eq!(
+        crate::backup::prune_automatic(&repo, &store, &outbox, 10)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM object_deletions").await,
+        0,
+        "nothing queued when the store deletes"
+    );
+}
+
+/// A store that refuses every delete.
+struct RefusingStore;
+
+#[async_trait::async_trait]
+impl crate::object_store::ObjectStore for RefusingStore {
+    async fn put(&self, _: &str, _: bytes::Bytes, _: &str) -> Result<(), common::EmberTroveError> {
+        Ok(())
+    }
+    async fn get(&self, _: &str) -> Result<bytes::Bytes, common::EmberTroveError> {
+        Ok(bytes::Bytes::new())
+    }
+    async fn delete(&self, _: &str) -> Result<(), common::EmberTroveError> {
+        Err(common::EmberTroveError::Internal(
+            "storage unavailable".into(),
+        ))
+    }
+    async fn presigned_url(&self, _: &str, _: u32) -> Result<String, common::EmberTroveError> {
+        Ok(String::new())
+    }
+}
+
+/// An archive holds everyone's data, so one the store won't delete must not
+/// be forgotten with its row: its key goes to the `object_deletions` outbox,
+/// which the daily drain retries.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_archive_the_store_refuses_to_delete_is_queued(pool: PgPool) {
+    use common::backup::AUTOMATIC_ACTOR;
+
+    for m in 0..2 {
+        sqlx::query(
+            "INSERT INTO backup_jobs (created_by, created_at, s3_key)
+             VALUES ($1, now() - make_interval(mins => $2), $3)",
+        )
+        .bind(AUTOMATIC_ACTOR)
+        .bind(m)
+        .bind(format!("backups/auto-{m}.tar.gz"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let repo = super::backup::PgBackupRepo::new(pool.clone());
+    let outbox = super::object_deletion::PgObjectDeletionRepo::new(pool.clone());
+    let pruned = crate::backup::prune_automatic(&repo, &RefusingStore, &outbox, 1)
+        .await
+        .unwrap();
+    assert_eq!(pruned, 1);
+
+    let queued: Vec<String> = sqlx::query_scalar("SELECT s3_key FROM object_deletions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(queued, ["backups/auto-1.tar.gz"]);
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM backup_jobs").await, 1);
+}
+
+// ── Backups: one snapshot, and everything in it (#281) ───────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
+    // #281: each table was read in its own query, so a node and its task
+    // created between two reads left a task in the archive without its
+    // node, and restoring that archive failed on the foreign key.
+    let before = create_node(&pool, "alice", "there before the backup").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    // The first query takes the snapshot.
+    super::tag::list_all_on(&mut *tx).await.expect("first read");
+
+    // Meanwhile, committed on another connection.
+    let late = create_node(&pool, "alice", "created mid-backup").await;
+    raw_task(&pool, "alice", Some(late.id.0), "its task").await;
+    raw_task(
+        &pool,
+        "alice",
+        Some(before.id.0),
+        "a late task on the old node",
+    )
+    .await;
+
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    let nodes: Vec<uuid::Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
+    assert_eq!(nodes, [before.id.0], "the late node is not in the snapshot");
+    assert!(
+        data.tasks.is_empty(),
+        "nor is any task written after it began: {:?}",
+        data.tasks
+    );
+
+    // Read-only: a backup can't change anything, even by mistake.
+    let write = sqlx::query("DELETE FROM nodes").execute(&mut *tx).await;
+    assert!(write.is_err(), "the snapshot transaction refuses writes");
+    drop(tx);
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM nodes").await, 2);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_replaces_the_people_registry(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    // #281: people are held by their owner, not by a node, so deleting the
+    // nodes never reached them and the live registry survived a restore.
+    let people = PgPersonRepo::new(pool.clone());
+    let kept = people
+        .create("alice", &person("In The Backup", None))
+        .await
+        .expect("kept");
+    create_node(&pool, "alice", "people restore host").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+
+    people
+        .create("alice", &person("Added After The Backup", None))
+        .await
+        .expect("later");
+    people
+        .create("bob", &person("Someone Else's, Also Later", None))
+        .await
+        .expect("bob's");
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    let ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM people")
+        .fetch_all(&pool)
+        .await
+        .expect("people");
+    assert_eq!(ids, [kept.id.0], "only the archive's people remain");
+}
+
+/// One row in each table a backup didn't carry before format 5, plus a
+/// recurring task and the occurrence it scheduled. Returns the ids of the
+/// signed webhook, the unsigned one, the parent task and its occurrence.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 4] {
+    sqlx::query(
+        "INSERT INTO node_templates (name, node_type, body, is_default, created_by)
+         VALUES ('Meeting', 'article', '## Agenda', TRUE, 'alice')",
+    )
+    .execute(pool)
+    .await
+    .expect("template");
+    sqlx::query(
+        "INSERT INTO search_presets (owner_id, name, query, fuzzy) VALUES ('alice', 'Open', 'todo', TRUE)",
+    )
+    .execute(pool)
+    .await
+    .expect("preset");
+    let parent = raw_task(pool, "alice", Some(node), "water the plants").await;
+    let child = raw_task(pool, "alice", Some(node), "water the plants").await;
+    sqlx::query("UPDATE node_tasks SET recurrence_parent_id = $2 WHERE id = $1")
+        .bind(child)
+        .bind(parent)
+        .execute(pool)
+        .await
+        .expect("link");
+    sqlx::query(
+        "INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height, collapsed)
+         VALUES ('alice', 'task', $1, 320, FALSE)",
+    )
+    .bind(parent)
+    .execute(pool)
+    .await
+    .expect("pref");
+    let signed: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO webhooks (owner_id, url, secret, is_active)
+         VALUES ('alice', 'https://example.com/signed', 'the-signing-secret', TRUE) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("signed webhook");
+    let unsigned: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO webhooks (owner_id, url, is_active)
+         VALUES ('bob', 'https://example.com/unsigned', TRUE) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("unsigned webhook");
+    [signed, unsigned, parent, child]
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool: PgPool) {
+    // #281: templates, saved searches, editor prefs, webhooks and the
+    // recurrence link were not in an archive, so a restore onto an empty
+    // database lost them.
+    let host = create_node(&pool, "alice", "settings host").await;
+    let [signed, unsigned, parent, child] = seed_account_settings(&pool, host.id.0).await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+
+    // SECURITY: a signing secret never reaches an archive.
+    let json = serde_json::to_string(&data).expect("serialises");
+    assert!(
+        !json.contains("the-signing-secret"),
+        "no secret in data.json"
+    );
+    assert_eq!(data.webhooks_switched_off(), 1);
+
+    // The live database moves on, then the archive is restored.
+    for sql in [
+        "DELETE FROM node_templates",
+        "DELETE FROM editor_prefs",
+        "DELETE FROM webhooks",
+        "UPDATE node_tasks SET recurrence_parent_id = NULL",
+        "INSERT INTO search_presets (owner_id, name) VALUES ('alice', 'Made after the backup')",
+    ] {
+        sqlx::query(sql).execute(&pool).await.expect("live change");
+    }
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    let template: (String, String, bool, String) =
+        sqlx::query_as("SELECT name, body, is_default, created_by FROM node_templates")
+            .fetch_one(&pool)
+            .await
+            .expect("one template");
+    assert_eq!(
+        template,
+        ("Meeting".into(), "## Agenda".into(), true, "alice".into())
+    );
+    let presets: Vec<(String, String, bool)> =
+        sqlx::query_as("SELECT name, query, fuzzy FROM search_presets")
+            .fetch_all(&pool)
+            .await
+            .expect("presets");
+    assert_eq!(
+        presets,
+        [("Open".into(), "todo".into(), true)],
+        "the archive's presets, and not the one made after it"
+    );
+    let pref: (String, uuid::Uuid, Option<i32>) =
+        sqlx::query_as("SELECT owner_id, entity_id, height FROM editor_prefs")
+            .fetch_one(&pool)
+            .await
+            .expect("one pref");
+    assert_eq!(pref, ("alice".into(), parent, Some(320)));
+    let linked: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT recurrence_parent_id FROM node_tasks WHERE id = $1")
+            .bind(child)
+            .fetch_one(&pool)
+            .await
+            .expect("child");
+    assert_eq!(
+        linked,
+        Some(parent),
+        "the occurrence knows its parent again"
+    );
+
+    // A webhook that signed comes back without its secret and switched off;
+    // one that never signed comes back as it was.
+    let hook = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>, bool)>(
+                "SELECT owner_id, secret, is_active FROM webhooks WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("webhook")
+        }
+    };
+    assert_eq!(hook(signed).await, ("alice".into(), None, false));
+    assert_eq!(hook(unsigned).await, ("bob".into(), None, true));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn an_older_archive_leaves_what_it_never_carried(pool: PgPool) {
+    use common::backup::BackupData;
+    // A format-3 or -4 archive has no templates, presets, prefs or webhooks.
+    // Restoring one must not empty the live ones, signing secrets included.
+    let host = create_node(&pool, "alice", "older archive host").await;
+    let [signed, ..] = seed_account_settings(&pool, host.id.0).await;
+    let data = BackupData {
+        nodes: PgNodeRepo::new(pool.clone())
+            .list_all()
+            .await
+            .expect("nodes"),
+        ..BackupData::default()
+    };
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM node_templates").await,
+        1
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM search_presets").await,
+        1
+    );
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM webhooks").await, 2);
+    let secret: Option<String> = sqlx::query_scalar("SELECT secret FROM webhooks WHERE id = $1")
+        .bind(signed)
+        .fetch_one(&pool)
+        .await
+        .expect("webhook");
+    assert_eq!(secret.as_deref(), Some("the-signing-secret"));
+}
+
+// ── The delete confirmation's counts (#281, owner decision) ──────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
+    use common::node::NodeDeletionPreview;
+    let repo = PgNodeRepo::new(pool.clone());
+    let doomed = create_node(&pool, "alice", "preview doomed").await.id;
+    let spared = create_node(&pool, "alice", "preview spared").await.id;
+    let (d, s) = (doomed.0, spared.0);
+    for q in [
+        // On the doomed node: 3 live tasks (1 is bob's) and 1 in the trash;
+        // 3 live notes (2 are bob's) and 1 in the trash; 2 files.
+        format!(
+            "INSERT INTO node_tasks (node_id, owner_id, title, deleted_at) VALUES
+            ('{d}', 'alice', 'a1', NULL), ('{d}', 'alice', 'a2', NULL),
+            ('{d}', 'bob', 'b1', NULL), ('{d}', 'bob', 'trashed', now()),
+            ('{s}', 'bob', 'elsewhere', NULL), (NULL, 'alice', 'standalone', NULL)"
+        ),
+        format!(
+            "INSERT INTO node_notes (node_id, owner_id, body, deleted_at) VALUES
+            ('{d}', 'alice', 'a', NULL), ('{d}', 'bob', 'b1', NULL),
+            ('{d}', 'bob', 'b2', NULL), ('{d}', 'bob', 'trashed', now()),
+            ('{s}', 'alice', 'elsewhere', NULL)"
+        ),
+        format!(
+            "INSERT INTO attachments (node_id, filename, s3_key) VALUES
+            ('{d}', 'one.pdf', '{d}/1/one.pdf'), ('{d}', 'two.pdf', '{d}/2/two.pdf'),
+            ('{s}', 'kept.pdf', '{s}/3/kept.pdf')"
+        ),
+    ] {
+        sqlx::query(&q).execute(&pool).await.expect("seed");
+    }
+
+    let preview = repo
+        .deletion_preview(&[doomed], "alice")
+        .await
+        .expect("preview");
+    assert_eq!(
+        preview,
+        NodeDeletionPreview {
+            nodes: 1,
+            tasks: 3,
+            others_tasks: 1,
+            notes: 3,
+            others_notes: 2,
+            files: 2,
+        }
+    );
+    // "Other people" is relative to who asks.
+    let as_bob = repo
+        .deletion_preview(&[doomed], "bob")
+        .await
+        .expect("as bob");
+    assert_eq!((as_bob.others_tasks, as_bob.others_notes), (2, 1));
+    // A node that doesn't exist adds nothing, and is not counted as a node.
+    let with_missing = repo
+        .deletion_preview(&[doomed, common::id::NodeId(uuid::Uuid::new_v4())], "alice")
+        .await
+        .expect("with a missing node");
+    assert_eq!(with_missing, preview);
+
+    // The counts are the rows the delete removes: every live task, note
+    // and file on the node goes, and nothing anywhere else does.
+    let live = |table: &'static str, node: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            let trash = if table == "attachments" {
+                ""
+            } else {
+                " AND deleted_at IS NULL"
+            };
+            sqlx::query_scalar::<_, i64>(&format!(
+                "SELECT COUNT(*) FROM {table} WHERE node_id = $1{trash}"
+            ))
+            .bind(node)
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+    assert_eq!(live("node_tasks", d).await, 3);
+    repo.delete(doomed).await.expect("delete");
+    for table in ["node_tasks", "node_notes", "attachments"] {
+        assert_eq!(live(table, d).await, 0, "{table} on the deleted node");
+        assert_eq!(live(table, s).await, 1, "{table} on the other node");
+    }
+    let standalone: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM node_tasks WHERE node_id IS NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("standalone");
+    assert_eq!(standalone, 1);
+}
+
+// ── One next occurrence per completion (#281, 1.8) ───────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn two_completions_at_once_schedule_one_next_occurrence(pool: PgPool) {
+    // A double click, or two devices: both requests read the task as open
+    // and both scheduled the next occurrence. `create_occurrence` now
+    // locks the parent and returns the live occurrence it already has.
+    let live_children = |parent: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM node_tasks
+                 WHERE recurrence_parent_id = $1 AND deleted_at IS NULL",
+            )
+            .bind(parent)
+            .fetch_one(&pool)
+            .await
+            .expect("count")
+        }
+    };
+    for round in 0..10 {
+        let parent = PgTaskRepo::new(pool.clone())
+            .create(None, "owner-a", task_req(&format!("daily {round}")))
+            .await
+            .expect("parent");
+        let (one, two) = (PgTaskRepo::new(pool.clone()), PgTaskRepo::new(pool.clone()));
+        let (r1, r2) = tokio::join!(
+            one.create_occurrence(parent.id, "owner-a", task_req("next")),
+            two.create_occurrence(parent.id, "owner-a", task_req("next")),
+        );
+        let (first, second) = (r1.expect("first"), r2.expect("second"));
+        assert_eq!(first.id, second.id, "both callers get the one occurrence");
+        assert_eq!(live_children(parent.id.0).await, 1, "round {round}");
+    }
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_retracted_or_deleted_occurrence_is_scheduled_again(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let parent = tasks
+        .create(None, "owner-a", task_req("weekly"))
+        .await
+        .expect("parent");
+    let first = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
+        .await
+        .expect("first");
+    // Reopening the parent retracts it; completing again schedules anew.
+    assert_eq!(
+        tasks
+            .retract_occurrence(parent.id, "owner-a")
+            .await
+            .expect("retract"),
+        1
+    );
+    let second = tasks
+        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
+        .await
+        .expect("second");
+    assert_ne!(first.id, second.id);
+    // A parent that is gone is an error, not a stray task.
+    let missing = common::id::TaskId(uuid::Uuid::new_v4());
+    assert!(
+        tasks
+            .create_occurrence(missing, "owner-a", task_req("weekly"))
+            .await
+            .is_err()
+    );
+}
+
+// ── Reorder follows the edit rule (#281, 2.5) ────────────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let shared = create_node(&pool, "alice", "reorder shared").await.id;
+    let private = create_node(&pool, "alice", "reorder private").await.id;
+    for q in [format!(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+            ('{0}', 'bob', 'editor', 'alice'), ('{0}', 'carol', 'viewer', 'alice')",
+        shared.0
+    )] {
+        sqlx::query(&q).execute(&pool).await.expect("seed");
+    }
+    let on = |node: common::id::NodeId, owner: &'static str, title: &'static str| {
+        let tasks = PgTaskRepo::new(pool.clone());
+        async move {
+            tasks
+                .create(Some(node), owner, task_req(title))
+                .await
+                .expect("task")
+                .id
+        }
+    };
+    let alice_shared = on(shared, "alice", "alice's on the shared node").await;
+    let alice_private = on(private, "alice", "alice's on her private node").await;
+    let order_of = |id: common::id::TaskId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i32>("SELECT sort_order FROM node_tasks WHERE id = $1")
+                .bind(id.0)
+                .fetch_one(&pool)
+                .await
+                .expect("order")
+        }
+    };
+    let both = [(alice_shared, 7), (alice_private, 7)];
+
+    // A viewer of the node moves nothing.
+    tasks.reorder(&both, Some("carol")).await.expect("carol");
+    assert_eq!(order_of(alice_shared).await, 0);
+    // An editor of the node moves the task there (they can already edit
+    // it), and nothing on a node they can't see.
+    tasks.reorder(&both, Some("bob")).await.expect("bob");
+    assert_eq!(order_of(alice_shared).await, 7);
+    assert_eq!(order_of(alice_private).await, 0);
+    // The owner moves their own; an admin (`None`) moves any.
+    tasks
+        .reorder(&[(alice_private, 3)], Some("alice"))
+        .await
+        .expect("alice");
+    assert_eq!(order_of(alice_private).await, 3);
+    tasks
+        .reorder(&[(alice_private, 9)], None)
+        .await
+        .expect("admin");
+    assert_eq!(order_of(alice_private).await, 9);
+}
+
+// ── One visibility rule for the big lists (#281, 3.2) ────────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what(pool: PgPool) {
+    // The node list, the title list and the graph each spelled "visible to
+    // the caller" their own way; they share `visible_among_many` now.
+    let nodes = PgNodeRepo::new(pool.clone());
+    let graph = PgGraphRepo::new(pool.clone());
+    let own = create_node(&pool, "alice", "vis own").await.id;
+    let shared = create_node(&pool, "bob", "vis shared with alice").await.id;
+    let foreign = create_node(&pool, "bob", "vis bob's alone").await.id;
+    // Two grants on one node for the same person must not list it twice
+    // (the old title query needed DISTINCT for this).
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
+         ($1, 'alice', 'owner', 'alice'), ($2, 'alice', 'viewer', 'bob'),
+         ($2, 'alice', 'editor', 'bob'), ($2, 'bob', 'owner', 'bob'), ($3, 'bob', 'owner', 'bob')
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(own.0)
+    .bind(shared.0)
+    .bind(foreign.0)
+    .execute(&pool)
+    .await
+    .expect("grants");
+
+    let listed = |subject: Option<&'static str>| {
+        let nodes = PgNodeRepo::new(pool.clone());
+        async move {
+            let (rows, total) = nodes
+                .list(common::node::NodeListParams {
+                    node_type: None,
+                    status: None,
+                    project_status: None,
+                    tag_id: None,
+                    owner_id: None,
+                    subject_id: subject.map(str::to_string),
+                    page: None,
+                    per_page: None,
+                    include_archived: true,
+                })
+                .await
+                .expect("list");
+            assert_eq!(rows.len() as u64, total, "the count follows the same rule");
+            let mut ids: Vec<_> = rows.into_iter().map(|n| n.id).collect();
+            ids.sort_by_key(|id| id.0);
+            ids
+        }
+    };
+    let sorted = |mut ids: Vec<common::id::NodeId>| {
+        ids.sort_by_key(|id| id.0);
+        ids
+    };
+
+    for (subject, expected) in [
+        (Some("alice"), sorted(vec![own, shared])),
+        (Some("bob"), sorted(vec![shared, foreign])),
+        (Some("carol"), vec![]),
+        // An admin's scope is `None`: everything.
+        (None, sorted(vec![own, shared, foreign])),
+    ] {
+        assert_eq!(listed(subject).await, expected, "node list as {subject:?}");
+        let titles = nodes.list_titles(subject).await.expect("titles");
+        assert_eq!(
+            sorted(titles.iter().map(|t| t.id).collect()),
+            expected,
+            "title list as {subject:?}"
+        );
+        let on_graph = graph.list_nodes(subject).await.expect("graph");
+        assert_eq!(
+            sorted(on_graph.iter().map(|n| n.id).collect()),
+            expected,
+            "graph as {subject:?}"
+        );
+    }
 }

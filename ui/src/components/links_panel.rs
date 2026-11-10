@@ -159,6 +159,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                    bg-white dark:bg-stone-800
                                                                                    text-stone-900 dark:text-stone-100
                                                                                    focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                                            aria-label="Link name"
                                                                             placeholder="Link name"
                                                                             prop:value=move || edit_name.get()
                                                                             on:input=move |ev| edit_name.set(event_target_value(&ev))
@@ -170,12 +171,13 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                                    bg-white dark:bg-stone-800
                                                                                    text-stone-900 dark:text-stone-100
                                                                                    focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                                            aria-label="Link address"
                                                                             placeholder="https://example.com"
                                                                             prop:value=move || edit_url.get()
                                                                             on:input=move |ev| edit_url.set(event_target_value(&ev))
                                                                         />
                                                                         {move || edit_error.get().map(|e| view! {
-                                                                            <p class="text-xs text-red-500">{e}</p>
+                                                                            <p role="alert" class="text-xs text-red-500">{e}</p>
                                                                         })}
                                                                         <div class="flex gap-1">
                                                                             <IconButton
@@ -217,9 +219,9 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                         {name_display}
                                                                     </a>
                                                                     {is_editor.then(|| view! {
-                                                                        <div class="flex items-center gap-1
-                                                                                    opacity-0 group-hover:opacity-100
-                                                                                    transition-opacity">
+                                                                        // Always visible: a hover-only control is out of reach
+                                                                        // of the keyboard and of touch (#281; leptos.md).
+                                                                        <div class="flex items-center gap-1">
                                                                             <button
                                                                                 class="p-1 rounded text-stone-400
                                                                                        hover:text-stone-600 dark:hover:text-stone-200
@@ -279,6 +281,7 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                bg-white dark:bg-stone-800
                                                                text-stone-900 dark:text-stone-100
                                                                focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                        aria-label="Link name"
                                                         placeholder="Link name"
                                                         prop:value=move || new_name.get()
                                                         on:input=move |ev| new_name.set(event_target_value(&ev))
@@ -290,12 +293,13 @@ pub fn LinksPanel(node_id: NodeId, is_editor: bool) -> impl IntoView {
                                                                bg-white dark:bg-stone-800
                                                                text-stone-900 dark:text-stone-100
                                                                focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                        aria-label="Link address"
                                                         placeholder="https://example.com"
                                                         prop:value=move || new_url.get()
                                                         on:input=move |ev| new_url.set(event_target_value(&ev))
                                                     />
                                                     {move || add_error.get().map(|e| view! {
-                                                        <p class="text-xs text-red-500">{e}</p>
+                                                        <p role="alert" class="text-xs text-red-500">{e}</p>
                                                     })}
                                                     <div class="flex gap-1">
                                                         <button

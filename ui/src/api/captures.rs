@@ -1,7 +1,7 @@
 //! `/captures` (#234): the caller's captures. Owner-only server-side.
 
 use common::{
-    capture::{Capture, CaptureRequest, ConvertCaptureRequest, Converted},
+    capture::{Capture, CaptureColor, CaptureRequest, ConvertCaptureRequest, Converted},
     id::CaptureId,
 };
 
@@ -17,16 +17,23 @@ pub async fn create_capture(body: &str) -> Result<Capture, UiError> {
         "/captures",
         &CaptureRequest {
             body: body.to_string(),
+            color: None,
         },
     )
     .await
 }
 
-pub async fn update_capture(id: CaptureId, body: &str) -> Result<Capture, UiError> {
+/// Reword a capture and set its paper (#273).
+pub async fn update_capture(
+    id: CaptureId,
+    body: &str,
+    color: CaptureColor,
+) -> Result<Capture, UiError> {
     patch_json(
         &format!("/captures/{id}"),
         &CaptureRequest {
             body: body.to_string(),
+            color: Some(color),
         },
     )
     .await

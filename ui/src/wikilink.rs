@@ -13,48 +13,24 @@ use common::id::NodeId;
 /// Inline HTML is preserved by pulldown-cmark and then sanitized by ammonia
 /// (which must be configured to allow `class` and `data-node-id` on `<a>`).
 pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) -> String {
-    let mut result = String::with_capacity(content.len() + 64);
-    let mut remaining = content;
-
-    while let Some(open) = remaining.find("[[") {
-        result.push_str(&remaining[..open]);
-        remaining = &remaining[open + 2..];
-
-        if let Some(close) = remaining.find("]]") {
-            let inner = &remaining[..close];
-            let (target, display) = if let Some(pipe) = inner.find('|') {
-                (inner[..pipe].trim(), inner[pipe + 1..].trim())
-            } else {
-                let t = inner.trim();
-                (t, t)
-            };
-
-            // Keys are lowercased: wiki links match case-insensitively, as
-            // the server's edge sync does (#134 — `[[rust]]` used to render
-            // unresolved while still creating a Linked Here edge).
-            if let Some(node_id) = title_map.get(&target.to_lowercase()) {
-                result.push_str(&format!(
-                    r#"<a class="wikilink" data-node-id="{}">{}</a>"#,
-                    node_id.0,
-                    html_escape(display),
-                ));
-            } else {
-                result.push_str(&format!(
-                    r#"<span class="wikilink-unresolved">{}</span>"#,
-                    html_escape(display),
-                ));
-            }
-            remaining = &remaining[close + 2..];
-        } else {
-            // Unclosed [[ — emit as-is and stop
-            result.push_str("[[");
-            result.push_str(remaining);
-            return result;
+    // The one scanner (`common::wikilink::wikilinks`; #281, 3.1). It skips
+    // code, so no `<a>` is put inside a code span or a fenced block.
+    common::wikilink::replace_wikilinks(content, |link| {
+        // Keys are lowercased: wiki links match case-insensitively, as
+        // the server's edge sync does (#134 — `[[rust]]` used to render
+        // unresolved while still creating a Linked Here edge).
+        match title_map.get(&link.target.to_lowercase()) {
+            Some(node_id) => format!(
+                r#"<a class="wikilink" data-node-id="{}">{}</a>"#,
+                node_id.0,
+                html_escape(link.display),
+            ),
+            None => format!(
+                r#"<span class="wikilink-unresolved">{}</span>"#,
+                html_escape(link.display),
+            ),
         }
-    }
-
-    result.push_str(remaining);
-    result
+    })
 }
 
 fn html_escape(s: &str) -> String {
@@ -120,5 +96,42 @@ mod case_tests {
         let html = preprocess_wikilinks("See [[Rust Language]] and [[rust language|it]].", &map);
         assert_eq!(html.matches("class=\"wikilink\"").count(), 2, "{html}");
         assert!(!html.contains("wikilink-unresolved"));
+    }
+
+    #[test]
+    fn code_is_left_as_typed() {
+        // #281, 1.10: an <a> was written into the code span, where Markdown
+        // then showed its HTML as text.
+        let id = NodeId(uuid::Uuid::from_u128(7));
+        let map: HashMap<String, NodeId> = [("rust".to_string(), id)].into();
+        let source = "Type `[[Rust]]` to link.\n\n```\n[[Rust]]\n```\n";
+        assert_eq!(preprocess_wikilinks(source, &map), source);
+        // Outside the code it is still a link.
+        let html = preprocess_wikilinks("`[[Rust]]` makes [[Rust]]", &map);
+        assert!(
+            html.starts_with("`[[Rust]]` makes <a class=\"wikilink\""),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_link_stays_text() {
+        let map = HashMap::new();
+        // No target: nothing to link to, so no empty span either.
+        assert_eq!(
+            preprocess_wikilinks("a [[]] b [[|x]] c", &map),
+            "a [[]] b [[|x]] c"
+        );
+        // An opener that never closes on its line doesn't swallow the rest.
+        let html = preprocess_wikilinks("see [[ this\nand [[That]]", &map);
+        assert_eq!(
+            html,
+            "see [[ this\nand <span class=\"wikilink-unresolved\">That</span>"
+        );
+        // Nothing after the pipe shows the title, not an empty link.
+        assert_eq!(
+            preprocess_wikilinks("[[That|]]", &map),
+            "<span class=\"wikilink-unresolved\">That</span>"
+        );
     }
 }

@@ -63,6 +63,12 @@ cargo check && cargo clippy -- -D warnings
 - The loop check is a recursive CTE with `UNION`, so a legacy loop
   terminates. The home check skips the same parent, so a repeat stays a
   409 duplicate.
+- `DELETE /edges/:id` refuses a `wiki_link` with 422 (#281, §6.6): it
+  mirrors `[[Title]]` in the text, and sync would put it back. The check
+  comes **after** the rights check, so a stranger still gets 403 and
+  learns nothing about the type. `EdgeType::is_machine_owned` is the one
+  rule; create, convert, `LinkRef::removable` and the UI's remove
+  controls all read it.
 - `DELETE /edges/:id` for `contains` and `related_to` accepts an editor of
   **either** end (one home must never trap a child; `related_to` has no
   direction). Other types stay source-editor only. The rule is
@@ -111,10 +117,10 @@ cargo check && cargo clippy -- -D warnings
   owners.
 - `/inbox/quick` keeps its path and wire format for installed service
   workers; `common::inbox::capture_text` builds the text.
-- Restore accepts formats 3 and 4 (`OLDEST_RESTORABLE`). A format-3 note
+- Restore accepts formats 3 to 5 (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
-  rule). Restore also clears the live captures and nodeless tasks, which
-  the `nodes` cascade never reached.
+  rule). Restore also clears the live captures, nodeless tasks and people,
+  which the `nodes` cascade never reached.
 - `POST /captures/{id}/convert` (S4b): the route checks the destination
   first, as its create route would (editor on the node or home, the
   containment table, `Capability::Tasks`). Then `CaptureRepo::convert`
@@ -171,11 +177,127 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
+## What a backup holds (#281, format 5)
+
+- **One snapshot.** `create_backup` reads everything through
+  `backup::read_snapshot` on `begin_snapshot`'s transaction
+  (`REPEATABLE READ, READ ONLY`). A table read outside it can disagree with
+  the rest, and that archive then fails to restore on a foreign key. So a
+  new backed-up table gets a free `list_all_on(executor)` function in its
+  repo module (the trait method delegates to it) and one line in
+  `read_snapshot`. Don't read it through `state.<repo>`.
+- **A new table that holds account data must join the backup**, as it must
+  join the purge. In `BackupData` it is an `Option<Vec<_>>` with
+  `#[serde(default)]`: `None` means an older archive that never carried
+  it, and `restore_into` then leaves the live rows alone; `Some` replaces
+  them (`restore_account_settings`). A table no node cascades to also
+  needs its own `DELETE` in `restore_into` (people were missed until #281).
+- **Attachment files are stored under `attachments/<attachment id>`**
+  (`common::backup::attachment_entry_path`). Formats 3 and 4 used
+  `attachments/<node id>/<file name>`, which two attachments can share.
+  Restore maps entries to rows only through
+  `common::backup::match_attachment_entries`; never match by file name.
+- **No credential goes into an archive** (owner decision, 2026-11-09): an
+  admin can download one. `repo::webhook::list_all_for_backup` never
+  selects `secret`, and `BackupWebhook` has no field for it. A webhook
+  that signed is restored switched off (`BackupWebhook::restored_active`).
+- The trash (soft-deleted notes, tasks, captures) is not backed up, on
+  purpose.
+- Changing what an archive holds, or where, bumps
+  `common::backup::SCHEMA_VERSION`, so older releases refuse it.
+
+## Server commands and automatic backups (2026-11-02)
+
+- `api/src/cli.rs`: `ember-trove-api backup create [--comment TEXT]` runs
+  instead of serving (parsed before anything connects; anything unknown is
+  refused). It needs a shell on the server, never a sign-in: don't add an
+  HTTP route or token for it.
+- It records `common::backup::AUTOMATIC_ACTOR` as `created_by`, and then
+  `backup::prune_automatic` keeps the newest `AUTOMATIC_KEPT` (10)
+  automatic backups. An admin's backups are never pruned. Deleting a backup
+  goes through `backup::delete_backup` (archive, then row), shared with the
+  Delete route.
+- It runs through `deploy/app-backup.sh` (public-log-safe output, full
+  output in `~/ember-trove-backups.log` on the host): after each deploy
+  (`release.yml`) and daily (`backup.yml`, sharing the deploy's
+  concurrency group). Schedules live in Actions, never the host's
+  crontab, so a failure is a red run and an email (the old `backup.sh`
+  cron failed silently for seven months).
+
+## "Visible to" in SQL (#281, 3.2)
+
+- Two spellings only, both in `repo/mod.rs`:
+  - `visible_to(alias, n)`: a per-row `EXISTS`. For a query that touches
+    few nodes (a join from tasks or notes, a title lookup).
+  - `visible_among_many(alias, n)`: `id IN (grants UNION own)`, hashed
+    once. For a query that returns many of the caller's nodes (node list,
+    title list, graph). Measured 2026-11-10 on 20,000 nodes: about twice
+    as fast as `visible_to` there.
+- A query scoped to `owner_id` alone is owned-only on purpose (graph edges
+  and positions, search, the notes feed). Don't "fix" it to visible.
+- `the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what`
+  holds the three big lists to one answer.
+- One line of Markdown as plain text is `common::note::plain_line`
+  (3.4); `markdown::plain_preview` and `note_title` both use it.
+
+## Wiki links (#281, 3.1)
+
+- `common::wikilink::wikilinks(text)` is the only scanner for `[[…]]`.
+  It gives each link's byte range, target and display, and skips code
+  (`code_ranges`). Edge sync, title resolution, the renderer, excerpts,
+  note previews and "link this mention" all go through it or
+  `replace_wikilinks`. Never write another `find("[[")` loop: the five
+  that existed disagreed on `[[]]`, `[[x|]]`, trimming and unclosed
+  openers.
+- A rule change there changes which `wiki_link` edges exist: sync runs on
+  the next save of each node.
+
+## Request validation (#281, 1.5)
+
+- An update request validates like its create: `UpdateNodeRequest` and
+  `UpdateTaskRequest` derive `garde::Validate`, and the route calls
+  `validate()` before anything else. A rule a create has (title length,
+  `not_blank`, the 1 MiB body cap) belongs on the update too, or the
+  database's CHECK answers it as a 500.
+- A node's body snapshot goes through `snapshot_body` (routes/nodes.rs),
+  awaited. Never `tokio::spawn` a version write: it can land after the
+  next save's.
+
+## Task rules (#281)
+
+- Who may change a task is `require_task_editor` (routes/tasks.rs): its
+  owner, an admin, or an editor of its node. `TaskRepo::reorder` applies
+  the same rule in SQL and skips the rest.
+- A list's admin scope is `subject_scope(&claims)`, never an inline
+  `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
+  `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
+  `common::task::is_overdue` and `Task::in_my_day`.
+- `TaskRepo::create_occurrence` locks the parent row and returns the live
+  occurrence it already has: a parent has at most one. Without the lock,
+  `two_completions_at_once_schedule_one_next_occurrence` fails.
+- "Today" for a recurring task's next occurrence is the sender's:
+  `UpdateTaskRequest.today`, read through `common::task::local_today`
+  (within a day of UTC, else UTC). `done_toggle` sends it. Never use the
+  server's UTC date for a user-facing day when the client can say.
+
+## Node deletion preview (#281)
+
+- `GET /nodes/deletion-preview?ids=a,b` feeds the delete confirmation.
+  Each id passes `require_owner`, the check `DELETE /nodes/:id` makes,
+  before anything is counted. A node that fails it is left out, the same
+  as one that doesn't exist: only a 403 means "not yours", any other error
+  propagates. The answer is counts only (`NodeDeletionPreview`).
+- `NodeRepo::deletion_preview` counts the rows the `nodes` cascade
+  removes. A new table that holds a node's content, and that a person
+  would miss, joins that query and `NodeDeletionPreview::losses`.
+
 ## Admin permission model
 
 - `require_role()` returns `Ok(())` immediately when `claims.roles.contains("admin")`.
 - `list_nodes` skips the `subject_id` filter for admins.
-- `is_owner`: `user.sub == n.owner_id || user.roles.contains("admin")`.
+- Ownership of a non-node resource is `require_resource_owner(claims, owner_id)`
+  (auth/permissions.rs): the owner, or an admin. People, captures and
+  memberships are the exceptions: owner only, no admin bypass.
 - Admin sub: `f1eb2590-0091-70e4-d9b3-24e4a23d24d1` (`julian@chultarsky.com`).
 
 ## AWS SDK / TLS
@@ -185,7 +307,7 @@ cargo check && cargo clippy -- -D warnings
   Do **not** re-enable the legacy `rustls` feature — it drags in the advisory-laden
   rustls 0.21 / rustls-webpki 0.101 chain that was deliberately eliminated (see
   `.cargo/audit.toml` history and `.claude/ERRORS.md`).
-- AWS SDK requires rustc ≥ 1.91.1; the pinned 1.96 toolchain clears it.
+- AWS SDK requires rustc ≥ 1.91.1; the pinned toolchain (`rust-toolchain.toml`) clears it.
 
 ## Cognito Hosted UI
 

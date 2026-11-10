@@ -4,11 +4,14 @@
 //! Each archive contains:
 //! - `manifest.json` — metadata and entity counts
 //! - `data.json`     — all serialised entities
-//! - `attachments/<node-uuid>/<filename>` — raw attachment bytes
+//! - `attachments/<attachment-uuid>` — raw attachment bytes (format 5; formats
+//!   3 and 4 used `attachments/<node-uuid>/<filename>`, which two attachments
+//!   can share, and restore still reads them: `match_attachment_entries`)
 
 use bytes::Bytes;
 use common::{
     activity::ActivityRecord,
+    attachment::Attachment,
     backup::{BackupData, BackupJob, BackupManifest, BackupNote, BackupPreview, EntityCounts},
     id::NodeId,
 };
@@ -18,7 +21,12 @@ use std::io::Write;
 use tar::Builder;
 use uuid::Uuid;
 
-use crate::{error::ApiError, state::AppState};
+use crate::{
+    error::ApiError,
+    object_store::ObjectStore,
+    repo::{self, backup::BackupRepo, object_deletion::ObjectDeletionRepo},
+    state::AppState,
+};
 
 // ── Internal helpers ───────────────────────────────────────────────────────────
 
@@ -65,8 +73,10 @@ fn counts_as_restored(mut counts: EntityCounts, notes: &[BackupNote]) -> EntityC
     counts
 }
 
-/// Only archives this release can read restore (#222): its own format, and
-/// format 3, whose captures are notes without a node (#234). Checked before
+/// Only archives this release can read restore (#222): its own format,
+/// format 4, whose attachment files sit under their node and file name
+/// (#281), and format 3, whose captures are also notes without a node
+/// (#234). Checked before
 /// anything else, so an unreadable archive costs no pre-restore snapshot
 /// and never reaches the parser, which would fail on its data with a 500.
 fn check_format(manifest: &BackupManifest) -> Result<(), ApiError> {
@@ -149,6 +159,23 @@ fn folded_links_warnings(data: &BackupData) -> Vec<String> {
     out
 }
 
+/// The restore preview's note on webhooks that come back switched off
+/// (`BackupWebhook::restored_active`). A count only.
+fn webhooks_warning(switched_off: usize) -> Option<String> {
+    (switched_off > 0).then(|| {
+        let (s, they, are, their) = if switched_off == 1 {
+            ("", "it", "is", "its")
+        } else {
+            ("s", "they", "are", "their")
+        };
+        format!(
+            "{switched_off} webhook{s} in this backup signed {their} payloads. Signing secrets \
+             are never backed up, so {they} {are} restored switched off until {their} owner \
+             enters a secret again."
+        )
+    })
+}
+
 fn add_bytes_to_archive<W: Write>(
     builder: &mut Builder<W>,
     path: &str,
@@ -160,93 +187,72 @@ fn add_bytes_to_archive<W: Write>(
     header.set_cksum();
     builder
         .append_data(&mut header, path, data)
-        .map_err(|e| ApiError::Internal(format!("tar append failed for {path}: {e}")))?;
+        // No path in the message: an attachment's holds its file name.
+        .map_err(|e| ApiError::Internal(format!("tar append failed: {e}")))?;
     Ok(())
 }
 
 // ── create_backup ──────────────────────────────────────────────────────────────
 
-/// Collect all owner data, pack it into a tar.gz archive, upload to S3,
-/// and record the job in `backup_jobs`.
-pub async fn create_backup(
-    state: &AppState,
-    owner_id: &str,
-    comment: Option<&str>,
-) -> Result<BackupJob, ApiError> {
-    // Fetch all data across all users.
-    let nodes = state.nodes.list_all().await.map_err(ApiError::from)?;
-    let tags = state.tags.list_all().await.map_err(ApiError::from)?;
-    let notes: Vec<BackupNote> = state
-        .notes
-        .list_all()
+/// Opens the transaction a backup reads in: `REPEATABLE READ`, so every
+/// table is read as of one instant, and `READ ONLY`. Read in separate
+/// queries, a node created or a tag deleted between two of them left rows
+/// pointing at nothing, and restoring that archive failed on its foreign
+/// keys (#281). The snapshot is taken by the first query run on it.
+pub(crate) async fn begin_snapshot(
+    pool: &sqlx::PgPool,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, ApiError> {
+    let mut tx = pool
+        .begin()
         .await
-        .map_err(ApiError::from)?
+        .map_err(|e| ApiError::Internal(format!("begin backup snapshot failed: {e}")))?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::Internal(format!("set backup snapshot isolation failed: {e}")))?;
+    Ok(tx)
+}
+
+/// Everything an archive's `data.json` holds, all owners (the backup is
+/// admin-run), read on the caller's connection: [`begin_snapshot`]'s, so
+/// the lists agree with each other.
+pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<BackupData, ApiError> {
+    let nodes = repo::node::list_all_on(&mut *conn).await?;
+    let tags = repo::tag::list_all_on(&mut *conn).await?;
+    let notes: Vec<BackupNote> = repo::note::list_all_on(&mut *conn)
+        .await?
         .into_iter()
         .map(Into::into)
         .collect();
-    // Captures (#234), all owners: the backup is admin-run.
-    let captures = state.captures.list_all().await.map_err(ApiError::from)?;
-    let tasks = state.tasks.list_all().await.map_err(ApiError::from)?;
-    let edges = state.edges.list_all().await.map_err(ApiError::from)?;
+    // Captures (#234).
+    let captures = repo::capture::list_all_on(&mut *conn).await?;
+    let tasks = repo::task::list_all_on(&mut *conn).await?;
+    let recurrence_links = repo::task::recurrence_links_on(&mut *conn).await?;
+    let edges = repo::edge::list_all_on(&mut *conn).await?;
+    let attachments = repo::attachment::list_all_on(&mut *conn).await?;
+    let node_links = repo::node_link::list_all_on(&mut *conn).await?;
+    let favorites = repo::favorite::list_all_on(&mut *conn).await?;
+    let permissions = repo::permission::list_all_on(&mut *conn, None).await?;
+    let node_versions = repo::node_version::list_all_on(&mut *conn).await?;
+    let node_positions = repo::graph::list_positions_on(&mut *conn, None).await?;
+    // People (#147): third-party contact details.
+    let (people, node_people) = repo::person::list_all_on(&mut *conn).await?;
+    // Activity (#208): the History record (ONTOLOGY §10).
+    let activity = repo::activity::list_all_on(&mut *conn).await?;
+    // Format 5 (#281): what a restore onto an empty database used to lose.
+    let node_templates = repo::template::list_on(&mut *conn, None).await?;
+    let search_presets = repo::search_presets::list_all_on(&mut *conn).await?;
+    let editor_prefs = repo::editor_pref::list_all_on(&mut *conn).await?;
+    // Without their signing secrets: the query never reads them.
+    let webhooks = repo::webhook::list_all_for_backup(&mut *conn).await?;
 
-    // Collect every attachment in one query (was an N+1 loop over nodes).
-    let attachments = state.attachments.list_all().await.map_err(ApiError::from)?;
-
-    // Collect additional entity types (schema v2).
-    let node_links = state.node_links.list_all().await.map_err(ApiError::from)?;
-    let favorites = state.favorites.list_all().await.map_err(ApiError::from)?;
-    let permissions = state
-        .permissions
-        .list_all(None)
-        .await
-        .map_err(ApiError::from)?;
-    let node_versions = state
-        .node_versions
-        .list_all()
-        .await
-        .map_err(ApiError::from)?;
-    // Full backup is admin-only — None = all owners' positions.
-    let node_positions = state
-        .graph
-        .list_positions(None)
-        .await
-        .map_err(ApiError::from)?;
-
-    // People (#147): third-party contact details, all owners (admin backup).
-    let (people, node_people) = state.people.list_all().await.map_err(ApiError::from)?;
-
-    // Activity (#208): the History record (ONTOLOGY §10), all owners.
-    let activity = state.activity.list_all().await.map_err(ApiError::from)?;
-
-    let entity_counts = EntityCounts {
-        nodes: nodes.len() as u32,
-        edges: edges.len() as u32,
-        tags: tags.len() as u32,
-        notes: notes.len() as u32,
-        tasks: tasks.len() as u32,
-        attachments: attachments.len() as u32,
-        people: people.len() as u32,
-        activity: activity.len() as u32,
-        captures: captures.len() as u32,
-    };
-
-    let now = chrono::Utc::now();
-    let job_id = Uuid::new_v4();
-
-    let manifest = BackupManifest {
-        schema_version: common::backup::SCHEMA_VERSION,
-        created_at: now,
-        created_by: owner_id.to_string(),
-        entity_counts: entity_counts.clone(),
-    };
-
-    let data = BackupData {
+    Ok(BackupData {
         nodes,
         edges,
         tags,
         notes,
         tasks,
-        attachments: attachments.clone(),
+        attachments,
         node_links,
         favorites,
         permissions,
@@ -256,12 +262,25 @@ pub async fn create_backup(
         node_people,
         activity,
         captures,
-    };
+        node_templates: Some(node_templates),
+        search_presets: Some(search_presets),
+        editor_prefs: Some(editor_prefs),
+        webhooks: Some(webhooks),
+        recurrence_links,
+    })
+}
 
-    // Build the tar.gz archive in memory.
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+/// Packs a manifest, the data and every attachment's bytes into a tar.gz,
+/// in memory. A file the store can't return is skipped with a warning; its
+/// row is still in `data`.
+async fn build_archive(
+    manifest: &BackupManifest,
+    data: &BackupData,
+    store: &dyn ObjectStore,
+) -> Result<Vec<u8>, ApiError> {
+    let manifest_bytes = serde_json::to_vec_pretty(manifest)
         .map_err(|e| ApiError::Internal(format!("manifest serialise failed: {e}")))?;
-    let data_bytes = serde_json::to_vec_pretty(&data)
+    let data_bytes = serde_json::to_vec_pretty(data)
         .map_err(|e| ApiError::Internal(format!("data serialise failed: {e}")))?;
 
     let gz_buf: Vec<u8> = Vec::new();
@@ -271,16 +290,19 @@ pub async fn create_backup(
     add_bytes_to_archive(&mut builder, "manifest.json", &manifest_bytes)?;
     add_bytes_to_archive(&mut builder, "data.json", &data_bytes)?;
 
-    // Stream attachment bytes into the archive.
-    for att in &attachments {
-        match state.object_store.get(&att.s3_key).await {
+    // Each attachment under its own id (#281): two on one node can share a
+    // file name, and the old node-and-name path made them one entry name.
+    for att in &data.attachments {
+        match store.get(&att.s3_key).await {
             Ok(file_bytes) => {
-                let archive_path = format!("attachments/{}/{}", att.node_id.0, att.filename);
+                let archive_path = common::backup::attachment_entry_path(att.id);
                 add_bytes_to_archive(&mut builder, &archive_path, &file_bytes)?;
             }
             Err(e) => {
+                // The attachment's id, never its key: the key holds the file
+                // name, and this command's output can reach the release log.
                 tracing::warn!(
-                    key = %att.s3_key,
+                    attachment_id = %att.id,
                     "attachment fetch failed during backup, skipping: {e}"
                 );
             }
@@ -290,9 +312,47 @@ pub async fn create_backup(
     let enc = builder
         .into_inner()
         .map_err(|e| ApiError::Internal(format!("tar finish failed: {e}")))?;
-    let gz_bytes = enc
-        .finish()
-        .map_err(|e| ApiError::Internal(format!("gzip finish failed: {e}")))?;
+    enc.finish()
+        .map_err(|e| ApiError::Internal(format!("gzip finish failed: {e}")))
+}
+
+/// Collect all owner data, pack it into a tar.gz archive, upload to S3,
+/// and record the job in `backup_jobs`.
+pub async fn create_backup(
+    state: &AppState,
+    owner_id: &str,
+    comment: Option<&str>,
+) -> Result<BackupJob, ApiError> {
+    // Every table as of one instant (#281). The transaction only reads, so
+    // there is nothing to commit, and it ends before the files are fetched:
+    // a snapshot shouldn't stay open across slow storage calls.
+    let mut tx = begin_snapshot(&state.pool).await?;
+    let data = read_snapshot(&mut tx).await?;
+    tx.rollback()
+        .await
+        .map_err(|e| ApiError::Internal(format!("end backup snapshot failed: {e}")))?;
+
+    let entity_counts = EntityCounts {
+        nodes: data.nodes.len() as u32,
+        edges: data.edges.len() as u32,
+        tags: data.tags.len() as u32,
+        notes: data.notes.len() as u32,
+        tasks: data.tasks.len() as u32,
+        attachments: data.attachments.len() as u32,
+        people: data.people.len() as u32,
+        activity: data.activity.len() as u32,
+        captures: data.captures.len() as u32,
+    };
+
+    let job_id = Uuid::new_v4();
+    let manifest = BackupManifest {
+        schema_version: common::backup::SCHEMA_VERSION,
+        created_at: chrono::Utc::now(),
+        created_by: owner_id.to_string(),
+        entity_counts: entity_counts.clone(),
+    };
+
+    let gz_bytes = build_archive(&manifest, &data, state.object_store.as_ref()).await?;
 
     let size_bytes = gz_bytes.len() as i64;
     let s3_key = format!("backups/{job_id}.tar.gz");
@@ -321,6 +381,47 @@ pub async fn create_backup(
         .map_err(ApiError::from)?;
 
     Ok(job)
+}
+
+// ── delete and prune ───────────────────────────────────────────────────────────
+
+/// Delete one backup: its archive, then its row. An archive holds everyone's
+/// data, so it must never outlive its row unnoticed: if the store refuses,
+/// the key goes to the `object_deletions` outbox (the daily drain retries
+/// it), and if even that fails, the row stays so the backup is still listed.
+pub async fn delete_backup(
+    backups: &dyn BackupRepo,
+    store: &dyn ObjectStore,
+    outbox: &dyn ObjectDeletionRepo,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    let job = backups.get(id).await.map_err(ApiError::from)?;
+    if let Err(e) = store.delete(&job.s3_key).await {
+        tracing::warn!(%id, "backup archive delete failed, queued for retry: {e}");
+        outbox.enqueue(&job.s3_key).await.map_err(ApiError::from)?;
+    }
+    backups.delete(id).await.map_err(ApiError::from)
+}
+
+/// Delete the automatic backups past the newest `keep`
+/// (`common::backup::automatic_to_prune`); an admin's are never touched.
+/// One already gone (an admin deleted it meanwhile) counts as deleted.
+/// Returns how many were deleted.
+pub async fn prune_automatic(
+    backups: &dyn BackupRepo,
+    store: &dyn ObjectStore,
+    outbox: &dyn ObjectDeletionRepo,
+    keep: usize,
+) -> Result<usize, ApiError> {
+    let jobs = backups.list_all().await.map_err(ApiError::from)?;
+    let doomed = common::backup::automatic_to_prune(&jobs, keep);
+    for id in &doomed {
+        match delete_backup(backups, store, outbox, *id).await {
+            Ok(()) | Err(ApiError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(doomed.len())
 }
 
 // ── preview_restore ────────────────────────────────────────────────────────────
@@ -373,6 +474,7 @@ pub async fn preview_restore(
             entity_counts = counts_as_restored(entity_counts, &data.notes);
             warnings.extend(edge_rules_warning(&data));
             warnings.extend(folded_links_warnings(&data));
+            warnings.extend(webhooks_warning(data.webhooks_switched_off()));
         }
         Err(e) => {
             tracing::warn!("restore preview couldn't read data.json: {e:?}");
@@ -454,36 +556,62 @@ pub async fn execute_restore(
         .map_err(|e| ApiError::Internal(format!("commit restore transaction failed: {e}")))?;
 
     // Re-upload attachment files to S3 (best-effort — non-fatal).
-    for (archive_path, file_bytes) in &attachment_files {
-        // Determine the s3_key from the matching attachment metadata.
-        let s3_key = data
-            .attachments
-            .iter()
-            .find(|a| archive_path == &format!("attachments/{}/{}", a.node_id.0, a.filename))
-            .map(|a| a.s3_key.clone());
-
-        if let Some(key) = s3_key {
-            let content_type = data
-                .attachments
-                .iter()
-                .find(|a| a.s3_key == key)
-                .map(|a| a.content_type.as_str())
-                .unwrap_or("application/octet-stream");
-
-            if let Err(e) = state
-                .object_store
-                .put(&key, Bytes::copy_from_slice(file_bytes), content_type)
-                .await
-            {
-                tracing::warn!(
-                    key = %key,
-                    "re-upload attachment to S3 failed (non-fatal): {e}"
-                );
-            }
-        }
-    }
+    upload_restored_files(
+        state.object_store.as_ref(),
+        &data.attachments,
+        &attachment_files,
+    )
+    .await;
 
     Ok(())
+}
+
+/// Puts an archive's attachment files back under their rows' keys. Each
+/// file goes to the attachment `match_attachment_entries` names for it and
+/// to no other: restore used to take the first attachment with the same
+/// node and file name, so one file's bytes could land under another's key
+/// (#281). Best effort: a failed upload is logged, not fatal. Returns how
+/// many files were uploaded.
+async fn upload_restored_files(
+    store: &dyn ObjectStore,
+    attachments: &[Attachment],
+    files: &[(String, Vec<u8>)],
+) -> usize {
+    let entries: Vec<(&str, u64)> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.len() as u64))
+        .collect();
+    let matched = common::backup::match_attachment_entries(attachments, &entries);
+
+    let (mut uploaded, mut unmatched) = (0usize, 0usize);
+    for ((_, bytes), index) in files.iter().zip(matched) {
+        let Some(att) = index.and_then(|i| attachments.get(i)) else {
+            unmatched += 1;
+            continue;
+        };
+        match store
+            .put(
+                &att.s3_key,
+                Bytes::copy_from_slice(bytes),
+                &att.content_type,
+            )
+            .await
+        {
+            Ok(()) => uploaded += 1,
+            // The attachment's id, never its key: the key holds the file name.
+            Err(e) => tracing::warn!(
+                attachment_id = %att.id,
+                "re-upload attachment to S3 failed (non-fatal): {e}"
+            ),
+        }
+    }
+    if unmatched > 0 {
+        tracing::warn!(
+            unmatched,
+            "restore: archive files that can't be told apart were not uploaded"
+        );
+    }
+    uploaded
 }
 
 /// Replaces every user's data with an archive's, on the caller's
@@ -516,16 +644,22 @@ pub(crate) async fn restore_into(
         .map_err(|e| ApiError::Internal(format!("delete favorites failed: {e}")))?;
 
     // What no node holds, which the cascade above never reached: tasks
-    // without a Project and the captures. A restore used to leave them, so
-    // the live database's own survived next to the archive's (#234).
+    // without a Project, the captures (#234) and the people registry (#281:
+    // memberships went with the nodes, the people themselves did not). A
+    // restore used to leave them, so the live database's own survived next
+    // to the archive's.
     for (what, sql) in [
-        ("tasks", "DELETE FROM node_tasks WHERE node_id IS NULL"),
+        (
+            "nodeless tasks",
+            "DELETE FROM node_tasks WHERE node_id IS NULL",
+        ),
         ("captures", "DELETE FROM captures"),
+        ("people", "DELETE FROM people"),
     ] {
         sqlx::query(sql)
             .execute(&mut *conn)
             .await
-            .map_err(|e| ApiError::Internal(format!("delete nodeless {what} failed: {e}")))?;
+            .map_err(|e| ApiError::Internal(format!("delete {what} failed: {e}")))?;
     }
 
     // Insert tags first (nodes may reference them via node_tags).
@@ -657,12 +791,13 @@ pub(crate) async fn restore_into(
     );
     for capture in captures {
         sqlx::query(
-            "INSERT INTO captures (id, owner_id, body, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
+            "INSERT INTO captures (id, owner_id, body, color, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
         )
         .bind(capture.id.0)
         .bind(&capture.owner_id)
         .bind(&capture.body)
+        .bind(capture.color.as_str())
         .bind(capture.created_at)
         .bind(capture.updated_at)
         .execute(&mut *conn)
@@ -726,6 +861,32 @@ pub(crate) async fn restore_into(
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert task failed: {e}")))?;
+    }
+
+    // Which task scheduled which occurrence (#281), once every task is in:
+    // the link is a foreign key to another task. A link whose parent isn't
+    // in the archive is dropped; that only disables the retraction for it.
+    if !data.recurrence_links.is_empty() {
+        let tasks: Vec<Uuid> = data.recurrence_links.iter().map(|l| l.task_id.0).collect();
+        let parents: Vec<Uuid> = data
+            .recurrence_links
+            .iter()
+            .map(|l| l.parent_id.0)
+            .collect();
+        sqlx::query(
+            r#"
+            UPDATE node_tasks t
+            SET recurrence_parent_id = l.parent
+            FROM UNNEST($1::uuid[], $2::uuid[]) AS l(task, parent)
+            WHERE t.id = l.task
+              AND EXISTS (SELECT 1 FROM node_tasks p WHERE p.id = l.parent)
+            "#,
+        )
+        .bind(&tasks)
+        .bind(&parents)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("restore recurrence links failed: {e}")))?;
     }
 
     // Insert attachment metadata rows.
@@ -900,6 +1061,8 @@ pub(crate) async fn restore_into(
         .map_err(|e| ApiError::Internal(format!("insert membership failed: {e}")))?;
     }
 
+    restore_account_settings(conn, data).await?;
+
     // Activity last (#208): every row needs its node. Deleting the nodes
     // above cascaded the old log away, so this brings History back.
     let restored_nodes: HashSet<Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
@@ -915,12 +1078,130 @@ pub(crate) async fn restore_into(
     Ok(())
 }
 
+/// Replaces what an account keeps outside its nodes: templates, saved
+/// searches, editor prefs and webhooks (format 5, #281). Each list is
+/// replaced only when the archive carries it. An older archive has `None`,
+/// and the live rows stay, as they did before backups held them.
+async fn restore_account_settings(
+    conn: &mut sqlx::PgConnection,
+    data: &BackupData,
+) -> Result<(), ApiError> {
+    if let Some(templates) = &data.node_templates {
+        sqlx::query("DELETE FROM node_templates")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("delete templates failed: {e}")))?;
+        for t in templates {
+            sqlx::query(
+                r#"
+                INSERT INTO node_templates
+                    (id, name, description, node_type, body, is_default, created_by,
+                     created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "#,
+            )
+            .bind(t.id.0)
+            .bind(&t.name)
+            .bind(&t.description)
+            .bind(t.node_type.as_str())
+            .bind(&t.body)
+            .bind(t.is_default)
+            .bind(&t.created_by)
+            .bind(t.created_at)
+            .bind(t.updated_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("insert template failed: {e}")))?;
+        }
+    }
+
+    if let Some(presets) = &data.search_presets {
+        sqlx::query("DELETE FROM search_presets")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("delete search presets failed: {e}")))?;
+        for p in presets {
+            sqlx::query(
+                r#"
+                INSERT INTO search_presets
+                    (id, owner_id, name, query, fuzzy, published_only, tag_ids, tag_op,
+                     created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                "#,
+            )
+            .bind(p.id.0)
+            .bind(&p.owner_id)
+            .bind(&p.name)
+            .bind(&p.query)
+            .bind(p.fuzzy)
+            .bind(p.published_only)
+            .bind(&p.tag_ids)
+            .bind(&p.tag_op)
+            .bind(p.created_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("insert search preset failed: {e}")))?;
+        }
+    }
+
+    if let Some(prefs) = &data.editor_prefs {
+        sqlx::query("DELETE FROM editor_prefs")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("delete editor prefs failed: {e}")))?;
+        for p in prefs {
+            sqlx::query(
+                "INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height, collapsed) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(&p.owner_id)
+            .bind(&p.entity_kind)
+            .bind(p.entity_id)
+            .bind(p.height)
+            .bind(p.collapsed)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("insert editor pref failed: {e}")))?;
+        }
+    }
+
+    if let Some(webhooks) = &data.webhooks {
+        sqlx::query("DELETE FROM webhooks")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| ApiError::Internal(format!("delete webhooks failed: {e}")))?;
+        for w in webhooks {
+            // No secret: an archive never holds one. A webhook that signed
+            // comes back switched off (`BackupWebhook::restored_active`).
+            sqlx::query(
+                r#"
+                INSERT INTO webhooks
+                    (id, owner_id, url, secret, events, is_active, created_at, updated_at)
+                VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
+                "#,
+            )
+            .bind(w.id.0)
+            .bind(&w.owner_id)
+            .bind(&w.url)
+            .bind(&w.events)
+            .bind(w.restored_active())
+            .bind(w.created_at)
+            .bind(w.updated_at)
+            .execute(&mut *conn)
+            .await
+            // Never include the row: its URL can carry a token.
+            .map_err(|e| ApiError::Internal(format!("insert webhook failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
 /// Re-inserts a backup's activity rows in one statement (the log only
 /// grows, so it's batched rather than one INSERT per row). Rows whose node
-/// isn't being restored are skipped: `create_backup` reads each table in its
-/// own query, so a node created mid-backup can leave activity behind
-/// without its node, and that row would fail the FK and abort the whole
-/// restore. Actions are inserted verbatim, known to this build or not.
+/// isn't being restored are skipped: until format 5 a backup read each table
+/// in its own query, so a node created mid-backup could leave activity
+/// behind without its node, and that row would fail the FK and abort the
+/// whole restore. Actions are inserted verbatim, known to this build or not.
 /// Returns how many rows were inserted.
 pub(crate) async fn restore_activity(
     conn: &mut sqlx::PgConnection,
@@ -1301,5 +1582,204 @@ mod tests {
         assert!(
             matches!(check_format(&manifest(9)), Err(ApiError::Validation(m)) if m.contains("newer"))
         );
+        // The formats before the attachment paths changed still restore.
+        assert!(check_format(&manifest(3)).is_ok() && check_format(&manifest(4)).is_ok());
+    }
+
+    /// An object store in memory.
+    #[derive(Default)]
+    struct MemStore(std::sync::Mutex<std::collections::HashMap<String, Bytes>>);
+
+    impl MemStore {
+        fn holding(files: &[(&str, &[u8])]) -> Self {
+            let store = Self::default();
+            for (key, bytes) in files {
+                store
+                    .0
+                    .lock()
+                    .unwrap()
+                    .insert((*key).to_string(), Bytes::copy_from_slice(bytes));
+            }
+            store
+        }
+
+        fn at(&self, key: &str) -> Option<Bytes> {
+            self.0.lock().unwrap().get(key).cloned()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for MemStore {
+        async fn put(
+            &self,
+            key: &str,
+            data: Bytes,
+            _content_type: &str,
+        ) -> Result<(), common::EmberTroveError> {
+            self.0.lock().unwrap().insert(key.to_string(), data);
+            Ok(())
+        }
+        async fn get(&self, key: &str) -> Result<Bytes, common::EmberTroveError> {
+            self.at(key)
+                .ok_or_else(|| common::EmberTroveError::NotFound("no such object".into()))
+        }
+        async fn delete(&self, key: &str) -> Result<(), common::EmberTroveError> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+        async fn presigned_url(
+            &self,
+            _key: &str,
+            _expires_secs: u32,
+        ) -> Result<String, common::EmberTroveError> {
+            Err(common::EmberTroveError::Internal("not in tests".into()))
+        }
+    }
+
+    fn manifest_at(schema_version: u32) -> BackupManifest {
+        BackupManifest {
+            schema_version,
+            created_at: chrono::Utc::now(),
+            created_by: "admin".into(),
+            entity_counts: EntityCounts {
+                nodes: 0,
+                edges: 0,
+                tags: 0,
+                notes: 0,
+                tasks: 0,
+                attachments: 2,
+                people: 0,
+                activity: 0,
+                captures: 0,
+            },
+        }
+    }
+
+    /// Two attachments on one node with the same file name, as two pasted
+    /// images are, each under its own key.
+    fn two_with_one_name(sizes: (i64, i64)) -> Vec<Attachment> {
+        let node = Uuid::new_v4();
+        [
+            ("key/first/image.png", sizes.0),
+            ("key/second/image.png", sizes.1),
+        ]
+        .into_iter()
+        .map(|(key, size)| Attachment {
+            id: common::id::AttachmentId(Uuid::new_v4()),
+            node_id: NodeId(node),
+            filename: "image.png".into(),
+            content_type: "image/png".into(),
+            size_bytes: size,
+            s3_key: key.into(),
+            created_at: chrono::Utc::now(),
+        })
+        .collect()
+    }
+
+    #[tokio::test]
+    async fn two_files_with_one_name_come_back_under_their_own_keys() {
+        // #281: restore sent both entries to the first attachment's key, so
+        // that key ended up with the second file and the second key with none.
+        let attachments = two_with_one_name((5, 7));
+        let live = MemStore::holding(&[
+            ("key/first/image.png", b"first"),
+            ("key/second/image.png", b"second!"),
+        ]);
+        let data = BackupData {
+            attachments,
+            ..BackupData::default()
+        };
+        let archive = build_archive(&manifest_at(common::backup::SCHEMA_VERSION), &data, &live)
+            .await
+            .expect("archive");
+
+        let (_, read, files) = extract_full(&archive).expect("reads back");
+        assert_eq!(files.len(), 2, "one entry per attachment");
+        assert_ne!(files[0].0, files[1].0, "each under its own path");
+        assert!(
+            files.iter().all(|(path, _)| !path.contains("image.png")),
+            "no file name in an archive path"
+        );
+
+        let restored = MemStore::default();
+        let uploaded = upload_restored_files(&restored, &read.attachments, &files).await;
+        assert_eq!(uploaded, 2);
+        assert_eq!(
+            restored.at("key/first/image.png").as_deref(),
+            Some(&b"first"[..])
+        );
+        assert_eq!(
+            restored.at("key/second/image.png").as_deref(),
+            Some(&b"second!"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_old_archive_with_a_shared_path_restores_each_file_once() {
+        // A format-4 archive already written: both files sit under one path,
+        // in the order of `attachments`, and are the same length.
+        let attachments = two_with_one_name((6, 6));
+        let shared = format!("attachments/{}/image.png", attachments[0].node_id.0);
+        let data = BackupData {
+            attachments,
+            ..BackupData::default()
+        };
+        let mut builder = Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+        let manifest = serde_json::to_vec(&manifest_at(4)).unwrap();
+        let json = serde_json::to_vec(&data).unwrap();
+        for (path, bytes) in [
+            ("manifest.json", manifest.as_slice()),
+            ("data.json", json.as_slice()),
+            (shared.as_str(), b"first!".as_slice()),
+            (shared.as_str(), b"second".as_slice()),
+        ] {
+            add_bytes_to_archive(&mut builder, path, bytes).unwrap();
+        }
+        let archive = builder.into_inner().unwrap().finish().unwrap();
+
+        let (_, read, files) = extract_full(&archive).expect("reads back");
+        let restored = MemStore::default();
+        let uploaded = upload_restored_files(&restored, &read.attachments, &files).await;
+        assert_eq!(uploaded, 2);
+        assert_eq!(
+            restored.at("key/first/image.png").as_deref(),
+            Some(&b"first!"[..])
+        );
+        assert_eq!(
+            restored.at("key/second/image.png").as_deref(),
+            Some(&b"second"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_that_cannot_be_told_apart_is_not_uploaded() {
+        // An old archive that lost one of two same-named, same-length files:
+        // the one entry could be either, so neither key is written.
+        let attachments = two_with_one_name((6, 6));
+        let shared = format!("attachments/{}/image.png", attachments[0].node_id.0);
+        let files = vec![(shared, b"which?".to_vec())];
+        let restored = MemStore::default();
+        assert_eq!(
+            upload_restored_files(&restored, &attachments, &files).await,
+            0
+        );
+        assert!(restored.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_preview_counts_webhooks_restored_switched_off() {
+        assert_eq!(webhooks_warning(0), None);
+        let one = webhooks_warning(1).expect("warns");
+        assert!(
+            one.starts_with("1 webhook in this backup signed its payloads"),
+            "{one}"
+        );
+        assert!(one.contains("it is restored switched off"), "{one}");
+        let two = webhooks_warning(2).expect("warns");
+        assert!(
+            two.starts_with("2 webhooks in this backup signed their payloads"),
+            "{two}"
+        );
+        assert!(two.contains("they are restored switched off"), "{two}");
     }
 }

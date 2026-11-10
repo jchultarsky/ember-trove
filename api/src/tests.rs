@@ -136,6 +136,29 @@ impl NodeRepo for StubNodeRepo {
             _ => panic!("authorization bypass: node delete reached the repo for {id}"),
         }
     }
+    async fn deletion_preview(
+        &self,
+        ids: &[NodeId],
+        caller: &str,
+    ) -> Result<common::node::NodeDeletionPreview, EmberTroveError> {
+        // As for `delete`: only nodes the caller may delete may get here.
+        // The answer echoes what arrived, so a test can read it back.
+        for id in ids {
+            assert!(
+                matches!(
+                    id.0.as_u128(),
+                    AZ_OWNED_NODE | AZ_MY_PROJECT | AZ_MY_ARTICLE
+                ) || caller == "admin-sub",
+                "authorization bypass: deletion preview reached the repo for {id}"
+            );
+        }
+        Ok(common::node::NodeDeletionPreview {
+            nodes: ids.len() as u64,
+            tasks: 7,
+            others_tasks: 2,
+            ..Default::default()
+        })
+    }
     async fn neighbors(&self, _: NodeId, _: Option<&str>) -> Result<Vec<Node>, EmberTroveError> {
         unimplemented!()
     }
@@ -240,6 +263,7 @@ impl EdgeRepo for StubEdgeRepo {
         let edge_type = match id.0.as_u128() {
             AZ_FOREIGN_HOME_EDGE | AZ_VISIBLE_HOME_EDGE => common::edge::EdgeType::Contains,
             AZ_FOREIGN_LINK_EDGE => common::edge::EdgeType::References,
+            AZ_MY_WIKI_EDGE | AZ_FOREIGN_WIKI_EDGE => common::edge::EdgeType::WikiLink,
             AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
                 common::edge::EdgeType::RelatedTo
             }
@@ -250,10 +274,10 @@ impl EdgeRepo for StubEdgeRepo {
         } else {
             AZ_MY_PROJECT
         };
-        let source = if id.0.as_u128() == AZ_VISIBLE_HOME_EDGE {
-            AZ_VIEW_NODE
-        } else {
-            AZ_FOREIGN_NODE
+        let source = match id.0.as_u128() {
+            AZ_VISIBLE_HOME_EDGE => AZ_VIEW_NODE,
+            AZ_MY_WIKI_EDGE => AZ_MY_ARTICLE,
+            _ => AZ_FOREIGN_NODE,
         };
         Ok(Edge {
             id,
@@ -264,7 +288,12 @@ impl EdgeRepo for StubEdgeRepo {
             created_at: chrono::Utc::now(),
         })
     }
-    async fn delete(&self, _: EdgeId) -> Result<(), EmberTroveError> {
+    async fn delete(&self, id: EdgeId) -> Result<(), EmberTroveError> {
+        // A wiki link is machine-owned (§6.6): a delete must never get here.
+        assert!(
+            !matches!(id.0.as_u128(), AZ_MY_WIKI_EDGE | AZ_FOREIGN_WIKI_EDGE),
+            "a wiki link reached the repo's delete"
+        );
         Ok(())
     }
     async fn convert(
@@ -395,6 +424,10 @@ const AZ_VISIBLE_HOME_EDGE: u128 = 0xa2_0e34;
 /// and the caller edits the child; AZ_VIEW_NODE's is hidden too, but the
 /// caller only views the child; AZ_EDIT_NODE's (AZ_OWNED_NODE) is visible.
 const AZ_HIDDEN_HOME_EDGE: u128 = 0xa2_0e35;
+/// A wiki link from the caller's own Article into their Project, and one
+/// from a node they can't touch (#281, 2.1).
+const AZ_MY_WIKI_EDGE: u128 = 0xa2_0e37;
+const AZ_FOREIGN_WIKI_EDGE: u128 = 0xa2_0e38;
 const AZ_SEEN_HOME_EDGE: u128 = 0xa2_0e36;
 
 /// Someone else's standalone task.
@@ -610,7 +643,7 @@ impl TaskRepo for StubTaskRepo {
     ) -> Result<Vec<MyDayTask>, EmberTroveError> {
         unimplemented!()
     }
-    async fn reorder(&self, _: &[(TaskId, i32)], _: &str) -> Result<(), EmberTroveError> {
+    async fn reorder(&self, _: &[(TaskId, i32)], _: Option<&str>) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
 }
@@ -630,17 +663,27 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
         &self,
         owner: &str,
         body: &str,
+        color: common::capture::CaptureColor,
     ) -> Result<common::capture::Capture, EmberTroveError> {
-        Ok(stub_capture(Uuid::new_v4(), owner, body))
+        Ok(common::capture::Capture {
+            color,
+            ..stub_capture(Uuid::new_v4(), owner, body)
+        })
     }
+    /// Every stub capture is stored as lime (`STUB_STORED_COLOR`), so a
+    /// test sees whether an edit kept the paper or changed it.
     async fn update(
         &self,
         id: common::id::CaptureId,
         owner: &str,
         body: &str,
+        color: Option<common::capture::CaptureColor>,
     ) -> Result<common::capture::Capture, EmberTroveError> {
         stub_owned(id, owner)?;
-        Ok(stub_capture(id.0, owner, body))
+        Ok(common::capture::Capture {
+            color: color.unwrap_or(STUB_STORED_COLOR),
+            ..stub_capture(id.0, owner, body)
+        })
     }
     async fn delete(&self, id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveError> {
         stub_owned(id, owner)
@@ -716,11 +759,14 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
     }
 }
 
+const STUB_STORED_COLOR: common::capture::CaptureColor = common::capture::CaptureColor::Lime;
+
 fn stub_capture(id: Uuid, owner: &str, body: &str) -> common::capture::Capture {
     common::capture::Capture {
         id: common::id::CaptureId(id),
         owner_id: owner.to_string(),
         body: body.to_string(),
+        color: STUB_STORED_COLOR,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     }
@@ -881,6 +927,12 @@ impl SearchRepo for StubSearchRepo {
 struct StubGraphRepo;
 #[async_trait]
 impl GraphRepo for StubGraphRepo {
+    async fn list_nodes(
+        &self,
+        _: Option<&str>,
+    ) -> Result<Vec<common::graph::GraphNode>, EmberTroveError> {
+        unimplemented!()
+    }
     async fn list_positions(&self, _: Option<&str>) -> Result<Vec<NodePosition>, EmberTroveError> {
         unimplemented!()
     }
@@ -1704,6 +1756,11 @@ async fn graph_route_registered() {
     assert_route_registered("GET", "/graph/positions").await;
 }
 #[tokio::test]
+async fn graph_data_route_registered() {
+    // Performance P1: the graph's one request.
+    assert_route_registered("GET", "/graph").await;
+}
+#[tokio::test]
 async fn favorites_list_route_registered() {
     assert_route_registered("GET", "/favorites").await;
 }
@@ -2009,6 +2066,7 @@ async fn backup_routes_registered() {
 #[tokio::test]
 async fn metrics_export_attachments_editor_prefs_routes_registered() {
     assert_route_registered("GET", "/metrics").await;
+    assert_route_registered("GET", "/metrics/db").await;
     assert_route_registered("GET", "/export").await;
     assert_route_registered("GET", "/data-health").await;
     let id = Uuid::new_v4();
@@ -2191,6 +2249,18 @@ async fn restore_refuses_an_old_backup_before_the_snapshot() {
 async fn metrics_rejects_non_admin() {
     let resp = claims_app("/metrics", crate::routes::metrics::router())
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// The database statements are admin-only too, and the role is checked
+/// before the database is touched: the test pool has no database behind it,
+/// so a query first would answer 500, not 403.
+#[tokio::test]
+async fn metrics_db_rejects_non_admin_before_any_query() {
+    let resp = claims_app("/metrics", crate::routes::metrics::router())
+        .oneshot(Request::get("/metrics/db").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -2444,6 +2514,16 @@ async fn task_patch(task: u128, body: serde_json::Value) -> StatusCode {
 async fn update_task_owner_can_edit_their_own_task() {
     let status = task_patch(0xa2_0199, serde_json::json!({ "title": "renamed" })).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn update_task_refuses_a_blank_or_overlong_title_as_422() {
+    // #281, 1.5: PATCH skipped validation, so these reached the database's
+    // CHECK and answered 500.
+    for title in ["", "   ", &"a".repeat(501)] {
+        let status = task_patch(0xa2_0199, serde_json::json!({ "title": title })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "title {title:?}");
+    }
 }
 
 #[tokio::test]
@@ -2705,6 +2785,37 @@ async fn a_home_can_be_released_from_the_childs_side() {
     );
     // Any other link still belongs to its source's editors.
     assert_eq!(delete(AZ_FOREIGN_LINK_EDGE).await, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_wiki_link_cannot_be_deleted_by_hand() {
+    // #281, 2.1 (ONTOLOGY §6.6): the edge mirrors `[[Title]]` in the text.
+    // Deleted by hand it came back on the next save. The stub's delete
+    // panics if a wiki link reaches it.
+    let delete = |edge: u128| async move {
+        let resp = claims_app("/edges", crate::routes::edges::router())
+            .oneshot(
+                Request::delete(format!("/edges/{}", Uuid::from_u128(edge)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    };
+    // The caller edits the source: refused for what the link is.
+    let (status, body) = delete(AZ_MY_WIKI_EDGE).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("can't be added or removed by hand"), "{body}");
+    // Rights still come first: a stranger to the source gets the same 403
+    // as for any link, and learns nothing about its type.
+    let (status, body) = delete(AZ_FOREIGN_WIKI_EDGE).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(!body.contains("wiki"), "{body}");
 }
 
 /// `POST /edges/{id}/convert` (#228): rights first (to delete the old link
@@ -3185,6 +3296,77 @@ async fn quick_capture_lands_a_capture_for_the_caller() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
+/// #273: a capture takes a paper colour from the notes' palette when it is
+/// made (by the wall or the quick-capture composer) and when it is edited.
+/// An edit that names no colour keeps the stored one, and an unknown key
+/// is refused rather than stored.
+#[tokio::test]
+async fn a_capture_keeps_or_changes_its_colour() {
+    let mine = Uuid::new_v4();
+    let call = |method: &str, uri: String, body: serde_json::Value| {
+        capture_call(fake_claims(), json_req(method, &uri, body))
+    };
+    let (status, made) = call(
+        "POST",
+        "/captures".into(),
+        serde_json::json!({ "body": "x", "color": "rose" }),
+    )
+    .await;
+    assert_eq!(
+        (status, &made["color"]),
+        (StatusCode::CREATED, &serde_json::json!("rose"))
+    );
+    let (_, made) = call(
+        "POST",
+        "/captures".into(),
+        serde_json::json!({ "body": "x" }),
+    )
+    .await;
+    assert_eq!(made["color"], "default", "an old client gets the yellow");
+
+    let (status, quick) = call(
+        "POST",
+        "/inbox/quick".into(),
+        serde_json::json!({ "body": "x", "color": "sky" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(quick["id"].is_string());
+
+    let (_, kept) = call(
+        "PATCH",
+        format!("/captures/{mine}"),
+        serde_json::json!({ "body": "reworded" }),
+    )
+    .await;
+    assert_eq!(
+        kept["color"],
+        STUB_STORED_COLOR.as_str(),
+        "a reword keeps the paper"
+    );
+    let (_, changed) = call(
+        "PATCH",
+        format!("/captures/{mine}"),
+        serde_json::json!({ "body": "x", "color": "violet" }),
+    )
+    .await;
+    assert_eq!(changed["color"], "violet");
+
+    for (method, uri) in [
+        ("POST", "/captures".to_string()),
+        ("PATCH", format!("/captures/{mine}")),
+        ("POST", "/inbox/quick".to_string()),
+    ] {
+        let (status, _) = call(
+            method,
+            uri.clone(),
+            serde_json::json!({ "body": "x", "color": "url(x)" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
+    }
+}
+
 fn convert_req(capture: Uuid, body: serde_json::Value) -> Request<Body> {
     json_req("POST", &format!("/captures/{capture}/convert"), body)
 }
@@ -3593,6 +3775,87 @@ async fn deleting_a_node_writes_no_activity_entry() {
         activity.0.lock().expect("lock").is_empty(),
         "no activity write after the node is gone"
     );
+}
+
+/// `GET /nodes/deletion-preview?ids=…` as `claims`: status and JSON body.
+async fn deletion_preview_call(
+    claims: common::auth::AuthClaims,
+    ids: &str,
+) -> (StatusCode, serde_json::Value) {
+    let app = Router::new()
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state());
+    let resp = app
+        .oneshot(
+            Request::get(format!("/nodes/deletion-preview?ids={ids}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn the_deletion_preview_counts_only_nodes_the_caller_may_delete() {
+    // #281 (owner decision): the confirmation counts what a delete
+    // destroys. A node the caller edits, views, can't see, or that doesn't
+    // exist is left out before the repo is asked: the stub panics if one
+    // reaches it.
+    let ids = [
+        AZ_OWNED_NODE,
+        AZ_EDIT_NODE,
+        AZ_VIEW_NODE,
+        AZ_FOREIGN_NODE,
+        0xdead_beef,
+    ]
+    .map(|n| Uuid::from_u128(n).to_string())
+    .join(",");
+    let (status, body) = deletion_preview_call(fake_claims(), &ids).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["nodes"], 1, "only the node the caller owns");
+    assert_eq!(body["tasks"], 7);
+    assert_eq!(body["others_tasks"], 2);
+}
+
+#[tokio::test]
+async fn a_deletion_preview_of_nothing_deletable_is_all_zeroes() {
+    // Someone else's node and a missing one answer alike: nothing to probe.
+    for id in [AZ_FOREIGN_NODE, AZ_VIEW_NODE, 0xdead_beef] {
+        let (status, body) =
+            deletion_preview_call(fake_claims(), &Uuid::from_u128(id).to_string()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_value::<common::node::NodeDeletionPreview>(body).unwrap(),
+            common::node::NodeDeletionPreview::default()
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_deletion_preview_refuses_bad_ids_and_too_many() {
+    let (status, _) = deletion_preview_call(fake_claims(), "not-a-uuid").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let many = (0..=common::node::DELETION_PREVIEW_MAX_NODES as u128)
+        .map(|n| Uuid::from_u128(0xbb00_0000 + n).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let (status, _) = deletion_preview_call(fake_claims(), &many).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // A repeated id counts once, and blanks are skipped.
+    let owned = Uuid::from_u128(AZ_OWNED_NODE);
+    let (status, body) =
+        deletion_preview_call(fake_claims(), &format!("{owned},,{owned},%20")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["nodes"], 1);
 }
 
 #[tokio::test]

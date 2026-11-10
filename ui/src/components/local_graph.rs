@@ -153,9 +153,24 @@ pub fn LocalGraphPanel(node_id: NodeId, title: String) -> impl IntoView {
                                             let nb_id = nb.id;
                                             let label = short_title(&nb.title);
                                             let full_title = nb.title.clone();
+                                            let open_label = format!("Open {}", nb.title);
                                             view! {
                                                 <g
                                                     class="cursor-pointer"
+                                                    // Reachable by keyboard, as the full graph's
+                                                    // nodes are (#281): it was click-only.
+                                                    tabindex="0"
+                                                    role="link"
+                                                    aria-label=open_label
+                                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                        if ev.key() == "Enter" {
+                                                            ev.prevent_default();
+                                                            navigate.get_value()(
+                                                                &format!("/nodes/{nb_id}"),
+                                                                Default::default(),
+                                                            );
+                                                        }
+                                                    }
                                                     on:click=move |_| {
                                                         navigate.get_value()(
                                                             &format!("/nodes/{nb_id}"),

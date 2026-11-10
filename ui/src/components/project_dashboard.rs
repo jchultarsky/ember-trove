@@ -20,9 +20,8 @@
 //! `PUT /api/nodes/:id/pin`; on success the dashboard refreshes so
 //! the card slides up/down to its new sort position.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use common::activity::{ActivityAction, RecentActivityEntry, status_change_summary};
-use common::id::NodeId;
 use common::task::{ProjectDashboardEntry, TaskSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -81,7 +80,18 @@ pub fn ProjectDashboard() -> impl IntoView {
                     <crate::components::skeleton::SkeletonCards cards=3 />
                 }>
                     {move || {
-                        let data = entries.get().and_then(|r| r.ok()).unwrap_or_default();
+                        // A failed load is not "No projects yet" (#281, 1.7).
+                        let data = match entries.get() {
+                            Some(Err(_)) => return view! {
+                                <div class="flex-1 flex flex-col justify-center">
+                                    <crate::components::load_error::LoadError
+                                        what="your projects"
+                                        on_retry=Callback::new(move |()| dashboard_refresh.update(|n| *n += 1))
+                                    />
+                                </div>
+                            }.into_any(),
+                            other => other.and_then(Result::ok).unwrap_or_default(),
+                        };
                         if data.is_empty() {
                             return view! {
                                 <div class="flex-1 flex flex-col justify-center">
@@ -360,10 +370,13 @@ fn ProjectCard(
                     </button>
                     <span class="material-symbols-outlined text-amber-500 flex-shrink-0"
                         style="font-size: 16px;">{"rocket_launch"}</span>
-                    <span class="font-medium text-stone-800 dark:text-stone-200 truncate
+                    // A real button: the card was click-only (#281). Its
+                    // click bubbles to the card's handler.
+                    <button type="button" class="font-medium text-stone-800 dark:text-stone-200 truncate text-left
+                        cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-500 rounded
                         group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">
                         {entry.title.clone()}
-                    </span>
+                    </button>
                     {entry.project_status.clone().map(|s| view! {
                         <crate::components::project_status::ProjectStatusBadge status=s />
                     })}
@@ -510,8 +523,3 @@ fn CountBadge(count: u32, color: &'static str) -> impl IntoView {
         </span>
     }
 }
-
-// Suppress dead-code warning on unused import when the dashboard
-// later becomes tag-aware.
-#[allow(dead_code)]
-fn _phantom(_: NodeId, _: DateTime<Utc>) {}

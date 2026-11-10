@@ -5,7 +5,9 @@
 //! The text is prefilled and may be reworded. What the form would send is
 //! checked with `ConvertCaptureRequest::checked`, the server's own rule, so
 //! Convert is only enabled when the request would pass it. A Task's title
-//! must fit (owner decision): it is reworded here, never cut.
+//! must fit (owner decision): it is reworded here, never cut. Its priority
+//! and due date use the task form's own fields (`PriorityPicker`,
+//! `DueDateField`), so both ways of making a task look and behave alike.
 
 use chrono::NaiveDate;
 use common::{
@@ -20,8 +22,11 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::{ModalPlacement, ModalShell};
 use crate::components::{
+    due_date_field::DueDateField,
     node_meta::type_label,
     node_picker::NodePicker,
+    task_common::parse_priority,
+    task_row_scaffold::PriorityPicker,
     toast::{ToastAction, ToastLevel, ToastState},
 };
 
@@ -74,6 +79,9 @@ pub fn ConvertCaptureDialog(
     let note_text = RwSignal::new(text.get_value().trim().to_string());
     let project: RwSignal<Option<(NodeId, String)>> = RwSignal::new(None);
     let task_title = RwSignal::new(one_line(&text.get_value()));
+    // The task form's fields and defaults (`NewTaskForm`), so a converted
+    // task is set up the way a task made in its Project is.
+    let priority = RwSignal::new("medium".to_string());
     let due = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -94,8 +102,8 @@ pub fn ConvertCaptureDialog(
             Dest::Task => ConvertCaptureRequest::Task {
                 node_id: project.get()?.0,
                 title: task_title.get(),
-                due_date: NaiveDate::parse_from_str(&due.get(), "%Y-%m-%d").ok(),
-                priority: None,
+                due_date: due.get().trim().parse::<NaiveDate>().ok(),
+                priority: Some(parse_priority(&priority.get())),
             },
         })
     };
@@ -317,11 +325,10 @@ pub fn ConvertCaptureDialog(
                                 on:input=move |ev| task_title.set(event_target_value(&ev)) />
                             <div class="text-right">{move || counter(task_title.with(|t| t.trim().chars().count()))}</div>
                         </div>
-                        <label class="block text-xs text-stone-500">"Due (optional)"
-                            <input type="date" class=field aria-label="Due date"
-                                prop:value=move || due.get()
-                                on:input=move |ev| due.set(event_target_value(&ev)) />
-                        </label>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <PriorityPicker value=priority />
+                            <DueDateField value=due />
+                        </div>
                     }.into_any(),
                 }}
                 <Show when=move || error.get().is_some()>

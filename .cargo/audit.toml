@@ -42,4 +42,20 @@ ignore = [
   #     (an earlier note here wrongly said the proc-macro always compiles it).
   #     No fixed `rsa` exists (patched = [], only 0.10 pre-releases).
   "RUSTSEC-2023-0071",
+
+  # ── Fix needs a major sqlx bump, never compiled ────────────────────────────
+  #   2026-11-09 (owner decision; first added): RUSTSEC-2026-0459 —
+  #     CVE-2026-119375 in the C SQLite that `libsqlite3-sys` 0.30.1 bundles
+  #     (medium, 6.8). Its only path is sqlx → sqlx-sqlite 0.8.6 (optional,
+  #     SQLite feature), which is NOT compiled into anything we build:
+  #     `cargo tree --workspace -i libsqlite3-sys --target all -e all` and the
+  #     same for `sqlx-sqlite` both print nothing. We enable sqlx's `postgres`
+  #     feature only, and CI installs sqlx-cli with `--no-default-features
+  #     --features postgres`. Like `rsa` above, it is listed only because
+  #     Cargo.lock records optional deps.
+  #     The fix is libsqlite3-sys >= 0.39.0. sqlx-sqlite 0.8.6 pins 0.30.1, so
+  #     the upgrade path is sqlx 0.9, a major bump (and the sqlx-cli pin in
+  #     ci.yml moves with it). DROP THIS ENTRY with that bump. If the SQLite
+  #     feature is ever enabled, drop it first: the advisory then applies.
+  "RUSTSEC-2026-0459",
 ]

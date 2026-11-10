@@ -5,8 +5,8 @@ use common::{
     activity::ActivityAction,
     id::{NodeId, TagId},
     node::{
-        CreateNodeRequest, Node, NodeListParams, NodeStatus, NodeTitleEntry, NodeType,
-        UpdateNodeRequest,
+        CreateNodeRequest, Node, NodeDeletionPreview, NodeListParams, NodeStatus, NodeTitleEntry,
+        NodeType, UpdateNodeRequest,
     },
     slug::slugify,
     tag::Tag,
@@ -40,6 +40,16 @@ pub trait NodeRepo: Send + Sync {
     ) -> Result<Node, EmberTroveError>;
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError>;
+
+    /// What deleting `ids` would destroy with them (#281): live tasks,
+    /// live notes and files, and how many of the tasks and notes belong to
+    /// an account other than `caller`. Counts only. The route passes only
+    /// nodes the caller may delete.
+    async fn deletion_preview(
+        &self,
+        ids: &[NodeId],
+        caller: &str,
+    ) -> Result<NodeDeletionPreview, EmberTroveError>;
 
     async fn neighbors(
         &self,
@@ -197,8 +207,8 @@ struct NodeTagRow {
 
 /// Fetch all tags for a slice of node IDs in one query.
 /// Returns a map of node_id → Vec<Tag>.
-async fn fetch_tags_for_nodes(
-    pool: &PgPool,
+async fn fetch_tags_for_nodes<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
     node_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, Vec<Tag>>, EmberTroveError> {
     if node_ids.is_empty() {
@@ -214,7 +224,7 @@ async fn fetch_tags_for_nodes(
         "#,
     )
     .bind(node_ids)
-    .fetch_all(pool)
+    .fetch_all(ex)
     .await
     .map_err(|e| EmberTroveError::Internal(format!("fetch tags for nodes failed: {e}")))?;
 
@@ -283,6 +293,37 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
     })?;
 
     row.into_node()
+}
+
+/// Every node with its tags, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on(
+    conn: &mut sqlx::PgConnection,
+) -> Result<Vec<Node>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, NodeRow>(
+        r#"
+        SELECT id, owner_id, node_type::text, title, slug, body, metadata,
+               status::text, project_status, pinned, created_at, updated_at
+        FROM nodes
+        ORDER BY created_at ASC
+        "#,
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all nodes failed: {e}")))?;
+
+    let mut nodes = rows
+        .into_iter()
+        .map(NodeRow::into_node)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
+    let mut tag_map = fetch_tags_for_nodes(&mut *conn, &node_ids).await?;
+    for node in &mut nodes {
+        node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
+    }
+
+    Ok(nodes)
 }
 
 #[async_trait]
@@ -389,12 +430,10 @@ impl NodeRepo for PgNodeRepo {
 
         if params.subject_id.is_some() {
             // Restrict to nodes the caller owns or holds any permission on.
-            conditions.push(format!(
-                "n.id IN (\
-                    SELECT node_id FROM permissions WHERE subject_id = ${param_idx} \
-                    UNION \
-                    SELECT id FROM nodes WHERE owner_id = ${param_idx}\
-                )"
+            // `param_idx` counts this query's own filters: a handful.
+            conditions.push(super::visible_among_many(
+                "n",
+                u8::try_from(param_idx).unwrap_or(u8::MAX),
             ));
             param_idx += 1;
         }
@@ -590,6 +629,44 @@ impl NodeRepo for PgNodeRepo {
         Ok(())
     }
 
+    async fn deletion_preview(
+        &self,
+        ids: &[NodeId],
+        caller: &str,
+    ) -> Result<NodeDeletionPreview, EmberTroveError> {
+        // These are the rows `DELETE FROM nodes` cascades to. The trash
+        // (`deleted_at`) goes too, but it is already deleted to its owner,
+        // so it is not counted.
+        let ids: Vec<Uuid> = ids.iter().map(|id| id.0).collect();
+        let row: (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+            "SELECT
+               (SELECT COUNT(*) FROM nodes WHERE id = ANY($1)),
+               (SELECT COUNT(*) FROM node_tasks
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL),
+               (SELECT COUNT(*) FROM node_tasks
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL AND owner_id <> $2),
+               (SELECT COUNT(*) FROM node_notes
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL),
+               (SELECT COUNT(*) FROM node_notes
+                 WHERE node_id = ANY($1) AND deleted_at IS NULL AND owner_id <> $2),
+               (SELECT COUNT(*) FROM attachments WHERE node_id = ANY($1))",
+        )
+        .bind(&ids)
+        .bind(caller)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("node deletion preview failed: {e}")))?;
+        let n = |v: i64| u64::try_from(v).unwrap_or(0);
+        Ok(NodeDeletionPreview {
+            nodes: n(row.0),
+            tasks: n(row.1),
+            others_tasks: n(row.2),
+            notes: n(row.3),
+            others_notes: n(row.4),
+            files: n(row.5),
+        })
+    }
+
     async fn neighbors(
         &self,
         id: NodeId,
@@ -719,33 +796,18 @@ impl NodeRepo for PgNodeRepo {
             slug: String,
         }
 
-        // Admin bypass: no filter.  Non-admin: scope to nodes owned by the
-        // caller OR shared with them via the permissions table.  DISTINCT
-        // avoids duplicates when a caller holds multiple permission rows
-        // for the same node.
-        let rows = match subject {
-            None => {
-                sqlx::query_as::<_, TitleRow>("SELECT id, title, slug FROM nodes ORDER BY title")
-                    .fetch_all(&self.pool)
-                    .await
-            }
-            Some(sub) => {
-                sqlx::query_as::<_, TitleRow>(
-                    r#"
-                    SELECT DISTINCT n.id, n.title, n.slug
-                    FROM nodes n
-                    LEFT JOIN permissions p
-                      ON p.node_id = n.id AND p.subject_id = $1
-                    WHERE n.owner_id = $1 OR p.subject_id IS NOT NULL
-                    ORDER BY n.title
-                    "#,
-                )
-                .bind(sub)
-                .fetch_all(&self.pool)
-                .await
-            }
-        }
-        .map_err(|e| EmberTroveError::Internal(format!("list_titles failed: {e}")))?;
+        // Admin (`None`): every node. Otherwise the nodes the caller owns
+        // or was granted, by the one rule (`visible_among_many`; #281, 3.2:
+        // this was a third spelling of it, a LEFT JOIN with DISTINCT).
+        let sql = format!(
+            "SELECT n.id, n.title, n.slug FROM nodes n WHERE {visible} ORDER BY n.title",
+            visible = super::visible_among_many("n", 1),
+        );
+        let rows = sqlx::query_as::<_, TitleRow>(&sql)
+            .bind(subject)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| EmberTroveError::Internal(format!("list_titles failed: {e}")))?;
 
         Ok(rows
             .into_iter()
@@ -817,30 +879,11 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Node>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodeRow>(
-            r#"
-            SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, project_status, pinned, created_at, updated_at
-            FROM nodes
-            ORDER BY created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all nodes failed: {e}")))?;
-
-        let mut nodes = rows
-            .into_iter()
-            .map(NodeRow::into_node)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let node_ids: Vec<Uuid> = nodes.iter().map(|n| n.id.0).collect();
-        let mut tag_map = fetch_tags_for_nodes(&self.pool, &node_ids).await?;
-        for node in &mut nodes {
-            node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
-        }
-
-        Ok(nodes)
+        let mut conn =
+            self.pool.acquire().await.map_err(|e| {
+                EmberTroveError::Internal(format!("acquire connection failed: {e}"))
+            })?;
+        list_all_on(&mut conn).await
     }
 
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError> {

@@ -75,7 +75,7 @@ ember-trove/
     ├── .env.prod.template         # production env var template
     ├── cognito.css                # Cognito hosted UI custom stylesheet
     ├── logo.png                   # Cognito hosted UI logo
-    └── backup.sh                  # PostgreSQL backup/restore to S3
+    └── app-backup.sh              # automatic app backup on the host (release + daily)
 ```
 
 ---
@@ -254,7 +254,7 @@ All API configuration is provided via environment variables.
 |----------|----------|-------------|
 | `DATABASE_URL` | Always | PostgreSQL connection string |
 | `COOKIE_KEY` | Always | 128 hex chars (64 bytes) for cookie encryption; must be a real random key (rejected if weak/all-identical) — `openssl rand -hex 64` |
-| `COOKIE_SECURE` | Prod | Set `true` in production (HTTPS only) |
+| `COOKIE_SECURE` | No | Cookies are `Secure` (HTTPS only) by default. Set `false` only for local HTTP development; the dev `docker-compose.yml` does |
 | `FRONTEND_URL` | Always | Browser-facing URL of the UI |
 | `API_EXTERNAL_URL` | Always | Browser-facing URL of the API |
 | `HOST` | No | Bind address (default: `0.0.0.0`) |
@@ -322,7 +322,7 @@ make verify             # or ./scripts/verify.sh — runs the full suite below
   Docker stack (auth bypassed via the `e2e-bypass` cargo feature, ephemeral DB; no local
   Node required — Playwright runs in its official image). Also a CI job. See
   [`e2e/README.md`](e2e/README.md).
-- **Coverage:** `make coverage` (CI reports it via `cargo llvm-cov`; currently report-only).
+- **Coverage:** `make coverage`. CI enforces a line-coverage floor with `cargo llvm-cov --fail-under-lines` (see `.github/workflows/ci.yml` for the number; the UI crate is excluded).
 - **Dependencies:** [Dependabot](.github/dependabot.yml) proposes weekly `cargo` and
   `github-actions` updates against `develop`; Actions are pinned to commit SHAs.
 - **Git Flow:** branch from `develop`; never commit directly to `main`/`develop`. See
@@ -364,11 +364,13 @@ All routes are nested under `/api`.
 | POST | `/api/nodes` | Create node (auto-grants Owner permission to creator) |
 | GET | `/api/nodes/{id}` | Get node by UUID |
 | GET | `/api/nodes/slug/{slug}` | Get node by slug |
+| GET | `/api/nodes/titles` | Every title the caller can see (id, title, slug). For full enumerations only; pickers use `lookup` |
 | GET | `/api/nodes/resolve-titles?titles=[…]` | Resolve wiki-link titles (a JSON array, ≤100) to node ids among nodes the caller can see; keys lowercased |
 | GET | `/api/nodes/project-statuses` | The caller's own project statuses with counts, most used first (status picker suggestions; owner-only) |
 | GET | `/api/nodes/lookup?q=&limit=&node_type=` | Title lookup for the node pickers: titles containing `q`, exact > prefix > other; own + shared nodes (admins: all); `limit` 1–20, default 8; optional `node_type` keeps one kind (the task pickers ask for `project`) |
 | PUT | `/api/nodes/{id}` | Update node (snapshots version on save). Optional `expected_updated_at`: apply only if the node is still at that version, else **412** and nothing is written (the editor sends it, #161) |
-| DELETE | `/api/nodes/{id}` | Delete node (cascading) |
+| DELETE | `/api/nodes/{id}` | Delete node, with its tasks, notes and files (children it contains are kept) |
+| GET | `/api/nodes/deletion-preview?ids=a,b` | What deleting these nodes would destroy: counts of tasks, notes and files, and how many are other accounts'. Only nodes the caller may delete are counted (at most 100 ids) |
 | PUT | `/api/nodes/{id}/pin` | Toggle pinned state (owner-only) |
 | GET | `/api/nodes/{id}/neighbors` | Linked neighbour nodes |
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |
@@ -384,6 +386,11 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/activity` | Audit log for this node |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
+| POST | `/api/nodes/{id}/duplicate` | Copy a node (body, type and tags) as a Draft titled "… (copy)", owned by the caller |
+| GET | `/api/nodes/{id}/export?format=markdown\|json` | Download one node: Markdown with YAML front matter (default), or the JSON node (viewer+) |
+| DELETE | `/api/nodes/{id}/permissions/{perm_id}` | Revoke a grant on this node |
+| GET / POST | `/api/nodes/{id}/links` | A node's saved web links: list, or add one |
+| PUT / DELETE | `/api/nodes/{id}/links/{link_id}` | Change or remove a saved link |
 
 ### People
 
@@ -407,9 +414,9 @@ details.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/edges` | List all edges |
+| GET | `/api/edges` | Edges whose two ends the caller owns (admins: all edges) |
 | POST | `/api/edges` | Create edge |
-| DELETE | `/api/edges/{id}` | Delete edge |
+| DELETE | `/api/edges/{id}` | Delete edge. A `wiki_link` is refused (422): it follows `[[Title]]` in the text |
 | GET | `/api/nodes/{id}/home` | The node's one home; one the caller can't see is shown unnamed, and only to the node's editors |
 | PUT | `/api/nodes/{id}/home` | Set the home (`parent_id`), or remove it (`null`) |
 | POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |
@@ -452,6 +459,7 @@ details.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/api/graph` | Everything the graph view draws in one response: the visible nodes without bodies (title, kind, status, pinned, tag ids and colours, a 100-character plain-text preview), the edges and the saved positions |
 | GET | `/api/graph/positions` | List saved node positions |
 | PUT | `/api/graph/positions/{node_id}` | Save / update a node position |
 
@@ -461,10 +469,17 @@ details.
 |--------|------|-------------|
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
 | POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
-| PUT | `/api/tasks/{id}` | Update task (toggle, rename, set focus date) |
+| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
-| GET | `/api/tasks/my-day` | Tasks scheduled for today (current user) |
+| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day (default: today in UTC; the UI sends the local date) |
+| GET | `/api/tasks/all` | Every open task of the caller, with its node's title (the My Day backlog) |
+| POST | `/api/tasks` | Create a task from the body: on the Project named by `node_id`, or on none (still allowed; Data health lists such tasks) |
+| GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |
+| PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
+| GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
+| GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status and top open tasks |
+| GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
 
 ### Notes
 
@@ -525,8 +540,31 @@ change them. They are in backups, and not in search, export or webhooks.
 |--------|------|-------------|
 | GET | `/api/templates` | List node templates (owner-scoped) |
 | POST | `/api/templates` | Create a template |
+| GET | `/api/templates/{id}` | Read one template |
 | PUT | `/api/templates/{id}` | Update a template |
 | DELETE | `/api/templates/{id}` | Delete a template |
+| PUT | `/api/templates/{id}/set-default` | Make it the default for its node type |
+
+### Favorites
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET / POST | `/api/favorites` | The caller's sidebar favorites: list, or add one |
+| DELETE | `/api/favorites/{id}` | Remove a favorite |
+| PATCH | `/api/favorites/reorder` | Save the favorites' order |
+
+### Webhooks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET / POST | `/api/webhooks` | The caller's webhooks: list, or create one (URL, events, optional signing secret) |
+| PUT / DELETE | `/api/webhooks/{id}` | Change or delete one of the caller's webhooks |
+
+### Export
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/export` | Download a ZIP of every node the caller can see (admins: all nodes), one Markdown file each |
 
 ### Admin (admin role required)
 
@@ -534,15 +572,58 @@ change them. They are in backups, and not in search, export or webhooks.
 |--------|------|-------------|
 | GET | `/api/admin/users` | List users |
 | POST | `/api/admin/users` | Create user |
-| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier admin backups and the daily database dumps (30 days) keep the data until they are deleted |
+| DELETE | `/api/admin/users/{id}` | Delete the account **and its data** (answers counts). Earlier backups keep the data until they are deleted: an admin's until removed by hand, automatic ones until they fall out of the newest 10 |
 | GET | `/api/admin/users/{id}/deletion-preview` | What deleting the account would remove (counts only) |
 | GET | `/api/admin/users/roles` | List available roles |
 | PUT | `/api/admin/users/{id}/roles` | Set roles for a user (not your own admin role) |
 | POST | `/api/admin/users/{id}/suspend` | Suspend: no sign-in, open sessions refused at once, data kept |
 | POST | `/api/admin/users/{id}/reactivate` | Lift a suspension |
-| GET | `/api/admin/backup` | Stream full-system backup (NDJSON) |
-| POST | `/api/admin/restore` | Restore from backup file |
-| GET | `/api/metrics` | Operational metrics snapshot: version, uptime, pool stats, row counts, request counts, and latency per route since start (`routes`: count, mean, p50, p95, p99, max) |
+| GET / POST | `/api/admin/backups` | List backups, or create one (optional comment) |
+| DELETE | `/api/admin/backups/{id}` | Delete a backup and its archive |
+| GET | `/api/admin/backups/{id}/download` | Download a backup's archive |
+| GET | `/api/admin/backups/{id}/preview` | What restoring it would do: counts and warnings, nothing written |
+| POST | `/api/admin/backups/{id}/restore` | Replace the live data with the backup's |
+| GET | `/api/metrics` | Operational metrics snapshot: version, uptime, pool stats, row counts, request counts, and latency per route since start (`routes`: count, total, mean, p50, p95, p99, max). Shown on **Admin → Performance** (`/admin/performance`) |
+| GET | `/api/metrics/db` | The database's 15 slowest statements by total time, from `pg_stat_statements` (`enabled: false` when it isn't preloaded or created). Reading and writing statements only, as Postgres normalised them (`$1` for every value), with comments stripped |
+
+### Automatic backups
+
+An app backup is made **after every deploy** (the release workflow) and
+**every day** at 07:43 UTC (`.github/workflows/backup.yml`). Both run
+`deploy/app-backup.sh` on the host over SSH, which runs a command the API
+binary has instead of serving:
+
+```bash
+docker exec deploy-api-1 ember-trove-api backup create --comment "Daily"
+```
+
+- It's the same backup as **Admin → Backup → Create**, listed there with an
+  **Automatic** badge, and it restores the same way.
+- A backup is one read-only snapshot of every account's data: nodes and
+  everything on them, captures, people, templates, saved searches, editor
+  sizes and webhooks, plus each attachment's file.
+  - **Not in it:** webhook signing secrets (a webhook that had one is
+    restored switched off, and its owner enters a secret again), the trash
+    (deleted items kept 30 days for Undo), sessions, and the list of
+    suspended accounts, which a restore never changes.
+- Only the **newest 10 automatic backups** are kept, daily and after-deploy
+  together (about ten days); each run deletes older ones (archive and row).
+  Backups an admin makes are never deleted this way.
+- The schedule is a GitHub Actions workflow, not the host's crontab: a
+  failed backup turns the run red and GitHub emails the maintainer. Run it
+  by hand from **Actions → Daily Backup → Run workflow**. (The old nightly
+  `pg_dump` cron, `deploy/backup.sh`, never ran: its log path wasn't
+  writable. It was removed on 2026-11-02.)
+- It needs no sign-in: running it takes a shell on the server, which already
+  has the database and storage credentials. Nothing new listens on the
+  network.
+- The Actions log is public, so the script echoes only the summary
+  (backup id and counts). The command's full output stays on the server in
+  `~/ember-trove-backups.log` (owner-only). In command mode the binary logs
+  errors only and skips OIDC discovery.
+- If storage refuses to delete an old archive, its key goes to the
+  `object_deletions` queue, which the daily task retries, so no archive
+  outlives its row unnoticed.
 
 ---
 
@@ -552,7 +633,7 @@ change them. They are in backups, and not in search, export or webhooks.
 
 | Type | Description |
 |------|-------------|
-| `article` | Blog post, essay, or atomic note |
+| `article` | Long-form writing: an essay, a write-up, documentation |
 | `project` | Active initiative with tasks and references |
 | `area` | Sphere of responsibility (ongoing) |
 | `reference` | Material you keep and cite: a paper, bookmark, asset or external source. (Resource merged into it in 3.0.0.) |
