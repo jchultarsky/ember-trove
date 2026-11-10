@@ -117,7 +117,7 @@ cargo check && cargo clippy -- -D warnings
   owners.
 - `/inbox/quick` keeps its path and wire format for installed service
   workers; `common::inbox::capture_text` builds the text.
-- Restore accepts formats 3 to 5 (`OLDEST_RESTORABLE`). A format-3 note
+- Restore accepts formats 3 to 6 (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
   rule). Restore also clears the live captures, nodeless tasks and people,
   which the `nodes` cascade never reached.
@@ -177,7 +177,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5)
+## What a backup holds (#281, format 5; Briefs made it 6)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -201,6 +201,10 @@ cargo check && cargo clippy -- -D warnings
   admin can download one. `repo::webhook::list_all_for_backup` never
   selects `secret`, and `BackupWebhook` has no field for it. A webhook
   that signed is restored switched off (`BackupWebhook::restored_active`).
+- **Project Briefs (#282, format 6)** are `briefs: Vec<ProjectBrief>`,
+  read by `repo::brief::list_all_on` inside the snapshot. A plain `Vec`,
+  not an `Option`: a Brief hangs on its node, the nodes are replaced by
+  any restore, so an older archive can't leave live Briefs behind.
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps

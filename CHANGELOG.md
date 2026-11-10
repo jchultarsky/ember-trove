@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Project Brief, backend (#282, part 1 of the Brief).** A Project can
+  carry one current Brief: an optional one-line headline, a pitch and up
+  to 20 points. `GET/PUT/DELETE /api/nodes/{id}/brief`: viewers read it,
+  editors write it, Projects only (§3.2). A save by the same person within
+  15 minutes of when the Brief was stated corrects it in place; any later
+  save, or one by someone else, supersedes it, and the old Brief becomes a
+  `brief_superseded` History entry in the same transaction. Saves carry
+  `expected_updated_at`, so a stale editor gets 412 instead of
+  overwriting; removing a Brief needs the version too. The project dashboard returns each project's Brief, and
+  History shows replaced Briefs. Migration 046 (`project_briefs`,
+  additive). The Brief section, the stale marker, the dashboard rendering
+  and "Move Status section into Brief" follow in the UI part.
+
+- Deleting a Project says so when its Brief goes with it: the delete
+  confirmation counts "1 brief" beside the tasks, notes and files.
+- **Backups are format 6**: they carry Project Briefs. This release
+  restores formats 3 to 6. A release before it refuses a format-6 backup,
+  where it would otherwise have restored one without its Briefs.
+
 ### Security
 A security audit of the code on 2026-11-10 (#281). None of these was known
 to have been used.
@@ -48,6 +68,10 @@ to have been used.
   history start empty once after this update.
 - **A failed deploy no longer prints the server's log lines** in the
   public build log.
+- Project Briefs are covered by the account purge (authorship on other
+  people's projects becomes the deleted-account marker, also inside the
+  History entries) and by backup and restore. Brief text never appears in
+  error messages or logs.
 
 ### Documentation
 - `docs/PERFORMANCE.md`: eight days of production statement statistics

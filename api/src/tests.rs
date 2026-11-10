@@ -1079,6 +1079,70 @@ const AZ_PERSON: u128 = 0xa2_0e01;
 /// The membership `add_membership` writes on AZ_MY_PROJECT (#216).
 const AZ_NEW_MEMBERSHIP: u128 = 0xa2_0e10;
 
+struct StubBriefRepo;
+
+/// Project Briefs (#282) in the authz world: writes reach the repo only for
+/// the caller's own Project (saves) or a node they edit (removals); any
+/// other write panics, so a missing check fails the test.
+#[async_trait]
+impl crate::repo::brief::BriefRepo for StubBriefRepo {
+    async fn get(&self, _: NodeId) -> Result<Option<common::brief::ProjectBrief>, EmberTroveError> {
+        Ok(None)
+    }
+    async fn for_nodes(
+        &self,
+        _: &[NodeId],
+    ) -> Result<Vec<common::brief::ProjectBrief>, EmberTroveError> {
+        Ok(vec![])
+    }
+    async fn save(
+        &self,
+        node: NodeId,
+        fields: &common::brief::BriefFields,
+        expected: Option<chrono::DateTime<chrono::Utc>>,
+        actor: &crate::repo::activity::ActivityActor,
+    ) -> Result<(common::brief::ProjectBrief, common::brief::BriefSave), EmberTroveError> {
+        assert_eq!(
+            node.0.as_u128(),
+            AZ_MY_PROJECT,
+            "authorization bypass: brief save reached the repo for {node}"
+        );
+        // A precondition always "fails" here: a 412 proves the route got
+        // past authorization and the gates.
+        if expected.is_some() {
+            return Err(EmberTroveError::PreconditionFailed("stub".into()));
+        }
+        let now = chrono::Utc::now();
+        Ok((
+            common::brief::ProjectBrief {
+                node_id: node,
+                headline: fields.headline.clone(),
+                pitch: fields.pitch.clone(),
+                points: fields.points.clone(),
+                author_id: actor.subject_id.clone(),
+                stated_at: now,
+                updated_at: now,
+            },
+            common::brief::BriefSave::Create,
+        ))
+    }
+    async fn delete(
+        &self,
+        node: NodeId,
+        _: Option<chrono::DateTime<chrono::Utc>>,
+        _: &crate::repo::activity::ActivityActor,
+    ) -> Result<(), EmberTroveError> {
+        match node.0.as_u128() {
+            AZ_MY_PROJECT => Err(EmberTroveError::NotFound("brief not found".into())),
+            AZ_OWNED_NODE | AZ_EDIT_NODE | AZ_MY_ARTICLE => Ok(()),
+            _ => panic!("authorization bypass: brief delete reached the repo for {node}"),
+        }
+    }
+    async fn list_all(&self) -> Result<Vec<common::brief::ProjectBrief>, EmberTroveError> {
+        Ok(vec![])
+    }
+}
+
 struct StubPersonRepo;
 #[async_trait]
 impl crate::repo::person::PersonRepo for StubPersonRepo {
@@ -1507,6 +1571,7 @@ fn test_state() -> AppState {
         activity: Arc::new(StubActivityRepo),
         data_health: Arc::new(StubDataHealthRepo::default()),
         people: Arc::new(StubPersonRepo),
+        briefs: Arc::new(StubBriefRepo),
         node_versions: Arc::new(StubNodeVersionRepo),
         templates: Arc::new(StubTemplateRepo),
         search_presets: Arc::new(StubSearchPresetRepo),
@@ -5132,4 +5197,208 @@ async fn the_deletion_preview_is_admin_only_and_counts_only() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ── Project Brief (#282) ──────────────────────────────────────────────────────
+
+fn brief_app(claims: common::auth::AuthClaims) -> Router {
+    Router::new()
+        .nest(
+            "/nodes/{node_id}/brief",
+            crate::routes::briefs::node_router(),
+        )
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+}
+
+async fn brief_call(
+    claims: common::auth::AuthClaims,
+    method: &str,
+    node: u128,
+    query: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let resp = brief_app(claims)
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(format!("/nodes/{}/brief{query}", Uuid::from_u128(node)))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn brief_routes_registered() {
+    assert_route_registered("GET", &format!("/nodes/{}/brief", Uuid::new_v4())).await;
+}
+
+#[tokio::test]
+async fn a_viewer_reads_a_brief_and_a_stranger_cannot() {
+    let (status, body) = brief_call(
+        fake_claims(),
+        "GET",
+        AZ_VIEW_NODE,
+        "",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.is_null(), "no brief reads as null: {body}");
+    let (status, _) = brief_call(
+        fake_claims(),
+        "GET",
+        AZ_FOREIGN_NODE,
+        "",
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+        "{status}"
+    );
+}
+
+#[tokio::test]
+async fn only_an_editor_saves_a_brief_and_authz_comes_before_validation() {
+    // An invalid body to a node the caller can't edit is still 403/404:
+    // nothing about the node or the rules leaks (the stub panics on a write).
+    for node in [AZ_VIEW_NODE, AZ_FOREIGN_NODE] {
+        for body in [
+            serde_json::json!({ "pitch": "p" }),
+            serde_json::json!({ "pitch": "" }),
+        ] {
+            let (status, _) = brief_call(fake_claims(), "PUT", node, "", body).await;
+            assert!(
+                status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+                "node {node:#x}: {status}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn only_a_project_takes_a_brief() {
+    let (status, body) = brief_call(
+        fake_claims(),
+        "PUT",
+        AZ_MY_ARTICLE,
+        "",
+        serde_json::json!({ "pitch": "p" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.to_string().contains("only Projects have a brief"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_projects_editor_saves_a_tidied_brief() {
+    let (status, body) = brief_call(
+        fake_claims(),
+        "PUT",
+        AZ_MY_PROJECT,
+        "",
+        serde_json::json!({ "headline": "  On track ", "pitch": "We ship.", "points": ["a", " "] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["headline"], "On track");
+    assert_eq!(body["points"], serde_json::json!(["a"]));
+    assert_eq!(body["author_id"], "test-sub");
+}
+
+#[tokio::test]
+async fn an_invalid_brief_is_refused_before_the_repo() {
+    for bad in [
+        serde_json::json!({ "pitch": "  " }),
+        serde_json::json!({ "headline": "a\nb" }),
+        serde_json::json!({ "pitch": "p".repeat(common::brief::MAX_PITCH + 1) }),
+        serde_json::json!({ "points": vec!["x"; common::brief::MAX_POINTS + 1] }),
+    ] {
+        let (status, _) = brief_call(fake_claims(), "PUT", AZ_MY_PROJECT, "", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
+
+#[tokio::test]
+async fn a_stale_brief_save_is_a_412() {
+    let (status, _) = brief_call(
+        fake_claims(),
+        "PUT",
+        AZ_MY_PROJECT,
+        "",
+        serde_json::json!({ "pitch": "p", "expected_updated_at": "2026-01-01T00:00:00Z" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+}
+
+/// SECURITY: someone with no rights on a node gets, for every Brief route,
+/// exactly what they get for a node that doesn't exist: same status, same
+/// body. Otherwise the answer says whether an id is a real node.
+#[tokio::test]
+async fn a_stranger_cannot_tell_a_node_from_a_missing_one_through_its_brief() {
+    let missing = Uuid::new_v4().as_u128();
+    for (method, query, body) in [
+        ("GET", "", serde_json::json!({})),
+        ("PUT", "", serde_json::json!({ "pitch": "p" })),
+        (
+            "PUT",
+            "",
+            serde_json::json!({ "pitch": "p", "expected_updated_at": "2026-01-01T00:00:00Z" }),
+        ),
+        ("DELETE", "", serde_json::json!({})),
+        (
+            "DELETE",
+            "?expected_updated_at=2026-01-01T00:00:00Z",
+            serde_json::json!({}),
+        ),
+    ] {
+        let foreign = brief_call(fake_claims(), method, AZ_FOREIGN_NODE, query, body.clone()).await;
+        let absent = brief_call(fake_claims(), method, missing, query, body).await;
+        assert_eq!(foreign, absent, "{method} {query}");
+        assert_eq!(foreign.0, StatusCode::FORBIDDEN, "{method} {query}");
+    }
+}
+
+#[tokio::test]
+async fn only_an_editor_removes_a_brief() {
+    for node in [AZ_VIEW_NODE, AZ_FOREIGN_NODE] {
+        let (status, _) =
+            brief_call(fake_claims(), "DELETE", node, "", serde_json::json!({})).await;
+        assert!(
+            status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND,
+            "node {node:#x}: {status}"
+        );
+    }
+    let (status, _) = brief_call(
+        fake_claims(),
+        "DELETE",
+        AZ_EDIT_NODE,
+        "",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = brief_call(
+        fake_claims(),
+        "DELETE",
+        AZ_MY_PROJECT,
+        "",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

@@ -101,6 +101,7 @@ Reference may hold material directly or be a *pointer* to an outside source
 | People (membership) | ✓ | — | — | — |
 | Status label (`project_status`) and terminal state (§4.1) | ✓ | — | — | — |
 | Project Plan (§10) | ✓ | — | — | — |
+| Brief (§10) | ✓ | — | — | — |
 
 ### 3.3 Rules that apply to all kinds
 
@@ -565,6 +566,17 @@ Two distinct concepts that are easily confused:
 History is distinct from a node's body *version history* — version
 snapshots are a text mechanism, not the semantic record of what occurred.
 
+- **Brief** (#282) — where a Project stands *now*: an optional one-line
+  headline, a pitch (the elevator speech) and a few points. A Project has
+  at most one current Brief, shared with the node (viewers read it,
+  editors write it). It sits beside the status label: the label is the
+  flag, the Brief the narrative. The body keeps the durable material.
+  A save by the same person within the edit window (15 minutes from when
+  the Brief was stated) corrects it in place; any later save, or one by
+  someone else, **supersedes** it, and the old Brief becomes a History
+  entry. Removing a Brief records it in History too. Its age is shown
+  wherever it renders; past a threshold it is marked stale, never hidden.
+
 ## 11. Events
 
 An **Event** is an occurrence, not a commitment: it happens whether or not
@@ -705,3 +717,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-09 | Archived nodes stay searchable: archiving declutters lists and navigation, and never makes information unfindable | Owner, on the full review (#281) |
 | 2026-11-09 | Deleting a node keeps the hard delete of its Tasks, notes and files, other accounts' included, behind a confirmation that counts them first (not the trash, and not unguarded) | Owner, on the full review (#281) |
 | 2026-11-09 | Written down from the code, no behaviour change: no self-loop for any edge type (§6); memberships are written by the Project's owner only (§7.2, §14) | Full review (#281), findings 2.3 and 2.4 |
+| 2026-11-09 | Project Brief: headline (optional) + pitch + points, Project-only; a save by the same author within the edit-coalesce window updates it in place, any other save supersedes it into History; Brief first, Focus in a later release | Owner, on #282 |
