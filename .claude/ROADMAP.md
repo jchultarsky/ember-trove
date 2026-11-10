@@ -3,61 +3,69 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-09)
+## Current state (2026-11-10)
 
-- **Unreleased: the delete confirmation counts what goes** (#281, owner
+- **v3.14.0 shipped: the full-codebase review's fixes** (#281), in the
+  entries marked v3.14.0 below: correctness and conformance, the UI
+  section, the docs, the reuse items, plus #257, #259 and the phone-width
+  pass of #262. Still open from the review: the seven private security
+  findings (with the owner), and the monthly recurrence drift (needs a
+  migration; owner to decide). Open drafts: #283 (Project Brief part 1,
+  migration 046, backup format 6) and #271 (copy a task's text).
+
+- **v3.14.0: the delete confirmation counts what goes** (#281, owner
   decision). `GET /nodes/deletion-preview` counts the tasks, notes and
   files of the nodes the caller may delete, and how many are other
   accounts'; `DeleteConfirmModal` takes them as `details`
   (`node_delete_details`) and keeps Delete off until they load. ONTOLOGY
   §3.3 and §6.1 record both review decisions.
-- **Unreleased: review fixes 1.5, 1.12 and 2.1** (#281). Updates
+- **v3.14.0: review fixes 1.5, 1.12 and 2.1** (#281). Updates
   validate like creates (no blank titles, the body cap on both, a 422 for
   a bad task title); a `wiki_link` can't be deleted by hand
   (`EdgeType::is_machine_owned`); a version restore's snapshot is awaited
   through `snapshot_body`.
-- **Unreleased: review task fixes 1.8, 1.9 (UTC day) and 2.5** (#281).
+- **v3.14.0: review task fixes 1.8, 1.9 (UTC day) and 2.5** (#281).
   One next occurrence per parent, under a row lock; the next occurrence
   counts from the sender's `today`; reorder follows `require_task_editor`.
   Still open from 1.9: a monthly task on the 29th to 31st settles on the
   28th after a short month (needs a stored anchor day; owner to decide).
-- **Unreleased: failures are shown** (#281, 1.7 and the dropped errors of
+- **v3.14.0: failures are shown** (#281, 1.7 and the dropped errors of
   §5). `LoadError` replaces the empty state after a failed fetch in ten
   views; bulk delete, revoke, link delete and attachment delete report
   failure; attachment delete confirms.
-- **Unreleased: UI robustness** (#281, 1.6, 1.11, the `try_` sweep and
+- **v3.14.0: UI robustness** (#281, 1.6, 1.11, the `try_` sweep and
   Suspense to Transition). Post-`.await` and forgotten-timer code uses
   `try_` access in the five flagged components; a late image upload
   settles its placeholder in the saved text; six page boundaries are
   `<Transition>`; draft messages follow `write_edit_draft`'s result.
-- **Unreleased: accessibility basics** (#281, UI section). Row titles are
+- **v3.14.0: accessibility basics** (#281, UI section). Row titles are
   buttons, the local graph and calendar days take the keyboard, no
   hover-only controls remain, labels are tied to inputs, inline errors are
   alerts.
-- **Unreleased: one wiki-link scanner** (#281, 3.1 and 1.10).
+- **v3.14.0: one wiki-link scanner** (#281, 3.1 and 1.10).
   `common::wikilink::wikilinks` replaces five hand-written scanners and
   skips code spans and fences.
-- **Unreleased: the icon font and the phone-width pass** (#262).
+- **v3.14.0: the icon font and the phone-width pass** (#262).
   `edit_note` is back in the font subset (the scan reads `*icon*`
   helpers; `ui/icon-names.txt` and a test guard it). The node header,
   `PageHeader` and the search toolbar wrap at 375px;
   `mobile_layout.spec.ts` keeps fourteen pages from scrolling sideways.
-- **Unreleased: the node list pages and sorts on the server** (#257), and
+- **v3.14.0: the node list pages and sorts on the server** (#257), and
   `GET /permissions` filters in SQL (#259). `NodeSort`,
   `node_list_limit` / `node_list_pages` in `common::node`;
   `api::fetch_node_list` in the UI; `PermissionRepo::list_visible`. #258
   (rate limits on reads) has its comment corrected and waits on the owner
   for the limits themselves.
-- **Unreleased: "visible to" and plain text** (#281, 3.2 and 3.4).
+- **v3.14.0: "visible to" and plain text** (#281, 3.2 and 3.4).
   `visible_among_many` for the node list, title list and graph;
   `note::plain_line` for the graph preview. Section 3 of the review is
   closed: 3.6's three parallels were looked at and left (the palette's
   clamping is a behaviour choice; the other two aren't duplicates).
-- **Unreleased: reuse and dead code** (#281, 3.3, 3.5, 3.7).
+- **v3.14.0: reuse and dead code** (#281, 3.3, 3.5, 3.7).
   `subject_scope` everywhere; `common::task::is_overdue` and
   `Task::in_my_day`; `PRIORITY_RANK` in `repo/task.rs`; `common::quickadd`
   deleted; no file-wide `allow(dead_code)` left in `ui/`.
-- **Unreleased: every top-level view uses `PageHeader` and `EmptyState`**
+- **v3.14.0: every top-level view uses `PageHeader` and `EmptyState`**
   (#281, UI section): backup, users, permissions, templates and webhooks
   were the last hand-built headers. The review's UI section is done.
 - **v3.13.1 shipped: backup and restore fixes from the full-codebase
