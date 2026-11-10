@@ -559,6 +559,13 @@ docker exec deploy-api-1 ember-trove-api backup create --comment "Daily"
 
 - It's the same backup as **Admin → Backup → Create**, listed there with an
   **Automatic** badge, and it restores the same way.
+- A backup is one read-only snapshot of every account's data: nodes and
+  everything on them, captures, people, templates, saved searches, editor
+  sizes and webhooks, plus each attachment's file.
+  - **Not in it:** webhook signing secrets (a webhook that had one is
+    restored switched off, and its owner enters a secret again), the trash
+    (deleted items kept 30 days for Undo), sessions, and the list of
+    suspended accounts, which a restore never changes.
 - Only the **newest 10 automatic backups** are kept, daily and after-deploy
   together (about ten days); each run deletes older ones (archive and row).
   Backups an admin makes are never deleted this way.

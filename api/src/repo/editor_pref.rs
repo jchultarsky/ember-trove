@@ -52,6 +52,38 @@ struct PrefRow {
     collapsed: bool,
 }
 
+/// Every owner's editor prefs, for the backup (`backup::read_snapshot`).
+/// Not on the trait: no route may read across owners.
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<common::backup::BackupEditorPref>, EmberTroveError> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        owner_id: String,
+        entity_kind: String,
+        entity_id: Uuid,
+        height: Option<i32>,
+        collapsed: bool,
+    }
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT owner_id, entity_kind, entity_id, height, collapsed
+         FROM editor_prefs ORDER BY owner_id, entity_kind, entity_id",
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list all editor prefs failed: {e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| common::backup::BackupEditorPref {
+            owner_id: r.owner_id,
+            entity_kind: r.entity_kind,
+            entity_id: r.entity_id,
+            height: r.height,
+            collapsed: r.collapsed,
+        })
+        .collect())
+}
+
 #[async_trait]
 impl EditorPrefRepo for PgEditorPrefRepo {
     async fn list_for_owner(&self, owner_id: &str) -> Result<Vec<EditorPref>, EmberTroveError> {

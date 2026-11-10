@@ -1968,6 +1968,7 @@ async fn a_restore_brings_the_activity_log_back(pool: PgPool) {
         node_people: vec![],
         activity: activity.clone(),
         captures: vec![],
+        ..BackupData::default()
     };
 
     let mut tx = pool.begin().await.expect("tx");
@@ -3159,6 +3160,7 @@ async fn a_restore_merges_a_related_pair_and_archives_the_copy(pool: PgPool) {
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        ..BackupData::default()
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3687,6 +3689,7 @@ async fn a_restore_keeps_each_nodes_oldest_home_and_archives_the_rest(pool: PgPo
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        ..BackupData::default()
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -3942,6 +3945,7 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         node_people: vec![],
         activity: vec![],
         captures: vec![],
+        ..BackupData::default()
     };
     let mut tx = pool.begin().await.unwrap();
     crate::backup::restore_into(&mut tx, &data)
@@ -4000,6 +4004,7 @@ async fn a_restore_keeps_each_captures_colour(pool: PgPool) {
         node_people: vec![],
         activity: vec![],
         captures: captures.list_all().await.unwrap(),
+        ..BackupData::default()
     };
     let mut tx = pool.begin().await.unwrap();
     crate::backup::restore_into(&mut tx, &data)
@@ -4903,4 +4908,263 @@ async fn an_archive_the_store_refuses_to_delete_is_queued(pool: PgPool) {
         .unwrap();
     assert_eq!(queued, ["backups/auto-1.tar.gz"]);
     assert_eq!(scalar(&pool, "SELECT count(*) FROM backup_jobs").await, 1);
+}
+
+// ── Backups: one snapshot, and everything in it (#281) ───────────────────────
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
+    // #281: each table was read in its own query, so a node and its task
+    // created between two reads left a task in the archive without its
+    // node, and restoring that archive failed on the foreign key.
+    let before = create_node(&pool, "alice", "there before the backup").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    // The first query takes the snapshot.
+    super::tag::list_all_on(&mut *tx).await.expect("first read");
+
+    // Meanwhile, committed on another connection.
+    let late = create_node(&pool, "alice", "created mid-backup").await;
+    raw_task(&pool, "alice", Some(late.id.0), "its task").await;
+    raw_task(
+        &pool,
+        "alice",
+        Some(before.id.0),
+        "a late task on the old node",
+    )
+    .await;
+
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    let nodes: Vec<uuid::Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
+    assert_eq!(nodes, [before.id.0], "the late node is not in the snapshot");
+    assert!(
+        data.tasks.is_empty(),
+        "nor is any task written after it began: {:?}",
+        data.tasks
+    );
+
+    // Read-only: a backup can't change anything, even by mistake.
+    let write = sqlx::query("DELETE FROM nodes").execute(&mut *tx).await;
+    assert!(write.is_err(), "the snapshot transaction refuses writes");
+    drop(tx);
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM nodes").await, 2);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_replaces_the_people_registry(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    // #281: people are held by their owner, not by a node, so deleting the
+    // nodes never reached them and the live registry survived a restore.
+    let people = PgPersonRepo::new(pool.clone());
+    let kept = people
+        .create("alice", &person("In The Backup", None))
+        .await
+        .expect("kept");
+    create_node(&pool, "alice", "people restore host").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+
+    people
+        .create("alice", &person("Added After The Backup", None))
+        .await
+        .expect("later");
+    people
+        .create("bob", &person("Someone Else's, Also Later", None))
+        .await
+        .expect("bob's");
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    let ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM people")
+        .fetch_all(&pool)
+        .await
+        .expect("people");
+    assert_eq!(ids, [kept.id.0], "only the archive's people remain");
+}
+
+/// One row in each table a backup didn't carry before format 5, plus a
+/// recurring task and the occurrence it scheduled. Returns the ids of the
+/// signed webhook, the unsigned one, the parent task and its occurrence.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 4] {
+    sqlx::query(
+        "INSERT INTO node_templates (name, node_type, body, is_default, created_by)
+         VALUES ('Meeting', 'article', '## Agenda', TRUE, 'alice')",
+    )
+    .execute(pool)
+    .await
+    .expect("template");
+    sqlx::query(
+        "INSERT INTO search_presets (owner_id, name, query, fuzzy) VALUES ('alice', 'Open', 'todo', TRUE)",
+    )
+    .execute(pool)
+    .await
+    .expect("preset");
+    let parent = raw_task(pool, "alice", Some(node), "water the plants").await;
+    let child = raw_task(pool, "alice", Some(node), "water the plants").await;
+    sqlx::query("UPDATE node_tasks SET recurrence_parent_id = $2 WHERE id = $1")
+        .bind(child)
+        .bind(parent)
+        .execute(pool)
+        .await
+        .expect("link");
+    sqlx::query(
+        "INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height, collapsed)
+         VALUES ('alice', 'task', $1, 320, FALSE)",
+    )
+    .bind(parent)
+    .execute(pool)
+    .await
+    .expect("pref");
+    let signed: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO webhooks (owner_id, url, secret, is_active)
+         VALUES ('alice', 'https://example.com/signed', 'the-signing-secret', TRUE) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("signed webhook");
+    let unsigned: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO webhooks (owner_id, url, is_active)
+         VALUES ('bob', 'https://example.com/unsigned', TRUE) RETURNING id",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("unsigned webhook");
+    [signed, unsigned, parent, child]
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool: PgPool) {
+    // #281: templates, saved searches, editor prefs, webhooks and the
+    // recurrence link were not in an archive, so a restore onto an empty
+    // database lost them.
+    let host = create_node(&pool, "alice", "settings host").await;
+    let [signed, unsigned, parent, child] = seed_account_settings(&pool, host.id.0).await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+
+    // SECURITY: a signing secret never reaches an archive.
+    let json = serde_json::to_string(&data).expect("serialises");
+    assert!(
+        !json.contains("the-signing-secret"),
+        "no secret in data.json"
+    );
+    assert_eq!(data.webhooks_switched_off(), 1);
+
+    // The live database moves on, then the archive is restored.
+    for sql in [
+        "DELETE FROM node_templates",
+        "DELETE FROM editor_prefs",
+        "DELETE FROM webhooks",
+        "UPDATE node_tasks SET recurrence_parent_id = NULL",
+        "INSERT INTO search_presets (owner_id, name) VALUES ('alice', 'Made after the backup')",
+    ] {
+        sqlx::query(sql).execute(&pool).await.expect("live change");
+    }
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    let template: (String, String, bool, String) =
+        sqlx::query_as("SELECT name, body, is_default, created_by FROM node_templates")
+            .fetch_one(&pool)
+            .await
+            .expect("one template");
+    assert_eq!(
+        template,
+        ("Meeting".into(), "## Agenda".into(), true, "alice".into())
+    );
+    let presets: Vec<(String, String, bool)> =
+        sqlx::query_as("SELECT name, query, fuzzy FROM search_presets")
+            .fetch_all(&pool)
+            .await
+            .expect("presets");
+    assert_eq!(
+        presets,
+        [("Open".into(), "todo".into(), true)],
+        "the archive's presets, and not the one made after it"
+    );
+    let pref: (String, uuid::Uuid, Option<i32>) =
+        sqlx::query_as("SELECT owner_id, entity_id, height FROM editor_prefs")
+            .fetch_one(&pool)
+            .await
+            .expect("one pref");
+    assert_eq!(pref, ("alice".into(), parent, Some(320)));
+    let linked: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT recurrence_parent_id FROM node_tasks WHERE id = $1")
+            .bind(child)
+            .fetch_one(&pool)
+            .await
+            .expect("child");
+    assert_eq!(
+        linked,
+        Some(parent),
+        "the occurrence knows its parent again"
+    );
+
+    // A webhook that signed comes back without its secret and switched off;
+    // one that never signed comes back as it was.
+    let hook = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>, bool)>(
+                "SELECT owner_id, secret, is_active FROM webhooks WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("webhook")
+        }
+    };
+    assert_eq!(hook(signed).await, ("alice".into(), None, false));
+    assert_eq!(hook(unsigned).await, ("bob".into(), None, true));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn an_older_archive_leaves_what_it_never_carried(pool: PgPool) {
+    use common::backup::BackupData;
+    // A format-3 or -4 archive has no templates, presets, prefs or webhooks.
+    // Restoring one must not empty the live ones, signing secrets included.
+    let host = create_node(&pool, "alice", "older archive host").await;
+    let [signed, ..] = seed_account_settings(&pool, host.id.0).await;
+    let data = BackupData {
+        nodes: PgNodeRepo::new(pool.clone())
+            .list_all()
+            .await
+            .expect("nodes"),
+        ..BackupData::default()
+    };
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM node_templates").await,
+        1
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM search_presets").await,
+        1
+    );
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM webhooks").await, 2);
+    let secret: Option<String> = sqlx::query_scalar("SELECT secret FROM webhooks WHERE id = $1")
+        .bind(signed)
+        .fetch_one(&pool)
+        .await
+        .expect("webhook");
+    assert_eq!(secret.as_deref(), Some("the-signing-secret"));
 }

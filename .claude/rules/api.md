@@ -111,10 +111,10 @@ cargo check && cargo clippy -- -D warnings
   owners.
 - `/inbox/quick` keeps its path and wire format for installed service
   workers; `common::inbox::capture_text` builds the text.
-- Restore accepts formats 3 and 4 (`OLDEST_RESTORABLE`). A format-3 note
+- Restore accepts formats 3 to 5 (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
-  rule). Restore also clears the live captures and nodeless tasks, which
-  the `nodes` cascade never reached.
+  rule). Restore also clears the live captures, nodeless tasks and people,
+  which the `nodes` cascade never reached.
 - `POST /captures/{id}/convert` (S4b): the route checks the destination
   first, as its create route would (editor on the node or home, the
   containment table, `Capability::Tasks`). Then `CaptureRepo::convert`
@@ -170,6 +170,35 @@ cargo check && cargo clippy -- -D warnings
   check `suspended_session` themselves (callback → Cognito logout URL,
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
+
+## What a backup holds (#281, format 5)
+
+- **One snapshot.** `create_backup` reads everything through
+  `backup::read_snapshot` on `begin_snapshot`'s transaction
+  (`REPEATABLE READ, READ ONLY`). A table read outside it can disagree with
+  the rest, and that archive then fails to restore on a foreign key. So a
+  new backed-up table gets a free `list_all_on(executor)` function in its
+  repo module (the trait method delegates to it) and one line in
+  `read_snapshot`. Don't read it through `state.<repo>`.
+- **A new table that holds account data must join the backup**, as it must
+  join the purge. In `BackupData` it is an `Option<Vec<_>>` with
+  `#[serde(default)]`: `None` means an older archive that never carried
+  it, and `restore_into` then leaves the live rows alone; `Some` replaces
+  them (`restore_account_settings`). A table no node cascades to also
+  needs its own `DELETE` in `restore_into` (people were missed until #281).
+- **Attachment files are stored under `attachments/<attachment id>`**
+  (`common::backup::attachment_entry_path`). Formats 3 and 4 used
+  `attachments/<node id>/<file name>`, which two attachments can share.
+  Restore maps entries to rows only through
+  `common::backup::match_attachment_entries`; never match by file name.
+- **No credential goes into an archive** (owner decision, 2026-11-09): an
+  admin can download one. `repo::webhook::list_all_for_backup` never
+  selects `secret`, and `BackupWebhook` has no field for it. A webhook
+  that signed is restored switched off (`BackupWebhook::restored_active`).
+- The trash (soft-deleted notes, tasks, captures) is not backed up, on
+  purpose.
+- Changing what an archive holds, or where, bumps
+  `common::backup::SCHEMA_VERSION`, so older releases refuse it.
 
 ## Server commands and automatic backups (2026-11-02)
 

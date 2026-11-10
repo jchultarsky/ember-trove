@@ -103,20 +103,30 @@ impl PgTemplateRepo {
 const COLS: &str =
     "id, name, description, node_type, body, is_default, created_by, created_at, updated_at";
 
+/// One owner's templates, or everyone's with `None`, by name. A free
+/// function so the backup can run it on its one snapshot transaction
+/// (`backup::read_snapshot`).
+pub(crate) async fn list_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+    subject: Option<&str>,
+) -> Result<Vec<NodeTemplate>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, TemplateRow>(&format!(
+        "SELECT {COLS} FROM node_templates \
+         WHERE ($1::text IS NULL OR created_by = $1::text) \
+         ORDER BY name",
+    ))
+    .bind(subject)
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list templates failed: {e}")))?;
+
+    rows.into_iter().map(TemplateRow::into_template).collect()
+}
+
 #[async_trait]
 impl TemplateRepo for PgTemplateRepo {
     async fn list(&self, subject: Option<&str>) -> Result<Vec<NodeTemplate>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TemplateRow>(&format!(
-            "SELECT {COLS} FROM node_templates \
-             WHERE ($1::text IS NULL OR created_by = $1::text) \
-             ORDER BY name",
-        ))
-        .bind(subject)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list templates failed: {e}")))?;
-
-        rows.into_iter().map(TemplateRow::into_template).collect()
+        list_on(&self.pool, subject).await
     }
 
     async fn get(&self, id: TemplateId) -> Result<NodeTemplate, EmberTroveError> {

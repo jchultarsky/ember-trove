@@ -54,6 +54,25 @@ impl TagRow {
     }
 }
 
+/// Every tag, all owners. A free function so the backup can run it on its one
+/// snapshot transaction (`backup::read_snapshot`).
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<Tag>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, TagRow>(
+        r#"
+        SELECT id, owner_id, name, color, created_at
+        FROM tags
+        ORDER BY name
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list_all tags failed: {e}")))?;
+
+    Ok(rows.into_iter().map(TagRow::into_tag).collect())
+}
+
 #[async_trait]
 impl TagRepo for PgTagRepo {
     async fn create(&self, owner_id: &str, req: CreateTagRequest) -> Result<Tag, EmberTroveError> {
@@ -116,18 +135,7 @@ impl TagRepo for PgTagRepo {
     }
 
     async fn list_all(&self) -> Result<Vec<Tag>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TagRow>(
-            r#"
-            SELECT id, owner_id, name, color, created_at
-            FROM tags
-            ORDER BY name
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list_all tags failed: {e}")))?;
-
-        Ok(rows.into_iter().map(TagRow::into_tag).collect())
+        list_all_on(&self.pool).await
     }
 
     async fn update(&self, id: TagId, req: UpdateTagRequest) -> Result<Tag, EmberTroveError> {
