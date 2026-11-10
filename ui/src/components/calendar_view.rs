@@ -379,7 +379,7 @@ pub fn CalendarView() -> impl IntoView {
 
             // Two-month calendar grid
             <div class="flex-1 overflow-auto p-4">
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <div class="flex items-center justify-center h-32 text-stone-400 text-sm">
                         "Loading\u{2026}"
                     </div>
@@ -415,7 +415,7 @@ pub fn CalendarView() -> impl IntoView {
                         </div>
                     }
                 }}
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }

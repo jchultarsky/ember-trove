@@ -110,8 +110,10 @@ pub fn NotesView() -> impl IntoView {
         let v = debounce_v.get_untracked() + 1;
         debounce_v.set(v);
         Timeout::new(300, move || {
-            if debounce_v.get_untracked() == v {
-                text_q.set(val.clone());
+            // A forgotten timer can fire after the view is gone: `try_`
+            // access, never a panic (leptos.md; #281).
+            if debounce_v.try_get_untracked() == Some(v) {
+                let _ = text_q.try_set(val.clone());
             }
         })
         .forget();

@@ -231,7 +231,7 @@ pub fn BackupView() -> impl IntoView {
             })}
 
             // ── Backup list ───────────────────────────────────────────────────
-            <Suspense fallback=|| view! {
+            <Transition fallback=|| view! {
                 <div class="space-y-2">
                     {(0..3).map(|_| view! {
                         <div class="h-14 rounded-lg bg-stone-100 dark:bg-stone-800 animate-pulse" />
@@ -287,7 +287,7 @@ pub fn BackupView() -> impl IntoView {
                         }.into_any(),
                     })
                 }}
-            </Suspense>
+            </Transition>
         </div>
     }
 }

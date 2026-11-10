@@ -343,7 +343,7 @@ pub fn MyDayView() -> impl IntoView {
             <div class="flex-1 overflow-auto p-4 md:p-6 space-y-6">
 
                 // Top zone: focus_date == today
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <crate::components::skeleton::SkeletonList rows=3 />
                 }>
                     {move || {
@@ -373,12 +373,12 @@ pub fn MyDayView() -> impl IntoView {
                             />
                         }.into_any()
                     }}
-                </Suspense>
+                </Transition>
 
                 <div class="border-t border-dashed border-stone-300 dark:border-stone-700"></div>
 
                 // Bottom zone: every open task NOT focused on today
-                <Suspense fallback=move || view! {
+                <Transition fallback=move || view! {
                     <crate::components::skeleton::SkeletonList rows=8 />
                 }>
                     {move || {
@@ -447,7 +447,7 @@ pub fn MyDayView() -> impl IntoView {
                             />
                         }.into_any()
                     }}
-                </Suspense>
+                </Transition>
             </div>
         </div>
     }

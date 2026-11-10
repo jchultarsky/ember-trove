@@ -901,7 +901,12 @@ fn PersonView(id: PersonId) -> impl IntoView {
         }
         wasm_bindgen_futures::spawn_local(async move {
             match crate::api::delete_person(id).await {
-                Ok(()) => navigate.get_value()("/people", Default::default()),
+                // The page may be gone by now: `try_` access (#281).
+                Ok(()) => {
+                    if let Some(go) = navigate.try_get_value() {
+                        go("/people", Default::default());
+                    }
+                }
                 Err(e) => push_toast(ToastLevel::Error, format!("Couldn't delete: {e}")),
             }
         });

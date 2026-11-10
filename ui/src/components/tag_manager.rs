@@ -266,7 +266,7 @@ pub fn TagManager() -> impl IntoView {
 
             // ── Tag list ───────────────────────────────────────────────────────
             <div class="flex-1 overflow-auto">
-                <Suspense fallback=|| view! {
+                <Transition fallback=|| view! {
                     <div class="divide-y divide-stone-100 dark:divide-stone-800">
                         {(0..5).map(|_| view! {
                             <div class="flex items-center gap-3 px-6 py-3">
@@ -478,7 +478,7 @@ pub fn TagManager() -> impl IntoView {
                             }
                         })
                     }}
-                </Suspense>
+                </Transition>
             </div>
         </div>
 
