@@ -1554,6 +1554,171 @@ async fn insert_raw_node(
     .expect("raw node")
 }
 
+/// Owner decision, 2026-11-11: a project with a Status section and no
+/// Brief gets the section as its Brief, and the section leaves the body.
+/// It rewrites user content, so this holds every promise the backfill
+/// makes: what moves and what doesn't, the snapshots, the dates, once only.
+#[sqlx::test(migrations = "../migrations")]
+async fn backfill_status_into_brief_moves_sections_keeps_history_and_runs_once(pool: PgPool) {
+    use crate::backfill::{StatusIntoBrief, status_into_brief};
+    let with_status = "# Plan\n\nGoals stay.\n\n## Status\n\nWaiting on the vendor.\n\n\
+                       - Review booked\n  for Friday\n- [x] Scope sent\n\n## Background\n\nKept.\n";
+    let moved = insert_raw_node(&pool, "a", "project", "Moved", with_status).await;
+    let empty = insert_raw_node(
+        &pool,
+        "a",
+        "project",
+        "Empty",
+        "Intro.\n\n## Status\n\n## Goals\n\n-\n",
+    )
+    .await;
+    let too_large_body = format!("## Status\n{}\n", "x".repeat(4001));
+    let too_large = insert_raw_node(&pool, "a", "project", "Too large", &too_large_body).await;
+    let has_brief = insert_raw_node(&pool, "a", "project", "Has a brief", with_status).await;
+    sqlx::query("INSERT INTO project_briefs (node_id, pitch, author_id) VALUES ($1, 'mine', 'a')")
+        .bind(has_brief)
+        .execute(&pool)
+        .await
+        .expect("brief");
+    let near_miss = insert_raw_node(
+        &pool,
+        "a",
+        "project",
+        "Near miss",
+        "## Status Update\n\nNot the section.\n",
+    )
+    .await;
+    let article = insert_raw_node(&pool, "a", "article", "Article", with_status).await;
+    let others = insert_raw_node(&pool, "b", "project", "Someone else's", with_status).await;
+
+    let done = status_into_brief(&pool).await.expect("backfill");
+    assert_eq!(
+        done,
+        StatusIntoBrief {
+            moved: 2,
+            emptied: 1,
+            too_large: 1
+        }
+    );
+
+    let body = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT body, to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') FROM nodes WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("node")
+        }
+    };
+    type BriefRow = (Option<String>, String, Vec<String>, String, String, String);
+    let brief = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, BriefRow>(
+                "SELECT headline, pitch, points, author_id, \
+                        to_char(stated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'), \
+                        to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') \
+                 FROM project_briefs WHERE node_id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&pool)
+            .await
+            .expect("brief")
+        }
+    };
+
+    // The section is the Brief, whole, and gone from the body. Nothing
+    // outside it changed, and the node's own date didn't move.
+    assert_eq!(
+        body(moved).await,
+        (
+            "# Plan\n\nGoals stay.\n\n## Background\n\nKept.\n".to_string(),
+            "2020-01-01".to_string()
+        )
+    );
+    let made = brief(moved).await.expect("a Brief was made");
+    assert_eq!(made.0, None, "no headline is invented");
+    assert_eq!(made.1, "Waiting on the vendor.");
+    assert_eq!(made.2, ["Review booked for Friday", "[x] Scope sent"]);
+    assert_eq!(made.3, "a", "the project's owner");
+    // Dated by when those words were last saved, not by today: an old
+    // status must not read as updated just now.
+    assert_eq!(
+        (made.4.as_str(), made.5.as_str()),
+        ("2020-01-01", "2020-01-01")
+    );
+    // Every account's projects, each under its own owner.
+    assert_eq!(brief(others).await.expect("theirs too").3, "b");
+
+    // An empty heading goes; there is nothing to make a Brief from.
+    assert_eq!(body(empty).await.0, "Intro.\n\n## Goals\n\n-\n");
+    assert!(brief(empty).await.is_none());
+
+    // Left exactly as they were: more than a Brief holds, a project that
+    // has a Brief, a heading that only resembles it, and a non-project.
+    assert_eq!(body(too_large).await.0, too_large_body);
+    assert!(brief(too_large).await.is_none());
+    assert_eq!(body(has_brief).await.0, with_status);
+    assert_eq!(brief(has_brief).await.expect("kept").1, "mine");
+    assert_eq!(
+        body(near_miss).await.0,
+        "## Status Update\n\nNot the section.\n"
+    );
+    assert!(brief(near_miss).await.is_none());
+    assert_eq!(body(article).await.0, with_status);
+    assert!(brief(article).await.is_none());
+
+    // The old body is restorable: snapshots are old then new.
+    let versions = |id: uuid::Uuid| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, String)>(
+                "SELECT body, created_by FROM node_versions WHERE node_id = $1 ORDER BY created_at",
+            )
+            .bind(id)
+            .fetch_all(&pool)
+            .await
+            .expect("versions")
+        }
+    };
+    let by = "system:backfill-status-into-brief".to_string();
+    assert_eq!(
+        versions(moved).await,
+        [
+            (with_status.to_string(), by.clone()),
+            (
+                "# Plan\n\nGoals stay.\n\n## Background\n\nKept.\n".to_string(),
+                by.clone()
+            )
+        ]
+    );
+    assert_eq!(versions(empty).await.len(), 2);
+    assert!(
+        versions(too_large).await.is_empty(),
+        "untouched: no snapshot"
+    );
+    assert!(versions(has_brief).await.is_empty());
+
+    // Once only: a second start changes nothing, even with a fresh candidate.
+    let later = insert_raw_node(&pool, "a", "project", "Later", with_status).await;
+    assert_eq!(
+        status_into_brief(&pool).await.expect("rerun"),
+        StatusIntoBrief::default()
+    );
+    assert_eq!(body(later).await.0, with_status);
+    assert!(brief(later).await.is_none());
+    let recorded: i32 = sqlx::query_scalar(
+        "SELECT rows_changed FROM data_backfills WHERE name = 'status_into_brief'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("claim");
+    assert_eq!(recorded, 3, "two moved and one emptied");
+}
+
 #[sqlx::test(migrations = "../migrations")]
 async fn backfill_035_moves_tokens_keeps_history_and_runs_once(pool: PgPool) {
     let scaffold = insert_raw_node(
