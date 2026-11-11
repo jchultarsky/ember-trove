@@ -481,7 +481,7 @@ details.
 | GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |
 | PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
 | GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
-| GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status and top open tasks |
+| GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status, the current Brief and top open tasks |
 | GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
 
 ### Notes

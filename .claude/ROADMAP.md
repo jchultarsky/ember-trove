@@ -3,8 +3,17 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-10)
+## Current state (2026-11-11)
 
+- **Unreleased: the Project Brief's UI** (#282, part 2). `BriefPanel`
+  (`ui/src/components/node_brief.rs`) is the Brief section of a Project
+  page; `BriefBody` also renders it on the dashboard card, which falls
+  back to the scraped `## Status` section only for a project without a
+  Brief. "Move Status section into Brief" is
+  `common::brief::move_status_section`. Not done: the stale threshold
+  (`STALE_AFTER_DAYS`, 14) as a per-user setting (there is no settings
+  page yet), and wiki links inside a Brief (it renders like a note).
+  **Focus** (#282, proposal B) is the next piece and has its own PR.
 - **v3.16.1 shipped: the audit's last fixes that needed no decision**
   (PR #303). By-id routes answer a foreign id like a missing one
   (`permissions::or_missing`); the node list's link count is of visible

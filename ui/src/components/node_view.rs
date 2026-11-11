@@ -401,6 +401,18 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             inner_html=body_html
                                             on:click=handle_wikilink_click
                                         />
+                                        // The Brief (#282): where a Project stands now.
+                                        // Projects only (§3.2); kinds never change, so no
+                                        // other node has one to show.
+                                        {allows(&n.node_type, Capability::Brief).then(|| view! {
+                                            <crate::components::node_brief::BriefPanel
+                                                node_id=id
+                                                can_edit=is_owner
+                                                body=n.body.clone()
+                                                body_version=n.updated_at
+                                                on_body_changed=Callback::new(move |()| refresh.update(|n| *n += 1))
+                                            />
+                                        })}
                                         // Tasks and People belong to Projects (§3.2, #216);
                                         // elsewhere they show only while older items remain.
                                         // One editor-prefs fetch per node for both panels (P1 #2).

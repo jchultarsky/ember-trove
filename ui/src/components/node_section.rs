@@ -16,6 +16,8 @@ use leptos::prelude::*;
 /// A section of the node page, in page order.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum NodeSection {
+    /// The Project Brief (#282): where the project stands now.
+    Brief,
     Tasks,
     Notes,
     People,
@@ -31,7 +33,8 @@ pub enum NodeSection {
 
 impl NodeSection {
     /// Page order: the outline lists them this way.
-    pub const ALL: [NodeSection; 11] = [
+    pub const ALL: [NodeSection; 12] = [
+        NodeSection::Brief,
         NodeSection::Tasks,
         NodeSection::Notes,
         NodeSection::People,
@@ -47,6 +50,7 @@ impl NodeSection {
 
     pub fn title(self) -> &'static str {
         match self {
+            NodeSection::Brief => "Brief",
             NodeSection::Tasks => "Tasks",
             NodeSection::Notes => "Notes",
             NodeSection::People => "People",
@@ -65,6 +69,7 @@ impl NodeSection {
     /// entries, so their icons must differ from the sidebar's (#173).
     pub fn icon(self) -> &'static str {
         match self {
+            NodeSection::Brief => "segment",
             NodeSection::Tasks => "check_box",
             NodeSection::Notes => "notes",
             NodeSection::People => "person",
@@ -83,6 +88,7 @@ impl NodeSection {
     /// are kept from #123).
     pub fn slug(self) -> &'static str {
         match self {
+            NodeSection::Brief => "brief",
             NodeSection::Tasks => "tasks",
             NodeSection::Notes => "notes",
             NodeSection::People => "people",
