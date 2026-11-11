@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.17.0] - 2026-11-11
+
 ### Added
 - **Project Brief, the UI (#282, part 2 of the Brief).** A Project page
   has a **Brief** section above its tasks: the headline, the pitch and the
