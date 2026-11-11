@@ -87,7 +87,7 @@ test('restoring a version shows the restored body at once', async ({ page, reque
       expect(saved.ok()).toBeTruthy();
     }
     await gotoNode(page, node.id);
-    const body = page.locator('.prose').first();
+    const body = page.getByTestId('node-body');
     await expect(body).toHaveText('words three');
 
     const versions = page.getByTestId('node-versions');
