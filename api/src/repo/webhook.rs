@@ -87,7 +87,6 @@ pub(crate) async fn list_all_for_backup<'e, E: sqlx::PgExecutor<'e>>(
     struct Row {
         id: Uuid,
         owner_id: String,
-        url: String,
         had_secret: bool,
         events: Vec<String>,
         is_active: bool,
@@ -95,7 +94,7 @@ pub(crate) async fn list_all_for_backup<'e, E: sqlx::PgExecutor<'e>>(
         updated_at: DateTime<Utc>,
     }
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT id, owner_id, url, (secret IS NOT NULL) AS had_secret, events, is_active, \
+        "SELECT id, owner_id, (secret IS NOT NULL) AS had_secret, events, is_active, \
                 created_at, updated_at \
          FROM webhooks ORDER BY created_at, id",
     )
@@ -107,7 +106,8 @@ pub(crate) async fn list_all_for_backup<'e, E: sqlx::PgExecutor<'e>>(
         .map(|r| common::backup::BackupWebhook {
             id: WebhookId(r.id),
             owner_id: r.owner_id,
-            url: r.url,
+            // Never selected: an address can be a credential.
+            url: None,
             had_secret: r.had_secret,
             events: r.events,
             is_active: r.is_active,

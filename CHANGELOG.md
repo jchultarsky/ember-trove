@@ -6,6 +6,37 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+Three owner decisions on the 2026-11-10 audit (#281).
+- **Revoking a share ends all of that person's access to the node.** They
+  could still change or delete the notes and tasks they had written there,
+  and those items stayed in their Notes page, My Day, calendar and
+  backlog. Now a note or task follows its node's rights: its author
+  changes it only while they can still edit the node, and it leaves their
+  lists when they can no longer see the node. The items stay on the node.
+  - A node's owner (or an admin) can delete any note on it. Deleting the
+    node always removed them, so this adds no reach.
+  - A person reduced to viewer can read their old notes and tasks there,
+    and can't change them.
+- **A backup no longer holds webhook addresses.** Many are credentials in
+  themselves, and an admin can download an archive. After a restore, a
+  webhook that still exists keeps its own address and secret. One that
+  doesn't comes back switched off with a placeholder address, and its
+  owner enters the real one again. The restore preview says how many are
+  affected.
+  - Backup format 7. Earlier releases refuse a format-7 archive; this one
+    still restores formats 3 to 6.
+  - **Archives made before this release still hold the addresses.** The
+    automatic ones age out (the newest 10 are kept); delete older manual
+    ones under Admin → Backup once a new backup exists.
+- **Only an admin's invite creates an account.** Any owner of a node could
+  share it with an address that had no account, which created one and
+  sent that address an email from this installation. Now they are told
+  the address has no account and that an administrator adds accounts;
+  sharing with an existing account works as before.
+  - Known cost: that message tells a node's owner whether an address has
+    an account here. The API's rate limit bounds guessing.
+
 ## [3.16.1] - 2026-11-10
 
 ### Security

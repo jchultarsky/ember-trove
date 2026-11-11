@@ -1,10 +1,10 @@
 /// Permission panel — list, invite, and revoke per-node access.
 ///
 /// The "Invite" form accepts an email address and calls `POST /nodes/{id}/invite`.
-/// The backend looks up the email in Cognito; if the user does not exist yet it
-/// creates a Cognito account (which triggers a welcome / temporary-password email)
-/// and then grants the permission.  If the user already exists the permission is
-/// granted directly without sending an email.
+/// The backend looks up the email in Cognito and grants the permission to the
+/// account it finds. An address with no account is refused with a message that
+/// says so, unless the caller is an admin: then the account is created first
+/// (Cognito sends the welcome / temporary-password email).
 use common::id::NodeId;
 use common::permission::{InviteRequest, PermissionRole, UpdatePermissionRequest};
 use leptos::prelude::*;

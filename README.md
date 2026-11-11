@@ -29,7 +29,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Node templates** — create reusable Markdown templates for each node type; "Use" pre-fills the editor body.
 - **Quick capture** — `n` opens a blank sticky note; Ctrl/Cmd+Enter sticks it on the Captures wall (Tasks → Captures), where each capture waits to become exactly one thing: a node, a note on a node, or a task in a Project.
 - **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
-- **Multi-user permissions** — nodes are **private by default**. Owners can invite others by email with Viewer / Editor / Owner roles. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
+- **Multi-user permissions** — nodes are **private by default**. Owners can share a node by email with Viewer / Editor / Owner roles; only an admin's invite creates a new account. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
 - **Light / dark mode** — class-based Tailwind v4 warm ember theme, persisted in `localStorage`.
@@ -385,7 +385,7 @@ All routes are nested under `/api`.
 | POST | `/api/nodes/{id}/attachments` | Upload attachment (multipart/form-data) |
 | GET | `/api/nodes/{id}/permissions` | Permission grants: all of them for an owner, the caller's own otherwise |
 | POST | `/api/nodes/{id}/permissions` | Grant permission to a user |
-| POST | `/api/nodes/{id}/invite` | Invite user by email (owner-only); sends SES email |
+| POST | `/api/nodes/{id}/invite` | Share with an account by email (owner-only); sends SES email. An address with no account is a 422, unless the caller is an admin: then the account is created |
 | GET | `/api/nodes/{id}/activity` | Audit log for this node (viewer+). Email addresses are shown to owners only |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
@@ -605,8 +605,9 @@ docker exec deploy-api-1 ember-trove-api backup create --comment "Daily"
 - A backup is one read-only snapshot of every account's data: nodes and
   everything on them, captures, people, templates, saved searches, editor
   sizes and webhooks, plus each attachment's file.
-  - **Not in it:** webhook signing secrets (a webhook that had one is
-    restored switched off, and its owner enters a secret again), the trash
+  - **Not in it:** webhook addresses and signing secrets (a restored
+    webhook keeps them if it still exists; otherwise it comes back
+    switched off, and its owner enters them again), the trash
     (deleted items kept 30 days for Undo), sessions, and the list of
     suspended accounts, which a restore never changes.
 - Only the **newest 10 automatic backups** are kept, daily and after-deploy
@@ -688,7 +689,7 @@ whichever end they edit.
 | `editor` | Read + write node, notes, tasks, tags, edges |
 | `owner` | Full access including invite, pin, delete, and share |
 
-Nodes are **private by default** — only the creating user can see a node until they explicitly grant access. The `POST /api/nodes/{id}/invite` endpoint looks up or creates a Cognito account for the invited email and grants the specified role.
+Nodes are **private by default** — only the creating user can see a node until they explicitly grant access. The `POST /api/nodes/{id}/invite` endpoint looks up the Cognito account for the email and grants it the specified role. An address with no account is refused; an admin's invite creates the account first. Revoking a grant ends all of that person's access to the node, including to the notes and tasks they wrote on it, which stay with the node.
 
 ---
 

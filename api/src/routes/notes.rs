@@ -17,9 +17,9 @@ use garde::Validate;
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{require_editor, require_viewer, subject_scope},
+    auth::permissions::{is_admin, require_editor, require_viewer, subject_scope},
     error::ApiError,
-    repo::note::NoteFeedFilter,
+    repo::note::{NoteActor, NoteFeedFilter},
     state::AppState,
 };
 
@@ -35,6 +35,15 @@ pub fn note_router() -> Router<AppState> {
         .route("/feed", get(note_feed))
         .route("/{note_id}", patch(update_note).delete(delete_note))
         .route("/{note_id}/restore", post(restore_note))
+}
+
+/// The caller, as the note repo's rights rules read them
+/// (`repo::note::author_may_write`).
+fn actor(claims: &AuthClaims) -> NoteActor<'_> {
+    NoteActor {
+        subject: &claims.sub,
+        admin: is_admin(claims),
+    }
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
@@ -87,7 +96,8 @@ async fn create_note_on_node(
     Ok((StatusCode::CREATED, Json(note)))
 }
 
-/// PATCH /notes/:note_id — edit the body of an existing note (owner only).
+/// PATCH /notes/:note_id — edit an existing note: its author only, while
+/// they can still write on its node.
 async fn update_note(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -99,29 +109,30 @@ async fn update_note(
 
     let note = state
         .notes
-        .update(NoteId(note_id), &claims.sub, req)
+        .update(NoteId(note_id), actor(&claims), req)
         .await?;
     Ok(Json(note))
 }
 
-/// DELETE /notes/:note_id — delete a note (owner only).
+/// DELETE /notes/:note_id — delete a note: its author while they can still
+/// write on its node, or an owner of the node.
 async fn delete_note(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(note_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    state.notes.delete(NoteId(note_id), &claims.sub).await?;
+    state.notes.delete(NoteId(note_id), actor(&claims)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /notes/:note_id/restore — un-delete a soft-deleted note (owner only,
-/// mirroring delete's authorization). Backs the undo toast.
+/// POST /notes/:note_id/restore — un-delete a soft-deleted note (delete's
+/// authorization). Backs the undo toast.
 async fn restore_note(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(note_id): Path<Uuid>,
 ) -> Result<Json<Note>, ApiError> {
-    let note = state.notes.restore(NoteId(note_id), &claims.sub).await?;
+    let note = state.notes.restore(NoteId(note_id), actor(&claims)).await?;
     Ok(Json(note))
 }
 

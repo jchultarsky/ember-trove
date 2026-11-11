@@ -473,6 +473,10 @@ const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
 const AZ_VIEW_TASK: u128 = 0xa2_0102;
 /// Someone else's task on a node the caller can edit.
 const AZ_EDIT_TASK: u128 = 0xa2_0103;
+/// The caller's own task on a node they have no grant on any more.
+const AZ_REVOKED_TASK: u128 = 0xa2_0104;
+/// The caller's own task on a node they may now only view.
+const AZ_DEMOTED_TASK: u128 = 0xa2_0105;
 
 /// The caller's own tag, and someone else's.
 const AZ_MY_TAG: u128 = 0xa2_0301;
@@ -527,6 +531,8 @@ fn authz_task(id: TaskId) -> Task {
         AZ_FOREIGN_TASK => ("someone-else", None),
         AZ_VIEW_TASK => ("someone-else", Some(az_node(AZ_VIEW_NODE))),
         AZ_EDIT_TASK => ("someone-else", Some(az_node(AZ_EDIT_NODE))),
+        AZ_REVOKED_TASK => ("test-sub", Some(az_node(AZ_FOREIGN_NODE))),
+        AZ_DEMOTED_TASK => ("test-sub", Some(az_node(AZ_VIEW_NODE))),
         _ => ("test-sub", None),
     };
     Task {
@@ -600,8 +606,10 @@ impl TaskRepo for StubTaskRepo {
         // A write the handler should have refused fails the test loudly
         // instead of quietly returning 200 (see the authz world below).
         let dest = req.node_id.flatten().map(|n| n.0.as_u128());
-        if matches!(id.0.as_u128(), AZ_FOREIGN_TASK | AZ_VIEW_TASK)
-            || matches!(dest, Some(AZ_VIEW_NODE | AZ_FOREIGN_NODE))
+        if matches!(
+            id.0.as_u128(),
+            AZ_FOREIGN_TASK | AZ_VIEW_TASK | AZ_REVOKED_TASK | AZ_DEMOTED_TASK
+        ) || matches!(dest, Some(AZ_VIEW_NODE | AZ_FOREIGN_NODE))
         {
             panic!("authorization bypass: update reached the repo for task {id}");
         }
@@ -626,11 +634,16 @@ impl TaskRepo for StubTaskRepo {
     async fn get_deleted(&self, id: TaskId) -> Result<Task, EmberTroveError> {
         match id.0.as_u128() {
             AZ_MISSING => Err(EmberTroveError::NotFound(format!("task {id} not found"))),
-            AZ_FOREIGN_TASK | AZ_VIEW_TASK => Ok(authz_task(id)),
+            AZ_FOREIGN_TASK | AZ_VIEW_TASK | AZ_REVOKED_TASK | AZ_DEMOTED_TASK => {
+                Ok(authz_task(id))
+            }
             _ => Ok(stub_task(id)),
         }
     }
     async fn restore(&self, id: TaskId) -> Result<Task, EmberTroveError> {
+        if matches!(id.0.as_u128(), AZ_REVOKED_TASK | AZ_DEMOTED_TASK) {
+            panic!("authorization bypass: restore reached the repo for task {id}");
+        }
         Ok(stub_task(id))
     }
     async fn purge_deleted_before(
@@ -841,7 +854,7 @@ impl NoteRepo for StubNoteRepo {
     async fn update(
         &self,
         _: common::id::NoteId,
-        _: &str,
+        _: crate::repo::note::NoteActor<'_>,
         _: common::note::UpdateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
         unimplemented!()
@@ -849,18 +862,22 @@ impl NoteRepo for StubNoteRepo {
     async fn list_for_node(&self, _: NodeId) -> Result<Vec<Note>, EmberTroveError> {
         unimplemented!()
     }
-    async fn delete(&self, _: common::id::NoteId, _: &str) -> Result<(), EmberTroveError> {
+    async fn delete(
+        &self,
+        _: common::id::NoteId,
+        _: crate::repo::note::NoteActor<'_>,
+    ) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
     async fn restore(
         &self,
         id: common::id::NoteId,
-        owner_id: &str,
+        actor: crate::repo::note::NoteActor<'_>,
     ) -> Result<Note, EmberTroveError> {
         Ok(Note {
             id,
             node_id: NodeId(Uuid::nil()),
-            owner_id: owner_id.to_string(),
+            owner_id: actor.subject.to_string(),
             body: "restored".to_string(),
             color: "yellow".to_string(),
             created_at: chrono::Utc::now(),
@@ -937,11 +954,20 @@ struct StubPermissionRepo;
 impl PermissionRepo for StubPermissionRepo {
     async fn grant(
         &self,
-        _: NodeId,
-        _: &str,
-        _: GrantPermissionRequest,
+        node: NodeId,
+        granted_by: &str,
+        req: GrantPermissionRequest,
     ) -> Result<Permission, EmberTroveError> {
-        unimplemented!()
+        // Only the account an admin's invite has just made (#invite tests).
+        assert_eq!(req.subject_id, NEW_ACCOUNT, "an unexpected grant");
+        Ok(Permission {
+            id: PermissionId(Uuid::new_v4()),
+            node_id: node,
+            subject_id: req.subject_id,
+            role: req.role,
+            granted_by: granted_by.to_string(),
+            created_at: chrono::Utc::now(),
+        })
     }
     async fn revoke(&self, id: PermissionId, node: NodeId) -> Result<(), EmberTroveError> {
         match authz_permissions().into_iter().find(|p| p.id == id) {
@@ -2775,6 +2801,62 @@ async fn update_task_on_a_shared_node_needs_editor_not_viewer() {
     assert_eq!(editor, StatusCode::OK);
 }
 
+/// SECURITY (owner decision, 2026-11-10): the caller created these tasks
+/// while a node was shared with them. Owning the task used to be enough to
+/// change, delete or restore it for good. Now the node's rights decide:
+/// with no grant left the task reads as missing, and a viewer is told no.
+/// The stub repo panics if a write is reached.
+#[tokio::test]
+async fn owning_a_task_is_no_way_back_onto_a_node_after_a_revoke() {
+    for (task, want) in [
+        (AZ_REVOKED_TASK, StatusCode::NOT_FOUND),
+        (AZ_DEMOTED_TASK, StatusCode::FORBIDDEN),
+    ] {
+        let id = Uuid::from_u128(task);
+        for (method, uri, body) in [
+            (
+                "PATCH",
+                format!("/tasks/{id}"),
+                serde_json::json!({ "title": "still mine?" }),
+            ),
+            ("DELETE", format!("/tasks/{id}"), serde_json::json!({})),
+            (
+                "POST",
+                format!("/tasks/{id}/restore"),
+                serde_json::json!({}),
+            ),
+        ] {
+            let (status, body) = by_id(
+                "/tasks",
+                crate::routes::tasks::task_router(),
+                method,
+                uri.clone(),
+                body,
+            )
+            .await;
+            assert_eq!(status, want, "{method} {uri}: {body}");
+        }
+    }
+    // With no grant left, the answer is the one for a task that isn't there.
+    let gone = by_id(
+        "/tasks",
+        crate::routes::tasks::task_router(),
+        "DELETE",
+        format!("/tasks/{}", Uuid::from_u128(AZ_REVOKED_TASK)),
+        serde_json::json!({}),
+    )
+    .await;
+    let absent = by_id(
+        "/tasks",
+        crate::routes::tasks::task_router(),
+        "DELETE",
+        format!("/tasks/{}", Uuid::from_u128(AZ_MISSING)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(gone, absent);
+}
+
 async fn nested_revoke(node: u128, perm: u128) -> StatusCode {
     claims_app("/nodes", crate::routes::nodes::router())
         .oneshot(
@@ -2852,6 +2934,52 @@ async fn an_invite_cannot_downgrade_the_canonical_owner() {
     // The stub repo's `grant` is unimplemented: reaching it fails the test.
     assert_eq!(invite("viewer").await, StatusCode::FORBIDDEN);
     assert_eq!(invite("editor").await, StatusCode::FORBIDDEN);
+}
+
+/// SECURITY (owner decision, 2026-11-10): sharing with an address that has
+/// no account used to create one, for any owner of a node: an account and
+/// an email to a stranger per request. Now only an admin's invite does.
+#[tokio::test]
+async fn only_an_admin_invites_an_address_that_has_no_account() {
+    let invite = |claims: common::auth::AuthClaims| async move {
+        let log = StepLog::default();
+        let mut state = test_state();
+        state.cognito_admin = Some(Arc::new(FakeDirectory {
+            log: log.clone(),
+            by_email: None,
+            ..FakeDirectory::default()
+        }));
+        let resp = Router::new()
+            .nest("/nodes", crate::routes::nodes::router())
+            .layer(axum::Extension(claims))
+            .with_state(state)
+            .oneshot(
+                Request::post(format!("/nodes/{}/invite", Uuid::from_u128(AZ_OWNED_NODE)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "email": "stranger@example.com", "role": "viewer" })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let steps = log.lock().unwrap().clone();
+        (status, String::from_utf8_lossy(&bytes).into_owned(), steps)
+    };
+
+    // An owner of the node who is not an admin: refused, and no account.
+    let (status, body, steps) = invite(fake_claims()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.contains("No account uses that address"), "{body}");
+    assert!(steps.is_empty(), "nothing was asked of Cognito: {steps:?}");
+
+    // An admin: the account is made and the node shared with it.
+    let (status, body, steps) = invite(admin_claims()).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(steps, ["create stranger@example.com"]);
 }
 
 /// GET a nested node route as the test caller, returning status and JSON.
@@ -4901,6 +5029,10 @@ impl crate::repo::account::AccountRepo for StubAccountRepo {
     }
 }
 
+/// The id `FakeDirectory::create_user` gives the account it makes. The
+/// stub permission repo accepts a grant to it and to nobody else.
+const NEW_ACCOUNT: &str = "new-account";
+
 /// A Cognito stand-in that records every call. `fail` names an operation
 /// that errors; `missing` makes every per-user call answer "not found".
 #[derive(Default)]
@@ -4946,9 +5078,19 @@ impl crate::admin::UserDirectory for FakeDirectory {
     }
     async fn create_user(
         &self,
-        _: &common::admin::CreateAdminUserRequest,
+        req: &common::admin::CreateAdminUserRequest,
     ) -> Result<common::admin::AdminUser, crate::error::ApiError> {
-        unimplemented!()
+        self.call("create", &req.email)?;
+        Ok(common::admin::AdminUser {
+            id: NEW_ACCOUNT.to_string(),
+            username: req.email.clone(),
+            email: Some(req.email.clone()),
+            first_name: None,
+            last_name: None,
+            enabled: true,
+            realm_roles: vec![],
+            suspended: false,
+        })
     }
     async fn find_user_by_email(
         &self,
