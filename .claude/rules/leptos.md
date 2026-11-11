@@ -109,6 +109,14 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   "Move Status section into Brief") saves the copy first and removes the
   original second: a failure in between leaves the words in both places,
   never in neither.
+- **Focus is the viewer's own** (#282). `FocusToggle` / `FocusMenuItem`
+  (`project_focus.rs`) take `state: RwSignal<Option<bool>>` and render
+  nothing while it is `None`: a control that guessed "not in Focus" would
+  show the wrong word. The dashboard's Focus section and its cards are in
+  `project_dashboard.rs` (`FocusSection`, `CardFocus`); a Focus card is a
+  `ProjectCard` with its strip, never separate markup. A card in the
+  Focus section may be a project shared with the viewer, so it has no
+  owner-only control (no pin star).
 - **Page headers & empty states are primitives, not markup.** Top-level views
   use `PageHeader` (`ui/src/components/page_header.rs`) and `EmptyState`
   (`empty_state.rs`) — never a hand-rolled `<h1>` bar or centered-icon block.

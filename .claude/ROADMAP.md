@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-11)
 
+- **Unreleased: Focus** (#282, proposal B; branch `feature/jc/focus`).
+  `project_focus` (migration 048), `/api/focus`, the dashboard's Focus
+  section and the toggle on the Project page. Rules in
+  `common::project_focus`; see "Focus" in `.claude/rules/api.md`. Backups
+  are format 8. Its release needs a Lightsail snapshot first (a
+  migration). Not done, on purpose: a palette command, suggestions
+  (§4.4 of the proposal), the why-line editor on the Project page.
+  **For S6:** the terminal state must join
+  `common::project_focus::holds_focus` (and the SQL in
+  `repo/project_focus.rs::shows`), and the route that closes a project
+  must delete the caller's own Focus entry, so re-opening doesn't restore
+  it. "Parked" is in the proposal but not in the ontology: it needs an
+  owner decision before anything is built on it.
 - **v3.17.0 shipped: the Project Brief's UI** (#282, part 2; PR #305). `BriefPanel`
   (`ui/src/components/node_brief.rs`) is the Brief section of a Project
   page; `BriefBody` also renders it on the dashboard card, which falls
@@ -327,7 +340,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   - **S4a–c:** captures and convert-to-one.
   - **S5a–d:** task states (`waiting`, `completed_at`), recurrence removed,
     tasks need a Project, task dependencies.
-  - **S6a–d:** the closed terminal state, the cascade, History.
+  - **S6a–d:** the closed terminal state, the cascade, History. Also:
+    a closed Project leaves Focus (#282; see "Current state").
   - **S7a–b:** reverse indexes and blockers.
   - **S8–S9:** email identity, the merge tool, @-mentions.
   - **S10:** Companies.
