@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.17.1] - 2026-11-11
+
 ### Changed
 - **The Brief is the first thing on a Project page**, above the body. It
   was the first section under the body, so a long body pushed it out of
