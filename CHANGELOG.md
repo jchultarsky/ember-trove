@@ -6,6 +6,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Every project's Status section becomes its Brief** (owner decision,
+  2026-11-11). On the first start of this release, each project that has
+  a `## Status` (or `## Project Status`) section in its body and no Brief
+  gets that section as its Brief, and the section leaves the body. It
+  runs once.
+  - Prose becomes the pitch and list items the points. A section with
+    sub-headings, or with more list items than a Brief has points, goes
+    into the pitch as it was written.
+  - The old body is kept in Version History, so each one can be restored.
+  - The Brief is dated by when the project was last saved, not by today,
+    so an old status shows as old ("May be out of date").
+  - Left as they were: a project that already has a Brief, and a section
+    too long for a Brief (over 4,000 characters). An empty Status heading
+    is removed.
+- **Moving a Status section into the Brief keeps more of its shape** (the
+  editor's "Move it into the brief" uses the same rule): an indented line
+  stays with its list item, a ticked item keeps its `[x]`, and a section
+  with sub-headings moves as written.
+
 ## [3.18.0] - 2026-11-11
 
 ### Added
