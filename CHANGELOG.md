@@ -28,9 +28,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     `PUT /api/focus/order`. Migration 048 (`project_focus`) is additive.
 
 ### Changed
-- **The Brief is the first thing on a Project page**, above the body. It
-  was the first section under the body, so a long body pushed it out of
-  sight.
 - **Backups are format 8**: an archive carries every account's Focus. An
   older release refuses a format-8 archive. Restoring an older archive
   keeps the Focus entries of the projects it brings back.
@@ -50,6 +47,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - Focus writes nothing to a project's History and fires no webhook:
     both are shared with the project.
   - Deleting an account deletes its Focus. The why-line is never logged.
+
+## [3.17.1] - 2026-11-11
+
+### Changed
+- **The Brief is the first thing on a Project page**, above the body. It
+  was the first section under the body, so a long body pushed it out of
+  sight.
 
 ## [3.17.0] - 2026-11-11
 
