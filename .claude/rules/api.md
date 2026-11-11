@@ -253,9 +253,21 @@ cargo check && cargo clippy -- -D warnings
   kind (`Capability::Focus`, 422), archived (422), the why-line (422).
   `why_now` is a double option (`FocusInput::change`): absent keeps the
   stored why-line, so an "add" from a stale page never wipes one.
-- `GET`, `DELETE` and the order route never look at the node: their
-  answers are the same for a foreign id, a missing one and an absent
-  entry.
+- `GET`, `DELETE`, the order route and the why-line route never look at
+  the node: their answers are the same for a foreign id, a missing one
+  and an absent entry.
+- **`PUT /focus/{node_id}/why` changes a why-line and never adds an
+  entry** (`FocusRepo::set_why`; no row is a 404). The UI's why-line
+  editor uses it, so a why-line saved from a page that is out of date
+  can't put a removed project back in Focus. Anything else that edits an
+  existing entry goes the same way, not through the upserting put.
+- **`reorder` renumbers all of the person's entries**, 0 upwards. The
+  ids it is sent swap among the slots they already hold; an entry it is
+  not sent (one the list hides) keeps its slot. Don't number only the
+  named ids: they land on top of the hidden ones
+  (`a_reorder_keeps_the_place_of_an_entry_the_list_hides`).
+- The why-line is one line with no control characters
+  (`normalize_why`): a NUL can't be stored and would answer as a 500.
 - **Never write Focus into History, a webhook or the node deletion
   preview.** All three are shared with the node, and each would tell its
   owner who has it in Focus.

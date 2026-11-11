@@ -66,8 +66,22 @@ pub trait FocusRepo: Send + Sync {
         node: NodeId,
         why: &WhyChange,
     ) -> Result<FocusItem, EmberTroveError>;
+    /// Replace the why-line of an entry that is there (`None` clears it).
+    /// `NotFound` when `subject` has no entry for `node`: unlike [`put`],
+    /// this never creates one, so a why-line saved from a stale page can't
+    /// put a removed project back in Focus.
+    ///
+    /// [`put`]: FocusRepo::put
+    async fn set_why(
+        &self,
+        subject: &str,
+        node: NodeId,
+        why_now: Option<&str>,
+    ) -> Result<FocusItem, EmberTroveError>;
     /// Order `subject`'s entries as `nodes` lists them. An id that is not
-    /// in their Focus is skipped.
+    /// in their Focus is skipped, and so is a repeat of one. An entry
+    /// `nodes` leaves out (one the list doesn't show: an archived project,
+    /// a share taken back) keeps its place among the others.
     async fn reorder(&self, subject: &str, nodes: &[NodeId]) -> Result<(), EmberTroveError>;
     /// Take `node` out of `subject`'s Focus. No entry is not an error.
     async fn remove(&self, subject: &str, node: NodeId) -> Result<(), EmberTroveError>;
@@ -262,15 +276,69 @@ impl FocusRepo for PgFocusRepo {
         Ok(row.into())
     }
 
+    async fn set_why(
+        &self,
+        subject: &str,
+        node: NodeId,
+        why_now: Option<&str>,
+    ) -> Result<FocusItem, EmberTroveError> {
+        let row: Option<ItemRow> = sqlx::query_as(
+            "UPDATE project_focus SET why_now = $3 \
+             WHERE subject_id = $1 AND node_id = $2 \
+             RETURNING node_id, why_now, added_at",
+        )
+        .bind(subject)
+        .bind(node.0)
+        .bind(why_now)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db("set why"))?;
+        row.map(FocusItem::from)
+            .ok_or_else(|| EmberTroveError::NotFound("project not found".to_string()))
+    }
+
     async fn reorder(&self, subject: &str, nodes: &[NodeId]) -> Result<(), EmberTroveError> {
         if nodes.is_empty() {
             return Ok(());
         }
         let ids: Vec<Uuid> = nodes.iter().map(|n| n.0).collect();
+        // One statement renumbers all of the person's entries, 0 upwards:
+        // - `cur`: every entry in its present order (`slot`), and where
+        //   the request wants it (`ord`; NULL when it isn't named, and the
+        //   first mention counts when it is named twice).
+        // - The named entries swap among **the slots they already hold**,
+        //   in the wanted order. An entry the request leaves out keeps its
+        //   slot. Numbering only the named ones from 0 would drop them on
+        //   top of those, and a hidden project would come back somewhere
+        //   else in the order.
         sqlx::query(
-            "UPDATE project_focus f SET position = (o.ord - 1)::int \
-             FROM unnest($2::uuid[]) WITH ORDINALITY AS o(node_id, ord) \
-             WHERE f.subject_id = $1 AND f.node_id = o.node_id",
+            "WITH cur AS ( \
+                 SELECT f.node_id, w.ord, \
+                        row_number() OVER (ORDER BY f.position, f.added_at, f.node_id) AS slot \
+                 FROM project_focus f \
+                 LEFT JOIN ( \
+                     SELECT node_id, MIN(ord) AS ord \
+                     FROM unnest($2::uuid[]) WITH ORDINALITY AS o(node_id, ord) \
+                     GROUP BY node_id \
+                 ) w ON w.node_id = f.node_id \
+                 WHERE f.subject_id = $1 \
+             ), \
+             held AS ( \
+                 SELECT slot, row_number() OVER (ORDER BY slot) AS k \
+                 FROM cur WHERE ord IS NOT NULL \
+             ), \
+             wanted AS ( \
+                 SELECT node_id, row_number() OVER (ORDER BY ord) AS k \
+                 FROM cur WHERE ord IS NOT NULL \
+             ), \
+             next AS ( \
+                 SELECT wanted.node_id, held.slot FROM wanted JOIN held USING (k) \
+                 UNION ALL \
+                 SELECT node_id, slot FROM cur WHERE ord IS NULL \
+             ) \
+             UPDATE project_focus f SET position = (next.slot - 1)::int \
+             FROM next \
+             WHERE f.subject_id = $1 AND f.node_id = next.node_id",
         )
         .bind(subject)
         .bind(&ids)

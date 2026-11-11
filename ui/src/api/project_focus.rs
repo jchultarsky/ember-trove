@@ -1,6 +1,6 @@
 use common::{
     id::NodeId,
-    project_focus::{FocusEntry, FocusInput, FocusItem, FocusOrder},
+    project_focus::{FocusEntry, FocusInput, FocusItem, FocusOrder, FocusWhy},
 };
 
 use super::{delete_empty, get_json, put_empty, put_json};
@@ -17,10 +17,15 @@ pub async fn fetch_focus_item(node_id: NodeId) -> Result<Option<FocusItem>, UiEr
     get_json(&format!("/focus/{node_id}")).await
 }
 
-/// Put a project in the caller's Focus (`FocusInput::add`), or change its
-/// why-line (`FocusInput::why`).
+/// Put a project in the caller's Focus (`FocusInput::add`).
 pub async fn put_focus(node_id: NodeId, input: &FocusInput) -> Result<FocusItem, UiError> {
     put_json(&format!("/focus/{node_id}"), input).await
+}
+
+/// Change the why-line of a project that is in the caller's Focus (`None`
+/// clears it). A 404 means it isn't there any more: this never adds it.
+pub async fn set_focus_why(node_id: NodeId, why_now: Option<String>) -> Result<FocusItem, UiError> {
+    put_json(&format!("/focus/{node_id}/why"), &FocusWhy { why_now }).await
 }
 
 /// Set the order of the caller's Focus.

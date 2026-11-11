@@ -494,7 +494,8 @@ The caller's own Focus: private to each account, with no admin bypass.
 | GET | `/api/focus` | The caller's Focus in their order: each entry (`node_id`, `why_now`, `added_at`) with the project's dashboard card. Archived projects, and ones the caller can no longer view, are left out |
 | GET | `/api/focus/{node_id}` | The caller's entry for that project, or `null` |
 | PUT | `/api/focus/{node_id}` | Put a Project the caller can view in their Focus (last), or change its why-line. `why_now` absent keeps the why-line, `null` clears it, a string (one line, at most 200 characters) sets it. A project the caller can't see is a **404**, like one that doesn't exist; not a Project, or archived, is **422** |
-| PUT | `/api/focus/order` | Body `{ "node_ids": [...] }`: the caller's Focus in that order (at most 500). Ids that aren't in it are skipped |
+| PUT | `/api/focus/{node_id}/why` | Body `{ "why_now": ... }`: change the why-line of a project that is in the caller's Focus (`null` or blank clears it). It never adds one: a project that isn't there is a **404** |
+| PUT | `/api/focus/order` | Body `{ "node_ids": [...] }`: the caller's Focus in that order (at most 500). Ids that aren't in it are skipped; an entry left out (one the list doesn't show) keeps its place |
 | DELETE | `/api/focus/{node_id}` | Take the project out of the caller's Focus. **204** whether or not it was there |
 
 ### Notes

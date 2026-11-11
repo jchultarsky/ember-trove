@@ -6434,6 +6434,111 @@ async fn focus_titles(repo: &PgFocusRepo, subject: &str, sees_all: bool) -> Vec<
         .collect()
 }
 
+/// A reorder names the entries the list shows. One it doesn't show (an
+/// archived project) must keep its place among them: numbering only the
+/// named ones from 0 dropped them on top of it, so it came back somewhere
+/// else in the order.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_reorder_keeps_the_place_of_an_entry_the_list_hides(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let a = focus_project(&pool, "alice", "alpha").await;
+    let b = focus_project(&pool, "alice", "bravo").await;
+    let hidden = focus_project(&pool, "alice", "hidden").await;
+    let c = focus_project(&pool, "alice", "charlie").await;
+    for node in [a, b, hidden, c] {
+        repo.put("alice", node, &WhyChange::Keep).await.unwrap();
+    }
+    let archive = |status: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE nodes SET status = $2::node_status WHERE id = $1")
+                .bind(hidden.0)
+                .bind(status)
+                .execute(&pool)
+                .await
+                .expect("status");
+        }
+    };
+    archive("archived").await;
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["alpha", "bravo", "charlie"]
+    );
+
+    // The page sends what it shows: three of the four.
+    repo.reorder("alice", &[c, a, b]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "alpha", "bravo"]
+    );
+    // Back from the archive, it is third, where it was.
+    archive("draft").await;
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "alpha", "hidden", "bravo"]
+    );
+
+    // An id named twice counts once (its first mention), an id that is not
+    // in her Focus is skipped, and the entries left out stay put.
+    let stranger = common::id::NodeId(uuid::Uuid::new_v4());
+    repo.reorder("alice", &[b, stranger, b, c]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["bravo", "alpha", "hidden", "charlie"]
+    );
+    // Positions are 0 upwards with no two alike.
+    let positions: Vec<i32> = sqlx::query_scalar(
+        "SELECT position FROM project_focus WHERE subject_id = 'alice' ORDER BY position",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("positions");
+    assert_eq!(positions, [0, 1, 2, 3]);
+}
+
+/// A why-line is changed only on an entry that is there. Saving one from a
+/// page that is out of date must not put a removed project back in Focus.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_why_line_is_set_only_on_an_entry_that_is_there(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let project = focus_project(&pool, "alice", "alpha").await;
+    let count = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_focus")
+                .fetch_one(&pool)
+                .await
+                .expect("count")
+        }
+    };
+
+    let absent = repo.set_why("alice", project, Some("too late")).await;
+    assert!(matches!(absent, Err(EmberTroveError::NotFound(_))));
+    assert_eq!(count().await, 0, "nothing was added");
+
+    let added = repo.put("alice", project, &WhyChange::Keep).await.unwrap();
+    let set = repo
+        .set_why("alice", project, Some("Decision Friday"))
+        .await
+        .unwrap();
+    assert_eq!(set.why_now.as_deref(), Some("Decision Friday"));
+    assert_eq!(set.added_at, added.added_at, "the age is not reset");
+    let cleared = repo.set_why("alice", project, None).await.unwrap();
+    assert_eq!(cleared.why_now, None);
+
+    // Another account has no entry for it: not found, and alice's is as it was.
+    repo.set_why("alice", project, Some("hers")).await.unwrap();
+    let theirs = repo.set_why("bob", project, Some("his")).await;
+    assert!(matches!(theirs, Err(EmberTroveError::NotFound(_))));
+    let hers = repo
+        .get("alice", false, project)
+        .await
+        .unwrap()
+        .expect("entry");
+    assert_eq!(hers.why_now.as_deref(), Some("hers"));
+    assert_eq!(count().await, 1);
+}
+
 #[sqlx::test(migrations = "../migrations")]
 async fn a_focus_keeps_its_order_and_a_second_put_keeps_its_place(pool: PgPool) {
     let repo = PgFocusRepo::new(pool.clone());

@@ -1322,6 +1322,20 @@ impl crate::repo::project_focus::FocusRepo for StubFocusRepo {
             _ => panic!("authorization bypass: focus put reached the repo for {node}"),
         }
     }
+    async fn set_why(
+        &self,
+        subject: &str,
+        node: NodeId,
+        why_now: Option<&str>,
+    ) -> Result<common::project_focus::FocusItem, EmberTroveError> {
+        stub_focus_owner(subject);
+        // Only "test-sub" has an entry, for AZ_MY_PROJECT.
+        if subject == "test-sub" && node == az_node(AZ_MY_PROJECT) {
+            Ok(stub_focus_item(node, why_now))
+        } else {
+            Err(EmberTroveError::NotFound("project not found".into()))
+        }
+    }
     async fn reorder(&self, subject: &str, nodes: &[NodeId]) -> Result<(), EmberTroveError> {
         stub_focus_owner(subject);
         assert!(
@@ -6233,18 +6247,85 @@ async fn an_owner_and_a_viewer_can_each_put_a_project_in_their_focus() {
 #[tokio::test]
 async fn a_bad_why_line_is_refused_without_repeating_it() {
     let secret = "s3cret ".repeat(40);
-    for why in [secret.as_str(), "s3cret\nsecond line"] {
-        let (status, body) = focus_call(
+    // A NUL used to reach the database and answer as a 500.
+    for why in [secret.as_str(), "s3cret\nsecond line", "s3cret\u{0}"] {
+        // On the entry, and on the why-line's own route.
+        for path in [
+            focus_path(AZ_MY_PROJECT),
+            format!("{}/why", focus_path(AZ_MY_PROJECT)),
+        ] {
+            let (status, body) = focus_call(
+                fake_claims(),
+                "PUT",
+                &path,
+                serde_json::json!({ "why_now": why }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{path}: {body}");
+            assert!(body.contains("why-line"), "{body}");
+            assert!(!body.contains("s3cret"), "{body}");
+        }
+    }
+}
+
+/// The why-line's own route changes an entry that is there and never adds
+/// one: a why-line saved from a page that is out of date can't put a
+/// removed project back in Focus.
+#[tokio::test]
+async fn a_why_line_is_changed_only_where_the_project_is_in_focus() {
+    let why_path = |node: u128| format!("{}/why", focus_path(node));
+    let (status, body) = focus_call(
+        fake_claims(),
+        "PUT",
+        &why_path(AZ_MY_PROJECT),
+        serde_json::json!({ "why_now": "  Decision Friday " }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let item: common::project_focus::FocusItem = serde_json::from_str(&body).unwrap();
+    assert_eq!(item.why_now.as_deref(), Some("Decision Friday"), "tidied");
+
+    // `null`, a blank and an absent field all clear it.
+    for cleared in [
+        serde_json::json!({ "why_now": null }),
+        serde_json::json!({ "why_now": "   " }),
+        serde_json::json!({}),
+    ] {
+        let (status, body) =
+            focus_call(fake_claims(), "PUT", &why_path(AZ_MY_PROJECT), cleared).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let item: common::project_focus::FocusItem = serde_json::from_str(&body).unwrap();
+        assert_eq!(item.why_now, None);
+    }
+
+    // Not in the caller's Focus: one answer, whatever the node is. A
+    // project they can see but never added, someone else's node, and an
+    // id that doesn't exist read exactly alike.
+    let answers = [AZ_VIEW_PROJECT, AZ_FOREIGN_NODE, AZ_MISSING].map(|node| {
+        focus_call(
             fake_claims(),
             "PUT",
-            &focus_path(AZ_MY_PROJECT),
-            serde_json::json!({ "why_now": why }),
+            Box::leak(why_path(node).into_boxed_str()),
+            serde_json::json!({ "why_now": "x" }),
         )
-        .await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
-        assert!(body.contains("why-line"), "{body}");
-        assert!(!body.contains("s3cret"), "{body}");
+    });
+    let mut seen = Vec::new();
+    for answer in answers {
+        let (status, body) = answer.await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        seen.push(body);
     }
+    assert!(seen.windows(2).all(|w| w[0] == w[1]), "{seen:?}");
+
+    // An admin has no bypass here either: their own Focus is empty.
+    let (status, _) = focus_call(
+        focus_admin(),
+        "PUT",
+        &why_path(AZ_MY_PROJECT),
+        serde_json::json!({ "why_now": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

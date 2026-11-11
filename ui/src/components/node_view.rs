@@ -15,7 +15,7 @@ use crate::components::node_meta::{
 };
 use crate::components::note_panel::NotePanel;
 use crate::components::permission_dialog::PermissionPanel;
-use crate::components::project_focus::{FocusMenuItem, FocusToggle};
+use crate::components::project_focus::{FocusMenuItem, FocusRetry, FocusToggle};
 use crate::components::tag_bar::TagBar;
 use crate::components::task_panel::TaskPanel;
 use crate::components::toast::{ToastLevel, push_toast};
@@ -209,12 +209,28 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // has no control.
                             let focusable = holds_focus(&n.node_type, &n.status);
                             let focus_state = RwSignal::new(None::<bool>);
-                            if focusable {
+                            // A failed read is said: the control offers to
+                            // load again. It used to leave no control.
+                            let focus_failed = RwSignal::new(false);
+                            let load_focus = Callback::new(move |()| {
+                                focus_failed.set(false);
                                 wasm_bindgen_futures::spawn_local(async move {
-                                    if let Ok(item) = crate::api::fetch_focus_item(edit_id).await {
-                                        let _ = focus_state.try_set(Some(item.is_some()));
+                                    match crate::api::fetch_focus_item(edit_id).await {
+                                        Ok(item) => {
+                                            let _ = focus_state.try_set(Some(item.is_some()));
+                                        }
+                                        Err(_) => {
+                                            let _ = focus_failed.try_set(true);
+                                        }
                                     }
                                 });
+                            });
+                            let focus_retry = FocusRetry {
+                                failed: focus_failed,
+                                run: load_focus,
+                            };
+                            if focusable {
+                                load_focus.run(());
                             }
 
                             view! {
@@ -298,7 +314,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                             <span aria-hidden="true" class="material-symbols-outlined">"edit"</span>
                                                         </button>
                                                         {focusable.then(|| view! {
-                                                            <FocusToggle node_id=edit_id state=focus_state />
+                                                            <FocusToggle node_id=edit_id state=focus_state retry=focus_retry />
                                                         })}
                                                         <button
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-amber-600
@@ -391,6 +407,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                     <FocusMenuItem
                                                                         node_id=edit_id
                                                                         state=focus_state
+                                                                        retry=focus_retry
                                                                         on_click=Callback::new(move |()| menu_open.set(false))
                                                                     />
                                                                 })}

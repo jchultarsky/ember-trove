@@ -11,6 +11,8 @@
 
 use common::id::NodeId;
 use common::project_focus::{FocusInput, MAX_WHY_NOW, normalize_why};
+
+use crate::error::UiError;
 use leptos::prelude::*;
 
 use crate::components::icon_button::{IconButton, IconButtonVariant};
@@ -89,13 +91,30 @@ pub fn toggle_focus(
     });
 }
 
+/// What a control shows when its Focus state could not be loaded: a way
+/// to load it again. Without it a failed read left no control at all, and
+/// nothing said why.
+#[derive(Clone, Copy)]
+pub struct FocusRetry {
+    /// The last load failed.
+    pub failed: RwSignal<bool>,
+    /// Load the state again.
+    pub run: Callback<()>,
+}
+
+const RETRY_LABEL: &str = "Focus didn\u{2019}t load. Try again";
+
 /// The icon button that adds a project to the viewer's Focus or removes it.
-/// Renders nothing until `state` is known.
+/// Renders nothing while `state` is unknown, unless the load failed and
+/// `retry` is given: then it offers to load again.
 #[component]
 pub fn FocusToggle(
     node_id: NodeId,
     /// Whether the project is in the viewer's Focus; `None` while unknown.
     state: RwSignal<Option<bool>>,
+    /// Offer a retry when the state failed to load.
+    #[prop(optional)]
+    retry: Option<FocusRetry>,
     /// Runs after the server took the change, with the new state.
     #[prop(optional, into)]
     on_changed: Option<Callback<bool>>,
@@ -105,7 +124,29 @@ pub fn FocusToggle(
 ) -> impl IntoView {
     let busy = RwSignal::new(false);
     move || {
-        state.get().map(|in_focus| {
+        let Some(in_focus) = state.get() else {
+            return retry.filter(|r| r.failed.get()).map(|r| {
+                view! {
+                    <button
+                        type="button"
+                        class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
+                            dark:hover:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800
+                            transition-colors cursor-pointer"
+                        data-testid="focus-retry"
+                        aria-label=RETRY_LABEL
+                        title=RETRY_LABEL
+                        on:click=move |ev| {
+                            ev.stop_propagation();
+                            r.run.run(());
+                        }
+                    >
+                        <span aria-hidden="true" class="material-symbols-outlined">"refresh"</span>
+                    </button>
+                }
+                .into_any()
+            });
+        };
+        Some({
             let tone = if in_focus {
                 "text-amber-600 dark:text-amber-400"
             } else {
@@ -127,7 +168,9 @@ pub fn FocusToggle(
                     type="button"
                     class=class
                     data-testid="focus-toggle"
-                    aria-pressed=if in_focus { "true" } else { "false" }
+                    // The name says what a click does and changes with the
+                    // state, so there is no `aria-pressed` beside it: the
+                    // two together read "Remove from Focus, pressed".
                     aria-label=focus_action(in_focus)
                     title=focus_action(in_focus)
                     disabled=move || busy.get()
@@ -142,6 +185,7 @@ pub fn FocusToggle(
                     </span>
                 </button>
             }
+            .into_any()
         })
     }
 }
@@ -152,20 +196,46 @@ pub fn FocusToggle(
 pub fn FocusMenuItem(
     node_id: NodeId,
     state: RwSignal<Option<bool>>,
+    /// Offer a retry when the state failed to load.
+    #[prop(optional)]
+    retry: Option<FocusRetry>,
     #[prop(into)] on_click: Callback<()>,
 ) -> impl IntoView {
     let busy = RwSignal::new(false);
+    const ROW: &str = "flex items-center gap-2 w-full text-left px-3 py-2 text-sm
+                        text-stone-700 dark:text-stone-200
+                        hover:bg-amber-50 dark:hover:bg-amber-900/30
+                        hover:text-amber-700 dark:hover:text-amber-400
+                        disabled:opacity-40";
     move || {
-        state.get().map(|in_focus| {
+        let Some(in_focus) = state.get() else {
+            return retry.filter(|r| r.failed.get()).map(|r| {
+                view! {
+                    <button
+                        type="button"
+                        role="menuitem"
+                        class=ROW
+                        data-testid="focus-retry-item"
+                        on:click=move |_| {
+                            on_click.run(());
+                            r.run.run(());
+                        }
+                    >
+                        <span aria-hidden="true" class="material-symbols-outlined" style="font-size:18px;">
+                            "refresh"
+                        </span>
+                        {RETRY_LABEL}
+                    </button>
+                }
+                .into_any()
+            });
+        };
+        Some({
             view! {
                 <button
                     type="button"
                     role="menuitem"
-                    class="flex items-center gap-2 w-full text-left px-3 py-2 text-sm
-                        text-stone-700 dark:text-stone-200
-                        hover:bg-amber-50 dark:hover:bg-amber-900/30
-                        hover:text-amber-700 dark:hover:text-amber-400
-                        disabled:opacity-40"
+                    class=ROW
                     data-testid="focus-menu-item"
                     disabled=move || busy.get()
                     on:click=move |_| {
@@ -179,14 +249,26 @@ pub fn FocusMenuItem(
                     {focus_action(in_focus)}
                 </button>
             }
+            .into_any()
         })
     }
 }
 
 /// A Focus entry's why-line, with its inline editor: one private line
 /// saying why this project, now.
+///
+/// It saves through the why-line's own route, which never adds an entry.
+/// If the project left Focus meanwhile (removed in another tab), the save
+/// is refused, a toast says so, and `on_gone` runs (the dashboard reloads
+/// its Focus). Saving used to put the project back.
 #[component]
-pub fn WhyLine(node_id: NodeId, initial: Option<String>) -> impl IntoView {
+pub fn WhyLine(
+    node_id: NodeId,
+    initial: Option<String>,
+    /// The project is no longer in the viewer's Focus.
+    #[prop(into)]
+    on_gone: Callback<()>,
+) -> impl IntoView {
     let why = RwSignal::new(initial);
     let editing = RwSignal::new(false);
     let draft = RwSignal::new(String::new());
@@ -222,12 +304,19 @@ pub fn WhyLine(node_id: NodeId, initial: Option<String>) -> impl IntoView {
         };
         busy.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::api::put_focus(node_id, &FocusInput::why(text)).await;
+            let result = crate::api::set_focus_why(node_id, text).await;
             let _ = busy.try_set(false);
             match result {
                 Ok(item) => {
                     let _ = why.try_set(item.why_now);
                     let _ = editing.try_set(false);
+                }
+                Err(UiError::Api { status: 404, .. }) => {
+                    push_toast(
+                        ToastLevel::Error,
+                        "Not saved: this project is no longer in your Focus.",
+                    );
+                    on_gone.try_run(());
                 }
                 Err(e) => push_toast(
                     ToastLevel::Error,

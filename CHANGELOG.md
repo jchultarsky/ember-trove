@@ -20,6 +20,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - Focus stays until you change it; nothing expires it. Past five
     projects the section says that Focus works best small. That is a
     hint, not a limit.
+  - The age counts days by your own calendar. A why-line saved for a
+    project that has left Focus (removed in another tab) is refused and
+    does not put it back.
   - An archived project does not show in Focus and can't be added. It
     shows again if it is un-archived. The states "complete", "cancelled"
     and "parked" from the proposal don't exist in the app yet; they will

@@ -21,7 +21,7 @@
 //! Everything here is pure, so the rules are unit-tested once and shared by
 //! the API and the UI.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -106,6 +106,15 @@ impl FocusInput {
     }
 }
 
+/// `PUT /focus/{node_id}/why` body: the why-line of a project that is in
+/// the caller's Focus. `null`, absent or blank clears it. Unlike a put of
+/// the entry, this never adds the project.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FocusWhy {
+    #[serde(default)]
+    pub why_now: Option<String>,
+}
+
 /// `PUT /focus/order` body: the caller's Focus, in the order they want.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FocusOrder {
@@ -120,6 +129,8 @@ pub enum FocusError {
     WhyTooLong,
     #[error("the why-line must be a single line")]
     WhyMultiline,
+    #[error("the why-line can't hold control characters")]
+    WhyControl,
     #[error("an archived project can't be in Focus")]
     Archived,
     #[error("a new order names at most {MAX_ORDER} projects")]
@@ -133,6 +144,10 @@ pub fn normalize_why(raw: Option<&str>) -> Result<Option<String>, FocusError> {
         Some(w) if w.contains(['\n', '\r', '\u{2028}', '\u{2029}']) => {
             Err(FocusError::WhyMultiline)
         }
+        // A NUL can't be stored at all (Postgres refuses it, which would
+        // answer as a 500), and no other control character belongs in one
+        // line of text. A tab inside the line is kept.
+        Some(w) if w.chars().any(|c| c.is_control() && c != '\t') => Err(FocusError::WhyControl),
         Some(w) if w.chars().count() > MAX_WHY_NOW => Err(FocusError::WhyTooLong),
         Some(w) => Ok(Some(w.to_string())),
     }
@@ -157,17 +172,20 @@ pub fn over_soft_limit(entries: usize) -> bool {
     entries > SOFT_LIMIT
 }
 
-/// Whole days the project has been in Focus. Never negative: a clock that
-/// runs behind the server's reads as today.
+/// Days the project has been in Focus, by the calendar: `added` and
+/// `today` are dates **in the reader's own time zone** (the UI reads them
+/// from the browser). So a project added last night reads "1d" this
+/// morning, not "today" until 24 hours have passed. Never negative: a
+/// clock that runs behind the server's reads as today.
 #[must_use]
-pub fn days_in_focus(added_at: DateTime<Utc>, now: DateTime<Utc>) -> i64 {
-    (now - added_at).num_days().max(0)
+pub fn days_in_focus(added: NaiveDate, today: NaiveDate) -> i64 {
+    (today - added).num_days().max(0)
 }
 
 /// The card's age line: "In focus today", then "In focus 6d".
 #[must_use]
-pub fn in_focus_label(added_at: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    match days_in_focus(added_at, now) {
+pub fn in_focus_label(added: NaiveDate, today: NaiveDate) -> String {
+    match days_in_focus(added, today) {
         0 => "In focus today".to_string(),
         days => format!("In focus {days}d"),
     }
@@ -199,7 +217,6 @@ pub fn moved(ids: &[NodeId], id: NodeId, step: Step) -> Option<Vec<NodeId>> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeDelta;
     use uuid::Uuid;
 
     use super::*;
@@ -239,6 +256,22 @@ mod tests {
     }
 
     #[test]
+    fn a_why_line_holds_no_control_characters() {
+        // A NUL can't be stored: without this it reached Postgres and
+        // answered as a 500.
+        for bad in ["a\0b", "\0", "a\u{1b}[31mb", "a\u{7f}b"] {
+            assert_eq!(
+                normalize_why(Some(bad)),
+                Err(FocusError::WhyControl),
+                "{bad:?}"
+            );
+        }
+        // A tab inside the line is text.
+        assert_eq!(normalize_why(Some("a\tb")), Ok(Some("a\tb".to_string())));
+        assert!(!FocusError::WhyControl.to_string().contains('\0'));
+    }
+
+    #[test]
     fn a_refusal_never_repeats_what_was_written() {
         let secret = "s3cret-reason ".repeat(40);
         let err = normalize_why(Some(&secret)).expect_err("too long");
@@ -267,24 +300,22 @@ mod tests {
     }
 
     #[test]
-    fn the_age_counts_whole_days_and_never_goes_negative() {
-        let now = Utc::now();
-        assert_eq!(days_in_focus(now, now), 0);
-        assert_eq!(days_in_focus(now - TimeDelta::hours(23), now), 0);
-        assert_eq!(days_in_focus(now - TimeDelta::hours(25), now), 1);
-        assert_eq!(days_in_focus(now - TimeDelta::days(6), now), 6);
-        assert_eq!(days_in_focus(now + TimeDelta::hours(3), now), 0);
+    fn the_age_counts_calendar_days_and_never_goes_negative() {
+        let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).expect("a date");
+        assert_eq!(days_in_focus(day(11), day(11)), 0);
+        // Added last night: one day by the calendar, whatever the hours.
+        assert_eq!(days_in_focus(day(11), day(12)), 1);
+        assert_eq!(days_in_focus(day(5), day(11)), 6);
+        assert_eq!(days_in_focus(day(12), day(11)), 0, "a clock running behind");
     }
 
     #[test]
     fn the_age_line_says_today_then_days() {
-        let now = Utc::now();
-        assert_eq!(in_focus_label(now, now), "In focus today");
-        assert_eq!(in_focus_label(now - TimeDelta::days(1), now), "In focus 1d");
-        assert_eq!(
-            in_focus_label(now - TimeDelta::days(40), now),
-            "In focus 40d"
-        );
+        let day = |d: u32| NaiveDate::from_ymd_opt(2026, 11, d).expect("a date");
+        assert_eq!(in_focus_label(day(11), day(11)), "In focus today");
+        assert_eq!(in_focus_label(day(10), day(11)), "In focus 1d");
+        let long_ago = NaiveDate::from_ymd_opt(2026, 10, 2).expect("a date");
+        assert_eq!(in_focus_label(long_ago, day(11)), "In focus 40d");
     }
 
     #[test]

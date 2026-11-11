@@ -17,6 +17,14 @@ pub fn local_today() -> chrono::NaiveDate {
     .unwrap_or_else(|| chrono::Utc::now().date_naive())
 }
 
+/// The date of `ts` in the browser's local timezone: the day a person
+/// would say it happened on. Falls back to the UTC date.
+pub fn local_date(ts: &chrono::DateTime<chrono::Utc>) -> chrono::NaiveDate {
+    let d = js_date(ts);
+    chrono::NaiveDate::from_ymd_opt(d.get_full_year() as i32, d.get_month() + 1, d.get_date())
+        .unwrap_or_else(|| ts.date_naive())
+}
+
 /// The current local time as a short clock label ("4:02 PM" / "16:02",
 /// per the browser locale) via `Intl.DateTimeFormat`.
 ///

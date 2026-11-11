@@ -119,6 +119,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   `ProjectCard` with its strip, never separate markup. A card in the
   Focus section may be a project shared with the viewer, so it has no
   owner-only control (no pin star).
+  The Focus cards are a keyed `<For>`: a move reorders them in place.
+  Don't rebuild them from the fetched list on a move (a why-line saved a
+  moment ago showed as it was before). Reorders are sent one at a time,
+  the latest last. The why-line saves through `set_focus_why`, which
+  never adds an entry; a control whose state failed to load offers a
+  retry (`FocusRetry`). The age and its tooltip use the reader's own
+  calendar (`local_date`, `local_today`), never UTC.
 - **Page headers & empty states are primitives, not markup.** Top-level views
   use `PageHeader` (`ui/src/components/page_header.rs`) and `EmptyState`
   (`empty_state.rs`) — never a hand-rolled `<h1>` bar or centered-icon block.

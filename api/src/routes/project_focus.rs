@@ -12,8 +12,9 @@
 //!   neither can tell a stranger anything about a node.
 //! - The reads check the rights again, in the query: a project whose share
 //!   was taken back drops out, title and all.
-//! - Removing and reordering act on the caller's own rows only and never
-//!   look at the node, so their answers say nothing about it.
+//! - Removing, reordering and changing a why-line act on the caller's own
+//!   rows only and never look at the node, so their answers say nothing
+//!   about it.
 //! - Focus writes no History entry and fires no webhook: both are shared
 //!   with the node, and Focus is not.
 //! - The why-line is user content: never logged.
@@ -31,7 +32,8 @@ use common::{
     id::NodeId,
     ontology::Capability,
     project_focus::{
-        FocusEntry, FocusError, FocusInput, FocusItem, FocusOrder, MAX_ORDER, holds_focus,
+        FocusEntry, FocusError, FocusInput, FocusItem, FocusOrder, FocusWhy, MAX_ORDER,
+        holds_focus, normalize_why,
     },
 };
 use uuid::Uuid;
@@ -57,6 +59,7 @@ pub fn router() -> Router<AppState> {
             "/{node_id}",
             get(get_focus).put(put_focus).delete(remove_focus),
         )
+        .route("/{node_id}/why", put(set_why))
 }
 
 /// The caller's Focus, in their order, each entry with its dashboard card.
@@ -130,6 +133,30 @@ async fn put_focus(
     let item = state
         .focus
         .put(&claims.sub, node_id, &why)
+        .await
+        .map_err(or_missing_row(PROJECT))?;
+    Ok(Json(item))
+}
+
+/// Change the why-line of a project that is in the caller's Focus. It
+/// never adds one: a project that isn't there is a 404, so a why-line saved
+/// from a page that is out of date can't put a removed project back.
+///
+/// SECURITY: this acts on the caller's own row and never looks at the node,
+/// so the 404 says only "not in your Focus", the same for a hidden node, a
+/// missing one and one never added. The why-line is checked first, so a
+/// refusal of it says nothing either.
+async fn set_why(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<FocusWhy>,
+) -> Result<Json<FocusItem>, ApiError> {
+    let why =
+        normalize_why(body.why_now.as_deref()).map_err(|e| ApiError::Validation(e.to_string()))?;
+    let item = state
+        .focus
+        .set_why(&claims.sub, NodeId(node_id), why.as_deref())
         .await
         .map_err(or_missing_row(PROJECT))?;
     Ok(Json(item))

@@ -34,7 +34,9 @@ use leptos_router::hooks::use_navigate;
 
 use crate::app::TaskRefresh;
 use crate::components::empty_state::EmptyState;
-use crate::components::format_helpers::format_relative_short;
+use crate::components::format_helpers::{
+    format_relative_short, format_timestamp, local_date, local_today,
+};
 use crate::components::icon_button::IconButton;
 use crate::components::node_meta::{status_color, status_icon, status_label};
 use crate::components::page_header::PageHeader;
@@ -250,8 +252,10 @@ enum CardFocus {
     /// that move it or take it out.
     Listed {
         item: FocusItem,
-        first: bool,
-        last: bool,
+        /// Whether the card is at that end of the order now. Signals: a
+        /// move reorders the cards in place and doesn't rebuild them.
+        first: Signal<bool>,
+        last: Signal<bool>,
         on_move: Callback<(NodeId, Step)>,
     },
 }
@@ -268,6 +272,12 @@ fn FocusSection(
     // A local copy, so a move shows at once.
     let list = RwSignal::new(entries);
 
+    // Reorders go to the server one at a time, and only the latest order
+    // waits: two moves in quick succession used to send two requests that
+    // could land in either order, leaving the stored order behind the page.
+    let waiting = StoredValue::new(None::<Vec<NodeId>>);
+    let sending = StoredValue::new(false);
+
     let on_move = Callback::new(move |(node_id, step): (NodeId, Step)| {
         let ids: Vec<NodeId> = list.with_untracked(|l| l.iter().map(|e| e.focus.node_id).collect());
         let Some(next) = moved(&ids, node_id, step) else {
@@ -278,12 +288,22 @@ fn FocusSection(
             move |e: &FocusEntry| next.iter().position(|id| *id == e.focus.node_id)
         };
         list.update(|l| l.sort_by_key(|e| place(e)));
+        waiting.set_value(Some(next));
+        if sending.get_value() {
+            return;
+        }
+        sending.set_value(true);
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = crate::api::set_focus_order(&next).await {
-                push_toast(ToastLevel::Error, format!("Couldn't reorder Focus: {e}"));
-                // Show the order the server still has.
-                let _ = refresh.try_update(|n| *n += 1);
+            // `try_`: the section is rebuilt on a refetch, and may be gone.
+            while let Some(order) = waiting.try_update_value(Option::take).flatten() {
+                if let Err(e) = crate::api::set_focus_order(&order).await {
+                    push_toast(ToastLevel::Error, format!("Couldn't reorder Focus: {e}"));
+                    // Show the order the server still has.
+                    let _ = refresh.try_update(|n| *n += 1);
+                    break;
+                }
             }
+            let _ = sending.try_set_value(false);
         });
     });
 
@@ -311,9 +331,11 @@ fn FocusSection(
         }
     };
 
+    // The count never changes while this section lives (an add or a remove
+    // refetches and rebuilds it), so a move re-renders nothing here.
+    let count = Memo::new(move |_| list.with(Vec::len));
     move || {
-        let entries = list.get();
-        let count = entries.len();
+        let count = count.get();
         if count == 0 {
             return show_empty.then(|| view! {
                 <section class="rounded-lg border border-stone-200 dark:border-stone-800 \
@@ -332,27 +354,40 @@ fn FocusSection(
                      data-testid="focus-section">
                 {header(count)}
                 <div class="space-y-3">
-                    {entries.into_iter().enumerate().map(|(i, entry)| {
-                        let node_id = entry.focus.node_id;
-                        view! {
-                            <ProjectCard
-                                entry=entry.project
-                                on_navigate=move || {
-                                    navigate.get_value()(
-                                        &format!("/nodes/{node_id}"),
-                                        Default::default(),
-                                    )
-                                }
-                                refresh=refresh
-                                focus=CardFocus::Listed {
-                                    item: entry.focus,
-                                    first: i == 0,
-                                    last: i + 1 == count,
-                                    on_move,
-                                }
-                            />
+                    // Keyed by project: a move reorders the cards in place.
+                    // Rebuilding them from the fetched list showed a
+                    // why-line saved a moment ago as it was before, and
+                    // closed an editor that was open on another card.
+                    <For
+                        each=move || list.get()
+                        key=|entry| entry.focus.node_id
+                        children=move |entry| {
+                            let node_id = entry.focus.node_id;
+                            let at = move |end: fn(&[FocusEntry]) -> Option<&FocusEntry>| {
+                                Signal::derive(move || {
+                                    list.with(|l| end(l).is_some_and(|e| e.focus.node_id == node_id))
+                                })
+                            };
+                            view! {
+                                <ProjectCard
+                                    entry=entry.project
+                                    on_navigate=move || {
+                                        navigate.get_value()(
+                                            &format!("/nodes/{node_id}"),
+                                            Default::default(),
+                                        )
+                                    }
+                                    refresh=refresh
+                                    focus=CardFocus::Listed {
+                                        item: entry.focus,
+                                        first: at(<[FocusEntry]>::first),
+                                        last: at(<[FocusEntry]>::last),
+                                        on_move,
+                                    }
+                                />
+                            }
                         }
-                    }).collect_view()}
+                    />
                 </div>
             </section>
         }
@@ -559,7 +594,8 @@ fn ProjectCard(
                     }
                 });
             };
-            let since = item.added_at.format("%b %-d, %Y").to_string();
+            // The reader's own clock and calendar, not UTC's.
+            let since = format_timestamp(&item.added_at);
             let strip = view! {
                 // Its own surface: a click here edits Focus, it doesn't
                 // open the project.
@@ -576,12 +612,18 @@ fn ProjectCard(
                         <span aria-hidden="true" class="material-symbols-outlined" style="font-size:14px;">
                             {IN_FOCUS_ICON}
                         </span>
-                        {in_focus_label(item.added_at, Utc::now())}
+                        {in_focus_label(local_date(&item.added_at), local_today())}
                     </span>
                     // `basis-48`: at phone width the why-line takes its
                     // own row instead of squeezing to a few characters.
                     <div class="flex items-center min-w-0 flex-1 basis-48">
-                        <WhyLine node_id=node_id initial=item.why_now />
+                        <WhyLine
+                            node_id=node_id
+                            initial=item.why_now
+                            on_gone=Callback::new(move |()| {
+                                let _ = refresh.try_update(|n| *n += 1);
+                            })
+                        />
                     </div>
                     <div class="flex items-center gap-0.5 flex-shrink-0 ml-auto">
                         <IconButton
