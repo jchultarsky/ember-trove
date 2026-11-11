@@ -132,23 +132,30 @@ fn scheduled_on(
     req
 }
 
-/// Who may change a task: its owner, an admin, or an editor of the node it
-/// is on. One rule for update, delete and restore (#281, 3.3; it was
-/// written out three times), and the one `TaskRepo::reorder` applies in
-/// SQL.
+/// Who may change a task. On a node: an editor of that node (or an admin).
+/// On no node: its owner (or an admin). One rule for update, delete and
+/// restore (#281, 3.3; it was written out three times), and the one
+/// `TaskRepo::reorder` applies in SQL.
+///
+/// SECURITY (owner decision, 2026-11-10): owning a task on a node is not a
+/// way in. The owner used to pass whatever their rights on the node, so
+/// someone whose share was revoked could still change or delete the tasks
+/// they had created there. Revoking a share now ends that: the task stays
+/// with the node.
 async fn require_task_editor(
     state: &AppState,
     claims: &AuthClaims,
     task: &Task,
 ) -> Result<(), ApiError> {
-    if task.owner_id == claims.sub || is_admin(claims) {
-        return Ok(());
-    }
+    let Some(node) = task.node_id else {
+        return if task.owner_id == claims.sub || is_admin(claims) {
+            Ok(())
+        } else {
+            Err(missing(TASK))
+        };
+    };
     // A refusal is a 403 only for someone who can see the task's node;
     // for anyone else the task reads as missing (`permissions::or_missing`).
-    let Some(node) = task.node_id else {
-        return Err(missing(TASK));
-    };
     let check = require_editor(state.permissions.as_ref(), claims, node).await;
     let may_see = check.is_ok() || can_view(state.permissions.as_ref(), claims, node).await?;
     or_missing(check, may_see, TASK)
@@ -375,8 +382,8 @@ async fn reorder_tasks(
     Json(req): Json<ReorderTasksRequest>,
 ) -> Result<StatusCode, ApiError> {
     let updates: Vec<(TaskId, i32)> = req.tasks.iter().map(|e| (e.id, e.sort_order)).collect();
-    // The repo applies the edit rule per task (owner, admin, or an editor
-    // of its node) and skips the rest.
+    // The repo applies the edit rule per task (`require_task_editor`'s)
+    // and skips the rest.
     state
         .tasks
         .reorder(&updates, subject_scope(&claims))
