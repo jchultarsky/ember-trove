@@ -27,6 +27,12 @@ test('no page scrolls sideways at phone width', async ({ page, request }) => {
       },
     });
     expect(task.ok()).toBeTruthy();
+    // In Focus (#282), with the longest why-line: the dashboard's Focus
+    // strip must wrap, not push the card past the screen.
+    const focus = await request.put(`/api/focus/${project.id}`, {
+      data: { why_now: 'Decision needed before the electrician comes back on Friday. '.repeat(4).trim().slice(0, 200) },
+    });
+    expect(focus.ok()).toBeTruthy();
 
     for (const path of [
       '/tasks/my-day',
