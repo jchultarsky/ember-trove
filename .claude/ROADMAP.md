@@ -5,6 +5,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-11)
 
+- **Unreleased: a dashboard card shows the Brief, the Status section and
+  the open tasks together** (owner decision 2026-11-11). The Brief no
+  longer hides the body's `## Status` section: most projects still have
+  that section and no Brief. The owner will drop the Status section from
+  the project template once the Briefs are written; the scraping
+  (`extract_section` in `dashboard_entries`) can go then.
 - **v3.18.0 shipped: Focus** (#282, proposal B; PR #307).
   `project_focus` (migration 048), `/api/focus`, the dashboard's Focus
   section and the toggle on the Project page. Rules in

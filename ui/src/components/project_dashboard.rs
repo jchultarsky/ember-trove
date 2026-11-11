@@ -521,13 +521,14 @@ fn ProjectCard(
     let s_label = status_label(&entry.node_status);
     let s_color = status_color(&entry.node_status);
 
-    // The Brief is the project's narrative (#282). The body's scraped
-    // `## Status` section is the fallback for a project that has none yet.
+    // The card shows the Brief, the body's `## Status` section and the
+    // open tasks, each when the project has it (owner decision,
+    // 2026-11-11). The Brief (#282) is to take over from the Status
+    // section; until the bodies are moved over, most projects have a
+    // Status section and no Brief, and some have both, so neither hides
+    // the other.
     let brief = entry.brief.clone();
-    let status_html = brief
-        .is_none()
-        .then(|| entry.status_section.as_deref().map(render_markdown_plain))
-        .flatten();
+    let status_html = entry.status_section.as_deref().map(render_markdown_plain);
     let open_tasks = entry.open_tasks.clone();
     let has_more = entry.has_more_tasks;
     let open_count = counts.open + counts.in_progress;
@@ -760,11 +761,22 @@ fn ProjectCard(
                 </div>
             </div>
 
-            // Expandable detail section — unchanged from v2.6.x
+            // The detail blocks: Brief, Status, open tasks.
             {(brief.is_some() || status_html.is_some() || !open_tasks.is_empty()).then(|| {
+                // Three blocks get a third column on a wide screen; two
+                // share the row as before.
+                let blocks = usize::from(brief.is_some())
+                    + usize::from(status_html.is_some())
+                    + usize::from(!open_tasks.is_empty());
+                let grid = if blocks == 3 {
+                    "border-t border-stone-200 dark:border-stone-700/60 px-4 py-3 \
+                     grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
+                } else {
+                    "border-t border-stone-200 dark:border-stone-700/60 px-4 py-3 \
+                     grid grid-cols-1 md:grid-cols-2 gap-4"
+                };
                 view! {
-                    <div class="border-t border-stone-200 dark:border-stone-700/60 px-4 py-3
-                        grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class=grid>
                         {brief.map(|brief| view! {
                             <div class="min-w-0" data-testid="card-brief">
                                 <div class="text-xs font-semibold uppercase tracking-wider
@@ -775,7 +787,7 @@ fn ProjectCard(
                             </div>
                         })}
                         {status_html.map(|html| view! {
-                            <div>
+                            <div class="min-w-0" data-testid="card-status">
                                 <div class="text-xs font-semibold uppercase tracking-wider
                                     text-stone-400 dark:text-stone-500 mb-1.5">
                                     "Status"
@@ -791,7 +803,7 @@ fn ProjectCard(
                         })}
 
                         {(!open_tasks.is_empty()).then(|| view! {
-                            <div>
+                            <div class="min-w-0" data-testid="card-tasks">
                                 <div class="text-xs font-semibold uppercase tracking-wider
                                     text-stone-400 dark:text-stone-500 mb-1.5">
                                     {format!("Open Tasks ({})", open_count)}

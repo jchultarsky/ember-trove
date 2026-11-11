@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **A dashboard card shows the Brief, the Status section and the open
+  tasks together.** A Brief used to replace the Status section on the
+  card, so a project that had both showed only its Brief. Each block
+  shows when the project has it.
+
 ## [3.18.0] - 2026-11-11
 
 ### Added
