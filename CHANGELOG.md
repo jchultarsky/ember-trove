@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.18.0] - 2026-11-11
+
 ### Added
 - **Focus: the projects that hold your attention (#282, proposal B).** The
   dashboard now leads with a **Focus** section: the projects you put

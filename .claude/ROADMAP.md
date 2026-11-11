@@ -5,12 +5,13 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-11)
 
-- **Unreleased: Focus** (#282, proposal B; branch `feature/jc/focus`).
+- **v3.18.0 shipped: Focus** (#282, proposal B; PR #307).
   `project_focus` (migration 048), `/api/focus`, the dashboard's Focus
   section and the toggle on the Project page. Rules in
   `common::project_focus`; see "Focus" in `.claude/rules/api.md`. Backups
-  are format 8. Its release needs a Lightsail snapshot first (a
-  migration). Not done, on purpose: a palette command, suggestions
+  are format 8. Owner decisions at the merge (2026-11-11): a project
+  that drops out keeps its entry; archives carry why-lines, as they do
+  captures and people. Not done, on purpose: a palette command, suggestions
   (§4.4 of the proposal), the why-line editor on the Project page.
   **For S6:** the terminal state must join
   `common::project_focus::holds_focus` (and the SQL in
