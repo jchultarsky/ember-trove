@@ -3,8 +3,17 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-10)
+## Current state (2026-11-11)
 
+- **Unreleased: the Project Brief's UI** (#282, part 2). `BriefPanel`
+  (`ui/src/components/node_brief.rs`) is the Brief section of a Project
+  page; `BriefBody` also renders it on the dashboard card, which falls
+  back to the scraped `## Status` section only for a project without a
+  Brief. "Move Status section into Brief" is
+  `common::brief::move_status_section`. Not done: the stale threshold
+  (`STALE_AFTER_DAYS`, 14) as a per-user setting (there is no settings
+  page yet), and wiki links inside a Brief (it renders like a note).
+  **Focus** (#282, proposal B) is the next piece and has its own PR.
 - **Unreleased: three owner decisions on the audit** (#281). A note or
   task follows its node's rights (a revoked share ends the author's
   access to what they wrote there); backups hold no webhook addresses

@@ -6,6 +6,30 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Project Brief, the UI (#282, part 2 of the Brief).** A Project page
+  has a **Brief** section above its tasks: the headline, the pitch and the
+  points, with when it was last updated. Whoever may edit the project
+  writes, edits and removes it there (Ctrl/Cmd+Enter saves).
+  - A Brief not updated for 14 days is marked "May be out of date".
+    Nothing is hidden or blocked. The 14 days are fixed for now; they are
+    not yet a setting.
+  - If someone else saves the Brief while you are editing it, your save
+    is refused, your text stays in the form, and you can load the latest.
+  - **Move the Status section into the Brief.** When a project's body has
+    a `## Status` (or `## Project Status`) section, the editor offers to
+    move it: prose becomes the pitch, list items the points. On save the
+    section leaves the body, so the story has one home (the body's
+    earlier text is in Version History). It is offered only when the
+    whole section fits a Brief.
+  - The dashboard's project cards show the Brief (the first five points)
+    in place of the Status section scraped from the body. A project
+    without a Brief shows that section as before.
+
+### Fixed
+- **Restoring a version shows the restored body at once.** The page kept
+  showing the body it had loaded until it was reloaded.
+
 ### Security
 Three owner decisions on the 2026-11-10 audit (#281).
 - **Revoking a share ends all of that person's access to the node.** They

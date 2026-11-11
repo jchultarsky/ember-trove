@@ -32,6 +32,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
         async move { crate::api::fetch_node(id).await }
     });
 
+    // The node's body changed under this page (a version restore, the
+    // Status section moving into the Brief): fetch it again. The `refresh`
+    // context only reloads lists, so the page used to keep showing the body
+    // it had loaded.
+    let reload_node = Callback::new(move |()| {
+        node.refetch();
+        refresh.update(|n| *n += 1);
+    });
+
     // Resolve just the titles this body links (#134) — it used to download
     // every visible node title on each node page view.
     let body = Signal::derive(move || {
@@ -401,6 +410,18 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             inner_html=body_html
                                             on:click=handle_wikilink_click
                                         />
+                                        // The Brief (#282): where a Project stands now.
+                                        // Projects only (§3.2); kinds never change, so no
+                                        // other node has one to show.
+                                        {allows(&n.node_type, Capability::Brief).then(|| view! {
+                                            <crate::components::node_brief::BriefPanel
+                                                node_id=id
+                                                can_edit=is_owner
+                                                body=n.body.clone()
+                                                body_version=n.updated_at
+                                                on_body_changed=reload_node
+                                            />
+                                        })}
                                         // Tasks and People belong to Projects (§3.2, #216);
                                         // elsewhere they show only while older items remain.
                                         // One editor-prefs fetch per node for both panels (P1 #2).
@@ -423,7 +444,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <VersionPanel
                                             node_id=id
                                             is_editor=is_owner
-                                            on_restore=Callback::new(move |_| refresh.update(|n| *n += 1))
+                                            on_restore=reload_node
                                         />
                                         <ActivityPanel node_id=id />
                                     </div>

@@ -102,6 +102,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   a count badge and an actions slot, and it answers the outline's jumps. A
   new section adds a variant and wraps its body; it never hand-rolls a
   chevron header.
+- **The Brief is rendered by `BriefBody`** (`node_brief.rs`, #282) on the
+  Project page and on the dashboard card (`compact`). A new place that
+  shows a Brief uses it, so the age and the stale marker are never left
+  off. A write that changes two things (the Brief, then the body, for
+  "Move Status section into Brief") saves the copy first and removes the
+  original second: a failure in between leaves the words in both places,
+  never in neither.
 - **Page headers & empty states are primitives, not markup.** Top-level views
   use `PageHeader` (`ui/src/components/page_header.rs`) and `EmptyState`
   (`empty_state.rs`) — never a hand-rolled `<h1>` bar or centered-icon block.

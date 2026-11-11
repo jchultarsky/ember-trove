@@ -302,7 +302,13 @@ fn ProjectCard(
     let s_label = status_label(&entry.node_status);
     let s_color = status_color(&entry.node_status);
 
-    let status_html = entry.status_section.as_deref().map(render_markdown_plain);
+    // The Brief is the project's narrative (#282). The body's scraped
+    // `## Status` section is the fallback for a project that has none yet.
+    let brief = entry.brief.clone();
+    let status_html = brief
+        .is_none()
+        .then(|| entry.status_section.as_deref().map(render_markdown_plain))
+        .flatten();
     let open_tasks = entry.open_tasks.clone();
     let has_more = entry.has_more_tasks;
     let open_count = counts.open + counts.in_progress;
@@ -431,10 +437,19 @@ fn ProjectCard(
             </div>
 
             // Expandable detail section — unchanged from v2.6.x
-            {(status_html.is_some() || !open_tasks.is_empty()).then(|| {
+            {(brief.is_some() || status_html.is_some() || !open_tasks.is_empty()).then(|| {
                 view! {
                     <div class="border-t border-stone-200 dark:border-stone-700/60 px-4 py-3
                         grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {brief.map(|brief| view! {
+                            <div class="min-w-0" data-testid="card-brief">
+                                <div class="text-xs font-semibold uppercase tracking-wider
+                                    text-stone-400 dark:text-stone-500 mb-1.5">
+                                    "Brief"
+                                </div>
+                                <crate::components::node_brief::BriefBody brief=brief compact=true />
+                            </div>
+                        })}
                         {status_html.map(|html| view! {
                             <div>
                                 <div class="text-xs font-semibold uppercase tracking-wider
