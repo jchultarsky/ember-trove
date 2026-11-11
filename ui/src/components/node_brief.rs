@@ -17,6 +17,10 @@
 //!   neither. `common::brief::move_status_section` offers it only when the
 //!   whole section fits a Brief.
 //!
+//! - It is the first thing on the page, above the body (owner decision,
+//!   2026-11-11): where the project stands now comes before its durable
+//!   documentation.
+//!
 //! [`BriefBody`] is also the dashboard card's Brief (`compact`).
 
 use chrono::{DateTime, Utc};
@@ -537,7 +541,7 @@ pub fn BriefPanel(
     });
 
     view! {
-        <SectionShell section=NodeSection::Brief open=open actions=actions.clone()>
+        <SectionShell section=NodeSection::Brief open=open actions=actions.clone() lead=true>
             {move || match brief.get() {
                 None => view! {
                     <p class="text-xs text-stone-400">"Loading\u{2026}"</p>
