@@ -1003,12 +1003,26 @@ async fn revoke_permission(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// What a node's owner is told when the address they share with has no
+/// account and they are not an admin.
+const NO_ACCOUNT_FOR_ADDRESS: &str =
+    "No account uses that address. An administrator can add one under Admin \u{2192} Users.";
+
 /// `POST /nodes/{id}/invite`
 ///
-/// Invite a user to collaborate on a node by email.  If the email is already
-/// registered in Cognito the permission is granted directly.  If not, a new
-/// Cognito user is created (Cognito sends the welcome / temp-password email)
-/// and the permission is then granted.
+/// Share a node with someone by email. If the address already has an
+/// account, the permission is granted directly. If it has none, only an
+/// **admin** may go on: a new Cognito user is created (Cognito sends the
+/// welcome / temp-password email) and the permission is then granted.
+/// Anyone else gets a 422 that says an administrator adds accounts.
+///
+/// SECURITY (owner decision, 2026-11-10): every owner of a node used to be
+/// able to create accounts this way, one per address they typed, each
+/// sending mail from this installation to a stranger. Who has an account
+/// here is the administrators' decision. The price: the 422 tells a node's
+/// owner that an address has no account. The old route showed them the
+/// same thing less plainly (a new grantee appeared either way), and the
+/// API's rate limit bounds the guessing.
 ///
 /// Requires `Owner` role on the node.  Returns `503` when the Cognito admin
 /// client is not configured (i.e. `COGNITO_USER_POOL_ID` is not set).
@@ -1031,13 +1045,16 @@ async fn invite(
     let node = state.nodes.get(NodeId(id)).await?;
     let node_title = node.title;
 
-    // Look up the email in Cognito.  If not found, create the user (Cognito
-    // then sends a welcome / temp-password email automatically).
+    // Look up the email in Cognito.  If not found, an admin creates the
+    // user (Cognito then sends a welcome / temp-password email).
     // Track whether this is an existing user — we only send an explicit invite
     // notification for existing users; new users get the Cognito welcome email.
     let (subject_id, notify_email) = match cognito.find_user_by_email(&req.email).await? {
         Some(user) => (user.id, Some(req.email.clone())),
         None => {
+            if !is_admin(&claims) {
+                return Err(ApiError::Validation(NO_ACCOUNT_FOR_ADDRESS.to_string()));
+            }
             let new_user = cognito
                 .create_user(&common::admin::CreateAdminUserRequest {
                     email: req.email.clone(),

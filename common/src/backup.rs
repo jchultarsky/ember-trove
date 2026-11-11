@@ -58,7 +58,10 @@ pub struct EntityCounts {
 /// 6 (#282): the archive carries Project Briefs. An older release would
 /// restore it without them and say nothing, so the number moves
 /// (`.claude/rules/api.md`, "What a backup holds").
-pub const SCHEMA_VERSION: u32 = 6;
+/// 7 (owner decision, 2026-11-10): a webhook's address is no longer in the
+/// archive ([`BackupWebhook`]). An older release needs it to restore a
+/// webhook at all, so the number moves and it refuses.
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -165,11 +168,19 @@ pub struct BackupEditorPref {
 /// on purpose (owner decision, 2026-11-09): an admin can download an
 /// archive, and a signing secret is a credential, not content. The archive
 /// records only that one was set.
+///
+/// Nor is its address written (owner decision, 2026-11-10): many webhook
+/// addresses are credentials in themselves (a Slack-style URL posts for
+/// whoever holds it, and so does a random host name), and there is no
+/// telling which. `url` is read from a format-5 or -6 archive, which holds
+/// it, and is never serialised.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackupWebhook {
     pub id: WebhookId,
     pub owner_id: String,
-    pub url: String,
+    /// `None` from this release's archives; the address from an older one.
+    #[serde(default, skip_serializing)]
+    pub url: Option<String>,
     pub events: Vec<String>,
     pub is_active: bool,
     /// The webhook signed its payloads. Its secret is not in the archive.
@@ -179,13 +190,26 @@ pub struct BackupWebhook {
     pub updated_at: DateTime<Utc>,
 }
 
+/// The address a webhook is restored with when the archive holds none and
+/// no live webhook has its id. `.invalid` never resolves (RFC 2606), and
+/// the webhook comes back switched off: its owner enters the real address.
+pub const WEBHOOK_URL_NOT_IN_BACKUP: &str = "https://address-not-in-backup.invalid/";
+
 impl BackupWebhook {
-    /// Whether the restored webhook delivers. One that signed its payloads
-    /// comes back switched off: without its secret it would send unsigned
-    /// payloads to a receiver that expects signed ones. Its owner enters the
-    /// secret again and switches it on.
+    /// Whether the webhook delivers when it is restored **from the archive
+    /// alone**. It comes back switched off when the archive lacks what it
+    /// needs: its address, or the secret it signed with (it would send
+    /// unsigned payloads to a receiver that expects signed ones). Its owner
+    /// enters them again and switches it on.
     pub fn restored_active(&self) -> bool {
-        self.is_active && !self.had_secret
+        self.is_active && !self.had_secret && self.url.is_some()
+    }
+
+    /// Whether it delivers when a live webhook with its id is still there
+    /// to take the address and secret from (`live_has_secret`): then only a
+    /// secret that has since been removed keeps it off.
+    pub fn restored_active_over_live(&self, live_has_secret: bool) -> bool {
+        self.is_active && (!self.had_secret || live_has_secret)
     }
 }
 
@@ -364,8 +388,8 @@ pub struct BackupData {
 }
 
 impl BackupData {
-    /// How many webhooks come back switched off because their signing
-    /// secret isn't in the archive ([`BackupWebhook::restored_active`]).
+    /// How many webhooks come back switched off when nothing live can fill
+    /// in what the archive lacks ([`BackupWebhook::restored_active`]).
     pub fn webhooks_switched_off(&self) -> usize {
         self.webhooks
             .iter()
@@ -503,11 +527,12 @@ mod tests {
         );
     }
 
+    /// A webhook as a format-5 or -6 archive holds it: with its address.
     fn webhook(is_active: bool, had_secret: bool) -> BackupWebhook {
         BackupWebhook {
             id: WebhookId(Uuid::new_v4()),
             owner_id: "someone".into(),
-            url: "https://example.com/hook".into(),
+            url: Some("https://example.com/hook".into()),
             events: vec!["node.created".into()],
             is_active,
             had_secret,
@@ -542,6 +567,45 @@ mod tests {
             "only the active signed one changes"
         );
         assert_eq!(BackupData::default().webhooks_switched_off(), 0);
+    }
+
+    /// SECURITY (owner decision, 2026-11-10): a webhook's address can be a
+    /// credential, so it is never written, and a webhook without one comes
+    /// back switched off unless a live one still has it.
+    #[test]
+    fn an_archived_webhook_has_no_address_and_comes_back_switched_off() {
+        let hook = webhook(true, false);
+        let json = serde_json::to_string(&hook).expect("serialises");
+        assert!(!json.contains("example.com"), "{json}");
+        assert!(!json.contains("url"), "{json}");
+
+        let read: BackupWebhook = serde_json::from_str(&json).expect("parses");
+        assert_eq!(read.url, None);
+        assert!(!read.restored_active(), "no address: off");
+        assert!(read.restored_active_over_live(false), "the live one has it");
+        let data = BackupData {
+            webhooks: Some(vec![read]),
+            ..BackupData::default()
+        };
+        assert_eq!(data.webhooks_switched_off(), 1);
+
+        // A signed one needs the live secret too; one that was off stays off.
+        let signed = BackupWebhook {
+            url: None,
+            ..webhook(true, true)
+        };
+        assert!(signed.restored_active_over_live(true));
+        assert!(!signed.restored_active_over_live(false));
+        assert!(!webhook(false, false).restored_active_over_live(true));
+
+        // An older archive holds the address, and it is still read.
+        let older = r#"{"id":"00000000-0000-0000-0000-000000000001","owner_id":"o",
+            "url":"https://example.com/hook","events":[],"is_active":true,
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
+        let read: BackupWebhook = serde_json::from_str(older).expect("parses");
+        assert_eq!(read.url.as_deref(), Some("https://example.com/hook"));
+        assert!(read.restored_active());
+        assert!(WEBHOOK_URL_NOT_IN_BACKUP.ends_with(".invalid/"));
     }
 
     #[test]

@@ -6,6 +6,63 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.17.0] - 2026-11-11
+
+### Added
+- **Project Brief, the UI (#282, part 2 of the Brief).** A Project page
+  has a **Brief** section above its tasks: the headline, the pitch and the
+  points, with when it was last updated. Whoever may edit the project
+  writes, edits and removes it there (Ctrl/Cmd+Enter saves).
+  - A Brief not updated for 14 days is marked "May be out of date".
+    Nothing is hidden or blocked. The 14 days are fixed for now; they are
+    not yet a setting.
+  - If someone else saves the Brief while you are editing it, your save
+    is refused, your text stays in the form, and you can load the latest.
+  - **Move the Status section into the Brief.** When a project's body has
+    a `## Status` (or `## Project Status`) section, the editor offers to
+    move it: prose becomes the pitch, list items the points. On save the
+    section leaves the body, so the story has one home (the body's
+    earlier text is in Version History). It is offered only when the
+    whole section fits a Brief.
+  - The dashboard's project cards show the Brief (the first five points)
+    in place of the Status section scraped from the body. A project
+    without a Brief shows that section as before.
+
+### Fixed
+- **Restoring a version shows the restored body at once.** The page kept
+  showing the body it had loaded until it was reloaded.
+
+### Security
+Three owner decisions on the 2026-11-10 audit (#281).
+- **Revoking a share ends all of that person's access to the node.** They
+  could still change or delete the notes and tasks they had written there,
+  and those items stayed in their Notes page, My Day, calendar and
+  backlog. Now a note or task follows its node's rights: its author
+  changes it only while they can still edit the node, and it leaves their
+  lists when they can no longer see the node. The items stay on the node.
+  - A node's owner (or an admin) can delete any note on it. Deleting the
+    node always removed them, so this adds no reach.
+  - A person reduced to viewer can read their old notes and tasks there,
+    and can't change them.
+- **A backup no longer holds webhook addresses.** Many are credentials in
+  themselves, and an admin can download an archive. After a restore, a
+  webhook that still exists keeps its own address and secret. One that
+  doesn't comes back switched off with a placeholder address, and its
+  owner enters the real one again. The restore preview says how many are
+  affected.
+  - Backup format 7. Earlier releases refuse a format-7 archive; this one
+    still restores formats 3 to 6.
+  - **Archives made before this release still hold the addresses.** The
+    automatic ones age out (the newest 10 are kept); delete older manual
+    ones under Admin → Backup once a new backup exists.
+- **Only an admin's invite creates an account.** Any owner of a node could
+  share it with an address that had no account, which created one and
+  sent that address an email from this installation. Now they are told
+  the address has no account and that an administrator adds accounts;
+  sharing with an existing account works as before.
+  - Known cost: that message tells a node's owner whether an address has
+    an account here. The API's rate limit bounds guessing.
+
 ## [3.16.1] - 2026-11-10
 
 ### Security

@@ -3,8 +3,23 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-10)
+## Current state (2026-11-11)
 
+- **v3.17.0 shipped: the Project Brief's UI** (#282, part 2; PR #305). `BriefPanel`
+  (`ui/src/components/node_brief.rs`) is the Brief section of a Project
+  page; `BriefBody` also renders it on the dashboard card, which falls
+  back to the scraped `## Status` section only for a project without a
+  Brief. "Move Status section into Brief" is
+  `common::brief::move_status_section`. Not done: the stale threshold
+  (`STALE_AFTER_DAYS`, 14) as a per-user setting (there is no settings
+  page yet), and wiki links inside a Brief (it renders like a note).
+  **Focus** (#282, proposal B) is the next piece and has its own PR.
+- **v3.17.0 also holds three owner decisions on the audit** (#281; PR #304). A note or
+  task follows its node's rights (a revoked share ends the author's
+  access to what they wrote there); backups hold no webhook addresses
+  (format 7); only an admin's invite creates an account. See "Security
+  rules from the 2026-11-10 audit" in `.claude/rules/api.md`. No
+  migration. This settles the audit; #281 closes with the release.
 - **v3.16.1 shipped: the audit's last fixes that needed no decision**
   (PR #303). By-id routes answer a foreign id like a missing one
   (`permissions::or_missing`); the node list's link count is of visible
@@ -14,7 +29,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
   fixes.**
   - The Brief (#282, part 1; PR #283): `project_briefs` (migration 046),
     `GET/PUT/DELETE /api/nodes/{id}/brief`, History entries, purge and
-    backup (format 6). Its UI is part 2 and not built yet.
+    backup (format 6). Its UI came in v3.17.0.
   - Security (PR #302; migration 047 `admin_demotions`). The seven
     findings of the 2026-11-09 review could not be recovered, so the code
     was audited again on 2026-11-10 and what that found was fixed: see the
