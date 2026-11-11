@@ -194,6 +194,12 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // Computed here: the panels' wrapper takes its
                             // children by value.
                             let tasks_allowed = allows(&n.node_type, Capability::Tasks);
+                            let has_brief = allows(&n.node_type, Capability::Brief);
+                            let body_class = if has_brief && n.body.as_deref().is_some_and(|b| !b.trim().is_empty()) {
+                                "border-t border-stone-200 dark:border-stone-700 pt-6"
+                            } else {
+                                ""
+                            };
 
                             // Focus (#282): whether this project is in the
                             // viewer's own Focus. It is private to them and
@@ -432,16 +438,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <TagBar node_id=id />
                                     </div>
                                     <div class="flex-1 overflow-auto p-6">
-                                        <crate::components::body_outline::BodyOutline entries=outline />
-                                        <div
-                                            class="prose max-w-none dark:prose-invert"
-                                            inner_html=body_html
-                                            on:click=handle_wikilink_click
-                                        />
-                                        // The Brief (#282): where a Project stands now.
-                                        // Projects only (§3.2); kinds never change, so no
-                                        // other node has one to show.
-                                        {allows(&n.node_type, Capability::Brief).then(|| view! {
+                                        // The Brief (#282): where a Project stands now. It
+                                        // leads the page, above the body (owner decision,
+                                        // 2026-11-11). Projects only (§3.2); kinds never
+                                        // change, so no other node has one to show.
+                                        {has_brief.then(|| view! {
                                             <crate::components::node_brief::BriefPanel
                                                 node_id=id
                                                 can_edit=is_owner
@@ -450,6 +451,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 on_body_changed=reload_node
                                             />
                                         })}
+                                        // Under a Brief, a body that has text gets the
+                                        // rule a section would draw above itself.
+                                        <div class=body_class data-testid="node-body">
+                                            <crate::components::body_outline::BodyOutline entries=outline />
+                                            <div
+                                                class="prose max-w-none dark:prose-invert"
+                                                inner_html=body_html
+                                                on:click=handle_wikilink_click
+                                            />
+                                        </div>
                                         // Tasks and People belong to Projects (§3.2, #216);
                                         // elsewhere they show only while older items remain.
                                         // One editor-prefs fetch per node for both panels (P1 #2).

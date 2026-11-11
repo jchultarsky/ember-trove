@@ -103,7 +103,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   new section adds a variant and wraps its body; it never hand-rolls a
   chevron header.
 - **The Brief is rendered by `BriefBody`** (`node_brief.rs`, #282) on the
-  Project page and on the dashboard card (`compact`). A new place that
+  Project page and on the dashboard card (`compact`). On the Project page
+  it leads, above the body (`SectionShell`'s `lead`; owner decision,
+  2026-11-11): don't move it under the body. A new place that
   shows a Brief uses it, so the age and the stale marker are never left
   off. A write that changes two things (the Brief, then the body, for
   "Move Status section into Brief") saves the copy first and removes the

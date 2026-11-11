@@ -18,6 +18,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   must delete the caller's own Focus entry, so re-opening doesn't restore
   it. "Parked" is in the proposal but not in the ontology: it needs an
   owner decision before anything is built on it.
+- **Unreleased: the Brief leads the Project page**, above the body (owner
+  decision 2026-11-11; `SectionShell`'s `lead`).
 - **v3.17.0 shipped: the Project Brief's UI** (#282, part 2; PR #305). `BriefPanel`
   (`ui/src/components/node_brief.rs`) is the Brief section of a Project
   page; `BriefBody` also renders it on the dashboard card, which falls

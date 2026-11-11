@@ -28,6 +28,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     `PUT /api/focus/order`. Migration 048 (`project_focus`) is additive.
 
 ### Changed
+- **The Brief is the first thing on a Project page**, above the body. It
+  was the first section under the body, so a long body pushed it out of
+  sight.
 - **Backups are format 8**: an archive carries every account's Focus. An
   older release refuses a format-8 archive. Restoring an older archive
   keeps the Focus entries of the projects it brings back.

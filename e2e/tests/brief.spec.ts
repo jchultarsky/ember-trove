@@ -20,7 +20,10 @@ async function putBrief(
 
 test('a brief is written, shown with its age, edited and removed', async ({ page, request }) => {
   const stamp = Date.now();
-  const node = await createNode(request, `e2e brief ${stamp}`, { node_type: 'project' });
+  const node = await createNode(request, `e2e brief ${stamp}`, {
+    node_type: 'project',
+    body: 'Durable notes about the project.',
+  });
   try {
     await page.goto(`/nodes/${node.id}`);
     const section = page.getByTestId('node-brief');
@@ -51,6 +54,11 @@ test('a brief is written, shown with its age, edited and removed', async ({ page
     ]);
     await expect(brief.getByTestId('brief-age')).toContainText('Updated just now');
     await expect(brief.getByTestId('brief-stale')).toHaveCount(0);
+
+    // The Brief leads the page: it sits above the body.
+    const briefTop = (await section.boundingBox())?.y ?? Infinity;
+    const bodyTop = (await page.getByTestId('node-body').boundingBox())?.y ?? -Infinity;
+    expect(briefTop).toBeLessThan(bodyTop);
 
     // It is stored, not just shown.
     await page.reload();
