@@ -37,14 +37,15 @@ pub fn VersionPanel(
             match api::restore_version(node_id, version_id).await {
                 Ok(_) => {
                     push_toast(ToastLevel::Success, "Body restored to selected version.");
-                    refresh.update(|n| *n += 1);
-                    on_restore.run(());
+                    // `try_`: the page reloads the node, and may be gone.
+                    refresh.try_update(|n| *n += 1);
+                    on_restore.try_run(());
                 }
                 Err(e) => {
                     push_toast(ToastLevel::Error, format!("Restore failed: {e}"));
                 }
             }
-            restoring.set(None);
+            restoring.try_set(None);
         });
     };
 

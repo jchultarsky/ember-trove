@@ -77,6 +77,30 @@ test('every section is in the outline and one shared look (#131)', async ({ page
   }
 });
 
+test('restoring a version shows the restored body at once', async ({ page, request }) => {
+  const node = await createNode(request, `e2e restore shows ${Date.now()}`, {
+    body: 'words one',
+  });
+  try {
+    for (const body of ['words two', 'words three']) {
+      const saved = await request.put(`/api/nodes/${node.id}`, { data: { body } });
+      expect(saved.ok()).toBeTruthy();
+    }
+    await gotoNode(page, node.id);
+    const body = page.locator('.prose').first();
+    await expect(body).toHaveText('words three');
+
+    const versions = page.getByTestId('node-versions');
+    await versions.getByRole('button', { name: /Version History/ }).click();
+    await versions.getByRole('button', { name: 'Restore' }).first().click();
+    await expect(page.getByText('Body restored to selected version.')).toBeVisible();
+    // The page used to keep showing the body it had loaded.
+    await expect(body).toHaveText(/words (one|two)/);
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+  }
+});
+
 test('an Article has no Tasks or People section, and the outline follows (#216)', async ({
   page,
   request,

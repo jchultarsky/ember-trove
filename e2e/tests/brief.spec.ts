@@ -99,7 +99,9 @@ test("the body's Status section moves into the brief and leaves the body", async
     '',
     '## Status',
     '',
-    'Waiting on the vendor review.',
+    // Not a bare one-line label: the API would file that as the project's
+    // status (`project_status::split_from_body`).
+    'Waiting on the **vendor** review.',
     '',
     '- Review booked',
     '- Scope sent',
@@ -122,7 +124,7 @@ test("the body's Status section moves into the brief and leaves the body", async
     await expect(offer).toContainText("This project's body has a Status section.");
 
     await offer.getByRole('button', { name: 'Move it into the brief' }).click();
-    await expect(editor.getByLabel('Pitch')).toHaveValue('Waiting on the vendor review.');
+    await expect(editor.getByLabel('Pitch')).toHaveValue('Waiting on the **vendor** review.');
     await expect(editor.getByLabel('Points')).toHaveValue('Review booked\nScope sent');
     await expect(offer).toContainText('The Status section will leave the body when you save.');
 
@@ -137,7 +139,7 @@ test("the body's Status section moves into the brief and leaves the body", async
     const after = await (await request.get(`/api/nodes/${node.id}`)).json();
     expect(after.body).toBe('# Plan\n\nGoals stay here.\n\n## Background\n\nKept as written.\n');
     const brief = await (await request.get(`/api/nodes/${node.id}/brief`)).json();
-    expect(brief.pitch).toBe('Waiting on the vendor review.');
+    expect(brief.pitch).toBe('Waiting on the **vendor** review.');
 
     // The page shows the new body, and there is nothing left to offer.
     await expect(page.getByRole('heading', { name: 'Background' })).toBeVisible();

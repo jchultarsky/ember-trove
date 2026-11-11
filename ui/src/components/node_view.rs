@@ -32,6 +32,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
         async move { crate::api::fetch_node(id).await }
     });
 
+    // The node's body changed under this page (a version restore, the
+    // Status section moving into the Brief): fetch it again. The `refresh`
+    // context only reloads lists, so the page used to keep showing the body
+    // it had loaded.
+    let reload_node = Callback::new(move |()| {
+        node.refetch();
+        refresh.update(|n| *n += 1);
+    });
+
     // Resolve just the titles this body links (#134) — it used to download
     // every visible node title on each node page view.
     let body = Signal::derive(move || {
@@ -410,7 +419,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 can_edit=is_owner
                                                 body=n.body.clone()
                                                 body_version=n.updated_at
-                                                on_body_changed=Callback::new(move |()| refresh.update(|n| *n += 1))
+                                                on_body_changed=reload_node
                                             />
                                         })}
                                         // Tasks and People belong to Projects (§3.2, #216);
@@ -435,7 +444,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <VersionPanel
                                             node_id=id
                                             is_editor=is_owner
-                                            on_restore=Callback::new(move |_| refresh.update(|n| *n += 1))
+                                            on_restore=reload_node
                                         />
                                         <ActivityPanel node_id=id />
                                     </div>

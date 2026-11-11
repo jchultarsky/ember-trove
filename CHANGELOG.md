@@ -26,6 +26,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     in place of the Status section scraped from the body. A project
     without a Brief shows that section as before.
 
+### Fixed
+- **Restoring a version shows the restored body at once.** The page kept
+  showing the body it had loaded until it was reloaded.
+
 ## [3.16.1] - 2026-11-10
 
 ### Security
