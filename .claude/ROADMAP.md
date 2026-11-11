@@ -5,6 +5,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-11)
 
+- **v3.17.1 shipped: the Brief leads the Project page** (PR #306), above the body (owner
+  decision 2026-11-11; `SectionShell`'s `lead`).
 - **v3.17.0 shipped: the Project Brief's UI** (#282, part 2; PR #305). `BriefPanel`
   (`ui/src/components/node_brief.rs`) is the Brief section of a Project
   page; `BriefBody` also renders it on the dashboard card, which falls

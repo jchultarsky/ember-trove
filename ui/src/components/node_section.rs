@@ -174,6 +174,11 @@ pub fn SectionShell(
     /// Header buttons on the right (e.g. "Add task").
     #[prop(optional)]
     actions: Option<ChildrenFn>,
+    /// The section leads the page, above the body (the Brief, owner
+    /// decision 2026-11-11): no rule or space above it. What follows draws
+    /// its own rule.
+    #[prop(optional)]
+    lead: bool,
     children: ChildrenFn,
 ) -> impl IntoView {
     let root: NodeRef<leptos::html::Section> = NodeRef::new();
@@ -237,7 +242,11 @@ pub fn SectionShell(
     view! {
         <section
             node_ref=root
-            class="mt-8 border-t border-stone-200 dark:border-stone-700 pt-6 focus:outline-none"
+            class=if lead {
+                "pb-6 focus:outline-none"
+            } else {
+                "mt-8 border-t border-stone-200 dark:border-stone-700 pt-6 focus:outline-none"
+            }
             aria-labelledby=heading_id()
             tabindex="-1"
             data-testid=format!("node-{}", section.slug())
