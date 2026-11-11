@@ -7,6 +7,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+<<<<<<< HEAD
 - **Every project's Status section becomes its Brief** (owner decision,
   2026-11-11). On the first start of this release, each project that has
   a `## Status` (or `## Project Status`) section in its body and no Brief
@@ -25,6 +26,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   editor's "Move it into the brief" uses the same rule): an indented line
   stays with its list item, a ticked item keeps its `[x]`, and a section
   with sub-headings moves as written.
+=======
+- **A dashboard card shows the Brief, the Status section and the open
+  tasks together.** A Brief used to replace the Status section on the
+  card, so a project that had both showed only its Brief. Each block
+  shows when the project has it.
+>>>>>>> origin/develop
 
 ## [3.18.0] - 2026-11-11
 
