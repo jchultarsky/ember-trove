@@ -14,9 +14,12 @@ block
 bolt
 bookmark_add
 bookmarks
+brief
 calendar_month
 call
 category
+center_focus_strong
+center_focus_weak
 check
 check_box
 check_circle
@@ -109,6 +112,7 @@ repeat
 restore
 rocket_launch
 route
+save
 schedule
 search
 search_off

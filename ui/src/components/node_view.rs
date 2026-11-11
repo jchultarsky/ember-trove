@@ -2,6 +2,7 @@ use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
 use common::node::NodeType;
 use common::ontology::{Capability, allows};
+use common::project_focus::holds_focus;
 use leptos::prelude::*;
 
 use crate::auth::{AuthStatus, use_auth_state};
@@ -14,6 +15,7 @@ use crate::components::node_meta::{
 };
 use crate::components::note_panel::NotePanel;
 use crate::components::permission_dialog::PermissionPanel;
+use crate::components::project_focus::{FocusMenuItem, FocusRetry, FocusToggle};
 use crate::components::tag_bar::TagBar;
 use crate::components::task_panel::TaskPanel;
 use crate::components::toast::{ToastLevel, push_toast};
@@ -199,6 +201,38 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                 ""
                             };
 
+                            // Focus (#282): whether this project is in the
+                            // viewer's own Focus. It is private to them and
+                            // not part of the node, so it loads apart; the
+                            // control shows once the answer is known. An
+                            // archived project never shows in Focus, so it
+                            // has no control.
+                            let focusable = holds_focus(&n.node_type, &n.status);
+                            let focus_state = RwSignal::new(None::<bool>);
+                            // A failed read is said: the control offers to
+                            // load again. It used to leave no control.
+                            let focus_failed = RwSignal::new(false);
+                            let load_focus = Callback::new(move |()| {
+                                focus_failed.set(false);
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    match crate::api::fetch_focus_item(edit_id).await {
+                                        Ok(item) => {
+                                            let _ = focus_state.try_set(Some(item.is_some()));
+                                        }
+                                        Err(_) => {
+                                            let _ = focus_failed.try_set(true);
+                                        }
+                                    }
+                                });
+                            });
+                            let focus_retry = FocusRetry {
+                                failed: focus_failed,
+                                run: load_focus,
+                            };
+                            if focusable {
+                                load_focus.run(());
+                            }
+
                             view! {
                                 <div class="flex flex-col h-full">
                                     // At phone width the title takes the row and the
@@ -279,6 +313,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                         >
                                                             <span aria-hidden="true" class="material-symbols-outlined">"edit"</span>
                                                         </button>
+                                                        {focusable.then(|| view! {
+                                                            <FocusToggle node_id=edit_id state=focus_state retry=focus_retry />
+                                                        })}
                                                         <button
                                                             class="p-1.5 rounded-lg text-stone-400 hover:text-amber-600
                                                                 dark:hover:text-amber-400 hover:bg-amber-50
@@ -366,6 +403,14 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                     <span class="material-symbols-outlined" style="font-size:18px;">"edit"</span>
                                                                     "Edit"
                                                                 </button>
+                                                                {focusable.then(|| view! {
+                                                                    <FocusMenuItem
+                                                                        node_id=edit_id
+                                                                        state=focus_state
+                                                                        retry=focus_retry
+                                                                        on_click=Callback::new(move |()| menu_open.set(false))
+                                                                    />
+                                                                })}
                                                                 <button
                                                                     type="button"
                                                                     class="flex items-center gap-2 w-full text-left px-3 py-2 text-sm

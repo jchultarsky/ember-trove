@@ -115,6 +115,14 @@ CI job is too slow a feedback loop for selector work.
   `seedTrove(request, stamp)` from `seed.ts`. It creates nodes whose bodies
   mention a title, titles that share a prefix, wiki links, a task and a
   note. Empty-body fixtures hid the v2.33.0 picker bug.
+- **A project in Focus has two cards on the dashboard** (2026-11-11,
+  #282): one in the Focus section and one in its Area group, so
+  `getByTestId('project-card').filter({ hasText: title })` is a
+  strict-mode violation. Scope it: `getByTestId('focus-section')` or
+  `getByTestId('project-groups')`. Focus belongs to the identity, not to a
+  node, so deleting a spec's nodes is not enough on a retry: empty both
+  identities' Focus before and after each test (`wipeFocus` in
+  focus.spec.ts).
 - **Service workers can't be exercised here** (2026-10-25, #129). The e2e
   origin (`http://host.docker.internal`) isn't a secure context. Mapping
   `localhost` to it (`--host-resolver-rules`) gives a secure context, but

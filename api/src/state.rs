@@ -42,6 +42,8 @@ pub struct AppState {
     pub people: Arc<dyn PersonRepo>,
     /// Project Briefs (#282). Keyed by node; routes check node rights.
     pub briefs: Arc<dyn crate::repo::brief::BriefRepo>,
+    /// Focus (#282). Private to each account, no admin bypass.
+    pub focus: Arc<dyn crate::repo::project_focus::FocusRepo>,
     pub search: Arc<dyn SearchRepo>,
     pub graph: Arc<dyn GraphRepo>,
     pub backup: Arc<dyn BackupRepo>,

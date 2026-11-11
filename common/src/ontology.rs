@@ -25,16 +25,19 @@ pub enum Capability {
     Plan,
     /// The Project Brief: where the project stands now (#282).
     Brief,
+    /// A place in someone's Focus (#282, `crate::project_focus`).
+    Focus,
 }
 
 impl Capability {
     /// Every capability. `all_lists_every_capability` ties it to the enum.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Tasks,
         Self::People,
         Self::ProjectStatus,
         Self::Plan,
         Self::Brief,
+        Self::Focus,
     ];
 }
 
@@ -49,6 +52,7 @@ impl Capability {
             Self::ProjectStatus => "only Projects have a project status",
             Self::Plan => "only Projects have a project plan",
             Self::Brief => "only Projects have a brief",
+            Self::Focus => "only Projects have a place in Focus",
         }
     }
 }
@@ -73,7 +77,8 @@ pub fn allows(kind: &NodeType, capability: Capability) -> bool {
         | Capability::People
         | Capability::ProjectStatus
         | Capability::Plan
-        | Capability::Brief => *kind == NodeType::Project,
+        | Capability::Brief
+        | Capability::Focus => *kind == NodeType::Project,
     }
 }
 
@@ -606,6 +611,7 @@ mod tests {
                 Capability::ProjectStatus => 2,
                 Capability::Plan => 3,
                 Capability::Brief => 4,
+                Capability::Focus => 5,
             }
         }
         for (i, c) in Capability::ALL.into_iter().enumerate() {

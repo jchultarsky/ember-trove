@@ -58,6 +58,7 @@ pub mod ontology;
 pub mod permission;
 pub mod person;
 pub mod picker;
+pub mod project_focus;
 pub mod project_status;
 pub mod save_watch;
 pub mod search;

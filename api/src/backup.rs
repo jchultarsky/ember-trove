@@ -12,10 +12,13 @@ use bytes::Bytes;
 use common::{
     activity::ActivityRecord,
     attachment::Attachment,
-    backup::{BackupData, BackupJob, BackupManifest, BackupNote, BackupPreview, EntityCounts},
+    backup::{
+        BackupData, BackupFocus, BackupJob, BackupManifest, BackupNote, BackupPreview, EntityCounts,
+    },
     id::NodeId,
 };
 use flate2::{Compression, write::GzEncoder};
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io::Write;
 use tar::Builder;
@@ -232,6 +235,8 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
     let recurrence_links = repo::task::recurrence_links_on(&mut *conn).await?;
     // Project Briefs (#282), all owners, in the same snapshot as their nodes.
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
+    // Focus (#282), every account's, in the same snapshot as its nodes.
+    let focus = repo::project_focus::list_all_on(&mut *conn).await?;
     let edges = repo::edge::list_all_on(&mut *conn).await?;
     let attachments = repo::attachment::list_all_on(&mut *conn).await?;
     let node_links = repo::node_link::list_all_on(&mut *conn).await?;
@@ -272,6 +277,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         webhooks: Some(webhooks),
         recurrence_links,
         briefs,
+        focus: Some(focus),
     })
 }
 
@@ -627,6 +633,16 @@ pub(crate) async fn restore_into(
     conn: &mut sqlx::PgConnection,
     data: &BackupData,
 ) -> Result<(), ApiError> {
+    // Focus (#282) hangs on its project, so deleting the nodes cascades the
+    // live entries away. An archive that carries Focus replaces them. An
+    // older one (`None`) never held any, so the live entries are read here
+    // and those whose project the archive brings back are put back below:
+    // the rule for a list an older archive lacks (`BackupData`).
+    let focus: Cow<'_, [BackupFocus]> = match &data.focus {
+        Some(list) => Cow::Borrowed(list),
+        None => Cow::Owned(repo::project_focus::list_all_on(&mut *conn).await?),
+    };
+
     // Delete all nodes (CASCADE removes edges, notes, tasks, attachments, permissions).
     // The attachment trigger queues every live file for deletion (#239);
     // the archive's own come back under their old keys and leave the queue
@@ -1103,6 +1119,30 @@ pub(crate) async fn restore_into(
         .await
         // Never include the row: it's user content.
         .map_err(|e| ApiError::Internal(format!("insert brief failed: {e}")))?;
+    }
+
+    // Focus (#282). An entry whose project isn't in the archive is skipped:
+    // a live entry kept across an older archive, or a damaged one.
+    for f in focus
+        .iter()
+        .filter(|f| restored_nodes.contains(&f.node_id.0))
+    {
+        sqlx::query(
+            r#"
+            INSERT INTO project_focus (subject_id, node_id, position, why_now, added_at)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (subject_id, node_id) DO NOTHING
+            "#,
+        )
+        .bind(&f.subject_id)
+        .bind(f.node_id.0)
+        .bind(f.position)
+        .bind(&f.why_now)
+        .bind(f.added_at)
+        .execute(&mut *conn)
+        .await
+        // Never include the row: the why-line is private.
+        .map_err(|e| ApiError::Internal(format!("insert focus failed: {e}")))?;
     }
 
     // The archive's files are back under their old keys: keep them out of
