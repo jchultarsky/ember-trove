@@ -102,6 +102,7 @@ Reference may hold material directly or be a *pointer* to an outside source
 | Status label (`project_status`) and terminal state (§4.1) | ✓ | — | — | — |
 | Project Plan (§10) | ✓ | — | — | — |
 | Brief (§10) | ✓ | — | — | — |
+| A place in someone's Focus (§10) | ✓ | — | — | — |
 
 ### 3.3 Rules that apply to all kinds
 
@@ -576,6 +577,24 @@ snapshots are a text mechanism, not the semantic record of what occurred.
   someone else, **supersedes** it, and the old Brief becomes a History
   entry. Removing a Brief records it in History too. Its age is shown
   wherever it renders; past a threshold it is marked stale, never hidden.
+- **Focus** (#282) — the Projects that hold a person's attention: a
+  declared, ordered set, the Project analog of My Day, shown first on the
+  dashboard. An entry may carry a one-line "why now".
+  - Focus belongs to the **person**, not to the Project. Each account has
+    its own, on any Project it can view. It is private, with no admin
+    bypass (§14): nobody learns that a Project is in someone else's
+    Focus, or reads their why-line. It has no reverse index and writes
+    nothing to History.
+  - It is persistent. Nothing expires it; the card shows how long the
+    Project has been there. The software sets no cap: past five entries
+    it says that Focus works best small (§12, surfacing).
+  - An archived Project does not show in Focus, nor does one its reader
+    can no longer view. That is a filter on the read: the entry stays, so
+    the Project shows again when it is un-archived or shared again. An
+    entry is deleted only by its own person, with its node, or with its
+    account.
+  - When the terminal state exists (§4.1), a complete or cancelled
+    Project leaves Focus, and re-opening it does not put it back.
 
 ## 11. Events
 
@@ -724,3 +743,6 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-09 | Written down from the code, no behaviour change: no self-loop for any edge type (§6); memberships are written by the Project's owner only (§7.2, §14) | Full review (#281), findings 2.3 and 2.4 |
 | 2026-11-10 | Revoking a share ends all of that person's access, including to the notes and Tasks they wrote on the node; those stay with the node (§14) | Owner, on the security audit (#281) |
 | 2026-11-09 | Project Brief: headline (optional) + pitch + points, Project-only; a save by the same author within the edit-coalesce window updates it in place, any other save supersedes it into History; Brief first, Focus in a later release | Owner, on #282 |
+| 2026-11-09 | Focus is persistent, with the time in Focus shown and no "still focused?" nudge; the optional why-line is kept and is private to its writer | Owner, on #282 |
+| 2026-11-09 | Focus is per person and private, with no admin bypass, like captures and people | Owner, on #282 |
+| 2026-11-11 | What leaves Focus by its own state is decided on the read, never by deleting the entry: today an archived Project, or one its reader can no longer view. Complete and cancelled join when the terminal state is built | Developer, building Focus (#282); to be confirmed by the owner in the PR |

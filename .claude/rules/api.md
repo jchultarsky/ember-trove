@@ -177,7 +177,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -213,10 +213,67 @@ cargo check && cargo clippy -- -D warnings
   read by `repo::brief::list_all_on` inside the snapshot. A plain `Vec`,
   not an `Option`: a Brief hangs on its node, the nodes are replaced by
   any restore, so an older archive can't leave live Briefs behind.
+- **Focus (#282, format 8)** is `focus: Option<Vec<BackupFocus>>`, read by
+  `repo::project_focus::list_all_on` inside the snapshot. It is keyed by
+  an account *and* hangs on a node, so the cascade empties it on any
+  restore. `restore_into` therefore reads the live entries **before**
+  `DELETE FROM nodes` when the archive has none (`None`), and puts back
+  those whose project the archive restores. `Some` replaces them. An
+  entry whose node isn't restored is skipped.
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps
   `common::backup::SCHEMA_VERSION`, so older releases refuse it.
+
+## Focus (#282, proposal B)
+
+- A person's Focus is `project_focus(subject_id, node_id, position,
+  why_now, added_at)` (migration 048). The rules are
+  `common::project_focus`; the module is named `project_focus` because
+  `focus_date` is My Day.
+- **Private, no admin bypass**, like captures and people. `FocusRepo`
+  takes the person as `&str` and every statement has `subject_id = $1`.
+  No route takes an account. Only `list_all` (the backup) crosses
+  accounts. Route tests use `focus_admin()`: the stub panics when another
+  account's Focus is asked for.
+- `sees_all` (an admin) widens which of the reader's **own** entries show,
+  because an admin may read every node. It never widens whose entries are
+  read. Pass `is_admin(&claims)`, nothing else.
+- **The read is a filter and deletes nothing.** `shows()` in
+  `repo/project_focus.rs` leaves out a node that is not a Project, is
+  archived, or that the reader can't see (`visible_to`), in the same
+  statement that reads the title. Its kind-and-state half is
+  `common::project_focus::holds_focus`;
+  `the_focus_filter_is_the_shared_rule` holds the two together. A new
+  state that leaves Focus (S6's terminal state) changes both.
+- A row is deleted only by its person (`remove`), its node (cascade) or
+  its account (the purge: `project_focus` is in `SETTINGS`).
+- `PUT /focus/{node_id}` checks, in order: viewer rights
+  (`or_missing(check, false, ..)`: hidden reads as missing, 404), the
+  kind (`Capability::Focus`, 422), archived (422), the why-line (422).
+  `why_now` is a double option (`FocusInput::change`): absent keeps the
+  stored why-line, so an "add" from a stale page never wipes one.
+- `GET`, `DELETE`, the order route and the why-line route never look at
+  the node: their answers are the same for a foreign id, a missing one
+  and an absent entry.
+- **`PUT /focus/{node_id}/why` changes a why-line and never adds an
+  entry** (`FocusRepo::set_why`; no row is a 404). The UI's why-line
+  editor uses it, so a why-line saved from a page that is out of date
+  can't put a removed project back in Focus. Anything else that edits an
+  existing entry goes the same way, not through the upserting put.
+- **`reorder` renumbers all of the person's entries**, 0 upwards. The
+  ids it is sent swap among the slots they already hold; an entry it is
+  not sent (one the list hides) keeps its slot. Don't number only the
+  named ids: they land on top of the hidden ones
+  (`a_reorder_keeps_the_place_of_an_entry_the_list_hides`).
+- The why-line is one line with no control characters
+  (`normalize_why`): a NUL can't be stored and would answer as a 500.
+- **Never write Focus into History, a webhook or the node deletion
+  preview.** All three are shared with the node, and each would tell its
+  owner who has it in Focus.
+- The cards of `GET /focus` come from `routes::tasks::dashboard_entries`,
+  shared with the dashboard. Its caller must already have checked that
+  the reader may view every node passed in.
 
 ## Server commands and automatic backups (2026-11-02)
 

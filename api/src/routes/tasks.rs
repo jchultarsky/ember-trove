@@ -460,9 +460,37 @@ async fn project_dashboard(
         sort: Default::default(),
     };
     let (projects, _) = state.nodes.list(params).await?;
+    let mut entries = dashboard_entries(&state, &claims, projects).await?;
 
+    // Pinned projects float to the top within their group; among
+    // unpinned (or among pinned), most recently active first — keeps
+    // the 2–3 projects the user is currently working on near the top
+    // of each Area.
+    entries.sort_by(|a, b| {
+        b.pinned
+            .cmp(&a.pinned)
+            .then_with(|| b.last_activity_at.cmp(&a.last_activity_at))
+    });
+
+    Ok(Json(entries))
+}
+
+/// The dashboard card of each project, in the order given: its task
+/// counts, top open tasks, latest activity, Area and Brief. Shared by the
+/// dashboard and Focus (#282), so a project reads the same in both.
+///
+/// SECURITY: the caller must already be allowed to view every node in
+/// `projects`. The dashboard passes the caller's own projects; Focus
+/// passes rows its query read under the visibility check. Tasks and the
+/// Brief follow the node's rights, so a viewer may read them; the Area is
+/// looked up as the reader, so a hidden one is never named.
+pub(crate) async fn dashboard_entries(
+    state: &AppState,
+    claims: &AuthClaims,
+    projects: Vec<common::node::Node>,
+) -> Result<Vec<ProjectDashboardEntry>, ApiError> {
     if projects.is_empty() {
-        return Ok(Json(vec![]));
+        return Ok(vec![]);
     }
 
     let node_ids: Vec<NodeId> = projects.iter().map(|n| n.id).collect();
@@ -475,10 +503,8 @@ async fn project_dashboard(
             .tasks
             .list_open_for_nodes(&node_ids, DASHBOARD_TASK_LIMIT),
         state.tasks.max_task_updated_for_nodes(&node_ids),
-        state
-            .nodes
-            .area_for_nodes(&node_ids, subject_scope(&claims)),
-        // Briefs (#282): the nodes are the caller's own projects.
+        state.nodes.area_for_nodes(&node_ids, subject_scope(claims)),
+        // Briefs (#282): the caller may view every one of these nodes.
         state.briefs.for_nodes(&node_ids),
     );
 
@@ -504,7 +530,7 @@ async fn project_dashboard(
         done: 0,
         cancelled: 0,
     };
-    let mut entries: Vec<ProjectDashboardEntry> = projects
+    Ok(projects
         .into_iter()
         .map(|n| {
             let node_status = n.status.as_str().to_string();
@@ -538,19 +564,7 @@ async fn project_dashboard(
                 brief: brief_map.remove(&n.id),
             }
         })
-        .collect();
-
-    // Pinned projects float to the top within their group; among
-    // unpinned (or among pinned), most recently active first — keeps
-    // the 2–3 projects the user is currently working on near the top
-    // of each Area.
-    entries.sort_by(|a, b| {
-        b.pinned
-            .cmp(&a.pinned)
-            .then_with(|| b.last_activity_at.cmp(&a.last_activity_at))
-    });
-
-    Ok(Json(entries))
+        .collect())
 }
 
 #[derive(Deserialize)]

@@ -21,6 +21,7 @@ pub mod person;
 #[cfg(all(test, feature = "pg-tests"))]
 mod pg_tests;
 pub mod pkce;
+pub mod project_focus;
 pub mod search;
 pub mod search_presets;
 pub mod tag;

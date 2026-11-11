@@ -22,6 +22,7 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Multi-tag filtering** — AND/OR tag filters across node list, search results, and graph view. Tags can be attached directly from the node list without opening the node.
 - **S3 attachments** — bulk drag-and-drop upload; inline preview for images and PDFs. Stored in SeaweedFS (local) or Lightsail Object Storage / AWS S3.
 - **Tasks & My Day** — per-node task lists with create / toggle / edit / delete. Daily planning view aggregates today's tasks across all nodes.
+- **Focus** — put the few projects that hold your attention at the top of the dashboard, in your own order, each with its Brief, how long it has been there and an optional "why now" line. Private to you: nobody else sees what is in your Focus.
 - **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed. On a node page each note collapses to its first line (Markdown stripped, so it doubles as a title), with Collapse all / Expand all; collapse state is saved per account.
 - **Node versioning** — body snapshot on every save; version history timeline with one-click restore.
 - **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
@@ -483,6 +484,19 @@ details.
 | GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
 | GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status, the current Brief and top open tasks |
 | GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
+
+### Focus
+
+The caller's own Focus: private to each account, with no admin bypass.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/focus` | The caller's Focus in their order: each entry (`node_id`, `why_now`, `added_at`) with the project's dashboard card. Archived projects, and ones the caller can no longer view, are left out |
+| GET | `/api/focus/{node_id}` | The caller's entry for that project, or `null` |
+| PUT | `/api/focus/{node_id}` | Put a Project the caller can view in their Focus (last), or change its why-line. `why_now` absent keeps the why-line, `null` clears it, a string (one line, at most 200 characters) sets it. A project the caller can't see is a **404**, like one that doesn't exist; not a Project, or archived, is **422** |
+| PUT | `/api/focus/{node_id}/why` | Body `{ "why_now": ... }`: change the why-line of a project that is in the caller's Focus (`null` or blank clears it). It never adds one: a project that isn't there is a **404** |
+| PUT | `/api/focus/order` | Body `{ "node_ids": [...] }`: the caller's Focus in that order (at most 500). Ids that aren't in it are skipped; an entry left out (one the list doesn't show) keeps its place |
+| DELETE | `/api/focus/{node_id}` | Take the project out of the caller's Focus. **204** whether or not it was there |
 
 ### Notes
 

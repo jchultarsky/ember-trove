@@ -97,13 +97,20 @@ impl NodeRepo for StubNodeRepo {
         let (owner, node_type) = match id.0.as_u128() {
             AZ_OWNED_NODE => ("creator", NodeType::Article),
             AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => ("someone-else", NodeType::Article),
-            AZ_MY_PROJECT => ("test-sub", NodeType::Project),
+            AZ_MY_PROJECT | AZ_ARCHIVED_PROJECT => ("test-sub", NodeType::Project),
+            AZ_VIEW_PROJECT => ("someone-else", NodeType::Project),
             AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
+        };
+        let status = if id.0.as_u128() == AZ_ARCHIVED_PROJECT {
+            NodeStatus::Archived
+        } else {
+            NodeStatus::Published
         };
         Ok(Node {
             id,
             node_type,
+            status,
             ..fake_node("authz-node", owner)
         })
     }
@@ -440,6 +447,10 @@ const AZ_FOREIGN_NODE: u128 = 0xa2_0004;
 /// Article (`fake_node`).
 const AZ_MY_PROJECT: u128 = 0xa2_0005;
 const AZ_MY_ARTICLE: u128 = 0xa2_0006;
+/// For Focus (#282): the caller's own Project, archived, and someone
+/// else's Project the caller may only view.
+const AZ_ARCHIVED_PROJECT: u128 = 0xa2_0007;
+const AZ_VIEW_PROJECT: u128 = 0xa2_0008;
 /// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
 const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
 const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
@@ -516,6 +527,18 @@ fn authz_permissions() -> Vec<Permission> {
         row(0xa2_0205, AZ_EDIT_NODE, "test-sub", PermissionRole::Editor),
         row(0xa2_0207, AZ_MY_PROJECT, "test-sub", PermissionRole::Owner),
         row(0xa2_0208, AZ_MY_ARTICLE, "test-sub", PermissionRole::Owner),
+        row(
+            0xa2_0209,
+            AZ_ARCHIVED_PROJECT,
+            "test-sub",
+            PermissionRole::Owner,
+        ),
+        row(
+            0xa2_020a,
+            AZ_VIEW_PROJECT,
+            "test-sub",
+            PermissionRole::Viewer,
+        ),
         row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
         row(
             AZ_PERM_FOREIGN,
@@ -1214,6 +1237,128 @@ impl crate::repo::brief::BriefRepo for StubBriefRepo {
     }
 }
 
+struct StubFocusRepo;
+
+/// An admin with an account of their own, for the Focus tests: the stub
+/// expects `sees_all` for this subject and for no other.
+const AZ_FOCUS_ADMIN: &str = "focus-admin";
+/// The why-line of someone else's Focus. No response may ever carry it.
+const AZ_OTHERS_WHY: &str = "their-private-reason";
+
+/// Focus (#282) in the authz world. "test-sub" has AZ_MY_PROJECT in Focus;
+/// "someone-else" has an entry too, which no test caller may reach: a call
+/// made for that account panics. `sees_all` must be true for the admin
+/// only. A `put` reaches the repo only for a Project the caller can see.
+fn stub_focus_reader(subject: &str, sees_all: bool) {
+    stub_focus_owner(subject);
+    assert_eq!(
+        sees_all,
+        subject == AZ_FOCUS_ADMIN,
+        "only an admin reads every node"
+    );
+}
+
+fn stub_focus_owner(subject: &str) {
+    assert_ne!(
+        subject, "someone-else",
+        "privacy bypass: another account's Focus reached the repo"
+    );
+}
+
+fn stub_focus_item(node: NodeId, why_now: Option<&str>) -> common::project_focus::FocusItem {
+    common::project_focus::FocusItem {
+        node_id: node,
+        why_now: why_now.map(str::to_string),
+        added_at: chrono::Utc::now(),
+    }
+}
+
+#[async_trait]
+impl crate::repo::project_focus::FocusRepo for StubFocusRepo {
+    async fn list(
+        &self,
+        subject: &str,
+        sees_all: bool,
+    ) -> Result<Vec<crate::repo::project_focus::FocusedProject>, EmberTroveError> {
+        stub_focus_reader(subject, sees_all);
+        if subject != "test-sub" {
+            return Ok(vec![]);
+        }
+        let node = az_node(AZ_MY_PROJECT);
+        Ok(vec![crate::repo::project_focus::FocusedProject {
+            item: stub_focus_item(node, Some("mine")),
+            node: Node {
+                id: node,
+                node_type: NodeType::Project,
+                ..fake_node("focused", "test-sub")
+            },
+        }])
+    }
+    async fn get(
+        &self,
+        subject: &str,
+        sees_all: bool,
+        node: NodeId,
+    ) -> Result<Option<common::project_focus::FocusItem>, EmberTroveError> {
+        stub_focus_reader(subject, sees_all);
+        Ok((subject == "test-sub" && node == az_node(AZ_MY_PROJECT))
+            .then(|| stub_focus_item(node, Some("mine"))))
+    }
+    async fn put(
+        &self,
+        subject: &str,
+        node: NodeId,
+        why: &common::project_focus::WhyChange,
+    ) -> Result<common::project_focus::FocusItem, EmberTroveError> {
+        use common::project_focus::WhyChange;
+        stub_focus_owner(subject);
+        // The stored why-line is "mine": a put that keeps it answers it.
+        let why_now = match why {
+            WhyChange::Keep => Some("mine"),
+            WhyChange::Set(text) => text.as_deref(),
+        };
+        match node.0.as_u128() {
+            AZ_MY_PROJECT | AZ_VIEW_PROJECT => Ok(stub_focus_item(node, why_now)),
+            _ => panic!("authorization bypass: focus put reached the repo for {node}"),
+        }
+    }
+    async fn set_why(
+        &self,
+        subject: &str,
+        node: NodeId,
+        why_now: Option<&str>,
+    ) -> Result<common::project_focus::FocusItem, EmberTroveError> {
+        stub_focus_owner(subject);
+        // Only "test-sub" has an entry, for AZ_MY_PROJECT.
+        if subject == "test-sub" && node == az_node(AZ_MY_PROJECT) {
+            Ok(stub_focus_item(node, why_now))
+        } else {
+            Err(EmberTroveError::NotFound("project not found".into()))
+        }
+    }
+    async fn reorder(&self, subject: &str, nodes: &[NodeId]) -> Result<(), EmberTroveError> {
+        stub_focus_owner(subject);
+        assert!(
+            nodes.len() <= common::project_focus::MAX_ORDER,
+            "an over-long order reached the repo"
+        );
+        Ok(())
+    }
+    async fn remove(&self, subject: &str, _: NodeId) -> Result<(), EmberTroveError> {
+        stub_focus_owner(subject);
+        Ok(())
+    }
+    async fn list_all(&self) -> Result<Vec<common::backup::BackupFocus>, EmberTroveError> {
+        Ok(vec![common::backup::BackupFocus {
+            subject_id: "someone-else".to_string(),
+            node_id: az_node(AZ_FOREIGN_NODE),
+            position: 0,
+            why_now: Some(AZ_OTHERS_WHY.to_string()),
+            added_at: chrono::Utc::now(),
+        }])
+    }
+}
+
 struct StubPersonRepo;
 #[async_trait]
 impl crate::repo::person::PersonRepo for StubPersonRepo {
@@ -1659,6 +1804,7 @@ fn test_state() -> AppState {
         data_health: Arc::new(StubDataHealthRepo::default()),
         people: Arc::new(StubPersonRepo),
         briefs: Arc::new(StubBriefRepo),
+        focus: Arc::new(StubFocusRepo),
         node_versions: Arc::new(StubNodeVersionRepo),
         templates: Arc::new(StubTemplateRepo),
         search_presets: Arc::new(StubSearchPresetRepo),
@@ -3218,7 +3364,9 @@ async fn by_id(
 /// write reached by a foreign id panics or is unimplemented).
 #[tokio::test]
 async fn a_foreign_thing_reads_exactly_like_a_missing_one() {
-    use crate::routes::{attachments, edges, nodes, permissions, tags, tasks, templates};
+    use crate::routes::{
+        attachments, edges, nodes, permissions, project_focus, tags, tasks, templates,
+    };
     let id = |n: u128| Uuid::from_u128(n);
     let none = || serde_json::json!({});
     let title = || serde_json::json!({ "title": "x" });
@@ -3361,6 +3509,15 @@ async fn a_foreign_thing_reads_exactly_like_a_missing_one() {
             "GET",
             format!("/nodes/slug/{AZ_FOREIGN_SLUG}"),
             "/nodes/slug/no-such-slug".to_string(),
+            none(),
+        ),
+        // Focus (#282): putting a project you can't see in your Focus.
+        (
+            "/focus",
+            project_focus::router,
+            "PUT",
+            format!("/focus/{}", id(AZ_FOREIGN_NODE)),
+            format!("/focus/{}", id(AZ_MISSING)),
             none(),
         ),
     ];
@@ -5853,4 +6010,372 @@ async fn only_an_editor_removes_a_brief() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ── Focus (#282, proposal B) ──────────────────────────────────────────────────
+
+fn focus_admin() -> common::auth::AuthClaims {
+    common::auth::AuthClaims {
+        sub: AZ_FOCUS_ADMIN.to_string(),
+        roles: vec!["admin".to_string()],
+        ..fake_claims()
+    }
+}
+
+/// One request through the Focus router as `claims`: status and body text.
+async fn focus_call(
+    claims: common::auth::AuthClaims,
+    method: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
+    let resp = Router::new()
+        .nest("/focus", crate::routes::project_focus::router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(json_req(method, &format!("/focus{path}"), body))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn focus_path(node: u128) -> String {
+    format!("/{}", Uuid::from_u128(node))
+}
+
+#[tokio::test]
+async fn the_caller_reads_their_own_focus_with_its_card() {
+    let (status, body) = focus_call(fake_claims(), "GET", "", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let mine = serde_json::json!(Uuid::from_u128(AZ_MY_PROJECT));
+    assert_eq!(list.as_array().map(Vec::len), Some(1), "{body}");
+    assert_eq!(list[0]["focus"]["node_id"], mine);
+    assert_eq!(list[0]["focus"]["why_now"], "mine");
+    assert_eq!(
+        list[0]["project"]["node_id"], mine,
+        "the card is the project's"
+    );
+
+    let (status, body) = focus_call(
+        fake_claims(),
+        "GET",
+        &focus_path(AZ_MY_PROJECT),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"mine\""), "{body}");
+}
+
+/// SECURITY: Focus is private with no admin bypass (owner decision). Every
+/// route asks for the caller's own; the stub panics if another account's is
+/// asked for, and holds `sees_all` to the admin alone. An admin with their
+/// own account reads an empty Focus, never someone else's.
+#[tokio::test]
+async fn an_admin_reads_and_changes_only_their_own_focus() {
+    let (status, body) = focus_call(focus_admin(), "GET", "", serde_json::json!({})).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "[]"));
+    for node in [AZ_MY_PROJECT, AZ_FOREIGN_NODE, AZ_MISSING] {
+        let (status, body) = focus_call(
+            focus_admin(),
+            "GET",
+            &focus_path(node),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::OK, "null"),
+            "{node:#x}"
+        );
+        let (status, body) = focus_call(
+            focus_admin(),
+            "DELETE",
+            &focus_path(node),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{node:#x}");
+        assert!(!body.contains(AZ_OTHERS_WHY));
+    }
+    let (status, _) = focus_call(
+        focus_admin(),
+        "PUT",
+        "/order",
+        serde_json::json!({ "node_ids": [Uuid::from_u128(AZ_FOREIGN_NODE)] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // An admin can view any node, so theirs is refused on its kind; a node
+    // that doesn't exist is the same 404 everyone gets.
+    let (status, _) = focus_call(
+        focus_admin(),
+        "PUT",
+        &focus_path(AZ_FOREIGN_NODE),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let as_admin = focus_call(
+        focus_admin(),
+        "PUT",
+        &focus_path(AZ_MISSING),
+        serde_json::json!({}),
+    )
+    .await;
+    let as_anyone = focus_call(
+        fake_claims(),
+        "PUT",
+        &focus_path(AZ_MISSING),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(as_admin.0, StatusCode::NOT_FOUND);
+    assert_eq!(as_admin, as_anyone);
+}
+
+/// SECURITY: the rights check comes first. For a node the caller can't see,
+/// no body changes the answer: not a why-line that is too long, not the
+/// node being an Article. It is the 404 a missing node gets, word for word.
+#[tokio::test]
+async fn rights_come_before_the_kind_and_the_why_line() {
+    let too_long = "x".repeat(common::project_focus::MAX_WHY_NOW + 1);
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({ "why_now": "Decision needed Friday" }),
+        serde_json::json!({ "why_now": too_long }),
+        serde_json::json!({ "why_now": "two\nlines" }),
+    ] {
+        let foreign = focus_call(
+            fake_claims(),
+            "PUT",
+            &focus_path(AZ_FOREIGN_NODE),
+            body.clone(),
+        )
+        .await;
+        let absent = focus_call(fake_claims(), "PUT", &focus_path(AZ_MISSING), body.clone()).await;
+        assert_eq!(foreign.0, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(foreign, absent, "{body}");
+    }
+    // The reads and the remove never look at the node at all.
+    for method in ["GET", "DELETE"] {
+        let foreign = focus_call(
+            fake_claims(),
+            method,
+            &focus_path(AZ_FOREIGN_NODE),
+            serde_json::json!({}),
+        )
+        .await;
+        let absent = focus_call(
+            fake_claims(),
+            method,
+            &focus_path(AZ_MISSING),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(foreign, absent, "{method}");
+    }
+}
+
+#[tokio::test]
+async fn only_a_project_that_shows_can_be_put_in_focus() {
+    // An Article the caller can see: the kind is said, after the rights.
+    for node in [AZ_VIEW_NODE, AZ_MY_ARTICLE] {
+        let (status, body) = focus_call(
+            fake_claims(),
+            "PUT",
+            &focus_path(node),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{node:#x}");
+        assert!(
+            body.contains("only Projects have a place in Focus"),
+            "{body}"
+        );
+    }
+    // An archived Project never shows in Focus, so it can't be added.
+    let (status, body) = focus_call(
+        fake_claims(),
+        "PUT",
+        &focus_path(AZ_ARCHIVED_PROJECT),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.contains("archived"), "{body}");
+}
+
+#[tokio::test]
+async fn an_owner_and_a_viewer_can_each_put_a_project_in_their_focus() {
+    for node in [AZ_MY_PROJECT, AZ_VIEW_PROJECT] {
+        let (status, body) = focus_call(
+            fake_claims(),
+            "PUT",
+            &focus_path(node),
+            serde_json::json!({ "why_now": "  Blocked on me  " }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{node:#x}: {body}");
+        let item: common::project_focus::FocusItem = serde_json::from_str(&body).expect("item");
+        assert_eq!(item.node_id, az_node(node));
+        assert_eq!(item.why_now.as_deref(), Some("Blocked on me"), "tidied");
+    }
+    // A body without a why-line keeps the one there (a stale page's "add"
+    // must not wipe it); null and a blank one clear it.
+    for (body, kept) in [
+        (serde_json::json!({}), Some("mine")),
+        (serde_json::json!({ "why_now": null }), None),
+        (serde_json::json!({ "why_now": "   " }), None),
+    ] {
+        let (status, text) = focus_call(
+            fake_claims(),
+            "PUT",
+            &focus_path(AZ_MY_PROJECT),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let item: common::project_focus::FocusItem = serde_json::from_str(&text).expect("item");
+        assert_eq!(item.why_now.as_deref(), kept, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_bad_why_line_is_refused_without_repeating_it() {
+    let secret = "s3cret ".repeat(40);
+    // A NUL used to reach the database and answer as a 500.
+    for why in [secret.as_str(), "s3cret\nsecond line", "s3cret\u{0}"] {
+        // On the entry, and on the why-line's own route.
+        for path in [
+            focus_path(AZ_MY_PROJECT),
+            format!("{}/why", focus_path(AZ_MY_PROJECT)),
+        ] {
+            let (status, body) = focus_call(
+                fake_claims(),
+                "PUT",
+                &path,
+                serde_json::json!({ "why_now": why }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{path}: {body}");
+            assert!(body.contains("why-line"), "{body}");
+            assert!(!body.contains("s3cret"), "{body}");
+        }
+    }
+}
+
+/// The why-line's own route changes an entry that is there and never adds
+/// one: a why-line saved from a page that is out of date can't put a
+/// removed project back in Focus.
+#[tokio::test]
+async fn a_why_line_is_changed_only_where_the_project_is_in_focus() {
+    let why_path = |node: u128| format!("{}/why", focus_path(node));
+    let (status, body) = focus_call(
+        fake_claims(),
+        "PUT",
+        &why_path(AZ_MY_PROJECT),
+        serde_json::json!({ "why_now": "  Decision Friday " }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let item: common::project_focus::FocusItem = serde_json::from_str(&body).unwrap();
+    assert_eq!(item.why_now.as_deref(), Some("Decision Friday"), "tidied");
+
+    // `null`, a blank and an absent field all clear it.
+    for cleared in [
+        serde_json::json!({ "why_now": null }),
+        serde_json::json!({ "why_now": "   " }),
+        serde_json::json!({}),
+    ] {
+        let (status, body) =
+            focus_call(fake_claims(), "PUT", &why_path(AZ_MY_PROJECT), cleared).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let item: common::project_focus::FocusItem = serde_json::from_str(&body).unwrap();
+        assert_eq!(item.why_now, None);
+    }
+
+    // Not in the caller's Focus: one answer, whatever the node is. A
+    // project they can see but never added, someone else's node, and an
+    // id that doesn't exist read exactly alike.
+    let answers = [AZ_VIEW_PROJECT, AZ_FOREIGN_NODE, AZ_MISSING].map(|node| {
+        focus_call(
+            fake_claims(),
+            "PUT",
+            Box::leak(why_path(node).into_boxed_str()),
+            serde_json::json!({ "why_now": "x" }),
+        )
+    });
+    let mut seen = Vec::new();
+    for answer in answers {
+        let (status, body) = answer.await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        seen.push(body);
+    }
+    assert!(seen.windows(2).all(|w| w[0] == w[1]), "{seen:?}");
+
+    // An admin has no bypass here either: their own Focus is empty.
+    let (status, _) = focus_call(
+        focus_admin(),
+        "PUT",
+        &why_path(AZ_MY_PROJECT),
+        serde_json::json!({ "why_now": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_order_is_capped_and_is_never_read_as_a_node() {
+    let ids = |n: usize| -> Vec<Uuid> { (0..n).map(|_| Uuid::new_v4()).collect() };
+    // 204 comes from the order route only: a put on a node answers 200.
+    let (status, _) = focus_call(
+        fake_claims(),
+        "PUT",
+        "/order",
+        serde_json::json!({ "node_ids": ids(common::project_focus::MAX_ORDER) }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, body) = focus_call(
+        fake_claims(),
+        "PUT",
+        "/order",
+        serde_json::json!({ "node_ids": ids(common::project_focus::MAX_ORDER + 1) }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    // Ids that are not the caller's (foreign, missing) are not an error:
+    // the repo skips them, and the answer says nothing about them.
+    let (status, _) = focus_call(
+        fake_claims(),
+        "PUT",
+        "/order",
+        serde_json::json!({ "node_ids": [
+            Uuid::from_u128(AZ_FOREIGN_NODE), Uuid::from_u128(AZ_MISSING),
+        ] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn removing_is_a_204_whether_or_not_it_was_there() {
+    for node in [AZ_MY_PROJECT, AZ_VIEW_NODE, AZ_FOREIGN_NODE, AZ_MISSING] {
+        let (status, body) = focus_call(
+            fake_claims(),
+            "DELETE",
+            &focus_path(node),
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::NO_CONTENT, ""),
+            "{node:#x}"
+        );
+    }
 }

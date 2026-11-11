@@ -77,8 +77,8 @@ pub struct PurgeCounts {
     pub people: u64,
     /// Files attached to their nodes.
     pub files: u64,
-    /// Tags, templates, saved searches, favorites, webhooks and editor
-    /// settings.
+    /// Tags, templates, saved searches, favorites, webhooks, editor
+    /// settings and Focus entries.
     pub settings: u64,
 }
 

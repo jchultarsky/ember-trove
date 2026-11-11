@@ -5,6 +5,20 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-11)
 
+- **v3.18.0 shipped: Focus** (#282, proposal B; PR #307).
+  `project_focus` (migration 048), `/api/focus`, the dashboard's Focus
+  section and the toggle on the Project page. Rules in
+  `common::project_focus`; see "Focus" in `.claude/rules/api.md`. Backups
+  are format 8. Owner decisions at the merge (2026-11-11): a project
+  that drops out keeps its entry; archives carry why-lines, as they do
+  captures and people. Not done, on purpose: a palette command, suggestions
+  (§4.4 of the proposal), the why-line editor on the Project page.
+  **For S6:** the terminal state must join
+  `common::project_focus::holds_focus` (and the SQL in
+  `repo/project_focus.rs::shows`), and the route that closes a project
+  must delete the caller's own Focus entry, so re-opening doesn't restore
+  it. "Parked" is in the proposal but not in the ontology: it needs an
+  owner decision before anything is built on it.
 - **v3.17.1 shipped: the Brief leads the Project page** (PR #306), above the body (owner
   decision 2026-11-11; `SectionShell`'s `lead`).
 - **v3.17.0 shipped: the Project Brief's UI** (#282, part 2; PR #305). `BriefPanel`
@@ -329,7 +343,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   - **S4a–c:** captures and convert-to-one.
   - **S5a–d:** task states (`waiting`, `completed_at`), recurrence removed,
     tasks need a Project, task dependencies.
-  - **S6a–d:** the closed terminal state, the cascade, History.
+  - **S6a–d:** the closed terminal state, the cascade, History. Also:
+    a closed Project leaves Focus (#282; see "Current state").
   - **S7a–b:** reverse indexes and blockers.
   - **S8–S9:** email identity, the merge tool, @-mentions.
   - **S10:** Companies.

@@ -4616,6 +4616,10 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
             ('{b_node}', 'a wrote this', '{a}'), ('{a_shared}', 'b wrote this', '{b}')"),
         format!("INSERT INTO activity_log (node_id, subject_id, action, metadata) VALUES
             ('{b_node}', '{b}', 'brief_superseded', '{{\"actor_name\": \"Bo\", \"author_id\": \"{a}\", \"pitch\": \"old\"}}')"),
+        // Focus (#282): each has their own node and the other's in Focus.
+        format!("INSERT INTO project_focus (subject_id, node_id, position, why_now) VALUES
+            ('{a}', '{a_shared}', 0, 'a on a'), ('{a}', '{b_node}', 1, 'a on b'),
+            ('{b}', '{a_shared}', 0, 'b on a'), ('{b}', '{b_node}', 1, 'b on b')"),
     ] {
         sql(pool, &q).await;
     }
@@ -4656,7 +4660,8 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
         captures: 1,
         people: 1,
         files: 1,
-        settings: 6,
+        // The six settings tables, and A's two Focus entries.
+        settings: 8,
     };
     assert_eq!(removed, expected);
     assert_eq!(preview, expected, "the preview predicts the purge");
@@ -4727,6 +4732,7 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
         ("SELECT count(*) FROM editor_prefs", 1),
         ("SELECT count(*) FROM activity_log", 5), // all on B's node
         ("SELECT count(*) FROM project_briefs", 1), // A's on B's node
+        ("SELECT count(*) FROM project_focus", 1), // B's on B's node
         ("SELECT count(*) FROM node_versions", 2),
         ("SELECT count(*) FROM attachments", 1),
         ("SELECT count(*) FROM edges", 0),
@@ -5481,6 +5487,11 @@ async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
     .execute(&pool)
     .await
     .expect("a late brief");
+    sqlx::query("INSERT INTO project_focus (subject_id, node_id) VALUES ('alice', $1)")
+        .bind(before.id.0)
+        .execute(&pool)
+        .await
+        .expect("a late focus entry");
     let late = create_node(&pool, "alice", "created mid-backup").await;
     raw_task(&pool, "alice", Some(late.id.0), "its task").await;
     raw_task(
@@ -5503,6 +5514,8 @@ async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
     // A Brief written after the snapshot began is not in it either (#282):
     // Briefs are read inside the same transaction as their nodes.
     assert!(data.briefs.is_empty(), "no Brief existed at the snapshot");
+    // Nor a Focus entry: present as a list (format 8), and empty.
+    assert_eq!(data.focus, Some(Vec::new()));
 
     // Read-only: a backup can't change anything, even by mistake.
     let write = sqlx::query("DELETE FROM nodes").execute(&mut *tx).await;
@@ -6391,4 +6404,473 @@ async fn the_node_list_sorts_filters_by_type_and_pages_without_gaps(pool: PgPool
     let mut tied = oldest[1..3].to_vec();
     tied.sort();
     assert_eq!(tied, ["Alpha", "Bravo"]);
+}
+
+// ── Focus (#282, proposal B) ─────────────────────────────────────────────────
+
+use super::project_focus::{FocusRepo, PgFocusRepo};
+use common::project_focus::WhyChange;
+
+/// Set the why-line to `text`.
+fn why(text: &str) -> WhyChange {
+    WhyChange::Set(Some(text.to_string()))
+}
+
+/// A Project owned by `owner`, with their Owner grant.
+async fn focus_project(pool: &PgPool, owner: &str, title: &str) -> common::id::NodeId {
+    let id = common::id::NodeId(insert_raw_node(pool, owner, "project", title, "").await);
+    own(pool, id, owner).await;
+    id
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn focus_titles(repo: &PgFocusRepo, subject: &str, sees_all: bool) -> Vec<String> {
+    repo.list(subject, sees_all)
+        .await
+        .expect("focus list")
+        .into_iter()
+        .map(|f| f.node.title)
+        .collect()
+}
+
+/// A reorder names the entries the list shows. One it doesn't show (an
+/// archived project) must keep its place among them: numbering only the
+/// named ones from 0 dropped them on top of it, so it came back somewhere
+/// else in the order.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_reorder_keeps_the_place_of_an_entry_the_list_hides(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let a = focus_project(&pool, "alice", "alpha").await;
+    let b = focus_project(&pool, "alice", "bravo").await;
+    let hidden = focus_project(&pool, "alice", "hidden").await;
+    let c = focus_project(&pool, "alice", "charlie").await;
+    for node in [a, b, hidden, c] {
+        repo.put("alice", node, &WhyChange::Keep).await.unwrap();
+    }
+    let archive = |status: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE nodes SET status = $2::node_status WHERE id = $1")
+                .bind(hidden.0)
+                .bind(status)
+                .execute(&pool)
+                .await
+                .expect("status");
+        }
+    };
+    archive("archived").await;
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["alpha", "bravo", "charlie"]
+    );
+
+    // The page sends what it shows: three of the four.
+    repo.reorder("alice", &[c, a, b]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "alpha", "bravo"]
+    );
+    // Back from the archive, it is third, where it was.
+    archive("draft").await;
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "alpha", "hidden", "bravo"]
+    );
+
+    // An id named twice counts once (its first mention), an id that is not
+    // in her Focus is skipped, and the entries left out stay put.
+    let stranger = common::id::NodeId(uuid::Uuid::new_v4());
+    repo.reorder("alice", &[b, stranger, b, c]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["bravo", "alpha", "hidden", "charlie"]
+    );
+    // Positions are 0 upwards with no two alike.
+    let positions: Vec<i32> = sqlx::query_scalar(
+        "SELECT position FROM project_focus WHERE subject_id = 'alice' ORDER BY position",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("positions");
+    assert_eq!(positions, [0, 1, 2, 3]);
+}
+
+/// A why-line is changed only on an entry that is there. Saving one from a
+/// page that is out of date must not put a removed project back in Focus.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_why_line_is_set_only_on_an_entry_that_is_there(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let project = focus_project(&pool, "alice", "alpha").await;
+    let count = || {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM project_focus")
+                .fetch_one(&pool)
+                .await
+                .expect("count")
+        }
+    };
+
+    let absent = repo.set_why("alice", project, Some("too late")).await;
+    assert!(matches!(absent, Err(EmberTroveError::NotFound(_))));
+    assert_eq!(count().await, 0, "nothing was added");
+
+    let added = repo.put("alice", project, &WhyChange::Keep).await.unwrap();
+    let set = repo
+        .set_why("alice", project, Some("Decision Friday"))
+        .await
+        .unwrap();
+    assert_eq!(set.why_now.as_deref(), Some("Decision Friday"));
+    assert_eq!(set.added_at, added.added_at, "the age is not reset");
+    let cleared = repo.set_why("alice", project, None).await.unwrap();
+    assert_eq!(cleared.why_now, None);
+
+    // Another account has no entry for it: not found, and alice's is as it was.
+    repo.set_why("alice", project, Some("hers")).await.unwrap();
+    let theirs = repo.set_why("bob", project, Some("his")).await;
+    assert!(matches!(theirs, Err(EmberTroveError::NotFound(_))));
+    let hers = repo
+        .get("alice", false, project)
+        .await
+        .unwrap()
+        .expect("entry");
+    assert_eq!(hers.why_now.as_deref(), Some("hers"));
+    assert_eq!(count().await, 1);
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_focus_keeps_its_order_and_a_second_put_keeps_its_place(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let a = focus_project(&pool, "alice", "alpha").await;
+    let b = focus_project(&pool, "alice", "bravo").await;
+    let c = focus_project(&pool, "alice", "charlie").await;
+    for node in [a, b, c] {
+        repo.put("alice", node, &WhyChange::Keep).await.unwrap();
+    }
+    // A new entry goes last.
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["alpha", "bravo", "charlie"]
+    );
+
+    repo.reorder("alice", &[c, a, b]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "alpha", "bravo"]
+    );
+
+    // A second put changes the why-line and nothing else: not the place,
+    // not the day it entered Focus.
+    let before = repo.get("alice", false, a).await.unwrap().expect("entry");
+    assert_eq!(before.why_now, None);
+    let after = repo.put("alice", a, &why("Blocked on me")).await.unwrap();
+    assert_eq!(after.why_now.as_deref(), Some("Blocked on me"));
+    assert_eq!(after.added_at, before.added_at);
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "alpha", "bravo"]
+    );
+    // An add from a page that didn't know it was there keeps the why-line.
+    let kept = repo.put("alice", a, &WhyChange::Keep).await.unwrap();
+    assert_eq!(kept, after);
+    let cleared = repo.put("alice", a, &WhyChange::Set(None)).await.unwrap();
+    assert_eq!(cleared.why_now, None);
+    assert_eq!(cleared.added_at, before.added_at);
+
+    // Removing is quiet when there is nothing to remove.
+    repo.remove("alice", a).await.unwrap();
+    repo.remove("alice", a).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "bravo"]
+    );
+    // And what comes back comes back last, as a fresh entry.
+    repo.put("alice", a, &WhyChange::Keep).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "bravo", "alpha"]
+    );
+    // An empty order changes nothing.
+    repo.reorder("alice", &[]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["charlie", "bravo", "alpha"]
+    );
+}
+
+/// The list's SQL and `common::project_focus::holds_focus` are one rule:
+/// only a Project that is not archived shows. The row of anything else
+/// stays (the read is a filter), so an un-archived project is back.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_focus_filter_is_the_shared_rule(pool: PgPool) {
+    use common::node::{NodeStatus, NodeType};
+    use common::project_focus::holds_focus;
+    let repo = PgFocusRepo::new(pool.clone());
+    let mut expected = Vec::new();
+    let mut all = Vec::new();
+    for kind in [
+        NodeType::Article,
+        NodeType::Project,
+        NodeType::Area,
+        NodeType::Reference,
+    ] {
+        for status in [
+            NodeStatus::Draft,
+            NodeStatus::Published,
+            NodeStatus::Archived,
+        ] {
+            let title = format!("{} {}", kind.as_str(), status.as_str());
+            let id = insert_raw_node(&pool, "alice", kind.as_str(), &title, "").await;
+            sql(
+                &pool,
+                &format!(
+                    "UPDATE nodes SET status = '{}' WHERE id = '{id}'",
+                    status.as_str()
+                ),
+            )
+            .await;
+            // Raw: the route would refuse most of these.
+            sql(
+                &pool,
+                &format!(
+                    "INSERT INTO project_focus (subject_id, node_id) VALUES ('alice', '{id}')"
+                ),
+            )
+            .await;
+            all.push(common::id::NodeId(id));
+            if holds_focus(&kind, &status) {
+                expected.push(title);
+            }
+        }
+    }
+    let mut shown = focus_titles(&repo, "alice", false).await;
+    shown.sort();
+    expected.sort();
+    assert_eq!(shown, expected);
+    assert_eq!(shown, ["project draft", "project published"]);
+    // `get` applies the same filter.
+    let mut got = 0;
+    for node in &all {
+        got += usize::from(repo.get("alice", false, *node).await.unwrap().is_some());
+    }
+    assert_eq!(got, 2);
+
+    // Archive one: it drops out, its row stays, and it is back as it was.
+    let shown_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM nodes WHERE title = 'project published'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let node = common::id::NodeId(shown_id);
+    let before = repo
+        .get("alice", false, node)
+        .await
+        .unwrap()
+        .expect("shown");
+    sql(
+        &pool,
+        &format!("UPDATE nodes SET status = 'archived' WHERE id = '{shown_id}'"),
+    )
+    .await;
+    assert_eq!(focus_titles(&repo, "alice", false).await, ["project draft"]);
+    assert_eq!(repo.get("alice", false, node).await.unwrap(), None);
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM project_focus").await,
+        12,
+        "a read deletes nothing"
+    );
+    sql(
+        &pool,
+        &format!("UPDATE nodes SET status = 'published' WHERE id = '{shown_id}'"),
+    )
+    .await;
+    assert_eq!(
+        repo.get("alice", false, node).await.unwrap(),
+        Some(before),
+        "un-archived: back, with the day it entered Focus"
+    );
+}
+
+/// SECURITY: Focus is private. Each account reads its own entries and its
+/// own why-line, on projects it can see now. Nobody reads another's, an
+/// admin included; and a project whose share is taken back drops out of
+/// the sharee's Focus, title and all.
+#[sqlx::test(migrations = "../migrations")]
+async fn focus_is_private_and_follows_the_readers_rights(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let plan = focus_project(&pool, "alice", "alice secret plan").await;
+    let other = focus_project(&pool, "alice", "alice other").await;
+    share(&pool, plan.0, "bob").await;
+    repo.put("alice", plan, &why("alice's reason"))
+        .await
+        .unwrap();
+    repo.put("alice", other, &WhyChange::Keep).await.unwrap();
+    repo.put("bob", plan, &why("bob's reason")).await.unwrap();
+
+    let whys = |entries: Vec<super::project_focus::FocusedProject>| -> Vec<Option<String>> {
+        entries.into_iter().map(|f| f.item.why_now).collect()
+    };
+    assert_eq!(
+        whys(repo.list("alice", false).await.unwrap()),
+        [Some("alice's reason".to_string()), None]
+    );
+    assert_eq!(
+        whys(repo.list("bob", false).await.unwrap()),
+        [Some("bob's reason".to_string())]
+    );
+
+    // Another account, and an admin (who may read every node), have no
+    // entries of their own, so they read none: not alice's, not bob's.
+    for (subject, sees_all) in [("carol", false), ("root", true)] {
+        assert!(
+            repo.list(subject, sees_all).await.unwrap().is_empty(),
+            "{subject}"
+        );
+        assert_eq!(repo.get(subject, sees_all, plan).await.unwrap(), None);
+        // Nor do their writes reach anyone else's rows.
+        repo.remove(subject, plan).await.unwrap();
+        repo.reorder(subject, &[other, plan]).await.unwrap();
+    }
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM project_focus").await, 3);
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["alice secret plan", "alice other"],
+        "someone else's reorder moved nothing of alice's"
+    );
+    // Bob orders his own one entry; alice's two stay where they were.
+    repo.reorder("bob", &[other, plan]).await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["alice secret plan", "alice other"]
+    );
+
+    // The share is taken back: the project is gone from bob's Focus.
+    sql(&pool, "DELETE FROM permissions WHERE subject_id = 'bob'").await;
+    assert!(repo.list("bob", false).await.unwrap().is_empty());
+    assert_eq!(repo.get("bob", false, plan).await.unwrap(), None);
+    // His row is still his (a read deletes nothing); shared again, it shows.
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM project_focus WHERE subject_id = 'bob'"
+        )
+        .await,
+        1
+    );
+    share(&pool, plan.0, "bob").await;
+    assert_eq!(
+        focus_titles(&repo, "bob", false).await,
+        ["alice secret plan"]
+    );
+
+    // `sees_all` widens which of the reader's OWN entries show (an admin
+    // sees every node). It never widens whose entries are read.
+    sql(&pool, "DELETE FROM permissions WHERE subject_id = 'bob'").await;
+    assert_eq!(
+        focus_titles(&repo, "bob", true).await,
+        ["alice secret plan"]
+    );
+    assert_eq!(
+        whys(repo.list("bob", true).await.unwrap()),
+        [Some("bob's reason".to_string())]
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_focus_entry_goes_with_its_node_and_the_limits_hold(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let node = focus_project(&pool, "alice", "short lived").await;
+    share(&pool, node.0, "bob").await;
+    repo.put("alice", node, &WhyChange::Keep).await.unwrap();
+    repo.put("bob", node, &WhyChange::Keep).await.unwrap();
+
+    // The CHECK is the backstop behind `normalize_why`.
+    for why in ["x".repeat(201), "two\nlines".to_string(), String::new()] {
+        let bad = sqlx::query("UPDATE project_focus SET why_now = $1 WHERE subject_id = 'alice'")
+            .bind(&why)
+            .execute(&pool)
+            .await;
+        assert!(bad.is_err(), "{why:?}");
+    }
+    let longest = "é".repeat(200);
+    let ok = repo.put("alice", node, &why(&longest)).await.unwrap();
+    assert_eq!(ok.why_now.as_deref(), Some(longest.as_str()));
+
+    // A node that is gone: not found, and nothing written.
+    let gone = common::id::NodeId(uuid::Uuid::new_v4());
+    let err = repo.put("alice", gone, &WhyChange::Keep).await.unwrap_err();
+    assert!(matches!(err, EmberTroveError::NotFound(_)), "{err:?}");
+
+    // The node's cascade takes every account's entry for it.
+    PgNodeRepo::new(pool.clone()).delete(node).await.unwrap();
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM project_focus").await, 0);
+}
+
+/// A backup carries every account's Focus (format 8) and a restore brings
+/// it back as it was, skipping an entry whose project isn't in the archive.
+#[sqlx::test(migrations = "../migrations")]
+async fn focus_survives_a_backup_round_trip(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let p = focus_project(&pool, "alice", "kept").await;
+    let q = focus_project(&pool, "alice", "also kept").await;
+    share(&pool, p.0, "bob").await;
+    repo.put("alice", p, &why("alice on p")).await.unwrap();
+    repo.put("alice", q, &WhyChange::Keep).await.unwrap();
+    repo.put("bob", p, &why("bob on p")).await.unwrap();
+    repo.reorder("alice", &[q, p]).await.unwrap();
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let mut data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    let archived = data.focus.clone().expect("format 8 carries Focus");
+    assert_eq!(archived.len(), 3);
+    assert_eq!(archived, repo.list_all().await.unwrap());
+
+    // The live Focus moves on, then the archive is restored over it.
+    repo.remove("alice", q).await.unwrap();
+    repo.put("bob", p, &why("changed since")).await.unwrap();
+    // A damaged archive: an entry for a project it doesn't hold.
+    let mut orphan = archived[0].clone();
+    orphan.node_id = common::id::NodeId(uuid::Uuid::new_v4());
+    data.focus.as_mut().expect("list").push(orphan);
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(repo.list_all().await.unwrap(), archived);
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["also kept", "kept"]
+    );
+}
+
+/// An archive older than format 8 holds no Focus (`None`). Restoring it
+/// keeps the live entries whose project it brings back, like the other
+/// lists an older archive lacks; one whose project it doesn't hold goes
+/// with the project.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_older_archive_keeps_the_live_focus_of_projects_it_restores(pool: PgPool) {
+    let repo = PgFocusRepo::new(pool.clone());
+    let kept = focus_project(&pool, "alice", "in the archive").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let mut data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    data.focus = None; // as a format-7 archive reads
+
+    let later = focus_project(&pool, "alice", "made after the archive").await;
+    repo.put("alice", kept, &why("still true")).await.unwrap();
+    repo.put("alice", later, &WhyChange::Keep).await.unwrap();
+    let live = repo.get("alice", false, kept).await.unwrap().expect("live");
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        focus_titles(&repo, "alice", false).await,
+        ["in the archive"]
+    );
+    assert_eq!(repo.get("alice", false, kept).await.unwrap(), Some(live));
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM project_focus").await, 1);
 }

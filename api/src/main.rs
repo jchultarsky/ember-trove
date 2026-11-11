@@ -193,6 +193,7 @@ async fn main() -> anyhow::Result<()> {
         permissions: Arc::new(PgPermissionRepo::new(pool.clone())),
         people: Arc::new(repo::person::PgPersonRepo::new(pool.clone())),
         briefs: Arc::new(repo::brief::PgBriefRepo::new(pool.clone())),
+        focus: Arc::new(repo::project_focus::PgFocusRepo::new(pool.clone())),
         data_health: Arc::new(repo::data_health::PgDataHealthRepo::new(pool.clone())),
         search: Arc::new(PgSearchRepo::new(pool.clone())),
         graph: Arc::new(PgGraphRepo::new(pool.clone())),

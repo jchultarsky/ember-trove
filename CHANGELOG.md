@@ -6,6 +6,53 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.18.0] - 2026-11-11
+
+### Added
+- **Focus: the projects that hold your attention (#282, proposal B).** The
+  dashboard now leads with a **Focus** section: the projects you put
+  there, in the order you choose. It is to projects what My Day is to
+  tasks.
+  - Add a project with the Focus button on its dashboard card or on its
+    own page, and take it out the same way. A project shared with you can
+    be in your Focus too.
+  - Each Focus card shows the project's Brief, tasks and progress, how
+    long it has been in Focus ("In focus 6d"), and an optional one-line
+    **why now** ("Decision needed Friday"). Arrows move a card up or down.
+  - Focus stays until you change it; nothing expires it. Past five
+    projects the section says that Focus works best small. That is a
+    hint, not a limit.
+  - The age counts days by your own calendar. A why-line saved for a
+    project that has left Focus (removed in another tab) is refused and
+    does not put it back.
+  - An archived project does not show in Focus and can't be added. It
+    shows again if it is un-archived. The states "complete", "cancelled"
+    and "parked" from the proposal don't exist in the app yet; they will
+    leave Focus when they arrive.
+  - API: `GET /api/focus`, `GET`/`PUT`/`DELETE /api/focus/{node_id}`,
+    `PUT /api/focus/order`. Migration 048 (`project_focus`) is additive.
+
+### Changed
+- **Backups are format 8**: an archive carries every account's Focus. An
+  older release refuses a format-8 archive. Restoring an older archive
+  keeps the Focus entries of the projects it brings back.
+- **The dashboard no longer jumps to the top** when you pin a project or
+  change Focus: it reloads in place instead of showing its placeholder.
+
+### Security
+- **Focus is private to each person, with no admin bypass** (owner
+  decision on #282, like captures and people). Every query matches the
+  signed-in account, so nobody reads or changes another person's Focus or
+  why-line, and a project's owner is never told who has it in Focus.
+  - Putting a project in Focus needs the right to view it. A project you
+    can't see answers exactly like one that doesn't exist (404), before
+    its kind or the why-line is looked at.
+  - The right is checked again on every read: when a share is taken back,
+    the project leaves that person's Focus, and its title with it.
+  - Focus writes nothing to a project's History and fires no webhook:
+    both are shared with the project.
+  - Deleting an account deletes its Focus. The why-line is never logged.
+
 ## [3.17.1] - 2026-11-11
 
 ### Changed
