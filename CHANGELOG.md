@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.18.1] - 2026-11-11
+
 ### Changed
 - **Every project's Status section becomes its Brief** (owner decision,
   2026-11-11). On the first start of this release, each project that has
