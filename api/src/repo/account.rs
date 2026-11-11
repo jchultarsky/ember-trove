@@ -389,13 +389,16 @@ fn demotion_second(at: chrono::DateTime<chrono::Utc>) -> i64 {
 
 /// Per-account settings: table and the column naming the account. Fixed
 /// identifiers only; the subject is always a bind parameter.
-const SETTINGS: [(&str, &str); 6] = [
+const SETTINGS: [(&str, &str); 7] = [
     ("tags", "owner_id"),
     ("node_templates", "created_by"),
     ("search_presets", "owner_id"),
     ("user_favorites", "owner_id"),
     ("webhooks", "owner_id"),
     ("editor_prefs", "owner_id"),
+    // Focus (#282): the account's own entries, on anyone's projects.
+    // Other people's entries on this account's projects go with the nodes.
+    ("project_focus", "subject_id"),
 ];
 
 /// Archives of removed edges (migrations 033, 034, 041, 042).

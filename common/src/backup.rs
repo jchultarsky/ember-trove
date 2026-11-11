@@ -9,7 +9,7 @@ use crate::{
     edge::Edge,
     favorite::Favorite,
     graph::NodePosition,
-    id::{AttachmentId, TaskId, WebhookId},
+    id::{AttachmentId, NodeId, TaskId, WebhookId},
     node::Node,
     node_link::NodeLink,
     node_version::NodeVersion,
@@ -61,7 +61,10 @@ pub struct EntityCounts {
 /// 7 (owner decision, 2026-11-10): a webhook's address is no longer in the
 /// archive ([`BackupWebhook`]). An older release needs it to restore a
 /// webhook at all, so the number moves and it refuses.
-pub const SCHEMA_VERSION: u32 = 7;
+/// 8 (#282): the archive carries each account's Focus ([`BackupFocus`]).
+/// An older release would restore it without them and say nothing, so the
+/// number moves.
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -162,6 +165,19 @@ pub struct BackupEditorPref {
     pub height: Option<i32>,
     #[serde(default)]
     pub collapsed: bool,
+}
+
+/// One project in one account's Focus (#282), as an archive holds it:
+/// `project_focus::FocusItem` plus the account and the stored position,
+/// which the API never sends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackupFocus {
+    pub subject_id: String,
+    pub node_id: NodeId,
+    pub position: i32,
+    #[serde(default)]
+    pub why_now: Option<String>,
+    pub added_at: DateTime<Utc>,
 }
 
 /// A webhook as an archive holds it. SECURITY: there is no `secret` field,
@@ -385,6 +401,11 @@ pub struct BackupData {
     /// it hung on are replaced.
     #[serde(default)]
     pub briefs: Vec<crate::brief::ProjectBrief>,
+    // ── Format 8: Focus (#282) ────────────────────────────────────────────
+    /// Every account's Focus. `None` in an older archive: restore then
+    /// keeps the live entries whose project the archive brings back.
+    #[serde(default)]
+    pub focus: Option<Vec<BackupFocus>>,
 }
 
 impl BackupData {
@@ -437,12 +458,35 @@ mod tests {
         assert!(data.node_templates.is_none() && data.search_presets.is_none());
         assert!(data.editor_prefs.is_none() && data.webhooks.is_none());
         assert!(data.recurrence_links.is_empty());
+        // Format 8's Focus too: absent, so restore keeps the live entries.
+        assert!(data.focus.is_none());
+    }
+
+    #[test]
+    fn an_archives_focus_is_absent_or_a_list_never_both() {
+        let base = r#""nodes": [], "edges": [], "tags": [], "notes": [], "tasks": [],
+            "attachments": []"#;
+        let empty: BackupData =
+            serde_json::from_str(&format!(r#"{{ {base}, "focus": [] }}"#)).expect("empty list");
+        assert_eq!(empty.focus, Some(Vec::new()), "a list, even an empty one");
+        let one: BackupData = serde_json::from_str(&format!(
+            r#"{{ {base}, "focus": [{{
+                "subject_id": "alice",
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "position": 3,
+                "added_at": "2026-11-11T00:00:00Z"
+            }}] }}"#
+        ))
+        .expect("one entry");
+        let entry = &one.focus.as_deref().expect("a list")[0];
+        assert_eq!((entry.subject_id.as_str(), entry.position), ("alice", 3));
+        assert_eq!(entry.why_now, None, "the why-line is optional");
     }
 
     fn attachment(node: Uuid, name: &str, size: i64) -> Attachment {
         Attachment {
             id: AttachmentId(Uuid::new_v4()),
-            node_id: crate::id::NodeId(node),
+            node_id: NodeId(node),
             filename: name.into(),
             content_type: "image/png".into(),
             size_bytes: size,

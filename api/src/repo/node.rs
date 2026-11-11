@@ -154,8 +154,9 @@ impl PgNodeRepo {
 }
 
 /// Intermediate row type for sqlx — maps DB columns with text-cast enums.
+/// `project_focus` reads it too, flattened beside its own columns.
 #[derive(sqlx::FromRow)]
-struct NodeRow {
+pub(super) struct NodeRow {
     id: Uuid,
     owner_id: String,
     node_type: String,
@@ -174,7 +175,7 @@ struct NodeRow {
 }
 
 impl NodeRow {
-    fn into_node(self) -> Result<Node, EmberTroveError> {
+    pub(super) fn into_node(self) -> Result<Node, EmberTroveError> {
         Ok(Node {
             id: NodeId(self.id),
             owner_id: self.owner_id,
