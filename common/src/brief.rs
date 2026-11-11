@@ -268,17 +268,31 @@ pub fn from_status_section(section: &str) -> BriefFields {
     }
 }
 
-/// A status section's prose and its list items, uncut.
+/// A status section's prose and its list items, uncut. An indented line
+/// straight after a list item continues that item (markdown's own rule),
+/// so it stays with its point instead of drifting into the pitch.
 fn split_status_section(section: &str) -> (String, Vec<String>) {
     let mut pitch_lines: Vec<&str> = Vec::new();
     let mut points: Vec<String> = Vec::new();
+    // Whether the last non-blank line belonged to a list item.
+    let mut in_item = false;
     for line in section.lines() {
         let t = line.trim();
         if let Some(item) = list_item(t) {
-            if !item.is_empty() {
+            in_item = !item.is_empty();
+            if in_item {
                 points.push(item.to_string());
             }
+        } else if t.is_empty() {
+            in_item = false;
+            pitch_lines.push("");
+        } else if in_item && line.starts_with([' ', '\t']) {
+            if let Some(last) = points.last_mut() {
+                last.push(' ');
+                last.push_str(t);
+            }
         } else {
+            in_item = false;
             pitch_lines.push(line.trim_end());
         }
     }
@@ -309,25 +323,69 @@ pub struct StatusMove {
     pub body: String,
 }
 
-/// "Move Status section into Brief": the Brief a body's Status section
-/// makes, and the body without that section (one fact, one home).
+/// The Brief a status section makes, **whole**: nothing is cut, so a
+/// section that doesn't fit is an error, not a shorter Brief.
+///
+/// - Prose becomes the pitch and list items the points.
+/// - A section with sub-headings, or with more or longer list items than
+///   points allow, goes into the pitch as it was written: the pitch is
+///   markdown, so its headings and lists read as they did in the body, and
+///   nothing is regrouped.
+fn status_fields(section: &str) -> Result<BriefFields, BriefError> {
+    use crate::markdown::atx_heading_level;
+    let brief = |pitch: String, points: Vec<String>| {
+        normalize(&BriefInput {
+            headline: None,
+            pitch,
+            points,
+            expected_updated_at: None,
+        })
+    };
+    let has_headings = section
+        .lines()
+        .any(|l| atx_heading_level(l.trim()).is_some());
+    if !has_headings {
+        let (pitch, points) = split_status_section(section);
+        match brief(pitch, points) {
+            Err(BriefError::TooManyPoints | BriefError::PointTooLong) => {}
+            fits_or_not => return fits_or_not,
+        }
+    }
+    brief(section.to_string(), Vec::new())
+}
+
+/// What a body's Status section is, for moving it into a Brief.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusSection {
+    /// The body has no heading that reads exactly "Status" or "Project
+    /// Status".
+    Absent,
+    /// The heading is there with nothing under it. `body` is the body
+    /// without the heading.
+    Empty { body: String },
+    /// The section, as a Brief, and the body without it.
+    Fits(StatusMove),
+    /// More than a Brief holds. Moving it would lose words, so it stays.
+    TooLarge,
+}
+
+/// Find a body's Status section and say what moving it into a Brief
+/// would do (#282 §6; one fact, one home).
 ///
 /// It rewrites what a person wrote, so it is conservative, like
-/// `project_status::split_from_body`. `None`, and nothing is offered,
-/// unless all of these hold:
-/// - a heading's text is exactly "Status" or "Project Status" (any level,
-///   any case; "Status Update" doesn't count);
-/// - there is something under it;
-/// - **all of it fits a Brief**. A section that [`from_status_section`]
-///   would have to cut stays where it is: removing it would lose the rest.
+/// `project_status::split_from_body`:
+/// - the heading's text must be exactly "Status" or "Project Status" (any
+///   level, any case; "Status Update" doesn't count);
+/// - **all of the section must fit a Brief** ([`StatusSection::TooLarge`]
+///   otherwise): nothing is ever cut.
 ///
 /// The section runs to the next heading of the same or a higher level.
 /// Everything outside it is kept byte for byte, line endings included.
 #[must_use]
-pub fn move_status_section(body: &str) -> Option<StatusMove> {
+pub fn status_section(body: &str) -> StatusSection {
     use crate::markdown::atx_heading_level;
     let lines: Vec<&str> = body.split_inclusive('\n').collect();
-    let (start, level) = lines.iter().enumerate().find_map(|(i, l)| {
+    let found = lines.iter().enumerate().find_map(|(i, l)| {
         let t = l.trim();
         let level = atx_heading_level(t)?;
         let text = t[level..]
@@ -336,20 +394,13 @@ pub fn move_status_section(body: &str) -> Option<StatusMove> {
             .trim()
             .to_lowercase();
         (text == "status" || text == "project status").then_some((i, level))
-    })?;
+    });
+    let Some((start, level)) = found else {
+        return StatusSection::Absent;
+    };
     let end = (start + 1..lines.len())
         .find(|&i| atx_heading_level(lines[i].trim()).is_some_and(|l| l <= level))
         .unwrap_or(lines.len());
-
-    let (pitch, points) = split_status_section(&lines[start + 1..end].concat());
-    // What the section holds must be what the Brief will hold.
-    let fields = normalize(&BriefInput {
-        headline: None,
-        pitch,
-        points,
-        expected_updated_at: None,
-    })
-    .ok()?;
 
     let mut out = lines[..start].concat();
     if end == lines.len() {
@@ -364,7 +415,24 @@ pub fn move_status_section(body: &str) -> Option<StatusMove> {
     } else {
         out.push_str(&lines[end..].concat());
     }
-    Some(StatusMove { fields, body: out })
+
+    match status_fields(&lines[start + 1..end].concat()) {
+        Ok(fields) => StatusSection::Fits(StatusMove { fields, body: out }),
+        Err(BriefError::Empty) => StatusSection::Empty { body: out },
+        Err(_) => StatusSection::TooLarge,
+    }
+}
+
+/// "Move Status section into Brief": the Brief a body's Status section
+/// makes, and the body without that section. `None`, and nothing is
+/// offered, unless the body has such a section with something under it
+/// that fits a Brief whole ([`status_section`]).
+#[must_use]
+pub fn move_status_section(body: &str) -> Option<StatusMove> {
+    match status_section(body) {
+        StatusSection::Fits(moved) => Some(moved),
+        _ => None,
+    }
 }
 
 /// A Brief's points as the editor shows them: one per line.
@@ -392,8 +460,8 @@ pub fn points_from_text(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The text of a markdown list item (`- x`, `* x`, `+ x`, `1. x`, `1) x`,
-/// with an optional task box), or `None` for any other line.
+/// The text of a markdown list item (`- x`, `* x`, `+ x`, `1. x`, `1) x`),
+/// or `None` for any other line.
 fn list_item(line: &str) -> Option<&str> {
     let rest = ["- ", "* ", "+ "]
         .iter()
@@ -404,12 +472,11 @@ fn list_item(line: &str) -> Option<&str> {
                 .then(|| &line[digits..])
                 .and_then(|r| r.strip_prefix(". ").or_else(|| r.strip_prefix(") ")))
         })?;
+    // An open task box goes: the point is the open item. A ticked one
+    // stays as written ("[x] Sent the scope"), or a finished item would
+    // read as one still to do.
     let rest = rest.trim();
-    let rest = ["[ ] ", "[x] ", "[X] "]
-        .iter()
-        .find_map(|b| rest.strip_prefix(b))
-        .unwrap_or(rest);
-    Some(rest.trim())
+    Some(rest.strip_prefix("[ ] ").unwrap_or(rest).trim())
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -662,19 +729,52 @@ mod tests {
     #[test]
     fn a_status_section_moves_out_of_the_body_whole() {
         let body = "# Plan\n\nGoals stay.\n\n## Status\n\nWaiting on the vendor.\n\n\
-                    - Review booked\n- [ ] Send the scope\n\n### Risks\nNone yet.\n\n\
+                    - Review booked\n- [ ] Send the scope\n\n\
                     ## Background\n\nKept.\n";
         let moved = move_status_section(body).expect("a Status section");
         assert_eq!(moved.fields.headline, None);
-        assert_eq!(
-            moved.fields.pitch,
-            "Waiting on the vendor.\n\n### Risks\nNone yet."
-        );
+        assert_eq!(moved.fields.pitch, "Waiting on the vendor.");
         assert_eq!(moved.fields.points, ["Review booked", "Send the scope"]);
         assert_eq!(
             moved.body,
             "# Plan\n\nGoals stay.\n\n## Background\n\nKept.\n"
         );
+    }
+
+    #[test]
+    fn a_list_item_keeps_its_continuation_lines_and_its_tick() {
+        let moved = move_status_section(
+            "## Status\n- Review booked\n  for Friday at ten\n\n- [x] Sent the scope\n\
+             - [ ] Chase legal\n    - a nested one\nNot indented: prose.\n",
+        )
+        .expect("moves");
+        assert_eq!(
+            moved.fields.points,
+            [
+                // An indented line after an item belongs to that item.
+                "Review booked for Friday at ten",
+                // A ticked item says so; an open box is just an open item.
+                "[x] Sent the scope",
+                "Chase legal",
+                "a nested one",
+            ]
+        );
+        assert_eq!(moved.fields.pitch, "Not indented: prose.");
+    }
+
+    #[test]
+    fn a_section_with_sub_headings_moves_as_it_was_written() {
+        // Splitting it would leave "### Risks" in the pitch and its items
+        // among the points, with nothing to say they belong together.
+        let body = "## Status\n\nOn track.\n\n### Next\n- Book the review\n\n\
+                    ### Risks\n- Vendor slips\n\n## Goals\n\nKept.\n";
+        let moved = move_status_section(body).expect("moves");
+        assert_eq!(
+            moved.fields.pitch,
+            "On track.\n\n### Next\n- Book the review\n\n### Risks\n- Vendor slips"
+        );
+        assert!(moved.fields.points.is_empty());
+        assert_eq!(moved.body, "## Goals\n\nKept.\n");
     }
 
     #[test]
@@ -694,17 +794,39 @@ mod tests {
 
     #[test]
     fn a_status_section_is_left_alone_when_moving_it_would_lose_words() {
-        // No such heading, a near miss, or nothing under it.
-        assert_eq!(move_status_section("# Plan\n\nText."), None);
-        assert_eq!(move_status_section("## Status Update\n\nText."), None);
+        // No such heading, or a near miss.
+        assert_eq!(status_section("# Plan\n\nText."), StatusSection::Absent);
+        assert_eq!(
+            status_section("## Status Update\n\nText."),
+            StatusSection::Absent
+        );
+        // Nothing under it: no Brief to make, and the heading can go.
+        assert_eq!(
+            status_section("Intro.\n\n## Status\n\n## Next\n\nText."),
+            StatusSection::Empty {
+                body: "Intro.\n\n## Next\n\nText.".to_string()
+            }
+        );
         assert_eq!(move_status_section("## Status\n\n## Next\n\nText."), None);
-        // More than a Brief holds: it would be cut, so it stays in the body.
+
+        // More list items than points allow, or one too long for a point:
+        // the section still fits as text, so it moves into the pitch as it
+        // was written.
         let many: String = (0..=MAX_POINTS).map(|i| format!("- point {i}\n")).collect();
-        assert_eq!(move_status_section(&format!("## Status\n{many}")), None);
-        let long_point = format!("## Status\n- {}\n", "x".repeat(MAX_POINT + 1));
-        assert_eq!(move_status_section(&long_point), None);
+        let moved = move_status_section(&format!("## Status\n{many}")).expect("moves");
+        assert!(moved.fields.points.is_empty());
+        assert_eq!(moved.fields.pitch, many.trim_end());
+        let long_point = format!("- {}", "x".repeat(MAX_POINT + 1));
+        let moved = move_status_section(&format!("## Status\n{long_point}\n")).expect("moves");
+        assert_eq!(moved.fields.pitch, long_point);
+
+        // More than a Brief holds at all: it would be cut, so it stays.
         let long_pitch = format!("## Status\n{}\n", "x".repeat(MAX_PITCH + 1));
+        assert_eq!(status_section(&long_pitch), StatusSection::TooLarge);
         assert_eq!(move_status_section(&long_pitch), None);
+        let long_list = format!("## Status\n{}", "- twenty characters.\n".repeat(250));
+        assert_eq!(status_section(&long_list), StatusSection::TooLarge);
+
         // The lenient parser still cuts, for a person to review.
         assert_eq!(
             from_status_section(&many).points.len(),

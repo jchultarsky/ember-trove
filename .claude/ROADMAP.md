@@ -5,6 +5,15 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-11)
 
+- **Unreleased: the Status sections become Briefs** (owner decision
+  2026-11-11). `backfill::status_into_brief` runs once at startup:
+  a project with a Status section and no Brief gets the section as its
+  Brief (`common::brief::status_section`), dated by the node's
+  `updated_at`; the old body is in `node_versions`. Production had 70
+  such projects (of 128, one owner) on 2026-11-11. Left for the owner:
+  drop the Status section from the project template. After that, the
+  dashboard's scrape (`extract_section` in `dashboard_entries`,
+  `ProjectDashboardEntry.status_section`) and its card block can go.
 - **Unreleased: a dashboard card shows the Brief, the Status section and
   the open tasks together** (owner decision 2026-11-11). The Brief no
   longer hides the body's `## Status` section: most projects still have

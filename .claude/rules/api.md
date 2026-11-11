@@ -31,6 +31,11 @@ cargo check && cargo clippy -- -D warnings
   - It sets `SET LOCAL ember.keep_updated_at = 'on'`, so the
     `touch_updated_at` trigger leaves `updated_at` alone.
   - Test it in `pg_tests` with nodes inserted by raw SQL.
+  - `status_into_brief` (2026-11-11) is the second one: a project's
+    Status section becomes its Brief. It dates the Brief by the node's
+    `updated_at`, not by now: a backfill must not make old words look
+    fresh. Give a backfill's snapshots their own `created_by`
+    (`system:backfill-…`).
 
 ## Optimistic concurrency (#161 follow-up)
 
