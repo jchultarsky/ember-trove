@@ -58,13 +58,52 @@ pub struct FocusEntry {
     pub project: ProjectDashboardEntry,
 }
 
-/// `PUT /focus/{node_id}` body: put the project in Focus with this
-/// why-line. For a project already there it replaces the why-line and
-/// keeps its place and its `added_at`.
+/// `PUT /focus/{node_id}` body: put the project in Focus. A project
+/// already there keeps its place and its `added_at`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct FocusInput {
-    #[serde(default)]
-    pub why_now: Option<String>,
+    /// Absent: leave the why-line as it is, so adding a project that is
+    /// already in Focus (from a stale page, say) never wipes one. `null`:
+    /// clear it. A string: set it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::task::deser_double_opt"
+    )]
+    pub why_now: Option<Option<String>>,
+}
+
+/// What a put does to the why-line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WhyChange {
+    /// Leave it: none for a new entry, the stored one for an old.
+    Keep,
+    /// Replace it; `None` clears it.
+    Set(Option<String>),
+}
+
+impl FocusInput {
+    /// Put the project in Focus and leave any why-line alone.
+    #[must_use]
+    pub fn add() -> Self {
+        Self { why_now: None }
+    }
+
+    /// Set the why-line (`None` clears it).
+    #[must_use]
+    pub fn why(text: Option<String>) -> Self {
+        Self {
+            why_now: Some(text),
+        }
+    }
+
+    /// The validated change this body asks for.
+    pub fn change(&self) -> Result<WhyChange, FocusError> {
+        match &self.why_now {
+            None => Ok(WhyChange::Keep),
+            Some(why) => normalize_why(why.as_deref()).map(WhyChange::Set),
+        }
+    }
 }
 
 /// `PUT /focus/order` body: the caller's Focus, in the order they want.
@@ -273,7 +312,37 @@ mod tests {
         }))
         .expect("item");
         assert_eq!(item.why_now, None);
-        let input: FocusInput = serde_json::from_str("{}").expect("input");
-        assert_eq!(input, FocusInput::default());
+    }
+
+    #[test]
+    fn a_put_without_a_why_line_keeps_the_one_there() {
+        // Absent, null and a value are three different requests.
+        let read = |json: &str| serde_json::from_str::<FocusInput>(json).expect(json);
+        assert_eq!(read("{}").change(), Ok(WhyChange::Keep));
+        assert_eq!(
+            read(r#"{"why_now": null}"#).change(),
+            Ok(WhyChange::Set(None))
+        );
+        assert_eq!(
+            read(r#"{"why_now": "  "}"#).change(),
+            Ok(WhyChange::Set(None)),
+            "a blank why-line clears it"
+        );
+        assert_eq!(
+            read(r#"{"why_now": " Blocked on me "}"#).change(),
+            Ok(WhyChange::Set(Some("Blocked on me".to_string())))
+        );
+        assert_eq!(
+            read(r#"{"why_now": "a\nb"}"#).change(),
+            Err(FocusError::WhyMultiline)
+        );
+        // And they are sent as they are read.
+        let sent = |input: &FocusInput| serde_json::to_string(input).expect("json");
+        assert_eq!(sent(&FocusInput::add()), "{}");
+        assert_eq!(sent(&FocusInput::why(None)), r#"{"why_now":null}"#);
+        assert_eq!(
+            sent(&FocusInput::why(Some("x".to_string()))),
+            r#"{"why_now":"x"}"#
+        );
     }
 }

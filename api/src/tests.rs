@@ -1308,9 +1308,15 @@ impl crate::repo::project_focus::FocusRepo for StubFocusRepo {
         &self,
         subject: &str,
         node: NodeId,
-        why_now: Option<&str>,
+        why: &common::project_focus::WhyChange,
     ) -> Result<common::project_focus::FocusItem, EmberTroveError> {
+        use common::project_focus::WhyChange;
         stub_focus_owner(subject);
+        // The stored why-line is "mine": a put that keeps it answers it.
+        let why_now = match why {
+            WhyChange::Keep => Some("mine"),
+            WhyChange::Set(text) => text.as_deref(),
+        };
         match node.0.as_u128() {
             AZ_MY_PROJECT | AZ_VIEW_PROJECT => Ok(stub_focus_item(node, why_now)),
             _ => panic!("authorization bypass: focus put reached the repo for {node}"),
@@ -6204,16 +6210,23 @@ async fn an_owner_and_a_viewer_can_each_put_a_project_in_their_focus() {
         assert_eq!(item.node_id, az_node(node));
         assert_eq!(item.why_now.as_deref(), Some("Blocked on me"), "tidied");
     }
-    // No why-line, and a blank one, are both none.
-    for body in [
-        serde_json::json!({}),
-        serde_json::json!({ "why_now": "   " }),
+    // A body without a why-line keeps the one there (a stale page's "add"
+    // must not wipe it); null and a blank one clear it.
+    for (body, kept) in [
+        (serde_json::json!({}), Some("mine")),
+        (serde_json::json!({ "why_now": null }), None),
+        (serde_json::json!({ "why_now": "   " }), None),
     ] {
-        let (status, text) =
-            focus_call(fake_claims(), "PUT", &focus_path(AZ_MY_PROJECT), body).await;
+        let (status, text) = focus_call(
+            fake_claims(),
+            "PUT",
+            &focus_path(AZ_MY_PROJECT),
+            body.clone(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let item: common::project_focus::FocusItem = serde_json::from_str(&text).expect("item");
-        assert_eq!(item.why_now, None);
+        assert_eq!(item.why_now.as_deref(), kept, "{body}");
     }
 }
 

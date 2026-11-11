@@ -17,7 +17,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::{
-    EmberTroveError, backup::BackupFocus, id::NodeId, node::Node, project_focus::FocusItem,
+    EmberTroveError,
+    backup::BackupFocus,
+    id::NodeId,
+    node::Node,
+    project_focus::{FocusItem, WhyChange},
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -52,14 +56,15 @@ pub trait FocusRepo: Send + Sync {
         sees_all: bool,
         node: NodeId,
     ) -> Result<Option<FocusItem>, EmberTroveError>;
-    /// Put `node` in `subject`'s Focus, last, with this why-line. For one
-    /// already there, replace the why-line and keep its place and its
-    /// `added_at`. The caller has checked the rights and the kind.
+    /// Put `node` in `subject`'s Focus, last. One already there keeps its
+    /// place and its `added_at`. `why` is what happens to the why-line:
+    /// kept as it is, or replaced. The caller has checked the rights and
+    /// the kind.
     async fn put(
         &self,
         subject: &str,
         node: NodeId,
-        why_now: Option<&str>,
+        why: &WhyChange,
     ) -> Result<FocusItem, EmberTroveError>;
     /// Order `subject`'s entries as `nodes` lists them. An id that is not
     /// in their Focus is skipped.
@@ -222,21 +227,29 @@ impl FocusRepo for PgFocusRepo {
         &self,
         subject: &str,
         node: NodeId,
-        why_now: Option<&str>,
+        why: &WhyChange,
     ) -> Result<FocusItem, EmberTroveError> {
+        let (set, why_now) = match why {
+            WhyChange::Keep => (false, None),
+            WhyChange::Set(text) => (true, text.as_deref()),
+        };
         // One statement: the aggregate always yields one row, so a first
         // entry gets position 0 and a later one goes last. Two adds at once
         // may share a position; the read breaks the tie by `added_at`.
+        // On a conflict the row is always updated (to itself when the
+        // why-line is kept), so RETURNING has it either way.
         let row: ItemRow = sqlx::query_as(
             "INSERT INTO project_focus (subject_id, node_id, position, why_now) \
              SELECT $1, $2, COALESCE(MAX(position), -1) + 1, $3 \
              FROM project_focus WHERE subject_id = $1 \
-             ON CONFLICT (subject_id, node_id) DO UPDATE SET why_now = EXCLUDED.why_now \
+             ON CONFLICT (subject_id, node_id) DO UPDATE \
+                 SET why_now = CASE WHEN $4 THEN EXCLUDED.why_now ELSE project_focus.why_now END \
              RETURNING node_id, why_now, added_at",
         )
         .bind(subject)
         .bind(node.0)
         .bind(why_now)
+        .bind(set)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| match &e {

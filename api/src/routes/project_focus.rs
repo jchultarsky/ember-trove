@@ -18,6 +18,8 @@
 //!   with the node, and Focus is not.
 //! - The why-line is user content: never logged.
 
+use std::collections::HashMap;
+
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
@@ -30,7 +32,6 @@ use common::{
     ontology::Capability,
     project_focus::{
         FocusEntry, FocusError, FocusInput, FocusItem, FocusOrder, MAX_ORDER, holds_focus,
-        normalize_why,
     },
 };
 use uuid::Uuid;
@@ -66,13 +67,20 @@ async fn list_focus(
     let focused = state.focus.list(&claims.sub, is_admin(&claims)).await?;
     let (items, nodes): (Vec<FocusItem>, Vec<_>) =
         focused.into_iter().map(|f| (f.item, f.node)).unzip();
-    // One card per node, in the nodes' order: the caller's Focus order.
-    let cards = dashboard_entries(&state, &claims, nodes).await?;
+    // The cards are matched to the entries by node, not by position: the
+    // Focus order is the entries', whatever order the cards come back in.
+    let mut cards: HashMap<NodeId, _> = dashboard_entries(&state, &claims, nodes)
+        .await?
+        .into_iter()
+        .map(|card| (card.node_id, card))
+        .collect();
     Ok(Json(
         items
             .into_iter()
-            .zip(cards)
-            .map(|(focus, project)| FocusEntry { focus, project })
+            .filter_map(|focus| {
+                let project = cards.remove(&focus.node_id)?;
+                Some(FocusEntry { focus, project })
+            })
             .collect(),
     ))
 }
@@ -93,7 +101,8 @@ async fn get_focus(
     ))
 }
 
-/// Put the project in the caller's Focus, or change its why-line.
+/// Put the project in the caller's Focus, or change its why-line. A body
+/// without `why_now` leaves the why-line alone (`FocusInput`).
 async fn put_focus(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -115,11 +124,12 @@ async fn put_focus(
         // The read would leave it out, so adding it would do nothing.
         return Err(ApiError::Validation(FocusError::Archived.to_string()));
     }
-    let why =
-        normalize_why(input.why_now.as_deref()).map_err(|e| ApiError::Validation(e.to_string()))?;
+    let why = input
+        .change()
+        .map_err(|e| ApiError::Validation(e.to_string()))?;
     let item = state
         .focus
-        .put(&claims.sub, node_id, why.as_deref())
+        .put(&claims.sub, node_id, &why)
         .await
         .map_err(or_missing_row(PROJECT))?;
     Ok(Json(item))

@@ -6409,6 +6409,12 @@ async fn the_node_list_sorts_filters_by_type_and_pages_without_gaps(pool: PgPool
 // ── Focus (#282, proposal B) ─────────────────────────────────────────────────
 
 use super::project_focus::{FocusRepo, PgFocusRepo};
+use common::project_focus::WhyChange;
+
+/// Set the why-line to `text`.
+fn why(text: &str) -> WhyChange {
+    WhyChange::Set(Some(text.to_string()))
+}
 
 /// A Project owned by `owner`, with their Owner grant.
 async fn focus_project(pool: &PgPool, owner: &str, title: &str) -> common::id::NodeId {
@@ -6435,7 +6441,7 @@ async fn a_focus_keeps_its_order_and_a_second_put_keeps_its_place(pool: PgPool) 
     let b = focus_project(&pool, "alice", "bravo").await;
     let c = focus_project(&pool, "alice", "charlie").await;
     for node in [a, b, c] {
-        repo.put("alice", node, None).await.unwrap();
+        repo.put("alice", node, &WhyChange::Keep).await.unwrap();
     }
     // A new entry goes last.
     assert_eq!(
@@ -6453,15 +6459,19 @@ async fn a_focus_keeps_its_order_and_a_second_put_keeps_its_place(pool: PgPool) 
     // not the day it entered Focus.
     let before = repo.get("alice", false, a).await.unwrap().expect("entry");
     assert_eq!(before.why_now, None);
-    let after = repo.put("alice", a, Some("Blocked on me")).await.unwrap();
+    let after = repo.put("alice", a, &why("Blocked on me")).await.unwrap();
     assert_eq!(after.why_now.as_deref(), Some("Blocked on me"));
     assert_eq!(after.added_at, before.added_at);
     assert_eq!(
         focus_titles(&repo, "alice", false).await,
         ["charlie", "alpha", "bravo"]
     );
-    let cleared = repo.put("alice", a, None).await.unwrap();
+    // An add from a page that didn't know it was there keeps the why-line.
+    let kept = repo.put("alice", a, &WhyChange::Keep).await.unwrap();
+    assert_eq!(kept, after);
+    let cleared = repo.put("alice", a, &WhyChange::Set(None)).await.unwrap();
     assert_eq!(cleared.why_now, None);
+    assert_eq!(cleared.added_at, before.added_at);
 
     // Removing is quiet when there is nothing to remove.
     repo.remove("alice", a).await.unwrap();
@@ -6471,7 +6481,7 @@ async fn a_focus_keeps_its_order_and_a_second_put_keeps_its_place(pool: PgPool) 
         ["charlie", "bravo"]
     );
     // And what comes back comes back last, as a fresh entry.
-    repo.put("alice", a, None).await.unwrap();
+    repo.put("alice", a, &WhyChange::Keep).await.unwrap();
     assert_eq!(
         focus_titles(&repo, "alice", false).await,
         ["charlie", "bravo", "alpha"]
@@ -6587,11 +6597,11 @@ async fn focus_is_private_and_follows_the_readers_rights(pool: PgPool) {
     let plan = focus_project(&pool, "alice", "alice secret plan").await;
     let other = focus_project(&pool, "alice", "alice other").await;
     share(&pool, plan.0, "bob").await;
-    repo.put("alice", plan, Some("alice's reason"))
+    repo.put("alice", plan, &why("alice's reason"))
         .await
         .unwrap();
-    repo.put("alice", other, None).await.unwrap();
-    repo.put("bob", plan, Some("bob's reason")).await.unwrap();
+    repo.put("alice", other, &WhyChange::Keep).await.unwrap();
+    repo.put("bob", plan, &why("bob's reason")).await.unwrap();
 
     let whys = |entries: Vec<super::project_focus::FocusedProject>| -> Vec<Option<String>> {
         entries.into_iter().map(|f| f.item.why_now).collect()
@@ -6667,8 +6677,8 @@ async fn a_focus_entry_goes_with_its_node_and_the_limits_hold(pool: PgPool) {
     let repo = PgFocusRepo::new(pool.clone());
     let node = focus_project(&pool, "alice", "short lived").await;
     share(&pool, node.0, "bob").await;
-    repo.put("alice", node, None).await.unwrap();
-    repo.put("bob", node, None).await.unwrap();
+    repo.put("alice", node, &WhyChange::Keep).await.unwrap();
+    repo.put("bob", node, &WhyChange::Keep).await.unwrap();
 
     // The CHECK is the backstop behind `normalize_why`.
     for why in ["x".repeat(201), "two\nlines".to_string(), String::new()] {
@@ -6679,12 +6689,12 @@ async fn a_focus_entry_goes_with_its_node_and_the_limits_hold(pool: PgPool) {
         assert!(bad.is_err(), "{why:?}");
     }
     let longest = "é".repeat(200);
-    let ok = repo.put("alice", node, Some(&longest)).await.unwrap();
+    let ok = repo.put("alice", node, &why(&longest)).await.unwrap();
     assert_eq!(ok.why_now.as_deref(), Some(longest.as_str()));
 
     // A node that is gone: not found, and nothing written.
     let gone = common::id::NodeId(uuid::Uuid::new_v4());
-    let err = repo.put("alice", gone, None).await.unwrap_err();
+    let err = repo.put("alice", gone, &WhyChange::Keep).await.unwrap_err();
     assert!(matches!(err, EmberTroveError::NotFound(_)), "{err:?}");
 
     // The node's cascade takes every account's entry for it.
@@ -6700,9 +6710,9 @@ async fn focus_survives_a_backup_round_trip(pool: PgPool) {
     let p = focus_project(&pool, "alice", "kept").await;
     let q = focus_project(&pool, "alice", "also kept").await;
     share(&pool, p.0, "bob").await;
-    repo.put("alice", p, Some("alice on p")).await.unwrap();
-    repo.put("alice", q, None).await.unwrap();
-    repo.put("bob", p, Some("bob on p")).await.unwrap();
+    repo.put("alice", p, &why("alice on p")).await.unwrap();
+    repo.put("alice", q, &WhyChange::Keep).await.unwrap();
+    repo.put("bob", p, &why("bob on p")).await.unwrap();
     repo.reorder("alice", &[q, p]).await.unwrap();
 
     let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
@@ -6714,7 +6724,7 @@ async fn focus_survives_a_backup_round_trip(pool: PgPool) {
 
     // The live Focus moves on, then the archive is restored over it.
     repo.remove("alice", q).await.unwrap();
-    repo.put("bob", p, Some("changed since")).await.unwrap();
+    repo.put("bob", p, &why("changed since")).await.unwrap();
     // A damaged archive: an entry for a project it doesn't hold.
     let mut orphan = archived[0].clone();
     orphan.node_id = common::id::NodeId(uuid::Uuid::new_v4());
@@ -6745,8 +6755,8 @@ async fn an_older_archive_keeps_the_live_focus_of_projects_it_restores(pool: PgP
     data.focus = None; // as a format-7 archive reads
 
     let later = focus_project(&pool, "alice", "made after the archive").await;
-    repo.put("alice", kept, Some("still true")).await.unwrap();
-    repo.put("alice", later, None).await.unwrap();
+    repo.put("alice", kept, &why("still true")).await.unwrap();
+    repo.put("alice", later, &WhyChange::Keep).await.unwrap();
     let live = repo.get("alice", false, kept).await.unwrap().expect("live");
 
     let mut tx = pool.begin().await.unwrap();
