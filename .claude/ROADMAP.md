@@ -14,6 +14,12 @@ Keep it current as part of each change (see `POLICY.md` §10).
   (`STALE_AFTER_DAYS`, 14) as a per-user setting (there is no settings
   page yet), and wiki links inside a Brief (it renders like a note).
   **Focus** (#282, proposal B) is the next piece and has its own PR.
+- **Unreleased: three owner decisions on the audit** (#281). A note or
+  task follows its node's rights (a revoked share ends the author's
+  access to what they wrote there); backups hold no webhook addresses
+  (format 7); only an admin's invite creates an account. See "Security
+  rules from the 2026-11-10 audit" in `.claude/rules/api.md`. No
+  migration. This settles the audit; #281 closes with the release.
 - **v3.16.1 shipped: the audit's last fixes that needed no decision**
   (PR #303). By-id routes answer a foreign id like a missing one
   (`permissions::or_missing`); the node list's link count is of visible

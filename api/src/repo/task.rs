@@ -228,6 +228,14 @@ impl TaskRow {
     }
 }
 
+/// For the owner's task feeds, which `LEFT JOIN nodes n` on the node being
+/// visible to the reader: keep a task with no node, or whose node they see.
+///
+/// SECURITY (owner decision, 2026-11-10): a task on a node its owner can no
+/// longer see (a revoked share) is not in their feeds. #230 hid only the
+/// node's title and kept the task.
+const ON_A_NODE_THEY_SEE: &str = "(t.node_id IS NULL OR n.id IS NOT NULL)";
+
 /// A task's priority as an `ORDER BY` rank: high, medium, low. One
 /// definition for every task list (#281, 3.5; it was written out five
 /// times). `T_` is the same for queries that alias `node_tasks` as `t`.
@@ -595,6 +603,7 @@ impl TaskRepo for PgTaskRepo {
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
               AND t.deleted_at IS NULL
+              AND {on_a_node_they_see}
               AND t.focus_date IS NOT NULL
               AND t.focus_date <= $2
               AND (
@@ -608,6 +617,7 @@ impl TaskRepo for PgTaskRepo {
                 t.created_at
             "#,
             visible = super::visible_to("n", 3),
+            on_a_node_they_see = ON_A_NODE_THEY_SEE,
         ))
         .bind(owner_id)
         .bind(date)
@@ -661,6 +671,7 @@ impl TaskRepo for PgTaskRepo {
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
               AND t.deleted_at IS NULL
+              AND {on_a_node_they_see}
               AND t.due_date >= $2
               AND t.due_date <= $3
             ORDER BY t.due_date,
@@ -668,6 +679,7 @@ impl TaskRepo for PgTaskRepo {
                 t.created_at
             "#,
             visible = super::visible_to("n", 4),
+            on_a_node_they_see = ON_A_NODE_THEY_SEE,
         ))
         .bind(owner_id)
         .bind(from)
@@ -702,6 +714,7 @@ impl TaskRepo for PgTaskRepo {
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
               AND t.deleted_at IS NULL
+              AND {on_a_node_they_see}
               AND t.status::text NOT IN ('done', 'cancelled')
             ORDER BY
                 t.due_date ASC NULLS LAST,
@@ -709,6 +722,7 @@ impl TaskRepo for PgTaskRepo {
                 t.created_at ASC
             "#,
             visible = super::visible_to("n", 2),
+            on_a_node_they_see = ON_A_NODE_THEY_SEE,
         ))
         .bind(owner_id)
         .bind(viewer)
@@ -943,9 +957,12 @@ impl TaskRepo for PgTaskRepo {
             ) AS u
             WHERE node_tasks.id = u.id
               AND node_tasks.deleted_at IS NULL
+              -- The routes' rule (`require_task_editor`): on a node, its
+              -- editors; on none, the task's owner. Owning a task on a
+              -- node is not enough (a revoked share).
               AND (
                 $3::text IS NULL
-                OR node_tasks.owner_id = $3::text
+                OR (node_tasks.node_id IS NULL AND node_tasks.owner_id = $3::text)
                 OR EXISTS (
                     SELECT 1 FROM permissions p
                     WHERE p.node_id = node_tasks.node_id

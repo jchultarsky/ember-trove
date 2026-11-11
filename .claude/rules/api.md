@@ -117,7 +117,7 @@ cargo check && cargo clippy -- -D warnings
   owners.
 - `/inbox/quick` keeps its path and wire format for installed service
   workers; `common::inbox::capture_text` builds the text.
-- Restore accepts formats 3 to 6 (`OLDEST_RESTORABLE`). A format-3 note
+- Restore accepts formats 3 to 7 (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
   rule). Restore also clears the live captures, nodeless tasks and people,
   which the `nodes` cascade never reached.
@@ -199,8 +199,16 @@ cargo check && cargo clippy -- -D warnings
   `common::backup::match_attachment_entries`; never match by file name.
 - **No credential goes into an archive** (owner decision, 2026-11-09): an
   admin can download one. `repo::webhook::list_all_for_backup` never
-  selects `secret`, and `BackupWebhook` has no field for it. A webhook
-  that signed is restored switched off (`BackupWebhook::restored_active`).
+  selects `secret`, and `BackupWebhook` has no field for it.
+  - Nor a webhook's **address** (format 7, owner decision 2026-11-10):
+    many are credentials in themselves. `BackupWebhook.url` is
+    `skip_serializing`; it is only read from a format-5 or -6 archive.
+  - On restore, a webhook whose id **and owner** match a live one keeps
+    the live address and secret
+    (`restored_active_over_live`). Any other comes back switched off
+    with `WEBHOOK_URL_NOT_IN_BACKUP` (`restored_active`).
+  - The restore's webhook errors never carry the driver's message: a
+    failed statement can quote an address.
 - **Project Briefs (#282, format 6)** are `briefs: Vec<ProjectBrief>`,
   read by `repo::brief::list_all_on` inside the snapshot. A plain `Vec`,
   not an `Option`: a Brief hangs on its node, the nodes are replaced by
@@ -269,9 +277,9 @@ cargo check && cargo clippy -- -D warnings
 
 ## Task rules (#281)
 
-- Who may change a task is `require_task_editor` (routes/tasks.rs): its
-  owner, an admin, or an editor of its node. `TaskRepo::reorder` applies
-  the same rule in SQL and skips the rest.
+- Who may change a task is `require_task_editor` (routes/tasks.rs): on a
+  node, an editor of that node; on none, its owner; an admin always.
+  `TaskRepo::reorder` applies the same rule in SQL and skips the rest.
 - A list's admin scope is `subject_scope(&claims)`, never an inline
   `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
   `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
@@ -296,6 +304,22 @@ cargo check && cargo clippy -- -D warnings
   would miss, joins that query and `NodeDeletionPreview::losses`.
 
 ## Security rules from the 2026-11-10 audit
+
+- **A note or task follows its node's rights, not its author's** (owner
+  decision). `require_task_editor`: on a node, an editor of the node; the
+  task's owner passes only for a task on no node. Notes:
+  `repo::note::author_may_write` (author **and** still an editor) for
+  update, `may_remove` (that, or the node's owner, or an admin) for
+  delete and restore; the routes pass a `NoteActor`. The owner's feeds
+  (My Day, calendar, backlog, notes feed) leave out an item whose node
+  the reader can't see (`ON_A_NODE_THEY_SEE`; the notes feed's inner
+  join). Never let `owner_id = caller` alone open something that hangs
+  on a node. Rights read the `permissions` table only: a pg test's node
+  needs its creator's Owner row (`own` in `pg_tests`).
+- **Only an admin's invite creates an account** (owner decision).
+  `invite` answers a non-admin 422 (`NO_ACCOUNT_FOR_ADDRESS`) before
+  anything is asked of Cognito beyond the lookup. Any new route that can
+  reach `UserDirectory::create_user` needs `is_admin`.
 
 - **Every grant path calls `guard_canonical_owner`**: grant, update,
   revoke *and invite*. `PermissionRepo::grant` is an upsert, so any new

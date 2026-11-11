@@ -655,6 +655,11 @@ model's semantics never widen what anyone can see or change.
   shared with; the admin role may manage nodes across owners. **Person and
   Company records are owner-only:** never shared, and the admin role does
   not reach them.
+- **Notes and Tasks follow their node's rights.** Writing one takes edit
+  rights on the node, and so does changing it later: its author changes it
+  only while they may still edit the node. When a share is revoked, what
+  that person wrote stays on the node, leaves their own lists, and is no
+  longer theirs to change. A node's owner may delete any note on it.
 - **Edges need rights on both ends.** Creating an edge requires edit rights
   on the source and at least view rights on the target. `contains` requires
   edit rights on **both** ends, because it claims the child's one home
@@ -717,4 +722,5 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-09 | Archived nodes stay searchable: archiving declutters lists and navigation, and never makes information unfindable | Owner, on the full review (#281) |
 | 2026-11-09 | Deleting a node keeps the hard delete of its Tasks, notes and files, other accounts' included, behind a confirmation that counts them first (not the trash, and not unguarded) | Owner, on the full review (#281) |
 | 2026-11-09 | Written down from the code, no behaviour change: no self-loop for any edge type (§6); memberships are written by the Project's owner only (§7.2, §14) | Full review (#281), findings 2.3 and 2.4 |
+| 2026-11-10 | Revoking a share ends all of that person's access, including to the notes and Tasks they wrote on the node; those stay with the node (§14) | Owner, on the security audit (#281) |
 | 2026-11-09 | Project Brief: headline (optional) + pitch + points, Project-only; a save by the same author within the edit-coalesce window updates it in place, any other save supersedes it into History; Brief first, Focus in a later release | Owner, on #282 |

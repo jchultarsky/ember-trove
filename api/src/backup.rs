@@ -159,19 +159,21 @@ fn folded_links_warnings(data: &BackupData) -> Vec<String> {
     out
 }
 
-/// The restore preview's note on webhooks that come back switched off
+/// The restore preview's note on webhooks that may come back switched off
 /// (`BackupWebhook::restored_active`). A count only.
 fn webhooks_warning(switched_off: usize) -> Option<String> {
     (switched_off > 0).then(|| {
-        let (s, they, are, their) = if switched_off == 1 {
+        let (s, it, is, its) = if switched_off == 1 {
             ("", "it", "is", "its")
         } else {
             ("s", "they", "are", "their")
         };
         format!(
-            "{switched_off} webhook{s} in this backup signed {their} payloads. Signing secrets \
-             are never backed up, so {they} {are} restored switched off until {their} owner \
-             enters a secret again."
+            "{switched_off} active webhook{s} in this backup may be restored switched off. A \
+             backup never holds a webhook's address or signing secret: {it} keep{v} them only \
+             if {it} still exist{v} here. Otherwise {it} {is} off until {its} owner enters \
+             them again.",
+            v = if switched_off == 1 { "s" } else { "" },
         )
     })
 }
@@ -1201,31 +1203,58 @@ async fn restore_account_settings(
     }
 
     if let Some(webhooks) = &data.webhooks {
-        sqlx::query("DELETE FROM webhooks")
-            .execute(&mut *conn)
+        // An archive holds neither a webhook's address nor its secret
+        // (`BackupWebhook`). A webhook that is still here, under the same
+        // id and owner, keeps its own; the rest come back switched off.
+        // SECURITY: these never leave this function, and never reach a log.
+        let live: std::collections::HashMap<Uuid, (String, String, Option<String>)> =
+            sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
+                "DELETE FROM webhooks RETURNING id, owner_id, url, secret",
+            )
+            .fetch_all(&mut *conn)
             .await
-            .map_err(|e| ApiError::Internal(format!("delete webhooks failed: {e}")))?;
+            .map_err(|_| ApiError::Internal("delete webhooks failed".to_string()))?
+            .into_iter()
+            .map(|(id, owner, url, secret)| (id, (owner, url, secret)))
+            .collect();
         for w in webhooks {
-            // No secret: an archive never holds one. A webhook that signed
-            // comes back switched off (`BackupWebhook::restored_active`).
+            let kept = live
+                .get(&w.id.0)
+                .filter(|(owner, ..)| *owner == w.owner_id && w.url.is_none());
+            let (url, secret, active) = match (kept, &w.url) {
+                (Some((_, url, secret)), _) => (
+                    url.as_str(),
+                    secret.as_deref(),
+                    w.restored_active_over_live(secret.is_some()),
+                ),
+                // An older archive's own address; it never held a secret.
+                (None, Some(url)) => (url.as_str(), None, w.restored_active()),
+                (None, None) => (
+                    common::backup::WEBHOOK_URL_NOT_IN_BACKUP,
+                    None,
+                    w.restored_active(),
+                ),
+            };
             sqlx::query(
                 r#"
                 INSERT INTO webhooks
                     (id, owner_id, url, secret, events, is_active, created_at, updated_at)
-                VALUES ($1, $2, $3, NULL, $4, $5, $6, $7)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 "#,
             )
             .bind(w.id.0)
             .bind(&w.owner_id)
-            .bind(&w.url)
+            .bind(url)
+            .bind(secret)
             .bind(&w.events)
-            .bind(w.restored_active())
+            .bind(active)
             .bind(w.created_at)
             .bind(w.updated_at)
             .execute(&mut *conn)
             .await
-            // Never include the row: its URL can carry a token.
-            .map_err(|e| ApiError::Internal(format!("insert webhook failed: {e}")))?;
+            // Never the row or the driver's message: an address can carry
+            // a token, and a failed statement may quote its values.
+            .map_err(|_| ApiError::Internal("insert webhook failed".to_string()))?;
         }
     }
     Ok(())
@@ -1806,15 +1835,17 @@ mod tests {
         assert_eq!(webhooks_warning(0), None);
         let one = webhooks_warning(1).expect("warns");
         assert!(
-            one.starts_with("1 webhook in this backup signed its payloads"),
+            one.starts_with("1 active webhook in this backup may be restored switched off")
+                && one.contains("it keeps them only if it still exists here")
+                && one.contains("it is off until its owner"),
             "{one}"
         );
-        assert!(one.contains("it is restored switched off"), "{one}");
         let two = webhooks_warning(2).expect("warns");
         assert!(
-            two.starts_with("2 webhooks in this backup signed their payloads"),
+            two.starts_with("2 active webhooks in this backup may be restored switched off")
+                && two.contains("they keep them only if they still exist here")
+                && two.contains("they are off until their owner"),
             "{two}"
         );
-        assert!(two.contains("they are restored switched off"), "{two}");
     }
 }

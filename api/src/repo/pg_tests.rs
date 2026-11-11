@@ -816,6 +816,7 @@ async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
     let notes = PgNoteRepo::new(pool.clone());
     let tasks = PgTaskRepo::new(pool.clone());
     let host = create_node(&pool, "owner-a", "Host node").await;
+    own(&pool, host.id, "owner-a").await;
     let note = notes
         .create(
             host.id,
@@ -848,7 +849,10 @@ async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
             assert_eq!(hits.results.len(), 1, "{q} fuzzy={fuzzy} before delete");
         }
     }
-    notes.delete(note.id, "owner-a").await.expect("trash note");
+    notes
+        .delete(note.id, note_actor("owner-a"))
+        .await
+        .expect("trash note");
     tasks.delete(task.id).await.expect("trash task");
     // Regression: trashed notes/tasks still matched (and showed snippets of
     // the deleted body) for the 30-day tombstone window.
@@ -1100,14 +1104,40 @@ async fn feed_titles(
     ]
 }
 
-/// #230: a task on a node whose share was revoked keeps appearing in its
-/// owner's feeds, but no longer carries the node's (live) title.
+/// The creator's Owner grant, which the create route writes with the node
+/// (`PgNodeRepo::create` alone doesn't). Rights checks read grants only.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn own(pool: &PgPool, node: common::id::NodeId, creator: &str) {
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) \
+         VALUES ($1, $2, 'owner', $2)",
+    )
+    .bind(node.0)
+    .bind(creator)
+    .execute(pool)
+    .await
+    .expect("owner grant");
+}
+
+/// A note's actor who is not an admin.
+fn note_actor(subject: &str) -> super::note::NoteActor<'_> {
+    super::note::NoteActor {
+        subject,
+        admin: false,
+    }
+}
+
+/// SECURITY (owner decision, 2026-11-10; #230 hid only the node's title): a
+/// task on a node whose share was revoked leaves its creator's feeds, and
+/// they can't reorder it.
 #[sqlx::test(migrations = "../migrations")]
-async fn task_feeds_hide_the_title_of_a_node_no_longer_shared(pool: PgPool) {
+async fn task_feeds_drop_a_task_on_a_node_no_longer_shared(pool: PgPool) {
     let tasks = PgTaskRepo::new(pool.clone());
     let perms = PgPermissionRepo::new(pool.clone());
     let today = chrono::Utc::now().date_naive();
     let node = create_node(&pool, "alice", "Alice Plan").await;
+    own(&pool, node.id, "alice").await;
     let grant = perms
         .grant(
             node.id,
@@ -1146,12 +1176,45 @@ async fn task_feeds_hide_the_title_of_a_node_no_longer_shared(pool: PgPool) {
         .await
         .expect("rename");
 
-    // The task is still Bob's and still listed, but the title is gone.
+    // The task stays with the node: it is in none of Bob's feeds.
     assert_eq!(
         feed_titles(&tasks, "bob", Some("bob"), today, task.id).await,
-        [Some(None), Some(None), Some(None)],
-        "after revoke, no feed leaks the node's live title"
+        [None, None, None],
+        "after revoke, no feed lists the task"
     );
+    // Nor can he reorder it; the node's owner can.
+    let order = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, i32>("SELECT sort_order FROM node_tasks WHERE id = $1")
+            .bind(task.id.0)
+            .fetch_one(&pool)
+            .await
+            .expect("sort order")
+    };
+    tasks
+        .reorder(&[(task.id, 7)], Some("bob"))
+        .await
+        .expect("reorder");
+    assert_eq!(order(pool.clone()).await, task.sort_order, "bob moved it");
+    tasks
+        .reorder(&[(task.id, 7)], Some("alice"))
+        .await
+        .expect("reorder");
+    assert_eq!(order(pool.clone()).await, 7);
+    // A task of his on no node is still his to reorder.
+    let loose = tasks
+        .create(None, "bob", task_req("bob's own"))
+        .await
+        .expect("create");
+    tasks
+        .reorder(&[(loose.id, 9)], Some("bob"))
+        .await
+        .expect("reorder");
+    let moved: i32 = sqlx::query_scalar("SELECT sort_order FROM node_tasks WHERE id = $1")
+        .bind(loose.id.0)
+        .fetch_one(&pool)
+        .await
+        .expect("sort order");
+    assert_eq!(moved, 9);
     // An admin (viewer = None) sees every node, so the title stays.
     let admin = Some(Some("Renamed Secret".to_string()));
     assert_eq!(
@@ -1178,9 +1241,9 @@ async fn task_feeds_hide_the_title_of_a_node_no_longer_shared(pool: PgPool) {
     );
 }
 
-/// #230, notes feed: the same rule as the task feeds.
+/// Notes feed: the same rule as the task feeds.
 #[sqlx::test(migrations = "../migrations")]
-async fn note_feed_hides_the_title_of_a_node_no_longer_shared(pool: PgPool) {
+async fn note_feed_drops_a_note_on_a_node_no_longer_shared(pool: PgPool) {
     let notes = PgNoteRepo::new(pool.clone());
     let perms = PgPermissionRepo::new(pool.clone());
     let node = create_node(&pool, "alice", "Alice Plan").await;
@@ -1230,13 +1293,149 @@ async fn note_feed_hides_the_title_of_a_node_no_longer_shared(pool: PgPool) {
     assert_eq!(title(Some("bob")).await, Some(Some("Alice Plan".into())));
 
     perms.revoke(grant.id, node.id).await.expect("revoke");
-    assert_eq!(
-        title(Some("bob")).await,
-        Some(None),
-        "no live title after revoke"
-    );
+    assert_eq!(title(Some("bob")).await, None, "not listed after revoke");
     // Admins (owner = None) see every node.
     assert_eq!(title(None).await, Some(Some("Alice Plan".into())));
+}
+
+/// SECURITY (owner decision, 2026-11-10): a note is its author's to change
+/// only while they can still write on its node. After a revoke it stays
+/// with the node: the author can't edit, delete or restore it, and the
+/// node's owner can delete it. Every refusal is the "not found" a missing
+/// note gets.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_note_follows_its_nodes_rights_not_its_authors(pool: PgPool) {
+    use common::permission::{GrantPermissionRequest, PermissionRole};
+    let notes = PgNoteRepo::new(pool.clone());
+    let perms = PgPermissionRepo::new(pool.clone());
+    let node = create_node(&pool, "alice", "Alice Plan").await;
+    own(&pool, node.id, "alice").await;
+    let grant_bob = |role: PermissionRole| {
+        let perms = &perms;
+        async move {
+            perms
+                .grant(
+                    node.id,
+                    "alice",
+                    GrantPermissionRequest {
+                        subject_id: "bob".to_string(),
+                        role,
+                    },
+                )
+                .await
+                .expect("share")
+        }
+    };
+    let edit = |body: &str| common::note::UpdateNoteRequest {
+        body: body.to_string(),
+        color: "default".to_string(),
+    };
+    let body_of = |id: common::id::NoteId| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, bool)>(
+                "SELECT body, deleted_at IS NOT NULL FROM node_notes WHERE id = $1",
+            )
+            .bind(id.0)
+            .fetch_one(&pool)
+            .await
+            .expect("note row")
+        }
+    };
+    let not_found = |r: Result<(), EmberTroveError>| matches!(r, Err(EmberTroveError::NotFound(_)));
+
+    grant_bob(PermissionRole::Editor).await;
+    let note = notes
+        .create(
+            node.id,
+            "bob",
+            common::note::CreateNoteRequest {
+                body: "bob's note".to_string(),
+                color: "default".to_string(),
+            },
+        )
+        .await
+        .expect("note");
+
+    // While he is an editor, it is his to change. Nobody else's, the
+    // node's owner included: she may delete it, not put words in it.
+    notes
+        .update(note.id, note_actor("bob"), edit("bob, edited"))
+        .await
+        .expect("author edits");
+    assert!(not_found(
+        notes
+            .update(note.id, note_actor("alice"), edit("alice's words"))
+            .await
+            .map(|_| ())
+    ));
+    assert!(not_found(
+        notes.delete(note.id, note_actor("mallory")).await
+    ));
+
+    // Demoted to viewer: reading is all that is left.
+    let grant = grant_bob(PermissionRole::Viewer).await;
+    assert!(not_found(
+        notes
+            .update(note.id, note_actor("bob"), edit("as a viewer"))
+            .await
+            .map(|_| ())
+    ));
+    assert!(not_found(notes.delete(note.id, note_actor("bob")).await));
+
+    // Revoked: nothing.
+    perms.revoke(grant.id, node.id).await.expect("revoke");
+    assert!(not_found(
+        notes
+            .update(note.id, note_actor("bob"), edit("after the revoke"))
+            .await
+            .map(|_| ())
+    ));
+    assert!(not_found(notes.delete(note.id, note_actor("bob")).await));
+    assert_eq!(body_of(note.id).await, ("bob, edited".to_string(), false));
+
+    // The node's owner removes it, and can bring it back; he can't.
+    notes
+        .delete(note.id, note_actor("alice"))
+        .await
+        .expect("the node's owner deletes");
+    assert!(not_found(
+        notes.restore(note.id, note_actor("bob")).await.map(|_| ())
+    ));
+    assert!(body_of(note.id).await.1, "still deleted");
+    notes
+        .restore(note.id, note_actor("alice"))
+        .await
+        .expect("the node's owner restores");
+
+    // An admin needs no grant: their own note stays theirs to edit, and
+    // they may delete anyone's.
+    let admin = super::note::NoteActor {
+        subject: "root",
+        admin: true,
+    };
+    let theirs = notes
+        .create(
+            node.id,
+            "root",
+            common::note::CreateNoteRequest {
+                body: "admin's note".to_string(),
+                color: "default".to_string(),
+            },
+        )
+        .await
+        .expect("note");
+    notes
+        .update(theirs.id, admin, edit("admin, edited"))
+        .await
+        .expect("admin edits their own");
+    assert!(not_found(
+        notes
+            .update(note.id, admin, edit("admin's words in bob's note"))
+            .await
+            .map(|_| ())
+    ));
+    notes.delete(note.id, admin).await.expect("admin deletes");
 }
 
 // ── Editor prefs: per-field upsert + note collapse ────────────────────────────
@@ -5414,19 +5613,29 @@ async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool
     let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
     drop(tx);
 
-    // SECURITY: a signing secret never reaches an archive.
+    // SECURITY: neither a signing secret nor a webhook's address reaches
+    // an archive (an address can be a credential; owner decision,
+    // 2026-11-10).
     let json = serde_json::to_string(&data).expect("serialises");
     assert!(
         !json.contains("the-signing-secret"),
         "no secret in data.json"
     );
-    assert_eq!(data.webhooks_switched_off(), 1);
+    assert!(!json.contains("example.com"), "no address in data.json");
+    assert_eq!(data.webhooks_switched_off(), 2);
 
-    // The live database moves on, then the archive is restored.
+    // The live database moves on, then the archive is restored. The signed
+    // webhook is deleted; the unsigned one stays, and its address changes.
+    sqlx::query("DELETE FROM webhooks WHERE id = $1")
+        .bind(signed)
+        .execute(&pool)
+        .await
+        .expect("delete the signed webhook");
     for sql in [
         "DELETE FROM node_templates",
         "DELETE FROM editor_prefs",
-        "DELETE FROM webhooks",
+        "UPDATE webhooks SET url = 'https://example.com/moved', secret = 'added-later',
+                             is_active = FALSE",
         "UPDATE node_tasks SET recurrence_parent_id = NULL",
         "INSERT INTO search_presets (owner_id, name) VALUES ('alice', 'Made after the backup')",
     ] {
@@ -5475,13 +5684,11 @@ async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool
         "the occurrence knows its parent again"
     );
 
-    // A webhook that signed comes back without its secret and switched off;
-    // one that never signed comes back as it was.
     let hook = |id: uuid::Uuid| {
         let pool = pool.clone();
         async move {
-            sqlx::query_as::<_, (String, Option<String>, bool)>(
-                "SELECT owner_id, secret, is_active FROM webhooks WHERE id = $1",
+            sqlx::query_as::<_, (String, String, Option<String>, bool)>(
+                "SELECT owner_id, url, secret, is_active FROM webhooks WHERE id = $1",
             )
             .bind(id)
             .fetch_one(&pool)
@@ -5489,8 +5696,65 @@ async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool
             .expect("webhook")
         }
     };
-    assert_eq!(hook(signed).await, ("alice".into(), None, false));
-    assert_eq!(hook(unsigned).await, ("bob".into(), None, true));
+    // A webhook that is gone comes back with no address and no secret,
+    // switched off.
+    assert_eq!(
+        hook(signed).await,
+        (
+            "alice".into(),
+            common::backup::WEBHOOK_URL_NOT_IN_BACKUP.into(),
+            None,
+            false
+        )
+    );
+    // One that is still here keeps its own address and secret, and is as
+    // active as the archive says.
+    assert_eq!(
+        hook(unsigned).await,
+        (
+            "bob".into(),
+            "https://example.com/moved".into(),
+            Some("added-later".into()),
+            true
+        )
+    );
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_never_gives_a_webhook_another_accounts_address(pool: PgPool) {
+    // SECURITY: the live address and secret are kept by id *and* owner. An
+    // archive that names a live webhook's id under another account (a
+    // crafted or mixed-up archive) gets the placeholder, not the address.
+    let host = create_node(&pool, "alice", "settings host").await;
+    let [signed, ..] = seed_account_settings(&pool, host.id.0).await;
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let mut data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    for w in data.webhooks.iter_mut().flatten() {
+        if w.id.0 == signed {
+            w.owner_id = "mallory".into();
+        }
+    }
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+    let row: (String, String, Option<String>, bool) =
+        sqlx::query_as("SELECT owner_id, url, secret, is_active FROM webhooks WHERE id = $1")
+            .bind(signed)
+            .fetch_one(&pool)
+            .await
+            .expect("webhook");
+    assert_eq!(
+        row,
+        (
+            "mallory".into(),
+            common::backup::WEBHOOK_URL_NOT_IN_BACKUP.into(),
+            None,
+            false
+        )
+    );
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -5762,6 +6026,8 @@ async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
     let tasks = PgTaskRepo::new(pool.clone());
     let shared = create_node(&pool, "alice", "reorder shared").await.id;
     let private = create_node(&pool, "alice", "reorder private").await.id;
+    // The creator's Owner grant: owning a task on a node is not enough.
+    own(&pool, private, "alice").await;
     for q in [format!(
         "INSERT INTO permissions (node_id, subject_id, role, granted_by) VALUES
             ('{0}', 'bob', 'editor', 'alice'), ('{0}', 'carol', 'viewer', 'alice')",
