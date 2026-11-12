@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.19.0] - 2026-11-12
+
 ### Added
 - **A node's home is in its page header.** A chip next to the status
   shows the Area (or parent project) the node belongs to, and links to it.

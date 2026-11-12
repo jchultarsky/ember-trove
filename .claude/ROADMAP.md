@@ -5,7 +5,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-12)
 
-- **Unreleased: the home chip and the end of the Status scrape** (owner
+- **v3.19.0 shipped: the home chip and the end of the Status scrape** (PR #310; owner
   requests, 2026-11-12). `node_home::HomeChip` shows a node's home in the
   page header and edits it; it shares one refresh counter with
   Connections' `HomeRow`. `ProjectDashboardEntry.status_section`,
