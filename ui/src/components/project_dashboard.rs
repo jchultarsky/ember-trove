@@ -43,7 +43,6 @@ use crate::components::page_header::PageHeader;
 use crate::components::project_focus::{FocusToggle, IN_FOCUS_ICON, WhyLine};
 use crate::components::task_common::priority_color_hex;
 use crate::components::toast::{ToastLevel, push_toast};
-use crate::markdown::render_markdown_plain;
 
 #[component]
 pub fn ProjectDashboard() -> impl IntoView {
@@ -521,14 +520,10 @@ fn ProjectCard(
     let s_label = status_label(&entry.node_status);
     let s_color = status_color(&entry.node_status);
 
-    // The card shows the Brief, the body's `## Status` section and the
-    // open tasks, each when the project has it (owner decision,
-    // 2026-11-11). The Brief (#282) is to take over from the Status
-    // section; until the bodies are moved over, most projects have a
-    // Status section and no Brief, and some have both, so neither hides
-    // the other.
+    // The Brief (#282) is the project's narrative on the card. The body's
+    // `## Status` section used to be read out here; the Briefs replaced it
+    // and the scrape was retired (owner decision, 2026-11-12).
     let brief = entry.brief.clone();
-    let status_html = entry.status_section.as_deref().map(render_markdown_plain);
     let open_tasks = entry.open_tasks.clone();
     let has_more = entry.has_more_tasks;
     let open_count = counts.open + counts.in_progress;
@@ -761,22 +756,11 @@ fn ProjectCard(
                 </div>
             </div>
 
-            // The detail blocks: Brief, Status, open tasks.
-            {(brief.is_some() || status_html.is_some() || !open_tasks.is_empty()).then(|| {
-                // Three blocks get a third column on a wide screen; two
-                // share the row as before.
-                let blocks = usize::from(brief.is_some())
-                    + usize::from(status_html.is_some())
-                    + usize::from(!open_tasks.is_empty());
-                let grid = if blocks == 3 {
-                    "border-t border-stone-200 dark:border-stone-700/60 px-4 py-3 \
-                     grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"
-                } else {
-                    "border-t border-stone-200 dark:border-stone-700/60 px-4 py-3 \
-                     grid grid-cols-1 md:grid-cols-2 gap-4"
-                };
+            // The detail blocks: the Brief and the open tasks.
+            {(brief.is_some() || !open_tasks.is_empty()).then(|| {
                 view! {
-                    <div class=grid>
+                    <div class="border-t border-stone-200 dark:border-stone-700/60 px-4 py-3
+                        grid grid-cols-1 md:grid-cols-2 gap-4">
                         {brief.map(|brief| view! {
                             <div class="min-w-0" data-testid="card-brief">
                                 <div class="text-xs font-semibold uppercase tracking-wider
@@ -786,22 +770,6 @@ fn ProjectCard(
                                 <crate::components::node_brief::BriefBody brief=brief compact=true />
                             </div>
                         })}
-                        {status_html.map(|html| view! {
-                            <div class="min-w-0" data-testid="card-status">
-                                <div class="text-xs font-semibold uppercase tracking-wider
-                                    text-stone-400 dark:text-stone-500 mb-1.5">
-                                    "Status"
-                                </div>
-                                <div
-                                    class="prose prose-sm dark:prose-invert max-w-none
-                                        text-stone-600 dark:text-stone-300
-                                        [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4
-                                        [&_li]:my-0.5 [&_p]:my-1"
-                                    inner_html=html
-                                />
-                            </div>
-                        })}
-
                         {(!open_tasks.is_empty()).then(|| view! {
                             <div class="min-w-0" data-testid="card-tasks">
                                 <div class="text-xs font-semibold uppercase tracking-wider

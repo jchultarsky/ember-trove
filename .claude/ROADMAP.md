@@ -3,8 +3,15 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-11)
+## Current state (2026-11-12)
 
+- **Unreleased: the home chip and the end of the Status scrape** (owner
+  requests, 2026-11-12). `node_home::HomeChip` shows a node's home in the
+  page header and edits it; it shares one refresh counter with
+  Connections' `HomeRow`. `ProjectDashboardEntry.status_section`,
+  `markdown::extract_section` and the card's Status block are gone: the
+  Brief is the project's narrative. The owner removed the Status section
+  from the project template.
 - **v3.18.1 shipped: the Status sections become Briefs** (PR #309; owner decision
   2026-11-11). `backfill::status_into_brief` runs once at startup:
   a project with a Status section and no Brief gets the section as its
