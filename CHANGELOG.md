@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **A node's home is in its page header.** A chip next to the status
+  shows the Area (or parent project) the node belongs to, and links to it.
+  For a node you can edit, the chip also sets, changes and removes the
+  home; one with no home reads "No area or project". Until now the only
+  place to set a home was inside the collapsed Connections section, and
+  the dashboard groups projects by it.
+
+### Removed
+- **The dashboard no longer reads a Status section out of a project's
+  body.** The Brief replaced it: the Status sections were moved into
+  Briefs in 3.18.1. A card shows the Brief and the open tasks. A body
+  that still has a `## Status` section keeps it, on the project page;
+  the Brief editor still offers to move it.
+  - `GET /api/dashboard/projects` and `GET /api/focus` no longer send
+    `status_section`.
+
 ## [3.18.1] - 2026-11-11
 
 ### Changed

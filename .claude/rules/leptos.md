@@ -104,9 +104,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   chevron header.
 - **The Brief is rendered by `BriefBody`** (`node_brief.rs`, #282) on the
   Project page and on the dashboard card (`compact`). The card shows the
-  Brief, the body's Status section and the open tasks, each when the
-  project has it: the Brief does not hide the Status section (owner
-  decision, 2026-11-11). On the Project page
+  Brief and the open tasks. The dashboard no longer reads a Status
+  section out of the body (retired 2026-11-12): don't bring the scrape
+  back. On the Project page
   it leads, above the body (`SectionShell`'s `lead`; owner decision,
   2026-11-11): don't move it under the body. A new place that
   shows a Brief uses it, so the age and the stale marker are never left
@@ -129,6 +129,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   never adds an entry; a control whose state failed to load offers a
   retry (`FocusRetry`). The age and its tooltip use the reader's own
   calendar (`local_date`, `local_today`), never UTC.
+- **A node's home is shown and edited in two places that share one
+  counter** (2026-11-12): `HomeChip` in the page header and `HomeRow` in
+  Connections (`node_home.rs`). `NodeView` owns the counter
+  (`home_refresh`) and passes it to both, so a change in one shows in the
+  other. A third place that changes a home bumps the same counter.
 - **Page headers & empty states are primitives, not markup.** Top-level views
   use `PageHeader` (`ui/src/components/page_header.rs`) and `EmptyState`
   (`empty_state.rs`) — never a hand-rolled `<h1>` bar or centered-icon block.

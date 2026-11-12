@@ -253,6 +253,68 @@ async function openHome(page: Page, nodeId: string) {
   return page.getByTestId('node-home');
 }
 
+test('the home is in the page header, and the dashboard follows it', async ({ page, request }) => {
+  const stamp = Date.now();
+  const area = await createNode(request, `e2e rules chip area ${stamp}`, { node_type: 'area' });
+  const project = await createNode(request, `e2e rules chip project ${stamp}`, {
+    node_type: 'project',
+  });
+  const reference = await createNode(request, `e2e rules chip ref ${stamp}`, {
+    node_type: 'reference',
+  });
+  try {
+    await page.goto(`/nodes/${project.id}`);
+    const chip = page.getByTestId('home-chip');
+    // No home yet: the chip says so and offers to set one.
+    const none = chip.getByRole('button', { name: 'No area or project. Choose a home' });
+    await expect(none).toBeVisible();
+    await none.click();
+    const popover = page.getByTestId('home-chip-popover');
+    const combo = popover.getByRole('combobox', { name: 'Choose a home (Area or Project)…' });
+    await expect(combo).toBeFocused();
+    await combo.fill(`e2e rules chip area ${stamp}`);
+    await expect(page.getByRole('option', { selected: true })).toContainText(
+      `e2e rules chip area ${stamp}`,
+    );
+    await combo.press('Enter');
+    await expect(page.getByText('Home set')).toBeVisible();
+    await expect(popover).toHaveCount(0);
+    const link = chip.getByRole('link', { name: `e2e rules chip area ${stamp}` });
+    await expect(link).toBeVisible();
+    expect((await homeOf(request, project.id)).home?.node?.id).toBe(area.id);
+
+    // Connections shows the same home: one refresh for both places.
+    await page.getByRole('button', { name: /Connections/ }).click();
+    const row = page.getByTestId('node-home');
+    await expect(row.getByRole('link', { name: `e2e rules chip area ${stamp}` })).toBeVisible();
+
+    // The dashboard files the project under that Area.
+    await page.goto('/dashboard');
+    const group = page
+      .getByTestId('project-groups')
+      .locator('section')
+      .filter({ hasText: `e2e rules chip area ${stamp}` });
+    await expect(group.getByTestId('project-card')).toContainText(
+      `e2e rules chip project ${stamp}`,
+    );
+
+    // The chip is a link to the home, and its menu removes it.
+    await page.goto(`/nodes/${project.id}`);
+    await chip.getByRole('button', { name: 'Change home' }).click();
+    await popover.getByRole('button', { name: 'Remove home' }).click();
+    await expect(page.getByText('Home removed')).toBeVisible();
+    await expect(none).toBeVisible();
+    expect((await homeOf(request, project.id)).home).toBeNull();
+
+    // A Reference is never contained: no chip.
+    await page.goto(`/nodes/${reference.id}`);
+    await expect(page.getByTestId('node-notes')).toBeVisible();
+    await expect(page.getByTestId('home-chip')).toHaveCount(0);
+  } finally {
+    for (const n of [area, project, reference]) await request.delete(`/api/nodes/${n.id}`);
+  }
+});
+
 test('a home is chosen, changed and removed from the child', async ({ page, request }) => {
   const stamp = Date.now();
   const a1 = await createNode(request, `e2e rules home one ${stamp}`, { node_type: 'area' });

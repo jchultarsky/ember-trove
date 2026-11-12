@@ -96,13 +96,13 @@ test('a brief is written, shown with its age, edited and removed', async ({ page
   }
 });
 
-test('a dashboard card shows the Brief, the Status section and the open tasks together', async ({
+test('a dashboard card shows the Brief and the open tasks, and no longer the Status section', async ({
   page,
   request,
 }) => {
   const stamp = Date.now();
-  // Not a bare one-line label under Status: the API would file that as
-  // the project's status (`project_status::split_from_body`).
+  // The dashboard used to read a `## Status` section out of the body. The
+  // Briefs replaced it (2026-11-12): a body that still has one is not shown.
   const body = '# Plan\n\n## Status\n\nWaiting on the **vendor** review.\n\n- Scope sent\n';
   const both = await createNode(request, `e2e card both ${stamp}`, { node_type: 'project', body });
   const statusOnly = await createNode(request, `e2e card status ${stamp}`, {
@@ -124,18 +124,23 @@ test('a dashboard card shows the Brief, the Status section and the open tasks to
     const card = (title: string) =>
       page.getByTestId('project-groups').getByTestId('project-card').filter({ hasText: title });
 
-    // A Brief used to replace the Status section on the card.
     const full = card(`e2e card both ${stamp}`);
     await expect(full.getByTestId('card-brief')).toContainText(`Pilot agreed ${stamp}`);
-    await expect(full.getByTestId('card-status')).toContainText('Waiting on the vendor review.');
-    await expect(full.getByTestId('card-status')).toContainText('Scope sent');
     await expect(full.getByTestId('card-tasks')).toContainText(`e2e card task ${stamp}`);
+    await expect(full).not.toContainText('Waiting on the vendor review.');
 
-    // A project with no Brief and no open task shows its Status section alone.
+    // No Brief and no open task: the card is its title row alone.
     const plain = card(`e2e card status ${stamp}`);
-    await expect(plain.getByTestId('card-status')).toContainText('Waiting on the vendor review.');
+    await expect(plain).toBeVisible();
     await expect(plain.getByTestId('card-brief')).toHaveCount(0);
     await expect(plain.getByTestId('card-tasks')).toHaveCount(0);
+    await expect(plain).not.toContainText('Waiting on the vendor review.');
+
+    // The API no longer sends the section.
+    const entries = await (await request.get('/api/dashboard/projects')).json();
+    const sent = entries.find((e: { node_id: string }) => e.node_id === statusOnly.id);
+    expect(sent).toBeTruthy();
+    expect(sent).not.toHaveProperty('status_section');
   } finally {
     await request.delete(`/api/nodes/${both.id}`);
     await request.delete(`/api/nodes/${statusOnly.id}`);

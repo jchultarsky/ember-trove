@@ -8,7 +8,6 @@ use chrono::NaiveDate;
 use common::{
     auth::AuthClaims,
     id::{NodeId, TaskId},
-    markdown::extract_section,
     node::{NodeListParams, NodeType},
     ontology::Capability,
     task::{
@@ -538,7 +537,6 @@ pub(crate) async fn dashboard_entries(
                 .get(&n.id)
                 .cloned()
                 .unwrap_or_else(|| empty.clone());
-            let status_section = n.body.as_deref().and_then(|b| extract_section(b, "status"));
             let (open_tasks, has_more_tasks) = open_map.get(&n.id).cloned().unwrap_or_default();
             let last_activity_at = activity_map
                 .get(&n.id)
@@ -553,7 +551,6 @@ pub(crate) async fn dashboard_entries(
                 title: n.title,
                 node_status,
                 task_counts,
-                status_section,
                 project_status: n.project_status,
                 open_tasks,
                 has_more_tasks,
