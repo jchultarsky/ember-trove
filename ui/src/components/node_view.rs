@@ -194,6 +194,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // Computed here: the panels' wrapper takes its
                             // children by value.
                             let tasks_allowed = allows(&n.node_type, Capability::Tasks);
+                            // One counter for the node's home and links: the
+                            // header's home chip and Connections both read it.
+                            let home_refresh = RwSignal::new(0u32);
                             let has_brief = allows(&n.node_type, Capability::Brief);
                             let body_class = if has_brief && n.body.as_deref().is_some_and(|b| !b.trim().is_empty()) {
                                 "border-t border-stone-200 dark:border-stone-700 pt-6"
@@ -277,6 +280,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                     editable=is_owner
                                                 />
                                             })}
+                                            // The home (owner request, 2026-11-12): the
+                                            // dashboard groups projects by Area, and the
+                                            // only way to set one was in Connections.
+                                            <crate::components::node_home::HomeChip
+                                                node_id=id
+                                                node_type=n.node_type.clone()
+                                                can_edit=is_owner
+                                                refresh=home_refresh
+                                            />
                                         </div>
                                         {
                                             // Overflow dropdown state — scoped to this rendered
@@ -492,7 +504,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             allowed=allows(&n.node_type, Capability::People) />
                                         // External links panel — grouped with other collapsible sections
                                         <LinksPanel node_id=id is_editor=is_owner />
-                                        <EdgePanel node_id=id node_type=n.node_type.clone() can_edit=is_owner />
+                                        <EdgePanel node_id=id node_type=n.node_type.clone() can_edit=is_owner
+                                            refresh_edges=home_refresh />
                                         <crate::components::local_graph::LocalGraphPanel node_id=id title=n.title.clone() />
                                         <BacklinksPanel node_id=id title=n.title.clone() />
                                         <AttachmentPanel node_id=id />
@@ -531,10 +544,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
 /// Shows edges (incoming + outgoing) for a node, with ability to add/remove.
 /// Its home comes first (#228): `node_home::HomeRow`.
 #[component]
-fn EdgePanel(node_id: NodeId, node_type: NodeType, can_edit: bool) -> impl IntoView {
+fn EdgePanel(
+    node_id: NodeId,
+    node_type: NodeType,
+    can_edit: bool,
+    /// The page's home-and-links refresh counter, shared with the header's
+    /// home chip: a change to the home in either place shows in both.
+    refresh_edges: RwSignal<u32>,
+) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let open = RwSignal::new(false);
-    let refresh_edges = RwSignal::new(0u32);
     let show_add = RwSignal::new(false);
     // The edge target is a committed node, never typed text (#126): the
     // old text field doubled as the UUID slot, so typing a title and

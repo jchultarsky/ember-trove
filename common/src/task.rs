@@ -236,9 +236,6 @@ pub struct ProjectDashboardEntry {
     pub title: String,
     pub node_status: String,
     pub task_counts: TaskCounts,
-    /// The `## Status` section's markdown, if the body still has one: the
-    /// narrative. The status token itself is `project_status` (#143).
-    pub status_section: Option<String>,
     /// The project's status token (#143).
     #[serde(default)]
     pub project_status: Option<String>,
@@ -261,8 +258,9 @@ pub struct ProjectDashboardEntry {
     pub area_id: Option<crate::id::NodeId>,
     #[serde(default)]
     pub area_title: Option<String>,
-    /// The project's current Brief (#282), if it has one. When set, it is
-    /// the narrative and `status_section` is the legacy fallback.
+    /// The project's current Brief (#282), if it has one: the narrative.
+    /// It replaced the `## Status` section the dashboard used to read out
+    /// of the body (retired 2026-11-12).
     #[serde(default)]
     pub brief: Option<crate::brief::ProjectBrief>,
 }

@@ -253,7 +253,7 @@ fn superseded_words(metadata: &serde_json::Value) -> Option<String> {
 
 /// A Brief built from a body's `## Status` section (#282 §6, the one-click
 /// "Move Status section into Brief"). `section` is the section's markdown
-/// without its heading (`markdown::extract_section`). List items become
+/// without its heading. List items become
 /// points and the remaining prose becomes the pitch; the headline is left
 /// for the person to write. Over-long input is cut to the limits rather
 /// than refused, since the person reviews the result before saving.
