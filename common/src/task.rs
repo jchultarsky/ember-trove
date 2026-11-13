@@ -539,15 +539,33 @@ pub fn warn_past_due(
 
 /// What an editor's state picker shows once the task's own state has moved
 /// from `base` to `now` outside the editor (the checkbox, another tab, or
-/// the editor's own save landing). A picker its person hasn't touched
-/// (`picked == base`) follows the task; a choice they made stays theirs.
+/// the editor's own save landing). `sent` is the state the editor's last
+/// Save sent, if it sent one.
+///
+/// The pick stays only while it is a choice still waiting to be saved:
+/// made in the editor, not yet sent, on a task that still has a picker.
+/// Otherwise the picker follows the task:
+/// - untouched (`picked == base`);
+/// - already sent: the task has moved since that Save, whether because it
+///   landed or for another reason, so the pick is history, not intent
+///   (re-sending it un-completed a task ticked after the save);
+/// - the task is now done: a done task has no picker, and a pick must not
+///   outlive the control that shows it.
 ///
 /// The state differs from an editor's other fields in this: it changes
 /// outside the editor, so "what the editor last sent" says nothing about
 /// what the task is now.
 #[must_use]
-pub fn rebased_state(picked: &str, base: &str, now: &str) -> String {
-    if picked == base { now } else { picked }.to_string()
+pub fn rebased_state(picked: &str, base: &str, now: &str, sent: Option<&str>) -> String {
+    let untouched = picked == base;
+    let already_sent = sent == Some(picked);
+    let no_picker = now == TaskStatus::Done.as_str();
+    if untouched || already_sent || no_picker {
+        now
+    } else {
+        picked
+    }
+    .to_string()
 }
 
 /// The state an editor's save sends: the one picked, and only when it
@@ -1022,12 +1040,42 @@ mod tests {
 
     #[test]
     fn an_untouched_picker_follows_the_task_and_a_choice_stays() {
-        // Untouched: the task was ticked done elsewhere; the editor follows.
-        assert_eq!(rebased_state("open", "open", "done"), "done");
-        // A choice made in the editor survives the task moving under it.
-        assert_eq!(rebased_state("waiting", "open", "done"), "waiting");
+        // Untouched: the task was set to waiting elsewhere; the editor follows.
+        assert_eq!(rebased_state("open", "open", "waiting", None), "waiting");
+        // A choice made in the editor and not yet saved survives the task
+        // moving under it.
+        assert_eq!(
+            rebased_state("cancelled", "open", "waiting", None),
+            "cancelled"
+        );
         // The editor's own save landing: the choice is now the task's.
-        assert_eq!(rebased_state("waiting", "open", "waiting"), "waiting");
+        assert_eq!(
+            rebased_state("waiting", "open", "waiting", Some("waiting")),
+            "waiting"
+        );
+    }
+
+    #[test]
+    fn a_pick_already_sent_or_on_a_done_task_does_not_come_back() {
+        // Saved as waiting, then ticked done with the checkbox: the editor
+        // must not hold "waiting" and send it with the next title edit.
+        assert_eq!(
+            rebased_state("waiting", "open", "done", Some("waiting")),
+            "done"
+        );
+        // Saved as waiting, then cancelled elsewhere: same.
+        assert_eq!(
+            rebased_state("waiting", "open", "cancelled", Some("waiting")),
+            "cancelled"
+        );
+        // An unsaved pick, and the task is ticked done in another tab: a
+        // done task has no picker, so the pick goes with it.
+        assert_eq!(rebased_state("waiting", "open", "done", None), "done");
+        // A different pick from the one sent is still a choice.
+        assert_eq!(
+            rebased_state("cancelled", "open", "waiting", Some("waiting")),
+            "cancelled"
+        );
     }
 
     #[test]

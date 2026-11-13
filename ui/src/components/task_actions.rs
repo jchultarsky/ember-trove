@@ -337,6 +337,10 @@ pub struct TaskEditDraft {
     /// is sent when the picker differs from it, so a Save that failed is
     /// sent again on the retry.
     base_status: StoredValue<String>,
+    /// The state the last Save sent, if it sent one. Once the task has
+    /// moved, a pick that was already sent is history, not a choice
+    /// (`common::task::rebased_state`).
+    sent_status: StoredValue<Option<String>>,
     /// Values sent by Save and not yet seen back from the server (a failed
     /// Save leaves them here, so reopening keeps them).
     pending: StoredValue<bool>,
@@ -377,6 +381,7 @@ impl TaskEditDraft {
             status: RwSignal::new(status.clone()),
             saved: StoredValue::new(saved),
             base_status: StoredValue::new(status),
+            sent_status: StoredValue::new(None),
             pending: StoredValue::new(false),
         }
     }
@@ -384,9 +389,10 @@ impl TaskEditDraft {
     /// Take `task`'s state as the list shows it now. A draft outlives list
     /// refetches (`EditSession`), and the task may have been ticked,
     /// unticked or saved meanwhile: a picker its person hasn't touched
-    /// follows the task, a choice they made stays
-    /// (`common::task::rebased_state`). The session calls this whenever it
-    /// hands the draft to an editor.
+    /// follows the task, and so does a pick that was already sent or that
+    /// has no picker left to show it; only a choice still waiting to be
+    /// saved stays (`common::task::rebased_state`). The session calls this
+    /// whenever it hands the draft to an editor.
     pub fn follow(&self, task: &Task) {
         let now = task.status.as_str();
         let Some(base) = self.base_status.try_get_value() else {
@@ -395,13 +401,16 @@ impl TaskEditDraft {
         if base == now {
             return;
         }
+        let sent = self.sent_status.try_get_value().flatten();
         if let Some(picked) = self.status.try_get_untracked() {
-            let next = common::task::rebased_state(&picked, &base, now);
+            let next = common::task::rebased_state(&picked, &base, now, sent.as_deref());
             if next != picked {
                 self.status.try_set(next);
             }
         }
         self.base_status.try_set_value(now.to_string());
+        // What was sent was sent against the old state.
+        self.sent_status.try_set_value(None);
     }
 
     /// Discard edits: every field back to the last saved values, and the
@@ -480,6 +489,7 @@ impl TaskEditDraft {
         self.status.dispose();
         self.saved.dispose();
         self.base_status.dispose();
+        self.sent_status.dispose();
         self.pending.dispose();
     }
 
@@ -502,6 +512,8 @@ impl TaskEditDraft {
         );
         let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3], status)?;
         self.saved.set_value(vals);
+        self.sent_status
+            .set_value(req.status.as_ref().map(|s| s.as_str().to_string()));
         self.pending.set_value(true);
         Some(req)
     }

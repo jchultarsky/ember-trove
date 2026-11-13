@@ -329,6 +329,43 @@ test("the editor's picker follows a task ticked or unticked outside it", async (
   }
 });
 
+test('a state saved in the editor does not come back after the task is ticked', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e states stale ${stamp}`, { node_type: 'project' });
+  try {
+    const task = await addTask(request, project.id, { title: `chase the quote ${stamp}` });
+    await page.goto(`/nodes/${project.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+
+    // Waiting, saved from the editor.
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await row.getByTestId('state-picker').getByRole('radio', { name: 'Waiting' }).click();
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(row.getByTestId('task-state')).toHaveText('Waiting');
+
+    // The quote arrives: done, with the checkbox.
+    await row.locator('button[title="Toggle done"]').click();
+    await page.getByRole('button', { name: /1 completed/ }).click();
+    await expect(row.getByTestId('task-completed')).toBeVisible();
+
+    // A title edit on the done task must send no state. The editor used to
+    // hold on to "waiting" and send it: the task came back un-completed.
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await expect(row.getByTestId('state-picker')).toHaveCount(0);
+    await row.getByTestId('task-editor').locator('textarea').fill(`quote received ${stamp}`);
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(row).toContainText(`quote received ${stamp}`);
+    const stored = (await (await request.get(`/api/nodes/${project.id}/tasks`)).json())[0];
+    expect(stored.status).toBe('done');
+    expect(stored.completed_at).toBeTruthy();
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
 test.describe('at phone width', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
@@ -349,6 +386,12 @@ test.describe('at phone width', () => {
         await expect(picker).toBeVisible();
         const clipped = await picker.evaluate((el) => el.scrollWidth - el.clientWidth);
         expect(clipped, `${id} is ${clipped}px wider than its box`).toBeLessThanOrEqual(0);
+        // On one line: a picker too wide for its box wraps now, it doesn't
+        // clip, so "not clipped" alone would pass with it in two rows.
+        const tops = await picker
+          .getByRole('radio')
+          .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+        expect(new Set(tops).size, `${id} wrapped`).toBe(1);
       }
       // And the page still doesn't scroll sideways with the editor open.
       const over = await page.locator('main').evaluate((el) => el.scrollWidth - el.clientWidth);

@@ -398,8 +398,15 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                 }}
             </div>
 
-            // Actions — right cluster; unified order (context, edit, delete)
-            <div class="flex items-center gap-0.5 flex-shrink-0">
+            // Actions — right cluster; unified order (context, edit, delete).
+            // Hidden at phone width while the row is edited, as in My Day's
+            // row: the editor needs the width, and has its own Save and
+            // Cancel.
+            <div class=move || if editing() {
+                "hidden sm:flex items-center gap-0.5 flex-shrink-0"
+            } else {
+                "flex items-center gap-0.5 flex-shrink-0"
+            }>
                 <MyDayButton
                     active=in_my_day
                     on_toggle=Callback::new(move |()| toggle_my_day(task_id, in_my_day, ctx))
