@@ -470,6 +470,10 @@ cargo check && cargo clippy -- -D warnings
   (`repo::task::asks_for_attention`), and
   `my_day_carries_over_only_what_asks_for_attention` compares the list
   with the rule for every task state, focus day and project state.
+- `done_toggle` takes the project's state as well: completing re-stamps
+  an earlier `focus_date` to today only for a task that was carried into
+  Today (`asks_for_attention`). A waiting task, or one of a parked
+  project, ticked in the Backlog stays where it was.
 - The three feeds (My Day, Backlog, Calendar) read one column list,
   `FEED_COLS`, and carry `project_state` from the **same** join as
   `node_title`: the one that checks the reader may see the node. Never

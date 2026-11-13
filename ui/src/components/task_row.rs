@@ -373,6 +373,7 @@ pub fn KanbanTaskRow(
             task_id,
             status_sig.get_untracked(),
             focus,
+            project_state,
             Some(RowSignals {
                 status: status_sig,
                 busy,

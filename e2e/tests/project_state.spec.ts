@@ -1,4 +1,4 @@
-import { test, expect, createNode, shareNode } from './fixtures';
+import { test, expect, createNode, shareNode, localISO } from './fixtures';
 import type { APIRequestContext } from '@playwright/test';
 
 /**
@@ -295,13 +295,30 @@ test('a project is parked, made active and completed from its page', async ({ pa
   await expect(page.getByTestId('project-state-options')).toHaveCount(0);
   await expect(chip).toBeFocused();
   expect(new URL(page.url()).pathname).toBe(`/nodes/${p.id}`);
-  // And by keyboard alone: open, move to Active, choose it.
+  // And by keyboard alone, as a radio group: one tab stop (the state it
+  // has), the arrows move, and moving does not choose.
   await page.keyboard.press('Enter');
   await expect(option('parked')).toBeFocused();
-  await page.keyboard.press('Shift+Tab');
+  await expect(option('parked')).toHaveAttribute('tabindex', '0');
+  await expect(option('active')).toHaveAttribute('tabindex', '-1');
+  await page.keyboard.press('ArrowDown');
+  await expect(option('complete')).toBeFocused();
+  await page.keyboard.press('End');
+  await expect(option('cancelled')).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await expect(option('active')).toBeFocused();
+  await expect(chip).toHaveAttribute('data-state', 'parked');
   await page.keyboard.press('Enter');
   await expect(chip).toHaveAttribute('data-state', 'active');
+  // The chip keeps the keyboard through the choice.
+  await expect(chip).toBeFocused();
+  // Tabbing away closes the choices: left open, a later Escape would be
+  // the page's, and leave it.
+  await page.keyboard.press('Enter');
+  await expect(option('active')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.getByTestId('project-state-options')).toHaveCount(0);
+  expect(new URL(page.url()).pathname).toBe(`/nodes/${p.id}`);
   await chip.click();
   await option('parked').click();
   await expect(chip).toHaveAttribute('data-state', 'parked');
@@ -332,11 +349,42 @@ test('a project is parked, made active and completed from its page', async ({ pa
   await expect(section.getByText('Complete → Active')).toHaveCount(1);
 });
 
+test("the Project page's task list follows the state chip", async ({ page, request }) => {
+  const stamp = Date.now();
+  const p = await project(request, `${PREFIX}page tasks ${stamp}`);
+  const carried = await addTask(request, p.id, { title: `carried ${stamp}`, focus_date: localISO(-1) });
+  const chosen = await addTask(request, p.id, { title: `chosen ${stamp}`, focus_date: localISO(0) });
+
+  await page.goto(`/nodes/${p.id}`);
+  const mark = (id: string) =>
+    page.locator(`[data-task-id="${id}"]`).getByRole('button', { name: /My Day$/ });
+  // Carried over from yesterday: in My Day while the project is active.
+  await expect(mark(carried.id)).toHaveAccessibleName('Remove from My Day');
+  await expect(mark(chosen.id)).toHaveAccessibleName('Remove from My Day');
+
+  // Parked from the page: the carried task is no longer in My Day, and its
+  // mark says so without a reload. The one chosen for today stays.
+  const tasks = page.waitForResponse(
+    (r) => r.url().includes(`/api/nodes/${p.id}/tasks`) && r.request().method() === 'GET',
+  );
+  await page.getByTestId('project-state-chip').click();
+  await page.getByTestId('project-state-option-parked').click();
+  await tasks;
+  await expect(mark(carried.id)).toHaveAccessibleName('Add to My Day');
+  await expect(mark(chosen.id)).toHaveAccessibleName('Remove from My Day');
+
+  await page.getByTestId('project-state-chip').click();
+  await page.getByTestId('project-state-option-active').click();
+  await expect(mark(carried.id)).toHaveAccessibleName('Remove from My Day');
+});
+
 test('a failed save puts the state chip back and says so', async ({ page, request }) => {
   const p = await project(request, `${PREFIX}failing ${Date.now()}`);
+  expect((await request.put(`/api/focus/${p.id}`, { data: {} })).ok()).toBeTruthy();
   await page.goto(`/nodes/${p.id}`);
   const chip = page.getByTestId('project-state-chip');
   await expect(chip).toHaveAttribute('data-state', 'active');
+  await expect(page.getByTestId('focus-toggle')).toHaveAccessibleName('Remove from Focus');
   await page.route('**/api/nodes/*/project-state', (route) =>
     route.fulfill({ status: 500, json: { error: 'no' } }),
   );
@@ -345,6 +393,8 @@ test('a failed save puts the state chip back and says so', async ({ page, reques
   await expect(page.locator('[role="alert"], [role="status"]').filter({ hasText: /save the state/ })).toBeVisible();
   await expect(chip).toHaveAttribute('data-state', 'active');
   expect(await stateOf(request, p.id)).toBe('active');
+  // And the Focus control is back as it was: still in Focus.
+  await expect(page.getByTestId('focus-toggle')).toHaveAccessibleName('Remove from Focus');
 });
 
 test('a viewer reads the state and has no control to change it', async ({
@@ -362,6 +412,16 @@ test('a viewer reads the state and has no control to change it', async ({
     );
     await expect(page.getByTestId('project-state-chip')).toHaveCount(0);
     await expect(page.getByTestId('focus-toggle')).toHaveCount(0);
+
+    // An editor who is not the owner: the API lets them declare a state
+    // (as it lets them archive the project), and the page offers the
+    // control to the people who can change its status label, the owner.
+    await shareNode(otherRequest, p.id, 'e2e-test-user', 'editor');
+    await page.reload();
+    await expect(page.getByTestId('project-state').getByTestId('project-state-badge')).toBeVisible();
+    await expect(page.getByTestId('project-state-chip')).toHaveCount(0);
+    const byApi = await request.put(`/api/nodes/${p.id}/project-state`, { data: { state: 'active' } });
+    expect(byApi.ok()).toBeTruthy();
   } finally {
     await otherRequest.delete(`/api/nodes/${p.id}`);
   }
@@ -375,10 +435,21 @@ test('the dashboard keeps parked projects in a closed group', async ({ page, req
   await declare(request, set_aside.id, 'parked');
   await declare(request, done.id, 'complete');
 
+  expect((await request.put(`/api/focus/${moving.id}`, { data: {} })).ok()).toBeTruthy();
+
   await page.goto('/dashboard');
   const groups = page.getByTestId('project-groups');
   const parked = page.getByTestId('parked-group');
   const toggle = page.getByTestId('parked-toggle');
+  // A card in the Focus section may be someone else's project: it has no
+  // control that changes the project. The same project's card in its
+  // Area group has.
+  const focused = page
+    .getByTestId('focus-section')
+    .getByTestId('project-card')
+    .filter({ hasText: moving.title });
+  await expect(focused).toBeVisible();
+  await expect(focused.getByTestId('project-state-button')).toHaveCount(0);
   const card = (title: string) => groups.getByTestId('project-card').filter({ hasText: title });
   await expect(card(moving.title)).toBeVisible();
   // Closed until asked for, and a complete project is not here at all.
@@ -443,18 +514,9 @@ test("a parked project's tasks leave Today and Overdue, and stay in the Backlog"
 }) => {
   const stamp = Date.now();
   const p = await project(request, `${PREFIX}my day ${stamp}`);
-  const yesterday = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return d;
-  })();
-  const iso = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const earlier = new Date(yesterday);
-  earlier.setDate(earlier.getDate() - 2);
-  const carried = await addTask(request, p.id, { title: `carried ${stamp}`, focus_date: iso(yesterday) });
-  const late = await addTask(request, p.id, { title: `late ${stamp}`, due_date: iso(earlier) });
-  const chosen = await addTask(request, p.id, { title: `chosen today ${stamp}`, focus_date: iso(new Date()) });
+  const carried = await addTask(request, p.id, { title: `carried ${stamp}`, focus_date: localISO(-1) });
+  const late = await addTask(request, p.id, { title: `late ${stamp}`, due_date: localISO(-3) });
+  const chosen = await addTask(request, p.id, { title: `chosen today ${stamp}`, focus_date: localISO(0) });
 
   await page.goto('/tasks/my-day');
   const today = page.getByTestId('zone-today');
@@ -477,6 +539,21 @@ test("a parked project's tasks leave Today and Overdue, and stay in the Backlog"
     await expect(row.getByTestId('task-project-state')).toHaveText('Project parked');
     await expect(row.getByTestId('carryover-prompt')).toHaveCount(0);
   }
+
+  // Ticked in the Backlog, a parked project's task is done where it was:
+  // it does not land in Today, where it never was.
+  const tick = await addTask(request, p.id, { title: `tick me ${stamp}`, focus_date: localISO(-2) });
+  await page.reload();
+  const saved = page.waitForResponse(
+    (r) => r.url().endsWith(`/api/tasks/${tick.id}`) && r.request().method() === 'PATCH',
+  );
+  await rowIn(backlog, tick.id).locator('button[title="Toggle done"]').click();
+  expect((await saved).ok()).toBeTruthy();
+  await expect(rowIn(today, tick.id)).toHaveCount(0);
+  const ticked = await (await request.get(`/api/nodes/${p.id}/tasks`)).json();
+  const done = ticked.find((x: { id: string }) => x.id === tick.id);
+  expect(done.status).toBe('done');
+  expect(done.focus_date).toBe(localISO(-2));
 
   // Active again: back in the normal flow.
   await declare(request, p.id, 'active');
@@ -519,22 +596,68 @@ test.describe('at phone width', () => {
   test.use({ viewport: { width: 375, height: 800 } });
 
   test('the state choices fit the screen', async ({ page, request }) => {
-    const p = await project(request, `${PREFIX}phone ${Date.now()}`);
-    await declare(request, p.id, 'parked');
-    await page.goto(`/nodes/${p.id}`);
-    const chip = page.getByTestId('project-state-chip');
-    await expect(chip).toContainText(/Parked since/);
-    await chip.click();
-    const options = page.getByTestId('project-state-options');
-    await expect(options).toBeVisible();
-    const box = await options.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(375);
-    // And the page itself doesn't scroll sideways with them open.
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    const stamp = Date.now();
+    // A parked chip is wide and wraps to the start of its own line. An
+    // active one is an icon that sits wherever the title, the icons and
+    // the status label leave it: mid-row, where choices hung from its
+    // left edge ran off the screen.
+    const parkedOne = await project(request, `${PREFIX}phone ${stamp}`);
+    await declare(request, parkedOne.id, 'parked');
+    const activeOne = await project(request, `${PREFIX}phone active ${stamp}`, 'In progress');
+    for (const p of [parkedOne, activeOne]) {
+      await page.goto(`/nodes/${p.id}`);
+      const chip = page.getByTestId('project-state-chip');
+      await expect(chip).toBeVisible();
+      await chip.click();
+      const options = page.getByTestId('project-state-options');
+      await expect(options).toBeVisible();
+      const box = await options.boundingBox();
+      expect(box, p.title).not.toBeNull();
+      expect(box!.x, p.title).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width, p.title).toBeLessThanOrEqual(375);
+      // Just under the chip, not somewhere else on the page.
+      const chipBox = await chip.boundingBox();
+      expect(box!.y, p.title).toBeGreaterThanOrEqual(chipBox!.y + chipBox!.height - 1);
+      expect(box!.y, p.title).toBeLessThan(chipBox!.y + chipBox!.height + 24);
+      // Every choice can be read and pressed.
+      await expect(page.getByTestId('project-state-option-cancelled')).toBeInViewport();
+      // And the page itself doesn't scroll sideways with them open.
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, p.title).toBeLessThanOrEqual(0);
+      await page.keyboard.press('Escape');
+    }
+  });
+
+  test("a parked card's Make active button is inside the card", async ({ page, request }) => {
+    const stamp = Date.now();
+    // A long label and title: the row must wrap, not push the button out
+    // of the card (which clips what overflows it).
+    const p = await project(
+      request,
+      `${PREFIX}phone card with a long enough title ${stamp}`,
+      'Waiting on the customer',
     );
-    expect(overflow).toBeLessThanOrEqual(0);
+    await declare(request, p.id, 'parked');
+    await page.goto('/dashboard');
+    await page.getByTestId('parked-toggle').click();
+    const card = page
+      .getByTestId('parked-group')
+      .getByTestId('project-card')
+      .filter({ hasText: p.title });
+    const button = card.getByRole('button', { name: 'Make active' });
+    await expect(button).toBeVisible();
+    const [outer, inner] = [await card.boundingBox(), await button.boundingBox()];
+    expect(outer && inner).toBeTruthy();
+    expect(inner!.x).toBeGreaterThanOrEqual(outer!.x);
+    expect(inner!.x + inner!.width).toBeLessThanOrEqual(outer!.x + outer!.width + 0.5);
+    // The title still reads: it is not squeezed to a sliver.
+    const title = await card.getByRole('button', { name: p.title }).boundingBox();
+    expect(title!.width).toBeGreaterThan(100);
+    await button.click();
+    await expect(
+      page.getByTestId('project-groups').getByTestId('project-card').filter({ hasText: p.title }),
+    ).toBeVisible();
   });
 });

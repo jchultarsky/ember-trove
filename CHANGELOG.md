@@ -57,12 +57,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   was declared. An older release refuses a format-10 archive rather than
   drop them. Archives of formats 3 to 9 still restore; a project's state
   is then read from its label, as above.
+- **Ticking a task in the Backlog no longer moves it into Today.**
+  Completing a task that was carried over from an earlier day still counts
+  it as done today. A task that was not carried over (a waiting one, or
+  one of a parked project) now stays where it was when ticked; it used to
+  appear in Today as done although it had never been there.
 - Until the cascade is built (S6b, S6c), completing or cancelling a
   project changes the project alone: its tasks and sub-projects stay as
   they are (and go quiet in My Day, as above).
 - A tab left open across this release should be reloaded: the app's
   cached shell is replaced (the task feeds and the dashboard carry new
   fields).
+
+### Fixed
+- **A status change's icon showed as the word "FLAG"** in a project's
+  History and in the dashboard's recent activity. The icon was missing
+  from the app's icon font.
 
 ## [3.20.0] - 2026-11-13
 

@@ -49,6 +49,7 @@ false
 filter_alt_off
 filter_list
 fit_screen
+flag
 group
 help
 help_outline

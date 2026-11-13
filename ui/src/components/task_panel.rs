@@ -34,7 +34,8 @@ pub fn TaskPanel(
     /// The declared state of this node when it is a Project (S6a), from the
     /// page: a parked or closed project keeps its tasks out of My Day's
     /// carry-over, and each row's "in My Day" mark must say the same.
-    project_state: ReadSignal<Option<common::project_state::ProjectState>>,
+    #[prop(into)]
+    project_state: Signal<Option<common::project_state::ProjectState>>,
 ) -> impl IntoView {
     let task_refresh = expect_context::<TaskRefresh>().0;
     // The rows read the state when they are built. A change on the page
@@ -326,6 +327,7 @@ fn TaskRow(
             task_id,
             status_sig.get_untracked(),
             focus_date,
+            project_state,
             Some(RowSignals {
                 status: status_sig,
                 busy,

@@ -57,6 +57,11 @@ pub fn ProjectDashboard() -> impl IntoView {
     // Refresh signal local to the dashboard so pin toggles refetch
     // both project list and the activity recap.
     let dashboard_refresh = RwSignal::new(0u32);
+    // Whether the Parked group is open. It lives here, not in the group:
+    // every refresh rebuilds the groups, and an action on a parked card
+    // must not shut the group it is in (the stored preference alone can't
+    // be relied on: storage may be blocked).
+    let parked_open = RwSignal::new(parked_open_pref());
 
     let entries = LocalResource::new(move || {
         let _ = task_refresh.get();
@@ -243,7 +248,7 @@ pub fn ProjectDashboard() -> impl IntoView {
                                         </section>
                                     }
                                 }).collect_view()}
-                                <ParkedGroup projects=parked refresh=dashboard_refresh />
+                                <ParkedGroup projects=parked refresh=dashboard_refresh open=parked_open />
                             </div>
                         }.into_any()
                     }}
@@ -279,15 +284,22 @@ fn set_parked_open_pref(open: bool) {
 /// card is out of sight but one click away, with a button to make it
 /// active again. Nothing is rendered when no project is parked.
 #[component]
-fn ParkedGroup(projects: Vec<ProjectDashboardEntry>, refresh: RwSignal<u32>) -> impl IntoView {
+fn ParkedGroup(
+    projects: Vec<ProjectDashboardEntry>,
+    refresh: RwSignal<u32>,
+    /// Open or closed: the dashboard's, so it outlives this group's
+    /// rebuild on a refresh.
+    open: RwSignal<bool>,
+) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let open = RwSignal::new(parked_open_pref());
     let count = projects.len();
     let projects = StoredValue::new(projects);
     (count > 0).then(|| {
         view! {
             <section data-testid="parked-group">
-                <header class="mb-2">
+                // The heading holds the button (a disclosure): a heading
+                // inside a button is not valid, and a screen reader loses it.
+                <h2 class="mb-2">
                     <button
                         type="button"
                         class="flex items-center gap-2 cursor-pointer rounded \
@@ -304,15 +316,15 @@ fn ParkedGroup(projects: Vec<ProjectDashboardEntry>, refresh: RwSignal<u32>) -> 
                               style="font-size:14px;" aria-hidden="true">
                             {move || if open.get() { "expand_more" } else { "chevron_right" }}
                         </span>
-                        <h2 class="text-xs font-semibold uppercase tracking-wider \
+                        <span class="text-xs font-semibold uppercase tracking-wider \
                                    text-stone-500 dark:text-stone-400">
                             "Parked"
-                        </h2>
-                        <span class="text-xs text-stone-400 dark:text-stone-500">
+                        </span>
+                        <span class="text-xs font-normal text-stone-400 dark:text-stone-500">
                             {format!("({count})")}
                         </span>
                     </button>
-                </header>
+                </h2>
                 {move || open.get().then(|| view! {
                     <div class="space-y-3">
                         {projects.get_value().into_iter().map(|entry| {
@@ -840,8 +852,12 @@ fn ProjectCard(
         >
             {strip}
             <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3">
-                // Title row — pin button + Focus toggle + icon + title
-                <div class="flex items-center gap-2 min-w-0 sm:flex-1">
+                // Title row — pin button + Focus toggle + icon + title. It
+                // wraps: with the status pill, the state badge and the
+                // Park button a phone-width card would otherwise squeeze
+                // the title to nothing, or push the button out of the
+                // card, which clips what overflows it.
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 sm:flex-1">
                     {(!listed).then(|| view! {
                     <button
                         type="button"
@@ -869,6 +885,7 @@ fn ProjectCard(
                     // A real button: the card was click-only (#281). Its
                     // click bubbles to the card's handler.
                     <button type="button" class="font-medium text-stone-800 dark:text-stone-200 truncate text-left
+                        min-w-[7rem] max-w-full
                         cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-500 rounded
                         group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">
                         {entry.title.clone()}

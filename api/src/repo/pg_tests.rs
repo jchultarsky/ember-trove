@@ -1190,7 +1190,6 @@ async fn my_day_carries_over_only_what_asks_for_attention(pool: PgPool) {
         .find(|t| t.task.id == quiet[1])
         .expect("in the backlog");
     assert_eq!(parked.project_state, Some(ProjectState::Parked));
-    assert_eq!(parked.quiet_project(), Some(ProjectState::Parked));
     assert!(!parked.in_my_day(today));
 
     // The calendar's feed carries the state too (one column list).

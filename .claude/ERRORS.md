@@ -477,3 +477,36 @@ Append new entries as you learn them. Format: **Symptom → Cause → Fix → da
   status icon isn't listed.
 - **Rule:** after adding an icon name anywhere, run the script and commit
   the font, the two `?v=` stamps and `ui/icon-names.txt` together.
+
+## An icon from `common` renders as its name ("FLAG") — 2026-11-13
+
+- **Symptom:** in History and the dashboard's recap, a status change showed
+  the word FLAG where its icon should be. In production too, since the
+  status history shipped.
+- **Cause:** the same subset script scanned `ui/src` only. `flag` is
+  returned by `ActivityAction::icon` in `common`, and the UI prints it into
+  a `material-symbols-outlined` span.
+- **Fix:** the script also reads the `fn *icon*` helpers in `common/src`.
+  `activity_panel::tests::every_action_has_a_glyph_in_the_font` fails when
+  an action's icon isn't in `ui/icon-names.txt`.
+- **Rule:** an icon name that reaches the UI from `common` must come from a
+  function whose name contains `icon`, as in `ui`.
+
+## A read sent on an optimistic state answers for the old one — 2026-11-13
+
+- **Symptom:** on a Project page, making a parked project active again
+  showed "Add to Focus" although the project was still in Focus (S6a).
+- **Cause:** the state chip set the page's state when a choice was made,
+  before the save reached the server, and an `Effect` on that state read
+  the Focus entry at once. The read is one SELECT and beat the save, so the
+  server answered for the parked project (whose entry is hidden). It had
+  been masked by a second read when the save answered; a `Memo` that
+  removed the duplicate fetch removed the mask.
+- **Fix:** the chip reports when a choice has settled (`on_settled`: saved,
+  or failed and rolled back), and the page reads the server then. Reads
+  are numbered and only the latest answer is kept.
+- **Rule:** an optimistic signal may drive what the page *shows*. Anything
+  it must *ask the server* waits for the write to settle.
+- **Also:** a control rebuilt by a reactive closure loses the keyboard on
+  every change. Keep one element and make its attributes and children
+  reactive (the chip's button), so focus survives a choice.

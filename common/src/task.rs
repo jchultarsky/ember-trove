@@ -270,14 +270,6 @@ impl MyDayTask {
     pub fn in_overdue_zone(&self, today: NaiveDate) -> bool {
         self.task.in_overdue_zone(today, self.project_state)
     }
-
-    /// The state of the task's Project when that state keeps the task
-    /// quiet (parked, complete, cancelled): what the Backlog row says
-    /// beside the project's name. `None` for an active project or none.
-    #[must_use]
-    pub fn quiet_project(&self) -> Option<ProjectState> {
-        self.project_state.filter(|s| !s.asks_for_attention())
-    }
 }
 
 /// Where a feed task (`MyDayTask`) lives, for its parent chip (#230).
@@ -506,10 +498,18 @@ impl DoneToggle {
 /// the viewed day, so without the stamp the task would vanish on completion
 /// and never count toward "X / Y done". Computed client-side because "today"
 /// is the viewer's local date, not the server's UTC date.
+///
+/// Only a task that **was** carried over is stamped: one that asked for
+/// attention ([`Task::asks_for_attention`]: open, on a project that is
+/// active, or on none). A waiting task, or one of a parked or closed
+/// project, sat in the Backlog; ticking it there must not drop it into
+/// Today as done, where it never was. `project` is the state of the task's
+/// Project, required for the same reason as in [`Task::in_my_day`].
 pub fn done_toggle(
     current: &TaskStatus,
     focus_date: Option<NaiveDate>,
     today: NaiveDate,
+    project: Option<ProjectState>,
 ) -> DoneToggle {
     let next = current.toggled();
     let mut request = UpdateTaskRequest {
@@ -524,7 +524,8 @@ pub fn done_toggle(
         // The server counts a recurring task's next occurrence from the
         // viewer's day, not from UTC's (#281, 1.9).
         request.today = Some(today);
-        if let Some(earlier) = focus_date.filter(|d| *d < today) {
+        let carried = current.is_actionable() && lets_tasks_ask(project);
+        if let Some(earlier) = focus_date.filter(|d| *d < today && carried) {
             request.focus_date = Some(Some(today));
             revert.focus_date = Some(Some(earlier));
         }
@@ -726,9 +727,9 @@ mod local_today_tests {
 
     #[test]
     fn completing_sends_the_viewers_day_and_reopening_does_not() {
-        let done = done_toggle(&TaskStatus::Open, None, day(9));
+        let done = done_toggle(&TaskStatus::Open, None, day(9), None);
         assert_eq!(done.request.today, Some(day(9)));
-        let reopen = done_toggle(&TaskStatus::Done, None, day(9));
+        let reopen = done_toggle(&TaskStatus::Done, None, day(9), None);
         assert_eq!(reopen.request.today, None);
         assert_eq!(done.revert.today, None);
     }
@@ -936,11 +937,6 @@ mod tests {
                 t.in_overdue_zone(today),
                 t.task.in_overdue_zone(today, project)
             );
-            assert_eq!(
-                t.quiet_project(),
-                project.filter(|s| *s != ProjectState::Active),
-                "{project:?}"
-            );
         }
         // A feed from before S6a has no such field: nothing is held back.
         let old: MyDayTask = serde_json::from_value(serde_json::json!({
@@ -1037,19 +1033,57 @@ mod tests {
 
     #[test]
     fn completing_a_carried_over_task_stamps_today() {
-        let t = done_toggle(&TaskStatus::Open, Some(day(9)), day(12));
+        for project in [None, Some(ProjectState::Active)] {
+            let t = done_toggle(&TaskStatus::Open, Some(day(9)), day(12), project);
+            assert!(t.completes());
+            assert_eq!(t.request.status, Some(TaskStatus::Done));
+            assert_eq!(t.request.focus_date, Some(Some(day(12))), "{project:?}");
+            // Undo restores both the status and the original commitment date.
+            assert_eq!(t.revert.status, Some(TaskStatus::Open));
+            assert_eq!(t.revert.focus_date, Some(Some(day(9))));
+        }
+    }
+
+    #[test]
+    fn completing_a_task_that_was_not_carried_over_stamps_nothing() {
+        // It sat in the Backlog: it must not land in Today as done.
+        // A waiting task focused on an earlier day...
+        let t = done_toggle(&TaskStatus::Waiting, Some(day(9)), day(12), None);
         assert!(t.completes());
-        assert_eq!(t.request.status, Some(TaskStatus::Done));
-        assert_eq!(t.request.focus_date, Some(Some(day(12))));
-        // Undo restores both the status and the original commitment date.
-        assert_eq!(t.revert.status, Some(TaskStatus::Open));
-        assert_eq!(t.revert.focus_date, Some(Some(day(9))));
+        assert_eq!(t.request.focus_date, None);
+        assert_eq!(t.revert.focus_date, None);
+        assert_eq!(t.revert.status, Some(TaskStatus::Waiting));
+        // ...and an open one whose project is parked or closed (S6a).
+        for project in [
+            ProjectState::Parked,
+            ProjectState::Complete,
+            ProjectState::Cancelled,
+        ] {
+            let t = done_toggle(&TaskStatus::Open, Some(day(9)), day(12), Some(project));
+            assert!(t.completes());
+            assert_eq!(t.request.status, Some(TaskStatus::Done));
+            assert_eq!(t.request.focus_date, None, "{project:?}");
+            assert_eq!(t.revert.focus_date, None, "{project:?}");
+        }
+        // The stamp is given exactly when the task was in My Day by
+        // carry-over: one rule, with `Task::in_my_day`.
+        for status in TaskStatus::ALL {
+            for project in projects() {
+                let t = done_toggle(status, Some(day(9)), day(12), project);
+                let task = task_in(status.clone(), Some(day(9)), None);
+                assert_eq!(
+                    t.request.focus_date.is_some(),
+                    t.completes() && task.in_my_day(day(12), project),
+                    "{status:?} on {project:?}"
+                );
+            }
+        }
     }
 
     #[test]
     fn completing_without_carry_over_leaves_focus_alone() {
         for focus in [None, Some(day(12)), Some(day(20))] {
-            let t = done_toggle(&TaskStatus::Waiting, focus, day(12));
+            let t = done_toggle(&TaskStatus::Waiting, focus, day(12), None);
             assert!(t.completes());
             assert_eq!(t.request.focus_date, None, "focus {focus:?}");
             assert_eq!(t.revert.focus_date, None);
@@ -1061,7 +1095,7 @@ mod tests {
     #[test]
     fn reopening_never_touches_focus() {
         for from in [TaskStatus::Done, TaskStatus::Cancelled] {
-            let t = done_toggle(&from, Some(day(9)), day(12));
+            let t = done_toggle(&from, Some(day(9)), day(12), None);
             assert!(!t.completes());
             assert_eq!(t.request.status, Some(TaskStatus::Open));
             assert_eq!(t.request.focus_date, None);

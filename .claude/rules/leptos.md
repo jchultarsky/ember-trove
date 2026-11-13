@@ -121,7 +121,14 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   Project page that depends on the state reads that signal; it never
   keeps its own copy. `project_state::declare` is the one write, shared
   with the dashboard's Park / Make active buttons and Data health's
-  fixes. Active is the unmarked case: `ProjectStateBadge` renders
+  fixes. The chip sets the state when a choice is made, before the server
+  has it, so the page reads the server (the Focus entry) only from the
+  chip's `on_settled`, never from an effect on the state (ERRORS.md,
+  2026-11-13). The chip is one stable `<button>` with reactive
+  attributes: a button rebuilt on each change would drop the keyboard.
+  Its choices are a radio group like `SegmentedRadio` (one tab stop;
+  arrows, Home and End move; Enter chooses), close on Escape and when
+  focus leaves, and span the screen below `sm`. Active is the unmarked case: `ProjectStateBadge` renders
   nothing for it and the chip is its icon alone, so no row says "Active"
   twice (the label often does already).
 - **The dashboard's Area groups hold active projects; parked ones go to
@@ -132,9 +139,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   only.
 - **A My Day row decides with `MyDayTask::in_my_day` /
   `in_overdue_zone`**, never with the task alone: they carry the
-  project's state. `KanbanTaskRow` takes `project_state` and says
-  "Project parked" (`quiet_project_badge_view`) on a row that is in the
-  Backlog because of it.
+  project's state. Both zones filter their own feed with the same rule
+  (the feeds are fetched apart). `KanbanTaskRow` takes `project_state`
+  and says "Project parked" (`quiet_project_badge_view`) on a row whose
+  project is not active. `toggle_done` takes the project's state too:
+  only a task that was carried into Today is stamped "done today".
 - **Focus is the viewer's own** (#282). `FocusToggle` / `FocusMenuItem`
   (`project_focus.rs`) take `state: RwSignal<Option<bool>>` and render
   nothing while it is `None`: a control that guessed "not in Focus" would

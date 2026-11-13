@@ -128,6 +128,12 @@ pub fn ProjectStateChip(
     state: RwSignal<Option<ProjectState>>,
     at: RwSignal<Option<DateTime<Utc>>>,
     editable: bool,
+    /// Run when a choice has settled: the save answered, or it failed and
+    /// the old state is back. `state` changes as soon as a choice is made,
+    /// before the server has it, so anything the page must read again
+    /// from the server (its Focus entry) waits for this.
+    #[prop(optional, into)]
+    on_settled: Option<Callback<()>>,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     let busy = RwSignal::new(false);
@@ -143,14 +149,41 @@ pub fn ProjectStateChip(
         }
     };
     // The choices take the keyboard when they open, on the state the
-    // project has: arrow-free, each is a button, so Tab and Enter work.
-    // Tracking the NodeRef (not a timer) runs this once the panel is in
-    // the page.
+    // project has. Tracking the NodeRef (not a timer) runs this once the
+    // panel is in the page.
     Effect::new(move |_| {
         if let Some(el) = panel.get() {
             focus_in(Some(el.into()), "[aria-checked='true']");
         }
     });
+    // A radio group's own keys (as `SegmentedRadio` has them): one tab
+    // stop, and the arrows, Home and End move between the states. Moving
+    // does not choose: a state is declared with Enter or Space, since
+    // each choice is saved at once.
+    let step = move |ev: leptos::ev::KeyboardEvent| {
+        let count = ProjectState::ALL.len();
+        let at = ev
+            .target()
+            .and_then(|t| {
+                use wasm_bindgen::JsCast;
+                t.dyn_into::<web_sys::Element>().ok()
+            })
+            .and_then(|el| el.get_attribute("data-index"))
+            .and_then(|i| i.parse::<usize>().ok());
+        let Some(at) = at else { return };
+        let next = match ev.key().as_str() {
+            "ArrowDown" | "ArrowRight" => (at + 1) % count,
+            "ArrowUp" | "ArrowLeft" => (at + count - 1) % count,
+            "Home" => 0,
+            "End" => count - 1,
+            _ => return,
+        };
+        ev.prevent_default();
+        focus_in(
+            panel.get_untracked().map(Into::into),
+            &format!("[data-index='{next}']"),
+        );
+    };
     // Close, and hand the keyboard back to the chip: the choices are
     // about to leave the page, and focus must not be lost with them.
     let close = move || {
@@ -162,13 +195,22 @@ pub fn ProjectStateChip(
     };
 
     let choose = move |next: ProjectState| {
-        open.set(false);
+        // Back to the chip: the choices are leaving the page.
+        close();
+        if busy.get_untracked() {
+            return;
+        }
         let (prev, prev_at) = (state.get_untracked(), at.get_untracked());
         // Already declared as this: nothing to say again.
         if prev == Some(next) && prev_at.is_some() {
             return;
         }
         state.set(Some(next));
+        if prev != Some(next) {
+            // The old state's date is not this one's: show none until the
+            // save says when it was declared.
+            at.set(None);
+        }
         busy.set(true);
         declare(
             node_id,
@@ -177,81 +219,129 @@ pub fn ProjectStateChip(
                 state.try_set(node.project_state);
                 at.try_set(node.project_state_at);
                 busy.try_set(false);
+                if let Some(settled) = on_settled {
+                    settled.try_run(());
+                }
             },
             move || {
                 state.try_set(prev);
                 at.try_set(prev_at);
                 busy.try_set(false);
+                if let Some(settled) = on_settled {
+                    settled.try_run(());
+                }
             },
         );
     };
 
+    // Only a Project has the chip, and a Project always has a state.
+    let current = move || state.get().unwrap_or(ProjectState::Active);
+    if !editable {
+        return view! {
+            <div data-testid="project-state">
+                {move || state.get().map(|s| view! { <ProjectStateBadge state=s at=at.get() /> })}
+            </div>
+        }
+        .into_any();
+    }
+    let name = move || format!("State: {}. Change state", state_text(current(), at.get()));
+
     view! {
         // Escape is handled here, on the element that holds both the chip
         // and its choices, so it works wherever the keyboard is in them,
-        // and is stopped: the page's own Escape must not also run.
+        // and is stopped: the page's own Escape must not also run. And
+        // when the keyboard leaves them for something else (Tab), the
+        // choices close: left open, a later Escape would be the page's.
         <div class="relative" data-testid="project-state" node_ref=wrapper
             on:keydown=move |ev: leptos::ev::KeyboardEvent| {
                 if ev.key() == "Escape" && open.get_untracked() {
                     ev.stop_propagation();
                     close();
                 }
-            }>
-            {move || {
-                let current = state.get()?;
-                if !editable {
-                    return Some(view! { <ProjectStateBadge state=current at=at.get() /> }.into_any());
-                }
-                let text = state_text(current, at.get());
-                let name = format!("State: {text}. Change state");
-                // Active is the unmarked case: the icon alone.
-                let words = (current != ProjectState::Active).then(|| text.clone());
-                let shape = if words.is_some() {
-                    format!("{PILL} {} border border-transparent", tone(current))
-                } else {
-                    "inline-flex items-center p-1 rounded-full text-stone-400 \
-                     dark:text-stone-500"
-                        .to_string()
+            }
+            on:focusout=move |ev: leptos::ev::FocusEvent| {
+                use wasm_bindgen::JsCast;
+                // Only when focus went to another element. A click on a
+                // choice gives it no focus in WebKit (no related target),
+                // and closing then would lose the click.
+                let Some(to) = ev
+                    .related_target()
+                    .and_then(|t| t.dyn_into::<web_sys::Node>().ok())
+                else {
+                    return;
                 };
-                Some(view! {
-                    <button
-                        type="button"
-                        class=format!("{shape} cursor-pointer hover:text-stone-700 \
-                                       dark:hover:text-stone-200 disabled:opacity-60")
-                        title=name.clone()
-                        aria-label=name
-                        aria-haspopup="true"
-                        aria-expanded=move || if open.get() { "true" } else { "false" }
-                        data-testid="project-state-chip"
-                        data-state=current.as_str()
-                        disabled=move || busy.get()
-                        on:click=move |_| open.update(|v| *v = !*v)
-                    >
-                        <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
-                            {project_state_icon(current)}
-                        </span>
-                        {words}
-                    </button>
-                }.into_any())
-            }}
+                let inside = wrapper
+                    .get_untracked()
+                    .is_some_and(|w| w.contains(Some(&to)));
+                if !inside {
+                    open.set(false);
+                }
+            }>
+            // One button for the life of the page: its words and icon
+            // change in place, so it keeps the keyboard through a choice.
+            // While a save is in flight it stays focusable and ignores
+            // clicks (a disabled button would drop the focus).
+            <button
+                type="button"
+                class=move || {
+                    // Active is the unmarked case: the icon alone.
+                    let shape = if current() == ProjectState::Active {
+                        "inline-flex items-center p-1 rounded-full text-stone-400 \
+                         dark:text-stone-500"
+                            .to_string()
+                    } else {
+                        format!("{PILL} {} border border-transparent", tone(current()))
+                    };
+                    let waiting = if busy.get() { " opacity-60" } else { "" };
+                    format!(
+                        "{shape} cursor-pointer hover:text-stone-700 \
+                         dark:hover:text-stone-200{waiting}"
+                    )
+                }
+                title=name
+                aria-label=name
+                aria-expanded=move || if open.get() { "true" } else { "false" }
+                aria-disabled=move || if busy.get() { "true" } else { "false" }
+                data-testid="project-state-chip"
+                data-state=move || current().as_str()
+                on:click=move |_| {
+                    if !busy.get_untracked() {
+                        open.update(|v| *v = !*v);
+                    }
+                }
+            >
+                <span class="material-symbols-outlined" style="font-size: 18px;" aria-hidden="true">
+                    {move || project_state_icon(current())}
+                </span>
+                {move || (current() != ProjectState::Active).then(|| state_text(current(), at.get()))}
+            </button>
             {move || open.get().then(|| {
                 let current = state.get_untracked();
                 view! {
                     <div class="fixed inset-0 z-20" on:click=move |_| open.set(false) />
-                    <div class="absolute left-0 top-full mt-1 z-30 w-72 max-w-[calc(100vw-2rem)] \
+                    // Under the chip. At phone width the chip can sit
+                    // anywhere along its row, so the choices span the
+                    // screen instead of starting at the chip's left edge
+                    // (`top-auto` keeps them just below it).
+                    <div class="absolute left-0 top-full mt-1 z-30 w-72 \
+                                max-sm:fixed max-sm:left-4 max-sm:right-4 max-sm:top-auto max-sm:w-auto \
                                 rounded-xl border border-stone-200 dark:border-stone-700 \
                                 bg-white dark:bg-stone-900 shadow-lg p-1"
                         role="radiogroup"
                         aria-label="Project state"
                         data-testid="project-state-options"
-                        node_ref=panel>
-                        {ProjectState::ALL.iter().copied().map(|option| {
+                        node_ref=panel
+                        on:keydown=step>
+                        {ProjectState::ALL.iter().copied().enumerate().map(|(index, option)| {
                             let chosen = current == Some(option);
                             view! {
                                 <button
                                     type="button"
                                     role="radio"
                                     aria-checked=if chosen { "true" } else { "false" }
+                                    // One tab stop: the state it has.
+                                    tabindex=if chosen { "0" } else { "-1" }
+                                    data-index=index
                                     class="w-full flex items-start gap-2 px-2 py-1.5 rounded-lg text-left \
                                            hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
                                     data-testid=format!("project-state-option-{}", option.as_str())
@@ -285,6 +375,7 @@ pub fn ProjectStateChip(
             })}
         </div>
     }
+    .into_any()
 }
 
 #[cfg(test)]

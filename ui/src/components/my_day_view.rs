@@ -102,9 +102,12 @@ pub fn MyDayView() -> impl IntoView {
     Effect::new(move |_| {
         let today_raw = today_tasks.get().and_then(|r| r.ok()).unwrap_or_default();
         let all_raw = all_open.get().and_then(|r| r.ok()).unwrap_or_default();
+        // One rule decides both zones (`MyDayTask::in_my_day`): the two
+        // feeds are fetched apart, and a zone that trusted its own feed
+        // could show a task the other zone shows too, or neither does.
         let today_zone: Vec<MyDayTask> = today_raw
             .into_iter()
-            .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
+            .filter(|t| t.in_my_day(today))
             .collect();
         let backlog_zone: Vec<MyDayTask> = all_raw
             .into_iter()
@@ -201,6 +204,7 @@ pub fn MyDayView() -> impl IntoView {
                     mdt.task.id,
                     mdt.task.status.clone(),
                     mdt.task.focus_date,
+                    mdt.project_state,
                     None,
                     TaskCtx {
                         today,
@@ -361,7 +365,7 @@ pub fn MyDayView() -> impl IntoView {
                             other => other.and_then(Result::ok).unwrap_or_default(),
                         };
                         let scoped: Vec<MyDayTask> = raw.into_iter()
-                            .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
+                            .filter(|t| t.in_my_day(today))
                             .collect();
                         view! {
                             <KanbanZoneRow
