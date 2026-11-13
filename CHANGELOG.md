@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **The shortcut help no longer lists `p` for pinning a node.** That key
+  has done nothing since the node page's pin was removed (2026-04-10); the
+  help and the README went on listing it. The README's shortcut table now
+  matches the app: `/` and Ctrl/Cmd+K open the command palette, `d`
+  duplicates the open node.
+
+### Tooling
+- **Two e2e runs can share one machine.**
+  `E2E_PROJECT=ember-e2e-b E2E_PORT=18003 ./scripts/e2e.sh` brings up a
+  second stack beside one that is already running, instead of rebuilding
+  it under whoever is using it. Only the second stack's UI gets a host
+  port. The defaults, and CI, are unchanged.
+- **CI lints the Postgres tests.** They sit behind the `pg-tests` feature,
+  which the clippy job doesn't build, so an `unwrap` in a fixture went
+  unseen. The repo-tests job now runs clippy with the feature.
+
 ## [3.19.0] - 2026-11-12
 
 ### Added

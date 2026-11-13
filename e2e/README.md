@@ -31,6 +31,15 @@ project (`ember-e2e`), so the dev stack's data is never touched.
 KEEP_STACK=1 ./scripts/e2e.sh   # leave the stack running for iteration
 ```
 
+The stack is one compose project (`ember-e2e`) on port 8003, so two runs on
+one machine would rebuild it under each other. Give a second run its own
+project and port; its database, S3 and API then get no host ports at all
+(`deploy/docker-compose.e2e-ports.yml`):
+
+```bash
+E2E_PROJECT=ember-e2e-b E2E_PORT=18003 ./scripts/e2e.sh
+```
+
 With Node installed you can iterate faster against a running stack:
 
 ```bash
