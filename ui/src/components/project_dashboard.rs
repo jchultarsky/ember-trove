@@ -774,7 +774,9 @@ fn ProjectCard(
                             <div class="min-w-0" data-testid="card-tasks">
                                 <div class="text-xs font-semibold uppercase tracking-wider
                                     text-stone-400 dark:text-stone-500 mb-1.5">
-                                    {format!("Open Tasks ({})", open_count)}
+                                    // "To do", not "Open": the list holds waiting tasks too,
+                                    // and the Open badge above counts only the open ones.
+                                    {format!("To do ({})", open_count)}
                                 </div>
                                 <div class="space-y-1">
                                     {open_tasks.into_iter().map(|t| view! {
@@ -808,7 +810,7 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
     let waiting = matches!(task.status, common::task::TaskStatus::Waiting);
 
     view! {
-        <div class="flex items-center gap-1.5 text-xs py-0.5 group/task">
+        <div class="flex items-center gap-1.5 text-xs py-0.5 group/task" data-testid="task-chip">
             <span
                 class="w-2 h-2 rounded-full flex-shrink-0"
                 style=format!("background-color: {color};")

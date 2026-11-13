@@ -7170,13 +7170,24 @@ async fn a_task_carries_its_completion_date_only_while_done(pool: PgPool) {
         .expect("create");
     assert_eq!(task.completed_at, None);
 
-    let before = Utc::now() - Duration::seconds(5);
+    // The database's clock on both sides: the test host's can differ from
+    // it by more than a moment (a container after the machine slept).
+    let db_now = || async {
+        sqlx::query_scalar::<_, chrono::DateTime<Utc>>("SELECT clock_timestamp()")
+            .fetch_one(&pool)
+            .await
+            .expect("database time")
+    };
+    let before = db_now().await;
     let done = tasks
         .update(task.id, status_req(TaskStatus::Done))
         .await
         .expect("done");
     let at = done.completed_at.expect("a done task has its date");
-    assert!(at > before && at <= Utc::now() + Duration::seconds(5));
+    assert!(
+        before <= at && at <= db_now().await,
+        "stamped at the update"
+    );
 
     // An edit that isn't about the state leaves it alone; so does a second
     // "done" (a double click, an Undo that re-sends it).
