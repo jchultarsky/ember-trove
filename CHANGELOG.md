@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.20.0] - 2026-11-13
+
 ### Added
 - **Task states: Open, Waiting, Done, Cancelled, and a completion date
   (S5a of #204; #314).**
