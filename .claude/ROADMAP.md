@@ -22,7 +22,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   only the master.
   **For S6b (the cascade):** S6a lets a project be complete or cancelled
   with open tasks and active sub-projects under it, and migration 051
-  closed 32 projects that way on production (none had an open task). S6b
+  closes the projects whose label says so (on production, as counted on
+  2026-11-13: 32, none with an open task). S6b
   needs a catch-up: offer the cascade for a project closed before it
   existed. Also open there: "no active child under a closed master"
   (S6c), and whether parking should ever reach sub-projects (owner said

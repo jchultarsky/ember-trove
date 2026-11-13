@@ -733,8 +733,17 @@ pub(crate) async fn restore_into(
                     status = EXCLUDED.status,
                     pinned = EXCLUDED.pinned,
                     project_status = EXCLUDED.project_status,
-                    project_state = EXCLUDED.project_state,
-                    project_state_at = EXCLUDED.project_state_at
+                    -- Only a damaged archive names an id twice. The kind
+                    -- that was stored first stays (it is not in this
+                    -- list), so the state must follow that kind, or the
+                    -- row fails `nodes_project_state_only_on_projects`
+                    -- and the whole restore with it.
+                    project_state = CASE WHEN nodes.node_type = 'project'
+                        THEN COALESCE(EXCLUDED.project_state, nodes.project_state) END,
+                    project_state_at = CASE
+                        WHEN nodes.node_type <> 'project' THEN NULL
+                        WHEN EXCLUDED.project_state IS NULL THEN nodes.project_state_at
+                        ELSE EXCLUDED.project_state_at END
             "#,
         )
         .bind(node.id.0)

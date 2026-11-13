@@ -23,6 +23,12 @@ ALTER TABLE nodes ADD COLUMN project_state_at TIMESTAMPTZ NULL;
 -- Area groups and Today on the day of the deploy. Labels that only
 -- suggest a state are listed in Data health instead.
 --
+-- An installation that has not yet run the 035 backfill (the one that
+-- lifts a label out of a body's "## Status" section; it runs at startup,
+-- after the migrations) has no labels to read here: its projects are all
+-- active, and Data health lists the ones whose lifted label reads as
+-- something else.
+--
 -- `common::project_state::state_from_label` is this statement's twin; a
 -- Postgres test holds the two together. The C collation folds ASCII case
 -- only, as the Rust side does.

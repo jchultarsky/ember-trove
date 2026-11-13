@@ -7533,6 +7533,24 @@ async fn declare(pool: &PgPool, node: common::id::NodeId, state: ProjectState, w
         .set_project_state(node, state, &actor(who))
         .await
         .expect("declare a state")
+        .0
+}
+
+/// Whether declaring `state` wrote the node (the route tells webhooks
+/// only then).
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn declare_wrote(
+    pool: &PgPool,
+    node: common::id::NodeId,
+    state: ProjectState,
+    who: &str,
+) -> bool {
+    PgNodeRepo::new(pool.clone())
+        .set_project_state(node, state, &actor(who))
+        .await
+        .expect("declare a state")
+        .1
 }
 
 // Fixture helper; see `create_node`.
@@ -7837,6 +7855,11 @@ async fn a_declared_state_is_stamped_and_logged_once_per_change(pool: PgPool) {
     assert_eq!(resent.project_state_at, Some(parked_at));
     assert_eq!(resent.updated_at, parked.updated_at);
     declare(&pool, p.id, ProjectState::Complete, "alice").await;
+    // What the route tells webhooks about: a write to the node. A repeat
+    // is none, even a repeated close (which may still clear a Focus entry).
+    assert!(!declare_wrote(&pool, p.id, ProjectState::Complete, "alice").await);
+    assert!(declare_wrote(&pool, p.id, ProjectState::Active, "alice").await);
+    assert!(declare_wrote(&pool, p.id, ProjectState::Complete, "alice").await);
 
     let rows = state_rows(&pool, p.id.0).await;
     let read = |i: usize| {
@@ -7847,7 +7870,7 @@ async fn a_declared_state_is_stamped_and_logged_once_per_change(pool: PgPool) {
             meta["to"].as_str().unwrap_or("?").to_string(),
         )
     };
-    assert_eq!(rows.len(), 2, "one entry per change: {rows:?}");
+    assert_eq!(rows.len(), 4, "one entry per change: {rows:?}");
     assert_eq!(read(0), ("bob", "active".to_string(), "parked".to_string()));
     assert_eq!(
         read(1),
@@ -8206,4 +8229,213 @@ async fn data_health_lists_a_label_that_reads_as_another_state(pool: PgPool) {
             .as_deref(),
         Some("On hold")
     );
+}
+
+/// Two declarations sent at once apply one after the other: the second
+/// reads the state the first left, so History chains (each entry starts
+/// where the one before ended) and the project ends in the state of the
+/// last entry, dated no earlier than the entry before it. Without the row
+/// lock both read "active" and History shows two changes from active.
+#[sqlx::test(migrations = "../migrations")]
+async fn two_declarations_at_once_apply_in_order(pool: PgPool) {
+    for round in 0..10 {
+        let p = a_project(&pool, "alice", &format!("raced {round}"), None).await;
+        let (one, two) = (PgNodeRepo::new(pool.clone()), PgNodeRepo::new(pool.clone()));
+        let (a, b) = (actor("alice"), actor("bob"));
+        let (r1, r2) = tokio::join!(
+            one.set_project_state(p.id, ProjectState::Parked, &a),
+            two.set_project_state(p.id, ProjectState::Complete, &b),
+        );
+        r1.expect("first");
+        r2.expect("second");
+
+        let rows = state_rows(&pool, p.id.0).await;
+        assert_eq!(rows.len(), 2, "round {round}: {rows:?}");
+        let word = |i: usize, key: &str| rows[i].1[key].as_str().unwrap_or("?").to_string();
+        assert_eq!(word(0, "from"), "active", "round {round}");
+        assert_eq!(
+            word(1, "from"),
+            word(0, "to"),
+            "round {round}: the second starts where the first ended"
+        );
+        let last = PgNodeRepo::new(pool.clone()).get(p.id).await.expect("get");
+        assert_eq!(
+            last.project_state.map(|s| s.as_str().to_string()),
+            Some(word(1, "to")),
+            "round {round}: the state is the last entry's"
+        );
+        // The date belongs to the write that landed last: not before the
+        // History entry of the one that landed first.
+        let first_entry: chrono::DateTime<Utc> = sqlx::query_scalar(
+            "SELECT min(created_at) FROM activity_log \
+             WHERE node_id = $1 AND action = 'project_state_changed'",
+        )
+        .bind(p.id.0)
+        .fetch_one(&pool)
+        .await
+        .expect("first entry");
+        assert!(
+            last.project_state_at.expect("declared") >= first_entry,
+            "round {round}"
+        );
+    }
+}
+
+/// An add to Focus and a close of the same project, sent at once by one
+/// person, never leave an entry on the closed project: either the add
+/// lands first and the close removes it, or the close lands first and the
+/// add is refused. Without the lock in `FocusRepo::put` the add could read
+/// the project as active, land after the close, and bring the project
+/// back to Focus when it is re-opened.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_add_to_focus_never_lands_beside_a_close(pool: PgPool) {
+    for round in 0..10 {
+        let p = a_project(&pool, "alice", &format!("add vs close {round}"), None).await;
+        let (focus, nodes) = (
+            PgFocusRepo::new(pool.clone()),
+            PgNodeRepo::new(pool.clone()),
+        );
+        let who = actor("alice");
+        let (added, closed) = tokio::join!(
+            focus.put("alice", p.id, &WhyChange::Keep),
+            nodes.set_project_state(p.id, ProjectState::Complete, &who),
+        );
+        closed.expect("the close always lands");
+        if let Err(e) = &added {
+            assert!(
+                matches!(e, EmberTroveError::Validation(why) if why.contains("closed")),
+                "round {round}: {e:?}"
+            );
+        }
+        let left = scalar(
+            &pool,
+            &format!(
+                "SELECT count(*) FROM project_focus WHERE node_id = '{}'",
+                p.id.0
+            ),
+        )
+        .await;
+        assert_eq!(left, 0, "round {round}: no entry on a closed project");
+    }
+}
+
+/// The repo refuses, with the reason, what may not be in Focus: its check
+/// is the shared rule, on the row as it is when the entry is written.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_focus_repo_refuses_what_the_list_would_hide(pool: PgPool) {
+    let focus = PgFocusRepo::new(pool.clone());
+    let parked = a_project(&pool, "alice", "parked", None).await;
+    declare(&pool, parked.id, ProjectState::Parked, "alice").await;
+    let cancelled = a_project(&pool, "alice", "cancelled", None).await;
+    declare(&pool, cancelled.id, ProjectState::Cancelled, "alice").await;
+    let archived = a_project(&pool, "alice", "archived", None).await;
+    sql(
+        &pool,
+        &format!(
+            "UPDATE nodes SET status = 'archived' WHERE id = '{}'",
+            archived.id.0
+        ),
+    )
+    .await;
+    let article = create_node(&pool, "alice", "an article").await;
+    for (node, reason) in [
+        (parked.id, "a parked project can't be in Focus"),
+        (cancelled.id, "a closed project can't be in Focus"),
+        (archived.id, "an archived project can't be in Focus"),
+        (article.id, "only Projects have a place in Focus"),
+    ] {
+        let refused = focus.put("alice", node, &why("now")).await;
+        assert!(
+            matches!(&refused, Err(EmberTroveError::Validation(why)) if why == reason),
+            "{reason}: {refused:?}"
+        );
+    }
+    let missing = focus
+        .put(
+            "alice",
+            common::id::NodeId(uuid::Uuid::new_v4()),
+            &WhyChange::Keep,
+        )
+        .await;
+    assert!(matches!(missing, Err(EmberTroveError::NotFound(_))));
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM project_focus").await, 0);
+}
+
+/// Past the page cap the Data health rule still counts every project and
+/// lists the first page, as the other rules do.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_label_rule_counts_past_its_page(pool: PgPool) {
+    use common::data_health::{ITEM_CAP, RuleId};
+    let over = i64::try_from(ITEM_CAP).expect("a count") + 7;
+    sqlx::query(
+        "INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status, \
+                            project_status, project_state) \
+         SELECT 'alice', 'project', 'held ' || lpad(i::text, 4, '0'), 'held-' || i, '', '{}', \
+                'draft', CASE WHEN i % 2 = 0 THEN 'On hold' ELSE 'ON HOLD' END, 'active' \
+         FROM generate_series(1, $1) i",
+    )
+    .bind(over)
+    .execute(&pool)
+    .await
+    .expect("many projects");
+    let report = health(&pool, "alice").await;
+    let rule = &report[&RuleId::LabelReadsAsAnotherState];
+    assert_eq!(rule.count, u64::try_from(over).expect("a count"));
+    assert_eq!(rule.items.len(), ITEM_CAP);
+    assert_eq!(rule.items[0].subject.label, "held 0001", "by title");
+    // Each item shows its own label, as written.
+    let reading = rule.items[0].label_reading.clone().expect("a reading");
+    assert_eq!(reading.label, "ON HOLD");
+    assert_eq!(reading.reads_as, ProjectState::Parked);
+}
+
+/// A damaged archive that names one id twice, as two kinds, still
+/// restores: the first kind stays, and the state follows it, so the row
+/// can't fail the "only a Project has a state" CHECK and take the whole
+/// restore down with it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_survives_an_id_named_twice_as_two_kinds(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let project = a_project(&pool, "alice", "a project", None).await;
+    declare(&pool, project.id, ProjectState::Parked, "alice").await;
+    let article = create_node(&pool, "alice", "an article").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    let mut damaged = serde_json::to_value(&data).expect("json");
+    let nodes = damaged["nodes"].as_array_mut().expect("nodes");
+    let find = |nodes: &Vec<serde_json::Value>, id: common::id::NodeId| {
+        nodes
+            .iter()
+            .find(|n| n["id"] == serde_json::json!(id))
+            .cloned()
+            .expect("in the archive")
+    };
+    // The project's id again as an article, and the article's as a
+    // complete project.
+    let mut as_article = find(nodes, project.id);
+    as_article["node_type"] = "article".into();
+    as_article["project_state"] = serde_json::Value::Null;
+    as_article["project_state_at"] = serde_json::Value::Null;
+    let mut as_project = find(nodes, article.id);
+    as_project["node_type"] = "project".into();
+    as_project["project_state"] = "complete".into();
+    nodes.push(as_article);
+    nodes.push(as_project);
+    let damaged: common::backup::BackupData =
+        serde_json::from_value(damaged).expect("a damaged archive");
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &damaged)
+        .await
+        .expect("it restores");
+    tx.commit().await.unwrap();
+    let p = repo.get(project.id).await.expect("restored");
+    assert_eq!(p.node_type, NodeType::Project, "the first kind stays");
+    assert_eq!(p.project_state, Some(ProjectState::Parked));
+    let a = repo.get(article.id).await.expect("restored");
+    assert_eq!(a.node_type, NodeType::Article);
+    assert_eq!(a.project_state, None);
+    assert_eq!(a.project_state_at, None);
 }

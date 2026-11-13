@@ -163,7 +163,7 @@ impl NodeRepo for StubNodeRepo {
         id: NodeId,
         state: ProjectState,
         actor: &crate::repo::activity::ActivityActor,
-    ) -> Result<Node, EmberTroveError> {
+    ) -> Result<(Node, bool), EmberTroveError> {
         // Only a Project the caller may edit reaches the repo: anything
         // else got past authorization or the kind gate.
         match id.0.as_u128() {
@@ -171,13 +171,14 @@ impl NodeRepo for StubNodeRepo {
             _ => panic!("authorization bypass: a state write reached the repo for {id}"),
         }
         assert_eq!(actor.subject_id, "test-sub", "attributed to the caller");
-        Ok(Node {
+        let node = Node {
             id,
             node_type: NodeType::Project,
             project_state: Some(state),
             project_state_at: Some(chrono::Utc::now()),
             ..fake_node("authz-node", "test-sub")
-        })
+        };
+        Ok((node, true))
     }
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
         // Only the node test-sub owns may be deleted; reaching here for any

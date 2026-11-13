@@ -146,12 +146,17 @@ pub trait NodeRepo: Send + Sync {
     /// A node that is not a Project is refused with the §3.2 reason: the
     /// route gates first, and this keeps a stray call from reaching the
     /// database's CHECK as a 500.
+    ///
+    /// Returns the node and whether the node was written. A repeat of a
+    /// state already declared writes nothing (not even when it removes a
+    /// Focus entry, which is not the node's), and the route then tells no
+    /// webhook.
     async fn set_project_state(
         &self,
         id: NodeId,
         state: ProjectState,
         actor: &ActivityActor,
-    ) -> Result<Node, EmberTroveError>;
+    ) -> Result<(Node, bool), EmberTroveError>;
 
     /// The project statuses `owner_id` uses on their own project nodes, for
     /// the status picker's suggestions (#143). Case variants are one entry,
@@ -1054,7 +1059,7 @@ impl NodeRepo for PgNodeRepo {
         id: NodeId,
         state: ProjectState,
         actor: &ActivityActor,
-    ) -> Result<Node, EmberTroveError> {
+    ) -> Result<(Node, bool), EmberTroveError> {
         let db_err =
             |e: sqlx::Error| EmberTroveError::Internal(format!("set project state failed: {e}"));
 
@@ -1081,7 +1086,8 @@ impl NodeRepo for PgNodeRepo {
         }
 
         let changed = old.as_deref() != Some(state.as_str());
-        if changed || declared_at.is_none() {
+        let wrote = changed || declared_at.is_none();
+        if wrote {
             // The state it already has, already declared, writes nothing:
             // `updated_at` is the version an open editor saves against.
             // `clock_timestamp()`, not `now()`: `now()` is the transaction's
@@ -1131,7 +1137,7 @@ impl NodeRepo for PgNodeRepo {
         let mut node = row.into_node()?;
         let mut tag_map = fetch_tags_for_nodes(&self.pool, &[id.0]).await?;
         node.tags = tag_map.remove(&id.0).unwrap_or_default();
-        Ok(node)
+        Ok((node, wrote))
     }
 
     async fn project_status_counts(

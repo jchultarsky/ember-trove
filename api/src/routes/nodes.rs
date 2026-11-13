@@ -126,15 +126,14 @@ async fn declare_project_state(
 ) -> Result<Json<Node>, ApiError> {
     let id = NodeId(id);
     require_editor(state.permissions.as_ref(), &claims, id).await?;
-    let before = state.nodes.get(id).await?;
-    refuse_unless(&before.node_type, Capability::ProjectStatus)?;
-    let node = state
+    require_capability(&state, id, Capability::ProjectStatus).await?;
+    let (node, wrote) = state
         .nodes
         .set_project_state(id, req.state, &ActivityActor::from_claims(&claims))
         .await?;
-    // A repeat of a state already declared writes nothing (the version
-    // stays), so it is not an update to tell anyone about.
-    if node.updated_at != before.updated_at {
+    // A repeat of a state already declared writes nothing, so it is not
+    // an update to tell anyone about.
+    if wrote {
         dispatch(
             state.webhooks.clone(),
             EVENT_NODE_UPDATED,

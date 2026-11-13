@@ -236,7 +236,9 @@ cargo check && cargo clippy -- -D warnings
   the one its **restored** label says when the archive has none (formats
   3 to 9), and never a state on another kind (a hand-edited archive
   can't fail the CHECK). It derives when the field is absent, not by
-  format number.
+  format number. The insert's `ON CONFLICT` branch (an id named twice,
+  only in a damaged archive) keeps the stored kind, so it sets the state
+  against that kind.
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps
@@ -270,7 +272,11 @@ cargo check && cargo clippy -- -D warnings
   writes `project_state_changed` to History when it changed, and on a
   terminal state calls `project_focus::remove_on` for the **caller's
   own** entry. A repeat of a declared state writes nothing: `updated_at`
-  is the version an open editor saves against.
+  is the version an open editor saves against. It returns whether it
+  wrote the node, and the route fires `node.updated` only then. The date
+  is `clock_timestamp()`, as History's is: `now()` is the transaction's
+  start, before the wait for the lock.
+  `two_declarations_at_once_apply_in_order` fails without the lock.
   `no_other_node_write_touches_the_project_state` holds `update` and
   `set_pinned` to that.
 - `project_state_at` is "when a person last declared it". NULL means
@@ -329,6 +335,13 @@ cargo check && cargo clippy -- -D warnings
   (`or_missing(check, false, ..)`: hidden reads as missing, 404), then
   `focus_refusal` (422 with its reason: the kind, archived, parked,
   closed), then the why-line (422).
+- **`FocusRepo::put` checks `focus_refusal` again under `FOR SHARE` on
+  the node's row**, in the transaction that inserts. A state change
+  holds `FOR NO KEY UPDATE`, so an add and a close never interleave:
+  the add lands first and the close removes it, or the close lands first
+  and the add is refused. Without it an add could slip in after a close
+  and bring the project back to Focus on re-opening
+  (`an_add_to_focus_never_lands_beside_a_close`).
   `why_now` is a double option (`FocusInput::change`): absent keeps the
   stored why-line, so an "add" from a stale page never wipes one.
 - `GET`, `DELETE`, the order route and the why-line route never look at

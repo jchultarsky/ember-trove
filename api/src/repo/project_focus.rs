@@ -20,8 +20,9 @@ use common::{
     EmberTroveError,
     backup::BackupFocus,
     id::NodeId,
-    node::Node,
-    project_focus::{FocusItem, WhyChange},
+    node::{Node, NodeStatus, NodeType},
+    project_focus::{FocusItem, WhyChange, focus_refusal},
+    project_state::ProjectState,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -58,8 +59,16 @@ pub trait FocusRepo: Send + Sync {
     ) -> Result<Option<FocusItem>, EmberTroveError>;
     /// Put `node` in `subject`'s Focus, last. One already there keeps its
     /// place and its `added_at`. `why` is what happens to the why-line:
-    /// kept as it is, or replaced. The caller has checked the rights and
-    /// the kind.
+    /// kept as it is, or replaced. The caller has checked the rights.
+    ///
+    /// What may be in Focus (`common::project_focus::focus_refusal`: the
+    /// kind, archived, the state) is checked here again, on the node's
+    /// locked row, and refused as `Validation` with its reason. The lock
+    /// is what keeps an add from landing beside a close: the write that
+    /// closes a project removes its person's entry, and an add that read
+    /// the project as active a moment earlier would otherwise slip in
+    /// after it and bring the project back to Focus when it is re-opened
+    /// (ONTOLOGY §10).
     async fn put(
         &self,
         subject: &str,
@@ -148,7 +157,7 @@ fn db(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
 fn shows() -> String {
     // The states that ask for attention, from the rule itself (the enum's
     // own wire strings, never text from a request).
-    let asking = common::project_state::ProjectState::ALL
+    let asking = ProjectState::ALL
         .iter()
         .filter(|state| state.asks_for_attention())
         .map(|state| format!("'{}'", state.as_str()))
@@ -280,6 +289,33 @@ impl FocusRepo for PgFocusRepo {
             WhyChange::Keep => (false, None),
             WhyChange::Set(text) => (true, text.as_deref()),
         };
+        let mut tx = self.pool.begin().await.map_err(db("put"))?;
+        // FOR SHARE waits for a state change in flight (it holds FOR NO KEY
+        // UPDATE) and then reads the row as that change left it; and a
+        // state change that comes second waits for this insert, which its
+        // own removal then sees.
+        let locked: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT node_type::text, status::text, project_state FROM nodes \
+             WHERE id = $1 FOR SHARE",
+        )
+        .bind(node.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db("put"))?;
+        let Some((kind, status, state)) = locked else {
+            return Err(EmberTroveError::NotFound("project not found".to_string()));
+        };
+        let state = state
+            .as_deref()
+            .map(|s| super::parse_wire(s, "project_state", ProjectState::parse))
+            .transpose()?;
+        if let Some(reason) = focus_refusal(
+            &super::parse_wire(&kind, "node_type", NodeType::parse)?,
+            &super::parse_wire(&status, "node_status", NodeStatus::parse)?,
+            state,
+        ) {
+            return Err(EmberTroveError::Validation(reason.to_string()));
+        }
         // One statement: the aggregate always yields one row, so a first
         // entry gets position 0 and a later one goes last. Two adds at once
         // may share a position; the read breaks the tie by `added_at`.
@@ -297,15 +333,10 @@ impl FocusRepo for PgFocusRepo {
         .bind(node.0)
         .bind(why_now)
         .bind(set)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|e| match &e {
-            // The node went between the route's check and this insert.
-            sqlx::Error::Database(d) if d.is_foreign_key_violation() => {
-                EmberTroveError::NotFound("project not found".to_string())
-            }
-            _ => db("put")(e),
-        })?;
+        .map_err(db("put"))?;
+        tx.commit().await.map_err(db("put"))?;
         Ok(row.into())
     }
 
