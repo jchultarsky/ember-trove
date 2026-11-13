@@ -307,6 +307,11 @@ jobs:
           key: ubuntu-cargo-pgtests-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ubuntu-cargo-pgtests-
 
+      - name: cargo clippy (api, with the pg tests)
+        # The clippy job doesn't build the `pg-tests` feature, so nothing
+        # linted this file: an `unwrap` sat in a fixture until 2026-11-12.
+        run: cargo clippy -p api --all-targets --features pg-tests -- -D warnings
+
       - name: Run repo tests against Postgres
         env:
           DATABASE_URL: postgres://ember_trove:ember_trove_dev@localhost:5432/ember_trove

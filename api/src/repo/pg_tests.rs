@@ -5177,6 +5177,9 @@ impl crate::object_store::ObjectStore for RecordingStore {
     async fn get(&self, _: &str) -> Result<bytes::Bytes, common::EmberTroveError> {
         Ok(bytes::Bytes::new())
     }
+    // Fixture, not a #[test] fn (see `create_node`): a poisoned lock means
+    // another assertion already failed.
+    #[allow(clippy::unwrap_used)]
     async fn delete(&self, key: &str) -> Result<(), common::EmberTroveError> {
         self.0.lock().unwrap().push(key.to_string());
         Ok(())

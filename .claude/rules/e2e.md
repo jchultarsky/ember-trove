@@ -165,6 +165,14 @@ CI job is too slow a feedback loop for selector work.
 
 ## Stack invariants
 
+- **Don't rebuild a stack someone else is using** (2026-11-11). Before
+  `./scripts/e2e.sh`, look at `docker ps`: an `ember-e2e-*` stack that is
+  up may be another session's (its `com.docker.compose.project.working_dir`
+  label says which checkout started it), and `up --build` would swap the
+  app under its run. Run beside it:
+  `E2E_PROJECT=ember-e2e-<name> E2E_PORT=18003 ./scripts/e2e.sh`. Only the
+  UI gets a host port then. CI runs the defaults.
+
 - The api image must be built with `--features e2e-bypass` AND armed with
   `E2E_AUTH_BYPASS=1`; `scripts/e2e.sh` refuses to run if `/api/auth/me`
   doesn't answer without a session. Release images never carry the feature.
