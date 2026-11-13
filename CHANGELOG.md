@@ -42,6 +42,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   matches the app: `/` and Ctrl/Cmd+K open the command palette, `d`
   duplicates the open node.
 
+### Security
+- **Two advisories cleared by patch updates** (`cargo audit` is clean
+  again). Neither could be used against this app as it is built; both are
+  updated all the same.
+  - `ammonia` 4.2.4 → 4.2.5 (RUSTSEC-2026-0533, a mutation XSS through
+    embedded SVG and MathML). It needs a sanitizer that allows a raw-text
+    tag such as `style`, `script` or `iframe`; the two sanitizers here
+    (`ui/src/markdown.rs`) allow none, nor `math` or `svg`.
+  - `quinn-udp` 0.5.14 → 0.5.16 (RUSTSEC-2026-0538, a receive loop that
+    can spin). It is an optional dependency of `reqwest` that is in
+    `Cargo.lock` but not compiled into anything we build.
+
 ### Tooling
 - **Two e2e runs can share one machine.**
   `E2E_PROJECT=ember-e2e-b E2E_PORT=18003 ./scripts/e2e.sh` brings up a
