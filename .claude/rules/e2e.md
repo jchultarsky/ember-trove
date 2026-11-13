@@ -123,6 +123,17 @@ CI job is too slow a feedback loop for selector work.
   node, so deleting a spec's nodes is not enough on a retry: empty both
   identities' Focus before and after each test (`wipeFocus` in
   focus.spec.ts).
+- **My Day's zones have test ids** (2026-11-13, S5a): `zone-today`,
+  `zone-backlog`, and `overdue-section` (which holds `zone-overdue`). A
+  task row is `[data-task-id="<uuid>"]` in every list; its state badge is
+  `task-state`, its completion day `task-completed`. The pickers in the
+  task editor are `priority-picker` and `state-picker`, radio groups:
+  `getByRole('radio', { name: 'Waiting' })`.
+- **A clipped control doesn't scroll the page** (2026-11-13): the state
+  picker's last label was cut off inside its own `overflow-hidden` box at
+  375px, and the phone-width gate (page scroll width) stayed green. To
+  hold a control to its box, compare its own `scrollWidth` and
+  `clientWidth`.
 - **Service workers can't be exercised here** (2026-10-25, #129). The e2e
   origin (`http://host.docker.internal`) isn't a secure context. Mapping
   `localhost` to it (`--host-resolver-rules`) gives a secure context, but
@@ -164,6 +175,14 @@ CI job is too slow a feedback loop for selector work.
 - Use `ControlOrMeta+Enter` for submit chords (portable across macOS/Linux).
 
 ## Stack invariants
+
+- **Don't rebuild a stack someone else is using** (2026-11-11). Before
+  `./scripts/e2e.sh`, look at `docker ps`: an `ember-e2e-*` stack that is
+  up may be another session's (its `com.docker.compose.project.working_dir`
+  label says which checkout started it), and `up --build` would swap the
+  app under its run. Run beside it:
+  `E2E_PROJECT=ember-e2e-<name> E2E_PORT=18003 ./scripts/e2e.sh`. Only the
+  UI gets a host port then. CI runs the defaults.
 
 - The api image must be built with `--features e2e-bypass` AND armed with
   `E2E_AUTH_BYPASS=1`; `scripts/e2e.sh` refuses to run if `/api/auth/me`

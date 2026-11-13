@@ -581,6 +581,7 @@ fn stub_task(id: TaskId) -> Task {
         sort_order: 0,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        completed_at: None,
     }
 }
 

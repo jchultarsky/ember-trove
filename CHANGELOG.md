@@ -6,6 +6,79 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.20.0] - 2026-11-13
+
+### Added
+- **Task states: Open, Waiting, Done, Cancelled, and a completion date
+  (S5a of #204; #314).**
+  - **Waiting** is a new state: the task is on someone or something else.
+    Set it in the task's editor, which now has a state picker: Open,
+    Waiting, Cancelled. Done stays the checkbox. A waiting or cancelled
+    task says so on its row.
+  - **A waiting task doesn't ask for attention it can't use.** In My Day
+    it is not carried over into Today and not listed under Overdue. It
+    stays in the Backlog and on its Project page, with its due date. Set
+    it back to Open and it returns to the normal flow.
+  - **Cancelling a task** is possible in the app for the first time (it
+    was API-only).
+  - A task records **when it was completed**, shown on the Project page
+    as "Done Nov 12". The date is set when the task becomes done and cleared
+    if it is reopened. Tasks completed before this release have no date:
+    it was never recorded, and is not made up.
+  - The dashboard counts open, waiting, done and cancelled tasks, and
+    each project's task list shows what can be acted on first, then what
+    is waiting.
+
+### Changed
+- **"In progress" is gone as a task state**; such tasks are open (owner
+  decision, 2026-10-30). Nothing in the app could set it. Production had
+  none. The API still reads `in_progress` as open, and never writes it.
+- **Backups are format 9**: tasks carry their completion date and may be
+  waiting. An older release refuses a format-9 archive. Archives of
+  formats 3 to 8 still restore.
+- Migrations 049 and 050. They change no task's "last updated" time.
+
+### Documentation
+- **"Parked" is a Project state** (owner decision, 2026-11-12;
+  `docs/ONTOLOGY.md` §4, §4.1, §15). A parked Project is set aside on
+  purpose and should not occupy its person's immediate attention. It sits
+  beside *active*, *complete* and *cancelled* and is not terminal. Nothing
+  in the app changes yet: the state is built with the others, in the
+  ontology programme's slice S6.
+
+### Fixed
+- **The shortcut help no longer lists `p` for pinning a node.** That key
+  has done nothing since the node page's pin was removed (2026-04-10); the
+  help and the README went on listing it. The README's shortcut table now
+  matches the app: `/` and Ctrl/Cmd+K open the command palette, `d`
+  duplicates the open node.
+
+### Security
+- **Two advisories cleared by patch updates** (`cargo audit` is clean
+  again). Neither could be used against this app as it is built; both are
+  updated all the same.
+  - `ammonia` 4.2.4 → 4.2.5 (RUSTSEC-2026-0533, a mutation XSS through
+    embedded SVG and MathML). It needs a sanitizer that allows a raw-text
+    tag such as `style`, `script` or `iframe`; the two sanitizers here
+    (`ui/src/markdown.rs`) allow none, nor `math` or `svg`.
+  - `quinn-udp` 0.5.14 → 0.5.16 (RUSTSEC-2026-0538, a receive loop that
+    can spin). It is an optional dependency of `reqwest` that is in
+    `Cargo.lock` but not compiled into anything we build.
+
+### Tooling
+- **Rust 1.100.** The pinned toolchain moves from 1.97 to 1.100.0
+  (`rust-toolchain.toml`, and `RUST_VERSION` in both Dockerfiles, so CI,
+  the images and local builds use one compiler). No new lints and no code
+  change.
+- **Two e2e runs can share one machine.**
+  `E2E_PROJECT=ember-e2e-b E2E_PORT=18003 ./scripts/e2e.sh` brings up a
+  second stack beside one that is already running, instead of rebuilding
+  it under whoever is using it. Only the second stack's UI gets a host
+  port. The defaults, and CI, are unchanged.
+- **CI lints the Postgres tests.** They sit behind the `pg-tests` feature,
+  which the clippy job doesn't build, so an `unwrap` in a fixture went
+  unseen. The repo-tests job now runs clippy with the feature.
+
 ## [3.19.0] - 2026-11-12
 
 ### Added

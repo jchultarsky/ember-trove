@@ -26,10 +26,10 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed. On a node page each note collapses to its first line (Markdown stripped, so it doubles as a title), with Collapse all / Expand all; collapse state is saved per account.
 - **Node versioning** — body snapshot on every save; version history timeline with one-click restore.
 - **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
-- **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. `p` key toggles pin on the open node.
+- **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. The star on a project's dashboard card pins and unpins it.
 - **Node templates** — create reusable Markdown templates for each node type; "Use" pre-fills the editor body.
 - **Quick capture** — `n` opens a blank sticky note; Ctrl/Cmd+Enter sticks it on the Captures wall (Tasks → Captures), where each capture waits to become exactly one thing: a node, a note on a node, or a task in a Project.
-- **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
+- **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` or Ctrl/Cmd+K command palette · `d` duplicate the open node · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
 - **Multi-user permissions** — nodes are **private by default**. Owners can share a node by email with Viewer / Editor / Owner roles; only an admin's invite creates a new account. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
@@ -473,16 +473,16 @@ details.
 |--------|------|-------------|
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
 | POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
-| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). A bad title is **422** |
+| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
-| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day (default: today in UTC; the UI sends the local date) |
+| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day, plus open tasks carried over from an earlier day; a waiting, done or cancelled task doesn't carry over (default: today in UTC; the UI sends the local date) |
 | GET | `/api/tasks/all` | Every open task of the caller, with its node's title (the My Day backlog) |
 | POST | `/api/tasks` | Create a task from the body: on the Project named by `node_id`, or on none (still allowed; Data health lists such tasks) |
 | GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |
 | PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
 | GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
-| GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status, the current Brief and top open tasks |
+| GET | `/api/dashboard/projects` | The caller's Projects with task counts (open, waiting, done, cancelled), project status, the current Brief and the top tasks still to do (open before waiting) |
 | GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
 
 ### Focus
@@ -713,8 +713,8 @@ Nodes are **private by default** — only the creating user can see a node until
 |-----|--------|
 | `n` | Quick capture (lands on the Captures wall) |
 | `g` | Go to graph view |
-| `/` | Focus search |
-| `p` | Toggle pin on the open node |
+| `/` or Ctrl/Cmd+K | Open the command palette (search and commands) |
+| `d` | Duplicate the open node |
 | `?` | Toggle keyboard shortcuts help overlay |
 | `Esc` | Back to node list / close modal |
 

@@ -38,7 +38,10 @@
 //        /tasks/captures; evicts the shell that still routes to the Inbox.
 //   v13: the graph loads from one GET /api/graph (performance P1) — evicts
 //        cached graph data in the old shapes.
-const CACHE_NAME = "ember-trove-v14";
+//   v15: task states (S5a, #314) — task counts are open / waiting / done /
+//        cancelled and a task may be "waiting"; evicts cached dashboard and
+//        task JSON in the old shape.
+const CACHE_NAME = "ember-trove-v15";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

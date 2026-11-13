@@ -122,7 +122,7 @@ cargo check && cargo clippy -- -D warnings
   owners.
 - `/inbox/quick` keeps its path and wire format for installed service
   workers; `common::inbox::capture_text` builds the text.
-- Restore accepts formats 3 to 7 (`OLDEST_RESTORABLE`). A format-3 note
+- Restore accepts formats 3 to the current one (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
   rule). Restore also clears the live captures, nodeless tasks and people,
   which the `nodes` cascade never reached.
@@ -182,7 +182,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -225,6 +225,11 @@ cargo check && cargo clippy -- -D warnings
   `DELETE FROM nodes` when the archive has none (`None`), and puts back
   those whose project the archive restores. `Some` replaces them. An
   entry whose node isn't restored is skipped.
+- **Task states (S5a, format 9)**: a task carries `completed_at` and may
+  be `waiting`. Older archives still restore: `TaskStatus::Open` reads
+  `"in_progress"` (a serde alias), and a missing `completed_at` stays
+  empty. Restore writes `Task::restorable_completed_at`, so a date on a
+  task that isn't done can't fail the CHECK.
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps
@@ -338,6 +343,32 @@ cargo check && cargo clippy -- -D warnings
   next save's.
 
 ## Task rules (#281)
+
+- **States (S5a, #314; ONTOLOGY §9.3): open, waiting, done, cancelled.**
+  `in_progress` is gone: migration 050 turned it into open, and
+  `node_tasks_no_in_progress` keeps it out (Postgres can't drop an enum
+  value). `TaskStatus::parse` (the database's words) rejects it; serde
+  reads it as open, for old archives and clients.
+- **`completed_at` is set only by the statement that sets the status**
+  (`COMPLETED_AT_AFTER` in repo/task.rs): now when a task becomes done,
+  cleared when it leaves done, untouched otherwise. Any new write to
+  `status` uses it. A task completed before migration 050 has none: never
+  back-fill one.
+- The database checks only "a date means done"
+  (`node_tasks_completed_only_when_done`). Don't add "done means a date",
+  even `NOT VALID`: Postgres applies a NOT VALID check to every update of
+  an old row, so no task completed before 050 could be renamed, reordered
+  or deleted again (`migration_050_…` holds this).
+- **Only an Open task is actionable** (`TaskStatus::is_actionable`; owner
+  decision, 2026-11-13). My Day carries over, and lists as overdue, only
+  actionable tasks: `Task::in_my_day` and `Task::in_overdue_zone` are the
+  rules, and `list_my_day`'s SQL is the first one
+  (`my_day_carries_over_only_what_can_be_acted_on` holds them together).
+  `is_overdue` stays the plain fact (past due and not finished), for the
+  red date on a row.
+- A query that buckets tasks by state names all four, or says "not
+  terminal". The dashboard's counts and its list (`counts_for_nodes`,
+  `list_open_for_nodes`: open before waiting) are the two that name them.
 
 - Who may change a task is `require_task_editor` (routes/tasks.rs): on a
   node, an editor of that node; on none, its owner; an admin always.

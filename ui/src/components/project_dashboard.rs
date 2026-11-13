@@ -41,7 +41,7 @@ use crate::components::icon_button::IconButton;
 use crate::components::node_meta::{status_color, status_icon, status_label};
 use crate::components::page_header::PageHeader;
 use crate::components::project_focus::{FocusToggle, IN_FOCUS_ICON, WhyLine};
-use crate::components::task_common::priority_color_hex;
+use crate::components::task_common::{WAITING_TONE, priority_color_hex};
 use crate::components::toast::{ToastLevel, push_toast};
 
 #[component]
@@ -511,7 +511,7 @@ fn ProjectCard(
     focus: CardFocus,
 ) -> impl IntoView {
     let counts = entry.task_counts.clone();
-    let total = counts.open + counts.in_progress + counts.done + counts.cancelled;
+    let total = counts.open + counts.waiting + counts.done + counts.cancelled;
     let done_pct = (counts.done * 100)
         .checked_div(total)
         .map_or(0.0, |v| v as f32);
@@ -526,7 +526,8 @@ fn ProjectCard(
     let brief = entry.brief.clone();
     let open_tasks = entry.open_tasks.clone();
     let has_more = entry.has_more_tasks;
-    let open_count = counts.open + counts.in_progress;
+    // Still to do: what can be acted on, and what waits on someone else.
+    let open_count = counts.open + counts.waiting;
     let updated_label = format_relative_short(&entry.last_activity_at);
 
     let node_id = entry.node_id;
@@ -722,13 +723,12 @@ fn ProjectCard(
                     </div>
 
                     <div class="flex items-center gap-1 flex-shrink-0">
-                        <CountBadge count=counts.open
+                        <CountBadge count=counts.open label="open"
                             color="bg-stone-200 dark:bg-stone-700 text-stone-700 dark:text-stone-300" />
-                        <CountBadge count=counts.in_progress
-                            color="bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400" />
-                        <CountBadge count=counts.done
+                        <CountBadge count=counts.waiting label="waiting" color=WAITING_TONE />
+                        <CountBadge count=counts.done label="done"
                             color="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" />
-                        <CountBadge count=counts.cancelled
+                        <CountBadge count=counts.cancelled label="cancelled"
                             color="bg-stone-100 dark:bg-stone-800 text-stone-400 dark:text-stone-500" />
                     </div>
 
@@ -774,7 +774,9 @@ fn ProjectCard(
                             <div class="min-w-0" data-testid="card-tasks">
                                 <div class="text-xs font-semibold uppercase tracking-wider
                                     text-stone-400 dark:text-stone-500 mb-1.5">
-                                    {format!("Open Tasks ({})", open_count)}
+                                    // "To do", not "Open": the list holds waiting tasks too,
+                                    // and the Open badge above counts only the open ones.
+                                    {format!("To do ({})", open_count)}
                                 </div>
                                 <div class="space-y-1">
                                     {open_tasks.into_iter().map(|t| view! {
@@ -805,10 +807,10 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
         .map(|d| d.format("%b %-d").to_string())
         .unwrap_or_default();
     let has_due = task.due_date.is_some();
-    let in_progress = matches!(task.status, common::task::TaskStatus::InProgress);
+    let waiting = matches!(task.status, common::task::TaskStatus::Waiting);
 
     view! {
-        <div class="flex items-center gap-1.5 text-xs py-0.5 group/task">
+        <div class="flex items-center gap-1.5 text-xs py-0.5 group/task" data-testid="task-chip">
             <span
                 class="w-2 h-2 rounded-full flex-shrink-0"
                 style=format!("background-color: {color};")
@@ -816,11 +818,10 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
             <span class="truncate text-stone-700 dark:text-stone-300 flex-1 min-w-0">
                 {task.title}
             </span>
-            {in_progress.then(|| view! {
-                <span class="text-[10px] px-1.5 py-0.5 rounded
-                    bg-amber-100 dark:bg-amber-900/30
-                    text-amber-700 dark:text-amber-400 flex-shrink-0">
-                    "In Progress"
+            {waiting.then(|| view! {
+                <span class=format!("text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 {WAITING_TONE}")
+                    data-testid="task-chip-waiting">
+                    "Waiting"
                 </span>
             })}
             {has_due.then(|| view! {
@@ -834,10 +835,17 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
 
 // ── Count badge (unchanged from v2.6.x) ─────────────────────────────────────
 
+/// One state's task count. The four sit side by side as bare numbers, so
+/// each says which it is: `label` is its tooltip and its accessible name.
 #[component]
-fn CountBadge(count: u32, color: &'static str) -> impl IntoView {
+fn CountBadge(count: u32, label: &'static str, color: &'static str) -> impl IntoView {
+    let name = format!("{count} {label}");
     view! {
-        <span class=format!("inline-flex items-center justify-center w-7 h-5 rounded text-xs font-semibold {color}")>
+        <span class=format!("inline-flex items-center justify-center w-7 h-5 rounded text-xs font-semibold {color}")
+            data-testid=format!("count-{label}")
+            title=name.clone()
+            aria-label=name
+            role="img">
             {count.to_string()}
         </span>
     }

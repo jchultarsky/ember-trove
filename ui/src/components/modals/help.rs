@@ -60,16 +60,14 @@ struct ShortcutGroup {
 // registry `common::keyboard::GLOBAL` (the same table the dispatcher uses), so
 // documented and dispatched global shortcuts cannot drift. See `ShortcutsTab`.
 
-const NODE_VIEW: &[Shortcut] = &[
-    Shortcut {
-        key: "d",
-        description: "Duplicate current node",
-    },
-    Shortcut {
-        key: "p",
-        description: "Pin / unpin current node",
-    },
-];
+// `d` is handled in `layout.rs` (the contextual key after the registry's).
+// There is no `p`: the node page's pin went on 2026-04-10, when Favorites
+// became the one way to keep a node at hand, and this table went on
+// listing it until 2026-11-12.
+const NODE_VIEW: &[Shortcut] = &[Shortcut {
+    key: "d",
+    description: "Duplicate current node",
+}];
 
 const MY_DAY: &[Shortcut] = &[
     Shortcut {
@@ -167,9 +165,13 @@ const CONCEPTS: &[Concept] = &[
     Concept {
         title: "Tasks",
         body: "Discrete actionable work, always in a Project. A task left without \
-               one shows up in Data health, which offers to move it. Has \
-               status (open/in-progress/done/cancelled), priority, focus_date, due_date, \
-               and an optional recurrence rule.",
+               one shows up in Data health, which offers to move it. Has a \
+               state (open, waiting, done or cancelled), priority, focus_date, \
+               due_date, and an optional recurrence rule. Tick the box when it \
+               is done; set Waiting or Cancelled in the task's editor. A \
+               waiting task is on someone or something else: My Day doesn't \
+               carry it over or list it as overdue, and it stays in the \
+               backlog and on its Project.",
     },
     Concept {
         title: "Notes",

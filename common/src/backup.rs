@@ -64,7 +64,11 @@ pub struct EntityCounts {
 /// 8 (#282): the archive carries each account's Focus ([`BackupFocus`]).
 /// An older release would restore it without them and say nothing, so the
 /// number moves.
-pub const SCHEMA_VERSION: u32 = 8;
+/// 9 (S5a, #314): a task carries its completion date, and may be
+/// `waiting`. An older release would drop the dates and can't read the new
+/// state, so the number moves. Archives of 3 to 8 still restore: their
+/// tasks have no completion date, and `in_progress` reads as open.
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts

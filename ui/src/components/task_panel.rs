@@ -10,13 +10,11 @@ use crate::components::node_section::{NodeSection, NotOnThisKind, SectionShell, 
 use crate::components::task_actions::{
     PatchOpts, RowSignals, TaskCtx, delete_with_undo, patch_task, toggle_done, toggle_my_day,
 };
-use crate::components::task_common::{
-    is_in_my_day, sort_tasks_by_order, status_done, status_label,
-};
+use crate::components::task_common::{is_in_my_day, sort_tasks_by_order, status_done};
 use crate::components::task_row::{EditSession, EditingTaskId, TaskEditorHeights};
 use crate::components::task_row_scaffold::{
     CopyTaskButton, MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody,
-    action_btn_class, due_badge_view, priority_dot_view,
+    action_btn_class, completed_badge_view, due_badge_view, priority_dot_view, state_badge_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use common::ontology::Capability;
@@ -321,7 +319,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
 
     let title_display = task.title.clone();
     let has_recurrence = task.recurrence.is_some();
-    let task_status = task.status.clone();
+    let completed_at = task.completed_at;
 
     view! {
         <div
@@ -361,7 +359,6 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                     // ── Display: shared scaffold (title, then meta) ──
                     let td = title_display.clone();
                     let prio_disp = prio.clone();
-                    let sv = task_status.clone();
                     let title_line = view! {
                         {priority_dot_view(&prio_disp)}
                         <span class=TITLE_CLASS
@@ -385,12 +382,14 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                                 <span class="material-symbols-outlined" style="font-size:12px;">"repeat"</span>
                             </span>
                         })}
-                        // Status badge (if not open/done)
-                        {(!matches!(sv, TaskStatus::Open | TaskStatus::Done)).then(|| {
-                            let lbl = status_label(&sv);
-                            view! {
-                                <span class="text-stone-400 dark:text-stone-500">{lbl}</span>
-                            }
+                        // Waiting or Cancelled, said in words. Reads the
+                        // live status: it was read once at setup (S5a).
+                        {move || state_badge_view(&status_sig.get())}
+                        // When it was completed. Only while it is still
+                        // ticked: an untick is shown before the refetch.
+                        {completed_at.map(|at| move || {
+                            matches!(status_sig.get(), TaskStatus::Done)
+                                .then(|| completed_badge_view(at))
                         })}
                     }
                     .into_any();
@@ -399,8 +398,15 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
                 }}
             </div>
 
-            // Actions — right cluster; unified order (context, edit, delete)
-            <div class="flex items-center gap-0.5 flex-shrink-0">
+            // Actions — right cluster; unified order (context, edit, delete).
+            // Hidden at phone width while the row is edited, as in My Day's
+            // row: the editor needs the width, and has its own Save and
+            // Cancel.
+            <div class=move || if editing() {
+                "hidden sm:flex items-center gap-0.5 flex-shrink-0"
+            } else {
+                "flex items-center gap-0.5 flex-shrink-0"
+            }>
                 <MyDayButton
                     active=in_my_day
                     on_toggle=Callback::new(move |()| toggle_my_day(task_id, in_my_day, ctx))

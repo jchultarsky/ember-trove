@@ -3,7 +3,20 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-12)
+## Current state (2026-11-13)
+
+- **v3.20.0 shipped: S5a, task states** (#314, PRs #316 and #319;
+  ONTOLOGY §9.3). PR 1 (data and API): migrations 049 (`waiting`) and 050 (`in_progress` → open,
+  `completed_at`), `TaskStatus` Open / Waiting / Done / Cancelled, backup
+  format 9. PR 2 (UI): the state picker (`StatePicker`, on the shared
+  `SegmentedRadio`), a Waiting task out of Today and Overdue in My Day
+  (`TaskStatus::is_actionable`, `Task::in_my_day`,
+  `Task::in_overdue_zone`), the completion date on done tasks. Not
+  changed: the Project page still calls its done and cancelled tasks
+  "completed". One release for both, after a Lightsail snapshot.
+  Rules: "Task rules" in `.claude/rules/api.md`. Owner decisions,
+  2026-11-13: the picker's three states; Waiting leaves Today and Overdue;
+  **S6a (project states, with parked) comes next**, before S5b to S5d.
 
 - **v3.19.0 shipped: the home chip and the end of the Status scrape** (PR #310; owner
   requests, 2026-11-12). `node_home::HomeChip` shows a node's home in the
@@ -39,8 +52,15 @@ Keep it current as part of each change (see `POLICY.md` §10).
   `common::project_focus::holds_focus` (and the SQL in
   `repo/project_focus.rs::shows`), and the route that closes a project
   must delete the caller's own Focus entry, so re-opening doesn't restore
-  it. "Parked" is in the proposal but not in the ontology: it needs an
-  owner decision before anything is built on it.
+  it. **Parked is decided** (owner, 2026-11-12; ONTOLOGY §4, §4.1, §15):
+  a real, declared, non-terminal state for a project set aside on
+  purpose. It is built with the closed state in S6 and joins
+  `holds_focus` there. Still to settle in S6's plan, with the owner:
+  whether parking a master parks its sub-Projects; how a parked project
+  shows on the dashboard, in the node list and in My Day (its tasks);
+  whether un-parking shows it in Focus again (an entry that drops out is
+  kept, so it would unless the park route deletes it); whether parking is
+  a History entry like a status change.
 - **v3.17.1 shipped: the Brief leads the Project page** (PR #306), above the body (owner
   decision 2026-11-11; `SectionShell`'s `lead`).
 - **v3.17.0 shipped: the Project Brief's UI** (#282, part 2; PR #305). `BriefPanel`
@@ -365,8 +385,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
   - **S4a–c:** captures and convert-to-one.
   - **S5a–d:** task states (`waiting`, `completed_at`), recurrence removed,
     tasks need a Project, task dependencies.
-  - **S6a–d:** the closed terminal state, the cascade, History. Also:
-    a closed Project leaves Focus (#282; see "Current state").
+  - **S6a–d:** the closed state (*active / parked / complete /
+    cancelled*; parked decided 2026-11-12), the cascade, History. Also:
+    a closed or parked Project leaves Focus (#282; see "Current state").
   - **S7a–b:** reverse indexes and blockers.
   - **S8–S9:** email identity, the merge tool, @-mentions.
   - **S10:** Companies.

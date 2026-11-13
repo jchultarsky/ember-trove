@@ -57,14 +57,10 @@ pub fn status_done(s: &TaskStatus) -> bool {
     s.is_terminal()
 }
 
-pub fn status_label(s: &TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Open => "Open",
-        TaskStatus::InProgress => "In Progress",
-        TaskStatus::Done => "Done",
-        TaskStatus::Cancelled => "Cancelled",
-    }
-}
+/// The badge of a task that is on someone or something else (S5a, #314).
+/// Cool, not warm: warm colour means urgency here, and a waiting task asks
+/// nothing of its person for now.
+pub const WAITING_TONE: &str = "bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300";
 
 // ── Priority ────────────────────────────────────────────────────────────────
 
@@ -112,14 +108,17 @@ pub fn is_in_my_day(task: &Task, today: chrono::NaiveDate) -> bool {
 // ── Backlog partitioning ────────────────────────────────────────────────────
 
 /// Split backlog tasks into `(overdue, upcoming)`. Overdue = an open task
-/// whose `due_date` is strictly before `today`; everything else (no due
-/// date, due today, due later, or already done) stays in the main backlog.
-/// Relative order is preserved within each group.
+/// whose `due_date` is strictly before `today` (`Task::in_overdue_zone`);
+/// everything else (no due date, due today, due later, already done, or
+/// waiting on someone else) stays in the main backlog. Relative order is
+/// preserved within each group.
 pub fn partition_overdue(
     tasks: Vec<MyDayTask>,
     today: chrono::NaiveDate,
 ) -> (Vec<MyDayTask>, Vec<MyDayTask>) {
-    tasks.into_iter().partition(|t| t.task.is_overdue(today))
+    tasks
+        .into_iter()
+        .partition(|t| t.task.in_overdue_zone(today))
 }
 
 // ── Sorting ─────────────────────────────────────────────────────────────────
@@ -156,6 +155,7 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                completed_at: None,
             },
             node_title: None,
         }
@@ -172,10 +172,18 @@ mod tests {
             mk(tomorrow, TaskStatus::Open),    // future → upcoming
             mk(None, TaskStatus::Open),        // undated → upcoming
             mk(yesterday, TaskStatus::Done),   // done → upcoming (no guilt pile)
+            // On someone else: past due, but not put under Overdue (S5a).
+            mk(yesterday, TaskStatus::Waiting),
         ];
         let (overdue, upcoming) = partition_overdue(tasks, today);
         assert_eq!(overdue.len(), 1);
         assert_eq!(overdue[0].task.due_date, yesterday);
-        assert_eq!(upcoming.len(), 4);
+        assert_eq!(overdue[0].task.status, TaskStatus::Open);
+        assert_eq!(upcoming.len(), 5);
+        // The waiting one is in the backlog, in its place.
+        assert_eq!(
+            upcoming.last().map(|t| t.task.status.clone()),
+            Some(TaskStatus::Waiting)
+        );
     }
 }

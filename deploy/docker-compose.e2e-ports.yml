@@ -1,0 +1,22 @@
+# A second e2e stack beside one already running (scripts/e2e.sh with
+# E2E_PROJECT and E2E_PORT). Layered over docker-compose.yml and
+# docker-compose.e2e.yml:
+#
+# * the UI is published on E2E_PORT instead of 8003;
+# * Postgres, S3 and the API get no host port. The suite only talks to the
+#   UI, which proxies the API, so they are reached inside the compose network
+#   and can't collide with the first stack's 5432, 9000 and 3003.
+#
+# `!override` replaces the inherited list and `!reset` clears it (a plain
+# list would be appended to it).
+
+services:
+  postgres:
+    ports: !reset []
+  s3:
+    ports: !reset []
+  api:
+    ports: !reset []
+  ui:
+    ports: !override
+      - "${E2E_PORT:?set by scripts/e2e.sh}:8080"

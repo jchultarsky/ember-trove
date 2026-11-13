@@ -861,9 +861,9 @@ pub(crate) async fn restore_into(
             r#"
             INSERT INTO node_tasks
                 (id, node_id, owner_id, title, status, priority, focus_date, due_date,
-                 recurrence, sort_order, created_at, updated_at)
+                 recurrence, sort_order, created_at, updated_at, completed_at)
             VALUES ($1, $2, $3, $4, $5::task_status, $6::task_priority, $7, $8,
-                    $9, $10, $11, $12)
+                    $9, $10, $11, $12, $13)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -879,6 +879,8 @@ pub(crate) async fn restore_into(
         .bind(task.sort_order)
         .bind(task.created_at)
         .bind(task.updated_at)
+        // Format 9 (S5a). An older archive has none, and none is made up.
+        .bind(task.restorable_completed_at())
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert task failed: {e}")))?;
@@ -1684,7 +1686,7 @@ mod tests {
             "got {old:?}"
         );
         assert!(
-            matches!(check_format(&manifest(9)), Err(ApiError::Validation(m)) if m.contains("newer"))
+            matches!(check_format(&manifest(common::backup::SCHEMA_VERSION + 1)), Err(ApiError::Validation(m)) if m.contains("newer"))
         );
         // The formats before the attachment paths changed still restore.
         assert!(check_format(&manifest(3)).is_ok() && check_format(&manifest(4)).is_ok());
