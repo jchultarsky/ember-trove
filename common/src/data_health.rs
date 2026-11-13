@@ -25,6 +25,9 @@ pub enum RuleId {
     OrphanTask,
     MembershipOnNonProject,
     StatusOnNonProject,
+    /// A Project whose state nobody has declared, with a status label
+    /// that reads as a different one (S6a; `project_state::label_disagrees`).
+    LabelReadsAsAnotherState,
     ContainedReference,
     ContainmentNotAllowed,
     DependsOnArea,
@@ -38,6 +41,7 @@ wire_enum!(RuleId {
     OrphanTask => "orphan_task",
     MembershipOnNonProject => "membership_on_non_project",
     StatusOnNonProject => "status_on_non_project",
+    LabelReadsAsAnotherState => "label_reads_as_another_state",
     ContainedReference => "contained_reference",
     ContainmentNotAllowed => "containment_not_allowed",
     DependsOnArea => "depends_on_area",
@@ -53,6 +57,7 @@ impl RuleId {
         match self {
             Self::TaskOnNonProject | Self::StatusOnNonProject => "§3.2",
             Self::OrphanTask => "§9.3",
+            Self::LabelReadsAsAnotherState => "§4.1",
             Self::MembershipOnNonProject => "§7.2",
             Self::ContainmentNotAllowed => "§3.3",
             Self::ContainedReference | Self::ContainsCycle => "§6.1",
@@ -69,6 +74,7 @@ impl RuleId {
             Self::OrphanTask => "Tasks with no Project",
             Self::MembershipOnNonProject => "People outside a Project",
             Self::StatusOnNonProject => "A project status outside a Project",
+            Self::LabelReadsAsAnotherState => "A status label that reads as another state",
             Self::ContainedReference => "A Reference inside a home",
             Self::ContainmentNotAllowed => "A home that isn't allowed",
             Self::DependsOnArea => "A dependency on an Area",
@@ -86,6 +92,9 @@ impl RuleId {
             Self::OrphanTask => "A task belongs to exactly one Project.",
             Self::MembershipOnNonProject => "Only Projects have people.",
             Self::StatusOnNonProject => "Only Projects have a project status.",
+            Self::LabelReadsAsAnotherState => {
+                "A Project's state is declared, never read from its status label."
+            }
             Self::ContainedReference => {
                 "A Reference is never contained: it's shared, and reached by links."
             }
@@ -110,6 +119,9 @@ impl RuleId {
                 "Add the person to a related Project, then remove them here."
             }
             Self::StatusOnNonProject => "Clear the status, or keep the note in the body.",
+            Self::LabelReadsAsAnotherState => {
+                "Declare the state the label means, or keep the state it has."
+            }
             Self::ContainedReference => "Turn the contains link into a references link.",
             Self::ContainmentNotAllowed => "Move it to an allowed home, or link it instead.",
             Self::DependsOnArea => "Depend on a Project in the Area instead.",
@@ -221,6 +233,23 @@ pub struct Violation {
     /// a loop's links in order. Empty for every other rule.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<LinkRef>,
+    /// What a label-reads-as-another-state item is about (S6a): the label,
+    /// the state it reads as and the state the project has. `None` for
+    /// every other rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_reading: Option<LabelReadingRef>,
+}
+
+/// A project's status label beside its state (S6a): what the item's fix
+/// buttons choose between. The label is its owner's own text, shown only
+/// to them: this rule reads the reader's own projects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LabelReadingRef {
+    pub label: String,
+    /// The state the label says or hints at.
+    pub reads_as: crate::project_state::ProjectState,
+    /// The state the project has, which nobody has declared.
+    pub state: crate::project_state::ProjectState,
 }
 
 /// One link a fix can act on (#228). Both ends are nodes the reader can
@@ -290,7 +319,16 @@ impl Violation {
             more,
             membership: None,
             links: Vec::new(),
+            label_reading: None,
         }
+    }
+
+    /// Says what a label-reads-as-another-state item is about (see
+    /// [`Violation::label_reading`]).
+    #[must_use]
+    pub fn with_label_reading(mut self, reading: LabelReadingRef) -> Self {
+        self.label_reading = Some(reading);
+        self
     }
 
     /// Names the links behind an edge item (see [`Violation::links`]).

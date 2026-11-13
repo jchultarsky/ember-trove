@@ -8102,3 +8102,95 @@ async fn project_states_survive_a_backup_round_trip(pool: PgPool) {
     assert_eq!(n.project_state, None, "only a Project has a state");
     assert_eq!(n.project_state_at, None);
 }
+
+/// Data health lists a Project whose state nobody has declared and whose
+/// label reads as another state: what the label says or only hints at.
+/// Declaring any state, the one it has included, takes it out of the list
+/// for good. The list is the reader's own projects; the admin view gets
+/// the count across accounts and nothing else.
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_lists_a_label_that_reads_as_another_state(pool: PgPool) {
+    use super::data_health::{DataHealthRepo, PgDataHealthRepo};
+    use common::data_health::RuleId;
+    let rule = RuleId::LabelReadsAsAnotherState;
+
+    let on_hold = a_project(&pool, "alice", "b on hold", Some("On hold")).await;
+    let done_ish = a_project(&pool, "alice", "a done-ish", Some("Done, awaiting invoice")).await;
+    // A new project is active whatever its label: "Done" disagrees too.
+    let done = a_project(&pool, "alice", "c labelled done", Some("Done")).await;
+    // Not listed: a label that says nothing, no label, and a state that
+    // already is what the label reads as.
+    a_project(&pool, "alice", "plain", Some("Active")).await;
+    a_project(&pool, "alice", "unlabelled", None).await;
+    let agreed = a_project(&pool, "alice", "really done", Some("Done")).await;
+    sql(
+        &pool,
+        &format!(
+            "UPDATE nodes SET project_state = 'complete' WHERE id = '{}'",
+            agreed.id.0
+        ),
+    )
+    .await;
+    // A label on a node that is not a Project is another rule's.
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    sql(
+        &pool,
+        &format!("UPDATE nodes SET project_status = 'On hold' WHERE id = '{article}'"),
+    )
+    .await;
+    // Someone else's, shared with alice: theirs to decide, and their words.
+    let bobs = a_project(&pool, "bob", "bob paused", Some("Paused")).await;
+    share(&pool, bobs.id.0, "alice").await;
+
+    let alice = health(&pool, "alice").await;
+    assert_eq!(
+        subjects(&alice, rule),
+        vec![done_ish.id.0, on_hold.id.0, done.id.0],
+        "her own, by title"
+    );
+    let reading = |i: usize| {
+        alice[&rule].items[i]
+            .label_reading
+            .clone()
+            .expect("the fix buttons need the reading")
+    };
+    assert_eq!(reading(0).label, "Done, awaiting invoice");
+    assert_eq!(reading(0).reads_as, ProjectState::Complete);
+    assert_eq!(reading(0).state, ProjectState::Active);
+    assert_eq!(reading(1).reads_as, ProjectState::Parked);
+    assert_eq!(reading(2).reads_as, ProjectState::Complete);
+    assert_eq!(alice[&rule].count, 3);
+    assert_eq!(subjects(&alice, RuleId::StatusOnNonProject), vec![article]);
+
+    let bob = health(&pool, "bob").await;
+    assert_eq!(subjects(&bob, rule), vec![bobs.id.0], "his own only");
+
+    let count = || async {
+        PgDataHealthRepo::new(pool.clone())
+            .counts_all()
+            .await
+            .expect("counts")
+            .into_iter()
+            .find(|c| c.rule == rule)
+            .map(|c| c.count)
+            .expect("the rule is counted")
+    };
+    assert_eq!(count().await, 4, "both accounts");
+
+    // Each fix is a declaration: keep the state it has, or the one it reads as.
+    declare(&pool, on_hold.id, ProjectState::Active, "alice").await;
+    declare(&pool, done.id, ProjectState::Complete, "alice").await;
+    let alice = health(&pool, "alice").await;
+    assert_eq!(subjects(&alice, rule), vec![done_ish.id.0]);
+    assert_eq!(count().await, 2);
+    // Kept active once, it stays out even though its label still hints.
+    assert_eq!(
+        PgNodeRepo::new(pool.clone())
+            .get(on_hold.id)
+            .await
+            .expect("get")
+            .project_status
+            .as_deref(),
+        Some("On hold")
+    );
+}

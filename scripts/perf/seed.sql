@@ -33,7 +33,7 @@ FROM generate_series(1, 300 * :scale) AS i;
 
 -- Bodies of about 3-6 KB: prose, a heading, a list and a few wiki links.
 INSERT INTO nodes (id, owner_id, node_type, title, slug, body, status, project_status,
-                   created_at, updated_at)
+                   project_state, created_at, updated_at)
 SELECT
     n.id,
     'e2e-test-user',
@@ -47,6 +47,10 @@ SELECT
       || E'\n\n' || repeat('Every capture becomes exactly one thing in the end. ', 10),
     (CASE WHEN n.i % 7 = 0 THEN 'published' ELSE 'draft' END)::node_status,
     CASE WHEN n.node_type = 'project' THEN (ARRAY['Active', 'Blocked', 'Done'])[1 + n.i % 3] END,
+    -- A Project always has a state (migration 051): the one its label
+    -- says, as the migration gave the live rows.
+    CASE WHEN n.node_type = 'project'
+         THEN (ARRAY['active', 'active', 'complete'])[1 + n.i % 3] END,
     now() - (n.i || ' hours')::interval,
     now() - ((n.i % 500) || ' minutes')::interval
 FROM perf_nodes n;

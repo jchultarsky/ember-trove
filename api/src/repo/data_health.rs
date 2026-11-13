@@ -12,12 +12,15 @@ use std::collections::HashMap;
 
 use common::{
     EmberTroveError,
-    data_health::{ITEM_CAP, LinkRef, Ref, RuleCount, RuleId, RuleReport, Violation},
+    data_health::{
+        ITEM_CAP, LabelReadingRef, LinkRef, Ref, RuleCount, RuleId, RuleReport, Violation,
+    },
     edge::EdgeType,
     node::NodeType,
     ontology::{
         ContainmentRule, containment_violation, cyclic_components, cyclic_components_preferring,
     },
+    project_state::{ProjectState, label_disagrees},
 };
 use sqlx::{FromRow, PgConnection, PgPool};
 use uuid::Uuid;
@@ -75,6 +78,7 @@ impl DataHealthRepo for PgDataHealthRepo {
             orphan_tasks(&mut tx, owner).await?,
             memberships_on_non_projects(&mut tx, owner).await?,
             statuses_on_non_projects(&mut tx, owner).await?,
+            labels_reading_as_another_state(&mut tx, owner).await?,
             contained_reference,
             not_allowed,
             depends_on_areas(&depends_on)?,
@@ -294,6 +298,94 @@ async fn statuses_on_non_projects(
         count,
         items,
     ))
+}
+
+#[derive(FromRow)]
+struct LabelledProjectRow {
+    id: Uuid,
+    title: String,
+    archived: bool,
+    project_status: String,
+    project_state: String,
+}
+
+/// My Projects whose state nobody has declared, with a status label that
+/// reads as a different state (S6a; ONTOLOGY §4.1).
+///
+/// The reading is `common::project_state::label_disagrees`, in Rust: the
+/// rows are one account's own undeclared, labelled projects, and no second
+/// spelling of the rule in SQL can drift from it. Declaring any state
+/// (the page's fixes, "Keep" included) stamps `project_state_at` and takes
+/// the project out of this list for good.
+///
+/// SECURITY: `owner_id = $1` only, never a shared node. A label is free
+/// text, the rule `project_status_counts` follows.
+async fn labels_reading_as_another_state(
+    conn: &mut PgConnection,
+    owner: &str,
+) -> Result<RuleReport, EmberTroveError> {
+    let rows: Vec<LabelledProjectRow> = sqlx::query_as(
+        r#"
+        SELECT id, title, status = 'archived' AS archived, project_status, project_state
+        FROM nodes
+        WHERE owner_id = $1
+          AND node_type = 'project'
+          AND project_state_at IS NULL
+          AND project_status IS NOT NULL
+        ORDER BY title, id
+        "#,
+    )
+    .bind(owner)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db)?;
+    let mut items = Vec::new();
+    for r in rows {
+        let state = project_state(&r.project_state)?;
+        if let Some(reads_as) = label_disagrees(Some(&r.project_status), state) {
+            items.push(
+                Violation::new(Ref::node(r.id, r.title, r.archived), vec![]).with_label_reading(
+                    LabelReadingRef {
+                        label: r.project_status,
+                        reads_as,
+                        state,
+                    },
+                ),
+            );
+        }
+    }
+    // `new` keeps the exact count and the first `ITEM_CAP` items.
+    Ok(RuleReport::new(RuleId::LabelReadsAsAnotherState, items))
+}
+
+fn project_state(s: &str) -> Result<ProjectState, EmberTroveError> {
+    parse_wire(s, "project_state", ProjectState::parse)
+}
+
+/// The same rule across all data, for the admin view: how many projects,
+/// and nothing else. Labels are grouped in SQL and read here only to be
+/// classified; none is returned, stored or logged.
+async fn label_reading_count(conn: &mut PgConnection) -> Result<u64, EmberTroveError> {
+    let groups: Vec<(String, String, i64)> = sqlx::query_as(
+        r#"
+        SELECT lower(project_status COLLATE "C"), project_state, count(*)
+        FROM nodes
+        WHERE node_type = 'project'
+          AND project_state_at IS NULL
+          AND project_status IS NOT NULL
+        GROUP BY 1, 2
+        "#,
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db)?;
+    let mut total = 0u64;
+    for (label, state, n) in &groups {
+        if label_disagrees(Some(label), project_state(state)?).is_some() {
+            total += u64::try_from(*n).unwrap_or(0);
+        }
+    }
+    Ok(total)
 }
 
 // ── Rules on edges (§3.3, §6) ─────────────────────────────────────────────────
@@ -555,6 +647,10 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::StatusOnNonProject,
             count: n(sql.status_on_non_project),
+        },
+        RuleCount {
+            rule: RuleId::LabelReadsAsAnotherState,
+            count: label_reading_count(conn).await?,
         },
         RuleCount {
             rule: RuleId::ContainedReference,
