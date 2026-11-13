@@ -315,11 +315,11 @@ pub fn patch_task(
     });
 }
 
-/// An inline task editor's form state (title / priority / due / recurrence),
-/// shared by every task list. Each list keeps its own markup (task-row
-/// contract); this owns the values: seeding from the task, `reset` on Cancel
-/// (it used to reset only the title, so abandoned priority/due/recurrence
-/// edits came back on reopen) and building the PATCH
+/// An inline task editor's form state (title / priority / due / recurrence /
+/// state), shared by every task list. Each list keeps its own markup
+/// (task-row contract); this owns the values: seeding from the task, `reset`
+/// on Cancel (it used to reset only the title, so abandoned
+/// priority/due/recurrence edits came back on reopen) and building the PATCH
 /// (`common::task::task_edit_request`).
 #[derive(Clone, Copy)]
 pub struct TaskEditDraft {
@@ -327,14 +327,27 @@ pub struct TaskEditDraft {
     pub priority: RwSignal<String>,
     pub due: RwSignal<String>,
     pub recurrence: RwSignal<String>,
+    /// The state the picker shows, as its wire string (S5a).
+    pub status: RwSignal<String>,
     saved: StoredValue<[String; 4]>,
+    /// The task's own state, as the list last showed it. Unlike the four
+    /// fields above, the state also changes outside the editor (the
+    /// checkbox, another tab), so this is never "what Save last sent": it
+    /// moves only when the task does ([`TaskEditDraft::follow`]). A state
+    /// is sent when the picker differs from it, so a Save that failed is
+    /// sent again on the retry.
+    base_status: StoredValue<String>,
+    /// The state the last Save sent, if it sent one. Once the task has
+    /// moved, a pick that was already sent is history, not a choice
+    /// (`common::task::rebased_state`).
+    sent_status: StoredValue<Option<String>>,
     /// Values sent by Save and not yet seen back from the server (a failed
     /// Save leaves them here, so reopening keeps them).
     pending: StoredValue<bool>,
 }
 
 impl TaskEditDraft {
-    /// The editor's four fields for `task` as saved.
+    /// The editor's four text fields for `task` as saved.
     fn values_of(task: &Task) -> [String; 4] {
         [
             task.title.clone(),
@@ -349,25 +362,66 @@ impl TaskEditDraft {
         ]
     }
 
+    /// Whether the editor offers the state picker: for a task that is not
+    /// done. A done task is reopened with its checkbox.
+    pub fn picks_state(&self) -> bool {
+        self.base_status
+            .try_with_value(|s| s != TaskStatus::Done.as_str())
+            .unwrap_or(false)
+    }
+
     pub fn from_task(task: &Task) -> Self {
         let saved = Self::values_of(task);
+        let status = task.status.as_str().to_string();
         Self {
             title: RwSignal::new(saved[0].clone()),
             priority: RwSignal::new(saved[1].clone()),
             due: RwSignal::new(saved[2].clone()),
             recurrence: RwSignal::new(saved[3].clone()),
+            status: RwSignal::new(status.clone()),
             saved: StoredValue::new(saved),
+            base_status: StoredValue::new(status),
+            sent_status: StoredValue::new(None),
             pending: StoredValue::new(false),
         }
     }
 
-    /// Discard edits: every field back to the last saved values.
+    /// Take `task`'s state as the list shows it now. A draft outlives list
+    /// refetches (`EditSession`), and the task may have been ticked,
+    /// unticked or saved meanwhile: a picker its person hasn't touched
+    /// follows the task, and so does a pick that was already sent or that
+    /// has no picker left to show it; only a choice still waiting to be
+    /// saved stays (`common::task::rebased_state`). The session calls this
+    /// whenever it hands the draft to an editor.
+    pub fn follow(&self, task: &Task) {
+        let now = task.status.as_str();
+        let Some(base) = self.base_status.try_get_value() else {
+            return;
+        };
+        if base == now {
+            return;
+        }
+        let sent = self.sent_status.try_get_value().flatten();
+        if let Some(picked) = self.status.try_get_untracked() {
+            let next = common::task::rebased_state(&picked, &base, now, sent.as_deref());
+            if next != picked {
+                self.status.try_set(next);
+            }
+        }
+        self.base_status.try_set_value(now.to_string());
+        // What was sent was sent against the old state.
+        self.sent_status.try_set_value(None);
+    }
+
+    /// Discard edits: every field back to the last saved values, and the
+    /// state back to the task's own.
     pub fn reset(&self) {
         let [t, p, d, r] = self.saved.get_value();
         self.title.set(t);
         self.priority.set(p);
         self.due.set(d);
         self.recurrence.set(r);
+        self.status.set(self.base_status.get_value());
     }
 
     /// Escape: discard like Cancel, but if anything was changed offer
@@ -381,7 +435,8 @@ impl TaskEditDraft {
             self.due.get_untracked(),
             self.recurrence.get_untracked(),
         ];
-        let dirty = typed != self.saved.get_value();
+        let picked = self.status.get_untracked();
+        let dirty = typed != self.saved.get_value() || picked != self.base_status.get_value();
         self.reset();
         if !dirty {
             return;
@@ -395,6 +450,7 @@ impl TaskEditDraft {
                 self.priority.try_set(p);
                 self.due.try_set(d);
                 self.recurrence.try_set(r);
+                self.status.try_set(picked.clone());
                 reopen();
             }),
         );
@@ -402,7 +458,9 @@ impl TaskEditDraft {
 
     /// Whether reopening `task`'s editor should keep this draft rather than
     /// start again from `task`: it has unsaved changes, or a Save sent
-    /// values the server hasn't shown back (a failed Save).
+    /// values the server hasn't shown back (a failed Save). Call
+    /// [`TaskEditDraft::follow`] first: a state the task took on its own is
+    /// not an unsaved change.
     pub fn worth_keeping(&self, task: &Task) -> bool {
         let typed = [
             self.title.try_get_untracked(),
@@ -417,7 +475,9 @@ impl TaskEditDraft {
         let dirty = self.saved.try_with_value(|s| differs(s)).unwrap_or(false);
         let unconfirmed =
             self.pending.try_get_value().unwrap_or(false) && differs(&Self::values_of(task));
-        dirty || unconfirmed
+        // A state picked and not yet the task's: unsaved, or a failed Save.
+        let state_picked = self.status.try_get_untracked() != self.base_status.try_get_value();
+        dirty || unconfirmed || state_picked
     }
 
     /// Free the draft's signals (`EditSession` replacing it with another).
@@ -426,12 +486,16 @@ impl TaskEditDraft {
         self.priority.dispose();
         self.due.dispose();
         self.recurrence.dispose();
+        self.status.dispose();
         self.saved.dispose();
+        self.base_status.dispose();
+        self.sent_status.dispose();
         self.pending.dispose();
     }
 
     /// The PATCH for the current values (`None` = blank title, don't save),
-    /// and remember them as saved so a later Cancel keeps them.
+    /// and remember the four text fields as saved so a later Cancel keeps
+    /// them.
     pub fn take_request(&self) -> Option<UpdateTaskRequest> {
         let vals = [
             self.title.get_untracked(),
@@ -439,8 +503,17 @@ impl TaskEditDraft {
             self.due.get_untracked(),
             self.recurrence.get_untracked(),
         ];
-        let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3])?;
+        // The state goes only when it differs from the task's own: saving a
+        // new title must not re-send a state, and a state whose Save failed
+        // must go again (`base_status` moves only when the task does).
+        let status = common::task::changed_state(
+            &self.status.get_untracked(),
+            &self.base_status.get_value(),
+        );
+        let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3], status)?;
         self.saved.set_value(vals);
+        self.sent_status
+            .set_value(req.status.as_ref().map(|s| s.as_str().to_string()));
         self.pending.set_value(true);
         Some(req)
     }

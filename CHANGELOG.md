@@ -10,10 +10,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **Task states: Open, Waiting, Done, Cancelled, and a completion date
   (S5a of #204; #314).**
   - **Waiting** is a new state: the task is on someone or something else.
-  - A task records **when it was completed**. The date is set when the
-    task becomes done and cleared if it is reopened. Tasks completed
-    before this release have no date: it was never recorded, and is not
-    made up.
+    Set it in the task's editor, which now has a state picker: Open,
+    Waiting, Cancelled. Done stays the checkbox. A waiting or cancelled
+    task says so on its row.
+  - **A waiting task doesn't ask for attention it can't use.** In My Day
+    it is not carried over into Today and not listed under Overdue. It
+    stays in the Backlog and on its Project page, with its due date. Set
+    it back to Open and it returns to the normal flow.
+  - **Cancelling a task** is possible in the app for the first time (it
+    was API-only).
+  - A task records **when it was completed**, shown on the Project page
+    as "Done Nov 12". The date is set when the task becomes done and cleared
+    if it is reopened. Tasks completed before this release have no date:
+    it was never recorded, and is not made up.
   - The dashboard counts open, waiting, done and cancelled tasks, and
     each project's task list shows what can be acted on first, then what
     is waiting.

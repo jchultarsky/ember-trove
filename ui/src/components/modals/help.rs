@@ -165,9 +165,13 @@ const CONCEPTS: &[Concept] = &[
     Concept {
         title: "Tasks",
         body: "Discrete actionable work, always in a Project. A task left without \
-               one shows up in Data health, which offers to move it. Has \
-               status (open/waiting/done/cancelled), priority, focus_date, due_date, \
-               and an optional recurrence rule.",
+               one shows up in Data health, which offers to move it. Has a \
+               state (open, waiting, done or cancelled), priority, focus_date, \
+               due_date, and an optional recurrence rule. Tick the box when it \
+               is done; set Waiting or Cancelled in the task's editor. A \
+               waiting task is on someone or something else: My Day doesn't \
+               carry it over or list it as overdue, and it stays in the \
+               backlog and on its Project.",
     },
     Concept {
         title: "Notes",

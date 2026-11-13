@@ -359,6 +359,13 @@ cargo check && cargo clippy -- -D warnings
   even `NOT VALID`: Postgres applies a NOT VALID check to every update of
   an old row, so no task completed before 050 could be renamed, reordered
   or deleted again (`migration_050_…` holds this).
+- **Only an Open task is actionable** (`TaskStatus::is_actionable`; owner
+  decision, 2026-11-13). My Day carries over, and lists as overdue, only
+  actionable tasks: `Task::in_my_day` and `Task::in_overdue_zone` are the
+  rules, and `list_my_day`'s SQL is the first one
+  (`my_day_carries_over_only_what_can_be_acted_on` holds them together).
+  `is_overdue` stays the plain fact (past due and not finished), for the
+  red date on a row.
 - A query that buckets tasks by state names all four, or says "not
   terminal". The dashboard's counts and its list (`counts_for_nodes`,
   `list_open_for_nodes`: open before waiting) are the two that name them.

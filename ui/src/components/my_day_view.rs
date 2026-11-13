@@ -108,7 +108,10 @@ pub fn MyDayView() -> impl IntoView {
             .collect();
         let backlog_zone: Vec<MyDayTask> = all_raw
             .into_iter()
-            .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
+            // Everything still to do that isn't in today's zone. Not "no
+            // focus date": a waiting task focused on an earlier day is
+            // here, not carried over and not lost (S5a).
+            .filter(|t| !t.task.in_my_day(today))
             .collect();
         // Mirror the display order: today → overdue (only while the section
         // is expanded — j/k must not focus hidden rows) → upcoming.
@@ -216,7 +219,7 @@ pub fn MyDayView() -> impl IntoView {
                 // Same rule as the Today zone (focus_date on or before today):
                 // `t` on a carried-over row used to re-stamp it instead of
                 // removing it, contradicting the row's × button.
-                let in_today = mdt.task.focus_date.is_some_and(|d| d <= today);
+                let in_today = mdt.task.in_my_day(today);
                 let new_focus = if in_today { None } else { Some(today) };
                 let msg = if in_today {
                     "Removed from today"
@@ -392,7 +395,7 @@ pub fn MyDayView() -> impl IntoView {
                             other => other.and_then(Result::ok).unwrap_or_default(),
                         };
                         let scoped: Vec<MyDayTask> = raw.into_iter()
-                            .filter(|t| t.task.focus_date.is_none_or(|d| d > today))
+                            .filter(|t| !t.task.in_my_day(today))
                             .collect();
                         // Overdue tasks get their own foldable section instead
                         // of mixing into (and topping) the backlog — visible by
@@ -526,6 +529,7 @@ fn KanbanZoneRow(
             }
             on:dragleave=move |_| drag_over.set(false)
             on:drop=on_drop
+            data-testid=format!("zone-{}", title.to_lowercase())
         >
             <div class="flex items-center gap-2 mb-2">
                 <span class="font-display text-[15px] font-semibold text-stone-800 dark:text-stone-200">

@@ -33,6 +33,20 @@ wire_enum!(TaskStatus {
 });
 
 impl TaskStatus {
+    /// The states a person sets by hand, in the task editor's picker
+    /// (owner decision, 2026-11-13). Done is not among them: it is the
+    /// checkbox, which also stamps the completion date's day in My Day.
+    pub const PICKABLE: [Self; 3] = [Self::Open, Self::Waiting, Self::Cancelled];
+
+    /// Whether its person can act on the task now: Open only. A Waiting
+    /// task is on someone or something else, so My Day doesn't carry it
+    /// over or list it as overdue (owner decision, 2026-11-13); it stays
+    /// in the backlog and on its Project.
+    #[must_use]
+    pub fn is_actionable(&self) -> bool {
+        matches!(self, TaskStatus::Open)
+    }
+
     /// The user-facing name, for every badge and picker.
     pub fn label(&self) -> &'static str {
         match self {
@@ -177,14 +191,24 @@ impl Task {
 
     /// Whether the task is in `today`'s My Day, by the server's
     /// carry-forward rule (`list_my_day`): focused on `today` exactly, or
-    /// focused on an earlier day and not yet finished.
+    /// focused on an earlier day and still actionable. A task that is
+    /// done, cancelled or waiting doesn't carry over (waiting since S5a).
     #[must_use]
     pub fn in_my_day(&self, today: NaiveDate) -> bool {
         match self.focus_date {
             Some(d) if d == today => true,
-            Some(d) if d < today => !self.status.is_terminal(),
+            Some(d) if d < today => self.status.is_actionable(),
             _ => false,
         }
+    }
+
+    /// Whether My Day lists the task under Overdue: past its due date and
+    /// actionable. A Waiting task past its due date keeps the red date on
+    /// its row ([`is_overdue`] is the fact), but is not put in front of its
+    /// person as something to do now.
+    #[must_use]
+    pub fn in_overdue_zone(&self, today: NaiveDate) -> bool {
+        self.status.is_actionable() && self.is_overdue(today)
     }
 }
 
@@ -513,15 +537,58 @@ pub fn warn_past_due(
     new.is_some_and(|d| d < today && Some(d) != original)
 }
 
+/// What an editor's state picker shows once the task's own state has moved
+/// from `base` to `now` outside the editor (the checkbox, another tab, or
+/// the editor's own save landing). `sent` is the state the editor's last
+/// Save sent, if it sent one.
+///
+/// The pick stays only while it is a choice still waiting to be saved:
+/// made in the editor, not yet sent, on a task that still has a picker.
+/// Otherwise the picker follows the task:
+/// - untouched (`picked == base`);
+/// - already sent: the task has moved since that Save, whether because it
+///   landed or for another reason, so the pick is history, not intent
+///   (re-sending it un-completed a task ticked after the save);
+/// - the task is now done: a done task has no picker, and a pick must not
+///   outlive the control that shows it.
+///
+/// The state differs from an editor's other fields in this: it changes
+/// outside the editor, so "what the editor last sent" says nothing about
+/// what the task is now.
+#[must_use]
+pub fn rebased_state(picked: &str, base: &str, now: &str, sent: Option<&str>) -> String {
+    let untouched = picked == base;
+    let already_sent = sent == Some(picked);
+    let no_picker = now == TaskStatus::Done.as_str();
+    if untouched || already_sent || no_picker {
+        now
+    } else {
+        picked
+    }
+    .to_string()
+}
+
+/// The state an editor's save sends: the one picked, and only when it
+/// differs from the task's own (`base`). An unknown word sends nothing.
+#[must_use]
+pub fn changed_state(picked: &str, base: &str) -> Option<TaskStatus> {
+    (picked != base)
+        .then(|| TaskStatus::parse(picked))
+        .flatten()
+}
+
 /// The PATCH for an inline task edit, from its form values (the strings the
 /// edit form's inputs hold). `None` when the title is blank. An empty due date
-/// or recurrence clears it; an unknown priority is Medium. Shared by every
-/// task list's inline editor (`task_actions::TaskEditDraft`).
+/// or recurrence clears it; an unknown priority is Medium. `status` is the
+/// state picked in the editor, and only when it was changed there: an
+/// edit of the title must not re-send the state the task happens to have.
+/// Shared by every task list's inline editor (`task_actions::TaskEditDraft`).
 pub fn task_edit_request(
     title: &str,
     priority: &str,
     due: &str,
     recurrence: &str,
+    status: Option<TaskStatus>,
 ) -> Option<UpdateTaskRequest> {
     let title = title.trim();
     if title.is_empty() {
@@ -529,6 +596,7 @@ pub fn task_edit_request(
     }
     Some(UpdateTaskRequest {
         title: Some(title.to_string()),
+        status,
         priority: Some(TaskPriority::parse(priority).unwrap_or(TaskPriority::Medium)),
         due_date: Some(due.trim().parse::<NaiveDate>().ok()),
         recurrence: Some(RecurrenceRule::parse(recurrence)),
@@ -692,6 +760,77 @@ mod tests {
         assert_eq!(TaskStatus::parse("in_progress"), None);
         assert_eq!(TaskStatus::parse("waiting"), Some(TaskStatus::Waiting));
         assert!(serde_json::from_str::<TaskStatus>(r#""started""#).is_err());
+    }
+
+    fn task_in(status: TaskStatus, focus: Option<NaiveDate>, due: Option<NaiveDate>) -> Task {
+        Task {
+            id: TaskId(uuid::Uuid::from_u128(1)),
+            node_id: None,
+            owner_id: "alice".to_string(),
+            title: "t".to_string(),
+            status,
+            priority: TaskPriority::Medium,
+            focus_date: focus,
+            due_date: due,
+            recurrence: None,
+            sort_order: 0,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn my_day_carries_over_only_what_can_be_acted_on() {
+        let today = day(12);
+        for status in TaskStatus::ALL {
+            // Focused today: in My Day, whatever its state.
+            assert!(
+                task_in(status.clone(), Some(today), None).in_my_day(today),
+                "{status:?} today"
+            );
+            // Focused on an earlier day: carried over only while open.
+            assert_eq!(
+                task_in(status.clone(), Some(day(9)), None).in_my_day(today),
+                *status == TaskStatus::Open,
+                "{status:?} carried over"
+            );
+            // Never focused, or for a later day: not in today's.
+            assert!(!task_in(status.clone(), None, None).in_my_day(today));
+            assert!(!task_in(status.clone(), Some(day(20)), None).in_my_day(today));
+        }
+    }
+
+    #[test]
+    fn the_overdue_zone_takes_open_tasks_only() {
+        let today = day(12);
+        let late = Some(day(9));
+        assert!(task_in(TaskStatus::Open, None, late).in_overdue_zone(today));
+        // A waiting task past its date: the date is a fact, but it isn't
+        // put in front of its person as something to do now.
+        let waiting = task_in(TaskStatus::Waiting, None, late);
+        assert!(waiting.is_overdue(today));
+        assert!(!waiting.in_overdue_zone(today));
+        for closed in [TaskStatus::Done, TaskStatus::Cancelled] {
+            assert!(!task_in(closed, None, late).in_overdue_zone(today));
+        }
+        assert!(!task_in(TaskStatus::Open, None, Some(today)).in_overdue_zone(today));
+        assert!(!task_in(TaskStatus::Open, None, None).in_overdue_zone(today));
+    }
+
+    #[test]
+    fn only_an_open_task_is_actionable_and_done_is_not_picked_by_hand() {
+        for status in TaskStatus::ALL {
+            assert_eq!(
+                status.is_actionable(),
+                *status == TaskStatus::Open,
+                "{status:?}"
+            );
+        }
+        assert_eq!(
+            TaskStatus::PICKABLE,
+            [TaskStatus::Open, TaskStatus::Waiting, TaskStatus::Cancelled]
+        );
     }
 
     #[test]
@@ -883,18 +1022,72 @@ mod tests {
 
     #[test]
     fn task_edit_request_maps_form_values() {
-        let r = task_edit_request("  Ship it  ", "high", "2026-11-03", "weekly").unwrap();
+        let r = task_edit_request("  Ship it  ", "high", "2026-11-03", "weekly", None).unwrap();
+        assert_eq!(r.status, None, "an unchanged state is not sent");
         assert_eq!(r.title.as_deref(), Some("Ship it"));
         assert_eq!(r.priority, Some(TaskPriority::High));
         assert_eq!(r.due_date, Some(NaiveDate::from_ymd_opt(2026, 11, 3)));
         assert_eq!(r.recurrence, Some(Some(RecurrenceRule::Weekly)));
         // Empty due / recurrence clear (Some(None)); unknown priority = Medium.
-        let r = task_edit_request("x", "bogus", "", "").unwrap();
+        let r = task_edit_request("x", "bogus", "", "", Some(TaskStatus::Waiting)).unwrap();
+        assert_eq!(r.status, Some(TaskStatus::Waiting));
         assert_eq!(r.priority, Some(TaskPriority::Medium));
         assert_eq!(r.due_date, Some(None));
         assert_eq!(r.recurrence, Some(None));
         // Blank title: no request at all.
-        assert!(task_edit_request("   ", "high", "", "").is_none());
+        assert!(task_edit_request("   ", "high", "", "", None).is_none());
+    }
+
+    #[test]
+    fn an_untouched_picker_follows_the_task_and_a_choice_stays() {
+        // Untouched: the task was set to waiting elsewhere; the editor follows.
+        assert_eq!(rebased_state("open", "open", "waiting", None), "waiting");
+        // A choice made in the editor and not yet saved survives the task
+        // moving under it.
+        assert_eq!(
+            rebased_state("cancelled", "open", "waiting", None),
+            "cancelled"
+        );
+        // The editor's own save landing: the choice is now the task's.
+        assert_eq!(
+            rebased_state("waiting", "open", "waiting", Some("waiting")),
+            "waiting"
+        );
+    }
+
+    #[test]
+    fn a_pick_already_sent_or_on_a_done_task_does_not_come_back() {
+        // Saved as waiting, then ticked done with the checkbox: the editor
+        // must not hold "waiting" and send it with the next title edit.
+        assert_eq!(
+            rebased_state("waiting", "open", "done", Some("waiting")),
+            "done"
+        );
+        // Saved as waiting, then cancelled elsewhere: same.
+        assert_eq!(
+            rebased_state("waiting", "open", "cancelled", Some("waiting")),
+            "cancelled"
+        );
+        // An unsaved pick, and the task is ticked done in another tab: a
+        // done task has no picker, so the pick goes with it.
+        assert_eq!(rebased_state("waiting", "open", "done", None), "done");
+        // A different pick from the one sent is still a choice.
+        assert_eq!(
+            rebased_state("cancelled", "open", "waiting", Some("waiting")),
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn a_state_is_sent_only_when_it_differs_from_the_tasks_own() {
+        assert_eq!(changed_state("open", "open"), None);
+        assert_eq!(changed_state("waiting", "open"), Some(TaskStatus::Waiting));
+        // A save that failed leaves the task as it was, so the retry
+        // sends the state again: nothing "already sent" is remembered.
+        assert_eq!(changed_state("waiting", "open"), Some(TaskStatus::Waiting));
+        // Once the task has it, there is nothing to send.
+        assert_eq!(changed_state("waiting", "waiting"), None);
+        assert_eq!(changed_state("bogus", "open"), None);
     }
 
     #[test]

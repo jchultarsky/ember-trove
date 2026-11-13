@@ -46,7 +46,7 @@ use crate::components::task_actions::{
 use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
     CopyTaskButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view,
-    priority_dot_view,
+    priority_dot_view, state_badge_view,
 };
 use crate::components::toast::ToastState;
 
@@ -117,10 +117,15 @@ impl EditSession {
     /// open editor, or after a failed Save, must not throw the text away
     /// (`TaskEditDraft::worth_keeping`).
     pub fn open(&self, task: &Task) {
-        let keep = matches!(
-            self.current.try_get_value().flatten(),
-            Some((id, draft)) if id == task.id && draft.worth_keeping(task)
-        );
+        let keep = match self.current.try_get_value().flatten() {
+            Some((id, draft)) if id == task.id => {
+                // The task's state may have moved while the draft waited
+                // (a tick, an untick, its own save landing).
+                draft.follow(task);
+                draft.worth_keeping(task)
+            }
+            _ => false,
+        };
         if !keep {
             self.replace(task);
         }
@@ -131,7 +136,10 @@ impl EditSession {
     /// editor was opened another way (an Undo reopening it).
     pub fn draft(&self, task: &Task) -> TaskEditDraft {
         match self.current.try_get_value().flatten() {
-            Some((id, draft)) if id == task.id => draft,
+            Some((id, draft)) if id == task.id => {
+                draft.follow(task);
+                draft
+            }
             _ => self.replace(task),
         }
     }
@@ -326,7 +334,12 @@ pub fn KanbanTaskRow(
     // committed to My Day on a previous day and never finished.  Such tasks
     // now stay in the Today zone (sticky My Day) rather than dropping to the
     // backlog, so surface the "carried from May 2" hint in either zone.
-    let carryover_from: Option<NaiveDate> = focus.filter(|&d| d < today);
+    // Only a task that is carried: one that can still be acted on. A
+    // waiting task focused on an earlier day sits in the backlog (S5a), and
+    // "keep on today?" is not a question to ask of it.
+    let carryover_from: Option<NaiveDate> = focus
+        .filter(|&d| d < today)
+        .filter(|_| task.status.is_actionable());
 
     // ── Mutations ─────────────────────────────────────────────────────
 
@@ -530,6 +543,8 @@ pub fn KanbanTaskRow(
                             );
                             due_badge_view(d, overdue)
                         })}
+                        // Waiting or Cancelled, said in words (S5a).
+                        {move || state_badge_view(&status_sig.get())}
                         // Carryover badge: the date IS the question; ✓
                         // keeps it on today. "No" is the existing ✕
                         // (remove from today) in the action cluster.
@@ -568,8 +583,15 @@ pub fn KanbanTaskRow(
                 }}
             </div>
 
-            // Actions — always visible, never trigger row navigation
-            <div class="flex items-center gap-0.5 flex-shrink-0">
+            // Actions — always visible, never trigger row navigation. Except
+            // at phone width while the row is being edited: beside them the
+            // editor was about 150px wide, too narrow for its pickers, and
+            // the editor has its own Save and Cancel.
+            <div class=move || if is_editing() {
+                "hidden sm:flex items-center gap-0.5 flex-shrink-0"
+            } else {
+                "flex items-center gap-0.5 flex-shrink-0"
+            }>
                 {match zone {
                     KanbanZone::Today => view! {
                         <button

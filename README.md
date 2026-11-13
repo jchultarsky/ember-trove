@@ -476,7 +476,7 @@ details.
 | PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
-| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day (default: today in UTC; the UI sends the local date) |
+| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day, plus open tasks carried over from an earlier day; a waiting, done or cancelled task doesn't carry over (default: today in UTC; the UI sends the local date) |
 | GET | `/api/tasks/all` | Every open task of the caller, with its node's title (the My Day backlog) |
 | POST | `/api/tasks` | Create a task from the body: on the Project named by `node_id`, or on none (still allowed; Data health lists such tasks) |
 | GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |

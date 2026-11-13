@@ -18,14 +18,14 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use common::id::TaskId;
-use common::task::{TaskPriority, UpdateTaskRequest};
+use common::task::{TaskPriority, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 
 use crate::components::due_date_field::{DUE_INPUT_CLASS, DueDateField};
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::resizable_editor::ResizableEditor;
 use crate::components::task_actions::TaskEditDraft;
-use crate::components::task_common::parse_priority;
+use crate::components::task_common::WAITING_TONE;
 use crate::components::task_row::TaskEditorHeights;
 
 /// Standard task checkbox classes (5×5, amber hover) — pair with an amber
@@ -172,18 +172,42 @@ fn priority_tint(p: &TaskPriority) -> (&'static str, &'static str) {
     }
 }
 
-/// The one priority control (#132): a labelled segmented radio group over
-/// `TaskPriority::ALL`, used by every task editor and the add-task form.
-/// Labels, not colour-only dots (WCAG 1.4.1); WAI-ARIA APG radio group —
-/// one tab stop on the checked option, arrow keys move the selection.
+/// One option of a [`SegmentedRadio`].
+#[derive(Clone)]
+struct Segment {
+    /// The wire string the picker's signal holds when this is chosen.
+    value: &'static str,
+    label: &'static str,
+    /// Text colour and selected tint when checked.
+    tint: (&'static str, &'static str),
+}
+
+/// A labelled segmented radio group over a few fixed options: the shape of
+/// every small picker in the task editor ([`PriorityPicker`],
+/// [`StatePicker`]). Labels, not colour-only dots (WCAG 1.4.1); WAI-ARIA APG
+/// radio group — one tab stop on the checked option, arrow keys move the
+/// selection.
 #[component]
-pub fn PriorityPicker(
-    /// The priority's wire string (`"low"` / `"medium"` / `"high"`).
+fn SegmentedRadio(
+    /// The group's accessible name.
+    label: &'static str,
+    testid: &'static str,
+    segments: Vec<Segment>,
+    /// The chosen option's wire string.
     value: RwSignal<String>,
+    /// The option shown as chosen while `value` names none of them, so
+    /// there is always exactly one checked option / tab stop.
+    fallback: usize,
 ) -> impl IntoView {
+    let segments = StoredValue::new(segments);
+    let len = segments.with_value(Vec::len);
+    let index_of = move |v: &str| {
+        segments
+            .with_value(|s| s.iter().position(|seg| seg.value == v))
+            .unwrap_or(fallback)
+    };
     let refs = StoredValue::new(
-        TaskPriority::ALL
-            .iter()
+        (0..len)
             .map(|_| NodeRef::<leptos::html::Button>::new())
             .collect::<Vec<_>>(),
     );
@@ -195,13 +219,12 @@ pub fn PriorityPicker(
         };
         ev.prevent_default();
         ev.stop_propagation();
-        let current = parse_priority(&value.get_untracked());
-        let active = TaskPriority::ALL.iter().position(|p| *p == current);
-        let Some(i) = common::picker::step(active, TaskPriority::ALL.len(), down) else {
+        let active = Some(index_of(&value.get_untracked()));
+        let Some(i) = common::picker::step(active, len, down) else {
             return;
         };
-        if let Some(p) = TaskPriority::ALL.get(i) {
-            value.set(p.as_str().to_string());
+        if let Some(v) = segments.with_value(|s| s.get(i).map(|seg| seg.value)) {
+            value.set(v.to_string());
         }
         // Focus follows the selection (roving tab stop).
         if let Some(btn) = refs.with_value(|r| r.get(i).and_then(|n| n.get_untracked())) {
@@ -211,20 +234,22 @@ pub fn PriorityPicker(
     view! {
         <div
             role="radiogroup"
-            aria-label="Priority"
-            class="inline-flex items-center rounded-lg border border-stone-200 dark:border-stone-700 overflow-hidden"
-            data-testid="priority-picker"
+            aria-label=label
+            // `flex-wrap`, `max-w-full`: in a box narrower than its options
+            // the group wraps. It must never cut an option off, which
+            // `overflow-hidden` (for the rounded corners) would do silently.
+            class="inline-flex flex-wrap max-w-full items-center rounded-lg border border-stone-200 dark:border-stone-700 overflow-hidden"
+            data-testid=testid
             on:keydown=on_keydown
         >
-            {TaskPriority::ALL
-                .iter()
+            {segments
+                .get_value()
+                .into_iter()
                 .enumerate()
-                .map(|(i, p)| {
-                    let v = p.as_str();
-                    let (fg, tint) = priority_tint(p);
-                    // An unknown value reads as Medium (`parse_priority`), so
-                    // there is always exactly one checked option / tab stop.
-                    let checked = move || parse_priority(&value.get()).as_str() == v;
+                .map(|(i, seg)| {
+                    let v = seg.value;
+                    let (fg, tint) = seg.tint;
+                    let checked = move || index_of(&value.get()) == i;
                     let node_ref = refs.with_value(|r| r.get(i).copied()).unwrap_or_default();
                     view! {
                         <button
@@ -233,7 +258,11 @@ pub fn PriorityPicker(
                             node_ref=node_ref
                             aria-checked=move || if checked() { "true" } else { "false" }
                             tabindex=move || if checked() { "0" } else { "-1" }
-                            class="text-xs px-2 py-0.5 transition-colors cursor-pointer \
+                            // Tighter at phone width: the editor is about
+                            // 170px wide there, and three state labels at
+                            // `px-2` were 13px wider than that (the last
+                            // one was clipped). `px-1` leaves room.
+                            class="text-xs px-1 sm:px-2 py-0.5 whitespace-nowrap transition-colors cursor-pointer \
                                    text-stone-500 dark:text-stone-400 \
                                    hover:bg-stone-100 dark:hover:bg-stone-800 \
                                    focus:outline-none focus-visible:ring-1 focus-visible:ring-amber-500"
@@ -247,7 +276,7 @@ pub fn PriorityPicker(
                                 value.set(v.to_string());
                             }
                         >
-                            {p.label()}
+                            {seg.label}
                         </button>
                     }
                 })
@@ -256,14 +285,119 @@ pub fn PriorityPicker(
     }
 }
 
+/// The one priority control (#132), over `TaskPriority::ALL`: used by every
+/// task editor and the add-task form.
+#[component]
+pub fn PriorityPicker(
+    /// The priority's wire string (`"low"` / `"medium"` / `"high"`).
+    value: RwSignal<String>,
+) -> impl IntoView {
+    let segments = TaskPriority::ALL
+        .iter()
+        .map(|p| Segment {
+            value: p.as_str(),
+            label: p.label(),
+            tint: priority_tint(p),
+        })
+        .collect::<Vec<_>>();
+    // An unknown value reads as Medium (`parse_priority`).
+    let fallback = TaskPriority::ALL
+        .iter()
+        .position(|p| *p == TaskPriority::Medium)
+        .unwrap_or(0);
+    view! {
+        <SegmentedRadio
+            label="Priority"
+            testid="priority-picker"
+            segments=segments
+            value=value
+            fallback=fallback
+        />
+    }
+}
+
+/// Text colour and selected tint per state. Cool or neutral, never warm:
+/// warm colour means urgency here, and none of these states is urgent.
+fn state_tint(s: &TaskStatus) -> (&'static str, &'static str) {
+    match s {
+        TaskStatus::Waiting => ("#0284c7", "rgba(14,165,233,0.15)"),
+        TaskStatus::Cancelled => ("#9ca3af", "rgba(156,163,175,0.18)"),
+        TaskStatus::Open | TaskStatus::Done => ("#78716c", "rgba(120,113,108,0.18)"),
+    }
+}
+
+/// The one state control (S5a, #314), over `TaskStatus::PICKABLE`: Open,
+/// Waiting, Cancelled. Done is not here; it is the row's checkbox. The task
+/// editor shows it for a task that is not done.
+#[component]
+pub fn StatePicker(
+    /// The state's wire string (`"open"` / `"waiting"` / `"cancelled"`).
+    value: RwSignal<String>,
+) -> impl IntoView {
+    let segments = TaskStatus::PICKABLE
+        .iter()
+        .map(|s| Segment {
+            value: s.as_str(),
+            label: s.label(),
+            tint: state_tint(s),
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <SegmentedRadio
+            label="State"
+            testid="state-picker"
+            segments=segments
+            value=value
+            fallback=0
+        />
+    }
+}
+
+/// The row badge of a state that needs saying: Waiting (cool, see
+/// [`WAITING_TONE`]) and Cancelled (muted). Open is the unmarked case and
+/// Done is the ticked checkbox, so neither has one.
+pub fn state_badge_view(status: &TaskStatus) -> Option<AnyView> {
+    let tone = match status {
+        TaskStatus::Waiting => WAITING_TONE,
+        TaskStatus::Cancelled => {
+            "bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400"
+        }
+        TaskStatus::Open | TaskStatus::Done => return None,
+    };
+    Some(
+        view! {
+            <span class=format!("flex-shrink-0 px-1.5 rounded {tone}")
+                data-testid="task-state">
+                {status.label()}
+            </span>
+        }
+        .into_any(),
+    )
+}
+
+/// "Done Nov 12" for the meta line of a done task: the day it was
+/// completed, on the reader's own calendar. A task completed before S5a has
+/// no date, and shows nothing.
+pub fn completed_badge_view(completed_at: chrono::DateTime<chrono::Utc>) -> AnyView {
+    let day = crate::components::format_helpers::local_date(&completed_at);
+    view! {
+        <span class="flex-shrink-0 text-stone-400 dark:text-stone-500"
+            data-testid="task-completed"
+            title="Completed">
+            {format!("Done {}", day.format("%b %-d"))}
+        </span>
+    }
+    .into_any()
+}
+
 /// [`TaskEditor`]'s title box. (The Inbox's roomier variant went with the
 /// Inbox's task list, S4c.)
 const EDITOR_TEXTAREA_CLASS: &str = "w-full bg-stone-100 dark:bg-stone-800 text-sm \
      text-stone-900 dark:text-stone-100 rounded px-2 py-1 resize-y \
      min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500";
 
-/// The one inline task editor (#132): title, priority, due date, repeat,
-/// Save / Cancel — the same controls and keys in My Day and the node
+/// The one inline task editor (#132): title, priority, state, due date,
+/// repeat, Save / Cancel — the same controls and keys in My Day and the node
 /// panel. The draft semantics live here too: Cancel resets every
 /// field, Escape discards with "Edit discarded · Undo" (`TaskEditDraft`),
 /// and Save hands the list the PATCH. Escape and Ctrl/⌘+Enter work from
@@ -337,6 +471,9 @@ pub fn TaskEditor(
             />
             <div class="flex items-center gap-2 flex-wrap">
                 <PriorityPicker value=draft.priority />
+                // Not for a done task: it is reopened with its checkbox,
+                // and the picker has no "Done" to show as chosen.
+                {draft.picks_state().then(|| view! { <StatePicker value=draft.status /> })}
                 <DueDateField value=draft.due original=due />
                 <select
                     class=DUE_INPUT_CLASS

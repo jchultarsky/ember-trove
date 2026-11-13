@@ -631,9 +631,12 @@ impl TaskRepo for PgTaskRepo {
               AND {on_a_node_they_see}
               AND t.focus_date IS NOT NULL
               AND t.focus_date <= $2
+              -- `Task::in_my_day`: focused that day, or carried over from
+              -- an earlier one while it can still be acted on. A waiting
+              -- task doesn't carry over (S5a, owner decision 2026-11-13).
               AND (
                   t.focus_date = $2
-                  OR t.status::text NOT IN ('done', 'cancelled')
+                  OR t.status = 'open'
               )
             ORDER BY
                 t.sort_order ASC,
