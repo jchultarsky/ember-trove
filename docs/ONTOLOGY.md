@@ -145,8 +145,10 @@ A Project assembles nine elements:
    so the picker suggests values already in use rather than enforcing a
    closed enum. Narrative status stays in the body or notes. Status is
    distinct from the Draft/Published/Archived lifecycle. Beside the open
-   label sits a small **closed terminal state** — *active*, *complete*, or
+   label sits a small **closed state** — *active*, *parked*, *complete*, or
    *cancelled* — which is the machine-readable declaration of §4.1.
+   *Complete* and *cancelled* are the **terminal states**; *parked* is not
+   terminal.
 3. **Tasks** — owned by the Project (§9).
 4. **People** — memberships carrying a Role and an optional context note
    (§7). Text may additionally *mention* People (§7.3).
@@ -173,9 +175,15 @@ A master Project may be suddenly cancelled (for example, a customer
 withdraws funding); that decision does not depend on the state of anything
 beneath it.
 
-- The terminal state is *active*, *complete*, or *cancelled*. A cancelled
-  Project is terminal and declared, parallel to a Task's Cancelled state
-  (§9.3).
+- The closed state is *active*, *parked*, *complete*, or *cancelled*.
+  *Complete* and *cancelled* are terminal. A cancelled Project is terminal
+  and declared, parallel to a Task's Cancelled state (§9.3).
+- **Parked is declared too, and is not terminal.** A parked Project is set
+  aside on purpose: it should not occupy its person's immediate attention.
+  One person works on many Projects and has to switch between them; parking
+  says which ones are deliberately not in motion, so they stop asking for
+  attention without being closed, archived or lost. A parked Project is
+  made *active* again by declaring it so.
 - The declaration is made independently of the children (never derived
   *upward*), and once declared it **cascades *downward***, transitively
   down the `contains` tree:
@@ -593,8 +601,10 @@ snapshots are a text mechanism, not the semantic record of what occurred.
     the Project shows again when it is un-archived or shared again. An
     entry is deleted only by its own person, with its node, or with its
     account.
-  - When the terminal state exists (§4.1), a complete or cancelled
-    Project leaves Focus, and re-opening it does not put it back.
+  - When the closed state exists (§4.1), a complete or cancelled
+    Project leaves Focus, and re-opening it does not put it back. A
+    parked Project does not show in Focus either: parking is the
+    statement that it should not hold attention now.
 
 ## 11. Events
 
@@ -746,3 +756,4 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-09 | Focus is persistent, with the time in Focus shown and no "still focused?" nudge; the optional why-line is kept and is private to its writer | Owner, on #282 |
 | 2026-11-09 | Focus is per person and private, with no admin bypass, like captures and people | Owner, on #282 |
 | 2026-11-11 | What leaves Focus by its own state is decided on the read, never by deleting the entry: today an archived Project, or one its reader can no longer view. Complete and cancelled join when the terminal state is built | Developer, building Focus (#282); to be confirmed by the owner in the PR |
+| 2026-11-12 | *Parked* is a real, declared Project state beside *active*, *complete* and *cancelled*: the Project is set aside on purpose and should not occupy its person's immediate attention. It is not terminal | Owner, in the developer session ("I am only one man and have to constantly switch context between projects") |
