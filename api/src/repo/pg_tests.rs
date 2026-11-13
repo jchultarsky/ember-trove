@@ -1009,8 +1009,10 @@ async fn retract_occurrence_keeps_a_started_occurrence(pool: PgPool) {
         .create_occurrence(parent.id, "owner-a", task_req("daily standup"))
         .await
         .expect("create occurrence");
+    // Since S5a "started" is any state but untouched-open; Waiting is the
+    // one the person can set.
     tasks
-        .update(next.id, status_req(TaskStatus::InProgress))
+        .update(next.id, status_req(TaskStatus::Waiting))
         .await
         .expect("start occurrence");
 
@@ -7041,4 +7043,357 @@ async fn an_older_archive_keeps_the_live_focus_of_projects_it_restores(pool: PgP
     );
     assert_eq!(repo.get("alice", false, kept).await.unwrap(), Some(live));
     assert_eq!(scalar(&pool, "SELECT count(*) FROM project_focus").await, 1);
+}
+
+// ── S5a: task states and the completion date (#314) ──────────────────────────
+
+/// Migration 050: every `in_progress` task becomes open, deleted ones too,
+/// without counting as an edit; the old word is closed off; and a task
+/// completed before the column existed has no completion date, yet can still
+/// be changed.
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_050_folds_in_progress_into_open_and_adds_the_completion_date(pool: PgPool) {
+    // Recreate the pre-050 state.
+    for q in [
+        "ALTER TABLE node_tasks DROP CONSTRAINT node_tasks_no_in_progress",
+        "ALTER TABLE node_tasks DROP CONSTRAINT node_tasks_completed_only_when_done",
+        "ALTER TABLE node_tasks DROP COLUMN completed_at",
+    ] {
+        sql(&pool, q).await;
+    }
+    let node = insert_raw_node(&pool, "alice", "project", "p", "").await;
+    for (title, status, deleted) in [
+        ("started", "in_progress", "NULL"),
+        ("started then deleted", "in_progress", "now()"),
+        ("open", "open", "NULL"),
+        ("finished long ago", "done", "NULL"),
+        ("dropped", "cancelled", "NULL"),
+    ] {
+        sql(
+            &pool,
+            &format!(
+                "INSERT INTO node_tasks (owner_id, node_id, title, status, deleted_at, updated_at) \
+                 VALUES ('alice', '{node}', '{title}', '{status}', {deleted}, '2020-01-01T00:00:00Z')"
+            ),
+        )
+        .await;
+    }
+
+    // Migrations run in a transaction; SET LOCAL needs one.
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::raw_sql(include_str!("../../../migrations/050_task_states.sql"))
+        .execute(&mut *tx)
+        .await
+        .expect("re-run migration 050");
+    tx.commit().await.expect("commit");
+
+    let rows: Vec<(String, String, bool, bool)> = sqlx::query_as(
+        "SELECT title, status::text, updated_at = '2020-01-01T00:00:00Z', completed_at IS NULL \
+         FROM node_tasks ORDER BY title",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("tasks");
+    let state = |title: &str| {
+        rows.iter()
+            .find(|r| r.0 == title)
+            .map(|r| (r.1.as_str(), r.2, r.3))
+            .expect(title)
+    };
+    // (status, updated_at untouched, no completion date)
+    assert_eq!(state("started"), ("open", true, true));
+    assert_eq!(state("started then deleted"), ("open", true, true));
+    assert_eq!(state("open"), ("open", true, true));
+    assert_eq!(state("dropped"), ("cancelled", true, true));
+    assert_eq!(
+        state("finished long ago"),
+        ("done", true, true),
+        "its completion date was never recorded, and is not made up"
+    );
+
+    // The old word can't come back, by any path.
+    let again = sqlx::query("UPDATE node_tasks SET status = 'in_progress' WHERE title = 'open'")
+        .execute(&pool)
+        .await;
+    assert!(again.is_err(), "in_progress is closed off");
+
+    // A task completed before the migration can still be renamed, reordered
+    // and deleted: no rule demands a date it never had.
+    let tasks = PgTaskRepo::new(pool.clone());
+    let old: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM node_tasks WHERE title = 'finished long ago'")
+            .fetch_one(&pool)
+            .await
+            .expect("id");
+    let old = common::id::TaskId(old);
+    let renamed = tasks
+        .update(
+            old,
+            UpdateTaskRequest {
+                title: Some("finished long ago, renamed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("rename a legacy done task");
+    assert_eq!(renamed.status, TaskStatus::Done);
+    assert_eq!(renamed.completed_at, None);
+    sql(
+        &pool,
+        &format!(
+            "UPDATE node_tasks SET sort_order = 7 WHERE id = '{}'",
+            old.0
+        ),
+    )
+    .await;
+    tasks.delete(old).await.expect("delete a legacy done task");
+    tasks
+        .restore(old)
+        .await
+        .expect("restore a legacy done task");
+    // Ticking it again as done doesn't invent a date either.
+    let still = tasks
+        .update(old, status_req(TaskStatus::Done))
+        .await
+        .expect("done again");
+    assert_eq!(still.completed_at, None);
+}
+
+/// A task has a completion date exactly while it is done: set when it
+/// becomes done, kept while it stays done, cleared when it leaves.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_task_carries_its_completion_date_only_while_done(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let task = tasks
+        .create(None, "alice", task_req("write the report"))
+        .await
+        .expect("create");
+    assert_eq!(task.completed_at, None);
+
+    // The database's clock on both sides: the test host's can differ from
+    // it by more than a moment (a container after the machine slept).
+    let db_now = || async {
+        sqlx::query_scalar::<_, chrono::DateTime<Utc>>("SELECT clock_timestamp()")
+            .fetch_one(&pool)
+            .await
+            .expect("database time")
+    };
+    let before = db_now().await;
+    let done = tasks
+        .update(task.id, status_req(TaskStatus::Done))
+        .await
+        .expect("done");
+    let at = done.completed_at.expect("a done task has its date");
+    assert!(
+        before <= at && at <= db_now().await,
+        "stamped at the update"
+    );
+
+    // An edit that isn't about the state leaves it alone; so does a second
+    // "done" (a double click, an Undo that re-sends it).
+    let renamed = tasks
+        .update(
+            task.id,
+            UpdateTaskRequest {
+                title: Some("write the report, v2".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("rename");
+    assert_eq!(renamed.completed_at, Some(at));
+    let again = tasks
+        .update(task.id, status_req(TaskStatus::Done))
+        .await
+        .expect("done again");
+    assert_eq!(again.completed_at, Some(at), "the first completion stands");
+
+    // Leaving done clears it, whichever way.
+    for to in [TaskStatus::Open, TaskStatus::Waiting, TaskStatus::Cancelled] {
+        tasks
+            .update(task.id, status_req(TaskStatus::Done))
+            .await
+            .expect("done");
+        let left = tasks
+            .update(task.id, status_req(to.clone()))
+            .await
+            .expect("leave done");
+        assert_eq!(left.status, to);
+        assert_eq!(left.completed_at, None, "{to:?} has no completion date");
+    }
+    // Completed again: stamped afresh (the loop above showed it cleared).
+    let redone = tasks
+        .update(task.id, status_req(TaskStatus::Done))
+        .await
+        .expect("done");
+    assert!(redone.completed_at.expect("date") >= at);
+
+    // A task created done is completed now; one created otherwise is not.
+    let born_done = tasks
+        .create(
+            None,
+            "alice",
+            CreateTaskRequest {
+                status: Some(TaskStatus::Done),
+                ..task_req("logged after the fact")
+            },
+        )
+        .await
+        .expect("create done");
+    assert!(born_done.completed_at.is_some());
+    let born_waiting = tasks
+        .create(
+            None,
+            "alice",
+            CreateTaskRequest {
+                status: Some(TaskStatus::Waiting),
+                ..task_req("ask the vendor")
+            },
+        )
+        .await
+        .expect("create waiting");
+    assert_eq!(born_waiting.status, TaskStatus::Waiting);
+    assert_eq!(born_waiting.completed_at, None);
+
+    // The database's half of the rule: no date on anything but a done task.
+    let bad = sqlx::query("UPDATE node_tasks SET completed_at = now() WHERE id = $1")
+        .bind(born_waiting.id.0)
+        .execute(&pool)
+        .await;
+    assert!(bad.is_err(), "only a done task has a completion date");
+}
+
+/// The dashboard counts each state, and its task list leads with what can
+/// be acted on: open tasks first, then waiting ones, each by priority.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_dashboard_counts_each_state_and_lists_actionable_tasks_first(pool: PgPool) {
+    use common::id::NodeId;
+    use common::task::TaskPriority;
+    let tasks = PgTaskRepo::new(pool.clone());
+    let node = NodeId(insert_raw_node(&pool, "alice", "project", "p", "").await);
+    let make = |title: &'static str, status: TaskStatus, priority: TaskPriority| {
+        let tasks = PgTaskRepo::new(pool.clone());
+        async move {
+            tasks
+                .create(
+                    Some(node),
+                    "alice",
+                    CreateTaskRequest {
+                        status: Some(status),
+                        priority: Some(priority),
+                        ..task_req(title)
+                    },
+                )
+                .await
+                .expect("create")
+        }
+    };
+    make("open, low", TaskStatus::Open, TaskPriority::Low).await;
+    make("waiting, high", TaskStatus::Waiting, TaskPriority::High).await;
+    make("open, high", TaskStatus::Open, TaskPriority::High).await;
+    make("done", TaskStatus::Done, TaskPriority::High).await;
+    make("cancelled", TaskStatus::Cancelled, TaskPriority::High).await;
+    let gone = make("open, deleted", TaskStatus::Open, TaskPriority::High).await;
+    tasks.delete(gone.id).await.expect("delete");
+
+    let counts = tasks.counts_for_nodes(&[node]).await.expect("counts");
+    let (_, c) = counts.first().expect("one node");
+    assert_eq!(
+        (c.open, c.waiting, c.done, c.cancelled),
+        (2, 1, 1, 1),
+        "a deleted task is in no count"
+    );
+
+    let listed = tasks
+        .list_open_for_nodes(&[node], 10)
+        .await
+        .expect("open list");
+    let (_, summaries, more) = listed.first().expect("one node");
+    let titles: Vec<&str> = summaries.iter().map(|t| t.title.as_str()).collect();
+    assert_eq!(titles, ["open, high", "open, low", "waiting, high"]);
+    assert_eq!(summaries[2].status, TaskStatus::Waiting);
+    assert!(!more);
+}
+
+/// A backup carries each task's state and completion date (format 9), and
+/// an archive from before S5a still restores: `in_progress` as open, no
+/// completion dates, and a date on a task that isn't done is dropped.
+#[sqlx::test(migrations = "../migrations")]
+async fn task_states_and_completion_dates_survive_a_backup_round_trip(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let node = common::id::NodeId(insert_raw_node(&pool, "alice", "project", "p", "").await);
+    let done = tasks
+        .create(Some(node), "alice", task_req("done"))
+        .await
+        .expect("create");
+    let done = tasks
+        .update(done.id, status_req(TaskStatus::Done))
+        .await
+        .expect("done");
+    let waiting = tasks
+        .create(
+            Some(node),
+            "alice",
+            CreateTaskRequest {
+                status: Some(TaskStatus::Waiting),
+                ..task_req("waiting")
+            },
+        )
+        .await
+        .expect("create waiting");
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    let archived = |id| {
+        data.tasks
+            .iter()
+            .find(|t: &&common::task::Task| t.id == id)
+            .expect("in the archive")
+    };
+    assert_eq!(archived(done.id).completed_at, done.completed_at);
+    assert_eq!(archived(waiting.id).status, TaskStatus::Waiting);
+
+    // Restored over a database that has moved on.
+    tasks
+        .update(done.id, status_req(TaskStatus::Open))
+        .await
+        .expect("reopen");
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data).await.unwrap();
+    tx.commit().await.unwrap();
+    let back = tasks.get(done.id).await.expect("restored");
+    assert_eq!(back.status, TaskStatus::Done);
+    assert_eq!(back.completed_at, done.completed_at);
+    assert_eq!(
+        tasks.get(waiting.id).await.expect("restored").status,
+        TaskStatus::Waiting
+    );
+
+    // The same archive as a release before S5a wrote it, plus a damaged row.
+    let mut old = serde_json::to_value(&data).expect("json");
+    let rows = old["tasks"].as_array_mut().expect("tasks");
+    for row in rows.iter_mut() {
+        let task = row.as_object_mut().expect("task");
+        if task["id"] == serde_json::json!(waiting.id) {
+            // No such state then: it would have been in_progress. And a
+            // completion date it can't have (a hand-edited archive).
+            task.insert("status".into(), "in_progress".into());
+            task.insert("completed_at".into(), "2026-01-01T00:00:00Z".into());
+        } else {
+            task.remove("completed_at");
+        }
+    }
+    let old: common::backup::BackupData = serde_json::from_value(old).expect("an older archive");
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &old)
+        .await
+        .expect("an older archive restores");
+    tx.commit().await.unwrap();
+    let was_in_progress = tasks.get(waiting.id).await.expect("restored");
+    assert_eq!(was_in_progress.status, TaskStatus::Open);
+    assert_eq!(was_in_progress.completed_at, None);
+    let legacy_done = tasks.get(done.id).await.expect("restored");
+    assert_eq!(legacy_done.status, TaskStatus::Done);
+    assert_eq!(legacy_done.completed_at, None, "never made up");
 }

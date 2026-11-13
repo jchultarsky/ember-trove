@@ -473,7 +473,7 @@ details.
 |--------|------|-------------|
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
 | POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
-| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). A bad title is **422** |
+| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
 | GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day (default: today in UTC; the UI sends the local date) |
@@ -482,7 +482,7 @@ details.
 | GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |
 | PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
 | GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
-| GET | `/api/dashboard/projects` | The caller's Projects with task counts, project status, the current Brief and top open tasks |
+| GET | `/api/dashboard/projects` | The caller's Projects with task counts (open, waiting, done, cancelled), project status, the current Brief and the top tasks still to do (open before waiting) |
 | GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
 
 ### Focus

@@ -58,13 +58,13 @@ pub fn status_done(s: &TaskStatus) -> bool {
 }
 
 pub fn status_label(s: &TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Open => "Open",
-        TaskStatus::InProgress => "In Progress",
-        TaskStatus::Done => "Done",
-        TaskStatus::Cancelled => "Cancelled",
-    }
+    s.label()
 }
+
+/// The badge of a task that is on someone or something else (S5a, #314).
+/// Cool, not warm: warm colour means urgency here, and a waiting task asks
+/// nothing of its person for now.
+pub const WAITING_TONE: &str = "bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300";
 
 // ── Priority ────────────────────────────────────────────────────────────────
 
@@ -156,6 +156,7 @@ mod tests {
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
+                completed_at: None,
             },
             node_title: None,
         }

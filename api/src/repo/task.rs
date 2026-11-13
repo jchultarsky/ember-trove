@@ -105,7 +105,8 @@ pub trait TaskRepo: Send + Sync {
         node_ids: &[NodeId],
     ) -> Result<Vec<(NodeId, TaskCounts)>, EmberTroveError>;
 
-    /// Open/in-progress tasks for the given nodes, capped at `limit` per node.
+    /// The tasks still to do on the given nodes, open ones before waiting
+    /// ones, capped at `limit` per node.
     /// Returns `(node_id, tasks, has_more)` tuples.
     async fn list_open_for_nodes(
         &self,
@@ -190,6 +191,7 @@ struct TaskRow {
     sort_order: i32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
 }
 
 fn parse_status(s: &str) -> Result<TaskStatus, EmberTroveError> {
@@ -224,6 +226,7 @@ impl TaskRow {
             sort_order: self.sort_order,
             created_at: self.created_at,
             updated_at: self.updated_at,
+            completed_at: self.completed_at,
         })
     }
 }
@@ -248,8 +251,25 @@ const SELECT_COLS: &str = r#"
     id, node_id, owner_id, title,
     status::text    AS status,
     priority::text  AS priority,
-    focus_date, due_date, recurrence, sort_order, created_at, updated_at
+    focus_date, due_date, recurrence, sort_order, created_at, updated_at, completed_at
 "#;
+
+/// The completion date a status write leaves behind (ONTOLOGY §9.3; S5a,
+/// #314), as the right-hand side of `completed_at = …` in an `UPDATE` whose
+/// new status, or NULL for "no change", is bound at `$3`:
+/// - no status in the request: untouched;
+/// - any state but done: cleared (a reopened or cancelled task has none);
+/// - done when it already was: untouched, so a task completed before the
+///   column existed keeps its empty date (never made up);
+/// - becoming done: now.
+///
+/// It lives in the statement that sets the status, so the two can't part.
+/// The database has only the other half as a CHECK (migration 050 says why).
+const COMPLETED_AT_AFTER: &str = "CASE \
+    WHEN $3::task_status IS NULL THEN completed_at \
+    WHEN $3::task_status <> 'done' THEN NULL \
+    WHEN status = 'done' THEN completed_at \
+    ELSE now() END";
 
 #[derive(sqlx::FromRow)]
 struct MyDayRow {
@@ -265,6 +285,7 @@ struct MyDayRow {
     sort_order: i32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
     node_title: Option<String>,
 }
 
@@ -282,6 +303,7 @@ fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
         sort_order: r.sort_order,
         created_at: r.created_at,
         updated_at: r.updated_at,
+        completed_at: r.completed_at,
     }
     .into_task()?;
     Ok(MyDayTask {
@@ -309,8 +331,10 @@ pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
         r#"
         INSERT INTO node_tasks
             (node_id, owner_id, title, status, priority, focus_date, due_date, recurrence,
-             recurrence_parent_id)
-        VALUES ($1, $2, $3, $4::task_status, $5::task_priority, $6, $7, $8, $9)
+             recurrence_parent_id, completed_at)
+        VALUES ($1, $2, $3, $4::task_status, $5::task_priority, $6, $7, $8, $9,
+                -- A task created done is completed now (S5a).
+                CASE WHEN $4::task_status = 'done' THEN now() END)
         RETURNING {SELECT_COLS}
         "#
     ))
@@ -499,6 +523,7 @@ impl TaskRepo for PgTaskRepo {
             UPDATE node_tasks SET
                 title      = COALESCE($2, title),
                 status     = COALESCE($3::task_status,   status),
+                completed_at = {COMPLETED_AT_AFTER},
                 priority   = COALESCE($4::task_priority, priority),
                 focus_date = CASE WHEN $5  THEN $6  ELSE focus_date END,
                 due_date   = CASE WHEN $7  THEN $8  ELSE due_date   END,
@@ -597,7 +622,7 @@ impl TaskRepo for PgTaskRepo {
                 t.status::text    AS status,
                 t.priority::text  AS priority,
                 t.focus_date, t.due_date, t.recurrence, t.sort_order,
-                t.created_at, t.updated_at,
+                t.created_at, t.updated_at, t.completed_at,
                 n.title           AS node_title
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
@@ -665,7 +690,7 @@ impl TaskRepo for PgTaskRepo {
                 t.status::text    AS status,
                 t.priority::text  AS priority,
                 t.focus_date, t.due_date, t.recurrence, t.sort_order,
-                t.created_at, t.updated_at,
+                t.created_at, t.updated_at, t.completed_at,
                 n.title           AS node_title
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
@@ -708,7 +733,7 @@ impl TaskRepo for PgTaskRepo {
                 t.status::text    AS status,
                 t.priority::text  AS priority,
                 t.focus_date, t.due_date, t.recurrence, t.sort_order,
-                t.created_at, t.updated_at,
+                t.created_at, t.updated_at, t.completed_at,
                 n.title           AS node_title
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
@@ -747,7 +772,7 @@ impl TaskRepo for PgTaskRepo {
         struct CountRow {
             node_id: Uuid,
             open: i64,
-            in_progress: i64,
+            waiting: i64,
             done: i64,
             cancelled: i64,
         }
@@ -757,7 +782,7 @@ impl TaskRepo for PgTaskRepo {
             SELECT
                 node_id,
                 COUNT(*) FILTER (WHERE status = 'open')        AS open,
-                COUNT(*) FILTER (WHERE status = 'in_progress') AS in_progress,
+                COUNT(*) FILTER (WHERE status = 'waiting')     AS waiting,
                 COUNT(*) FILTER (WHERE status = 'done')        AS done,
                 COUNT(*) FILTER (WHERE status = 'cancelled')   AS cancelled
             FROM node_tasks
@@ -778,7 +803,7 @@ impl TaskRepo for PgTaskRepo {
                     NodeId(r.node_id),
                     TaskCounts {
                         open: r.open as u32,
-                        in_progress: r.in_progress as u32,
+                        waiting: r.waiting as u32,
                         done: r.done as u32,
                         cancelled: r.cancelled as u32,
                     },
@@ -822,6 +847,9 @@ impl TaskRepo for PgTaskRepo {
                        ROW_NUMBER() OVER (
                            PARTITION BY node_id
                            ORDER BY
+                               -- What can be acted on leads; what waits
+                               -- on someone else follows (S5a).
+                               (status = 'waiting'),
                                {PRIORITY_RANK},
                                due_date NULLS LAST,
                                sort_order ASC,
@@ -830,7 +858,7 @@ impl TaskRepo for PgTaskRepo {
                 FROM node_tasks
                 WHERE node_id = ANY($1)
                   AND deleted_at IS NULL
-                  AND status::text IN ('open', 'in_progress')
+                  AND status::text IN ('open', 'waiting')
             ) ranked
             WHERE rn <= $2
             ORDER BY node_id, rn

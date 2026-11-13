@@ -3,7 +3,17 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-12)
+## Current state (2026-11-13)
+
+- **In progress: S5a, task states** (#314; ONTOLOGY §9.3). PR 1 (data and
+  API): migrations 049 (`waiting`) and 050 (`in_progress` → open,
+  `completed_at`), `TaskStatus` Open / Waiting / Done / Cancelled, backup
+  format 9. PR 2 (UI): the state picker (Open, Waiting, Cancelled), a
+  Waiting task out of Today and Overdue in My Day, the completion date on
+  done tasks. One release for both (3.20.0), after a Lightsail snapshot.
+  Rules: "Task rules" in `.claude/rules/api.md`. Owner decisions,
+  2026-11-13: the picker's three states; Waiting leaves Today and Overdue;
+  **S6a (project states, with parked) comes next**, before S5b to S5d.
 
 - **v3.19.0 shipped: the home chip and the end of the Status scrape** (PR #310; owner
   requests, 2026-11-12). `node_home::HomeChip` shows a node's home in the

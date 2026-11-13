@@ -115,7 +115,8 @@ fn series_effect(pre: &Task, new_status: Option<&TaskStatus>, today: NaiveDate) 
         }
         // Keyed on the link, not on `pre.recurrence`: the rule may have been
         // cleared since the completion that scheduled the occurrence.
-        (TaskStatus::Done, TaskStatus::Open | TaskStatus::InProgress) => SeriesEffect::RetractNext,
+        // Reopened, as open or as waiting (S5a).
+        (TaskStatus::Done, TaskStatus::Open | TaskStatus::Waiting) => SeriesEffect::RetractNext,
         _ => SeriesEffect::Unchanged,
     }
 }
@@ -525,7 +526,7 @@ pub(crate) async fn dashboard_entries(
 
     let empty = TaskCounts {
         open: 0,
-        in_progress: 0,
+        waiting: 0,
         done: 0,
         cancelled: 0,
     };
@@ -611,6 +612,7 @@ mod tests {
             sort_order: 0,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            completed_at: None,
         }
     }
 
@@ -655,8 +657,8 @@ mod tests {
     }
 
     #[test]
-    fn completing_from_in_progress_also_schedules() {
-        let pre = task(TaskStatus::InProgress, Some(RecurrenceRule::Daily));
+    fn completing_from_waiting_also_schedules() {
+        let pre = task(TaskStatus::Waiting, Some(RecurrenceRule::Daily));
         assert!(matches!(
             series_effect(&pre, Some(&TaskStatus::Done), today()),
             SeriesEffect::ScheduleNext { .. }
@@ -681,7 +683,7 @@ mod tests {
 
     #[test]
     fn reopening_completed_task_retracts_next() {
-        for to in [TaskStatus::Open, TaskStatus::InProgress] {
+        for to in [TaskStatus::Open, TaskStatus::Waiting] {
             let pre = task(TaskStatus::Done, Some(RecurrenceRule::Daily));
             assert!(matches!(
                 series_effect(&pre, Some(&to), today()),
