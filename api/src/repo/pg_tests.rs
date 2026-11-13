@@ -1074,65 +1074,196 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
     assert!(!ids.contains(&carried_done.id));
 }
 
-/// S5a (owner decision, 2026-11-13): a Waiting task doesn't carry over into
-/// My Day. The query and `Task::in_my_day` are one rule: for every state,
-/// focused today or earlier, the list holds exactly the tasks the rule
-/// names. And a waiting task is still in the backlog's feed.
+/// My Day carries a task over only while it asks for attention: it is
+/// open (a Waiting task doesn't carry over; S5a, owner decision
+/// 2026-11-13) and its project is not parked or closed (S6a, owner
+/// decision 2026-11-13). The query and `Task::in_my_day` are one rule: for
+/// every task state, focused today or earlier, on no node, on an Article
+/// (older data) and on a Project in each state, the list holds exactly
+/// the tasks the rule names, and each row carries its project's state. A
+/// task the list leaves out is still in the backlog's feed.
 #[sqlx::test(migrations = "../migrations")]
-async fn my_day_carries_over_only_what_can_be_acted_on(pool: PgPool) {
+async fn my_day_carries_over_only_what_asks_for_attention(pool: PgPool) {
+    use common::project_state::ProjectState;
     let tasks = PgTaskRepo::new(pool.clone());
     let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 12).expect("date");
     let earlier = today - Duration::days(2);
+
+    // Where a task can be: (label, node, the state the feed should carry).
+    let mut places: Vec<(String, Option<common::id::NodeId>, Option<ProjectState>)> =
+        vec![("no node".to_string(), None, None)];
+    let article = create_node(&pool, "owner-a", "an article").await;
+    own(&pool, article.id, "owner-a").await;
+    places.push(("an article".to_string(), Some(article.id), None));
+    for state in ProjectState::ALL {
+        let p = a_project(
+            &pool,
+            "owner-a",
+            &format!("{} project", state.as_str()),
+            None,
+        )
+        .await;
+        declare(&pool, p.id, *state, "owner-a").await;
+        places.push((p.title.clone(), Some(p.id), Some(*state)));
+    }
+
     let mut made = Vec::new();
-    for status in TaskStatus::ALL {
-        for focus in [today, earlier] {
-            let task = tasks
-                .create(
-                    None,
-                    "owner-a",
-                    CreateTaskRequest {
-                        status: Some(status.clone()),
-                        focus_date: Some(focus),
-                        ..task_req(&format!("{} {focus}", status.as_str()))
-                    },
-                )
-                .await
-                .expect("create");
-            made.push(task);
+    for (place, node, state) in &places {
+        for status in TaskStatus::ALL {
+            for focus in [today, earlier] {
+                let task = tasks
+                    .create(
+                        *node,
+                        "owner-a",
+                        CreateTaskRequest {
+                            status: Some(status.clone()),
+                            focus_date: Some(focus),
+                            ..task_req(&format!("{} {focus} on {place}", status.as_str()))
+                        },
+                    )
+                    .await
+                    .expect("create");
+                made.push((task, *state));
+            }
         }
     }
-    let listed: Vec<_> = tasks
+    let listed = tasks
         .list_my_day("owner-a", Some("owner-a"), today)
         .await
-        .expect("my day")
-        .into_iter()
-        .map(|t| t.task.id)
-        .collect();
-    for task in &made {
+        .expect("my day");
+    let ids: Vec<_> = listed.iter().map(|t| t.task.id).collect();
+    for (task, state) in &made {
         assert_eq!(
-            listed.contains(&task.id),
-            task.in_my_day(today),
+            ids.contains(&task.id),
+            task.in_my_day(today, *state),
             "{}",
             task.title
         );
     }
-    // What the rule comes to: four focused today, and the open one carried.
-    assert_eq!(listed.len(), 5);
-    let waiting_carried = made
-        .iter()
-        .find(|t| t.status == TaskStatus::Waiting && t.focus_date == Some(earlier))
-        .expect("made");
-    assert!(!listed.contains(&waiting_carried.id));
+    // Each row says which state its project is in, and its own rule agrees.
+    for row in &listed {
+        let (_, state) = made
+            .iter()
+            .find(|(t, _)| t.id == row.task.id)
+            .expect("one of ours");
+        assert_eq!(row.project_state, *state, "{}", row.task.title);
+        assert!(row.in_my_day(today), "{}", row.task.title);
+    }
+    // What the rule comes to. Focused today: every task (4 states x 6
+    // places). Carried over: the open one, where nothing holds it back
+    // (no node, the article, the active project).
+    assert_eq!(listed.len(), 4 * places.len() + 3);
+    let carried = |status: TaskStatus, place: &str| {
+        made.iter()
+            .map(|(t, _)| t)
+            .find(|t| {
+                t.status == status
+                    && t.focus_date == Some(earlier)
+                    && t.title.ends_with(&format!("on {place}"))
+            })
+            .expect("made")
+            .id
+    };
+    assert!(ids.contains(&carried(TaskStatus::Open, "active project")));
+    assert!(ids.contains(&carried(TaskStatus::Open, "an article")));
+    let quiet = [
+        carried(TaskStatus::Waiting, "no node"),
+        carried(TaskStatus::Open, "parked project"),
+        carried(TaskStatus::Open, "complete project"),
+        carried(TaskStatus::Open, "cancelled project"),
+    ];
+    for id in &quiet {
+        assert!(!ids.contains(id));
+    }
 
-    // It is not lost: the backlog feed (every task still to do) has it.
-    let backlog: Vec<_> = tasks
+    // None of them is lost: the backlog feed (every task still to do) has
+    // them, each with its project's state for the row to show.
+    let backlog = tasks
         .list_open_for_owner("owner-a", Some("owner-a"))
         .await
-        .expect("backlog")
-        .into_iter()
-        .map(|t| t.task.id)
-        .collect();
-    assert!(backlog.contains(&waiting_carried.id));
+        .expect("backlog");
+    for id in &quiet {
+        assert!(backlog.iter().any(|t| t.task.id == *id));
+    }
+    let parked = backlog
+        .iter()
+        .find(|t| t.task.id == quiet[1])
+        .expect("in the backlog");
+    assert_eq!(parked.project_state, Some(ProjectState::Parked));
+    assert_eq!(parked.quiet_project(), Some(ProjectState::Parked));
+    assert!(!parked.in_my_day(today));
+
+    // The calendar's feed carries the state too (one column list).
+    sql(
+        &pool,
+        &format!(
+            "UPDATE node_tasks SET due_date = '{today}' WHERE id = '{}'",
+            quiet[1].0
+        ),
+    )
+    .await;
+    let due = tasks
+        .list_by_due_range("owner-a", Some("owner-a"), today, today)
+        .await
+        .expect("calendar");
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].project_state, Some(ProjectState::Parked));
+}
+
+/// SECURITY: the project's state reaches a feed only through the join that
+/// checks the reader may see the node. A task on a node its owner can no
+/// longer see is not in the feeds at all, so a state can't tell them
+/// anything about it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_feed_never_carries_the_state_of_a_node_its_reader_cannot_see(pool: PgPool) {
+    use common::project_state::ProjectState;
+    let tasks = PgTaskRepo::new(pool.clone());
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 12).expect("date");
+    // Bob's project, parked; alice has a task on it but no rights to it.
+    let hidden = a_project(&pool, "bob", "bob's parked project", None).await;
+    declare(&pool, hidden.id, ProjectState::Parked, "bob").await;
+    let task = tasks
+        .create(
+            Some(hidden.id),
+            "alice",
+            CreateTaskRequest {
+                focus_date: Some(today),
+                due_date: Some(today),
+                ..task_req("alice's task on it")
+            },
+        )
+        .await
+        .expect("create");
+    let seen = |rows: Vec<common::task::MyDayTask>| rows.into_iter().any(|t| t.task.id == task.id);
+    assert!(!seen(
+        tasks
+            .list_my_day("alice", Some("alice"), today)
+            .await
+            .expect("my day")
+    ));
+    assert!(!seen(
+        tasks
+            .list_open_for_owner("alice", Some("alice"))
+            .await
+            .expect("backlog")
+    ));
+    assert!(!seen(
+        tasks
+            .list_by_due_range("alice", Some("alice"), today, today)
+            .await
+            .expect("calendar")
+    ));
+    // Shared with her, it is listed, with the state.
+    share(&pool, hidden.id.0, "alice").await;
+    let rows = tasks
+        .list_open_for_owner("alice", Some("alice"))
+        .await
+        .expect("backlog");
+    let row = rows
+        .iter()
+        .find(|t| t.task.id == task.id)
+        .expect("visible now");
+    assert_eq!(row.project_state, Some(ProjectState::Parked));
 }
 
 /// The three task feeds' `node_title` for one task, as seen by `viewer`.

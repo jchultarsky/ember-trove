@@ -211,7 +211,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // archived project never shows in Focus, nor
                             // one that is parked or closed (S6a), so it
                             // has no control.
-                            let focusable = holds_focus(&n.node_type, &n.status, n.project_state);
+                            //
+                            // The declared state (S6a) belongs to the page:
+                            // the state chip writes it, and the Focus
+                            // control and the task list follow it at once.
+                            let project_state = RwSignal::new(n.project_state);
+                            let project_state_at = RwSignal::new(n.project_state_at);
+                            let (kind, lifecycle) = (n.node_type.clone(), n.status.clone());
+                            let focusable = Signal::derive(move || {
+                                holds_focus(&kind, &lifecycle, project_state.get())
+                            });
                             let focus_state = RwSignal::new(None::<bool>);
                             // A failed read is said: the control offers to
                             // load again. It used to leave no control.
@@ -233,9 +242,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                 failed: focus_failed,
                                 run: load_focus,
                             };
-                            if focusable {
-                                load_focus.run(());
-                            }
+                            // Read it now, and again whenever the project
+                            // comes back to a state that may be in Focus:
+                            // closing it removed the entry on the server, so
+                            // what was known before no longer holds.
+                            Effect::new(move |_| {
+                                if focusable.get() {
+                                    focus_state.set(None);
+                                    load_focus.run(());
+                                }
+                            });
 
                             view! {
                                 <div class="flex flex-col h-full">
@@ -278,6 +294,15 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 <crate::components::project_status::ProjectStatusChip
                                                     node_id=id
                                                     initial=n.project_status.clone()
+                                                    editable=is_owner
+                                                />
+                                            })}
+                                            // The declared state (S6a), beside the label.
+                                            {allows(&n.node_type, Capability::ProjectStatus).then(|| view! {
+                                                <crate::components::project_state::ProjectStateChip
+                                                    node_id=id
+                                                    state=project_state
+                                                    at=project_state_at
                                                     editable=is_owner
                                                 />
                                             })}
@@ -326,7 +351,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                         >
                                                             <span aria-hidden="true" class="material-symbols-outlined">"edit"</span>
                                                         </button>
-                                                        {focusable.then(|| view! {
+                                                        {move || focusable.get().then(|| view! {
                                                             <FocusToggle node_id=edit_id state=focus_state retry=focus_retry />
                                                         })}
                                                         <button
@@ -416,7 +441,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                     <span class="material-symbols-outlined" style="font-size:18px;">"edit"</span>
                                                                     "Edit"
                                                                 </button>
-                                                                {focusable.then(|| view! {
+                                                                {move || focusable.get().then(|| view! {
                                                                     <FocusMenuItem
                                                                         node_id=edit_id
                                                                         state=focus_state
@@ -496,7 +521,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         // One editor-prefs fetch per node for both panels (P1 #2).
                                         <crate::components::task_row::EditorPrefsScope>
                                         <TaskPanel node_id=id allowed=tasks_allowed
-                                            can_fix=is_canonical_owner />
+                                            can_fix=is_canonical_owner
+                                            project_state=project_state.read_only() />
                                         // Note panel — append-only; owner can add, everyone can read
                                         <NotePanel node_id=id is_owner=is_owner />
                                         </crate::components::task_row::EditorPrefsScope>

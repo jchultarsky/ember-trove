@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::id::{NodeId, TaskId};
+use crate::project_state::{ProjectState, lets_tasks_ask};
 
 /// A Task's lifecycle (ONTOLOGY §9.3): Open, Waiting, Done or Cancelled.
 ///
@@ -189,26 +190,46 @@ impl Task {
         is_overdue(&self.status, self.due_date, today)
     }
 
+    /// Whether the task may ask for its person's attention now: it can be
+    /// acted on ([`TaskStatus::is_actionable`], Open only) **and** its
+    /// Project is not set aside or closed
+    /// (`project_state::lets_tasks_ask`; S6a, owner decision 2026-11-13).
+    /// `project` is the state of the task's Project, `None` for a task on
+    /// no Project.
+    ///
+    /// The one rule behind My Day's carry-over and its Overdue zone. Both
+    /// take the project's state as a required argument, so no caller can
+    /// decide without it: a task that one place counted out of Today and
+    /// another out of the Backlog would be in neither.
+    #[must_use]
+    pub fn asks_for_attention(&self, project: Option<ProjectState>) -> bool {
+        self.status.is_actionable() && lets_tasks_ask(project)
+    }
+
     /// Whether the task is in `today`'s My Day, by the server's
     /// carry-forward rule (`list_my_day`): focused on `today` exactly, or
-    /// focused on an earlier day and still actionable. A task that is
-    /// done, cancelled or waiting doesn't carry over (waiting since S5a).
+    /// focused on an earlier day and still asking for attention
+    /// ([`Task::asks_for_attention`]). A task that is done, cancelled or
+    /// waiting doesn't carry over (waiting since S5a), nor does one whose
+    /// Project is parked or closed (S6a). A task its person put in today's
+    /// list stays there whatever its state or its project's.
     #[must_use]
-    pub fn in_my_day(&self, today: NaiveDate) -> bool {
+    pub fn in_my_day(&self, today: NaiveDate, project: Option<ProjectState>) -> bool {
         match self.focus_date {
             Some(d) if d == today => true,
-            Some(d) if d < today => self.status.is_actionable(),
+            Some(d) if d < today => self.asks_for_attention(project),
             _ => false,
         }
     }
 
     /// Whether My Day lists the task under Overdue: past its due date and
-    /// actionable. A Waiting task past its due date keeps the red date on
-    /// its row ([`is_overdue`] is the fact), but is not put in front of its
-    /// person as something to do now.
+    /// asking for attention. A Waiting task past its due date, or one on a
+    /// parked project, keeps the red date on its row ([`is_overdue`] is
+    /// the fact), but is not put in front of its person as something to do
+    /// now.
     #[must_use]
-    pub fn in_overdue_zone(&self, today: NaiveDate) -> bool {
-        self.status.is_actionable() && self.is_overdue(today)
+    pub fn in_overdue_zone(&self, today: NaiveDate, project: Option<ProjectState>) -> bool {
+        self.asks_for_attention(project) && self.is_overdue(today)
     }
 }
 
@@ -229,6 +250,34 @@ pub struct MyDayTask {
     #[serde(flatten)]
     pub task: Task,
     pub node_title: Option<String>,
+    /// The declared state of the task's Project (S6a), from the same
+    /// visibility-scoped read as `node_title`: `None` for a task on no
+    /// Project. A task on a node its reader can't see is not in the feeds
+    /// at all, so this says nothing about a hidden node.
+    #[serde(default)]
+    pub project_state: Option<ProjectState>,
+}
+
+impl MyDayTask {
+    /// [`Task::in_my_day`], with this task's own project.
+    #[must_use]
+    pub fn in_my_day(&self, today: NaiveDate) -> bool {
+        self.task.in_my_day(today, self.project_state)
+    }
+
+    /// [`Task::in_overdue_zone`], with this task's own project.
+    #[must_use]
+    pub fn in_overdue_zone(&self, today: NaiveDate) -> bool {
+        self.task.in_overdue_zone(today, self.project_state)
+    }
+
+    /// The state of the task's Project when that state keeps the task
+    /// quiet (parked, complete, cancelled): what the Backlog row says
+    /// beside the project's name. `None` for an active project or none.
+    #[must_use]
+    pub fn quiet_project(&self) -> Option<ProjectState> {
+        self.project_state.filter(|s| !s.asks_for_attention())
+    }
 }
 
 /// Where a feed task (`MyDayTask`) lives, for its parent chip (#230).
@@ -789,42 +838,119 @@ mod tests {
         }
     }
 
+    /// Every project a task can be on: none, and each declared state.
+    fn projects() -> Vec<Option<ProjectState>> {
+        std::iter::once(None)
+            .chain(ProjectState::ALL.iter().copied().map(Some))
+            .collect()
+    }
+
     #[test]
-    fn my_day_carries_over_only_what_can_be_acted_on() {
-        let today = day(12);
+    fn a_task_asks_for_attention_only_when_open_on_an_active_project_or_none() {
         for status in TaskStatus::ALL {
-            // Focused today: in My Day, whatever its state.
-            assert!(
-                task_in(status.clone(), Some(today), None).in_my_day(today),
-                "{status:?} today"
-            );
-            // Focused on an earlier day: carried over only while open.
-            assert_eq!(
-                task_in(status.clone(), Some(day(9)), None).in_my_day(today),
-                *status == TaskStatus::Open,
-                "{status:?} carried over"
-            );
-            // Never focused, or for a later day: not in today's.
-            assert!(!task_in(status.clone(), None, None).in_my_day(today));
-            assert!(!task_in(status.clone(), Some(day(20)), None).in_my_day(today));
+            for project in projects() {
+                let expected = *status == TaskStatus::Open
+                    && matches!(project, None | Some(ProjectState::Active));
+                assert_eq!(
+                    task_in(status.clone(), None, None).asks_for_attention(project),
+                    expected,
+                    "{status:?} on {project:?}"
+                );
+            }
         }
     }
 
     #[test]
-    fn the_overdue_zone_takes_open_tasks_only() {
+    fn my_day_carries_over_only_what_asks_for_attention() {
+        let today = day(12);
+        for status in TaskStatus::ALL {
+            for project in projects() {
+                let what = format!("{status:?} on {project:?}");
+                // Focused today: in My Day, whatever its state or its
+                // project's. Its person put it there.
+                assert!(
+                    task_in(status.clone(), Some(today), None).in_my_day(today, project),
+                    "{what} today"
+                );
+                // Focused on an earlier day: carried over only while it
+                // still asks for attention.
+                let carried = task_in(status.clone(), Some(day(9)), None);
+                assert_eq!(
+                    carried.in_my_day(today, project),
+                    carried.asks_for_attention(project),
+                    "{what} carried over"
+                );
+                // Never focused, or for a later day: not in today's.
+                assert!(!task_in(status.clone(), None, None).in_my_day(today, project));
+                assert!(!task_in(status.clone(), Some(day(20)), None).in_my_day(today, project));
+            }
+        }
+        // Spelled out once: an open task on a parked project stays behind.
+        let open = task_in(TaskStatus::Open, Some(day(9)), None);
+        assert!(open.in_my_day(today, None));
+        assert!(open.in_my_day(today, Some(ProjectState::Active)));
+        assert!(!open.in_my_day(today, Some(ProjectState::Parked)));
+        assert!(!open.in_my_day(today, Some(ProjectState::Complete)));
+    }
+
+    #[test]
+    fn the_overdue_zone_takes_only_what_asks_for_attention() {
         let today = day(12);
         let late = Some(day(9));
-        assert!(task_in(TaskStatus::Open, None, late).in_overdue_zone(today));
+        assert!(task_in(TaskStatus::Open, None, late).in_overdue_zone(today, None));
         // A waiting task past its date: the date is a fact, but it isn't
         // put in front of its person as something to do now.
         let waiting = task_in(TaskStatus::Waiting, None, late);
         assert!(waiting.is_overdue(today));
-        assert!(!waiting.in_overdue_zone(today));
+        assert!(!waiting.in_overdue_zone(today, None));
         for closed in [TaskStatus::Done, TaskStatus::Cancelled] {
-            assert!(!task_in(closed, None, late).in_overdue_zone(today));
+            assert!(!task_in(closed, None, late).in_overdue_zone(today, None));
         }
-        assert!(!task_in(TaskStatus::Open, None, Some(today)).in_overdue_zone(today));
-        assert!(!task_in(TaskStatus::Open, None, None).in_overdue_zone(today));
+        assert!(!task_in(TaskStatus::Open, None, Some(today)).in_overdue_zone(today, None));
+        assert!(!task_in(TaskStatus::Open, None, None).in_overdue_zone(today, None));
+        // Nor is an open, late task of a project that is parked or closed
+        // (S6a): its date stays red on its row, and it stays in the Backlog.
+        let open_late = task_in(TaskStatus::Open, None, late);
+        for project in projects() {
+            assert_eq!(
+                open_late.in_overdue_zone(today, project),
+                matches!(project, None | Some(ProjectState::Active)),
+                "{project:?}"
+            );
+            assert!(open_late.is_overdue(today));
+        }
+    }
+
+    #[test]
+    fn a_feed_task_carries_its_projects_state_into_the_rules() {
+        let today = day(12);
+        let on = |project: Option<ProjectState>| MyDayTask {
+            task: task_in(TaskStatus::Open, Some(day(9)), Some(day(9))),
+            node_title: project.map(|_| "p".to_string()),
+            project_state: project,
+        };
+        for project in projects() {
+            let t = on(project);
+            assert_eq!(t.in_my_day(today), t.task.in_my_day(today, project));
+            assert_eq!(
+                t.in_overdue_zone(today),
+                t.task.in_overdue_zone(today, project)
+            );
+            assert_eq!(
+                t.quiet_project(),
+                project.filter(|s| *s != ProjectState::Active),
+                "{project:?}"
+            );
+        }
+        // A feed from before S6a has no such field: nothing is held back.
+        let old: MyDayTask = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::from_u128(1), "node_id": null, "owner_id": "alice",
+            "title": "t", "status": "open", "priority": "medium",
+            "focus_date": null, "due_date": null, "recurrence": null, "sort_order": 0,
+            "created_at": Utc::now(), "updated_at": Utc::now(), "node_title": null,
+        }))
+        .expect("an older feed row");
+        assert_eq!(old.project_state, None);
     }
 
     #[test]

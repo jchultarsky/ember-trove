@@ -46,7 +46,7 @@ use crate::components::task_actions::{
 use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
     CopyTaskButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view,
-    priority_dot_view, state_badge_view,
+    priority_dot_view, quiet_project_badge_view, state_badge_view,
 };
 use crate::components::toast::ToastState;
 
@@ -256,6 +256,11 @@ pub fn KanbanTaskRow(
     /// and for a node the caller can no longer see (#230). The chip says
     /// which (`common::task::TaskParent`).
     node_title: Option<String>,
+    /// The declared state of the task's Project (S6a), `None` for a task
+    /// on no Project. A parked or closed project keeps its tasks out of
+    /// Today's carry-over and Overdue; the row then says why it is in the
+    /// Backlog.
+    project_state: Option<common::project_state::ProjectState>,
     today: NaiveDate,
     zone: KanbanZone,
     refresh: RwSignal<u32>,
@@ -334,12 +339,15 @@ pub fn KanbanTaskRow(
     // committed to My Day on a previous day and never finished.  Such tasks
     // now stay in the Today zone (sticky My Day) rather than dropping to the
     // backlog, so surface the "carried from May 2" hint in either zone.
-    // Only a task that is carried: one that can still be acted on. A
+    // Only a task that is carried: one that still asks for attention. A
     // waiting task focused on an earlier day sits in the backlog (S5a), and
-    // "keep on today?" is not a question to ask of it.
+    // so does a task of a parked or closed project (S6a); "keep on today?"
+    // is not a question to ask of either.
     let carryover_from: Option<NaiveDate> = focus
         .filter(|&d| d < today)
-        .filter(|_| task.status.is_actionable());
+        .filter(|_| task.asks_for_attention(project_state));
+    // Why an open task is not carried over or listed as overdue.
+    let quiet_project = project_state.filter(|s| !s.asks_for_attention());
 
     // ── Mutations ─────────────────────────────────────────────────────
 
@@ -545,6 +553,8 @@ pub fn KanbanTaskRow(
                         })}
                         // Waiting or Cancelled, said in words (S5a).
                         {move || state_badge_view(&status_sig.get())}
+                        // Its project is parked or closed (S6a).
+                        {quiet_project.map(quiet_project_badge_view)}
                         // Carryover badge: the date IS the question; ✓
                         // keeps it on today. "No" is the existing ✕
                         // (remove from today) in the action cluster.
