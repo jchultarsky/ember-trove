@@ -257,6 +257,24 @@ pub(super) fn node_cols(alias: &str) -> String {
         .join(", ")
 }
 
+/// SQL for "`alias`'s state is not terminal": the twin of
+/// `ProjectState::is_terminal`, built from it so the two can't drift.
+/// `IS DISTINCT FROM` keeps a node with no state (anything but a Project).
+/// The states are the enum's own wire strings, never text from a request.
+fn not_closed(alias: &str) -> String {
+    ProjectState::ALL
+        .iter()
+        .filter(|state| state.is_terminal())
+        .map(|state| {
+            format!(
+                "{alias}.project_state IS DISTINCT FROM '{}'",
+                state.as_str()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
 /// Row type for batch tag fetch — includes the owning node_id.
 #[derive(sqlx::FromRow)]
 struct NodeTagRow {
@@ -529,12 +547,8 @@ impl NodeRepo for PgNodeRepo {
         }
         if params.exclude_closed {
             // The dashboard: in SQL, so closed projects don't use up the
-            // page. `IS DISTINCT FROM` keeps a node with no state.
-            conditions.push(
-                "n.project_state IS DISTINCT FROM 'complete' \
-                 AND n.project_state IS DISTINCT FROM 'cancelled'"
-                    .to_owned(),
-            );
+            // page.
+            conditions.push(not_closed("n"));
         }
 
         if params.owner_id.is_some() {
@@ -1070,8 +1084,13 @@ impl NodeRepo for PgNodeRepo {
         if changed || declared_at.is_none() {
             // The state it already has, already declared, writes nothing:
             // `updated_at` is the version an open editor saves against.
+            // `clock_timestamp()`, not `now()`: `now()` is the transaction's
+            // start, before the wait for the lock above, so of two
+            // declarations sent at once the one that landed last could
+            // carry the earlier date (the History entry's rule, #208).
             sqlx::query(
-                "UPDATE nodes SET project_state = $2, project_state_at = now() WHERE id = $1",
+                "UPDATE nodes SET project_state = $2, project_state_at = clock_timestamp() \
+                 WHERE id = $1",
             )
             .bind(id.0)
             .bind(state.as_str())

@@ -278,12 +278,18 @@ cargo check && cargo clippy -- -D warnings
   Never fill it in. Don't add a "declared by" column: who declared is in
   History, which the purge already rewrites.
 - **Who asks for attention is one rule**:
-  `ProjectState::asks_for_attention` (active only). Focus
-  (`focus_refusal` / `holds_focus`, and `shows()` in SQL), the
-  dashboard and My Day's task rule all read it.
-- The dashboard asks the node list with `exclude_closed`, in SQL, so
-  closed projects don't use up its page. `NodeListParams.project_state`
-  is the public filter.
+  `ProjectState::asks_for_attention` (active only). Focus reads it:
+  `focus_refusal` / `holds_focus` in Rust, and `shows()` builds its SQL
+  from the same method. (My Day's task rule joins it in the slice's
+  second PR.)
+- **The dashboard shows what is not closed**: active and parked. It asks
+  the node list with `exclude_closed`, whose SQL (`not_closed`) is built
+  from `ProjectState::is_terminal`, and runs in SQL so closed projects
+  don't use up its page. `NodeListParams.project_state` is the public
+  filter. Don't write a state's name into a query: build it from the
+  enum, as those two do.
+- A duplicate is a new, active project: `copied_status` drops a label
+  that reads as another state.
 - Data health's `LabelReadsAsAnotherState`: the reader's **own**
   projects with `project_state_at IS NULL` whose label
   `label_disagrees` with their state. The reading is done in Rust, on

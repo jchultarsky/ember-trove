@@ -146,9 +146,17 @@ fn db(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
 /// doesn't show). `the_focus_filter_is_the_shared_rule` holds the two
 /// together.
 fn shows() -> String {
+    // The states that ask for attention, from the rule itself (the enum's
+    // own wire strings, never text from a request).
+    let asking = common::project_state::ProjectState::ALL
+        .iter()
+        .filter(|state| state.asks_for_attention())
+        .map(|state| format!("'{}'", state.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "f.subject_id = $1 AND n.node_type = 'project' AND n.status <> 'archived' \
-         AND n.project_state = 'active' AND {visible}",
+         AND n.project_state IN ({asking}) AND {visible}",
         visible = super::visible_to("n", 2),
     )
 }

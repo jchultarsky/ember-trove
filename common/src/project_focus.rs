@@ -346,6 +346,11 @@ mod tests {
             focus_refusal(&Area, &Archived, None),
             Some(FocusError::NotAProject)
         );
+        // The route answers with this text; it is the capability's own.
+        assert_eq!(
+            FocusError::NotAProject.to_string(),
+            Capability::Focus.refusal()
+        );
         // Archived is said before the state: un-archiving is the first step.
         assert_eq!(
             focus_refusal(&Project, &Archived, Some(ProjectState::Parked)),

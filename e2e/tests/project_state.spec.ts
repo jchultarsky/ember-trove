@@ -96,6 +96,11 @@ test('a state is declared by an editor, dated, and written to History', async ({
   expect((await relabelled.json()).project_state).toBe('parked');
 
   await declare(request, p.id, 'complete');
+  // A copy is a new, active project: it doesn't start out labelled "Done".
+  const copy = await (await request.post(`/api/nodes/${p.id}/duplicate`)).json();
+  expect(copy.project_state).toBe('active');
+  expect(copy.project_state_at).toBeNull();
+  expect(copy.project_status).toBe('Active');
   const history: { action: string; metadata: { from?: string; to?: string } }[] = await (
     await request.get(`/api/nodes/${p.id}/activity`)
   ).json();

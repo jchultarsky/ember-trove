@@ -307,14 +307,15 @@ struct LabelledProjectRow {
     archived: bool,
     project_status: String,
     project_state: String,
+    total: i64,
 }
 
 /// My Projects whose state nobody has declared, with a status label that
 /// reads as a different state (S6a; ONTOLOGY §4.1).
 ///
-/// The reading is `common::project_state::label_disagrees`, in Rust: the
-/// rows are one account's own undeclared, labelled projects, and no second
-/// spelling of the rule in SQL can drift from it. Declaring any state
+/// The reading is `common::project_state::label_disagrees`, in Rust, on
+/// the account's own distinct labels: no second spelling of the rule in
+/// SQL can drift from it. Declaring any state
 /// (the page's fixes, "Keep" included) stamps `project_state_at` and takes
 /// the project out of this list for good.
 ///
@@ -324,38 +325,82 @@ async fn labels_reading_as_another_state(
     conn: &mut PgConnection,
     owner: &str,
 ) -> Result<RuleReport, EmberTroveError> {
-    let rows: Vec<LabelledProjectRow> = sqlx::query_as(
+    // The distinct (label, state) pairs first, a handful however many
+    // projects there are; then only the projects whose pair disagrees, a
+    // page of them with the exact count (as every rule here reads).
+    let groups: Vec<(String, String)> = sqlx::query_as(
         r#"
-        SELECT id, title, status = 'archived' AS archived, project_status, project_state
+        SELECT lower(project_status COLLATE "C"), project_state
         FROM nodes
         WHERE owner_id = $1
           AND node_type = 'project'
           AND project_state_at IS NULL
           AND project_status IS NOT NULL
-        ORDER BY title, id
+        GROUP BY 1, 2
         "#,
     )
     .bind(owner)
     .fetch_all(&mut *conn)
     .await
     .map_err(db)?;
-    let mut items = Vec::new();
-    for r in rows {
-        let state = project_state(&r.project_state)?;
-        if let Some(reads_as) = label_disagrees(Some(&r.project_status), state) {
-            items.push(
-                Violation::new(Ref::node(r.id, r.title, r.archived), vec![]).with_label_reading(
-                    LabelReadingRef {
-                        label: r.project_status,
-                        reads_as,
-                        state,
-                    },
-                ),
-            );
+    let (mut labels, mut states) = (Vec::new(), Vec::new());
+    for (label, state) in groups {
+        if label_disagrees(Some(&label), project_state(&state)?).is_some() {
+            labels.push(label);
+            states.push(state);
         }
     }
-    // `new` keeps the exact count and the first `ITEM_CAP` items.
-    Ok(RuleReport::new(RuleId::LabelReadsAsAnotherState, items))
+    if labels.is_empty() {
+        return Ok(RuleReport::with_count(
+            RuleId::LabelReadsAsAnotherState,
+            0,
+            Vec::new(),
+        ));
+    }
+    let rows: Vec<LabelledProjectRow> = sqlx::query_as(
+        r#"
+        SELECT id, title, status = 'archived' AS archived, project_status, project_state,
+               count(*) OVER () AS total
+        FROM nodes
+        WHERE owner_id = $1
+          AND node_type = 'project'
+          AND project_state_at IS NULL
+          AND (lower(project_status COLLATE "C"), project_state)
+              IN (SELECT * FROM unnest($2::text[], $3::text[]))
+        ORDER BY title, id
+        LIMIT $4
+        "#,
+    )
+    .bind(owner)
+    .bind(&labels)
+    .bind(&states)
+    .bind(LIMIT)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db)?;
+    let count = count_of(rows.first().map(|r| r.total));
+    let mut items = Vec::with_capacity(rows.len());
+    for r in rows {
+        let state = project_state(&r.project_state)?;
+        // Read from the label as written, so the item shows its own words.
+        let Some(reads_as) = label_disagrees(Some(&r.project_status), state) else {
+            continue;
+        };
+        items.push(
+            Violation::new(Ref::node(r.id, r.title, r.archived), vec![]).with_label_reading(
+                LabelReadingRef {
+                    label: r.project_status,
+                    reads_as,
+                    state,
+                },
+            ),
+        );
+    }
+    Ok(RuleReport::with_count(
+        RuleId::LabelReadsAsAnotherState,
+        count,
+        items,
+    ))
 }
 
 fn project_state(s: &str) -> Result<ProjectState, EmberTroveError> {

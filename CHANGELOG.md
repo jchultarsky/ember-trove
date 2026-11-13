@@ -25,6 +25,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - **The dashboard lists active and parked projects.** A complete or
     cancelled one has left it.
   - `GET /api/nodes` takes `project_state` as a filter.
+  - A duplicate of a project is a new, active project. If the original's
+    label says it is done, cancelled or on hold, the copy starts with
+    "Active" instead.
   - **Data health: "A status label that reads as another state".** It
     lists your projects whose state nobody has declared and whose label
     suggests a different one ("On hold", "Done, awaiting invoice").

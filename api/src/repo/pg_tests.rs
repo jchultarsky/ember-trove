@@ -7751,6 +7751,19 @@ async fn a_new_project_is_active_and_the_list_filters_by_state(pool: PgPool) {
         }
     };
     assert_eq!(list(None, false, 50).await.1, 5, "every project");
+    // The dashboard's filter is `ProjectState::is_terminal`, state by state.
+    for state in ProjectState::ALL {
+        let in_state = list(Some(*state), false, 50).await.0;
+        let open = list(None, true, 50).await.0;
+        assert!(!in_state.is_empty(), "{state:?}: the fixture covers it");
+        for title in &in_state {
+            assert_eq!(
+                open.contains(title),
+                !state.is_terminal(),
+                "{title} ({state:?})"
+            );
+        }
+    }
     assert_eq!(
         list(Some(ProjectState::Parked), false, 50).await,
         (vec!["parked one".to_string()], 1)

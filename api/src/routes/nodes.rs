@@ -20,7 +20,7 @@ use common::{
     node_version::NodeVersion,
     ontology::{Capability, allows, edge_kind_violation},
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
-    project_state::DeclareProjectState,
+    project_state::{DeclareProjectState, ProjectState, label_disagrees},
     project_status,
     tag::Tag,
     webhook::{EVENT_NODE_CREATED, EVENT_NODE_DELETED, EVENT_NODE_UPDATED},
@@ -126,18 +126,23 @@ async fn declare_project_state(
 ) -> Result<Json<Node>, ApiError> {
     let id = NodeId(id);
     require_editor(state.permissions.as_ref(), &claims, id).await?;
-    require_capability(&state, id, Capability::ProjectStatus).await?;
+    let before = state.nodes.get(id).await?;
+    refuse_unless(&before.node_type, Capability::ProjectStatus)?;
     let node = state
         .nodes
         .set_project_state(id, req.state, &ActivityActor::from_claims(&claims))
         .await?;
-    dispatch(
-        state.webhooks.clone(),
-        EVENT_NODE_UPDATED,
-        Some(node.id),
-        &claims.sub,
-        &node.owner_id,
-    );
+    // A repeat of a state already declared writes nothing (the version
+    // stays), so it is not an update to tell anyone about.
+    if node.updated_at != before.updated_at {
+        dispatch(
+            state.webhooks.clone(),
+            EVENT_NODE_UPDATED,
+            Some(node.id),
+            &claims.sub,
+            &node.owner_id,
+        );
+    }
     Ok(Json(node))
 }
 
@@ -494,10 +499,19 @@ fn with_initial_status(meta: &mut serde_json::Value, status: Option<&str>) {
 
 /// The status a duplicate of `src` starts with: a copy never carries a
 /// status its kind may not have (§3.2, #216), even when the original does.
+/// Nor one that reads as a state the copy doesn't have (S6a): a copy is a
+/// new, active project, so a copied "Done" would be untrue from the start
+/// (and Data health would list it at once). Such a label becomes the
+/// default one.
 fn copied_status(src: &Node) -> Option<String> {
-    src.project_status
+    let label = src
+        .project_status
         .clone()
-        .filter(|_| allows(&src.node_type, Capability::ProjectStatus))
+        .filter(|_| allows(&src.node_type, Capability::ProjectStatus))?;
+    if label_disagrees(Some(&label), ProjectState::Active).is_some() {
+        return Some(project_status::DEFAULT.to_string());
+    }
+    Some(label)
 }
 
 /// Whether an update changes the project status and nothing else: what the
@@ -1581,6 +1595,20 @@ mod tests {
             Some("Active")
         );
         assert_eq!(copied_status(&node(NodeType::Article)), None);
+        // A copy is active: it doesn't start with a label that says, or
+        // hints, that it is anything else.
+        for label in ["Done", "Cancelled", "On hold", "Done, awaiting invoice"] {
+            let mut closed = node(NodeType::Project);
+            closed.project_status = Some(label.into());
+            closed.project_state = Some(ProjectState::Complete);
+            assert_eq!(copied_status(&closed).as_deref(), Some("Active"), "{label}");
+        }
+        let mut unlabelled = node(NodeType::Project);
+        unlabelled.project_status = None;
+        assert_eq!(copied_status(&unlabelled), None, "none to copy");
+        let mut blocked = node(NodeType::Project);
+        blocked.project_status = Some("Blocked".into());
+        assert_eq!(copied_status(&blocked).as_deref(), Some("Blocked"));
     }
 
     #[test]
