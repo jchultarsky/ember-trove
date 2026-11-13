@@ -166,7 +166,7 @@ const CONCEPTS: &[Concept] = &[
         title: "Tasks",
         body: "Discrete actionable work, always in a Project. A task left without \
                one shows up in Data health, which offers to move it. Has \
-               status (open/in-progress/done/cancelled), priority, focus_date, due_date, \
+               status (open/waiting/done/cancelled), priority, focus_date, due_date, \
                and an optional recurrence rule.",
     },
     Concept {

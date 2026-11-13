@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Task states: Open, Waiting, Done, Cancelled, and a completion date
+  (S5a of #204; #314).**
+  - **Waiting** is a new state: the task is on someone or something else.
+  - A task records **when it was completed**. The date is set when the
+    task becomes done and cleared if it is reopened. Tasks completed
+    before this release have no date: it was never recorded, and is not
+    made up.
+  - The dashboard counts open, waiting, done and cancelled tasks, and
+    each project's task list shows what can be acted on first, then what
+    is waiting.
+
+### Changed
+- **"In progress" is gone as a task state**; such tasks are open (owner
+  decision, 2026-10-30). Nothing in the app could set it. Production had
+  none. The API still reads `in_progress` as open, and never writes it.
+- **Backups are format 9**: tasks carry their completion date and may be
+  waiting. An older release refuses a format-9 archive. Archives of
+  formats 3 to 8 still restore.
+- Migrations 049 and 050. They change no task's "last updated" time.
+
 ### Documentation
 - **"Parked" is a Project state** (owner decision, 2026-11-12;
   `docs/ONTOLOGY.md` §4, §4.1, §15). A parked Project is set aside on

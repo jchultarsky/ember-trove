@@ -5,23 +5,44 @@ use utoipa::ToSchema;
 
 use crate::id::{NodeId, TaskId};
 
+/// A Task's lifecycle (ONTOLOGY §9.3): Open, Waiting, Done or Cancelled.
+///
+/// There was an `in_progress` until S5a (#314); it became Open (owner
+/// decision, 2026-10-30). The database keeps it out with a CHECK.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    /// Reads `"in_progress"` too: a backup made before S5a still restores,
+    /// and a client that sends the old word is not refused. It is never
+    /// written, and [`TaskStatus::parse`] (the database's words) rejects it.
+    #[serde(alias = "in_progress")]
     Open,
-    InProgress,
+    /// On someone or something else. What it waits on is in the task's text.
+    Waiting,
+    /// Completed. Carries the completion date ([`Task::completed_at`]).
     Done,
+    /// Something prevented it, for good. No completion date.
     Cancelled,
 }
 
 wire_enum!(TaskStatus {
     Open => "open",
-    InProgress => "in_progress",
+    Waiting => "waiting",
     Done => "done",
     Cancelled => "cancelled",
 });
 
 impl TaskStatus {
+    /// The user-facing name, for every badge and picker.
+    pub fn label(&self) -> &'static str {
+        match self {
+            TaskStatus::Open => "Open",
+            TaskStatus::Waiting => "Waiting",
+            TaskStatus::Done => "Done",
+            TaskStatus::Cancelled => "Cancelled",
+        }
+    }
+
     /// `true` for terminal statuses (Done, Cancelled) — the ones a task
     /// checkbox renders as ticked.
     pub fn is_terminal(&self) -> bool {
@@ -121,6 +142,11 @@ pub struct Task {
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When the task became Done (§9.3); cleared when it is reopened.
+    /// `None` for every other state, and for a task completed before S5a:
+    /// that date was never recorded, and is not made up.
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
 }
 
 /// Past its due date and still to do. Done and Cancelled are never
@@ -133,6 +159,16 @@ pub fn is_overdue(status: &TaskStatus, due: Option<NaiveDate>, today: NaiveDate)
 }
 
 impl Task {
+    /// The completion date a restore writes: the archived one, and only
+    /// for a done task. The database refuses a date on any other state
+    /// (migration 050), and one such row in a hand-edited archive must not
+    /// fail the whole restore.
+    #[must_use]
+    pub fn restorable_completed_at(&self) -> Option<DateTime<Utc>> {
+        self.completed_at
+            .filter(|_| self.status == TaskStatus::Done)
+    }
+
     /// See [`is_overdue`].
     #[must_use]
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
@@ -156,7 +192,7 @@ impl Task {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct TaskCounts {
     pub open: u32,
-    pub in_progress: u32,
+    pub waiting: u32,
     pub done: u32,
     pub cancelled: u32,
 }
@@ -239,7 +275,8 @@ pub struct ProjectDashboardEntry {
     /// The project's status token (#143).
     #[serde(default)]
     pub project_status: Option<String>,
-    /// Up to 10 open/in-progress tasks, ordered by priority then due date.
+    /// Up to 10 tasks still to do: open ones first, then waiting ones, each
+    /// by priority then due date.
     pub open_tasks: Vec<TaskSummary>,
     /// `true` when more open tasks exist beyond the returned slice.
     pub has_more_tasks: bool,
@@ -525,7 +562,8 @@ mod overdue_tests {
     fn overdue_is_unfinished_and_strictly_past_due() {
         let today = day(10);
         assert!(is_overdue(&TaskStatus::Open, Some(day(9)), today));
-        assert!(is_overdue(&TaskStatus::InProgress, Some(day(9)), today));
+        // Waiting is still to do: its due date is a fact either way.
+        assert!(is_overdue(&TaskStatus::Waiting, Some(day(9)), today));
         // Due today is not overdue yet; no due date never is.
         assert!(!is_overdue(&TaskStatus::Open, Some(today), today));
         assert!(!is_overdue(&TaskStatus::Open, None, today));
@@ -629,13 +667,85 @@ mod tests {
         assert!(TaskStatus::Done.is_terminal());
         assert!(TaskStatus::Cancelled.is_terminal());
         assert!(!TaskStatus::Open.is_terminal());
-        assert!(!TaskStatus::InProgress.is_terminal());
+        assert!(!TaskStatus::Waiting.is_terminal());
     }
 
     #[test]
-    fn toggle_completes_open_and_in_progress() {
+    fn toggle_completes_open_and_waiting() {
         assert_eq!(TaskStatus::Open.toggled(), TaskStatus::Done);
-        assert_eq!(TaskStatus::InProgress.toggled(), TaskStatus::Done);
+        assert_eq!(TaskStatus::Waiting.toggled(), TaskStatus::Done);
+    }
+
+    #[test]
+    fn in_progress_is_read_as_open_and_never_written() {
+        // S5a (#314): archives made before it, and old clients, still say
+        // "in_progress".
+        let read = |json: &str| serde_json::from_str::<TaskStatus>(json).expect(json);
+        assert_eq!(read(r#""in_progress""#), TaskStatus::Open);
+        assert_eq!(read(r#""open""#), TaskStatus::Open);
+        assert_eq!(read(r#""waiting""#), TaskStatus::Waiting);
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Open).expect("json"),
+            r#""open""#
+        );
+        // The database's words are strict: no row may hold it any more.
+        assert_eq!(TaskStatus::parse("in_progress"), None);
+        assert_eq!(TaskStatus::parse("waiting"), Some(TaskStatus::Waiting));
+        assert!(serde_json::from_str::<TaskStatus>(r#""started""#).is_err());
+    }
+
+    #[test]
+    fn every_status_has_its_own_label() {
+        let labels: Vec<&str> = TaskStatus::ALL.iter().map(TaskStatus::label).collect();
+        assert_eq!(labels, ["Open", "Waiting", "Done", "Cancelled"]);
+    }
+
+    #[test]
+    fn a_task_from_before_s5a_has_no_completion_date() {
+        // An archive of format 8 or older has no `completed_at`, and may
+        // say `in_progress`.
+        let task: Task = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::from_u128(1),
+            "node_id": null,
+            "owner_id": "alice",
+            "title": "old",
+            "status": "in_progress",
+            "priority": "medium",
+            "focus_date": null,
+            "due_date": null,
+            "recurrence": null,
+            "sort_order": 0,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }))
+        .expect("an old task");
+        assert_eq!(task.status, TaskStatus::Open);
+        assert_eq!(task.completed_at, None);
+
+        // A restore keeps a completion date on a done task only.
+        let at = Utc::now();
+        for (status, kept) in [
+            (TaskStatus::Done, Some(at)),
+            (TaskStatus::Open, None),
+            (TaskStatus::Waiting, None),
+            (TaskStatus::Cancelled, None),
+        ] {
+            let t = Task {
+                status,
+                completed_at: Some(at),
+                ..task.clone()
+            };
+            assert_eq!(t.restorable_completed_at(), kept, "{:?}", t.status);
+        }
+        assert_eq!(
+            Task {
+                status: TaskStatus::Done,
+                ..task
+            }
+            .restorable_completed_at(),
+            None,
+            "a done task from before S5a keeps its empty date"
+        );
     }
 
     #[test]
@@ -665,12 +775,12 @@ mod tests {
     #[test]
     fn completing_without_carry_over_leaves_focus_alone() {
         for focus in [None, Some(day(12)), Some(day(20))] {
-            let t = done_toggle(&TaskStatus::InProgress, focus, day(12));
+            let t = done_toggle(&TaskStatus::Waiting, focus, day(12));
             assert!(t.completes());
             assert_eq!(t.request.focus_date, None, "focus {focus:?}");
             assert_eq!(t.revert.focus_date, None);
-            // Undo returns to In Progress, not a generic Open.
-            assert_eq!(t.revert.status, Some(TaskStatus::InProgress));
+            // Undo returns to Waiting, not a generic Open.
+            assert_eq!(t.revert.status, Some(TaskStatus::Waiting));
         }
     }
 
