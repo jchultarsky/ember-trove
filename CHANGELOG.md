@@ -64,6 +64,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     `Cargo.lock` but not compiled into anything we build.
 
 ### Tooling
+- **Rust 1.100.** The pinned toolchain moves from 1.97 to 1.100.0
+  (`rust-toolchain.toml`, and `RUST_VERSION` in both Dockerfiles, so CI,
+  the images and local builds use one compiler). No new lints and no code
+  change.
 - **Two e2e runs can share one machine.**
   `E2E_PROJECT=ember-e2e-b E2E_PORT=18003 ./scripts/e2e.sh` brings up a
   second stack beside one that is already running, instead of rebuilding
