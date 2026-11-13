@@ -134,6 +134,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   Connections (`node_home.rs`). `NodeView` owns the counter
   (`home_refresh`) and passes it to both, so a change in one shows in the
   other. A third place that changes a home bumps the same counter.
+- **Task states in the UI (S5a, #314).** The state is set in the one
+  `TaskEditor` through `StatePicker` (`TaskStatus::PICKABLE`: Open,
+  Waiting, Cancelled); Done is only ever the checkbox
+  (`task_actions::toggle_done`). The editor sends the state only when it
+  was changed there (`TaskEditDraft::take_request`), and shows no picker
+  for a done task. Rows say Waiting and Cancelled with
+  `state_badge_view`, and a done task's day with `completed_badge_view`.
+  A new small picker is a `SegmentedRadio` with its own `Segment`s, like
+  `PriorityPicker` and `StatePicker`: don't copy the radio-group markup.
+  Waiting is cool (`WAITING_TONE`), never warm. My Day's backlog is
+  "everything still to do that is not `in_my_day`", not "no focus date".
 - **Page headers & empty states are primitives, not markup.** Top-level views
   use `PageHeader` (`ui/src/components/page_header.rs`) and `EmptyState`
   (`empty_state.rs`) — never a hand-rolled `<h1>` bar or centered-icon block.

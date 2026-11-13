@@ -1,4 +1,4 @@
-import { test, expect, createNode } from './fixtures';
+import { test, expect, createNode, localISO } from './fixtures';
 import type { APIRequestContext } from '@playwright/test';
 
 /**
@@ -101,4 +101,185 @@ test('the dashboard counts each state and lists what can be acted on first', asy
   } finally {
     await request.delete(`/api/nodes/${project.id}`);
   }
+});
+
+test('a task is set to Waiting and back from its editor', async ({ page, request }) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e states editor ${stamp}`, {
+    node_type: 'project',
+  });
+  try {
+    const task = await addTask(request, project.id, { title: `ask the vendor ${stamp}` });
+    await page.goto(`/nodes/${project.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId('task-state')).toHaveCount(0);
+
+    // The picker sits in the one task editor: Open, Waiting, Cancelled.
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    const picker = row.getByTestId('task-editor').getByTestId('state-picker');
+    await expect(picker.getByRole('radio')).toHaveText(['Open', 'Waiting', 'Cancelled']);
+    await expect(picker.getByRole('radio', { name: 'Open' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await picker.getByRole('radio', { name: 'Waiting' }).click();
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(row.getByTestId('task-state')).toHaveText('Waiting');
+    const stored = await (await request.get(`/api/nodes/${project.id}/tasks`)).json();
+    expect(stored[0].status).toBe('waiting');
+
+    // Saving a new title alone leaves the state as it is.
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await row.getByTestId('task-editor').locator('textarea').fill(`ask the vendor again ${stamp}`);
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(row).toContainText(`ask the vendor again ${stamp}`);
+    await expect(row.getByTestId('task-state')).toHaveText('Waiting');
+
+    // Arrow keys move the choice, as in the priority picker.
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    const waiting = picker.getByRole('radio', { name: 'Waiting' });
+    await expect(waiting).toHaveAttribute('aria-checked', 'true');
+    await waiting.focus();
+    await waiting.press('ArrowLeft');
+    await expect(picker.getByRole('radio', { name: 'Open' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await expect(picker.getByRole('radio', { name: 'Open' })).toBeFocused();
+    await picker.getByRole('radio', { name: 'Open' }).press('ControlOrMeta+Enter');
+    await expect(row.getByTestId('task-editor')).toHaveCount(0);
+    await expect(row.getByTestId('task-state')).toHaveCount(0);
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
+test('a done task shows when it was completed, and a cancelled one says so', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e states done ${stamp}`, { node_type: 'project' });
+  try {
+    const finished = await addTask(request, project.id, { title: `agree the scope ${stamp}` });
+    const dropped = await addTask(request, project.id, { title: `print handouts ${stamp}` });
+    await page.goto(`/nodes/${project.id}`);
+
+    // Cancelled from the editor.
+    const droppedRow = page.locator(`[data-task-id="${dropped.id}"]`);
+    await droppedRow.getByRole('button', { name: 'Edit task' }).click();
+    await droppedRow
+      .getByTestId('task-editor')
+      .getByTestId('state-picker')
+      .getByRole('radio', { name: 'Cancelled' })
+      .click();
+    await droppedRow.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    // Done with the checkbox.
+    const finishedRow = page.locator(`[data-task-id="${finished.id}"]`);
+    await finishedRow.locator('button[title="Toggle done"]').click();
+
+    // Both are among the finished tasks now.
+    await page.getByRole('button', { name: /2 completed/ }).click();
+    await expect(droppedRow.getByTestId('task-state')).toHaveText('Cancelled');
+    await expect(droppedRow.getByTestId('task-completed')).toHaveCount(0);
+    await expect(finishedRow.getByTestId('task-completed')).toHaveText(/^Done [A-Z][a-z]{2} \d{1,2}$/);
+    await expect(finishedRow.getByTestId('task-state')).toHaveCount(0);
+
+    // A done task is reopened with its checkbox: its editor has no picker.
+    await finishedRow.getByRole('button', { name: 'Edit task' }).click();
+    await expect(finishedRow.getByTestId('task-editor')).toBeVisible();
+    await expect(finishedRow.getByTestId('state-picker')).toHaveCount(0);
+    // A cancelled one can be put back.
+    await droppedRow.getByRole('button', { name: 'Edit task' }).click();
+    await expect(
+      droppedRow.getByTestId('state-picker').getByRole('radio', { name: 'Cancelled' }),
+    ).toHaveAttribute('aria-checked', 'true');
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
+test('a Waiting task is out of Today and Overdue, and stays in the Backlog', async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e states my day ${stamp}`, {
+    node_type: 'project',
+  });
+  try {
+    const carried = await addTask(request, project.id, {
+      title: `carried ${stamp}`,
+      focus_date: localISO(-1),
+    });
+    // Focused yesterday and past its due date: both would put it in front
+    // of its person. It is waiting on someone else.
+    const waiting = await addTask(request, project.id, {
+      title: `on the vendor ${stamp}`,
+      status: 'waiting',
+      focus_date: localISO(-1),
+      due_date: localISO(-3),
+    });
+    const late = await addTask(request, project.id, {
+      title: `late ${stamp}`,
+      due_date: localISO(-3),
+    });
+
+    await page.goto('/tasks/my-day');
+    const today = page.getByTestId('zone-today');
+    const overdue = page.getByTestId('overdue-section');
+    const backlog = page.getByTestId('zone-backlog');
+    const rowIn = (zone: typeof today, id: string) => zone.locator(`[data-task-id="${id}"]`);
+
+    await expect(rowIn(today, carried.id)).toBeVisible();
+    await expect(rowIn(overdue, late.id)).toBeVisible();
+    await expect(rowIn(today, waiting.id)).toHaveCount(0);
+    await expect(rowIn(overdue, waiting.id)).toHaveCount(0);
+
+    // Not hidden: in the backlog, marked, with its date, and no "keep on
+    // today?" question.
+    const row = rowIn(backlog, waiting.id);
+    await expect(row.getByTestId('task-state')).toHaveText('Waiting');
+    await expect(row.getByText(/due [A-Z][a-z]{2} \d/)).toBeVisible();
+    await expect(row.getByTestId('carryover-prompt')).toHaveCount(0);
+
+    // The vendor answers: open again, and it is back in the normal flow.
+    await setStatus(request, waiting.id, 'open');
+    await page.reload();
+    await expect(rowIn(today, waiting.id)).toBeVisible();
+    await expect(rowIn(today, waiting.id).getByTestId('carryover-prompt')).toBeVisible();
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
+test.describe('at phone width', () => {
+  test.use({ viewport: { width: 375, height: 812 } });
+
+  test('the state picker fits the task editor', async ({ page, request }) => {
+    const stamp = Date.now();
+    const project = await createNode(request, `e2e states phone ${stamp}`, {
+      node_type: 'project',
+    });
+    try {
+      const task = await addTask(request, project.id, { title: `narrow ${stamp}` });
+      await page.goto(`/nodes/${project.id}`);
+      const row = page.locator(`[data-task-id="${task.id}"]`);
+      await row.getByRole('button', { name: 'Edit task' }).click();
+      const editor = row.getByTestId('task-editor');
+      // Neither picker clips its last option ("Cancelled" was cut by 8px).
+      for (const id of ['priority-picker', 'state-picker']) {
+        const picker = editor.getByTestId(id);
+        await expect(picker).toBeVisible();
+        const clipped = await picker.evaluate((el) => el.scrollWidth - el.clientWidth);
+        expect(clipped, `${id} is ${clipped}px wider than its box`).toBeLessThanOrEqual(0);
+      }
+      // And the page still doesn't scroll sideways with the editor open.
+      const over = await page.locator('main').evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(over).toBeLessThanOrEqual(1);
+    } finally {
+      await request.delete(`/api/nodes/${project.id}`);
+    }
+  });
 });

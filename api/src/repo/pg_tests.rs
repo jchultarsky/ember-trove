@@ -1074,6 +1074,67 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
     assert!(!ids.contains(&carried_done.id));
 }
 
+/// S5a (owner decision, 2026-11-13): a Waiting task doesn't carry over into
+/// My Day. The query and `Task::in_my_day` are one rule: for every state,
+/// focused today or earlier, the list holds exactly the tasks the rule
+/// names. And a waiting task is still in the backlog's feed.
+#[sqlx::test(migrations = "../migrations")]
+async fn my_day_carries_over_only_what_can_be_acted_on(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 12).expect("date");
+    let earlier = today - Duration::days(2);
+    let mut made = Vec::new();
+    for status in TaskStatus::ALL {
+        for focus in [today, earlier] {
+            let task = tasks
+                .create(
+                    None,
+                    "owner-a",
+                    CreateTaskRequest {
+                        status: Some(status.clone()),
+                        focus_date: Some(focus),
+                        ..task_req(&format!("{} {focus}", status.as_str()))
+                    },
+                )
+                .await
+                .expect("create");
+            made.push(task);
+        }
+    }
+    let listed: Vec<_> = tasks
+        .list_my_day("owner-a", Some("owner-a"), today)
+        .await
+        .expect("my day")
+        .into_iter()
+        .map(|t| t.task.id)
+        .collect();
+    for task in &made {
+        assert_eq!(
+            listed.contains(&task.id),
+            task.in_my_day(today),
+            "{}",
+            task.title
+        );
+    }
+    // What the rule comes to: four focused today, and the open one carried.
+    assert_eq!(listed.len(), 5);
+    let waiting_carried = made
+        .iter()
+        .find(|t| t.status == TaskStatus::Waiting && t.focus_date == Some(earlier))
+        .expect("made");
+    assert!(!listed.contains(&waiting_carried.id));
+
+    // It is not lost: the backlog feed (every task still to do) has it.
+    let backlog: Vec<_> = tasks
+        .list_open_for_owner("owner-a", Some("owner-a"))
+        .await
+        .expect("backlog")
+        .into_iter()
+        .map(|t| t.task.id)
+        .collect();
+    assert!(backlog.contains(&waiting_carried.id));
+}
+
 /// The three task feeds' `node_title` for one task, as seen by `viewer`.
 // Fixture helper, not a #[test] fn (see `create_node`).
 #[allow(clippy::expect_used)]

@@ -46,7 +46,7 @@ use crate::components::task_actions::{
 use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
     CopyTaskButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view,
-    priority_dot_view,
+    priority_dot_view, state_badge_view,
 };
 use crate::components::toast::ToastState;
 
@@ -326,7 +326,12 @@ pub fn KanbanTaskRow(
     // committed to My Day on a previous day and never finished.  Such tasks
     // now stay in the Today zone (sticky My Day) rather than dropping to the
     // backlog, so surface the "carried from May 2" hint in either zone.
-    let carryover_from: Option<NaiveDate> = focus.filter(|&d| d < today);
+    // Only a task that is carried: one that can still be acted on. A
+    // waiting task focused on an earlier day sits in the backlog (S5a), and
+    // "keep on today?" is not a question to ask of it.
+    let carryover_from: Option<NaiveDate> = focus
+        .filter(|&d| d < today)
+        .filter(|_| task.status.is_actionable());
 
     // ── Mutations ─────────────────────────────────────────────────────
 
@@ -530,6 +535,8 @@ pub fn KanbanTaskRow(
                             );
                             due_badge_view(d, overdue)
                         })}
+                        // Waiting or Cancelled, said in words (S5a).
+                        {move || state_badge_view(&status_sig.get())}
                         // Carryover badge: the date IS the question; ✓
                         // keeps it on today. "No" is the existing ✕
                         // (remove from today) in the action cluster.

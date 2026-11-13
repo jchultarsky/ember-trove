@@ -315,7 +315,8 @@ pub fn patch_task(
     });
 }
 
-/// An inline task editor's form state (title / priority / due / recurrence),
+/// An inline task editor's form state (title / priority / due / recurrence /
+/// state),
 /// shared by every task list. Each list keeps its own markup (task-row
 /// contract); this owns the values: seeding from the task, `reset` on Cancel
 /// (it used to reset only the title, so abandoned priority/due/recurrence
@@ -327,15 +328,17 @@ pub struct TaskEditDraft {
     pub priority: RwSignal<String>,
     pub due: RwSignal<String>,
     pub recurrence: RwSignal<String>,
-    saved: StoredValue<[String; 4]>,
+    /// The state's wire string (S5a). Sent only when changed here.
+    pub status: RwSignal<String>,
+    saved: StoredValue<[String; 5]>,
     /// Values sent by Save and not yet seen back from the server (a failed
     /// Save leaves them here, so reopening keeps them).
     pending: StoredValue<bool>,
 }
 
 impl TaskEditDraft {
-    /// The editor's four fields for `task` as saved.
-    fn values_of(task: &Task) -> [String; 4] {
+    /// The editor's five fields for `task` as saved.
+    fn values_of(task: &Task) -> [String; 5] {
         [
             task.title.clone(),
             task.priority.as_str().to_string(),
@@ -346,7 +349,17 @@ impl TaskEditDraft {
                 .as_ref()
                 .map(|r| r.as_str().to_string())
                 .unwrap_or_default(),
+            task.status.as_str().to_string(),
         ]
+    }
+
+    /// Whether the editor offers the state picker: for a task that was not
+    /// done when the editor opened. A done task is reopened with its
+    /// checkbox.
+    pub fn picks_state(&self) -> bool {
+        self.saved
+            .try_with_value(|s| s[4] != TaskStatus::Done.as_str())
+            .unwrap_or(false)
     }
 
     pub fn from_task(task: &Task) -> Self {
@@ -356,6 +369,7 @@ impl TaskEditDraft {
             priority: RwSignal::new(saved[1].clone()),
             due: RwSignal::new(saved[2].clone()),
             recurrence: RwSignal::new(saved[3].clone()),
+            status: RwSignal::new(saved[4].clone()),
             saved: StoredValue::new(saved),
             pending: StoredValue::new(false),
         }
@@ -363,11 +377,12 @@ impl TaskEditDraft {
 
     /// Discard edits: every field back to the last saved values.
     pub fn reset(&self) {
-        let [t, p, d, r] = self.saved.get_value();
+        let [t, p, d, r, s] = self.saved.get_value();
         self.title.set(t);
         self.priority.set(p);
         self.due.set(d);
         self.recurrence.set(r);
+        self.status.set(s);
     }
 
     /// Escape: discard like Cancel, but if anything was changed offer
@@ -380,6 +395,7 @@ impl TaskEditDraft {
             self.priority.get_untracked(),
             self.due.get_untracked(),
             self.recurrence.get_untracked(),
+            self.status.get_untracked(),
         ];
         let dirty = typed != self.saved.get_value();
         self.reset();
@@ -389,12 +405,13 @@ impl TaskEditDraft {
         push_undo_toast(
             "Edit discarded",
             Arc::new(move || {
-                let [t, p, d, r] = typed.clone();
+                let [t, p, d, r, s] = typed.clone();
                 // `try_`: the row may have been refetched away meanwhile.
                 self.title.try_set(t);
                 self.priority.try_set(p);
                 self.due.try_set(d);
                 self.recurrence.try_set(r);
+                self.status.try_set(s);
                 reopen();
             }),
         );
@@ -409,11 +426,12 @@ impl TaskEditDraft {
             self.priority.try_get_untracked(),
             self.due.try_get_untracked(),
             self.recurrence.try_get_untracked(),
+            self.status.try_get_untracked(),
         ];
         let Some(typed) = typed.into_iter().collect::<Option<Vec<String>>>() else {
             return false;
         };
-        let differs = |other: &[String; 4]| typed.iter().zip(other).any(|(t, o)| t != o);
+        let differs = |other: &[String; 5]| typed.iter().zip(other).any(|(t, o)| t != o);
         let dirty = self.saved.try_with_value(|s| differs(s)).unwrap_or(false);
         let unconfirmed =
             self.pending.try_get_value().unwrap_or(false) && differs(&Self::values_of(task));
@@ -426,6 +444,7 @@ impl TaskEditDraft {
         self.priority.dispose();
         self.due.dispose();
         self.recurrence.dispose();
+        self.status.dispose();
         self.saved.dispose();
         self.pending.dispose();
     }
@@ -438,8 +457,17 @@ impl TaskEditDraft {
             self.priority.get_untracked(),
             self.due.get_untracked(),
             self.recurrence.get_untracked(),
+            self.status.get_untracked(),
         ];
-        let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3])?;
+        // The state goes only when it was changed here: saving a new title
+        // must not re-send the state the task had when the editor opened
+        // (it may have been ticked done since, in another tab).
+        let status = self
+            .saved
+            .with_value(|s| s[4] != vals[4])
+            .then(|| TaskStatus::parse(&vals[4]))
+            .flatten();
+        let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3], status)?;
         self.saved.set_value(vals);
         self.pending.set_value(true);
         Some(req)
