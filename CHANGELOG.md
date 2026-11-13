@@ -6,6 +6,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+- **"Parked" is a Project state** (owner decision, 2026-11-12;
+  `docs/ONTOLOGY.md` §4, §4.1, §15). A parked Project is set aside on
+  purpose and should not occupy its person's immediate attention. It sits
+  beside *active*, *complete* and *cancelled* and is not terminal. Nothing
+  in the app changes yet: the state is built with the others, in the
+  ontology programme's slice S6.
+
 ### Fixed
 - **The shortcut help no longer lists `p` for pinning a node.** That key
   has done nothing since the node page's pin was removed (2026-04-10); the
