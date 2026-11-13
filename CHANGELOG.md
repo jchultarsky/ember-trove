@@ -6,6 +6,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Brief editor (#317): Pitch and Points now carry a help line that stays
+  visible once the field has text. Pitch says it takes Markdown; Points says
+  one point per line and counts, as you type, how many points the text will
+  save as (and warns past the limit of 20). Points also accept a numbered
+  list (`1.`, `1)`) and open task boxes (`- [ ]`) as list markers, like the
+  Status-section move already did; `-`, `*` and `+` were already accepted.
+
 ### Documentation
 - **"Parked" is a Project state** (owner decision, 2026-11-12;
   `docs/ONTOLOGY.md` §4, §4.1, §15). A parked Project is set aside on
