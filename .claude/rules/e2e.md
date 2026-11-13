@@ -134,6 +134,18 @@ CI job is too slow a feedback loop for selector work.
   375px, and the phone-width gate (page scroll width) stayed green. To
   hold a control to its box, compare its own `scrollWidth` and
   `clientWidth`.
+- **A project's card may be in one of two places on the dashboard by its
+  state** (2026-11-13, S6a): active ones in `project-groups`, parked ones
+  in `parked-group`, which is closed until `parked-toggle` is pressed.
+  Scope a card lookup to one of them, and open the group before looking
+  in it. A card carries `data-project-state`. The state chip on the
+  Project page is `project-state-chip` (`data-state`), its choices
+  `project-state-option-<state>`. Active has no words on the chip or a
+  badge: assert the attribute or the accessible name, not text.
+- **Don't keep a stack's database across an edit to a migration file**
+  (2026-11-13): `KEEP_STACK=1` keeps the volume, and the API then refuses
+  to start ("migration N was previously applied but has been modified").
+  Tear the stack down (`docker compose -p <project> down -v`) first.
 - **Service workers can't be exercised here** (2026-10-25, #129). The e2e
   origin (`http://host.docker.internal`) isn't a secure context. Mapping
   `localhost` to it (`--host-resolver-rules`) gives a secure context, but

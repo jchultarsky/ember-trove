@@ -131,6 +131,35 @@ pub fn ProjectStateChip(
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     let busy = RwSignal::new(false);
+    let wrapper: NodeRef<leptos::html::Div> = NodeRef::new();
+    let panel: NodeRef<leptos::html::Div> = NodeRef::new();
+    let focus_in = move |within: Option<web_sys::Element>, selector: &str| {
+        use wasm_bindgen::JsCast;
+        if let Some(el) = within
+            .and_then(|w| w.query_selector(selector).ok().flatten())
+            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = el.focus();
+        }
+    };
+    // The choices take the keyboard when they open, on the state the
+    // project has: arrow-free, each is a button, so Tab and Enter work.
+    // Tracking the NodeRef (not a timer) runs this once the panel is in
+    // the page.
+    Effect::new(move |_| {
+        if let Some(el) = panel.get() {
+            focus_in(Some(el.into()), "[aria-checked='true']");
+        }
+    });
+    // Close, and hand the keyboard back to the chip: the choices are
+    // about to leave the page, and focus must not be lost with them.
+    let close = move || {
+        open.set(false);
+        focus_in(
+            wrapper.get_untracked().map(Into::into),
+            "[data-testid='project-state-chip']",
+        );
+    };
 
     let choose = move |next: ProjectState| {
         open.set(false);
@@ -158,7 +187,16 @@ pub fn ProjectStateChip(
     };
 
     view! {
-        <div class="relative" data-testid="project-state">
+        // Escape is handled here, on the element that holds both the chip
+        // and its choices, so it works wherever the keyboard is in them,
+        // and is stopped: the page's own Escape must not also run.
+        <div class="relative" data-testid="project-state" node_ref=wrapper
+            on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                if ev.key() == "Escape" && open.get_untracked() {
+                    ev.stop_propagation();
+                    close();
+                }
+            }>
             {move || {
                 let current = state.get()?;
                 if !editable {
@@ -206,14 +244,7 @@ pub fn ProjectStateChip(
                         role="radiogroup"
                         aria-label="Project state"
                         data-testid="project-state-options"
-                        on:keydown=move |ev: leptos::ev::KeyboardEvent| {
-                            if ev.key() == "Escape" {
-                                // Ours alone: the page's own Escape must
-                                // not also run.
-                                ev.stop_propagation();
-                                open.set(false);
-                            }
-                        }>
+                        node_ref=panel>
                         {ProjectState::ALL.iter().copied().map(|option| {
                             let chosen = current == Some(option);
                             view! {

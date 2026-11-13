@@ -114,6 +114,27 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   "Move Status section into Brief") saves the copy first and removes the
   original second: a failure in between leaves the words in both places,
   never in neither.
+- **A project's state is the page's, not the chip's** (S6a).
+  `NodeView` owns `project_state` and `project_state_at` and hands them
+  to `ProjectStateChip` (`project_state.rs`), to the Focus control
+  (`focusable` is derived from it) and to `TaskPanel`. A new place on the
+  Project page that depends on the state reads that signal; it never
+  keeps its own copy. `project_state::declare` is the one write, shared
+  with the dashboard's Park / Make active buttons and Data health's
+  fixes. Active is the unmarked case: `ProjectStateBadge` renders
+  nothing for it and the chip is its icon alone, so no row says "Active"
+  twice (the label often does already).
+- **The dashboard's Area groups hold active projects; parked ones go to
+  `ParkedGroup`**, closed by default (owner decision, 2026-11-13). A
+  parked card has `CardFocus::Absent` (it can't be in Focus) and a card
+  in the Focus section has no state button (it may be someone else's
+  project). Completing or cancelling is offered on the Project page
+  only.
+- **A My Day row decides with `MyDayTask::in_my_day` /
+  `in_overdue_zone`**, never with the task alone: they carry the
+  project's state. `KanbanTaskRow` takes `project_state` and says
+  "Project parked" (`quiet_project_badge_view`) on a row that is in the
+  Backlog because of it.
 - **Focus is the viewer's own** (#282). `FocusToggle` / `FocusMenuItem`
   (`project_focus.rs`) take `state: RwSignal<Option<bool>>` and render
   nothing while it is `None`: a control that guessed "not in Focus" would
