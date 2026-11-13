@@ -90,11 +90,15 @@ pub enum ActivityAction {
     /// A Project Brief was replaced (#282): History, ONTOLOGY §10. The
     /// metadata holds the old Brief (`brief::superseded_metadata`).
     BriefSuperseded,
+    /// A Project's declared state changed (S6a): History, ONTOLOGY §4.1,
+    /// §10. Metadata carries `from` and `to`, the wire strings of
+    /// `ProjectState`.
+    ProjectStateChanged,
 }
 
 impl ActivityAction {
     /// Every action this build knows, in declaration order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Created,
         Self::Edited,
         Self::TagAdded,
@@ -107,6 +111,7 @@ impl ActivityAction {
         Self::CreatedFromTemplate,
         Self::StatusChanged,
         Self::BriefSuperseded,
+        Self::ProjectStateChanged,
     ];
 
     /// The database strings of [`Self::ALL`]. Reads filter on these in SQL
@@ -133,6 +138,7 @@ impl ActivityAction {
             Self::CreatedFromTemplate => "created_from_template",
             Self::StatusChanged => "status_changed",
             Self::BriefSuperseded => "brief_superseded",
+            Self::ProjectStateChanged => "project_state_changed",
         }
     }
 
@@ -150,6 +156,7 @@ impl ActivityAction {
             "created_from_template" => Some(Self::CreatedFromTemplate),
             "status_changed" => Some(Self::StatusChanged),
             "brief_superseded" => Some(Self::BriefSuperseded),
+            "project_state_changed" => Some(Self::ProjectStateChanged),
             _ => None,
         }
     }
@@ -170,6 +177,7 @@ impl ActivityAction {
             Self::CreatedFromTemplate => "content_copy",
             Self::StatusChanged => "flag",
             Self::BriefSuperseded => "edit_note",
+            Self::ProjectStateChanged => "flag",
         }
     }
 
@@ -190,6 +198,7 @@ impl ActivityAction {
             // Lowercase like the rest: the dashboard recap prints it inline.
             Self::StatusChanged => "changed status",
             Self::BriefSuperseded => "updated the brief",
+            Self::ProjectStateChanged => "changed state",
         }
     }
 }
@@ -206,11 +215,39 @@ pub fn status_change_summary(from: Option<&str>, to: Option<&str>) -> String {
     }
 }
 
+/// One line describing a change of a Project's declared state, from a
+/// `project_state_changed` entry's `from` / `to` (S6a). They are wire
+/// strings; a value this build doesn't know is shown as it is.
+#[must_use]
+pub fn project_state_change_summary(from: Option<&str>, to: Option<&str>) -> String {
+    let name = |s: &str| {
+        crate::project_state::ProjectState::parse(s)
+            .map_or_else(|| s.to_string(), |state| state.label().to_string())
+    };
+    status_change_summary(from.map(name).as_deref(), to.map(name).as_deref())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_state_change_reads_in_the_states_own_words() {
+        assert_eq!(
+            project_state_change_summary(Some("active"), Some("parked")),
+            "Active \u{2192} Parked"
+        );
+        assert_eq!(
+            project_state_change_summary(Some("parked"), Some("someday")),
+            "Parked \u{2192} someday"
+        );
+        assert_eq!(
+            project_state_change_summary(None, Some("complete")),
+            "set to Complete"
+        );
+    }
 
     #[test]
     fn round_trip_all_actions() {
@@ -243,6 +280,7 @@ mod tests {
                 ActivityAction::CreatedFromTemplate => 9,
                 ActivityAction::StatusChanged => 10,
                 ActivityAction::BriefSuperseded => 11,
+                ActivityAction::ProjectStateChanged => 12,
             }
         }
         for (i, a) in ActivityAction::ALL.iter().enumerate() {

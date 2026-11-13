@@ -140,13 +140,39 @@ fn db(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
 
 /// Which of a person's entries show: `f` is the entry, `n` its node, `$1`
 /// the person and `$2` the subject whose view applies (NULL: every node).
-/// The kind and lifecycle half is `common::project_focus::holds_focus`;
-/// `the_focus_filter_is_the_shared_rule` holds the two together.
+/// The kind, lifecycle and state half is
+/// `common::project_focus::holds_focus`: a Project, not archived, whose
+/// declared state is active (S6a: a parked, complete or cancelled project
+/// doesn't show). `the_focus_filter_is_the_shared_rule` holds the two
+/// together.
 fn shows() -> String {
     format!(
-        "f.subject_id = $1 AND n.node_type = 'project' AND n.status <> 'archived' AND {visible}",
+        "f.subject_id = $1 AND n.node_type = 'project' AND n.status <> 'archived' \
+         AND n.project_state = 'active' AND {visible}",
         visible = super::visible_to("n", 2),
     )
+}
+
+/// Remove `subject`'s own entry for `node`, on the caller's transaction:
+/// the write that closes a project (`NodeRepo::set_project_state`) takes
+/// its declaring person's entry with it, so re-opening doesn't put the
+/// project back in their Focus (ONTOLOGY §10). It lives here so every
+/// statement that touches Focus is in this module. It matches
+/// `subject_id` like all the others: nobody else's entry is ever removed,
+/// and the caller must record nothing about it (History, logs and
+/// webhooks are shared with the node).
+pub(crate) async fn remove_on(
+    conn: &mut sqlx::PgConnection,
+    subject: &str,
+    node: NodeId,
+) -> Result<(), EmberTroveError> {
+    sqlx::query("DELETE FROM project_focus WHERE subject_id = $1 AND node_id = $2")
+        .bind(subject)
+        .bind(node.0)
+        .execute(conn)
+        .await
+        .map_err(db("remove on close"))?;
+    Ok(())
 }
 
 /// The subject bound at `$2` of [`shows`].
@@ -186,13 +212,12 @@ impl FocusRepo for PgFocusRepo {
         sees_all: bool,
     ) -> Result<Vec<FocusedProject>, EmberTroveError> {
         let rows: Vec<ListedRow> = sqlx::query_as(&format!(
-            "SELECT n.id, n.owner_id, n.node_type::text AS node_type, n.title, n.slug, n.body, \
-                    n.metadata, n.status::text AS status, n.project_status, n.pinned, \
-                    n.created_at, n.updated_at, f.why_now, f.added_at \
+            "SELECT {cols}, f.why_now, f.added_at \
              FROM project_focus f JOIN nodes n ON n.id = f.node_id \
              WHERE {shows} \
              ORDER BY f.position, f.added_at, f.node_id \
              LIMIT {limit}",
+            cols = super::node::node_cols("n."),
             shows = shows(),
             limit = common::project_focus::MAX_ORDER,
         ))

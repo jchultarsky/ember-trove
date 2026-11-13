@@ -25,7 +25,9 @@
 //! the card slides up/down to its new sort position.
 
 use chrono::{Duration, Utc};
-use common::activity::{ActivityAction, RecentActivityEntry, status_change_summary};
+use common::activity::{
+    ActivityAction, RecentActivityEntry, project_state_change_summary, status_change_summary,
+};
 use common::id::NodeId;
 use common::project_focus::{FocusEntry, FocusItem, Step, in_focus_label, moved, over_soft_limit};
 use common::task::{ProjectDashboardEntry, TaskSummary};
@@ -458,10 +460,17 @@ fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl
                     let action_label = e.entry.action.label();
                     // A status change says what it became, not just that it
                     // changed (#208).
-                    let detail = (e.entry.action == ActivityAction::StatusChanged).then(|| {
-                        let label = |k: &str| e.entry.metadata.get(k).and_then(|v| v.as_str());
-                        status_change_summary(label("from"), label("to"))
-                    });
+                    let word = |k: &str| e.entry.metadata.get(k).and_then(|v| v.as_str());
+                    let detail = match e.entry.action {
+                        ActivityAction::StatusChanged => {
+                            Some(status_change_summary(word("from"), word("to")))
+                        }
+                        // And a change of the declared state (S6a).
+                        ActivityAction::ProjectStateChanged => {
+                            Some(project_state_change_summary(word("from"), word("to")))
+                        }
+                        _ => None,
+                    };
                     let title = e.node_title.clone();
                     let node_id = e.entry.node_id;
                     view! {

@@ -20,6 +20,7 @@ use common::{
     node_version::NodeVersion,
     ontology::{Capability, allows, edge_kind_violation},
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
+    project_state::DeclareProjectState,
     project_status,
     tag::Tag,
     webhook::{EVENT_NODE_CREATED, EVENT_NODE_DELETED, EVENT_NODE_UPDATED},
@@ -76,6 +77,10 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/versions/{version_id}/restore", post(restore_version))
         .route("/{id}/duplicate", post(duplicate_node))
         .route("/{id}/pin", axum::routing::put(set_pin))
+        .route(
+            "/{id}/project-state",
+            axum::routing::put(declare_project_state),
+        )
 }
 
 #[derive(serde::Deserialize)]
@@ -94,6 +99,45 @@ async fn set_pin(
 ) -> Result<Json<Node>, ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let node = state.nodes.set_pinned(NodeId(id), req.pinned).await?;
+    Ok(Json(node))
+}
+
+/// `PUT /api/nodes/:id/project-state`: declare a Project's state (S6a;
+/// ONTOLOGY §4.1): active, parked, complete or cancelled. The body names
+/// the state, never "toggle", so a request sent twice says the same thing.
+///
+/// Its own route, not a field of `PUT /nodes/:id`: an autosave can then
+/// never restamp the declaration, and the cascade's preview and confirm
+/// (S6b) have a place to go.
+///
+/// SECURITY: an editor of the node, checked first; only then the kind
+/// (§3.2, 422), so the refusal tells a stranger nothing about a node. The
+/// repo writes the History entry in the same transaction and, for a
+/// terminal state, removes the caller's **own** Focus entry. Nothing
+/// about Focus is logged, sent to a webhook or returned.
+///
+/// Until the cascade ships (S6b, S6c) closing a project changes the
+/// project alone: its tasks and sub-Projects stay as they are.
+async fn declare_project_state(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<DeclareProjectState>,
+) -> Result<Json<Node>, ApiError> {
+    let id = NodeId(id);
+    require_editor(state.permissions.as_ref(), &claims, id).await?;
+    require_capability(&state, id, Capability::ProjectStatus).await?;
+    let node = state
+        .nodes
+        .set_project_state(id, req.state, &ActivityActor::from_claims(&claims))
+        .await?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_NODE_UPDATED,
+        Some(node.id),
+        &claims.sub,
+        &node.owner_id,
+    );
     Ok(Json(node))
 }
 
@@ -1524,6 +1568,8 @@ mod tests {
             metadata: json!({}),
             status: common::node::NodeStatus::Draft,
             project_status: Some("Active".into()),
+            project_state: None,
+            project_state_at: None,
             tags: vec![],
             pinned: false,
             created_at: chrono::Utc::now(),

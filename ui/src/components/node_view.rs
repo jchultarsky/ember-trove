@@ -208,9 +208,10 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // viewer's own Focus. It is private to them and
                             // not part of the node, so it loads apart; the
                             // control shows once the answer is known. An
-                            // archived project never shows in Focus, so it
+                            // archived project never shows in Focus, nor
+                            // one that is parked or closed (S6a), so it
                             // has no control.
-                            let focusable = holds_focus(&n.node_type, &n.status);
+                            let focusable = holds_focus(&n.node_type, &n.status, n.project_state);
                             let focus_state = RwSignal::new(None::<bool>);
                             // A failed read is said: the control offers to
                             // load again. It used to leave no control.

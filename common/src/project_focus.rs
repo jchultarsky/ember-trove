@@ -28,6 +28,7 @@ use utoipa::ToSchema;
 use crate::id::NodeId;
 use crate::node::{NodeStatus, NodeType};
 use crate::ontology::{Capability, allows};
+use crate::project_state::ProjectState;
 use crate::task::ProjectDashboardEntry;
 
 /// Longest why-line, in characters: one short sentence.
@@ -133,6 +134,12 @@ pub enum FocusError {
     WhyControl,
     #[error("an archived project can't be in Focus")]
     Archived,
+    #[error("a parked project can't be in Focus")]
+    Parked,
+    #[error("a closed project can't be in Focus")]
+    Closed,
+    #[error("only Projects have a place in Focus")]
+    NotAProject,
     #[error("a new order names at most {MAX_ORDER} projects")]
     OrderTooLong,
 }
@@ -153,17 +160,39 @@ pub fn normalize_why(raw: Option<&str>) -> Result<Option<String>, FocusError> {
     }
 }
 
-/// Whether a node of this kind, in this lifecycle state, shows in Focus:
-/// a Project (§3.2) that is not archived (archived nodes are hidden from
-/// lists, §3.3).
+/// Why a node does not show in Focus, or `None` when it does: it is not
+/// a Project (§3.2), it is archived (archived nodes are hidden from
+/// lists, §3.3), or its declared state does not ask for attention (§10:
+/// parked, complete and cancelled; `ProjectState::asks_for_attention`).
+/// A Project with no state can't exist; it reads as closed.
 ///
 /// The one rule for what falls out of Focus by its own state. The API's
 /// list applies it in SQL (a Postgres test holds the two together) and its
-/// add route refuses what it would hide. When the closed terminal state
-/// lands (ONTOLOGY §4.1, roadmap S6), complete and cancelled join it here.
+/// add route refuses, with this reason, what the list would hide.
 #[must_use]
-pub fn holds_focus(kind: &NodeType, status: &NodeStatus) -> bool {
-    allows(kind, Capability::Focus) && *status != NodeStatus::Archived
+pub fn focus_refusal(
+    kind: &NodeType,
+    status: &NodeStatus,
+    state: Option<ProjectState>,
+) -> Option<FocusError> {
+    if !allows(kind, Capability::Focus) {
+        return Some(FocusError::NotAProject);
+    }
+    if *status == NodeStatus::Archived {
+        return Some(FocusError::Archived);
+    }
+    match state {
+        Some(ProjectState::Active) => None,
+        Some(ProjectState::Parked) => Some(FocusError::Parked),
+        Some(ProjectState::Complete | ProjectState::Cancelled) | None => Some(FocusError::Closed),
+    }
+}
+
+/// Whether a node shows in Focus: [`focus_refusal`] finds no reason
+/// against it.
+#[must_use]
+pub fn holds_focus(kind: &NodeType, status: &NodeStatus, state: Option<ProjectState>) -> bool {
+    focus_refusal(kind, status, state).is_none()
 }
 
 /// Whether to say that Focus works best small.
@@ -281,15 +310,63 @@ mod tests {
     }
 
     #[test]
-    fn only_a_project_that_is_not_archived_holds_focus() {
+    fn only_an_active_project_that_is_not_archived_holds_focus() {
         use NodeStatus::{Archived, Draft, Published};
         use NodeType::{Area, Article, Project, Reference};
+        let states = [
+            None,
+            Some(ProjectState::Active),
+            Some(ProjectState::Parked),
+            Some(ProjectState::Complete),
+            Some(ProjectState::Cancelled),
+        ];
         for kind in [Article, Project, Area, Reference] {
             for status in [Draft, Published, Archived] {
-                let expected = kind == Project && status != Archived;
-                assert_eq!(holds_focus(&kind, &status), expected, "{kind:?} {status:?}");
+                for state in states {
+                    let expected = kind == Project
+                        && status != Archived
+                        && state == Some(ProjectState::Active);
+                    assert_eq!(
+                        holds_focus(&kind, &status, state),
+                        expected,
+                        "{kind:?} {status:?} {state:?}"
+                    );
+                }
             }
         }
+    }
+
+    #[test]
+    fn a_refusal_names_its_reason_and_the_kind_comes_first() {
+        use NodeStatus::{Archived, Published};
+        use NodeType::{Area, Project};
+        let active = Some(ProjectState::Active);
+        assert_eq!(focus_refusal(&Project, &Published, active), None);
+        assert_eq!(
+            focus_refusal(&Area, &Archived, None),
+            Some(FocusError::NotAProject)
+        );
+        // Archived is said before the state: un-archiving is the first step.
+        assert_eq!(
+            focus_refusal(&Project, &Archived, Some(ProjectState::Parked)),
+            Some(FocusError::Archived)
+        );
+        assert_eq!(
+            focus_refusal(&Project, &Published, Some(ProjectState::Parked)),
+            Some(FocusError::Parked)
+        );
+        for closed in [ProjectState::Complete, ProjectState::Cancelled] {
+            assert_eq!(
+                focus_refusal(&Project, &Published, Some(closed)),
+                Some(FocusError::Closed)
+            );
+        }
+        // A Project always has a state; one without reads as closed, never
+        // as something to put in front of its person.
+        assert_eq!(
+            focus_refusal(&Project, &Published, None),
+            Some(FocusError::Closed)
+        );
     }
 
     #[test]

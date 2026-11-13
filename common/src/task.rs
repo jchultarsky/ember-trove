@@ -299,6 +299,15 @@ pub struct ProjectDashboardEntry {
     /// The project's status token (#143).
     #[serde(default)]
     pub project_status: Option<String>,
+    /// The project's declared state (S6a). The dashboard's Area groups
+    /// show active projects and its Parked group the parked ones; a
+    /// complete or cancelled project is not listed at all.
+    #[serde(default)]
+    pub project_state: Option<crate::project_state::ProjectState>,
+    /// When that state was last declared, if anyone has
+    /// (`Node::project_state_at`): "Parked since Nov 13".
+    #[serde(default)]
+    pub project_state_at: Option<DateTime<Utc>>,
     /// Up to 10 tasks still to do: open ones first, then waiting ones, each
     /// by priority then due date.
     pub open_tasks: Vec<TaskSummary>,

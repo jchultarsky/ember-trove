@@ -1603,9 +1603,13 @@ async fn insert_raw_node(
     title: &str,
     body: &str,
 ) -> uuid::Uuid {
+    // A Project is active, as a new one is; no other kind has a state
+    // (S6a, `nodes_project_state_only_on_projects`).
     sqlx::query_scalar(
-        "INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status, updated_at) \
-         VALUES ($1, $2::node_type, $3, $4, $5, '{}', 'draft', '2020-01-01T00:00:00Z') RETURNING id",
+        "INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status, updated_at, \
+                            project_state) \
+         VALUES ($1, $2::node_type, $3, $4, $5, '{}', 'draft', '2020-01-01T00:00:00Z', \
+                 CASE WHEN $2 = 'project' THEN 'active' END) RETURNING id",
     )
     .bind(owner)
     .bind(node_type)
@@ -1911,6 +1915,8 @@ async fn project_status_filter_counts_and_three_state_update(pool: PgPool) {
             node_type: Some(NodeType::Project),
             status: None,
             project_status: Some("active".into()),
+            project_state: None,
+            exclude_closed: false,
             tag_id: None,
             owner_id: Some("a".into()),
             subject_id: None,
@@ -6358,6 +6364,8 @@ async fn the_node_lists_link_count_leaves_out_links_to_hidden_nodes(pool: PgPool
                     node_type: None,
                     status: None,
                     project_status: None,
+                    project_state: None,
+                    exclude_closed: false,
                     tag_id: None,
                     owner_id: None,
                     subject_id: subject.map(str::to_string),
@@ -6417,6 +6425,8 @@ async fn the_node_list_the_title_list_and_the_graph_agree_on_who_sees_what(pool:
                     node_type: None,
                     status: None,
                     project_status: None,
+                    project_state: None,
+                    exclude_closed: false,
                     tag_id: None,
                     owner_id: None,
                     subject_id: subject.map(str::to_string),
@@ -6587,6 +6597,8 @@ async fn the_node_list_sorts_filters_by_type_and_pages_without_gaps(pool: PgPool
                     node_type,
                     status: None,
                     project_status: None,
+                    project_state: None,
+                    exclude_closed: false,
                     tag_id: None,
                     owner_id: Some("alice".into()),
                     subject_id: None,
@@ -6831,12 +6843,14 @@ async fn a_focus_keeps_its_order_and_a_second_put_keeps_its_place(pool: PgPool) 
 }
 
 /// The list's SQL and `common::project_focus::holds_focus` are one rule:
-/// only a Project that is not archived shows. The row of anything else
-/// stays (the read is a filter), so an un-archived project is back.
+/// only a Project that is not archived and whose declared state is active
+/// shows (S6a). The row of anything else stays (the read is a filter), so
+/// an un-archived or un-parked project is back as it was.
 #[sqlx::test(migrations = "../migrations")]
 async fn the_focus_filter_is_the_shared_rule(pool: PgPool) {
     use common::node::{NodeStatus, NodeType};
     use common::project_focus::holds_focus;
+    use common::project_state::ProjectState;
     let repo = PgFocusRepo::new(pool.clone());
     let mut expected = Vec::new();
     let mut all = Vec::new();
@@ -6846,40 +6860,60 @@ async fn the_focus_filter_is_the_shared_rule(pool: PgPool) {
         NodeType::Area,
         NodeType::Reference,
     ] {
+        // A Project has one of the four states; nothing else has any.
+        let states: Vec<Option<ProjectState>> = if kind == NodeType::Project {
+            ProjectState::ALL.iter().copied().map(Some).collect()
+        } else {
+            vec![None]
+        };
         for status in [
             NodeStatus::Draft,
             NodeStatus::Published,
             NodeStatus::Archived,
         ] {
-            let title = format!("{} {}", kind.as_str(), status.as_str());
-            let id = insert_raw_node(&pool, "alice", kind.as_str(), &title, "").await;
-            sql(
-                &pool,
-                &format!(
-                    "UPDATE nodes SET status = '{}' WHERE id = '{id}'",
-                    status.as_str()
-                ),
-            )
-            .await;
-            // Raw: the route would refuse most of these.
-            sql(
-                &pool,
-                &format!(
-                    "INSERT INTO project_focus (subject_id, node_id) VALUES ('alice', '{id}')"
-                ),
-            )
-            .await;
-            all.push(common::id::NodeId(id));
-            if holds_focus(&kind, &status) {
-                expected.push(title);
+            for state in &states {
+                let word = state.map_or("stateless", |s| s.as_str());
+                let title = format!("{} {} {word}", kind.as_str(), status.as_str());
+                let id = insert_raw_node(&pool, "alice", kind.as_str(), &title, "").await;
+                sql(
+                    &pool,
+                    &format!(
+                        "UPDATE nodes SET status = '{}' WHERE id = '{id}'",
+                        status.as_str()
+                    ),
+                )
+                .await;
+                if let Some(state) = state {
+                    sql(
+                        &pool,
+                        &format!(
+                            "UPDATE nodes SET project_state = '{}' WHERE id = '{id}'",
+                            state.as_str()
+                        ),
+                    )
+                    .await;
+                }
+                // Raw: the route would refuse most of these.
+                sql(
+                    &pool,
+                    &format!(
+                        "INSERT INTO project_focus (subject_id, node_id) VALUES ('alice', '{id}')"
+                    ),
+                )
+                .await;
+                all.push(common::id::NodeId(id));
+                if holds_focus(&kind, &status, *state) {
+                    expected.push(title);
+                }
             }
         }
     }
+    let entries = i64::try_from(all.len()).expect("a count");
     let mut shown = focus_titles(&repo, "alice", false).await;
     shown.sort();
     expected.sort();
     assert_eq!(shown, expected);
-    assert_eq!(shown, ["project draft", "project published"]);
+    assert_eq!(shown, ["project draft active", "project published active"]);
     // `get` applies the same filter.
     let mut got = 0;
     for node in &all {
@@ -6887,9 +6921,10 @@ async fn the_focus_filter_is_the_shared_rule(pool: PgPool) {
     }
     assert_eq!(got, 2);
 
-    // Archive one: it drops out, its row stays, and it is back as it was.
+    // Archive one, then park it: each time it drops out, its row stays,
+    // and it is back as it was.
     let shown_id: uuid::Uuid =
-        sqlx::query_scalar("SELECT id FROM nodes WHERE title = 'project published'")
+        sqlx::query_scalar("SELECT id FROM nodes WHERE title = 'project published active'")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -6899,28 +6934,41 @@ async fn the_focus_filter_is_the_shared_rule(pool: PgPool) {
         .await
         .unwrap()
         .expect("shown");
-    sql(
-        &pool,
-        &format!("UPDATE nodes SET status = 'archived' WHERE id = '{shown_id}'"),
-    )
-    .await;
-    assert_eq!(focus_titles(&repo, "alice", false).await, ["project draft"]);
-    assert_eq!(repo.get("alice", false, node).await.unwrap(), None);
-    assert_eq!(
-        scalar(&pool, "SELECT count(*) FROM project_focus").await,
-        12,
-        "a read deletes nothing"
-    );
-    sql(
-        &pool,
-        &format!("UPDATE nodes SET status = 'published' WHERE id = '{shown_id}'"),
-    )
-    .await;
-    assert_eq!(
-        repo.get("alice", false, node).await.unwrap(),
-        Some(before),
-        "un-archived: back, with the day it entered Focus"
-    );
+    for (hide, show, what) in [
+        ("status = 'archived'", "status = 'published'", "un-archived"),
+        (
+            "project_state = 'parked'",
+            "project_state = 'active'",
+            "made active again",
+        ),
+    ] {
+        sql(
+            &pool,
+            &format!("UPDATE nodes SET {hide} WHERE id = '{shown_id}'"),
+        )
+        .await;
+        assert_eq!(
+            focus_titles(&repo, "alice", false).await,
+            ["project draft active"],
+            "{hide}"
+        );
+        assert_eq!(repo.get("alice", false, node).await.unwrap(), None);
+        assert_eq!(
+            scalar(&pool, "SELECT count(*) FROM project_focus").await,
+            entries,
+            "a read deletes nothing"
+        );
+        sql(
+            &pool,
+            &format!("UPDATE nodes SET {show} WHERE id = '{shown_id}'"),
+        )
+        .await;
+        assert_eq!(
+            repo.get("alice", false, node).await.unwrap(),
+            Some(before.clone()),
+            "{what}: back, with the day it entered Focus"
+        );
+    }
 }
 
 /// SECURITY: Focus is private. Each account reads its own entries and its
@@ -7457,4 +7505,600 @@ async fn task_states_and_completion_dates_survive_a_backup_round_trip(pool: PgPo
     let legacy_done = tasks.get(done.id).await.expect("restored");
     assert_eq!(legacy_done.status, TaskStatus::Done);
     assert_eq!(legacy_done.completed_at, None, "never made up");
+}
+
+// ── S6a: project states (#320) ───────────────────────────────────────────────
+
+use common::project_state::ProjectState;
+
+/// A Project created through the repo, with its creator's Owner grant.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn a_project(pool: &PgPool, owner: &str, title: &str, label: Option<&str>) -> Node {
+    let mut req = node_req(title);
+    req.node_type = NodeType::Project;
+    req.project_status = label.map(str::to_string);
+    let node = PgNodeRepo::new(pool.clone())
+        .create(owner, req)
+        .await
+        .expect("project create");
+    own(pool, node.id, owner).await;
+    node
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn declare(pool: &PgPool, node: common::id::NodeId, state: ProjectState, who: &str) -> Node {
+    PgNodeRepo::new(pool.clone())
+        .set_project_state(node, state, &actor(who))
+        .await
+        .expect("declare a state")
+}
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn state_rows(pool: &PgPool, node: uuid::Uuid) -> Vec<(String, serde_json::Value)> {
+    sqlx::query_as(
+        "SELECT subject_id, metadata FROM activity_log \
+         WHERE node_id = $1 AND action = 'project_state_changed' ORDER BY created_at",
+    )
+    .bind(node)
+    .fetch_all(pool)
+    .await
+    .expect("state rows")
+}
+
+/// Migration 051 reads each label once, by the rule of
+/// `common::project_state::state_from_label`: a label that IS one of the
+/// ruled words gives the state, anything else is active, and no label
+/// parks a project. Nothing but a Project gets a state, no date is made
+/// up, and no node looks edited.
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_051_reads_each_label_once_and_moves_no_updated_at(pool: PgPool) {
+    use common::project_state::state_from_label;
+    let labels: [Option<&str>; 17] = [
+        None,
+        Some("Active"),
+        Some("Done"),
+        Some("done"),
+        Some("DONE"),
+        Some("Complete"),
+        Some("completed"),
+        Some("Cancelled"),
+        Some("canceled"),
+        Some("Abandoned"),
+        Some("On hold"),
+        Some("Parked"),
+        Some("Paused"),
+        Some("Done, awaiting invoice"),
+        Some("Closed"),
+        Some("In progress"),
+        Some("D\u{d6}NE"),
+    ];
+    // Seed while the columns are there (the fixture names them), then put
+    // the table back as it was before 051.
+    for (i, label) in labels.iter().enumerate() {
+        let id = insert_raw_node(&pool, "alice", "project", &format!("p{i:02}"), "").await;
+        sqlx::query("UPDATE nodes SET project_status = $2 WHERE id = $1")
+            .bind(id)
+            .bind(label)
+            .execute(&pool)
+            .await
+            .expect("label");
+    }
+    let archived = insert_raw_node(&pool, "alice", "project", "archived and done", "").await;
+    sql(
+        &pool,
+        &format!(
+            "UPDATE nodes SET status = 'archived', project_status = 'Done' WHERE id = '{archived}'"
+        ),
+    )
+    .await;
+    for kind in ["article", "area", "reference"] {
+        // A label on a node that is not a Project is older data (Data
+        // health lists it); it must not give that node a state.
+        let id = insert_raw_node(&pool, "alice", kind, &format!("a {kind}"), "").await;
+        sql(
+            &pool,
+            &format!("UPDATE nodes SET project_status = 'Done' WHERE id = '{id}'"),
+        )
+        .await;
+    }
+    // The fixture's own writes above moved `updated_at`; pin it again.
+    sql(&pool, "ALTER TABLE nodes DISABLE TRIGGER USER").await;
+    sql(
+        &pool,
+        "UPDATE nodes SET updated_at = '2020-01-01T00:00:00Z'",
+    )
+    .await;
+    sql(&pool, "ALTER TABLE nodes ENABLE TRIGGER USER").await;
+    for q in [
+        "ALTER TABLE nodes DROP CONSTRAINT nodes_project_state_only_on_projects",
+        "ALTER TABLE nodes DROP CONSTRAINT nodes_project_state_at_needs_a_state",
+        "ALTER TABLE nodes DROP COLUMN project_state_at",
+        "ALTER TABLE nodes DROP COLUMN project_state",
+    ] {
+        sql(&pool, q).await;
+    }
+
+    // Migrations run in a transaction; SET LOCAL needs one.
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::raw_sql(include_str!("../../../migrations/051_project_states.sql"))
+        .execute(&mut *tx)
+        .await
+        .expect("re-run migration 051");
+    tx.commit().await.expect("commit");
+
+    type Row = (String, String, Option<String>, Option<String>, bool, bool);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT title, node_type::text, project_status, project_state, \
+                project_state_at IS NULL, updated_at = '2020-01-01T00:00:00Z' \
+         FROM nodes ORDER BY title",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("nodes");
+    assert_eq!(rows.len(), labels.len() + 4);
+    for (title, kind, label, state, undated, untouched) in &rows {
+        assert!(undated, "{title}: nobody declared it, so it has no date");
+        assert!(untouched, "{title}: a change of vocabulary is not an edit");
+        if kind == "project" {
+            let expected = state_from_label(label.as_deref());
+            assert_eq!(
+                state.as_deref(),
+                Some(expected.as_str()),
+                "{title}: label {label:?}"
+            );
+        } else {
+            assert_eq!(
+                state.as_deref(),
+                None,
+                "{title}: only a Project has a state"
+            );
+        }
+    }
+    let state_of = |title: &str| {
+        rows.iter()
+            .find(|r| r.0 == title)
+            .and_then(|r| r.3.clone())
+            .expect(title)
+    };
+    // The rule, spelled out once, so the two sides can't both drift.
+    assert_eq!(state_of("p02"), "complete", "Done");
+    assert_eq!(state_of("p04"), "complete", "DONE");
+    assert_eq!(state_of("p09"), "cancelled", "Abandoned");
+    assert_eq!(
+        state_of("p10"),
+        "active",
+        "On hold: no label parks a project"
+    );
+    assert_eq!(state_of("p13"), "active", "a longer label only hints");
+    assert_eq!(state_of("p16"), "active", "only ASCII case is folded");
+    assert_eq!(state_of("archived and done"), "complete");
+
+    // The rules the migration leaves behind.
+    for (bad, why) in [
+        (
+            "UPDATE nodes SET project_state = NULL WHERE title = 'p00'",
+            "a Project always has a state",
+        ),
+        (
+            "UPDATE nodes SET project_state = 'active' WHERE title = 'a article'",
+            "nothing else has one",
+        ),
+        (
+            "UPDATE nodes SET project_state = 'on_hold' WHERE title = 'p00'",
+            "only the four states",
+        ),
+        (
+            "UPDATE nodes SET project_state_at = now() WHERE title = 'a area'",
+            "no date without a state",
+        ),
+    ] {
+        assert!(sqlx::query(bad).execute(&pool).await.is_err(), "{why}");
+    }
+}
+
+/// A new Project is active and nobody has declared that; a node of any
+/// other kind has no state. The node list filters on the state in SQL, so
+/// the dashboard's page is not used up by closed projects.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_new_project_is_active_and_the_list_filters_by_state(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let article = create_node(&pool, "alice", "an article").await;
+    assert_eq!(article.project_state, None);
+    assert_eq!(article.project_state_at, None);
+
+    let active = a_project(&pool, "alice", "active one", None).await;
+    assert_eq!(active.project_state, Some(ProjectState::Active));
+    assert_eq!(active.project_state_at, None, "not declared yet");
+    let parked = a_project(&pool, "alice", "parked one", None).await;
+    declare(&pool, parked.id, ProjectState::Parked, "alice").await;
+    // The closed ones are the most recently changed: first in the default
+    // order, where they would fill a small page.
+    for (title, state) in [
+        ("complete one", ProjectState::Complete),
+        ("cancelled one", ProjectState::Cancelled),
+        ("complete two", ProjectState::Complete),
+    ] {
+        let p = a_project(&pool, "alice", title, None).await;
+        declare(&pool, p.id, state, "alice").await;
+    }
+
+    let list = |state: Option<ProjectState>, exclude_closed: bool, per_page: u32| {
+        let repo = &repo;
+        async move {
+            let (mut rows, total) = repo
+                .list(common::node::NodeListParams {
+                    node_type: Some(NodeType::Project),
+                    status: None,
+                    project_status: None,
+                    project_state: state,
+                    exclude_closed,
+                    tag_id: None,
+                    owner_id: Some("alice".into()),
+                    subject_id: None,
+                    page: None,
+                    per_page: Some(per_page),
+                    include_archived: false,
+                    sort: Default::default(),
+                })
+                .await
+                .expect("list");
+            rows.sort_by(|a, b| a.title.cmp(&b.title));
+            let titles: Vec<String> = rows.into_iter().map(|n| n.title).collect();
+            (titles, total)
+        }
+    };
+    assert_eq!(list(None, false, 50).await.1, 5, "every project");
+    assert_eq!(
+        list(Some(ProjectState::Parked), false, 50).await,
+        (vec!["parked one".to_string()], 1)
+    );
+    assert_eq!(
+        list(Some(ProjectState::Complete), false, 50).await.0,
+        ["complete one", "complete two"]
+    );
+    // The dashboard's filter, with a page smaller than the closed projects
+    // would fill: both open projects are there, and counted.
+    assert_eq!(
+        list(None, true, 2).await,
+        (vec!["active one".to_string(), "parked one".to_string()], 2)
+    );
+
+    // A node of another kind has no state: it matches no state filter, and
+    // the dashboard's filter doesn't drop it.
+    let (all_kinds, _) = repo
+        .list(common::node::NodeListParams {
+            node_type: None,
+            status: None,
+            project_status: None,
+            project_state: None,
+            exclude_closed: true,
+            tag_id: None,
+            owner_id: Some("alice".into()),
+            subject_id: None,
+            page: None,
+            per_page: None,
+            include_archived: false,
+            sort: Default::default(),
+        })
+        .await
+        .expect("list");
+    let mut titles: Vec<&str> = all_kinds.iter().map(|n| n.title.as_str()).collect();
+    titles.sort_unstable();
+    assert_eq!(titles, ["active one", "an article", "parked one"]);
+}
+
+/// Declaring a state stamps when, and writes one History entry per change,
+/// attributed to its actor. Declaring the state a project already has
+/// records, once, that it was looked at; after that a repeat writes
+/// nothing at all (`updated_at` is the version an open editor saves on).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_declared_state_is_stamped_and_logged_once_per_change(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let p = a_project(&pool, "alice", "declared", Some("Active")).await;
+
+    // "Keep active": no change, so no History entry, but now declared.
+    let kept = declare(&pool, p.id, ProjectState::Active, "alice").await;
+    assert_eq!(kept.project_state, Some(ProjectState::Active));
+    let first = kept.project_state_at.expect("declared");
+    assert!(state_rows(&pool, p.id.0).await.is_empty());
+    // Again: nothing moves.
+    let again = declare(&pool, p.id, ProjectState::Active, "alice").await;
+    assert_eq!(again.project_state_at, Some(first));
+    assert_eq!(again.updated_at, kept.updated_at, "no write at all");
+
+    let parked = declare(&pool, p.id, ProjectState::Parked, "bob").await;
+    assert_eq!(parked.project_state, Some(ProjectState::Parked));
+    let parked_at = parked.project_state_at.expect("declared");
+    assert!(parked_at >= first);
+    assert!(parked.updated_at > kept.updated_at, "a new version");
+    assert_eq!(
+        parked.project_status.as_deref(),
+        Some("Active"),
+        "the label is its person's to word; a state never rewrites it"
+    );
+    // A stale tab sends it again: one entry, the same date, the same version.
+    let resent = declare(&pool, p.id, ProjectState::Parked, "bob").await;
+    assert_eq!(resent.project_state_at, Some(parked_at));
+    assert_eq!(resent.updated_at, parked.updated_at);
+    declare(&pool, p.id, ProjectState::Complete, "alice").await;
+
+    let rows = state_rows(&pool, p.id.0).await;
+    let read = |i: usize| {
+        let (who, meta) = &rows[i];
+        (
+            who.as_str(),
+            meta["from"].as_str().unwrap_or("?").to_string(),
+            meta["to"].as_str().unwrap_or("?").to_string(),
+        )
+    };
+    assert_eq!(rows.len(), 2, "one entry per change: {rows:?}");
+    assert_eq!(read(0), ("bob", "active".to_string(), "parked".to_string()));
+    assert_eq!(
+        read(1),
+        ("alice", "parked".to_string(), "complete".to_string())
+    );
+    assert_eq!(rows[0].1["actor_name"], "Alice", "the actor's metadata");
+
+    // Only a Project has a state to declare; a missing node is a 404.
+    let article = create_node(&pool, "alice", "an article").await;
+    let refused = repo
+        .set_project_state(article.id, ProjectState::Parked, &actor("alice"))
+        .await;
+    assert!(
+        matches!(&refused, Err(EmberTroveError::Validation(why)) if why == "only Projects have a project status"),
+        "{refused:?}"
+    );
+    assert_eq!(repo.get(article.id).await.expect("get").project_state, None);
+    let missing = repo
+        .set_project_state(
+            common::id::NodeId(uuid::Uuid::new_v4()),
+            ProjectState::Parked,
+            &actor("alice"),
+        )
+        .await;
+    assert!(matches!(missing, Err(EmberTroveError::NotFound(_))));
+}
+
+#[sqlx::test(migrations = "../migrations")]
+async fn a_state_change_and_its_history_entry_commit_together(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let p = a_project(&pool, "alice", "state atomic", None).await;
+    // Make the history insert fail: the state must not change alone.
+    sql(
+        &pool,
+        "ALTER TABLE activity_log ADD CONSTRAINT no_state_rows \
+         CHECK (action <> 'project_state_changed')",
+    )
+    .await;
+    let r = repo
+        .set_project_state(p.id, ProjectState::Cancelled, &actor("alice"))
+        .await;
+    assert!(r.is_err(), "the failed history write fails the declaration");
+    let still = repo.get(p.id).await.expect("get");
+    assert_eq!(still.project_state, Some(ProjectState::Active));
+    assert_eq!(still.project_state_at, None, "rolled back together");
+}
+
+/// No other write to a node touches its state or the date it was declared:
+/// not a save, not a new label (the state is never read from the label
+/// again), not a pin.
+#[sqlx::test(migrations = "../migrations")]
+async fn no_other_node_write_touches_the_project_state(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let p = a_project(&pool, "alice", "left alone", Some("Active")).await;
+    let parked = declare(&pool, p.id, ProjectState::Parked, "alice").await;
+    let stamp = parked.project_state_at;
+
+    let saved = repo
+        .update(
+            p.id,
+            common::node::UpdateNodeRequest {
+                title: Some("left alone, renamed".to_string()),
+                body: Some("new words".to_string()),
+                metadata: None,
+                status: Some(common::node::NodeStatus::Published),
+                project_status: Some(Some("Done".to_string())),
+                expected_updated_at: None,
+            },
+            &actor("alice"),
+        )
+        .await
+        .expect("save");
+    assert_eq!(saved.project_status.as_deref(), Some("Done"));
+    assert_eq!(
+        saved.project_state,
+        Some(ProjectState::Parked),
+        "a label that says Done does not complete the project"
+    );
+    assert_eq!(saved.project_state_at, stamp);
+
+    let pinned = repo.set_pinned(p.id, true).await.expect("pin");
+    assert_eq!(pinned.project_state, Some(ProjectState::Parked));
+    assert_eq!(pinned.project_state_at, stamp);
+    assert!(state_rows(&pool, p.id.0).await.len() == 1);
+}
+
+/// Closing a project takes its declaring person's own Focus entry with it,
+/// and nobody else's (Focus is private: no write may reach another
+/// account's rows). Parking deletes nothing: the entry is hidden and comes
+/// back as it was. Nothing about Focus is written to the node's History.
+#[sqlx::test(migrations = "../migrations")]
+async fn closing_a_project_removes_only_the_callers_own_focus_entry(pool: PgPool) {
+    let focus = PgFocusRepo::new(pool.clone());
+    let first = a_project(&pool, "alice", "first", None).await;
+    let shared = a_project(&pool, "alice", "shared", None).await;
+    let last = a_project(&pool, "alice", "last", None).await;
+    share(&pool, shared.id.0, "bob").await;
+    for p in [&first, &shared, &last] {
+        focus
+            .put("alice", p.id, &why(&format!("alice on {}", p.title)))
+            .await
+            .unwrap();
+    }
+    focus
+        .put("bob", shared.id, &why("bob's reason"))
+        .await
+        .unwrap();
+    let before = focus
+        .get("alice", false, shared.id)
+        .await
+        .unwrap()
+        .expect("in Focus");
+    let entries = || scalar(&pool, "SELECT count(*) FROM project_focus");
+
+    // Parked: hidden for both, every row kept.
+    declare(&pool, shared.id, ProjectState::Parked, "alice").await;
+    assert_eq!(
+        focus_titles(&focus, "alice", false).await,
+        ["first", "last"]
+    );
+    assert!(focus_titles(&focus, "bob", false).await.is_empty());
+    assert_eq!(entries().await, 4);
+    // Active again: back in its place, with its why-line and its day.
+    declare(&pool, shared.id, ProjectState::Active, "alice").await;
+    assert_eq!(
+        focus_titles(&focus, "alice", false).await,
+        ["first", "shared", "last"]
+    );
+    assert_eq!(
+        focus.get("alice", false, shared.id).await.unwrap(),
+        Some(before)
+    );
+
+    // Complete: alice declared it, so her entry goes. Bob's row stays, hidden.
+    declare(&pool, shared.id, ProjectState::Complete, "alice").await;
+    assert_eq!(
+        focus_titles(&focus, "alice", false).await,
+        ["first", "last"]
+    );
+    assert!(focus_titles(&focus, "bob", false).await.is_empty());
+    let rows_of = |who: &'static str| {
+        let pool = pool.clone();
+        let node = shared.id.0;
+        async move {
+            scalar(
+                &pool,
+                &format!(
+                    "SELECT count(*) FROM project_focus \
+                     WHERE subject_id = '{who}' AND node_id = '{node}'"
+                ),
+            )
+            .await
+        }
+    };
+    assert_eq!(rows_of("alice").await, 0, "the declaring person's entry");
+    assert_eq!(rows_of("bob").await, 1, "nobody else's is ever removed");
+    // Re-opened: it is not back in alice's Focus; bob's entry shows again.
+    declare(&pool, shared.id, ProjectState::Active, "alice").await;
+    assert_eq!(
+        focus_titles(&focus, "alice", false).await,
+        ["first", "last"]
+    );
+    assert_eq!(focus_titles(&focus, "bob", false).await, ["shared"]);
+
+    // A close that changes nothing (a stale tab, or a second person
+    // confirming) still leaves no entry of its sender's.
+    declare(&pool, shared.id, ProjectState::Cancelled, "alice").await;
+    declare(&pool, shared.id, ProjectState::Cancelled, "bob").await;
+    assert_eq!(rows_of("bob").await, 0);
+    assert_eq!(entries().await, 2, "alice's two other projects");
+
+    // History is shared with the node, and Focus is not: the entries say
+    // who changed the state and nothing about anyone's Focus.
+    let history: Vec<serde_json::Value> =
+        sqlx::query_scalar("SELECT metadata FROM activity_log WHERE node_id = $1")
+            .bind(shared.id.0)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert!(!history.is_empty());
+    for meta in &history {
+        let text = meta.to_string().to_lowercase();
+        assert!(!text.contains("focus"), "{text}");
+        assert!(!text.contains("reason"), "{text}");
+    }
+}
+
+/// A backup carries each project's declared state and its date (format
+/// 10). An archive from before S6a still restores: a project's state is
+/// read from its label, once, with no date; and a state on a node that is
+/// not a Project (a hand-edited archive) is dropped, not refused.
+#[sqlx::test(migrations = "../migrations")]
+async fn project_states_survive_a_backup_round_trip(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let parked = a_project(&pool, "alice", "parked", Some("Active")).await;
+    let parked = declare(&pool, parked.id, ProjectState::Parked, "alice").await;
+    let done = a_project(&pool, "alice", "labelled done", Some("Done")).await;
+    let untouched = a_project(&pool, "alice", "never declared", Some("On hold")).await;
+    let article = create_node(&pool, "alice", "an article").await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    let archived = |id| {
+        data.nodes
+            .iter()
+            .find(|n: &&Node| n.id == id)
+            .expect("in the archive")
+    };
+    assert_eq!(
+        archived(parked.id).project_state,
+        Some(ProjectState::Parked)
+    );
+    assert_eq!(
+        archived(parked.id).project_state_at,
+        parked.project_state_at
+    );
+    assert_eq!(archived(article.id).project_state, None);
+
+    // Restored over a database that has moved on.
+    declare(&pool, parked.id, ProjectState::Cancelled, "alice").await;
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data).await.unwrap();
+    tx.commit().await.unwrap();
+    let back = repo.get(parked.id).await.expect("restored");
+    assert_eq!(back.project_state, Some(ProjectState::Parked));
+    assert_eq!(back.project_state_at, parked.project_state_at);
+    // A new project's "active" was not declared, and still is not.
+    let back = repo.get(done.id).await.expect("restored");
+    assert_eq!(
+        back.project_state,
+        Some(ProjectState::Active),
+        "format 10 carries the state; the label is not read again"
+    );
+    assert_eq!(back.project_state_at, None);
+
+    // The same archive as a release before S6a wrote it, plus a damaged row.
+    let mut old = serde_json::to_value(&data).expect("json");
+    for row in old["nodes"].as_array_mut().expect("nodes").iter_mut() {
+        let node = row.as_object_mut().expect("node");
+        if node["id"] == serde_json::json!(article.id) {
+            node.insert("project_state".into(), "complete".into());
+            node.insert("project_state_at".into(), "2026-01-01T00:00:00Z".into());
+        } else {
+            node.remove("project_state");
+            node.remove("project_state_at");
+        }
+    }
+    let old: common::backup::BackupData = serde_json::from_value(old).expect("an older archive");
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &old)
+        .await
+        .expect("an older archive restores");
+    tx.commit().await.unwrap();
+    for (node, expected, why) in [
+        (parked.id, ProjectState::Active, "label Active"),
+        (done.id, ProjectState::Complete, "label Done says complete"),
+        (untouched.id, ProjectState::Active, "On hold only hints"),
+    ] {
+        let n = repo.get(node).await.expect("restored");
+        assert_eq!(n.project_state, Some(expected), "{why}");
+        assert_eq!(n.project_state_at, None, "{why}: never made up");
+    }
+    let n = repo.get(article.id).await.expect("restored");
+    assert_eq!(n.project_state, None, "only a Project has a state");
+    assert_eq!(n.project_state_at, None);
 }
