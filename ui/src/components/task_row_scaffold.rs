@@ -235,7 +235,10 @@ fn SegmentedRadio(
         <div
             role="radiogroup"
             aria-label=label
-            class="inline-flex items-center rounded-lg border border-stone-200 dark:border-stone-700 overflow-hidden"
+            // `flex-wrap`, `max-w-full`: in a box narrower than its options
+            // the group wraps. It must never cut an option off, which
+            // `overflow-hidden` (for the rounded corners) would do silently.
+            class="inline-flex flex-wrap max-w-full items-center rounded-lg border border-stone-200 dark:border-stone-700 overflow-hidden"
             data-testid=testid
             on:keydown=on_keydown
         >

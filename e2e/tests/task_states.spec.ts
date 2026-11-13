@@ -254,6 +254,81 @@ test('a Waiting task is out of Today and Overdue, and stays in the Backlog', asy
   }
 });
 
+test('a state whose save failed is sent again on the retry', async ({ page, request }) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e states retry ${stamp}`, { node_type: 'project' });
+  try {
+    const task = await addTask(request, project.id, { title: `ask the vendor ${stamp}` });
+    await page.goto(`/nodes/${project.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+    const picker = row.getByTestId('state-picker');
+
+    let fail = true;
+    await page.route(`**/api/tasks/${task.id}`, (route) =>
+      fail && route.request().method() === 'PATCH'
+        ? route.fulfill({ status: 500, body: 'no' })
+        : route.continue(),
+    );
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await picker.getByRole('radio', { name: 'Waiting' }).click();
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByText(/Save failed/)).toBeVisible();
+    await expect(row.getByTestId('task-state')).toHaveCount(0);
+
+    // The editor still holds the choice, and the retry sends it. It used
+    // to count the state as saved once it had been sent, and leave it out.
+    fail = false;
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await expect(picker.getByRole('radio', { name: 'Waiting' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(row.getByTestId('task-state')).toHaveText('Waiting');
+    const stored = await (await request.get(`/api/nodes/${project.id}/tasks`)).json();
+    expect(stored[0].status).toBe('waiting');
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
+test("the editor's picker follows a task ticked or unticked outside it", async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const project = await createNode(request, `e2e states follow ${stamp}`, { node_type: 'project' });
+  try {
+    const task = await addTask(request, project.id, { title: `write it up ${stamp}` });
+    await page.goto(`/nodes/${project.id}`);
+    const row = page.locator(`[data-task-id="${task.id}"]`);
+
+    // An edit and a save: the list keeps this task's editor state from here.
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await row.getByTestId('task-editor').locator('textarea').fill(`write it up, v2 ${stamp}`);
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Save' }).click();
+    await expect(row).toContainText(`write it up, v2 ${stamp}`);
+
+    // Ticked with the checkbox: its editor has no state picker now.
+    await row.locator('button[title="Toggle done"]').click();
+    await page.getByRole('button', { name: /1 completed/ }).click();
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await expect(row.getByTestId('task-editor')).toBeVisible();
+    await expect(row.getByTestId('state-picker')).toHaveCount(0);
+    await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
+
+    // Unticked: the picker is back, on Open.
+    await row.locator('button[title="Toggle done"]').click();
+    await expect(row.locator('button[title="Toggle done"]')).toBeVisible();
+    await row.getByRole('button', { name: 'Edit task' }).click();
+    await expect(
+      row.getByTestId('state-picker').getByRole('radio', { name: 'Open' }),
+    ).toHaveAttribute('aria-checked', 'true');
+  } finally {
+    await request.delete(`/api/nodes/${project.id}`);
+  }
+});
+
 test.describe('at phone width', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
@@ -276,6 +351,40 @@ test.describe('at phone width', () => {
         expect(clipped, `${id} is ${clipped}px wider than its box`).toBeLessThanOrEqual(0);
       }
       // And the page still doesn't scroll sideways with the editor open.
+      const over = await page.locator('main').evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(over).toBeLessThanOrEqual(1);
+    } finally {
+      await request.delete(`/api/nodes/${project.id}`);
+    }
+  });
+
+  test("the pickers fit My Day's task editor", async ({ page, request }) => {
+    const stamp = Date.now();
+    const project = await createNode(request, `e2e states phone day ${stamp}`, {
+      node_type: 'project',
+    });
+    try {
+      const task = await addTask(request, project.id, {
+        title: `narrower still ${stamp}`,
+        focus_date: localISO(0),
+      });
+      await page.goto('/tasks/my-day');
+      const row = page.locator(`[data-task-id="${task.id}"]`);
+      await row.locator('button[title="Edit task"]').click();
+      const editor = row.getByTestId('task-editor');
+      await expect(editor).toBeVisible();
+      // My Day's row is narrower than the Project page's: beside its action
+      // buttons the editor was about 150px wide, less than the state picker.
+      for (const id of ['priority-picker', 'state-picker']) {
+        const picker = editor.getByTestId(id);
+        const clipped = await picker.evaluate((el) => el.scrollWidth - el.clientWidth);
+        expect(clipped, `${id} is ${clipped}px wider than its box`).toBeLessThanOrEqual(0);
+        // On one line: nothing wrapped under the first option.
+        const tops = await picker
+          .getByRole('radio')
+          .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)));
+        expect(new Set(tops).size, `${id} wrapped`).toBe(1);
+      }
       const over = await page.locator('main').evaluate((el) => el.scrollWidth - el.clientWidth);
       expect(over).toBeLessThanOrEqual(1);
     } finally {

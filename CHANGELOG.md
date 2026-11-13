@@ -19,8 +19,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     it back to Open and it returns to the normal flow.
   - **Cancelling a task** is possible in the app for the first time (it
     was API-only).
-  - A task records **when it was completed**, shown on a done task as
-    "Done Nov 12". The date is set when the task becomes done and cleared
+  - A task records **when it was completed**, shown on the Project page
+    as "Done Nov 12". The date is set when the task becomes done and cleared
     if it is reopened. Tasks completed before this release have no date:
     it was never recorded, and is not made up.
   - The dashboard counts open, waiting, done and cancelled tasks, and

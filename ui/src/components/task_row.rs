@@ -117,10 +117,15 @@ impl EditSession {
     /// open editor, or after a failed Save, must not throw the text away
     /// (`TaskEditDraft::worth_keeping`).
     pub fn open(&self, task: &Task) {
-        let keep = matches!(
-            self.current.try_get_value().flatten(),
-            Some((id, draft)) if id == task.id && draft.worth_keeping(task)
-        );
+        let keep = match self.current.try_get_value().flatten() {
+            Some((id, draft)) if id == task.id => {
+                // The task's state may have moved while the draft waited
+                // (a tick, an untick, its own save landing).
+                draft.follow(task);
+                draft.worth_keeping(task)
+            }
+            _ => false,
+        };
         if !keep {
             self.replace(task);
         }
@@ -131,7 +136,10 @@ impl EditSession {
     /// editor was opened another way (an Undo reopening it).
     pub fn draft(&self, task: &Task) -> TaskEditDraft {
         match self.current.try_get_value().flatten() {
-            Some((id, draft)) if id == task.id => draft,
+            Some((id, draft)) if id == task.id => {
+                draft.follow(task);
+                draft
+            }
             _ => self.replace(task),
         }
     }
@@ -575,8 +583,15 @@ pub fn KanbanTaskRow(
                 }}
             </div>
 
-            // Actions — always visible, never trigger row navigation
-            <div class="flex items-center gap-0.5 flex-shrink-0">
+            // Actions — always visible, never trigger row navigation. Except
+            // at phone width while the row is being edited: beside them the
+            // editor was about 150px wide, too narrow for its pickers, and
+            // the editor has its own Save and Cancel.
+            <div class=move || if is_editing() {
+                "hidden sm:flex items-center gap-0.5 flex-shrink-0"
+            } else {
+                "flex items-center gap-0.5 flex-shrink-0"
+            }>
                 {match zone {
                     KanbanZone::Today => view! {
                         <button

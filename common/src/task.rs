@@ -537,6 +537,28 @@ pub fn warn_past_due(
     new.is_some_and(|d| d < today && Some(d) != original)
 }
 
+/// What an editor's state picker shows once the task's own state has moved
+/// from `base` to `now` outside the editor (the checkbox, another tab, or
+/// the editor's own save landing). A picker its person hasn't touched
+/// (`picked == base`) follows the task; a choice they made stays theirs.
+///
+/// The state differs from an editor's other fields in this: it changes
+/// outside the editor, so "what the editor last sent" says nothing about
+/// what the task is now.
+#[must_use]
+pub fn rebased_state(picked: &str, base: &str, now: &str) -> String {
+    if picked == base { now } else { picked }.to_string()
+}
+
+/// The state an editor's save sends: the one picked, and only when it
+/// differs from the task's own (`base`). An unknown word sends nothing.
+#[must_use]
+pub fn changed_state(picked: &str, base: &str) -> Option<TaskStatus> {
+    (picked != base)
+        .then(|| TaskStatus::parse(picked))
+        .flatten()
+}
+
 /// The PATCH for an inline task edit, from its form values (the strings the
 /// edit form's inputs hold). `None` when the title is blank. An empty due date
 /// or recurrence clears it; an unknown priority is Medium. `status` is the
@@ -996,6 +1018,28 @@ mod tests {
         assert_eq!(r.recurrence, Some(None));
         // Blank title: no request at all.
         assert!(task_edit_request("   ", "high", "", "", None).is_none());
+    }
+
+    #[test]
+    fn an_untouched_picker_follows_the_task_and_a_choice_stays() {
+        // Untouched: the task was ticked done elsewhere; the editor follows.
+        assert_eq!(rebased_state("open", "open", "done"), "done");
+        // A choice made in the editor survives the task moving under it.
+        assert_eq!(rebased_state("waiting", "open", "done"), "waiting");
+        // The editor's own save landing: the choice is now the task's.
+        assert_eq!(rebased_state("waiting", "open", "waiting"), "waiting");
+    }
+
+    #[test]
+    fn a_state_is_sent_only_when_it_differs_from_the_tasks_own() {
+        assert_eq!(changed_state("open", "open"), None);
+        assert_eq!(changed_state("waiting", "open"), Some(TaskStatus::Waiting));
+        // A save that failed leaves the task as it was, so the retry
+        // sends the state again: nothing "already sent" is remembered.
+        assert_eq!(changed_state("waiting", "open"), Some(TaskStatus::Waiting));
+        // Once the task has it, there is nothing to send.
+        assert_eq!(changed_state("waiting", "waiting"), None);
+        assert_eq!(changed_state("bogus", "open"), None);
     }
 
     #[test]

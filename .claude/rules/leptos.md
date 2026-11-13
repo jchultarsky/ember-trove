@@ -140,7 +140,15 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   (`task_actions::toggle_done`). The editor sends the state only when it
   was changed there (`TaskEditDraft::take_request`), and shows no picker
   for a done task. Rows say Waiting and Cancelled with
-  `state_badge_view`, and a done task's day with `completed_badge_view`.
+  `state_badge_view`; the Project page's task list also shows a done
+  task's day (`completed_badge_view`).
+  The draft's state is unlike its other fields: it changes outside the
+  editor (the checkbox, another tab). `TaskEditDraft` therefore keeps the
+  task's own state (`base_status`), which `EditSession` refreshes with
+  `follow` each time it hands the draft out, and sends a state only when
+  the picker differs from it (`common::task::changed_state`). Never
+  compare against "what Save last sent": a Save that failed would drop
+  the state on the retry.
   A new small picker is a `SegmentedRadio` with its own `Segment`s, like
   `PriorityPicker` and `StatePicker`: don't copy the radio-group markup.
   Waiting is cool (`WAITING_TONE`), never warm. My Day's backlog is
