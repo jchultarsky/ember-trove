@@ -12,9 +12,13 @@ Keep it current as part of each change (see `POLICY.md` §10).
   (`NodeRepo::set_project_state`: the stamp, the History entry and, on a
   terminal state, the caller's own Focus entry, in one transaction),
   Focus and the dashboard on active projects, the Data health rule
-  `label_reads_as_another_state`, backup format 10. PR 2 (UI): the state
-  chip, the dashboard's Parked group, the list filter, and My Day's rule
-  (a task of a project that is not active is out of Today and Overdue).
+  `label_reads_as_another_state`, backup format 10 (PR #321, merged).
+  PR 2 (UI): the state chip on the Project page (`ProjectStateChip`; the
+  page owns the state), the dashboard's Parked group and Park / Make
+  active buttons, the Projects list's State filter, Data health's fix
+  buttons, and My Day's rule (`Task::asks_for_attention`: a task of a
+  project that is not active is out of Today and Overdue, and stays in
+  the Backlog, marked).
   One release for both (3.21.0), after a Lightsail snapshot. Rules:
   "Project states" in `.claude/rules/api.md`. Owner decisions,
   2026-11-13: parked tasks leave Today and Overdue; a collapsed Parked

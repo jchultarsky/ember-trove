@@ -12,26 +12,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   status label. Complete and cancelled close it. **Parked** sets it aside
   on purpose: it stays yours and unfinished, and stops asking for
   attention.
-  - `PUT /api/nodes/{id}/project-state` declares the state. An editor of
-    the project may; the change is written to the project's History.
-  - The state is declared, never worked out: not from the tasks, and not
-    from the label. Changing the label to "Done" completes nothing.
-  - The date a state was declared is kept ("parked since"). A state
-    nobody has declared yet has no date: it is never made up.
+  - **Set it on the Project's page**: the icon beside the status label
+    opens the four states, each with what it does. A parked or closed
+    project says so there, and since when ("Parked since Nov 13").
+  - **Park from the dashboard too**: the pause button on a project's
+    card. Parked projects wait in one "Parked" group under the Area
+    groups, closed until you open it, each with a button to make it
+    active again. Complete and cancelled projects leave the dashboard;
+    the Projects list finds them with its new State filter.
+  - **A parked project's tasks don't ask for attention either.** In My
+    Day they are not carried over into Today and not listed under
+    Overdue. They stay in the Backlog, marked "Project parked", and on
+    the Project's page. A task you put in today's list yourself stays
+    there. Make the project active and its tasks are back in the normal
+    flow. The same holds for a complete or cancelled project.
   - **Focus shows active projects only.** A parked project drops out and
     comes back as it was, in its place and with its why-line, when it is
     made active again. Completing or cancelling a project takes it out of
     the Focus of the person who declared it, for good.
-  - **The dashboard lists active and parked projects.** A complete or
-    cancelled one has left it.
-  - `GET /api/nodes` takes `project_state` as a filter.
+  - The state is declared, never worked out: not from the tasks, and not
+    from the label. Changing the label to "Done" completes nothing.
+  - The date a state was declared is kept. A state nobody has declared
+    yet has no date: it is never made up.
+  - A change of state is written to the project's History.
   - A duplicate of a project is a new, active project. If the original's
     label says it is done, cancelled or on hold, the copy starts with
     "Active" instead.
   - **Data health: "A status label that reads as another state".** It
     lists your projects whose state nobody has declared and whose label
-    suggests a different one ("On hold", "Done, awaiting invoice").
-    Declaring any state, the one it has included, settles the item.
+    suggests a different one ("On hold", "Done, awaiting invoice"), with
+    a button for the state the label means and one to keep the state the
+    project has. Either settles the item.
+  - API: `PUT /api/nodes/{id}/project-state` declares the state (an
+    editor of the project); `GET /api/nodes` takes `project_state` as a
+    filter; the task feeds carry each task's `project_state`.
 
 ### Changed
 - **Existing projects got their state from their label, once** (owner
@@ -43,9 +57,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   was declared. An older release refuses a format-10 archive rather than
   drop them. Archives of formats 3 to 9 still restore; a project's state
   is then read from its label, as above.
+- **Ticking a task in the Backlog no longer moves it into Today.**
+  Completing a task that was carried over from an earlier day still counts
+  it as done today. A task that was not carried over (a waiting one, or
+  one of a parked project) now stays where it was when ticked; it used to
+  appear in Today as done although it had never been there.
 - Until the cascade is built (S6b, S6c), completing or cancelling a
   project changes the project alone: its tasks and sub-projects stay as
-  they are.
+  they are (and go quiet in My Day, as above).
+- A tab left open across this release should be reloaded: the app's
+  cached shell is replaced (the task feeds and the dashboard carry new
+  fields).
+
+### Fixed
+- **A status change's icon showed as the word "FLAG"** in a project's
+  History and in the dashboard's recent activity. The icon was missing
+  from the app's icon font.
 
 ## [3.20.0] - 2026-11-13
 

@@ -49,6 +49,7 @@ false
 filter_alt_off
 filter_list
 fit_screen
+flag
 group
 help
 help_outline
@@ -96,6 +97,7 @@ oldest
 open_in_new
 owner
 pass
+pause_circle
 people
 person
 person_add
@@ -103,6 +105,7 @@ person_off
 person_remove
 phone
 picture_as_pdf
+play_circle
 progress_activity
 public
 push_pin

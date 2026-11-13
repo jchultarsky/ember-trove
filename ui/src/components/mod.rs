@@ -40,6 +40,7 @@ pub mod performance_view;
 pub mod permission_dialog;
 pub mod project_dashboard;
 pub mod project_focus;
+pub mod project_state;
 pub mod project_status;
 pub mod resizable_editor;
 pub mod search_bar;

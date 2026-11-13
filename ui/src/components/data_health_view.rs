@@ -12,6 +12,7 @@ use common::data_health::{
 use common::edge::EdgeType;
 use common::id::{MembershipId, NodeId, TaskId};
 use common::node::{NodeType, UpdateNodeRequest};
+use common::project_state::ProjectState;
 use common::task::UpdateTaskRequest;
 use leptos::prelude::*;
 
@@ -65,6 +66,30 @@ enum Fix {
     LinkInstead,
     /// Remove the item's link (#228).
     RemoveLink,
+    /// Declare the state the project's label reads as (S6a).
+    DeclareState(ProjectState),
+    /// Declare the state the project already has: the label stays, and
+    /// the item is settled (S6a).
+    KeepState(ProjectState),
+}
+
+/// The words on a state fix's button, and what its toast says.
+fn state_fix_words(fix: Fix) -> Option<(ProjectState, &'static str, &'static str)> {
+    match fix {
+        Fix::DeclareState(state) => Some(match state {
+            ProjectState::Active => (state, "Make active", "Active"),
+            ProjectState::Parked => (state, "Park", "Parked"),
+            ProjectState::Complete => (state, "Mark complete", "Complete"),
+            ProjectState::Cancelled => (state, "Mark cancelled", "Cancelled"),
+        }),
+        Fix::KeepState(state) => Some(match state {
+            ProjectState::Active => (state, "Keep active", "Kept active"),
+            ProjectState::Parked => (state, "Keep parked", "Kept parked"),
+            ProjectState::Complete => (state, "Keep complete", "Kept complete"),
+            ProjectState::Cancelled => (state, "Keep cancelled", "Kept cancelled"),
+        }),
+        _ => None,
+    }
 }
 
 /// The fixes an item offers, in button order. Removing a membership needs
@@ -75,6 +100,11 @@ fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
             vec![Fix::MoveToProject, Fix::DeleteTask]
         }
         RuleId::StatusOnNonProject => vec![Fix::ClearStatus],
+        // What the label reads as, then what the project is (S6a). Either
+        // is a declaration, which settles the item.
+        RuleId::LabelReadsAsAnotherState => v.label_reading.as_ref().map_or_else(Vec::new, |r| {
+            vec![Fix::DeclareState(r.reads_as), Fix::KeepState(r.state)]
+        }),
         // Needs the membership, the reader's ownership of the node, and the
         // node itself (the call names it).
         RuleId::MembershipOnNonProject
@@ -292,6 +322,18 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
                         <li class="px-4 py-2 text-sm flex flex-wrap items-center gap-x-2 gap-y-1"
                             data-testid="data-health-item">
                             <RefLink r=v.subject />
+                            // Its own label and what it reads as (S6a).
+                            {v.label_reading.clone().map(|r| view! {
+                                <span class="text-xs text-stone-500 dark:text-stone-400"
+                                    data-testid="label-reading">
+                                    {format!(
+                                        "\u{201c}{}\u{201d} reads as {}; the project is {}",
+                                        r.label,
+                                        r.reads_as.label().to_lowercase(),
+                                        r.state.label().to_lowercase(),
+                                    )}
+                                </span>
+                            })}
                             {(!v.related.is_empty()).then(|| view! {
                                 <span class="text-stone-400 dark:text-stone-500" aria-hidden="true">"\u{2192}"</span>
                             })}
@@ -421,6 +463,36 @@ fn FixControl(
                         </button>
                     }.into_any()
                 }}
+            }
+            .into_any()
+        }
+        Fix::DeclareState(_) | Fix::KeepState(_) => {
+            let Some((state, label, done)) = state_fix_words(fix) else {
+                return ().into_any();
+            };
+            let node = NodeId(item.subject.id);
+            let declare = move |_| {
+                if busy.get_untracked() {
+                    return;
+                }
+                busy.set(true);
+                wasm_bindgen_futures::spawn_local(async move {
+                    finish(
+                        api::declare_project_state(node, state)
+                            .await
+                            .map(|_| done.to_string())
+                            .map_err(|e| format!("Couldn't save the state: {e}")),
+                    );
+                });
+            };
+            view! {
+                <button type="button" class=FIX_BUTTON disabled=move || busy.get() on:click=declare
+                    data-testid=format!("fix-state-{}", state.as_str())>
+                    <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">
+                        {crate::components::project_state::project_state_icon(state)}
+                    </span>
+                    {label}
+                </button>
             }
             .into_any()
         }
@@ -900,6 +972,42 @@ mod tests {
         assert_eq!(ref_href(&done), Some(format!("/nodes/{node}")));
         let done_orphan = Ref::task(id, "t", None, false).with_closed(true);
         assert_eq!(ref_href(&done_orphan), None);
+    }
+
+    #[test]
+    fn a_label_item_offers_the_state_it_reads_as_and_the_one_it_has() {
+        use common::data_health::LabelReadingRef;
+        let id = Uuid::from_u128(1);
+        let item =
+            Violation::new(Ref::node(id, "p", false), vec![]).with_label_reading(LabelReadingRef {
+                label: "On hold".into(),
+                reads_as: ProjectState::Parked,
+                state: ProjectState::Active,
+            });
+        let fixes = fixes_for(RuleId::LabelReadsAsAnotherState, &item);
+        assert_eq!(
+            fixes,
+            vec![
+                Fix::DeclareState(ProjectState::Parked),
+                Fix::KeepState(ProjectState::Active)
+            ]
+        );
+        let words: Vec<_> = fixes
+            .into_iter()
+            .filter_map(state_fix_words)
+            .map(|(state, label, _)| (state, label))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                (ProjectState::Parked, "Park"),
+                (ProjectState::Active, "Keep active")
+            ]
+        );
+        // Without the reading there is nothing to choose between.
+        let bare = Violation::new(Ref::node(id, "p", false), vec![]);
+        assert!(fixes_for(RuleId::LabelReadsAsAnotherState, &bare).is_empty());
+        assert_eq!(state_fix_words(Fix::ClearStatus), None);
     }
 
     #[test]

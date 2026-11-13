@@ -54,6 +54,9 @@ pub fn toggle_done(
     task_id: TaskId,
     status: TaskStatus,
     focus_date: Option<NaiveDate>,
+    // The state of the task's Project (S6a): a task of a parked or closed
+    // project was not carried into Today, so completing it stamps nothing.
+    project: Option<common::project_state::ProjectState>,
     row: Option<RowSignals>,
     ctx: TaskCtx,
     spark: Option<&web_sys::MouseEvent>,
@@ -61,7 +64,7 @@ pub fn toggle_done(
     if row.is_some_and(|r| r.busy.get_untracked()) {
         return;
     }
-    let toggle = done_toggle(&status, focus_date, ctx.today);
+    let toggle = done_toggle(&status, focus_date, ctx.today, project);
     let completes = toggle.completes();
     if completes && let Some(ev) = spark {
         crate::spark::strike_spark(ev);

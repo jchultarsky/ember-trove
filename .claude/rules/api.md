@@ -286,8 +286,7 @@ cargo check && cargo clippy -- -D warnings
 - **Who asks for attention is one rule**:
   `ProjectState::asks_for_attention` (active only). Focus reads it:
   `focus_refusal` / `holds_focus` in Rust, and `shows()` builds its SQL
-  from the same method. (My Day's task rule joins it in the slice's
-  second PR.)
+  from the same method. So does a task: see "Task rules".
 - **The dashboard shows what is not closed**: active and parked. It asks
   the node list with `exclude_closed`, whose SQL (`not_closed`) is built
   from `ProjectState::is_terminal`, and runs in SQL so closed projects
@@ -461,6 +460,24 @@ cargo check && cargo clippy -- -D warnings
 - `TaskRepo::create_occurrence` locks the parent row and returns the live
   occurrence it already has: a parent has at most one. Without the lock,
   `two_completions_at_once_schedule_one_next_occurrence` fails.
+- **A task asks for attention only when it is open and its project is
+  active** (S5a, S6a): `Task::asks_for_attention(project)`. My Day's
+  carry-over (`Task::in_my_day`) and its Overdue zone
+  (`Task::in_overdue_zone`) take the project's state as a **required**
+  argument, so no caller can decide without it; a task one place counted
+  out of Today and another out of the Backlog would be in neither.
+  `list_my_day` builds its SQL from the same two rules
+  (`repo::task::asks_for_attention`), and
+  `my_day_carries_over_only_what_asks_for_attention` compares the list
+  with the rule for every task state, focus day and project state.
+- `done_toggle` takes the project's state as well: completing re-stamps
+  an earlier `focus_date` to today only for a task that was carried into
+  Today (`asks_for_attention`). A waiting task, or one of a parked
+  project, ticked in the Backlog stays where it was.
+- The three feeds (My Day, Backlog, Calendar) read one column list,
+  `FEED_COLS`, and carry `project_state` from the **same** join as
+  `node_title`: the one that checks the reader may see the node. Never
+  add a second join to `nodes` in a feed.
 - "Today" for a recurring task's next occurrence is the sender's:
   `UpdateTaskRequest.today`, read through `common::task::local_today`
   (within a day of UTC, else UTC). `done_toggle` sends it. Never use the
