@@ -1,7 +1,7 @@
 # ── Stage 1: build WASM + static assets ──────────────────────────────────────
 # Pinned to rust-toolchain.toml's channel: images used to build with whatever
 # `rust:latest` was, not the toolchain CI tests. Bump BOTH together.
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.100
 FROM rust:${RUST_VERSION} AS builder
 
 RUN apt-get update && apt-get install -y \
