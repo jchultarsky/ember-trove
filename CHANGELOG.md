@@ -6,6 +6,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Project states: active, parked, complete, cancelled (S6a of #204;
+  #320).** A Project now carries a declared state beside its free-text
+  status label. Complete and cancelled close it. **Parked** sets it aside
+  on purpose: it stays yours and unfinished, and stops asking for
+  attention.
+  - `PUT /api/nodes/{id}/project-state` declares the state. An editor of
+    the project may; the change is written to the project's History.
+  - The state is declared, never worked out: not from the tasks, and not
+    from the label. Changing the label to "Done" completes nothing.
+  - The date a state was declared is kept ("parked since"). A state
+    nobody has declared yet has no date: it is never made up.
+  - **Focus shows active projects only.** A parked project drops out and
+    comes back as it was, in its place and with its why-line, when it is
+    made active again. Completing or cancelling a project takes it out of
+    the Focus of the person who declared it, for good.
+  - **The dashboard lists active and parked projects.** A complete or
+    cancelled one has left it.
+  - `GET /api/nodes` takes `project_state` as a filter.
+  - A duplicate of a project is a new, active project. If the original's
+    label says it is done, cancelled or on hold, the copy starts with
+    "Active" instead.
+  - **Data health: "A status label that reads as another state".** It
+    lists your projects whose state nobody has declared and whose label
+    suggests a different one ("On hold", "Done, awaiting invoice").
+    Declaring any state, the one it has included, settles the item.
+
+### Changed
+- **Existing projects got their state from their label, once** (owner
+  decision, 2026-10-30): a label that is exactly Done, Complete or
+  Completed made the project complete; Cancelled, Canceled or Abandoned
+  made it cancelled; every other project is active. No label parked a
+  project: parking is yours to declare. Nothing looks edited by this.
+- **Backups are format 10**: a project carries its state and the date it
+  was declared. An older release refuses a format-10 archive rather than
+  drop them. Archives of formats 3 to 9 still restore; a project's state
+  is then read from its label, as above.
+- Until the cascade is built (S6b, S6c), completing or cancelling a
+  project changes the project alone: its tasks and sub-projects stay as
+  they are.
+
 ## [3.20.0] - 2026-11-13
 
 ### Added

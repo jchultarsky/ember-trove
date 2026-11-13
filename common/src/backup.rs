@@ -68,7 +68,12 @@ pub struct EntityCounts {
 /// `waiting`. An older release would drop the dates and can't read the new
 /// state, so the number moves. Archives of 3 to 8 still restore: their
 /// tasks have no completion date, and `in_progress` reads as open.
-pub const SCHEMA_VERSION: u32 = 9;
+/// 10 (S6a, #320): a Project carries its declared state and the date it
+/// was declared. An older release would drop both and restore every
+/// closed or parked project as if nothing had been declared, so the
+/// number moves. Archives of 3 to 9 still restore: a project's state is
+/// read from its label, once (`project_state::restored`).
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts

@@ -20,8 +20,9 @@ use common::{
     EmberTroveError,
     backup::BackupFocus,
     id::NodeId,
-    node::Node,
-    project_focus::{FocusItem, WhyChange},
+    node::{Node, NodeStatus, NodeType},
+    project_focus::{FocusItem, WhyChange, focus_refusal},
+    project_state::ProjectState,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -58,8 +59,16 @@ pub trait FocusRepo: Send + Sync {
     ) -> Result<Option<FocusItem>, EmberTroveError>;
     /// Put `node` in `subject`'s Focus, last. One already there keeps its
     /// place and its `added_at`. `why` is what happens to the why-line:
-    /// kept as it is, or replaced. The caller has checked the rights and
-    /// the kind.
+    /// kept as it is, or replaced. The caller has checked the rights.
+    ///
+    /// What may be in Focus (`common::project_focus::focus_refusal`: the
+    /// kind, archived, the state) is checked here again, on the node's
+    /// locked row, and refused as `Validation` with its reason. The lock
+    /// is what keeps an add from landing beside a close: the write that
+    /// closes a project removes its person's entry, and an add that read
+    /// the project as active a moment earlier would otherwise slip in
+    /// after it and bring the project back to Focus when it is re-opened
+    /// (ONTOLOGY §10).
     async fn put(
         &self,
         subject: &str,
@@ -140,13 +149,47 @@ fn db(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
 
 /// Which of a person's entries show: `f` is the entry, `n` its node, `$1`
 /// the person and `$2` the subject whose view applies (NULL: every node).
-/// The kind and lifecycle half is `common::project_focus::holds_focus`;
-/// `the_focus_filter_is_the_shared_rule` holds the two together.
+/// The kind, lifecycle and state half is
+/// `common::project_focus::holds_focus`: a Project, not archived, whose
+/// declared state is active (S6a: a parked, complete or cancelled project
+/// doesn't show). `the_focus_filter_is_the_shared_rule` holds the two
+/// together.
 fn shows() -> String {
+    // The states that ask for attention, from the rule itself (the enum's
+    // own wire strings, never text from a request).
+    let asking = ProjectState::ALL
+        .iter()
+        .filter(|state| state.asks_for_attention())
+        .map(|state| format!("'{}'", state.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
-        "f.subject_id = $1 AND n.node_type = 'project' AND n.status <> 'archived' AND {visible}",
+        "f.subject_id = $1 AND n.node_type = 'project' AND n.status <> 'archived' \
+         AND n.project_state IN ({asking}) AND {visible}",
         visible = super::visible_to("n", 2),
     )
+}
+
+/// Remove `subject`'s own entry for `node`, on the caller's transaction:
+/// the write that closes a project (`NodeRepo::set_project_state`) takes
+/// its declaring person's entry with it, so re-opening doesn't put the
+/// project back in their Focus (ONTOLOGY §10). It lives here so every
+/// statement that touches Focus is in this module. It matches
+/// `subject_id` like all the others: nobody else's entry is ever removed,
+/// and the caller must record nothing about it (History, logs and
+/// webhooks are shared with the node).
+pub(crate) async fn remove_on(
+    conn: &mut sqlx::PgConnection,
+    subject: &str,
+    node: NodeId,
+) -> Result<(), EmberTroveError> {
+    sqlx::query("DELETE FROM project_focus WHERE subject_id = $1 AND node_id = $2")
+        .bind(subject)
+        .bind(node.0)
+        .execute(conn)
+        .await
+        .map_err(db("remove on close"))?;
+    Ok(())
 }
 
 /// The subject bound at `$2` of [`shows`].
@@ -186,13 +229,12 @@ impl FocusRepo for PgFocusRepo {
         sees_all: bool,
     ) -> Result<Vec<FocusedProject>, EmberTroveError> {
         let rows: Vec<ListedRow> = sqlx::query_as(&format!(
-            "SELECT n.id, n.owner_id, n.node_type::text AS node_type, n.title, n.slug, n.body, \
-                    n.metadata, n.status::text AS status, n.project_status, n.pinned, \
-                    n.created_at, n.updated_at, f.why_now, f.added_at \
+            "SELECT {cols}, f.why_now, f.added_at \
              FROM project_focus f JOIN nodes n ON n.id = f.node_id \
              WHERE {shows} \
              ORDER BY f.position, f.added_at, f.node_id \
              LIMIT {limit}",
+            cols = super::node::node_cols("n."),
             shows = shows(),
             limit = common::project_focus::MAX_ORDER,
         ))
@@ -247,6 +289,33 @@ impl FocusRepo for PgFocusRepo {
             WhyChange::Keep => (false, None),
             WhyChange::Set(text) => (true, text.as_deref()),
         };
+        let mut tx = self.pool.begin().await.map_err(db("put"))?;
+        // FOR SHARE waits for a state change in flight (it holds FOR NO KEY
+        // UPDATE) and then reads the row as that change left it; and a
+        // state change that comes second waits for this insert, which its
+        // own removal then sees.
+        let locked: Option<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT node_type::text, status::text, project_state FROM nodes \
+             WHERE id = $1 FOR SHARE",
+        )
+        .bind(node.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db("put"))?;
+        let Some((kind, status, state)) = locked else {
+            return Err(EmberTroveError::NotFound("project not found".to_string()));
+        };
+        let state = state
+            .as_deref()
+            .map(|s| super::parse_wire(s, "project_state", ProjectState::parse))
+            .transpose()?;
+        if let Some(reason) = focus_refusal(
+            &super::parse_wire(&kind, "node_type", NodeType::parse)?,
+            &super::parse_wire(&status, "node_status", NodeStatus::parse)?,
+            state,
+        ) {
+            return Err(EmberTroveError::Validation(reason.to_string()));
+        }
         // One statement: the aggregate always yields one row, so a first
         // entry gets position 0 and a later one goes last. Two adds at once
         // may share a position; the read breaks the tie by `added_at`.
@@ -264,15 +333,10 @@ impl FocusRepo for PgFocusRepo {
         .bind(node.0)
         .bind(why_now)
         .bind(set)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(|e| match &e {
-            // The node went between the route's check and this insert.
-            sqlx::Error::Database(d) if d.is_foreign_key_violation() => {
-                EmberTroveError::NotFound("project not found".to_string())
-            }
-            _ => db("put")(e),
-        })?;
+        .map_err(db("put"))?;
+        tx.commit().await.map_err(db("put"))?;
         Ok(row.into())
     }
 

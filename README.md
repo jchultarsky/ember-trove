@@ -361,7 +361,7 @@ All routes are nested under `/api`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/nodes` | List nodes the caller can see. Filters: `node_type`, `status`, `project_status`, `tag_id`, `include_archived`. `sort`: `modified_desc` (default), `modified_asc`, `title_asc`, `title_desc`; pinned nodes first. `page`, `per_page` (default 50, at most 200); the answer has `total` and `has_more` |
+| GET | `/api/nodes` | List nodes the caller can see. Filters: `node_type`, `status`, `project_status`, `project_state`, `tag_id`, `include_archived`. `sort`: `modified_desc` (default), `modified_asc`, `title_asc`, `title_desc`; pinned nodes first. `page`, `per_page` (default 50, at most 200); the answer has `total` and `has_more` |
 | POST | `/api/nodes` | Create node (auto-grants Owner permission to creator) |
 | GET | `/api/nodes/{id}` | Get node by UUID |
 | GET | `/api/nodes/slug/{slug}` | Get node by slug |
@@ -373,6 +373,7 @@ All routes are nested under `/api`.
 | DELETE | `/api/nodes/{id}` | Delete node, with its tasks, notes and files (children it contains are kept) |
 | GET | `/api/nodes/deletion-preview?ids=a,b` | What deleting these nodes would destroy: counts of tasks, notes and files, and how many are other accounts'. Only nodes the caller may delete are counted (at most 100 ids) |
 | PUT | `/api/nodes/{id}/pin` | Toggle pinned state (owner-only) |
+| PUT | `/api/nodes/{id}/project-state` | Declare a Project's state: `{ "state": "active" \| "parked" \| "complete" \| "cancelled" }`. An editor of the node; Projects only (422 otherwise). Writes a History entry; a terminal state removes the caller's own Focus entry |
 | GET | `/api/nodes/{id}/brief` | The Project's current Brief (headline, pitch, points), or `null` (viewer) |
 | PUT | `/api/nodes/{id}/brief` | Save the Brief (editor, Projects only). The author's own save within 15 min of stating it updates in place; any other save moves the old Brief into History. Send `expected_updated_at` (the version edited; omit for a first Brief), else **412** |
 | DELETE | `/api/nodes/{id}/brief?expected_updated_at=` | Remove the Brief (editor); its words stay in History. `expected_updated_at` is required: a missing or older version is a **412** |

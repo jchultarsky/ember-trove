@@ -8,6 +8,8 @@ use common::{
         CreateNodeRequest, Node, NodeDeletionPreview, NodeListParams, NodeSort, NodeStatus,
         NodeTitleEntry, NodeType, UpdateNodeRequest,
     },
+    ontology::{Capability, allows},
+    project_state::ProjectState,
     slug::slugify,
     tag::Tag,
 };
@@ -130,6 +132,32 @@ pub trait NodeRepo: Send + Sync {
     /// dashboard pin/unpin button (v2.9.0).
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError>;
 
+    /// Declare a Project's state (S6a; ONTOLOGY §4.1). One transaction:
+    /// - the state is set, and `project_state_at` stamped when the state
+    ///   changes or nobody had declared it yet (so declaring the state a
+    ///   project already has records that it was looked at, once, and a
+    ///   request sent twice moves nothing);
+    /// - a change writes a `project_state_changed` History entry
+    ///   attributed to `actor`;
+    /// - a terminal state removes `actor`'s **own** Focus entry, so
+    ///   re-opening doesn't put the project back there (§10). Nobody
+    ///   else's entry is touched, and nothing records the removal.
+    ///
+    /// A node that is not a Project is refused with the §3.2 reason: the
+    /// route gates first, and this keeps a stray call from reaching the
+    /// database's CHECK as a 500.
+    ///
+    /// Returns the node and whether the node was written. A repeat of a
+    /// state already declared writes nothing (not even when it removes a
+    /// Focus entry, which is not the node's), and the route then tells no
+    /// webhook.
+    async fn set_project_state(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        actor: &ActivityActor,
+    ) -> Result<(Node, bool), EmberTroveError>;
+
     /// The project statuses `owner_id` uses on their own project nodes, for
     /// the status picker's suggestions (#143). Case variants are one entry,
     /// spelled the most-used way; most-used first, at most 50.
@@ -166,6 +194,8 @@ pub(super) struct NodeRow {
     metadata: serde_json::Value,
     status: String,
     project_status: Option<String>,
+    project_state: Option<String>,
+    project_state_at: Option<DateTime<Utc>>,
     pinned: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -186,6 +216,12 @@ impl NodeRow {
             metadata: self.metadata,
             status: parse_node_status(&self.status)?,
             project_status: self.project_status,
+            project_state: self
+                .project_state
+                .as_deref()
+                .map(parse_project_state)
+                .transpose()?,
+            project_state_at: self.project_state_at,
             tags: vec![], // populated separately if needed
             pinned: self.pinned,
             created_at: self.created_at,
@@ -193,6 +229,55 @@ impl NodeRow {
             edge_count: u32::try_from(self.edge_count).unwrap_or(0),
         })
     }
+}
+
+/// The columns a [`NodeRow`] reads, in one place: every statement that
+/// fills one names them through [`node_cols`]. They used to be written out
+/// eleven times, and `FromRow` only finds a missing one when that route
+/// runs (a 500 on one route, S6a).
+const NODE_COLS: [&str; 14] = [
+    "id",
+    "owner_id",
+    "node_type::text",
+    "title",
+    "slug",
+    "body",
+    "metadata",
+    "status::text",
+    "project_status",
+    "project_state",
+    "project_state_at",
+    "pinned",
+    "created_at",
+    "updated_at",
+];
+
+/// [`NODE_COLS`] as a select list. `alias` is the table alias with its
+/// dot (`"n."`), or `""`. Fixed strings only: never text from a request.
+pub(super) fn node_cols(alias: &str) -> String {
+    NODE_COLS
+        .iter()
+        .map(|col| format!("{alias}{col}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// SQL for "`alias`'s state is not terminal": the twin of
+/// `ProjectState::is_terminal`, built from it so the two can't drift.
+/// `IS DISTINCT FROM` keeps a node with no state (anything but a Project).
+/// The states are the enum's own wire strings, never text from a request.
+fn not_closed(alias: &str) -> String {
+    ProjectState::ALL
+        .iter()
+        .filter(|state| state.is_terminal())
+        .map(|state| {
+            format!(
+                "{alias}.project_state IS DISTINCT FROM '{}'",
+                state.as_str()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
 }
 
 /// Row type for batch tag fetch — includes the owning node_id.
@@ -286,6 +371,10 @@ fn parse_node_status(s: &str) -> Result<NodeStatus, EmberTroveError> {
     super::parse_wire(s, "node_status", NodeStatus::parse)
 }
 
+fn parse_project_state(s: &str) -> Result<ProjectState, EmberTroveError> {
+    super::parse_wire(s, "project_state", ProjectState::parse)
+}
+
 /// Insert a node (`NodeRepo::create`), on any executor, so capture
 /// conversion (#234) can do it inside its transaction. A taken slug or
 /// title is `AlreadyExists` (409).
@@ -297,16 +386,20 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
     let slug = slugify(&req.title);
     let node_type_str = req.node_type.as_str();
     let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
+    // A new Project is active and nobody has declared that yet (S6a); no
+    // other kind has a state. The database refuses a row that gets this
+    // wrong (`nodes_project_state_only_on_projects`).
+    let state = (req.node_type == NodeType::Project).then_some(ProjectState::Active.as_str());
 
-    let row = sqlx::query_as::<_, NodeRow>(
+    let row = sqlx::query_as::<_, NodeRow>(&format!(
         r#"
         INSERT INTO nodes (owner_id, node_type, title, slug, body, metadata, status,
-                           project_status)
-        VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8)
-        RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                  status::text, project_status, pinned, created_at, updated_at
+                           project_status, project_state)
+        VALUES ($1, $2::node_type, $3, $4, $5, $6, $7::node_status, $8, $9)
+        RETURNING {cols}
         "#,
-    )
+        cols = node_cols(""),
+    ))
     .bind(owner_id)
     .bind(node_type_str)
     .bind(&req.title)
@@ -315,6 +408,7 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
     .bind(&req.metadata)
     .bind(status_str)
     .bind(&req.project_status)
+    .bind(state)
     .fetch_one(ex)
     .await
     .map_err(|e| match &e {
@@ -337,14 +431,10 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
 pub(crate) async fn list_all_on(
     conn: &mut sqlx::PgConnection,
 ) -> Result<Vec<Node>, EmberTroveError> {
-    let rows = sqlx::query_as::<_, NodeRow>(
-        r#"
-        SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-               status::text, project_status, pinned, created_at, updated_at
-        FROM nodes
-        ORDER BY created_at ASC
-        "#,
-    )
+    let rows = sqlx::query_as::<_, NodeRow>(&format!(
+        "SELECT {cols} FROM nodes ORDER BY created_at ASC",
+        cols = node_cols(""),
+    ))
     .fetch_all(&mut *conn)
     .await
     .map_err(|e| EmberTroveError::Internal(format!("list_all nodes failed: {e}")))?;
@@ -384,13 +474,10 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
-        let row = sqlx::query_as::<_, NodeRow>(
-            r#"
-            SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, project_status, pinned, created_at, updated_at
-            FROM nodes WHERE id = $1
-            "#,
-        )
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
+            "SELECT {cols} FROM nodes WHERE id = $1",
+            cols = node_cols(""),
+        ))
         .bind(id.0)
         .fetch_optional(&self.pool)
         .await
@@ -404,13 +491,10 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn get_by_slug(&self, slug: &str) -> Result<Node, EmberTroveError> {
-        let row = sqlx::query_as::<_, NodeRow>(
-            r#"
-            SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, project_status, pinned, created_at, updated_at
-            FROM nodes WHERE slug = $1
-            "#,
-        )
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
+            "SELECT {cols} FROM nodes WHERE slug = $1",
+            cols = node_cols(""),
+        ))
         .bind(slug)
         .fetch_optional(&self.pool)
         .await
@@ -428,11 +512,9 @@ impl NodeRepo for PgNodeRepo {
 
         // Build dynamic count query with optional filters.
         let mut count_sql = String::from("SELECT COUNT(*) FROM nodes n");
-        let mut data_sql = String::from(
-            "SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body, \
-             n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at, \
-             0::bigint AS edge_count \
-             FROM nodes n",
+        let mut data_sql = format!(
+            "SELECT {cols}, 0::bigint AS edge_count FROM nodes n",
+            cols = node_cols("n."),
         );
 
         let mut conditions: Vec<String> = Vec::new();
@@ -461,6 +543,17 @@ impl NodeRepo for PgNodeRepo {
         if params.project_status.is_some() {
             conditions.push(format!("lower(n.project_status) = lower(${param_idx})"));
             param_idx += 1;
+        }
+
+        // S6a: a node of another kind has no state, so it never matches.
+        if params.project_state.is_some() {
+            conditions.push(format!("n.project_state = ${param_idx}"));
+            param_idx += 1;
+        }
+        if params.exclude_closed {
+            // The dashboard: in SQL, so closed projects don't use up the
+            // page.
+            conditions.push(not_closed("n"));
         }
 
         if params.owner_id.is_some() {
@@ -498,6 +591,9 @@ impl NodeRepo for PgNodeRepo {
         if let Some(ref ps) = params.project_status {
             count_query = count_query.bind(ps.as_str());
         }
+        if let Some(state) = params.project_state {
+            count_query = count_query.bind(state.as_str());
+        }
         if let Some(ref owner_id) = params.owner_id {
             count_query = count_query.bind(owner_id.as_str());
         }
@@ -533,6 +629,9 @@ impl NodeRepo for PgNodeRepo {
         }
         if let Some(ref ps) = params.project_status {
             query = query.bind(ps.as_str());
+        }
+        if let Some(state) = params.project_state {
+            query = query.bind(state.as_str());
         }
         if let Some(ref owner_id) = params.owner_id {
             query = query.bind(owner_id.as_str());
@@ -593,7 +692,7 @@ impl NodeRepo for PgNodeRepo {
             return Err(EmberTroveError::NotFound(format!("node {id} not found")));
         };
 
-        let row = sqlx::query_as::<_, NodeRow>(
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
             UPDATE nodes SET
                 title    = COALESCE($2, title),
@@ -608,10 +707,10 @@ impl NodeRepo for PgNodeRepo {
             -- waits for this one and then sees the new version: of two
             -- saves sent on one version only the first applies.
             WHERE id = $1 AND ($8::timestamptz IS NULL OR updated_at = $8)
-            RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, project_status, pinned, created_at, updated_at
+            RETURNING {cols}
             "#,
-        )
+            cols = node_cols(""),
+        ))
         .bind(id.0)
         .bind(&req.title)
         .bind(&req.body)
@@ -727,8 +826,7 @@ impl NodeRepo for PgNodeRepo {
         // pre-hotfix cross-owner wiki link) would expose its full body.
         let rows = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
-            SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
-                   n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at
+            SELECT {cols}
             FROM nodes n
             -- `related_to` has no direction (#226): its other end is a
             -- neighbour whichever way it is stored.
@@ -738,6 +836,7 @@ impl NodeRepo for PgNodeRepo {
             WHERE {visible}
             ORDER BY n.title
             "#,
+            cols = node_cols("n."),
             visible = super::visible_to("n", 2),
         ))
         .bind(id.0)
@@ -759,8 +858,7 @@ impl NodeRepo for PgNodeRepo {
         // pre-hotfix cross-owner wiki link) would expose its full body.
         let rows = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
-            SELECT n.id, n.owner_id, n.node_type::text, n.title, n.slug, n.body,
-                   n.metadata, n.status::text, n.project_status, n.pinned, n.created_at, n.updated_at
+            SELECT {cols}
             FROM nodes n
             -- `related_to` has no direction (#226): it links back too.
             JOIN edges e
@@ -769,6 +867,7 @@ impl NodeRepo for PgNodeRepo {
             WHERE {visible}
             ORDER BY n.title
             "#,
+            cols = node_cols("n."),
             visible = super::visible_to("n", 2),
         ))
         .bind(id.0)
@@ -900,15 +999,10 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn list_all_for_owner(&self, owner_id: &str) -> Result<Vec<Node>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NodeRow>(
-            r#"
-            SELECT id, owner_id, node_type::text, title, slug, body, metadata,
-                   status::text, project_status, pinned, created_at, updated_at
-            FROM nodes
-            WHERE owner_id = $1
-            ORDER BY created_at ASC
-            "#,
-        )
+        let rows = sqlx::query_as::<_, NodeRow>(&format!(
+            "SELECT {cols} FROM nodes WHERE owner_id = $1 ORDER BY created_at ASC",
+            cols = node_cols(""),
+        ))
         .bind(owner_id)
         .fetch_all(&self.pool)
         .await
@@ -937,16 +1031,16 @@ impl NodeRepo for PgNodeRepo {
     }
 
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError> {
-        let row = sqlx::query_as::<_, NodeRow>(
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
             r#"
             UPDATE nodes
             SET pinned = $2,
                 updated_at = NOW()
             WHERE id = $1
-            RETURNING id, owner_id, node_type::text, title, slug, body, metadata,
-                      status::text, project_status, pinned, created_at, updated_at
+            RETURNING {cols}
             "#,
-        )
+            cols = node_cols(""),
+        ))
         .bind(id.0)
         .bind(pinned)
         .fetch_optional(&self.pool)
@@ -958,6 +1052,92 @@ impl NodeRepo for PgNodeRepo {
         let mut tag_map = fetch_tags_for_nodes(&self.pool, &[node.id.0]).await?;
         node.tags = tag_map.remove(&node.id.0).unwrap_or_default();
         Ok(node)
+    }
+
+    async fn set_project_state(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        actor: &ActivityActor,
+    ) -> Result<(Node, bool), EmberTroveError> {
+        let db_err =
+            |e: sqlx::Error| EmberTroveError::Internal(format!("set project state failed: {e}"));
+
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // Lock the row and read what it had (as `update` does): the History
+        // entry needs the old state, and two declarations sent at once
+        // then apply one after the other.
+        let Some((kind, old, declared_at)) =
+            sqlx::query_as::<_, (String, Option<String>, Option<DateTime<Utc>>)>(
+                "SELECT node_type::text, project_state, project_state_at \
+                 FROM nodes WHERE id = $1 FOR NO KEY UPDATE",
+            )
+            .bind(id.0)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?
+        else {
+            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
+        };
+        if !allows(&parse_node_type(&kind)?, Capability::ProjectStatus) {
+            return Err(EmberTroveError::Validation(
+                Capability::ProjectStatus.refusal().to_string(),
+            ));
+        }
+
+        let changed = old.as_deref() != Some(state.as_str());
+        let wrote = changed || declared_at.is_none();
+        if wrote {
+            // The state it already has, already declared, writes nothing:
+            // `updated_at` is the version an open editor saves against.
+            // `clock_timestamp()`, not `now()`: `now()` is the transaction's
+            // start, before the wait for the lock above, so of two
+            // declarations sent at once the one that landed last could
+            // carry the earlier date (the History entry's rule, #208).
+            sqlx::query(
+                "UPDATE nodes SET project_state = $2, project_state_at = clock_timestamp() \
+                 WHERE id = $1",
+            )
+            .bind(id.0)
+            .bind(state.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        if changed {
+            let meta = actor.metadata_with(serde_json::json!({
+                "from": old,
+                "to": state.as_str(),
+            }));
+            record_in(
+                &mut tx,
+                id,
+                &actor.subject_id,
+                ActivityAction::ProjectStateChanged,
+                meta,
+            )
+            .await?;
+        }
+        if state.is_terminal() {
+            // Whether or not the state changed: a stale tab closing a
+            // project again must still leave no entry of its person's.
+            super::project_focus::remove_on(&mut tx, &actor.subject_id, id).await?;
+        }
+
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
+            "SELECT {cols} FROM nodes WHERE id = $1",
+            cols = node_cols(""),
+        ))
+        .bind(id.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+
+        let mut node = row.into_node()?;
+        let mut tag_map = fetch_tags_for_nodes(&self.pool, &[id.0]).await?;
+        node.tags = tag_map.remove(&id.0).unwrap_or_default();
+        Ok((node, wrote))
     }
 
     async fn project_status_counts(

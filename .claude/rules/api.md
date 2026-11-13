@@ -182,7 +182,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -230,10 +230,80 @@ cargo check && cargo clippy -- -D warnings
   `"in_progress"` (a serde alias), and a missing `completed_at` stays
   empty. Restore writes `Task::restorable_completed_at`, so a date on a
   task that isn't done can't fail the CHECK.
+- **Project states (S6a, format 10)**: a node carries `project_state`
+  and `project_state_at`. Restore writes
+  `common::project_state::restored`: the archive's state for a Project,
+  the one its **restored** label says when the archive has none (formats
+  3 to 9), and never a state on another kind (a hand-edited archive
+  can't fail the CHECK). It derives when the field is absent, not by
+  format number. The insert's `ON CONFLICT` branch (an id named twice,
+  only in a damaged archive) keeps the stored kind, so it sets the state
+  against that kind.
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps
   `common::backup::SCHEMA_VERSION`, so older releases refuse it.
+
+## Project states (S6a, #320)
+
+- A Project is active, parked, complete or cancelled:
+  `nodes.project_state` (TEXT with a CHECK, not an enum type: an enum
+  value can't be dropped) and `project_state_at` (migration 051). The
+  rules are `common::project_state`.
+- **A Project always has a state and nothing else has one**
+  (`nodes_project_state_only_on_projects`). Every `INSERT INTO nodes`
+  supplies it: `insert_node` (active for a project), the restore, the
+  `insert_raw_node` fixture in `pg_tests`, `scripts/perf/seed.sql`. A new
+  one that forgets fails on the CHECK for every project, which is the
+  point: it can't quietly re-open closed projects.
+- **Every statement that fills a `NodeRow` names its columns through
+  `node_cols(alias)`** (repo/node.rs). `FromRow` finds a missing column
+  only when that route runs, so don't write the list out.
+- **The state is declared, never derived.** Only migration 051 and the
+  restore of an older archive read the label, once
+  (`state_from_label`; a pg test holds the migration's SQL to it). No
+  label gives "parked". Don't add a path that sets the state from the
+  label, the tasks or the sub-projects (§4.1).
+- **The only writer is `PUT /nodes/{id}/project-state`**
+  (`NodeRepo::set_project_state`). Order: rights (`require_editor`),
+  then the kind (`Capability::ProjectStatus`, 422), then the repo. In one
+  transaction it locks the row, sets the state, stamps
+  `project_state_at` when the state changes or was never declared,
+  writes `project_state_changed` to History when it changed, and on a
+  terminal state calls `project_focus::remove_on` for the **caller's
+  own** entry. A repeat of a declared state writes nothing: `updated_at`
+  is the version an open editor saves against. It returns whether it
+  wrote the node, and the route fires `node.updated` only then. The date
+  is `clock_timestamp()`, as History's is: `now()` is the transaction's
+  start, before the wait for the lock.
+  `two_declarations_at_once_apply_in_order` fails without the lock.
+  `no_other_node_write_touches_the_project_state` holds `update` and
+  `set_pinned` to that.
+- `project_state_at` is "when a person last declared it". NULL means
+  nobody has (the migration's reading, or a new project's active).
+  Never fill it in. Don't add a "declared by" column: who declared is in
+  History, which the purge already rewrites.
+- **Who asks for attention is one rule**:
+  `ProjectState::asks_for_attention` (active only). Focus reads it:
+  `focus_refusal` / `holds_focus` in Rust, and `shows()` builds its SQL
+  from the same method. (My Day's task rule joins it in the slice's
+  second PR.)
+- **The dashboard shows what is not closed**: active and parked. It asks
+  the node list with `exclude_closed`, whose SQL (`not_closed`) is built
+  from `ProjectState::is_terminal`, and runs in SQL so closed projects
+  don't use up its page. `NodeListParams.project_state` is the public
+  filter. Don't write a state's name into a query: build it from the
+  enum, as those two do.
+- A duplicate is a new, active project: `copied_status` drops a label
+  that reads as another state.
+- Data health's `LabelReadsAsAnotherState`: the reader's **own**
+  projects with `project_state_at IS NULL` whose label
+  `label_disagrees` with their state. The reading is done in Rust, on
+  one account's rows; the admin count groups labels in SQL and
+  classifies them in Rust. A label is free text: never log one, and
+  never read another account's into a report.
+- Until the cascade exists (S6b, S6c), closing a project changes the
+  project alone.
 
 ## Focus (#282, proposal B)
 
@@ -251,16 +321,27 @@ cargo check && cargo clippy -- -D warnings
   read. Pass `is_admin(&claims)`, nothing else.
 - **The read is a filter and deletes nothing.** `shows()` in
   `repo/project_focus.rs` leaves out a node that is not a Project, is
-  archived, or that the reader can't see (`visible_to`), in the same
-  statement that reads the title. Its kind-and-state half is
-  `common::project_focus::holds_focus`;
-  `the_focus_filter_is_the_shared_rule` holds the two together. A new
-  state that leaves Focus (S6's terminal state) changes both.
-- A row is deleted only by its person (`remove`), its node (cascade) or
-  its account (the purge: `project_focus` is in `SETTINGS`).
+  archived, is not active (S6a: parked, complete or cancelled), or that
+  the reader can't see (`visible_to`), in the same statement that reads
+  the title. Its kind-and-state half is
+  `common::project_focus::holds_focus` (`focus_refusal` gives the
+  reason); `the_focus_filter_is_the_shared_rule` holds the two together.
+  Anything new that leaves Focus changes both.
+- A row is deleted only by its person (`remove`), its node (cascade), its
+  account (the purge: `project_focus` is in `SETTINGS`), or by its person
+  closing the project (`remove_on`, called from
+  `NodeRepo::set_project_state`; "Project states" above).
 - `PUT /focus/{node_id}` checks, in order: viewer rights
-  (`or_missing(check, false, ..)`: hidden reads as missing, 404), the
-  kind (`Capability::Focus`, 422), archived (422), the why-line (422).
+  (`or_missing(check, false, ..)`: hidden reads as missing, 404), then
+  `focus_refusal` (422 with its reason: the kind, archived, parked,
+  closed), then the why-line (422).
+- **`FocusRepo::put` checks `focus_refusal` again under `FOR SHARE` on
+  the node's row**, in the transaction that inserts. A state change
+  holds `FOR NO KEY UPDATE`, so an add and a close never interleave:
+  the add lands first and the close removes it, or the close lands first
+  and the add is refused. Without it an add could slip in after a close
+  and bring the project back to Focus on re-opening
+  (`an_add_to_focus_never_lands_beside_a_close`).
   `why_now` is a double option (`FocusInput::change`): absent keeps the
   stored why-line, so an "add" from a stale page never wipes one.
 - `GET`, `DELETE`, the order route and the why-line route never look at

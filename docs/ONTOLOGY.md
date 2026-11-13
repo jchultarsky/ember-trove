@@ -601,10 +601,17 @@ snapshots are a text mechanism, not the semantic record of what occurred.
     the Project shows again when it is un-archived or shared again. An
     entry is deleted only by its own person, with its node, or with its
     account.
-  - When the closed state exists (§4.1), a complete or cancelled
-    Project leaves Focus, and re-opening it does not put it back. A
-    parked Project does not show in Focus either: parking is the
-    statement that it should not hold attention now.
+  - Only an *active* Project shows in Focus (§4.1).
+    - A **parked** Project does not show: parking is the statement that
+      it should not hold attention now. That is the same filter on the
+      read as archiving: the entry stays, so the Project is back in its
+      place, with its why-line, when it is made active again.
+    - A **complete or cancelled** Project leaves the Focus of the person
+      who declared it, and re-opening it does not put it back: the
+      declaration removes that person's own entry. It can remove no one
+      else's (Focus is private, and an entry is deleted only by its own
+      person), so anyone else's entry is hidden while the Project is
+      closed and shows again if it is re-opened.
 
 ## 11. Events
 
@@ -758,3 +765,8 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-11 | What leaves Focus by its own state is decided on the read, never by deleting the entry: today an archived Project, or one its reader can no longer view. Complete and cancelled join when the terminal state is built | Developer, building Focus (#282); to be confirmed by the owner in the PR |
 | 2026-11-13 | A Task's completion date is stamped when it becomes Done and cleared when it leaves Done; a Task completed before the date existed has none (never made up). The database checks only that a date means Done: "Done means a date" would lock every older Task against further edits | Developer, building S5a (#314); the owner approved the plan |
 | 2026-11-12 | *Parked* is a real, declared Project state beside *active*, *complete* and *cancelled*: the Project is set aside on purpose and should not occupy its person's immediate attention. It is not terminal | Owner, in the developer session ("I am only one man and have to constantly switch context between projects") |
+| 2026-11-13 | Existing status labels were read once, by migration 051: exactly *Done / Complete / Completed* → complete; *Cancelled / Canceled / Abandoned* → cancelled; everything else → active. No label parks a Project: parking is declared by a person, and a migration that parked Projects would take them out of their person's view on the day of the deploy. A label that only suggests a state is listed in Data health | Owner ruling 2026-10-30 for the mapping; developer for "no label parks", approved in the S6a plan (#320) |
+| 2026-11-13 | A Project's state carries the date it was last declared. A state nobody has declared (read from the label by the migration, or a new Project's *active*) has none: never made up | Developer, building S6a (#320); the owner approved the plan |
+| 2026-11-13 | Tasks of a Project that is not *active* are out of My Day's Today and Overdue; they stay in the Backlog and on the Project. The dashboard's Area groups show active Projects, with one collapsed *Parked* group; complete and cancelled Projects leave it. Un-parking returns a Project to Focus as it was. Parking a master does not park its sub-Projects: the downward cascade is for complete and cancelled only | Owner, in the developer session (S6a planning) |
+| 2026-11-13 | Closing a Project removes only the declaring person's own Focus entry; anyone else's is hidden while it is closed and shows again if it is re-opened (§10 amended: it read as if re-opening never put a Project back for anyone) | Developer, building S6a (#320); the owner approved the plan |
+| 2026-11-13 | Until the cascade exists (S6b, S6c), declaring *complete* or *cancelled* changes the Project alone: its Tasks and sub-Projects stay as they are. S6b must offer the cascade for Projects closed before it existed | Developer, building S6a (#320); the owner approved the plan |

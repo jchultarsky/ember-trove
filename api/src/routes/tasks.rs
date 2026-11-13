@@ -451,6 +451,11 @@ async fn project_dashboard(
         node_type: Some(NodeType::Project),
         status: None,
         project_status: None,
+        // Active and parked projects (S6a): a complete or cancelled one
+        // has left the dashboard. Filtered in SQL, so closed projects
+        // don't use up the page.
+        project_state: None,
+        exclude_closed: true,
         tag_id: None,
         owner_id: Some(claims.sub.clone()),
         subject_id: None,
@@ -553,6 +558,8 @@ pub(crate) async fn dashboard_entries(
                 node_status,
                 task_counts,
                 project_status: n.project_status,
+                project_state: n.project_state,
+                project_state_at: n.project_state_at,
                 open_tasks,
                 has_more_tasks,
                 last_activity_at,

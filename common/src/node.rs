@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::id::{NodeId, TagId, TemplateId};
+use crate::project_state::ProjectState;
 use crate::tag::Tag;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -99,6 +100,17 @@ pub struct Node {
     /// Validated by `crate::project_status::normalize`.
     #[serde(default)]
     pub project_status: Option<String>,
+    /// A Project's declared state (§4.1; S6a): active, parked, complete or
+    /// cancelled. `Some` for every Project and `None` for every other
+    /// kind (the database holds the two together). Absent from an archive
+    /// older than format 10; restore then derives it from the label.
+    #[serde(default)]
+    pub project_state: Option<ProjectState>,
+    /// When a person last declared `project_state`. `None` while nobody
+    /// has: a state the migration read from the label, or a new
+    /// project's "active". Never made up.
+    #[serde(default)]
+    pub project_state_at: Option<DateTime<Utc>>,
     pub tags: Vec<Tag>,
     pub pinned: bool,
     pub created_at: DateTime<Utc>,
@@ -261,6 +273,15 @@ pub struct NodeListParams {
     /// Project status filter (#143), matched case-insensitively.
     #[serde(default)]
     pub project_status: Option<String>,
+    /// Only Projects in this declared state (S6a). A node of another
+    /// kind has no state and never matches.
+    #[serde(default)]
+    pub project_state: Option<ProjectState>,
+    /// Leave out Projects whose state is terminal (complete, cancelled).
+    /// Set by the dashboard, which shows active and parked projects; the
+    /// filter runs in SQL so closed projects don't use up its page.
+    #[serde(skip)]
+    pub exclude_closed: bool,
     pub tag_id: Option<TagId>,
     pub owner_id: Option<String>,
     /// When set, restricts results to nodes the subject owns or has an explicit
