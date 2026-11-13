@@ -26,10 +26,10 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed. On a node page each note collapses to its first line (Markdown stripped, so it doubles as a title), with Collapse all / Expand all; collapse state is saved per account.
 - **Node versioning** — body snapshot on every save; version history timeline with one-click restore.
 - **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
-- **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. `p` key toggles pin on the open node.
+- **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. The star on a project's dashboard card pins and unpins it.
 - **Node templates** — create reusable Markdown templates for each node type; "Use" pre-fills the editor body.
 - **Quick capture** — `n` opens a blank sticky note; Ctrl/Cmd+Enter sticks it on the Captures wall (Tasks → Captures), where each capture waits to become exactly one thing: a node, a note on a node, or a task in a Project.
-- **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` search · `p` pin · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
+- **Keyboard shortcuts** — `n` quick capture · `g` graph · `/` or Ctrl/Cmd+K command palette · `d` duplicate the open node · `?` shortcut help · `Esc` back. All suppressed inside form fields. The Captures wall and My Day have their own keys (see `?`).
 - **Multi-user permissions** — nodes are **private by default**. Owners can share a node by email with Viewer / Editor / Owner roles; only an admin's invite creates a new account. Bulk permission management available in the admin panel. Admin users have full access to all nodes regardless of ownership.
 - **User management** — admin UI backed by Amazon Cognito. User invite emails via AWS SES.
 - **Export** — download any node as Markdown (with YAML front-matter) or JSON.
@@ -713,8 +713,8 @@ Nodes are **private by default** — only the creating user can see a node until
 |-----|--------|
 | `n` | Quick capture (lands on the Captures wall) |
 | `g` | Go to graph view |
-| `/` | Focus search |
-| `p` | Toggle pin on the open node |
+| `/` or Ctrl/Cmd+K | Open the command palette (search and commands) |
+| `d` | Duplicate the open node |
 | `?` | Toggle keyboard shortcuts help overlay |
 | `Esc` | Back to node list / close modal |
 

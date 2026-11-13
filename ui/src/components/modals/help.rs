@@ -60,16 +60,14 @@ struct ShortcutGroup {
 // registry `common::keyboard::GLOBAL` (the same table the dispatcher uses), so
 // documented and dispatched global shortcuts cannot drift. See `ShortcutsTab`.
 
-const NODE_VIEW: &[Shortcut] = &[
-    Shortcut {
-        key: "d",
-        description: "Duplicate current node",
-    },
-    Shortcut {
-        key: "p",
-        description: "Pin / unpin current node",
-    },
-];
+// `d` is handled in `layout.rs` (the contextual key after the registry's).
+// There is no `p`: the node page's pin went on 2026-04-10, when Favorites
+// became the one way to keep a node at hand, and this table went on
+// listing it until 2026-11-12.
+const NODE_VIEW: &[Shortcut] = &[Shortcut {
+    key: "d",
+    description: "Duplicate current node",
+}];
 
 const MY_DAY: &[Shortcut] = &[
     Shortcut {
