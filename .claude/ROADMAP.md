@@ -3,7 +3,32 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-13)
+## Current state (2026-11-14)
+
+- **v3.22.0 shipped: S6b and S6c, the cascade** (#326, PRs #327 and
+  #328; ONTOLOGY §4.1). No migration, backup format unchanged. PR 1
+  (rules and API): `common::cascade` (the plan, one pure function shared
+  by the preview and the write), `GET /nodes/{id}/project-state/cascade`,
+  the `confirm` token on `PUT /nodes/{id}/project-state` (412 without it
+  or when the plan changed), the reopen rule (422), History's
+  `cascade_closed` (ids stored, titles resolved for each reader), the
+  Data health rule `open_under_closed_project`. PR 2 (UI): the
+  confirmation dialog (`modals/cascade_confirm.rs`, one for the app),
+  `project_state::declare` asking on a 412, `StillOpenNotice` on a closed
+  project's page, Data health's "Close them…" and its state fixes through
+  the same dialog. Rules: "The cascade" in `.claude/rules/api.md` and
+  `.claude/rules/leptos.md`. Owner decisions, 2026-11-14: the catch-up is
+  offered, never automatic; under a closed master a sub-project is
+  neither made active nor parked; an open project may be given a closed
+  home, and Data health lists it.
+  **For the owner to confirm** (ONTOLOGY §15): an active sub-project
+  moved under a closed master may still be parked; the cascade does not
+  go through a sub-project its actor can't edit, open or closed.
+  Known and left: an admin closing someone else's project with no share
+  of their own closes it alone, with no dialog; the chip and the notice
+  are offered to the owner, not to other editors.
+  **Next:** S6d (the History facet) or S5b (recurrence removed), the
+  owner's call.
 
 - **v3.21.0 shipped: S6a, project states** (#320, PRs #321 and #322;
   ONTOLOGY §4, §4.1). PR 1

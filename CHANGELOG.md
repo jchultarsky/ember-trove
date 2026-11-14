@@ -6,6 +6,81 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.22.0] - 2026-11-14
+
+### Added
+- **Closing a project closes what is under it** (S6b and S6c of the
+  ontology programme, #326; ONTOLOGY §4.1).
+  - Declaring a Project complete or cancelled gives its sub-Projects that
+    state, all the way down, and cancels the open and Waiting tasks on
+    them. A cancelled task gets no completion date. Nothing is deleted,
+    archived or hidden.
+  - **You are shown the list first.** Choosing Complete or Cancelled on a
+    project that has something under it opens a confirmation: the
+    sub-Projects that close, the tasks that are cancelled (and how many
+    are other people's), and what stays open because you can't edit it.
+    "Go back" changes nothing. If what is under the project changes
+    while the dialog is open, it shows the new list and asks again. A
+    project with nothing under it closes at once, as before.
+  - **A closed project that still has something open under it says so**
+    on its page, with "Close them…", and Data health's *Still open under
+    a closed project* offers the same. Both show the confirmation; nothing
+    is closed until you confirm.
+  - In the API: `GET /api/nodes/{id}/project-state/cascade`
+    answers with the plan: the sub-Projects that close, the tasks that are
+    cancelled (and how many are other people's), and the sub-Projects that
+    stay open because you may not edit them. The plan carries a token;
+    `PUT /api/nodes/{id}/project-state` takes it as `confirm`. Without it,
+    or when what would close has changed since the plan was shown, the
+    answer is 412 and nothing is written. A project with nothing under it
+    closes as before.
+  - **It acts only through your own grants.** A sub-Project you may only
+    view stays open, with everything under it. The admin role does not
+    widen this: an admin who closes someone's project closes, under it,
+    only what the admin holds a grant of their own on (usually nothing).
+  - **History** records it on every project it touched: which sub-Projects
+    closed and which tasks were cancelled. A reader is shown a sub-Project's
+    title only when they may view it, and an entry with nothing they may
+    see is not shown to them.
+  - **Re-opening affects the project alone.** What the cascade closed stays
+    closed. While its master is closed, a sub-Project can't be made active,
+    and a closed one can't be parked either (422): make the master active
+    first. (An active sub-Project that was moved under a closed master may
+    still be parked.)
+  - **Webhooks**: `node.updated` for each project whose state changed, and
+    `task.updated` for each project whose tasks were cancelled, to the
+    hooks of those tasks' owners.
+  - **A project closed earlier is not touched until you ask.** Declaring
+    the state it already has still changes nothing. Data health's new rule,
+    *Still open under a closed project*, lists your closed projects with
+    open tasks or open sub-Projects.
+
+### Fixed
+- **Dialogs keep the keyboard after a click on their text.** A click on a
+  dialog's wording or padding used to drop the focus to the page behind:
+  Escape then acted on that page (on a project it left for the node
+  list) and Tab walked out of the dialog. Every dialog's panel now keeps
+  the focus.
+
+### Changed
+- A task reorder and an account deletion now take their task rows in id
+  order, as the cascade does, so the three queue behind each other and
+  can't deadlock.
+- A state change waits at most 5 seconds for a row or for the project
+  tree that something else holds, then answers 409 ("try again") with
+  nothing written.
+
+### Security
+- The cascade's rights are the declaring person's own owner or editor
+  grants (`repo::editable_by`), never the admin role. Its plan and its
+  History entries name a node only to someone who may view it, and never
+  count a hidden one. The refusal to re-open a sub-Project names no node
+  and is not given for a master its editor can't view.
+- **`rustix` 1.1.6** (RUSTSEC-2026-0486, flagged unsound: its xattr
+  functions mark unwritten bytes as initialized when given a zero-length
+  buffer). It is a transitive dependency (through `tar`, which the backup
+  uses, and `tempfile`). `cargo audit` no longer lists it.
+
 ## [3.21.0] - 2026-11-13
 
 ### Added

@@ -162,8 +162,10 @@ impl NodeRepo for StubNodeRepo {
         &self,
         id: NodeId,
         state: ProjectState,
+        confirm: Option<&str>,
         actor: &crate::repo::activity::ActivityActor,
-    ) -> Result<(Node, bool), EmberTroveError> {
+        _sees_all: bool,
+    ) -> Result<crate::repo::node::StateOutcome, EmberTroveError> {
         // Only a Project the caller may edit reaches the repo: anything
         // else got past authorization or the kind gate.
         match id.0.as_u128() {
@@ -171,6 +173,14 @@ impl NodeRepo for StubNodeRepo {
             _ => panic!("authorization bypass: a state write reached the repo for {id}"),
         }
         assert_eq!(actor.subject_id, "test-sub", "attributed to the caller");
+        // AZ_PARKED_PROJECT has something under it (S6b): closing it needs
+        // the stub plan's token, as the real repo needs the real one.
+        if id.0.as_u128() == AZ_PARKED_PROJECT
+            && state.is_terminal()
+            && confirm != Some(AZ_CASCADE_TOKEN)
+        {
+            return Err(EmberTroveError::PreconditionFailed("confirm it".into()));
+        }
         let node = Node {
             id,
             node_type: NodeType::Project,
@@ -178,7 +188,65 @@ impl NodeRepo for StubNodeRepo {
             project_state_at: Some(chrono::Utc::now()),
             ..fake_node("authz-node", "test-sub")
         };
-        Ok((node, true))
+        Ok(crate::repo::node::StateOutcome {
+            node,
+            wrote: true,
+            closed: Vec::new(),
+            cancelled_on: Vec::new(),
+        })
+    }
+    async fn cascade_preview(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        actor: &str,
+    ) -> Result<common::cascade::CascadePlan, EmberTroveError> {
+        match id.0.as_u128() {
+            AZ_MY_PROJECT | AZ_PARKED_PROJECT | AZ_CLOSED_PROJECT => {}
+            _ => panic!("authorization bypass: a cascade preview reached the repo for {id}"),
+        }
+        // The caller's own account, an admin's too: never the admin scope.
+        assert!(!actor.is_empty(), "a plan is always for a person");
+        assert!(state.is_terminal(), "the route refuses any other state");
+        let has_tasks = id.0.as_u128() == AZ_PARKED_PROJECT;
+        Ok(common::cascade::CascadePlan {
+            master_title: "a project".into(),
+            master_state: Some(ProjectState::Active),
+            state,
+            own_grant: true,
+            projects: Vec::new(),
+            tasks: if has_tasks {
+                vec![common::cascade::CascadeTasks {
+                    node_id: id,
+                    node_title: "a parked project".into(),
+                    tasks: vec![common::cascade::CascadeTask {
+                        id: TaskId(Uuid::from_u128(AZ_EDIT_TASK)),
+                        title: "still open".into(),
+                        others: false,
+                    }],
+                }]
+            } else {
+                Vec::new()
+            },
+            skipped: Vec::new(),
+            token: AZ_CASCADE_TOKEN.to_string(),
+        })
+    }
+    async fn visible_titles(
+        &self,
+        ids: &[Uuid],
+        subject: Option<&str>,
+    ) -> Result<std::collections::BTreeMap<Uuid, String>, EmberTroveError> {
+        // The rule of the real one: what `subject` may view. Here that is
+        // whatever the authz world grants them a row on.
+        let all = authz_permissions();
+        Ok(ids
+            .iter()
+            .filter(|id| {
+                subject.is_none_or(|s| all.iter().any(|p| p.node_id.0 == **id && p.subject_id == s))
+            })
+            .map(|id| (*id, format!("node {id}")))
+            .collect())
     }
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
         // Only the node test-sub owns may be deleted; reaching here for any
@@ -487,6 +555,9 @@ const AZ_VIEW_PROJECT: u128 = 0xa2_0008;
 /// one complete. Every other Project in this world is active.
 const AZ_PARKED_PROJECT: u128 = 0xa2_0009;
 const AZ_CLOSED_PROJECT: u128 = 0xa2_000a;
+/// The token of the stub's cascade plan for AZ_PARKED_PROJECT, the one
+/// project in this world with something to close under it (S6b).
+const AZ_CASCADE_TOKEN: &str = "the-plan-i-was-shown";
 /// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
 const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
 const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
@@ -1552,6 +1623,33 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
     }
 }
 
+/// A project's stored History after two cascades (S6b), as the database
+/// holds it: other nodes by id. The first closed a sub-Project `test-sub`
+/// may view and one they may not; the second closed only one they may
+/// not, and cancelled no task here.
+fn cascade_history(node: NodeId) -> Vec<ActivityEntry> {
+    let entry = |n: u128, sub_projects: &[u128]| ActivityEntry {
+        id: common::id::ActivityId(Uuid::from_u128(n)),
+        node_id: node,
+        subject_id: "test-sub".to_string(),
+        action: ActivityAction::CascadeClosed,
+        metadata: common::cascade::recorded(
+            ProjectState::Complete,
+            None,
+            &sub_projects
+                .iter()
+                .map(|id| az_node(*id))
+                .collect::<Vec<_>>(),
+            &[],
+        ),
+        created_at: chrono::Utc::now(),
+    };
+    vec![
+        entry(1, &[AZ_VIEW_PROJECT, AZ_FOREIGN_NODE]),
+        entry(2, &[AZ_FOREIGN_NODE]),
+    ]
+}
+
 struct StubActivityRepo;
 #[async_trait]
 impl ActivityRepo for StubActivityRepo {
@@ -1565,6 +1663,9 @@ impl ActivityRepo for StubActivityRepo {
         Ok(())
     }
     async fn list(&self, node: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+        if node.0.as_u128() == AZ_PARKED_PROJECT {
+            return Ok(cascade_history(node));
+        }
         Ok(vec![ActivityEntry {
             id: common::id::ActivityId(Uuid::from_u128(1)),
             node_id: node,
@@ -1585,7 +1686,13 @@ impl ActivityRepo for StubActivityRepo {
         _: chrono::DateTime<chrono::Utc>,
         _: i64,
     ) -> Result<Vec<common::activity::RecentActivityEntry>, EmberTroveError> {
-        unimplemented!()
+        Ok(cascade_history(az_node(AZ_PARKED_PROJECT))
+            .into_iter()
+            .map(|entry| common::activity::RecentActivityEntry {
+                entry,
+                node_title: "a parked project".to_string(),
+            })
+            .collect())
     }
     async fn list_all(&self) -> Result<Vec<common::activity::ActivityRecord>, EmberTroveError> {
         Ok(vec![])
@@ -5202,6 +5309,169 @@ async fn a_state_request_names_one_of_the_four_states() {
             "{body}: {mine}"
         );
         assert_eq!(theirs, mine, "{body}");
+    }
+}
+
+// ── The cascade (S6b) ────────────────────────────────────────────────────────
+
+/// `GET /nodes/{id}/project-state/cascade?state=…` as `claims`.
+async fn cascade_get(
+    claims: common::auth::AuthClaims,
+    node: u128,
+    state: &str,
+) -> (StatusCode, String) {
+    let resp = Router::new()
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(
+            Request::get(format!(
+                "/nodes/{}/project-state/cascade?state={state}",
+                Uuid::from_u128(node)
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn closing_a_project_with_something_under_it_needs_the_plans_token() {
+    let complete = serde_json::json!({ "state": "complete" });
+    // Nothing under it: closes as it always did, no confirmation.
+    let (status, _) = state_put(fake_claims(), AZ_MY_PROJECT, complete.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    // Something under it: 412 without the token, or with another one.
+    let (status, body) = state_put(fake_claims(), AZ_PARKED_PROJECT, complete).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{body}");
+    let (status, _) = state_put(
+        fake_claims(),
+        AZ_PARKED_PROJECT,
+        serde_json::json!({ "state": "complete", "confirm": "some-other-plan" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+
+    // The plan the caller is shown carries the token that confirms it.
+    let (status, body) = cascade_get(fake_claims(), AZ_PARKED_PROJECT, "complete").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: common::cascade::CascadePlan = serde_json::from_str(&body).expect("a plan");
+    assert!(plan.closes_something());
+    assert_eq!(plan.task_count(), 1);
+    let (status, body) = state_put(
+        fake_claims(),
+        AZ_PARKED_PROJECT,
+        serde_json::json!({ "state": "complete", "confirm": plan.token }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // A state that closes nothing needs none, whatever is under it.
+    let (status, _) = state_put(
+        fake_claims(),
+        AZ_PARKED_PROJECT,
+        serde_json::json!({ "state": "active" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn nothing_about_a_cascade_reaches_someone_who_may_not_edit_the_project() {
+    // Rights first, on both routes: a viewer of a Project, a viewer of an
+    // Article, a stranger and a missing id all get the same 403. Never a
+    // 412 (which would say "this is a project with something under it"),
+    // never the kind's 422, and never a plan.
+    let confirmed = serde_json::json!({ "state": "complete", "confirm": AZ_CASCADE_TOKEN });
+    for node in [AZ_VIEW_PROJECT, AZ_VIEW_NODE, AZ_FOREIGN_NODE, AZ_MISSING] {
+        let (status, _) = state_put(fake_claims(), node, confirmed.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "PUT {node:#x}");
+        let (status, body) = cascade_get(fake_claims(), node, "complete").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "GET {node:#x}");
+        assert!(!body.contains("token"), "{body}");
+    }
+    // Then the kind: an Article the caller owns has no state to close.
+    let (status, body) = cascade_get(fake_claims(), AZ_MY_ARTICLE, "complete").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.contains("only Projects have a project status"),
+        "{body}"
+    );
+    // An admin passes the rights check, so a missing node is a plain 404.
+    let (status, _) = cascade_get(admin_claims(), AZ_MISSING, "complete").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Both routes that send History out show a cascade's entry as its reader
+/// may see it: a sub-Project they can view by title, one they can't not
+/// at all (no id, no empty list), and an entry with nothing left for
+/// them not at all. An admin reads every node, so every entry.
+#[tokio::test]
+async fn history_routes_show_a_cascade_as_its_reader_may_see_it() {
+    let get = |claims: common::auth::AuthClaims, path: String| async move {
+        let resp = Router::new()
+            .nest("/nodes", crate::routes::nodes::router())
+            .nest(
+                "/dashboard/activity",
+                crate::routes::tasks::dashboard_activity_router(),
+            )
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        (json, text)
+    };
+    let viewable = az_node(AZ_VIEW_PROJECT).to_string();
+    let hidden = az_node(AZ_FOREIGN_NODE).to_string();
+    for path in [
+        format!("/nodes/{}/activity", az_node(AZ_PARKED_PROJECT)),
+        "/dashboard/activity".to_string(),
+    ] {
+        let (json, text) = get(fake_claims(), path.clone()).await;
+        let entries = json.as_array().expect("a list");
+        assert_eq!(
+            entries.len(),
+            1,
+            "{path}: the second entry has nothing for them"
+        );
+        assert_eq!(
+            entries[0]["metadata"]["sub_projects"],
+            serde_json::json!([{ "id": viewable, "title": format!("node {viewable}") }]),
+            "{path}"
+        );
+        assert!(!text.contains(&hidden), "{path}: {text}");
+
+        let (json, text) = get(admin_claims(), path.clone()).await;
+        assert_eq!(json.as_array().map(Vec::len), Some(2), "{path}");
+        assert!(text.contains(&hidden), "{path}: an admin reads every node");
+    }
+}
+
+#[tokio::test]
+async fn only_a_terminal_state_has_a_cascade_to_preview() {
+    for state in ["active", "parked"] {
+        let (status, body) = cascade_get(fake_claims(), AZ_MY_PROJECT, state).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{state}: {body}");
+    }
+    // Not one of the four states, or none: refused while reading the query.
+    for query in ["on_hold", ""] {
+        let (status, _) = cascade_get(fake_claims(), AZ_MY_PROJECT, query).await;
+        assert!(status.is_client_error(), "{query:?}: {status}");
+    }
+    for state in ["complete", "cancelled"] {
+        let (status, body) = cascade_get(fake_claims(), AZ_MY_PROJECT, state).await;
+        assert_eq!(status, StatusCode::OK, "{state}: {body}");
+        let plan: common::cascade::CascadePlan = serde_json::from_str(&body).expect("a plan");
+        assert!(!plan.closes_something());
+        assert_eq!(plan.state.as_str(), state);
     }
 }
 

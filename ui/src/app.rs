@@ -145,6 +145,10 @@ pub fn App() -> impl IntoView {
     let show_capture = ShowCapture(RwSignal::new(false));
     provide_context(show_capture);
 
+    // The one confirmation before a cascade (S6b): anything that closes a
+    // project asks through it; Layout mounts the dialog.
+    provide_context(crate::components::modals::cascade_confirm::CascadeConfirm::new());
+
     // Toast actions that open a page set this; Layout acts on it.
     provide_context(NavRequest(RwSignal::new(None)));
 

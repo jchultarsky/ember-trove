@@ -223,9 +223,17 @@ pub fn restored(
 /// The body of `PUT /nodes/{id}/project-state`: the state its sender
 /// declares. Always a named state, never "toggle": a request sent twice,
 /// or from a page that is out of date, still says what its person meant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+///
+/// `confirm` is the token of a cascade plan the sender was shown
+/// (`crate::cascade::CascadePlan::token`). A change to a terminal state
+/// that closes sub-Projects or cancels tasks needs it (S6b, §4.1:
+/// "confirmation first"); with the state a project already has, it asks
+/// for what is still open under it to be closed (the catch-up).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct DeclareProjectState {
     pub state: ProjectState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<String>,
 }
 
 #[cfg(test)]
@@ -388,6 +396,15 @@ mod tests {
         let body: DeclareProjectState =
             serde_json::from_str(r#"{"state":"parked"}"#).expect("a state");
         assert_eq!(body.state, Parked);
+        assert_eq!(body.confirm, None, "an older tab sends the state alone");
+        let confirmed: DeclareProjectState =
+            serde_json::from_str(r#"{"state":"complete","confirm":"abc"}"#).expect("confirmed");
+        assert_eq!(confirmed.confirm.as_deref(), Some("abc"));
+        // And nothing is sent that an older server would not expect.
+        assert_eq!(
+            serde_json::to_string(&body).expect("json"),
+            r#"{"state":"parked"}"#
+        );
         assert!(serde_json::from_str::<DeclareProjectState>(r#"{"state":"toggle"}"#).is_err());
         assert!(serde_json::from_str::<DeclareProjectState>("{}").is_err());
     }

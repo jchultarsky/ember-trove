@@ -28,6 +28,9 @@ use leptos_router::hooks::use_navigate;
 pub fn NodeView(id: NodeId) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let refresh = expect_context::<RwSignal<u32>>();
+    // Bumped when this page changes tasks other than through the task
+    // list (a cascade cancels them), and read by the "still open" notice.
+    let task_refresh = expect_context::<crate::app::TaskRefresh>().0;
 
     let node = LocalResource::new(move || {
         let id = id;
@@ -279,6 +282,25 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                     load_focus.run(());
                                 }
                             });
+                            // A settled change of state may have changed
+                            // more than the state: closing cancels tasks
+                            // and writes History (S6b). The task list, the
+                            // History panel and the "still open" notice
+                            // read again.
+                            let state_writes = RwSignal::new(0u32);
+                            let state_settled = Callback::new(move |()| {
+                                reload_focus.run(());
+                                let _ = state_writes.try_update(|n| *n += 1);
+                                let _ = task_refresh.try_update(|n| *n += 1);
+                            });
+                            let still_open_refresh = Signal::derive(move || {
+                                state_writes.get().wrapping_add(task_refresh.get())
+                            });
+                            let caught_up = Callback::new(move |saved: common::node::Node| {
+                                let _ = project_state.try_set(saved.project_state);
+                                let _ = project_state_at.try_set(saved.project_state_at);
+                                state_settled.run(());
+                            });
 
                             view! {
                                 <div class="flex flex-col h-full">
@@ -331,7 +353,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                     state=project_state
                                                     at=project_state_at
                                                     editable=is_owner
-                                                    on_settled=reload_focus
+                                                    on_settled=state_settled
                                                 />
                                             })}
                                             // The home (owner request, 2026-11-12): the
@@ -521,6 +543,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <TagBar node_id=id />
                                     </div>
                                     <div class="flex-1 overflow-auto p-6">
+                                        // Something still open under a closed project
+                                        // (S6b): said to those who have the state chip.
+                                        {(is_owner && allows(&n.node_type, Capability::ProjectStatus)).then(|| view! {
+                                            <crate::components::project_state::StillOpenNotice
+                                                node_id=id
+                                                state=state_now
+                                                refresh=still_open_refresh
+                                                on_closed=caught_up
+                                            />
+                                        })}
                                         // The Brief (#282): where a Project stands now. It
                                         // leads the page, above the body (owner decision,
                                         // 2026-11-11). Projects only (§3.2); kinds never
@@ -570,7 +602,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             is_editor=is_owner
                                             on_restore=reload_node
                                         />
-                                        <ActivityPanel node_id=id />
+                                        <ActivityPanel node_id=id refresh=state_writes />
                                     </div>
                                 </div>
                             }.into_any()

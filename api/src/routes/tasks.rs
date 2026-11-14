@@ -597,6 +597,11 @@ async fn dashboard_activity(
         .activity
         .list_recent_for_owner(&claims.sub, since, limit)
         .await?;
+    // SECURITY: these are the caller's own nodes, but a cascade's entry
+    // can refer to a sub-Project of someone else's that they can't view
+    // (S6b). Shown as the reader may see it, as a node's History is.
+    let entries =
+        crate::routes::nodes::present_for(&state, &claims, entries, |e| &mut e.entry).await?;
     Ok(Json(entries))
 }
 

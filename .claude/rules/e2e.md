@@ -154,6 +154,24 @@ CI job is too slow a feedback loop for selector work.
   effect in headless Chromium. Test `sw.js` with `node --test
   ui/public/sw.test.mjs` instead (fakes for `self`/`caches`/`fetch`).
 
+- **The project state chip ignores input while it saves** (2026-11-14):
+  it is `aria-disabled="true"` until the PUT answers, and a click or key
+  then is dropped. A step that opens the chip right after a choice waits
+  for `aria-disabled="false"` first (`saved()` in project_state.spec.ts).
+  The optimistic `data-state` flips before the save lands, so it is not
+  the thing to wait for.
+
+- **The cascade's confirmation** (2026-11-14, #326) is
+  `getByRole('alertdialog', { name: 'Confirm closing a project' })`, with
+  `cascade-heading`, `cascade-projects`, `cascade-tasks`,
+  `cascade-skipped`, `cascade-back` and `cascade-confirm` inside. Closing
+  a project that has an open task or sub-project opens it; a fixture that
+  must just be closed uses the API with the plan's token (`closeByApi` in
+  cascade_ui.spec.ts). The buttons that open it (the chip, "Close them…",
+  Data health's state fixes) are `aria-disabled` while busy, never
+  `disabled`: `toBeEnabled()` says nothing about them. In-app Back and
+  Forward need in-app navigation first: a `goto` reloads the app.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —

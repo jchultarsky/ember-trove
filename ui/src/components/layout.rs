@@ -185,11 +185,24 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     // node pages only) stays inline here; it joins the registry with the Phase
     // 2 `KeyboardScope` model. One owned listener with one `on_cleanup` (the
     // previous two both risked the disposed-signal leak; see leptos.md).
+    let cascade_confirm =
+        expect_context::<crate::components::modals::cascade_confirm::CascadeConfirm>();
     let handle = {
         let navigate = navigate.clone();
         window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
             use common::keyboard::GlobalAction::*;
             let key = ev.key();
+            // An open cascade confirmation owns the keyboard, wherever
+            // the focus is: Escape goes back from it (the panel handles
+            // and stops its own; this is for a focus that fell outside),
+            // and no shortcut acts on the page behind it.
+            if cascade_confirm.is_open() {
+                if key == "Escape" {
+                    ev.prevent_default();
+                    cascade_confirm.go_back();
+                }
+                return;
+            }
             let cmd = ev.ctrl_key() || ev.meta_key();
             let editable = crate::keyboard::active_element_is_editable();
             // An exclusive overlay (palette or help) owns the keyboard: the
@@ -473,6 +486,9 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                     />
                 }
             }
+
+            // The confirmation before a cascade (S6b): one for the app.
+            <crate::components::modals::cascade_confirm::CascadeConfirmModal />
 
             // v2.10.0 — Help modal: Shortcuts / Concepts / Workflow tabs.
             // Triggered by `?` (kept the legacy `show_shortcuts` signal name
