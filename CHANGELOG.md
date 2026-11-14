@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **`rustix` 1.1.6** (RUSTSEC-2026-0486, flagged unsound: its xattr
+  functions mark unwritten bytes as initialized when given a zero-length
+  buffer). It is a transitive dependency (through `tar`, which the backup
+  uses, and `tempfile`). `cargo audit` no longer lists it.
+
 ## [3.21.0] - 2026-11-13
 
 ### Added
