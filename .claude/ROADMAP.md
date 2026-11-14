@@ -3,7 +3,24 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-13)
+## Current state (2026-11-14)
+
+- **In progress: S6b and S6c, the cascade** (#326; ONTOLOGY §4.1). Two
+  PRs, one release (3.22.0), no migration and no change to the backup
+  format. PR 1 (rules and API): `common::cascade` (the plan, one pure
+  function shared by the preview and the write), `GET
+  /nodes/{id}/project-state/cascade`, the `confirm` token on `PUT
+  /nodes/{id}/project-state` (412 without it or when the plan changed),
+  the reopen rule (422), History's `cascade_closed` (ids stored, titles
+  resolved for each reader), the Data health rule
+  `open_under_closed_project`. PR 2 (UI): the confirmation dialog, the
+  notice on a closed project's page, Data health's "Close them".
+  Rules: "The cascade" in `.claude/rules/api.md`. Owner decisions,
+  2026-11-14: the catch-up is offered, never automatic; under a closed
+  master a sub-project is neither made active nor parked; an open project
+  may be given a closed home, and Data health lists it.
+  After it: S6d (the History facet) or S5b (recurrence removed), the
+  owner's call.
 
 - **v3.21.0 shipped: S6a, project states** (#320, PRs #321 and #322;
   ONTOLOGY §4, §4.1). PR 1

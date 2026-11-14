@@ -154,6 +154,13 @@ CI job is too slow a feedback loop for selector work.
   effect in headless Chromium. Test `sw.js` with `node --test
   ui/public/sw.test.mjs` instead (fakes for `self`/`caches`/`fetch`).
 
+- **The project state chip ignores input while it saves** (2026-11-14):
+  it is `aria-disabled="true"` until the PUT answers, and a click or key
+  then is dropped. A step that opens the chip right after a choice waits
+  for `aria-disabled="false"` first (`saved()` in project_state.spec.ts).
+  The optimistic `data-state` flips before the save lands, so it is not
+  the thing to wait for.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —

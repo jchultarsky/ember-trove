@@ -10,6 +10,7 @@ use common::{
     activity::{ActivityAction, ActivityEntry},
     attachment::Attachment,
     auth::AuthClaims,
+    cascade::CascadePlan,
     edge::{EdgeType, EdgeWithTitles, Home, HomeNode, NodeHome, SetHomeRequest},
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
@@ -81,6 +82,7 @@ pub fn router() -> Router<AppState> {
             "/{id}/project-state",
             axum::routing::put(declare_project_state),
         )
+        .route("/{id}/project-state/cascade", get(cascade_preview))
 }
 
 #[derive(serde::Deserialize)]
@@ -107,17 +109,26 @@ async fn set_pin(
 /// the state, never "toggle", so a request sent twice says the same thing.
 ///
 /// Its own route, not a field of `PUT /nodes/:id`: an autosave can then
-/// never restamp the declaration, and the cascade's preview and confirm
-/// (S6b) have a place to go.
+/// never restamp the declaration, and the cascade's confirmation rides on
+/// it.
+///
+/// **The cascade** (S6b). Closing a project closes what is under it. A
+/// change to complete or cancelled that would close a sub-Project or
+/// cancel a task needs `confirm`, the token of the plan the caller was
+/// shown (`GET …/project-state/cascade`); without it, or when what is
+/// under the project has changed since, the answer is **412** and nothing
+/// is written. There is no way to close a project around its cascade.
+/// A change back to active or parked is refused (**422**) while the
+/// project's home is a closed Project the caller can view (S6c).
 ///
 /// SECURITY: an editor of the node, checked first; only then the kind
-/// (§3.2, 422), so the refusal tells a stranger nothing about a node. The
-/// repo writes the History entry in the same transaction and, for a
-/// terminal state, removes the caller's **own** Focus entry. Nothing
-/// about Focus is logged, sent to a webhook or returned.
-///
-/// Until the cascade ships (S6b, S6c) closing a project changes the
-/// project alone: its tasks and sub-Projects stay as they are.
+/// (§3.2, 422) and anything about what is under it (412), so no answer
+/// tells a stranger about a node. The repo acts for the caller's own
+/// account: the cascade closes only where they hold a grant of their own,
+/// and the admin role opens this route and nothing below it. It writes
+/// History in the same transaction and removes the caller's **own** Focus
+/// entries on what closed. Nothing about Focus is logged, sent to a
+/// webhook or returned.
 async fn declare_project_state(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -127,13 +138,24 @@ async fn declare_project_state(
     let id = NodeId(id);
     require_editor(state.permissions.as_ref(), &claims, id).await?;
     require_capability(&state, id, Capability::ProjectStatus).await?;
-    let (node, wrote) = state
+    let outcome = state
         .nodes
-        .set_project_state(id, req.state, &ActivityActor::from_claims(&claims))
+        .set_project_state(
+            id,
+            req.state,
+            req.confirm.as_deref(),
+            &ActivityActor::from_claims(&claims),
+            is_admin(&claims),
+        )
         .await?;
-    // A repeat of a state already declared writes nothing, so it is not
-    // an update to tell anyone about.
-    if wrote {
+    let node = outcome.node;
+    // After the commit. A project whose state changed is updated, told to
+    // its own owner's hooks (the master only when it was written: a
+    // repeat of a declared state is no update). A project whose tasks
+    // were cancelled has had tasks updated, told to those tasks' owners'
+    // hooks, as every task event is. One event per project and owner,
+    // not per task: the payload names the node, not the task.
+    if outcome.wrote {
         dispatch(
             state.webhooks.clone(),
             EVENT_NODE_UPDATED,
@@ -142,7 +164,110 @@ async fn declare_project_state(
             &node.owner_id,
         );
     }
+    for touched in &outcome.closed {
+        dispatch(
+            state.webhooks.clone(),
+            EVENT_NODE_UPDATED,
+            Some(touched.id),
+            &claims.sub,
+            &touched.owner_id,
+        );
+    }
+    for touched in &outcome.cancelled_on {
+        dispatch(
+            state.webhooks.clone(),
+            common::webhook::EVENT_TASK_UPDATED,
+            Some(touched.id),
+            &claims.sub,
+            &touched.owner_id,
+        );
+    }
     Ok(Json(node))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CascadeParams {
+    /// The terminal state the caller means to declare.
+    state: ProjectState,
+}
+
+/// `GET /api/nodes/:id/project-state/cascade?state=complete|cancelled`:
+/// what declaring that state on this Project would close (S6b; §4.1,
+/// "confirmation first"): the sub-Projects, the tasks, and the
+/// sub-Projects that stay open because the caller can't edit them. Its
+/// `token` is what the PUT takes as `confirm`.
+///
+/// SECURITY: the same gate as the PUT (an editor, then the kind). The plan
+/// is computed for the caller's **own** account, an admin's included: it
+/// names a node only if that account can view it and never counts one it
+/// can't (§14).
+async fn cascade_preview(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Query(params): Query<CascadeParams>,
+) -> Result<Json<CascadePlan>, ApiError> {
+    let id = NodeId(id);
+    require_editor(state.permissions.as_ref(), &claims, id).await?;
+    require_capability(&state, id, Capability::ProjectStatus).await?;
+    if !params.state.is_terminal() {
+        return Err(ApiError::Validation(
+            "only complete and cancelled close what is under a project".to_string(),
+        ));
+    }
+    let plan = state
+        .nodes
+        .cascade_preview(id, params.state, &claims.sub)
+        .await?;
+    Ok(Json(plan))
+}
+
+/// Show History entries to one reader (S6b). A `cascade_closed` entry
+/// refers to other nodes by id (the sub-Projects it closed, the master it
+/// came from); each becomes a title only if `claims` may view that node,
+/// and is left out otherwise, without a count (§14). An entry that then
+/// has nothing to show this reader is left out whole
+/// (`common::cascade::presented`). Every route that sends activity
+/// metadata out goes through this; `entry` finds the entry in whatever
+/// the route lists.
+pub(crate) async fn present_for<T>(
+    state: &AppState,
+    claims: &AuthClaims,
+    mut entries: Vec<T>,
+    entry: fn(&mut T) -> &mut ActivityEntry,
+) -> Result<Vec<T>, ApiError> {
+    let mut ids: Vec<Uuid> = Vec::new();
+    for item in &mut entries {
+        let e = entry(item);
+        if e.action == ActivityAction::CascadeClosed {
+            ids.extend(common::cascade::referenced_nodes(&e.metadata));
+        }
+    }
+    // Every cascade entry is presented, also one that names no other node:
+    // its task list is cut to what one entry sends. Only the lookup is
+    // skipped when there is nothing to look up.
+    let titles = if ids.is_empty() {
+        std::collections::BTreeMap::new()
+    } else {
+        state
+            .nodes
+            .visible_titles(&ids, subject_scope(claims))
+            .await?
+    };
+    entries.retain_mut(|item| {
+        let e = entry(item);
+        if e.action != ActivityAction::CascadeClosed {
+            return true;
+        }
+        match common::cascade::presented(&e.metadata, &titles) {
+            Some(shown) => {
+                e.metadata = shown;
+                true
+            }
+            None => false,
+        }
+    });
+    Ok(entries)
 }
 
 // ── Node list ────────────────────────────────────────────────────────────────
@@ -1222,7 +1347,10 @@ async fn list_activity(
 ) -> Result<Json<Vec<ActivityEntry>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let mut entries = state.activity.list(NodeId(id), limit).await?;
+    let entries = state.activity.list(NodeId(id), limit).await?;
+    // SECURITY: other nodes an entry refers to are named only if this
+    // reader may view them (S6b).
+    let mut entries = present_for(&state, &claims, entries, |e| e).await?;
     // SECURITY: names for everyone who can read the node; email addresses
     // (actors' and invitees') for its owners only. Any failure to show
     // ownership redacts.

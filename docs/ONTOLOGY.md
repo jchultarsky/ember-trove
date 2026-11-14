@@ -213,6 +213,22 @@ beneath it.
   the actor cannot edit is skipped, listed in the confirmation, and shown
   afterwards as open under a closed master — the "no active child" rule
   above applies only to children the actor can edit.
+- **A Project closed before the cascade existed, or that gained something
+  open since, is caught up only when asked.** Declaring the state it
+  already has changes nothing. The Project's page and Data health say
+  what is still open under it and offer to close it, with the same
+  confirmation.
+- **Under a closed master a sub-Project is not re-opened**: it cannot be
+  made active, and a closed one cannot be parked either (parked is not
+  closed). Changing it between complete and cancelled is allowed. An open
+  Project may be *given* a closed Project as its home; Data health lists
+  it, and such a Project, while still active, may be parked. The rule is
+  not applied when the actor cannot view the master: they are not told
+  that a hidden Project is closed. An admin reads every Project, so the
+  rule applies to them.
+- **A sub-Project the actor cannot edit that is already closed** is not
+  listed as staying open, and the cascade does not go through it: what is
+  under it is left to the people who can edit it.
 - A `depends_on` edge targeting a Project is satisfied exactly when that
   Project's terminal state is *complete*. A cancelled target can never
   satisfy a dependency.
@@ -770,3 +786,8 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-13 | Tasks of a Project that is not *active* are out of My Day's Today and Overdue; they stay in the Backlog and on the Project. The dashboard's Area groups show active Projects, with one collapsed *Parked* group; complete and cancelled Projects leave it. Un-parking returns a Project to Focus as it was. Parking a master does not park its sub-Projects: the downward cascade is for complete and cancelled only | Owner, in the developer session (S6a planning) |
 | 2026-11-13 | Closing a Project removes only the declaring person's own Focus entry; anyone else's is hidden while it is closed and shows again if it is re-opened (§10 amended: it read as if re-opening never put a Project back for anyone) | Developer, building S6a (#320); the owner approved the plan |
 | 2026-11-13 | Until the cascade exists (S6b, S6c), declaring *complete* or *cancelled* changes the Project alone: its Tasks and sub-Projects stay as they are. S6b must offer the cascade for Projects closed before it existed | Developer, building S6a (#320); the owner approved the plan |
+| 2026-11-14 | The cascade's catch-up is **offered, never automatic**: a closed Project with something still open under it says so on its page and in Data health, with a "Close them" action that shows the same confirmation. Under a closed master a sub-Project may be made **neither active nor parked**. Giving an open Project a closed Project as its home is **allowed** and listed in Data health | Owner, in the developer session (S6b planning, #326) |
+| 2026-11-14 | Re-declaring the state a Project already has stays a no-op (the catch-up is that request sent with a confirmation). A sub-Project under a master the actor cannot view may be re-opened (an admin reads every Project, so this never applies to one). An admin with no grant of their own on a Project closes it, and under it only what they do hold a grant on. History stores a cascade's other nodes by id and names each only to a reader who may view it; hidden ones are left out, uncounted, and an entry left with nothing for its reader is not shown to them | Developer, building S6b (#326); the owner approved the plan |
+| 2026-11-14 | "Neither active nor parked" under a closed master is read as: no change to active, and none from a closed state to parked. An active sub-Project that was moved under a closed master may still be parked (it re-opens nothing, and refusing would leave it only "close it" or "move it") | Developer's reading of the owner's decision above, building S6b (#326); for the owner to confirm |
+| 2026-11-14 | The cascade does not go through a sub-Project the actor cannot edit, open or closed. A closed one is not listed as "staying open" | Developer, after the independent review of #326; for the owner to confirm |
+| 2026-11-14 | A cascade's webhooks follow the existing rule for each event: `node.updated` to the hooks of each closed Project's owner, `task.updated` (one per Project) to the hooks of the cancelled tasks' owners. An open sub-Project that its master's owner cannot view is in nobody's Data health report | Developer, building S6b (#326) |

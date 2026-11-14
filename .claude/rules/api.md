@@ -301,8 +301,96 @@ cargo check && cargo clippy -- -D warnings
   one account's rows; the admin count groups labels in SQL and
   classifies them in Rust. A label is free text: never log one, and
   never read another account's into a report.
-- Until the cascade exists (S6b, S6c), closing a project changes the
-  project alone.
+- Closing a project also closes what is under it: see "The cascade".
+
+## The cascade (S6b, S6c, #326)
+
+- **One rule, one function**: `common::cascade::plan`. The preview
+  (`GET /nodes/{id}/project-state/cascade`) and the write both call it on
+  rows read by `read_subtree` (repo/node.rs). Don't decide what closes
+  anywhere else, in SQL or in the UI.
+- **Rights are the actor's own grants**: `repo::editable_by(node, param)`,
+  an owner or editor row in `permissions`. It has no admin branch, on
+  purpose (§4.1, §14): never pass the cascade a "sees all". `viewable`
+  binds the actor's subject to `visible_to`; never a NULL.
+  A child the actor can't edit is skipped and **not walked into**; it is
+  in the plan (`skipped`: "stays open") only when they can view it and
+  it is not already closed.
+- **The token is a hash of what the plan shows**
+  (`CascadePlan::fingerprint`: the master, the target, the ids that close
+  and the ids that are skipped). It is not a secret and grants nothing:
+  the write decides from the rows under its own locks. A hidden child is
+  in neither the plan nor the token. A rename changes neither.
+- **When the PUT needs it**: a *change* to complete or cancelled whose
+  plan closes something. Without a token, or with another plan's: 412
+  (`PreconditionFailed`), nothing written. A plan that closes nothing
+  needs none. The same terminal state again: without a token a no-op,
+  as before (Data health's "Keep" sends it); with the plan's token it is
+  the catch-up. Rights and the kind are checked before any 412.
+- **Lock order, for anything that locks many node or task rows**:
+  `SET LOCAL lock_timeout`, then `edge::lock_type_raw(Contains)`, then
+  node rows `ORDER BY id` (`FOR NO KEY UPDATE`), then task rows
+  `ORDER BY id`. The purge (nodes, then tasks) and `TaskRepo::reorder`
+  (`a_reorder_takes_its_rows_in_id_order`) take theirs in id order for
+  the same reason; a new bulk writer does too. A deadlock (40P01) is
+  retried once (`a_cascade_that_loses_a_deadlock_goes_again`); a lock
+  timeout (55P03), on a row or on the tree lock, is a 409 "try again"
+  (`a_state_write_gives_up_on_a_row_held_too_long`). The timeout is per
+  wait, not for the whole write. Keep the driver's error
+  (`StateError::Db`) on any statement in `declare_once` that can wait
+  for a lock: mapped to `Internal` first, it answers 500.
+  A change to active or parked reads and locks the master's row only
+  (`read_subtree`'s `walk`).
+  The pg tests `two_confirmed_closes_at_once_cascade_once`,
+  `a_close_and_a_childs_change_never_interleave`,
+  `a_focus_add_never_lands_beside_a_cascade` and
+  `a_cascade_runs_beside_a_reorder_and_a_purge` run it beside the other
+  writers. They pass without the row locks too (checked 2026-11-14): the
+  `contains` lock orders state writes, and the Focus add waits on the
+  cascade's own `UPDATE`. The row locks are there so that a task or
+  project changed meanwhile makes the cascade wait and then see it,
+  rather than record something it did not do; `written_all` drops the
+  transaction (412) if a statement still changes fewer rows than planned.
+- **In the cascade, the state `UPDATE` comes before `remove_on`.** A
+  Focus add holds `FOR SHARE` on the node; the update waits for it, and
+  the delete that follows then sees the new entry. The other way round,
+  an entry could land on a closed project.
+- Tasks are cancelled by `task::cancel_open_on`, through
+  `COMPLETED_AT_AFTER`: **no completion date** (owner decision,
+  2026-10-30). "Still to do" is `task::still_to_do()`, from the enum.
+- **History**: `cascade_closed` on every node where something closed
+  (`common::cascade::recorded`), and each closed sub-project's own
+  `project_state_changed`. The entry stores other nodes **by id only**
+  (`sub_projects`, `root`). Anything that returns History entries runs
+  them through `routes::nodes::present_for`, which resolves ids to titles
+  for nodes this reader can view (`NodeRepo::visible_titles`) and drops
+  the rest, uncounted: no empty list, and an entry left with no master,
+  no sub-project and no task is not shown to that reader at all (alone
+  it would say that something hidden was closed). A new place that shows
+  History must call it; a
+  title stored in the entry would be read by everyone who can view the
+  node. Task titles are stored: a task is read by whoever can view its
+  node.
+- **Focus**: the cascade removes the actor's own entries on what it
+  closes (`project_focus::remove_on`), nobody else's, and records none.
+- **Webhooks** after commit, each by its event's existing rule:
+  `node.updated` per project whose state changed, to that project's
+  owner's hooks; `task.updated` per project whose tasks were cancelled,
+  to the hooks of those tasks' owners (once per owner).
+- **Re-opening (S6c)** is `common::cascade::reopen_refused`: under a
+  closed home that is a Project the actor can view, no change to active,
+  and none from a closed state to parked (422, `MASTER_IS_CLOSED`, names
+  no node). Active to parked is allowed. A hidden master refuses
+  nothing. `sees_all` (pass `is_admin(&claims)`) is for this check only:
+  an admin reads every node, so is held to the rule; it never widens
+  what the cascade closes. Re-opening a master changes the master alone.
+- Data health's `OpenUnderClosedProject`: the reader's **own** closed
+  projects with tasks still to do, or with direct sub-projects that are
+  not closed and that the reader can view. `can_close` is `editable_by`,
+  the cascade's rule, applied **one level down**: the plan goes all the
+  way, so a project whose only closable leftover is deeper says
+  `can_close: false` here; the deeper project is its own owner's item.
+  The admin view gets the count.
 
 ## Focus (#282, proposal B)
 

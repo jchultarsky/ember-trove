@@ -269,6 +269,9 @@ test('a project is parked, made active and completed from its page', async ({ pa
   const chip = page.getByTestId('project-state-chip');
   const option = (state: string) => page.getByTestId(`project-state-option-${state}`);
   const focus = page.getByTestId('focus-toggle');
+  // The chip takes no click or key while a choice is being saved, so a
+  // step that opens it again right after a choice waits for the save.
+  const saved = () => expect(chip).toHaveAttribute('aria-disabled', 'false');
   // Active is the unmarked case: the icon alone, named for a screen reader.
   await expect(chip).toHaveAttribute('data-state', 'active');
   await expect(chip).toHaveAccessibleName('State: Active. Change state');
@@ -312,6 +315,7 @@ test('a project is parked, made active and completed from its page', async ({ pa
   await expect(chip).toHaveAttribute('data-state', 'active');
   // The chip keeps the keyboard through the choice.
   await expect(chip).toBeFocused();
+  await saved();
   // Tabbing away closes the choices: left open, a later Escape would be
   // the page's, and leave it.
   await page.keyboard.press('Enter');
@@ -322,12 +326,14 @@ test('a project is parked, made active and completed from its page', async ({ pa
   await chip.click();
   await option('parked').click();
   await expect(chip).toHaveAttribute('data-state', 'parked');
+  await saved();
 
   // Active again: it is back in Focus as it was.
   await chip.click();
   await option('active').click();
   await expect(chip).toHaveAttribute('data-state', 'active');
   await expect(focus).toHaveAccessibleName('Remove from Focus');
+  await saved();
 
   // Complete: it has left Focus for good, and History has each change.
   await chip.click();
@@ -335,6 +341,7 @@ test('a project is parked, made active and completed from its page', async ({ pa
   await expect(chip).toContainText(/Complete since/);
   await expect(focus).toHaveCount(0);
   await expect.poll(() => stateOf(request, p.id)).toBe('complete');
+  await saved();
   await chip.click();
   await option('active').click();
   await expect(focus).toHaveAccessibleName('Add to Focus');

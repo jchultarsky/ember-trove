@@ -43,6 +43,27 @@ pub(crate) fn visible_to(alias: &str, param: u8) -> String {
     )
 }
 
+/// SQL predicate: the subject bound at placeholder `$param` may **edit**
+/// the node whose id is the expression `node_id`, through a grant of
+/// their own: an owner or editor row in `permissions` (a node's creator
+/// has an Owner row; rights read that table only, as `require_role`
+/// does).
+///
+/// There is deliberately **no admin branch**: unlike [`visible_to`], a
+/// NULL subject matches nothing. It is the rule for what a person does in
+/// their own name: the cascade (ONTOLOGY §14: "the admin role does not
+/// extend it"). A caller that wants an admin to pass says so itself, as
+/// `TaskRepo::reorder` does.
+///
+/// SECURITY: `node_id` and `param` come from the code, never from a
+/// request; the subject is always a bind parameter.
+pub(crate) fn editable_by(node_id: &str, param: u8) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM permissions ep WHERE ep.node_id = {node_id} \
+         AND ep.subject_id = ${param}::text AND ep.role::text IN ('owner', 'editor'))"
+    )
+}
+
 /// The same rule as [`visible_to`], written for a query that returns
 /// **many** of the subject's nodes at once (the node list, the graph, the
 /// title list): `id IN (their grants UNION their own)`, which Postgres

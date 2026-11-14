@@ -367,6 +367,48 @@ fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
     })
 }
 
+/// The task states that are still to do (open, waiting): what a cascade
+/// cancels, and what "open under a closed project" means. From the enum,
+/// so the SQL can't name a different set.
+pub(crate) fn still_to_do() -> Vec<&'static str> {
+    TaskStatus::ALL
+        .iter()
+        .filter(|s| !s.is_terminal())
+        .map(TaskStatus::as_str)
+        .collect()
+}
+
+/// Cancel the tasks `ids` that are still to do, in one statement on the
+/// caller's transaction: the cascade's write (ONTOLOGY §4.1; S6b). The
+/// caller has decided which tasks (the plan, under its locks) and that
+/// the actor may: this checks no rights.
+///
+/// The status goes through [`COMPLETED_AT_AFTER`] like every status
+/// write, so a cancelled task never has a completion date. Cancelling
+/// schedules nothing and retracts nothing (`series_effect`: only a move
+/// to Done does). The tasks trigger moves `updated_at`: it is a change.
+/// Returns how many it cancelled.
+pub(crate) async fn cancel_open_on(
+    conn: &mut sqlx::PgConnection,
+    ids: &[Uuid],
+) -> Result<u64, EmberTroveError> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let done = sqlx::query(&format!(
+        "UPDATE node_tasks \
+         SET status = $3::task_status, completed_at = {COMPLETED_AT_AFTER} \
+         WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL AND status::text = ANY($2::text[])"
+    ))
+    .bind(ids)
+    .bind(still_to_do())
+    .bind(TaskStatus::Cancelled.as_str())
+    .execute(conn)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("cancel tasks failed: {e}")))?;
+    Ok(done.rows_affected())
+}
+
 /// Insert a task (`TaskRepo::create`), on any executor, so capture
 /// conversion (#234) can do it inside its transaction.
 pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
@@ -1018,8 +1060,20 @@ impl TaskRepo for PgTaskRepo {
         }
         let ids: Vec<Uuid> = updates.iter().map(|(id, _)| id.0).collect();
         let orders: Vec<i32> = updates.iter().map(|(_, o)| *o).collect();
+        let failed =
+            |e: sqlx::Error| EmberTroveError::Internal(format!("reorder tasks failed: {e}"));
 
-        sqlx::query(
+        // The rows first, in id order, as everything that takes many task
+        // rows does (the cascade, the purge). The update below takes them
+        // in the order the request lists them, and two writers taking the
+        // same rows in different orders can deadlock.
+        let mut tx = self.pool.begin().await.map_err(failed)?;
+        sqlx::query("SELECT 1 FROM node_tasks WHERE id = ANY($1) ORDER BY id FOR UPDATE")
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await
+            .map_err(failed)?;
+        sqlx::query(&format!(
             r#"
             UPDATE node_tasks
             SET sort_order = u.sort_order
@@ -1032,25 +1086,23 @@ impl TaskRepo for PgTaskRepo {
               AND node_tasks.deleted_at IS NULL
               -- The routes' rule (`require_task_editor`): on a node, its
               -- editors; on none, the task's owner. Owning a task on a
-              -- node is not enough (a revoked share).
+              -- node is not enough (a revoked share). An admin (NULL)
+              -- passes here, by this caller's choice.
               AND (
                 $3::text IS NULL
                 OR (node_tasks.node_id IS NULL AND node_tasks.owner_id = $3::text)
-                OR EXISTS (
-                    SELECT 1 FROM permissions p
-                    WHERE p.node_id = node_tasks.node_id
-                      AND p.subject_id = $3::text
-                      AND p.role::text IN ('owner', 'editor')
-                )
+                OR {edits_its_node}
               )
             "#,
-        )
+            edits_its_node = super::editable_by("node_tasks.node_id", 3),
+        ))
         .bind(&ids)
         .bind(&orders)
         .bind(subject)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| EmberTroveError::Internal(format!("reorder tasks failed: {e}")))?;
+        .map_err(failed)?;
+        tx.commit().await.map_err(failed)?;
 
         Ok(())
     }

@@ -94,11 +94,16 @@ pub enum ActivityAction {
     /// §10. Metadata carries `from` and `to`, the wire strings of
     /// `ProjectState`.
     ProjectStateChanged,
+    /// A cascade closed something on or under this Project (S6b; §4.1,
+    /// §10): the sub-Projects it closed and this Project's own cancelled
+    /// tasks. The metadata is `cascade::recorded`; it is shown to a reader
+    /// through `cascade::presented`, never raw.
+    CascadeClosed,
 }
 
 impl ActivityAction {
     /// Every action this build knows, in declaration order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Created,
         Self::Edited,
         Self::TagAdded,
@@ -112,6 +117,7 @@ impl ActivityAction {
         Self::StatusChanged,
         Self::BriefSuperseded,
         Self::ProjectStateChanged,
+        Self::CascadeClosed,
     ];
 
     /// The database strings of [`Self::ALL`]. Reads filter on these in SQL
@@ -139,6 +145,7 @@ impl ActivityAction {
             Self::StatusChanged => "status_changed",
             Self::BriefSuperseded => "brief_superseded",
             Self::ProjectStateChanged => "project_state_changed",
+            Self::CascadeClosed => "cascade_closed",
         }
     }
 
@@ -157,6 +164,7 @@ impl ActivityAction {
             "status_changed" => Some(Self::StatusChanged),
             "brief_superseded" => Some(Self::BriefSuperseded),
             "project_state_changed" => Some(Self::ProjectStateChanged),
+            "cascade_closed" => Some(Self::CascadeClosed),
             _ => None,
         }
     }
@@ -178,6 +186,7 @@ impl ActivityAction {
             Self::StatusChanged => "flag",
             Self::BriefSuperseded => "edit_note",
             Self::ProjectStateChanged => "flag",
+            Self::CascadeClosed => "checklist",
         }
     }
 
@@ -199,6 +208,7 @@ impl ActivityAction {
             Self::StatusChanged => "changed status",
             Self::BriefSuperseded => "updated the brief",
             Self::ProjectStateChanged => "changed state",
+            Self::CascadeClosed => "closed what was under it",
         }
     }
 }
@@ -281,6 +291,7 @@ mod tests {
                 ActivityAction::StatusChanged => 10,
                 ActivityAction::BriefSuperseded => 11,
                 ActivityAction::ProjectStateChanged => 12,
+                ActivityAction::CascadeClosed => 13,
             }
         }
         for (i, a) in ActivityAction::ALL.iter().enumerate() {
