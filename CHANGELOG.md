@@ -8,13 +8,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - **Closing a project closes what is under it** (S6b and S6c of the
-  ontology programme, #326; ONTOLOGY §4.1). This entry is the server's
-  half; the confirmation dialog follows.
+  ontology programme, #326; ONTOLOGY §4.1).
   - Declaring a Project complete or cancelled gives its sub-Projects that
     state, all the way down, and cancels the open and Waiting tasks on
     them. A cancelled task gets no completion date. Nothing is deleted,
     archived or hidden.
-  - **It is confirmed first.** `GET /api/nodes/{id}/project-state/cascade`
+  - **You are shown the list first.** Choosing Complete or Cancelled on a
+    project that has something under it opens a confirmation: the
+    sub-Projects that close, the tasks that are cancelled (and how many
+    are other people's), and what stays open because you can't edit it.
+    "Go back" changes nothing. If what is under the project changes
+    while the dialog is open, it shows the new list and asks again. A
+    project with nothing under it closes at once, as before.
+  - **A closed project that still has something open under it says so**
+    on its page, with "Close them…", and Data health's *Still open under
+    a closed project* offers the same. Both show the confirmation; nothing
+    is closed until you confirm.
+  - In the API: `GET /api/nodes/{id}/project-state/cascade`
     answers with the plan: the sub-Projects that close, the tasks that are
     cancelled (and how many are other people's), and the sub-Projects that
     stay open because you may not edit them. The plan carries a token;
@@ -42,6 +52,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     the state it already has still changes nothing. Data health's new rule,
     *Still open under a closed project*, lists your closed projects with
     open tasks or open sub-Projects.
+
+### Fixed
+- **Dialogs keep the keyboard after a click on their text.** A click on a
+  dialog's wording or padding used to drop the focus to the page behind:
+  Escape then acted on that page (on a project it left for the node
+  list) and Tab walked out of the dialog. Every dialog's panel now keeps
+  the focus.
 
 ### Changed
 - A task reorder and an account deletion now take their task rows in id

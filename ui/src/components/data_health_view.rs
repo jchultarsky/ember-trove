@@ -71,6 +71,9 @@ enum Fix {
     /// Declare the state the project already has: the label stays, and
     /// the item is settled (S6a).
     KeepState(ProjectState),
+    /// Close what is still open under a project that is already in this
+    /// closed state (S6b): the cascade's catch-up, confirmed first.
+    CloseStillOpen(ProjectState),
 }
 
 /// The words on a state fix's button, and what its toast says.
@@ -92,6 +95,27 @@ fn state_fix_words(fix: Fix) -> Option<(ProjectState, &'static str, &'static str
     }
 }
 
+/// "complete, with 2 tasks and 1 sub-project still open".
+fn still_open_words(s: &common::data_health::StillOpenRef) -> String {
+    let count = |n: u32, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let open: Vec<String> = [
+        count(s.tasks, "task", "tasks"),
+        count(s.sub_projects, "sub-project", "sub-projects"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    format!(
+        "{}, with {} still open",
+        s.state.label().to_lowercase(),
+        open.join(" and ")
+    )
+}
+
 /// The fixes an item offers, in button order. Removing a membership needs
 /// the node's owner (the API's rule), so it's offered only to them.
 fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
@@ -104,6 +128,17 @@ fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
         // is a declaration, which settles the item.
         RuleId::LabelReadsAsAnotherState => v.label_reading.as_ref().map_or_else(Vec::new, |r| {
             vec![Fix::DeclareState(r.reads_as), Fix::KeepState(r.state)]
+        }),
+        // Close what is still open (only when the reader could close any
+        // of it: otherwise the button would do nothing), or re-open the
+        // project (S6b).
+        RuleId::OpenUnderClosedProject => v.still_open.as_ref().map_or_else(Vec::new, |s| {
+            let mut fixes = Vec::new();
+            if s.can_close {
+                fixes.push(Fix::CloseStillOpen(s.state));
+            }
+            fixes.push(Fix::DeclareState(ProjectState::Active));
+            fixes
         }),
         // Needs the membership, the reader's ownership of the node, and the
         // node itself (the call names it).
@@ -334,6 +369,13 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
                                     )}
                                 </span>
                             })}
+                            // What is still open under it (S6b).
+                            {v.still_open.map(|s| view! {
+                                <span class="text-xs text-stone-500 dark:text-stone-400"
+                                    data-testid="still-open">
+                                    {still_open_words(&s)}
+                                </span>
+                            })}
                             {(!v.related.is_empty()).then(|| view! {
                                 <span class="text-stone-400 dark:text-stone-500" aria-hidden="true">"\u{2192}"</span>
                             })}
@@ -356,7 +398,15 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
 
 const FIX_BUTTON: &str = "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs \
     text-stone-600 dark:text-stone-300 border border-stone-200 dark:border-stone-700 \
-    hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40";
+    hover:bg-stone-100 dark:hover:bg-stone-800 disabled:opacity-40 aria-disabled:opacity-40";
+
+/// `aria-disabled` for a fix that may open the cascade's confirmation:
+/// the button stays focusable while busy (its click is ignored), so the
+/// dialog can give the keyboard back to it. A `disabled` button can't
+/// take focus.
+fn aria_busy(busy: RwSignal<bool>) -> impl Fn() -> &'static str {
+    move || if busy.get() { "true" } else { "false" }
+}
 
 /// An inline "are you sure?" for a fix: the question, the commit button,
 /// and Cancel. Worded for what the action does, not a generic delete.
@@ -471,27 +521,64 @@ fn FixControl(
                 return ().into_any();
             };
             let node = NodeId(item.subject.id);
+            // Through the one write for a state: closing a project that
+            // has something under it asks first (S6b). It says its own
+            // failures, so only the lock is put back here.
             let declare = move |_| {
                 if busy.get_untracked() {
                     return;
                 }
                 busy.set(true);
-                wasm_bindgen_futures::spawn_local(async move {
-                    finish(
-                        api::declare_project_state(node, state)
-                            .await
-                            .map(|_| done.to_string())
-                            .map_err(|e| format!("Couldn't save the state: {e}")),
-                    );
-                });
+                crate::components::project_state::declare(
+                    node,
+                    state,
+                    move |_| finish(Ok(done.to_string())),
+                    move || {
+                        busy.try_set(false);
+                    },
+                );
             };
             view! {
-                <button type="button" class=FIX_BUTTON disabled=move || busy.get() on:click=declare
+                <button type="button" class=FIX_BUTTON aria-disabled=aria_busy(busy) on:click=declare
                     data-testid=format!("fix-state-{}", state.as_str())>
                     <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">
                         {crate::components::project_state::project_state_icon(state)}
                     </span>
                     {label}
+                </button>
+            }
+            .into_any()
+        }
+        Fix::CloseStillOpen(state) => {
+            let node = NodeId(item.subject.id);
+            let close = move |_| {
+                if busy.get_untracked() {
+                    return;
+                }
+                busy.set(true);
+                crate::components::project_state::ask_to_close(
+                    node,
+                    state,
+                    move |_| finish(Ok("Closed".to_string())),
+                    // Out of date (closed elsewhere, or the project was
+                    // re-opened): the report reads again, as after a fix.
+                    move |why| {
+                        if why == crate::components::modals::cascade_confirm::NotClosed::NothingLeft
+                        {
+                            on_fixed.try_run(());
+                        } else {
+                            busy.try_set(false);
+                        }
+                    },
+                );
+            };
+            view! {
+                <button type="button" class=FIX_BUTTON aria-disabled=aria_busy(busy) on:click=close
+                    data-testid="fix-close-still-open">
+                    <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">
+                        {crate::components::project_state::project_state_icon(state)}
+                    </span>
+                    "Close them\u{2026}"
                 </button>
             }
             .into_any()
@@ -972,6 +1059,46 @@ mod tests {
         assert_eq!(ref_href(&done), Some(format!("/nodes/{node}")));
         let done_orphan = Ref::task(id, "t", None, false).with_closed(true);
         assert_eq!(ref_href(&done_orphan), None);
+    }
+
+    #[test]
+    fn a_closed_project_with_something_open_offers_to_close_it_or_reopen() {
+        use common::data_health::StillOpenRef;
+        let id = Uuid::from_u128(1);
+        let item = |can_close| {
+            Violation::new(Ref::node(id, "p", false), vec![]).with_still_open(StillOpenRef {
+                state: ProjectState::Cancelled,
+                tasks: 2,
+                sub_projects: 1,
+                can_close,
+            })
+        };
+        assert_eq!(
+            fixes_for(RuleId::OpenUnderClosedProject, &item(true)),
+            vec![
+                Fix::CloseStillOpen(ProjectState::Cancelled),
+                Fix::DeclareState(ProjectState::Active)
+            ]
+        );
+        // Nothing of it is the reader's to close: no button that would do
+        // nothing. Re-opening the project is still theirs.
+        assert_eq!(
+            fixes_for(RuleId::OpenUnderClosedProject, &item(false)),
+            vec![Fix::DeclareState(ProjectState::Active)]
+        );
+        // The item says what is open, in words.
+        let s = item(true).still_open.expect("set above");
+        assert_eq!(
+            still_open_words(&s),
+            "cancelled, with 2 tasks and 1 sub-project still open"
+        );
+        let one = StillOpenRef {
+            state: ProjectState::Complete,
+            tasks: 1,
+            sub_projects: 0,
+            can_close: true,
+        };
+        assert_eq!(still_open_words(&one), "complete, with 1 task still open");
     }
 
     #[test]

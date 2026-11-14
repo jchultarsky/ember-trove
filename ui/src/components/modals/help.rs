@@ -184,8 +184,13 @@ const CONCEPTS: &[Concept] = &[
                into Today or listed as overdue. They stay in the Backlog, \
                marked. Make it active and it is back where it was. Complete \
                and cancelled close a project: it leaves the Dashboard and \
-               Focus, and the Projects list finds it by State. For now closing \
-               changes the project alone; its tasks stay as they are.",
+               Focus, and the Projects list finds it by State. Closing also \
+               closes its sub-projects and cancels its open and waiting tasks \
+               (a cancelled task gets no completion date); you are shown the \
+               list and confirm it first. Only what you can edit is closed. \
+               Making the project active again re-opens the project alone. A \
+               closed project that still has something open under it says so \
+               on its page and in Data health, and offers to close it.",
     },
     Concept {
         title: "Notes",

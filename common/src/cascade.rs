@@ -37,6 +37,15 @@ use utoipa::ToSchema;
 use crate::id::{NodeId, TaskId};
 use crate::project_state::ProjectState;
 
+/// "1 task" / "3 tasks"; nothing for none.
+fn counted(n: usize, one: &str, many: &str) -> Option<String> {
+    match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    }
+}
+
 /// One Project of the subtree, as the caller read it for one actor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeIn {
@@ -100,6 +109,16 @@ pub struct CascadeSkipped {
 /// confirmation's content, and what the write applies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CascadePlan {
+    /// The master's title, for the confirmation's heading. Its reader is
+    /// an editor of it. Not part of the token.
+    #[serde(default)]
+    pub master_title: String,
+    /// The state the master has now. When it is already [`Self::state`],
+    /// confirming changes nothing about the master and only closes what
+    /// is still open under it (the catch-up). Part of the token: a master
+    /// re-opened since the plan was shown makes it a different plan.
+    #[serde(default)]
+    pub master_state: Option<ProjectState>,
     /// The terminal state being declared.
     pub state: ProjectState,
     /// Whether the actor holds a grant of their own on the master. An
@@ -120,6 +139,13 @@ pub struct CascadePlan {
 }
 
 impl CascadePlan {
+    /// Whether confirming leaves the master's own state as it is: it
+    /// already has the state being declared (the catch-up).
+    #[must_use]
+    pub fn is_catch_up(&self) -> bool {
+        self.master_state == Some(self.state)
+    }
+
     /// Whether the cascade would change anything. This alone decides
     /// whether a confirmation is needed and whether a closed project is
     /// said to have something open under it: a skipped child stays open
@@ -145,6 +171,20 @@ impl CascadePlan {
             .count()
     }
 
+    /// What it closes, in words: "2 sub-projects and 3 tasks". `None`
+    /// when it closes nothing.
+    #[must_use]
+    pub fn closes_text(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            counted(self.projects.len(), "sub-project", "sub-projects"),
+            counted(self.task_count(), "task", "tasks"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!parts.is_empty()).then(|| parts.join(" and "))
+    }
+
     /// Every project whose tasks are cancelled or whose state changes:
     /// where the write records the cascade.
     #[must_use]
@@ -156,8 +196,8 @@ impl CascadePlan {
             .collect()
     }
 
-    /// The plan as one canonical text: the master, the target state and
-    /// the ids of everything it shows, each list sorted. Two plans read
+    /// The plan as one canonical text: the master, the state it has, the
+    /// target state and the ids of everything it shows, each list sorted. Two plans read
     /// alike exactly when they would close the same things for the same
     /// declaration, whatever order the rows came in. The API hashes it
     /// into [`CascadePlan::token`] (the hash lives there: `common` is
@@ -184,6 +224,10 @@ impl CascadePlan {
         skipped.sort();
         let mut lines = vec![
             format!("master:{master}"),
+            format!(
+                "from:{}",
+                self.master_state.map_or("?", |state| state.as_str())
+            ),
             format!("target:{}", self.state.as_str()),
         ];
         lines.extend(projects);
@@ -286,6 +330,8 @@ pub fn plan(
         .collect();
 
     CascadePlan {
+        master_title: master.title.clone(),
+        master_state: Some(master.state),
         state: target,
         own_grant: master.editable,
         projects,
@@ -419,11 +465,6 @@ pub fn presented(
 /// tasks).
 #[must_use]
 pub fn summary(presented: &serde_json::Value) -> Option<String> {
-    let count = |n: usize, one: &str, many: &str| match n {
-        0 => None,
-        1 => Some(format!("1 {one}")),
-        n => Some(format!("{n} {many}")),
-    };
     let projects = presented
         .get("sub_projects")
         .and_then(|v| v.as_array())
@@ -440,8 +481,8 @@ pub fn summary(presented: &serde_json::Value) -> Option<String> {
         })
         .unwrap_or(0);
     let parts: Vec<String> = [
-        count(projects, "sub-project", "sub-projects"),
-        count(tasks, "task", "tasks"),
+        counted(projects, "sub-project", "sub-projects"),
+        counted(tasks, "task", "tasks"),
     ]
     .into_iter()
     .flatten()
@@ -530,6 +571,44 @@ mod tests {
         assert!(p.own_grant);
         assert_eq!((p.task_count(), p.others_task_count()), (0, 0));
         assert!(p.touched_nodes().is_empty());
+    }
+
+    /// A master re-opened (or closed differently) since the plan was
+    /// shown is a different plan: a catch-up confirmed from a stale page
+    /// must not quietly close the project again.
+    #[test]
+    fn the_token_covers_the_state_the_master_has() {
+        let tasks = [task(10, 1, "t")];
+        let closed = plan(&mine(1, "m", Complete), Complete, &[], &[], &tasks);
+        let reopened = plan(&mine(1, "m", Active), Complete, &[], &[], &tasks);
+        assert!(closed.is_catch_up());
+        assert!(!reopened.is_catch_up());
+        assert_ne!(closed.fingerprint(nid(1)), reopened.fingerprint(nid(1)));
+        let other = plan(&mine(1, "m", Cancelled), Complete, &[], &[], &tasks);
+        assert!(!other.is_catch_up());
+        assert_ne!(closed.fingerprint(nid(1)), other.fingerprint(nid(1)));
+    }
+
+    #[test]
+    fn what_it_closes_is_said_in_words() {
+        let master = mine(1, "m", Active);
+        let nodes = [mine(2, "a", Active), mine(3, "b", Parked)];
+        let edges = [(nid(1), nid(2)), (nid(1), nid(3))];
+        let none = plan(&master, Complete, &[], &[], &[]);
+        assert_eq!(none.closes_text(), None);
+        let one_task = plan(&master, Complete, &[], &[], &[task(10, 1, "t")]);
+        assert_eq!(one_task.closes_text().as_deref(), Some("1 task"));
+        let both = plan(
+            &master,
+            Complete,
+            &nodes,
+            &edges,
+            &[task(10, 1, "t"), task(11, 2, "u"), task(12, 3, "v")],
+        );
+        assert_eq!(
+            both.closes_text().as_deref(),
+            Some("2 sub-projects and 3 tasks")
+        );
     }
 
     #[test]

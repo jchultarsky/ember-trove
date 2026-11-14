@@ -144,6 +144,49 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   and says "Project parked" (`quiet_project_badge_view`) on a row whose
   project is not active. `toggle_done` takes the project's state too:
   only a task that was carried into Today is stamped "done today".
+- **Closing a project goes through `project_state::declare`** (S6b,
+  #326), never `api::declare_project_state` from a view. It sends the
+  plain request; a 412 means something under the project would close, so
+  it fetches the plan and opens the app's one confirmation
+  (`modals/cascade_confirm.rs`, mounted in `Layout`). `on_failed` also
+  runs when the person goes back, so the caller puts back what it showed
+  and says nothing. The catch-up on an already closed project is
+  `project_state::ask_to_close` (the page's `StillOpenNotice`, Data
+  health's "Close them…").
+  - The dialog is opened with `cascade_confirm::ask`, through a
+    thread-local handle like the toasts': the question is asked after an
+    `.await`, where there is no context.
+  - **No optimistic flip for a terminal state.** The chip shows Complete
+    only when the server has it: while the dialog asks, the project is
+    still what it was. Parking and re-opening still flip at once.
+  - Its callbacks are `Fn + Send + Sync` and are kept in an `Arc`, not a
+    `Callback`: they are stored after an `.await`, with no owner to
+    dispose a `Callback`'s slot.
+  - After a state settles the page re-reads what a cascade can have
+    changed: the task list (`TaskRefresh`), History
+    (`ActivityPanel`'s `refresh`) and the notice. A new panel that shows
+    tasks or History on the project page joins `state_settled` in
+    `node_view.rs`.
+  - The dialog shows the server's plan and nothing else. Don't work out
+    in the browser what would close. Whether it is a catch-up is the
+    plan's `is_catch_up()` (the master already has the state), never the
+    caller's belief: `ask_to_close` refuses to ask when the project is no
+    longer in that state.
+  - **A question belongs to the page it was asked on.** `declare` and
+    `ask_to_close` read `current_path()` at the click, before any
+    `.await`; `ask` refuses when the page has been left or another
+    question is on screen, and an open dialog is withdrawn on navigation.
+    Every path ends in exactly one of `on_saved` or `on_back`, or the
+    caller's lock stays set.
+  - **A button that opens the dialog is `aria-disabled` while busy, not
+    `disabled`** (and ignores its click): the dialog returns focus to
+    it, and a disabled button can't take focus. The same for the
+    dialog's own commit button while it saves.
+- **An open modal's keys must not depend on where the focus is.**
+  `ModalShell`'s panel has `tabindex="-1"`, so a click on its text keeps
+  the focus inside (Escape, the Tab trap). The cascade confirmation is
+  also known to the window's key handler (`CascadeConfirm::is_open`):
+  Escape goes back and no shortcut acts on the page behind it.
 - **Focus is the viewer's own** (#282). `FocusToggle` / `FocusMenuItem`
   (`project_focus.rs`) take `state: RwSignal<Option<bool>>` and render
   nothing while it is `None`: a control that guessed "not in Focus" would

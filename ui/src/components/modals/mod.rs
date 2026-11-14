@@ -1,4 +1,5 @@
 pub mod add_favorite;
+pub mod cascade_confirm;
 pub mod command_palette;
 pub mod convert_capture;
 pub mod create_node;
@@ -89,11 +90,11 @@ pub fn ModalShell(
     // Separate base strings, so no two classes compete for one property.
     let surface = match placement {
         ModalPlacement::Sheet => {
-            "pointer-events-auto bg-white dark:bg-stone-900 shadow-2xl w-full \
+            "pointer-events-auto bg-white dark:bg-stone-900 shadow-2xl w-full outline-none \
              sm:rounded-2xl sm:border border-stone-200 dark:border-stone-700"
         }
         _ => {
-            "pointer-events-auto bg-white dark:bg-stone-900 rounded-2xl shadow-2xl \
+            "pointer-events-auto bg-white dark:bg-stone-900 rounded-2xl shadow-2xl outline-none \
              border border-stone-200 dark:border-stone-700"
         }
     };
@@ -112,6 +113,11 @@ pub fn ModalShell(
                         node_ref=panel_ref
                         class=panel.get_value()
                         role=if alert { "alertdialog" } else { "dialog" }
+                        // Focusable by script and by a click, not by Tab:
+                        // a click on the panel's text then keeps the focus
+                        // in the panel, where Escape and the Tab trap are
+                        // handled. Without it the focus fell to the page.
+                        tabindex="-1"
                         aria-modal="true"
                         aria-label=label
                         on:keydown=on_keydown
