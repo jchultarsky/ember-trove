@@ -5,7 +5,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-13)
 
-- **In progress: S6a, project states** (#320; ONTOLOGY §4, §4.1). PR 1
+- **v3.21.0 shipped: S6a, project states** (#320, PRs #321 and #322;
+  ONTOLOGY §4, §4.1). PR 1
   (data and API): migration 051 (`nodes.project_state`,
   `project_state_at`; each label read once, no label parks),
   `common::project_state`, `PUT /nodes/{id}/project-state`
@@ -19,7 +20,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
   buttons, and My Day's rule (`Task::asks_for_attention`: a task of a
   project that is not active is out of Today and Overdue, and stays in
   the Backlog, marked).
-  One release for both (3.21.0), after a Lightsail snapshot. Rules:
+  One release for both, after a Lightsail snapshot. Rules:
   "Project states" in `.claude/rules/api.md`. Owner decisions,
   2026-11-13: parked tasks leave Today and Overdue; a collapsed Parked
   group; un-parking returns a project to Focus; parking a master parks

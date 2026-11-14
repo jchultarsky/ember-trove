@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.21.0] - 2026-11-13
+
 ### Added
 - **Project states: active, parked, complete, cancelled (S6a of #204;
   #320).** A Project now carries a declared state beside its free-text
