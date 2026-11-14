@@ -8945,8 +8945,44 @@ async fn the_same_state_again_catches_up_only_when_confirmed(pool: PgPool) {
         "the master's state did not change again"
     );
 
+    // A catch-up's token is for a master that is still closed. Re-opened
+    // meanwhile, the same token would close it again: refused instead.
+    let later = raw_task(&pool, "alice", Some(master.id.0), "added later").await;
+    let shown = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
+    assert!(shown.is_catch_up());
+    close(&pool, master.id, ProjectState::Active, "alice", None)
+        .await
+        .expect("re-opened");
+    let r = close(
+        &pool,
+        master.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&shown.token),
+    )
+    .await;
+    assert!(
+        matches!(r, Err(EmberTroveError::PreconditionFailed(_))),
+        "{r:?}"
+    );
+    assert_eq!(state_of(&pool, master.id).await, "active");
+    assert_eq!(task_now(&pool, later).await.0, "open");
+    let again = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
+    assert!(!again.is_catch_up());
+    close(
+        &pool,
+        master.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&again.token),
+    )
+    .await
+    .expect("confirmed as what it is: a close");
+    assert_eq!(state_rows(&pool, master.id.0).await.len(), 3);
+
     // A catch-up that only cancels a task on a sub-Project is recorded
     // there, with where it came from. The master gets no empty entry.
+    let on_master_before = cascade_rows(&pool, master.id).await.len();
     let late = raw_task(
         &pool,
         "alice",
@@ -8967,13 +9003,13 @@ async fn the_same_state_again_catches_up_only_when_confirmed(pool: PgPool) {
     assert_eq!(task_now(&pool, late).await.0, "cancelled");
     assert_eq!(
         cascade_rows(&pool, master.id).await.len(),
-        1,
-        "no second entry"
+        on_master_before,
+        "no new entry on the master"
     );
     let on_child = cascade_rows(&pool, child.id).await;
-    assert_eq!(on_child.len(), 2);
-    assert_eq!(on_child[1]["root"], serde_json::json!(master.id));
-    assert_eq!(ids_in(&on_child[1]["tasks"]), [late.to_string()]);
+    let last = on_child.last().expect("the child's entry");
+    assert_eq!(last["root"], serde_json::json!(master.id));
+    assert_eq!(ids_in(&last["tasks"]), [late.to_string()]);
 }
 
 /// The cascade acts only through the declaring person's own grants

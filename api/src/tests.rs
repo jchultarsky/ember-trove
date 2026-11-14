@@ -210,6 +210,8 @@ impl NodeRepo for StubNodeRepo {
         assert!(state.is_terminal(), "the route refuses any other state");
         let has_tasks = id.0.as_u128() == AZ_PARKED_PROJECT;
         Ok(common::cascade::CascadePlan {
+            master_title: "a project".into(),
+            master_state: Some(ProjectState::Active),
             state,
             own_grant: true,
             projects: Vec::new(),

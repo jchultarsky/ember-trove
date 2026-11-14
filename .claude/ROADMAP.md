@@ -13,8 +13,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   /nodes/{id}/project-state` (412 without it or when the plan changed),
   the reopen rule (422), History's `cascade_closed` (ids stored, titles
   resolved for each reader), the Data health rule
-  `open_under_closed_project`. PR 2 (UI): the confirmation dialog, the
-  notice on a closed project's page, Data health's "Close them".
+  `open_under_closed_project` (PR #327). PR 2 (UI): the confirmation
+  dialog (`modals/cascade_confirm.rs`, one for the app),
+  `project_state::declare` asking on a 412, `StillOpenNotice` on a closed
+  project's page, Data health's "Close them…" and its state fixes through
+  the same dialog.
   Rules: "The cascade" in `.claude/rules/api.md`. Owner decisions,
   2026-11-14: the catch-up is offered, never automatic; under a closed
   master a sub-project is neither made active nor parked; an open project

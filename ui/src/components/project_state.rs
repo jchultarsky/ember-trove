@@ -17,8 +17,10 @@ use common::node::Node;
 use common::project_state::ProjectState;
 use leptos::prelude::*;
 
+use crate::components::modals::cascade_confirm::{self, CascadeRequest, NotClosed};
 use crate::components::task_common::WAITING_TONE;
 use crate::components::toast::{ToastLevel, push_toast};
+use crate::error::UiError;
 
 /// The Material Symbols glyph of a state.
 #[must_use]
@@ -91,18 +93,36 @@ pub fn ProjectStateBadge(
 }
 
 /// Declare `next` for `node_id` and hand the saved node to `on_saved`.
-/// A failure is said in a toast and handed to `on_failed`, so the caller
-/// can put back what it showed. Both run after an `.await`: they must use
-/// `try_` access on their signals.
+///
+/// Closing a project that has something to close under it is confirmed
+/// first (S6b): the server refuses the plain request with 412, the plan
+/// is fetched, and the app's confirmation dialog asks. Nothing under the
+/// project means no dialog. So does a state the project already has: the
+/// server treats that as a no-op whatever is under it (Data health's
+/// "Keep complete" relies on it).
+///
+/// `on_failed` runs when nothing was saved: the save failed (said in a
+/// toast) or the person went back from the dialog (said by nobody). The
+/// caller puts back what it showed. Both callbacks run after an `.await`
+/// and must use `try_` access on their signals.
 pub fn declare(
     node_id: NodeId,
     next: ProjectState,
-    on_saved: impl FnOnce(Node) + 'static,
-    on_failed: impl FnOnce() + 'static,
+    on_saved: impl Fn(Node) + Send + Sync + 'static,
+    on_failed: impl Fn() + Send + Sync + 'static,
 ) {
+    // Where the person is now, read before anything is awaited: an
+    // answer that lands after they have left asks nothing there.
+    let asked_on = cascade_confirm::current_path();
     wasm_bindgen_futures::spawn_local(async move {
-        match crate::api::declare_project_state(node_id, next).await {
+        match crate::api::declare_project_state(node_id, next, None).await {
             Ok(node) => on_saved(node),
+            Err(UiError::Api { status: 412, .. }) if next.is_terminal() => {
+                ask_with_plan(node_id, next, false, asked_on, on_saved, move |_| {
+                    on_failed()
+                })
+                .await;
+            }
             Err(e) => {
                 on_failed();
                 push_toast(
@@ -112,6 +132,81 @@ pub fn declare(
             }
         }
     });
+}
+
+/// Offer to close what is still open under a project that is already
+/// `state` (the catch-up; owner decision, 2026-11-14: offered, never
+/// automatic). The same confirmation as closing it.
+///
+/// It never changes the project's own state: if the project is no longer
+/// `state` (re-opened in another tab since this page loaded), nothing is
+/// asked and `on_back` is told the offer is out of date. `on_back` runs
+/// whenever nothing was closed, with why.
+pub fn ask_to_close(
+    node_id: NodeId,
+    state: ProjectState,
+    on_saved: impl Fn(Node) + Send + Sync + 'static,
+    on_back: impl Fn(NotClosed) + Send + Sync + 'static,
+) {
+    let asked_on = cascade_confirm::current_path();
+    wasm_bindgen_futures::spawn_local(ask_with_plan(
+        node_id, state, true, asked_on, on_saved, on_back,
+    ));
+}
+
+/// Fetch the plan and open the confirmation with it. `catch_up_only`: the
+/// caller offered to close what is under a project it believes is already
+/// `state`, and must not end up changing the project itself.
+async fn ask_with_plan(
+    node_id: NodeId,
+    state: ProjectState,
+    catch_up_only: bool,
+    asked_on: String,
+    on_saved: impl Fn(Node) + Send + Sync + 'static,
+    on_back: impl Fn(NotClosed) + Send + Sync + 'static,
+) {
+    let plan = match crate::api::cascade_plan(node_id, state).await {
+        Ok(plan) => plan,
+        Err(e) => {
+            on_back(NotClosed::Failed);
+            push_toast(
+                ToastLevel::Error,
+                format!("Couldn\u{2019}t load what closing this would close: {e}"),
+            );
+            return;
+        }
+    };
+    if catch_up_only {
+        let stale = if !plan.is_catch_up() {
+            Some(format!(
+                "This project is not {} any more. Nothing was closed.",
+                state.label().to_lowercase()
+            ))
+        } else if !plan.closes_something() {
+            Some("Nothing is left to close under it.".to_string())
+        } else {
+            None
+        };
+        if let Some(said) = stale {
+            on_back(NotClosed::NothingLeft);
+            push_toast(ToastLevel::Info, said);
+            return;
+        }
+    }
+    let on_back = std::sync::Arc::new(on_back);
+    let unanswered = on_back.clone();
+    let asked = cascade_confirm::ask(CascadeRequest {
+        node_id,
+        state,
+        plan,
+        asked_on,
+        on_saved: std::sync::Arc::new(on_saved),
+        on_back,
+    });
+    if !asked {
+        // Another question is on screen, or the page was left meanwhile.
+        unanswered(NotClosed::WentBack);
+    }
 }
 
 /// The project header's state control. It shows the state (an icon alone
@@ -205,11 +300,16 @@ pub fn ProjectStateChip(
         if prev == Some(next) && prev_at.is_some() {
             return;
         }
-        state.set(Some(next));
-        if prev != Some(next) {
-            // The old state's date is not this one's: show none until the
-            // save says when it was declared.
-            at.set(None);
+        // Parking and re-opening show at once. Closing waits for the
+        // server: it may first ask what to do about what is under the
+        // project, and the chip must not say "Complete" while it asks.
+        if !next.is_terminal() {
+            state.set(Some(next));
+            if prev != Some(next) {
+                // The old state's date is not this one's: show none until
+                // the save says when it was declared.
+                at.set(None);
+            }
         }
         busy.set(true);
         declare(
@@ -367,8 +467,8 @@ pub fn ProjectStateChip(
                         }).collect_view()}
                         <p class="px-2 py-1.5 text-xs text-stone-400 dark:text-stone-500 \
                                   border-t border-stone-100 dark:border-stone-800 mt-1">
-                            "Complete and Cancelled change the project only. Its tasks and \
-                             sub-projects stay as they are."
+                            "Complete and Cancelled also close its sub-projects and cancel its \
+                             open tasks. You are shown them first."
                         </p>
                     </div>
                 }
@@ -376,6 +476,103 @@ pub fn ProjectStateChip(
         </div>
     }
     .into_any()
+}
+
+/// The notice on a closed project's page when something is still open
+/// under it (S6b): tasks added since, a sub-Project moved in, or a
+/// project closed before closing reached below it. It offers the
+/// catch-up, which shows the same confirmation as closing does; nothing
+/// is closed until that is confirmed (owner decision, 2026-11-14).
+///
+/// Shown to those the page gives the state chip (its owner, an admin).
+/// What it counts is the server's plan for this reader, so it never
+/// mentions what they may not edit, and it is gone when the plan closes
+/// nothing. A plan that fails to load shows no notice: the page's own
+/// content does not depend on it.
+#[component]
+pub fn StillOpenNotice(
+    node_id: NodeId,
+    #[prop(into)] state: Signal<Option<ProjectState>>,
+    /// Bumped when the tasks or the state may have changed.
+    #[prop(into)]
+    refresh: Signal<u32>,
+    /// Run with the saved node once the catch-up is written.
+    on_closed: Callback<Node>,
+) -> impl IntoView {
+    // Bumped when the offer turned out to be out of date.
+    let reread = RwSignal::new(0u32);
+    let plan = LocalResource::new(move || {
+        let state = state.get();
+        refresh.track();
+        reread.track();
+        async move {
+            match state {
+                Some(state) if state.is_terminal() => {
+                    crate::api::cascade_plan(node_id, state).await.ok()
+                }
+                _ => None,
+            }
+        }
+    });
+    let asking = RwSignal::new(false);
+    view! {
+        {move || {
+            let plan = plan.get().flatten()?;
+            let closes = plan.closes_text()?;
+            let state = plan.state;
+            let ask = move |_| {
+                if asking.get_untracked() {
+                    return;
+                }
+                asking.set(true);
+                ask_to_close(
+                    node_id,
+                    state,
+                    move |node| {
+                        asking.try_set(false);
+                        on_closed.try_run(node);
+                    },
+                    move |why| {
+                        asking.try_set(false);
+                        if why == NotClosed::NothingLeft {
+                            reread.try_update(|n| *n += 1);
+                        }
+                    },
+                );
+            };
+            Some(view! {
+                <div class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border \
+                            border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-800/40 \
+                            px-3 py-2 text-sm text-stone-700 dark:text-stone-300"
+                    role="status"
+                    data-testid="still-open-notice">
+                    <span class="material-symbols-outlined text-stone-500 dark:text-stone-400"
+                        style="font-size: 18px;" aria-hidden="true">"info"</span>
+                    <span class="min-w-[12rem] flex-1">
+                        {format!(
+                            "This project is {}, and {closes} under it {} still open.",
+                            state.label().to_lowercase(),
+                            if closes.starts_with("1 ") && !closes.contains(" and ") { "is" } else { "are" },
+                        )}
+                    </span>
+                    <button type="button"
+                        class="inline-flex items-center gap-1 rounded-md border border-stone-300 \
+                               dark:border-stone-600 px-2 py-0.5 text-xs font-medium \
+                               hover:bg-stone-100 dark:hover:bg-stone-800 aria-disabled:opacity-40"
+                        // Not `disabled`: the dialog gives the keyboard
+                        // back to this button when it closes.
+                        aria-disabled=move || if asking.get() { "true" } else { "false" }
+                        data-testid="still-open-close"
+                        on:click=ask>
+                        <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">
+                            {project_state_icon(state)}
+                        </span>
+                        "Close them\u{2026}"
+                    </button>
+                </div>
+            })
+        }}
+    }
 }
 
 #[cfg(test)]

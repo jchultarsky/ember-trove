@@ -317,8 +317,11 @@ cargo check && cargo clippy -- -D warnings
   in the plan (`skipped`: "stays open") only when they can view it and
   it is not already closed.
 - **The token is a hash of what the plan shows**
-  (`CascadePlan::fingerprint`: the master, the target, the ids that close
-  and the ids that are skipped). It is not a secret and grants nothing:
+  (`CascadePlan::fingerprint`: the master, the state it has, the target,
+  the ids that close and the ids that are skipped). The master's state is
+  in it so that a catch-up confirmed from a stale page can't close a
+  project that was re-opened meanwhile; `CascadePlan::is_catch_up` is the
+  one reading of "already in this state". It is not a secret and grants nothing:
   the write decides from the rows under its own locks. A hidden child is
   in neither the plan nor the token. A rename changes neither.
 - **When the PUT needs it**: a *change* to complete or cancelled whose

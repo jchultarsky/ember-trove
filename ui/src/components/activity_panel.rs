@@ -80,9 +80,22 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
         // The replaced Brief's headline, else the start of its pitch (#282).
         // Shown as plain text: Leptos escapes it, no markdown is rendered.
         ActivityAction::BriefSuperseded => common::brief::superseded_summary(&entry.metadata),
-        // How much a cascade closed here (S6b). The API has already left
-        // out what this reader may not see, so this counts the rest.
-        ActivityAction::CascadeClosed => common::cascade::summary(&entry.metadata),
+        // How much a cascade closed here (S6b), and on a sub-Project's
+        // entry the master it came from. The API has already left out what
+        // this reader may not see, so this says the rest.
+        ActivityAction::CascadeClosed => {
+            let from = entry
+                .metadata
+                .get("root")
+                .and_then(|root| root.get("title"))
+                .and_then(|title| title.as_str())
+                .map(|title| format!("with \u{201c}{title}\u{201d}"));
+            let parts: Vec<String> = [from, common::cascade::summary(&entry.metadata)]
+                .into_iter()
+                .flatten()
+                .collect();
+            (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
+        }
         _ => None,
     }
 }
@@ -122,11 +135,20 @@ fn action_colour(action: &ActivityAction) -> &'static str {
 }
 
 #[component]
-pub fn ActivityPanel(node_id: NodeId) -> impl IntoView {
+pub fn ActivityPanel(
+    node_id: NodeId,
+    /// Bumped by the page when something it did wrote History (a change
+    /// of state, a cascade), so an open panel shows it.
+    #[prop(optional, into)]
+    refresh: Option<Signal<u32>>,
+) -> impl IntoView {
     let open = RwSignal::new(false);
 
     let entries = LocalResource::new(move || {
         let is_open = open.get();
+        if let Some(refresh) = refresh {
+            refresh.track();
+        }
         async move {
             if !is_open {
                 return Ok(vec![]);
@@ -212,6 +234,21 @@ mod tests {
             }),
         );
         assert_eq!(action_detail(&e).as_deref(), Some("2 sub-projects, 1 task"));
+        // On a sub-Project: the master it was closed with, when the
+        // reader was given it.
+        let on_child = entry(
+            ActivityAction::CascadeClosed,
+            serde_json::json!({
+                "state": "complete",
+                "root": { "id": "m", "title": "Kitchen" },
+                "tasks": [{ "id": "t", "title": "T" }],
+                "tasks_total": 1,
+            }),
+        );
+        assert_eq!(
+            action_detail(&on_child).as_deref(),
+            Some("with \u{201c}Kitchen\u{201d} \u{b7} 1 task")
+        );
         // Nothing this reader may see closed here: the line stands alone.
         let bare = entry(
             ActivityAction::CascadeClosed,
