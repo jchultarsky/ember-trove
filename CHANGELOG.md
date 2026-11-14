@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.22.0] - 2026-11-14
+
 ### Added
 - **Closing a project closes what is under it** (S6b and S6c of the
   ontology programme, #326; ONTOLOGY §4.1).
