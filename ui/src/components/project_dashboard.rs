@@ -25,9 +25,12 @@
 //! the card slides up/down to its new sort position.
 
 use chrono::{Duration, Utc};
-use common::activity::{ActivityAction, RecentActivityEntry, status_change_summary};
+use common::activity::{
+    ActivityAction, RecentActivityEntry, project_state_change_summary, status_change_summary,
+};
 use common::id::NodeId;
 use common::project_focus::{FocusEntry, FocusItem, Step, in_focus_label, moved, over_soft_limit};
+use common::project_state::ProjectState;
 use common::task::{ProjectDashboardEntry, TaskSummary};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
@@ -41,6 +44,7 @@ use crate::components::icon_button::IconButton;
 use crate::components::node_meta::{status_color, status_icon, status_label};
 use crate::components::page_header::PageHeader;
 use crate::components::project_focus::{FocusToggle, IN_FOCUS_ICON, WhyLine};
+use crate::components::project_state::{ProjectStateBadge, project_state_icon};
 use crate::components::task_common::{WAITING_TONE, priority_color_hex};
 use crate::components::toast::{ToastLevel, push_toast};
 
@@ -53,6 +57,11 @@ pub fn ProjectDashboard() -> impl IntoView {
     // Refresh signal local to the dashboard so pin toggles refetch
     // both project list and the activity recap.
     let dashboard_refresh = RwSignal::new(0u32);
+    // Whether the Parked group is open. It lives here, not in the group:
+    // every refresh rebuilds the groups, and an action on a parked card
+    // must not shut the group it is in (the stored preference alone can't
+    // be relied on: storage may be blocked).
+    let parked_open = RwSignal::new(parked_open_pref());
 
     let entries = LocalResource::new(move || {
         let _ = task_refresh.get();
@@ -162,6 +171,14 @@ pub fn ProjectDashboard() -> impl IntoView {
                             }.into_any();
                         }
 
+                        // The Area groups hold what is in motion. A parked
+                        // project is set aside on purpose (S6a): it waits
+                        // in one group below, closed until asked for. The
+                        // API lists no complete or cancelled project.
+                        let (data, parked): (Vec<_>, Vec<_>) = data
+                            .into_iter()
+                            .partition(|e| e.project_state != Some(ProjectState::Parked));
+
                         // Group by area_title.  None → "Ungrouped".
                         // Preserve insertion order: walk the (already-
                         // sorted-by-pinned-then-recency) list, and bucket
@@ -223,6 +240,7 @@ pub fn ProjectDashboard() -> impl IntoView {
                                                             }
                                                             refresh=dashboard_refresh
                                                             focus=CardFocus::Toggle(in_focus)
+                                                            state_control=true
                                                         />
                                                     }
                                                 }).collect_view()}
@@ -230,6 +248,7 @@ pub fn ProjectDashboard() -> impl IntoView {
                                         </section>
                                     }
                                 }).collect_view()}
+                                <ParkedGroup projects=parked refresh=dashboard_refresh open=parked_open />
                             </div>
                         }.into_any()
                     }}
@@ -239,11 +258,108 @@ pub fn ProjectDashboard() -> impl IntoView {
     }
 }
 
+// ── Parked projects (S6a) ───────────────────────────────────────────────────
+
+/// Whether the Parked group was left open on this device. A convenience
+/// only: absent, blocked or unreadable storage reads as closed.
+const PARKED_OPEN_KEY: &str = "ember.dashboard.parked_open";
+
+fn parked_open_pref() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item(PARKED_OPEN_KEY).ok().flatten())
+        .is_some_and(|v| v == "1")
+}
+
+fn set_parked_open_pref(open: bool) {
+    if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        // Best-effort: a full or blocked storage only loses the preference.
+        let _ = storage.set_item(PARKED_OPEN_KEY, if open { "1" } else { "0" });
+    }
+}
+
+/// The projects that are parked: one group under the Area groups, closed
+/// until its heading is pressed (owner decision, 2026-11-13). Parking is
+/// the statement that a project should not hold attention now, so its
+/// card is out of sight but one click away, with a button to make it
+/// active again. Nothing is rendered when no project is parked.
+#[component]
+fn ParkedGroup(
+    projects: Vec<ProjectDashboardEntry>,
+    refresh: RwSignal<u32>,
+    /// Open or closed: the dashboard's, so it outlives this group's
+    /// rebuild on a refresh.
+    open: RwSignal<bool>,
+) -> impl IntoView {
+    let navigate = StoredValue::new(use_navigate());
+    let count = projects.len();
+    let projects = StoredValue::new(projects);
+    (count > 0).then(|| {
+        view! {
+            <section data-testid="parked-group">
+                // The heading holds the button (a disclosure): a heading
+                // inside a button is not valid, and a screen reader loses it.
+                <h2 class="mb-2">
+                    <button
+                        type="button"
+                        class="flex items-center gap-2 cursor-pointer rounded \
+                               focus-visible:outline-2 focus-visible:outline-amber-500"
+                        aria-expanded=move || if open.get() { "true" } else { "false" }
+                        data-testid="parked-toggle"
+                        on:click=move |_| {
+                            let next = !open.get_untracked();
+                            open.set(next);
+                            set_parked_open_pref(next);
+                        }
+                    >
+                        <span class="material-symbols-outlined text-stone-400 dark:text-stone-500"
+                              style="font-size:14px;" aria-hidden="true">
+                            {move || if open.get() { "expand_more" } else { "chevron_right" }}
+                        </span>
+                        <span class="text-xs font-semibold uppercase tracking-wider \
+                                   text-stone-500 dark:text-stone-400">
+                            "Parked"
+                        </span>
+                        <span class="text-xs font-normal text-stone-400 dark:text-stone-500">
+                            {format!("({count})")}
+                        </span>
+                    </button>
+                </h2>
+                {move || open.get().then(|| view! {
+                    <div class="space-y-3">
+                        {projects.get_value().into_iter().map(|entry| {
+                            let node_id = entry.node_id;
+                            view! {
+                                <ProjectCard
+                                    entry=entry
+                                    on_navigate=move || {
+                                        navigate.get_value()(
+                                            &format!("/nodes/{node_id}"),
+                                            Default::default(),
+                                        )
+                                    }
+                                    refresh=refresh
+                                    // A parked project can't be in Focus.
+                                    focus=CardFocus::Absent
+                                    state_control=true
+                                />
+                            }
+                        }).collect_view()}
+                    </div>
+                })}
+            </section>
+        }
+    })
+}
+
 // ── Focus (#282) ────────────────────────────────────────────────────────────
 
 /// How a card relates to the viewer's Focus.
 #[derive(Clone)]
 enum CardFocus {
+    /// No Focus control at all: a parked project's card (S6a). A parked
+    /// project doesn't show in Focus and can't be put there.
+    Absent,
     /// A card in an Area group: the add/remove toggle, showing whether the
     /// project is in Focus. `None`: Focus didn't load, so no toggle.
     Toggle(Option<bool>),
@@ -458,10 +574,17 @@ fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl
                     let action_label = e.entry.action.label();
                     // A status change says what it became, not just that it
                     // changed (#208).
-                    let detail = (e.entry.action == ActivityAction::StatusChanged).then(|| {
-                        let label = |k: &str| e.entry.metadata.get(k).and_then(|v| v.as_str());
-                        status_change_summary(label("from"), label("to"))
-                    });
+                    let word = |k: &str| e.entry.metadata.get(k).and_then(|v| v.as_str());
+                    let detail = match e.entry.action {
+                        ActivityAction::StatusChanged => {
+                            Some(status_change_summary(word("from"), word("to")))
+                        }
+                        // And a change of the declared state (S6a).
+                        ActivityAction::ProjectStateChanged => {
+                            Some(project_state_change_summary(word("from"), word("to")))
+                        }
+                        _ => None,
+                    };
                     let title = e.node_title.clone();
                     let node_id = e.entry.node_id;
                     view! {
@@ -509,6 +632,12 @@ fn ProjectCard(
     on_navigate: impl Fn() + 'static,
     refresh: RwSignal<u32>,
     focus: CardFocus,
+    /// Whether the card offers Park / Make active (S6a). The Area groups'
+    /// and the Parked group's cards do: those are the viewer's own
+    /// projects. A card in the Focus section may be someone else's
+    /// project, so it has no control that changes the project.
+    #[prop(optional)]
+    state_control: bool,
 ) -> impl IntoView {
     let counts = entry.task_counts.clone();
     let total = counts.open + counts.waiting + counts.done + counts.cancelled;
@@ -646,6 +775,7 @@ fn ProjectCard(
             };
             (Some(strip), None)
         }
+        CardFocus::Absent => (None, None),
         CardFocus::Toggle(in_focus) => {
             let state = RwSignal::new(in_focus);
             let toggle = view! {
@@ -660,6 +790,56 @@ fn ProjectCard(
         }
     };
 
+    // Park, or make active again (S6a): the one state change the
+    // dashboard offers. Completing or cancelling is declared on the
+    // project's own page, where what it does is spelled out.
+    let project_state = entry.project_state;
+    let project_state_at = entry.project_state_at;
+    let state_busy = RwSignal::new(false);
+    let state_button = state_control
+        .then_some(project_state)
+        .flatten()
+        .and_then(|current| match current {
+            ProjectState::Active => Some((
+                ProjectState::Parked,
+                "Park: set this project aside",
+                "Parked",
+            )),
+            ProjectState::Parked => Some((ProjectState::Active, "Make active", "Active again")),
+            ProjectState::Complete | ProjectState::Cancelled => None,
+        })
+        .map(|(next, label, done)| {
+            let on_click = Callback::new(move |()| {
+                if state_busy.get_untracked() {
+                    return;
+                }
+                state_busy.set(true);
+                crate::components::project_state::declare(
+                    node_id,
+                    next,
+                    move |_| {
+                        push_toast(ToastLevel::Success, done);
+                        let _ = state_busy.try_set(false);
+                        let _ = refresh.try_update(|n| *n += 1);
+                    },
+                    move || {
+                        let _ = state_busy.try_set(false);
+                    },
+                );
+            });
+            view! {
+                <span data-testid="project-state-button" class="flex-shrink-0">
+                    <IconButton
+                        icon=project_state_icon(next)
+                        label=label
+                        disabled=state_busy
+                        stop_propagation=true
+                        on_click=on_click
+                    />
+                </span>
+            }
+        });
+
     view! {
         <div
             class="rounded-lg border border-stone-200 dark:border-stone-800
@@ -667,12 +847,17 @@ fn ProjectCard(
                 hover:border-amber-300 dark:hover:border-amber-700
                 transition-colors cursor-pointer group overflow-hidden"
             data-testid="project-card"
+            data-project-state=project_state.map(|s| s.as_str())
             on:click=move |_| on_navigate()
         >
             {strip}
             <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 px-4 py-3">
-                // Title row — pin button + Focus toggle + icon + title
-                <div class="flex items-center gap-2 min-w-0 sm:flex-1">
+                // Title row — pin button + Focus toggle + icon + title. It
+                // wraps: with the status pill, the state badge and the
+                // Park button a phone-width card would otherwise squeeze
+                // the title to nothing, or push the button out of the
+                // card, which clips what overflows it.
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 sm:flex-1">
                     {(!listed).then(|| view! {
                     <button
                         type="button"
@@ -700,6 +885,7 @@ fn ProjectCard(
                     // A real button: the card was click-only (#281). Its
                     // click bubbles to the card's handler.
                     <button type="button" class="font-medium text-stone-800 dark:text-stone-200 truncate text-left
+                        min-w-[7rem] max-w-full
                         cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-500 rounded
                         group-hover:text-amber-700 dark:group-hover:text-amber-400 transition-colors">
                         {entry.title.clone()}
@@ -707,6 +893,11 @@ fn ProjectCard(
                     {entry.project_status.clone().map(|s| view! {
                         <crate::components::project_status::ProjectStatusBadge status=s />
                     })}
+                    // Parked, and since when (S6a). Active says nothing.
+                    {project_state.map(|s| view! {
+                        <ProjectStateBadge state=s at=project_state_at />
+                    })}
+                    {state_button}
                 </div>
 
                 <div class="flex items-center flex-wrap gap-x-3 gap-y-2 sm:gap-4 sm:flex-nowrap">

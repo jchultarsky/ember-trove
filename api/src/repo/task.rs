@@ -3,6 +3,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use common::{
     EmberTroveError,
     id::{NodeId, TaskId},
+    project_state::ProjectState,
     task::{
         CreateTaskRequest, MyDayTask, RecurrenceRule, Task, TaskCounts, TaskPriority, TaskStatus,
         TaskSummary, UpdateTaskRequest,
@@ -247,6 +248,53 @@ const PRIORITY_RANK: &str =
 const T_PRIORITY_RANK: &str =
     "CASE t.priority::text WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 END";
 
+/// The columns a [`MyDayRow`] reads: the task (`t`) and what its feeds
+/// show of its node (`n`, joined under the reader's visibility, so both
+/// are NULL for a node they can't see; such a task is not listed at all,
+/// [`ON_A_NODE_THEY_SEE`]). One list for the three feeds: `FromRow` finds
+/// a missing column only when that feed runs.
+const FEED_COLS: &str = "t.id, t.node_id, t.owner_id, t.title, \
+     t.status::text AS status, t.priority::text AS priority, \
+     t.focus_date, t.due_date, t.recurrence, t.sort_order, \
+     t.created_at, t.updated_at, t.completed_at, \
+     n.title AS node_title, n.project_state AS project_state";
+
+/// SQL for `Task::asks_for_attention` in a feed query (`t` the task, `n`
+/// its visible node): the task can be acted on and its project, if it is
+/// on one, asks for attention. Built from the two rules themselves
+/// (`TaskStatus::is_actionable`, `ProjectState::asks_for_attention`), so
+/// the SQL can't name a different set; a Postgres test compares the list
+/// it gives with the Rust rule for every combination. The words are the
+/// enums' own wire strings, never text from a request.
+fn asks_for_attention() -> String {
+    let quoted = |words: Vec<&'static str>| {
+        words
+            .iter()
+            .map(|w| format!("'{w}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let actionable = quoted(
+        TaskStatus::ALL
+            .iter()
+            .filter(|s| s.is_actionable())
+            .map(TaskStatus::as_str)
+            .collect(),
+    );
+    let asking = quoted(
+        ProjectState::ALL
+            .iter()
+            .filter(|s| s.asks_for_attention())
+            .map(ProjectState::as_str)
+            .collect(),
+    );
+    // No state: a task on no node, or on a node that is not a Project.
+    format!(
+        "(t.status::text IN ({actionable}) \
+          AND (n.project_state IS NULL OR n.project_state IN ({asking})))"
+    )
+}
+
 const SELECT_COLS: &str = r#"
     id, node_id, owner_id, title,
     status::text    AS status,
@@ -287,6 +335,7 @@ struct MyDayRow {
     updated_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
     node_title: Option<String>,
+    project_state: Option<String>,
 }
 
 fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
@@ -306,9 +355,15 @@ fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
         completed_at: r.completed_at,
     }
     .into_task()?;
+    let project_state = r
+        .project_state
+        .as_deref()
+        .map(|s| super::parse_wire(s, "project_state", ProjectState::parse))
+        .transpose()?;
     Ok(MyDayTask {
         task,
         node_title: r.node_title,
+        project_state,
     })
 }
 
@@ -618,12 +673,7 @@ impl TaskRepo for PgTaskRepo {
         let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
-                t.id, t.node_id, t.owner_id, t.title,
-                t.status::text    AS status,
-                t.priority::text  AS priority,
-                t.focus_date, t.due_date, t.recurrence, t.sort_order,
-                t.created_at, t.updated_at, t.completed_at,
-                n.title           AS node_title
+                {FEED_COLS}
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
@@ -632,11 +682,12 @@ impl TaskRepo for PgTaskRepo {
               AND t.focus_date IS NOT NULL
               AND t.focus_date <= $2
               -- `Task::in_my_day`: focused that day, or carried over from
-              -- an earlier one while it can still be acted on. A waiting
-              -- task doesn't carry over (S5a, owner decision 2026-11-13).
+              -- an earlier one while it still asks for attention. A
+              -- waiting task doesn't carry over (S5a), nor one whose
+              -- project is parked or closed (S6a).
               AND (
                   t.focus_date = $2
-                  OR t.status = 'open'
+                  OR {asks_for_attention}
               )
             ORDER BY
                 t.sort_order ASC,
@@ -646,6 +697,7 @@ impl TaskRepo for PgTaskRepo {
             "#,
             visible = super::visible_to("n", 3),
             on_a_node_they_see = ON_A_NODE_THEY_SEE,
+            asks_for_attention = asks_for_attention(),
         ))
         .bind(owner_id)
         .bind(date)
@@ -689,12 +741,7 @@ impl TaskRepo for PgTaskRepo {
         let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
-                t.id, t.node_id, t.owner_id, t.title,
-                t.status::text    AS status,
-                t.priority::text  AS priority,
-                t.focus_date, t.due_date, t.recurrence, t.sort_order,
-                t.created_at, t.updated_at, t.completed_at,
-                n.title           AS node_title
+                {FEED_COLS}
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
@@ -732,12 +779,7 @@ impl TaskRepo for PgTaskRepo {
         let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
-                t.id, t.node_id, t.owner_id, t.title,
-                t.status::text    AS status,
-                t.priority::text  AS priority,
-                t.focus_date, t.due_date, t.recurrence, t.sort_order,
-                t.created_at, t.updated_at, t.completed_at,
-                n.title           AS node_title
+                {FEED_COLS}
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1

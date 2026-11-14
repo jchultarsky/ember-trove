@@ -30,10 +30,9 @@ use axum::{
 use common::{
     auth::AuthClaims,
     id::NodeId,
-    ontology::Capability,
     project_focus::{
         FocusEntry, FocusError, FocusInput, FocusItem, FocusOrder, FocusWhy, MAX_ORDER,
-        holds_focus, normalize_why,
+        focus_refusal, normalize_why,
     },
 };
 use uuid::Uuid;
@@ -41,7 +40,7 @@ use uuid::Uuid;
 use crate::{
     auth::permissions::{is_admin, or_missing, or_missing_row, require_viewer},
     error::ApiError,
-    routes::{capability::refuse_unless, tasks::dashboard_entries},
+    routes::tasks::dashboard_entries,
     state::AppState,
 };
 
@@ -122,10 +121,11 @@ async fn put_focus(
         .get(node_id)
         .await
         .map_err(or_missing_row(PROJECT))?;
-    refuse_unless(&node.node_type, Capability::Focus)?;
-    if !holds_focus(&node.node_type, &node.status) {
-        // The read would leave it out, so adding it would do nothing.
-        return Err(ApiError::Validation(FocusError::Archived.to_string()));
+    // The kind first, then what the read would leave out (archived, or a
+    // state that doesn't ask for attention): adding it would do nothing.
+    // The caller may view the node, so the reason tells them nothing new.
+    if let Some(reason) = focus_refusal(&node.node_type, &node.status, node.project_state) {
+        return Err(ApiError::Validation(reason.to_string()));
     }
     let why = input
         .change()

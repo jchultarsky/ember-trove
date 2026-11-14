@@ -20,6 +20,7 @@ use common::{
     node_version::NodeVersion,
     ontology::{Capability, allows, edge_kind_violation},
     permission::{GrantPermissionRequest, InviteRequest, Permission, PermissionRole},
+    project_state::{DeclareProjectState, ProjectState, label_disagrees},
     project_status,
     tag::Tag,
     webhook::{EVENT_NODE_CREATED, EVENT_NODE_DELETED, EVENT_NODE_UPDATED},
@@ -76,6 +77,10 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/versions/{version_id}/restore", post(restore_version))
         .route("/{id}/duplicate", post(duplicate_node))
         .route("/{id}/pin", axum::routing::put(set_pin))
+        .route(
+            "/{id}/project-state",
+            axum::routing::put(declare_project_state),
+        )
 }
 
 #[derive(serde::Deserialize)]
@@ -94,6 +99,49 @@ async fn set_pin(
 ) -> Result<Json<Node>, ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let node = state.nodes.set_pinned(NodeId(id), req.pinned).await?;
+    Ok(Json(node))
+}
+
+/// `PUT /api/nodes/:id/project-state`: declare a Project's state (S6a;
+/// ONTOLOGY §4.1): active, parked, complete or cancelled. The body names
+/// the state, never "toggle", so a request sent twice says the same thing.
+///
+/// Its own route, not a field of `PUT /nodes/:id`: an autosave can then
+/// never restamp the declaration, and the cascade's preview and confirm
+/// (S6b) have a place to go.
+///
+/// SECURITY: an editor of the node, checked first; only then the kind
+/// (§3.2, 422), so the refusal tells a stranger nothing about a node. The
+/// repo writes the History entry in the same transaction and, for a
+/// terminal state, removes the caller's **own** Focus entry. Nothing
+/// about Focus is logged, sent to a webhook or returned.
+///
+/// Until the cascade ships (S6b, S6c) closing a project changes the
+/// project alone: its tasks and sub-Projects stay as they are.
+async fn declare_project_state(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<DeclareProjectState>,
+) -> Result<Json<Node>, ApiError> {
+    let id = NodeId(id);
+    require_editor(state.permissions.as_ref(), &claims, id).await?;
+    require_capability(&state, id, Capability::ProjectStatus).await?;
+    let (node, wrote) = state
+        .nodes
+        .set_project_state(id, req.state, &ActivityActor::from_claims(&claims))
+        .await?;
+    // A repeat of a state already declared writes nothing, so it is not
+    // an update to tell anyone about.
+    if wrote {
+        dispatch(
+            state.webhooks.clone(),
+            EVENT_NODE_UPDATED,
+            Some(node.id),
+            &claims.sub,
+            &node.owner_id,
+        );
+    }
     Ok(Json(node))
 }
 
@@ -450,10 +498,19 @@ fn with_initial_status(meta: &mut serde_json::Value, status: Option<&str>) {
 
 /// The status a duplicate of `src` starts with: a copy never carries a
 /// status its kind may not have (§3.2, #216), even when the original does.
+/// Nor one that reads as a state the copy doesn't have (S6a): a copy is a
+/// new, active project, so a copied "Done" would be untrue from the start
+/// (and Data health would list it at once). Such a label becomes the
+/// default one.
 fn copied_status(src: &Node) -> Option<String> {
-    src.project_status
+    let label = src
+        .project_status
         .clone()
-        .filter(|_| allows(&src.node_type, Capability::ProjectStatus))
+        .filter(|_| allows(&src.node_type, Capability::ProjectStatus))?;
+    if label_disagrees(Some(&label), ProjectState::Active).is_some() {
+        return Some(project_status::DEFAULT.to_string());
+    }
+    Some(label)
 }
 
 /// Whether an update changes the project status and nothing else: what the
@@ -1524,6 +1581,8 @@ mod tests {
             metadata: json!({}),
             status: common::node::NodeStatus::Draft,
             project_status: Some("Active".into()),
+            project_state: None,
+            project_state_at: None,
             tags: vec![],
             pinned: false,
             created_at: chrono::Utc::now(),
@@ -1535,6 +1594,20 @@ mod tests {
             Some("Active")
         );
         assert_eq!(copied_status(&node(NodeType::Article)), None);
+        // A copy is active: it doesn't start with a label that says, or
+        // hints, that it is anything else.
+        for label in ["Done", "Cancelled", "On hold", "Done, awaiting invoice"] {
+            let mut closed = node(NodeType::Project);
+            closed.project_status = Some(label.into());
+            closed.project_state = Some(ProjectState::Complete);
+            assert_eq!(copied_status(&closed).as_deref(), Some("Active"), "{label}");
+        }
+        let mut unlabelled = node(NodeType::Project);
+        unlabelled.project_status = None;
+        assert_eq!(copied_status(&unlabelled), None, "none to copy");
+        let mut blocked = node(NodeType::Project);
+        blocked.project_status = Some("Blocked".into());
+        assert_eq!(copied_status(&blocked).as_deref(), Some("Blocked"));
     }
 
     #[test]

@@ -709,12 +709,22 @@ pub(crate) async fn restore_into(
         let node_type_str = node.node_type.as_str();
         let status_str = node.status.as_str();
         let (body, project_status) = restored_project_status(node);
+        // S6a: the state the archive carries, or, for an archive older than
+        // format 10, the one the restored label says. Never one on a node
+        // that is not a Project (`common::project_state::restored`).
+        let (project_state, project_state_at) = common::project_state::restored(
+            &node.node_type,
+            node.project_state,
+            node.project_state_at,
+            project_status.as_deref(),
+        );
         sqlx::query(
             r#"
             INSERT INTO nodes
                 (id, owner_id, node_type, title, slug, body, metadata, status, pinned, created_at,
-                 updated_at, project_status)
-            VALUES ($1, $2, $3::node_type, $4, $5, $6, $7, $8::node_status, $9, $10, $11, $12)
+                 updated_at, project_status, project_state, project_state_at)
+            VALUES ($1, $2, $3::node_type, $4, $5, $6, $7, $8::node_status, $9, $10, $11, $12,
+                    $13, $14)
             ON CONFLICT (id) DO UPDATE
                 SET title = EXCLUDED.title,
                     body  = EXCLUDED.body,
@@ -722,7 +732,18 @@ pub(crate) async fn restore_into(
                     metadata = EXCLUDED.metadata,
                     status = EXCLUDED.status,
                     pinned = EXCLUDED.pinned,
-                    project_status = EXCLUDED.project_status
+                    project_status = EXCLUDED.project_status,
+                    -- Only a damaged archive names an id twice. The kind
+                    -- that was stored first stays (it is not in this
+                    -- list), so the state must follow that kind, or the
+                    -- row fails `nodes_project_state_only_on_projects`
+                    -- and the whole restore with it.
+                    project_state = CASE WHEN nodes.node_type = 'project'
+                        THEN COALESCE(EXCLUDED.project_state, nodes.project_state) END,
+                    project_state_at = CASE
+                        WHEN nodes.node_type <> 'project' THEN NULL
+                        WHEN EXCLUDED.project_state IS NULL THEN nodes.project_state_at
+                        ELSE EXCLUDED.project_state_at END
             "#,
         )
         .bind(node.id.0)
@@ -737,6 +758,8 @@ pub(crate) async fn restore_into(
         .bind(node.created_at)
         .bind(node.updated_at)
         .bind(&project_status)
+        .bind(project_state.map(|s| s.as_str()))
+        .bind(project_state_at)
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert node failed: {e}")))?;
@@ -1514,6 +1537,8 @@ mod tests {
             metadata: serde_json::json!({}),
             status: NodeStatus::Draft,
             project_status: project_status.map(str::to_string),
+            project_state: None,
+            project_state_at: None,
             tags: vec![],
             pinned: false,
             created_at: chrono::Utc::now(),

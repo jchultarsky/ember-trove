@@ -51,6 +51,7 @@ use common::{
     node_link::{CreateNodeLinkRequest, NodeLink, UpdateNodeLinkRequest},
     note::{CreateNoteRequest, FeedNote, Note},
     permission::{GrantPermissionRequest, Permission, PermissionRole},
+    project_state::ProjectState,
     search::{CreateSearchPresetRequest, SearchPreset, SearchQuery, SearchResponse},
     tag::{CreateTagRequest, Tag, UpdateTagRequest},
     task::{
@@ -97,7 +98,9 @@ impl NodeRepo for StubNodeRepo {
         let (owner, node_type) = match id.0.as_u128() {
             AZ_OWNED_NODE => ("creator", NodeType::Article),
             AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => ("someone-else", NodeType::Article),
-            AZ_MY_PROJECT | AZ_ARCHIVED_PROJECT => ("test-sub", NodeType::Project),
+            AZ_MY_PROJECT | AZ_ARCHIVED_PROJECT | AZ_PARKED_PROJECT | AZ_CLOSED_PROJECT => {
+                ("test-sub", NodeType::Project)
+            }
             AZ_VIEW_PROJECT => ("someone-else", NodeType::Project),
             AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
@@ -107,10 +110,17 @@ impl NodeRepo for StubNodeRepo {
         } else {
             NodeStatus::Published
         };
+        // A Project always has a state, and nothing else does (S6a).
+        let project_state = (node_type == NodeType::Project).then(|| match id.0.as_u128() {
+            AZ_PARKED_PROJECT => ProjectState::Parked,
+            AZ_CLOSED_PROJECT => ProjectState::Complete,
+            _ => ProjectState::Active,
+        });
         Ok(Node {
             id,
             node_type,
             status,
+            project_state,
             ..fake_node("authz-node", owner)
         })
     }
@@ -147,6 +157,28 @@ impl NodeRepo for StubNodeRepo {
             return Err(EmberTroveError::PreconditionFailed("stub".into()));
         }
         unimplemented!()
+    }
+    async fn set_project_state(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        actor: &crate::repo::activity::ActivityActor,
+    ) -> Result<(Node, bool), EmberTroveError> {
+        // Only a Project the caller may edit reaches the repo: anything
+        // else got past authorization or the kind gate.
+        match id.0.as_u128() {
+            AZ_MY_PROJECT | AZ_PARKED_PROJECT | AZ_CLOSED_PROJECT => {}
+            _ => panic!("authorization bypass: a state write reached the repo for {id}"),
+        }
+        assert_eq!(actor.subject_id, "test-sub", "attributed to the caller");
+        let node = Node {
+            id,
+            node_type: NodeType::Project,
+            project_state: Some(state),
+            project_state_at: Some(chrono::Utc::now()),
+            ..fake_node("authz-node", "test-sub")
+        };
+        Ok((node, true))
     }
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {
         // Only the node test-sub owns may be deleted; reaching here for any
@@ -451,6 +483,10 @@ const AZ_MY_ARTICLE: u128 = 0xa2_0006;
 /// else's Project the caller may only view.
 const AZ_ARCHIVED_PROJECT: u128 = 0xa2_0007;
 const AZ_VIEW_PROJECT: u128 = 0xa2_0008;
+/// For project states (S6a): the caller's own Projects, one parked and
+/// one complete. Every other Project in this world is active.
+const AZ_PARKED_PROJECT: u128 = 0xa2_0009;
+const AZ_CLOSED_PROJECT: u128 = 0xa2_000a;
 /// Edges from AZ_FOREIGN_NODE into AZ_MY_PROJECT (#224).
 const AZ_FOREIGN_HOME_EDGE: u128 = 0xa2_0e30;
 const AZ_FOREIGN_LINK_EDGE: u128 = 0xa2_0e31;
@@ -538,6 +574,18 @@ fn authz_permissions() -> Vec<Permission> {
             AZ_VIEW_PROJECT,
             "test-sub",
             PermissionRole::Viewer,
+        ),
+        row(
+            0xa2_020b,
+            AZ_PARKED_PROJECT,
+            "test-sub",
+            PermissionRole::Owner,
+        ),
+        row(
+            0xa2_020c,
+            AZ_CLOSED_PROJECT,
+            "test-sub",
+            PermissionRole::Owner,
         ),
         row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
         row(
@@ -1159,6 +1207,8 @@ fn fake_node(slug: &str, owner: &str) -> Node {
         metadata: serde_json::json!({}),
         status: NodeStatus::Published,
         project_status: None,
+        project_state: None,
+        project_state_at: None,
         tags: vec![],
         pinned: false,
         created_at: chrono::Utc::now(),
@@ -5060,6 +5110,101 @@ async fn a_project_status_can_be_set_only_on_a_project_but_always_cleared() {
     );
 }
 
+// ── Project state (S6a) ──────────────────────────────────────────────────────
+
+/// `PUT /nodes/{id}/project-state` as `claims`: status and body text.
+async fn state_put(
+    claims: common::auth::AuthClaims,
+    node: u128,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
+    let resp = Router::new()
+        .nest("/nodes", crate::routes::nodes::router())
+        .layer(axum::Extension(claims))
+        .with_state(test_state())
+        .oneshot(json_req(
+            "PUT",
+            &format!("/nodes/{}/project-state", Uuid::from_u128(node)),
+            body,
+        ))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn an_editor_declares_a_projects_state_and_gets_the_node_back() {
+    for state in ["active", "parked", "complete", "cancelled"] {
+        let (status, body) = state_put(
+            fake_claims(),
+            AZ_MY_PROJECT,
+            serde_json::json!({ "state": state }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{state}: {body}");
+        let node: Node = serde_json::from_str(&body).expect("a node");
+        assert_eq!(node.project_state.map(|s| s.as_str()), Some(state));
+        assert!(node.project_state_at.is_some(), "declared");
+    }
+}
+
+#[tokio::test]
+async fn only_a_project_has_a_state_to_declare() {
+    let (status, body) = state_put(
+        fake_claims(),
+        AZ_MY_ARTICLE,
+        serde_json::json!({ "state": "parked" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body.contains("only Projects have a project status"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn the_state_gate_never_tells_a_viewer_or_a_stranger_a_nodes_kind() {
+    // Rights first. A Project and an Article the caller may only view, and
+    // a node they can't see at all, answer alike: 403, never the kind's 422.
+    let parked = serde_json::json!({ "state": "parked" });
+    for node in [AZ_VIEW_PROJECT, AZ_VIEW_NODE, AZ_FOREIGN_NODE, AZ_MISSING] {
+        let (status, _) = state_put(fake_claims(), node, parked.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{node:#x}");
+    }
+    // An admin passes the rights check, so a missing node is a plain 404.
+    let (status, _) = state_put(admin_claims(), AZ_MISSING, parked).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_state_request_names_one_of_the_four_states() {
+    // Refused while reading the body, before any node is looked at: the
+    // answer is the same for the caller's own project and a stranger's.
+    for body in [
+        serde_json::json!({ "state": "toggle" }),
+        serde_json::json!({ "state": "in_progress" }),
+        serde_json::json!({ "state": null }),
+        serde_json::json!({}),
+    ] {
+        let mine = state_put(fake_claims(), AZ_MY_PROJECT, body.clone())
+            .await
+            .0;
+        let theirs = state_put(fake_claims(), AZ_FOREIGN_NODE, body.clone())
+            .await
+            .0;
+        // 422 for a word that is not a state, 400 where serde calls the
+        // body malformed (a null for an enum).
+        assert!(
+            mine == StatusCode::UNPROCESSABLE_ENTITY || mine == StatusCode::BAD_REQUEST,
+            "{body}: {mine}"
+        );
+        assert_eq!(theirs, mine, "{body}");
+    }
+}
+
 // ── Account lifecycle (#239) ─────────────────────────────────────────────────
 
 const ADMIN_SUB: &str = "0a0a0a0a-0000-4000-8000-00000000000a";
@@ -6208,6 +6353,21 @@ async fn only_a_project_that_shows_can_be_put_in_focus() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body.contains("archived"), "{body}");
+    // Nor does a parked or a closed one (S6a): each is told its reason.
+    for (node, reason) in [
+        (AZ_PARKED_PROJECT, "a parked project can't be in Focus"),
+        (AZ_CLOSED_PROJECT, "a closed project can't be in Focus"),
+    ] {
+        let (status, body) = focus_call(
+            fake_claims(),
+            "PUT",
+            &focus_path(node),
+            serde_json::json!({ "why_now": "now" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{node:#x}");
+        assert!(body.contains(reason), "{body}");
+    }
 }
 
 #[tokio::test]

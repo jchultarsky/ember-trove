@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use common::{
     id::{NodeId, TagId},
     node::{Node, NodeSort},
+    project_state::ProjectState,
     tag::Tag,
 };
 use leptos::prelude::*;
@@ -48,6 +49,8 @@ pub fn NodeList() -> impl IntoView {
     let status_filter: RwSignal<Option<String>> = RwSignal::new(None);
     // Project status (#143): only on the Projects page.
     let project_status_filter: RwSignal<Option<String>> = RwSignal::new(None);
+    // The declared state (S6a): also only on the Projects page.
+    let project_state_filter: RwSignal<Option<ProjectState>> = RwSignal::new(None);
     let on_projects = move || node_type_filter.get().as_deref() == Some("project");
     let show_archived = RwSignal::new(false);
     let sort_key = RwSignal::new(NodeSort::ModifiedDesc);
@@ -68,6 +71,7 @@ pub fn NodeList() -> impl IntoView {
     let query = Memo::new(move |_| NodeListQuery {
         status: status_filter.get(),
         project_status: project_status_filter.get().filter(|_| on_projects()),
+        project_state: project_state_filter.get().filter(|_| on_projects()),
         tag_id: tag_filter.get().map(|t| t.id.0),
         include_archived: show_archived.get(),
         node_type: node_type_filter.get(),
@@ -219,6 +223,7 @@ pub fn NodeList() -> impl IntoView {
                 // Project status filter (#143), Projects page only.
                 {move || on_projects().then(|| view! {
                     <ProjectStatusFilter selected=project_status_filter />
+                    <ProjectStateFilter selected=project_state_filter />
                 })}
 
                 // Spacer pushes the archived toggle to the right
@@ -604,6 +609,8 @@ fn NodeCards(
                 let pinned  = node.pinned;
                 let project_status = node.project_status.clone()
                     .filter(|_| common::ontology::allows(&node.node_type, common::ontology::Capability::ProjectStatus));
+                // Parked, complete or cancelled says so; active says nothing.
+                let project_state = node.project_state;
 
                 // Per-card picker visibility signal.
                 let show_picker = RwSignal::new(false);
@@ -685,6 +692,10 @@ fn NodeCards(
                                     // Project status (#143)
                                     {project_status.map(|s| view! {
                                         <crate::components::project_status::ProjectStatusBadge status=s />
+                                    })}
+                                    // The declared state (S6a)
+                                    {project_state.map(|s| view! {
+                                        <crate::components::project_state::ProjectStateBadge state=s at=None />
                                     })}
 
                                     // Pin indicator
@@ -869,6 +880,80 @@ fn NodeCards(
                 }
             }).collect::<Vec<_>>()}
         </ul>
+    }
+}
+
+// ── Project state filter (S6a) ──────────────────────────────────────────────────
+
+/// "State: Any ▾" menu on the Projects page: the four declared states.
+/// The server applies it, before paging (#257).
+#[component]
+fn ProjectStateFilter(selected: RwSignal<Option<ProjectState>>) -> impl IntoView {
+    let open = RwSignal::new(false);
+    let item_class = |active: bool| {
+        let base = "w-full text-left px-3 py-2 text-xs flex items-center gap-2 transition-colors";
+        if active {
+            format!(
+                "{base} bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 font-medium"
+            )
+        } else {
+            format!(
+                "{base} text-stone-700 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-800"
+            )
+        }
+    };
+    view! {
+        <div class="relative ml-2" data-testid="project-state-filter">
+            <button
+                type="button"
+                class=move || {
+                    let base = "flex items-center gap-1 px-2.5 py-0.5 text-xs rounded-full font-medium transition-colors";
+                    if selected.get().is_some() {
+                        format!("{base} bg-ember text-white")
+                    } else {
+                        format!("{base} bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-200 dark:hover:bg-stone-700")
+                    }
+                }
+                aria-haspopup="menu"
+                aria-expanded=move || if open.get() { "true" } else { "false" }
+                on:click=move |_| open.update(|v| *v = !*v)
+            >
+                {move || format!("State: {}", selected.get().map_or("Any", |s| s.label()))}
+                <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"expand_more"</span>
+            </button>
+            {move || open.get().then(|| view! {
+                <div class="fixed inset-0 z-10" on:click=move |_| open.set(false) />
+                <div
+                    class="absolute left-0 top-full mt-1 z-20 w-44
+                        bg-white dark:bg-stone-900 rounded-xl shadow-xl
+                        border border-stone-200 dark:border-stone-700 overflow-hidden"
+                    role="menu"
+                    aria-label="Project state"
+                >
+                    <button
+                        type="button"
+                        role="menuitem"
+                        class=move || item_class(selected.get().is_none())
+                        on:click=move |_| { selected.set(None); open.set(false); }
+                    >
+                        "Any"
+                    </button>
+                    {ProjectState::ALL.iter().copied().map(|state| view! {
+                        <button
+                            type="button"
+                            role="menuitem"
+                            class=move || item_class(selected.get() == Some(state))
+                            on:click=move |_| { selected.set(Some(state)); open.set(false); }
+                        >
+                            <span class="material-symbols-outlined text-stone-400" style="font-size: 14px;" aria-hidden="true">
+                                {crate::components::project_state::project_state_icon(state)}
+                            </span>
+                            {state.label()}
+                        </button>
+                    }).collect_view()}
+                </div>
+            })}
+        </div>
     }
 }
 

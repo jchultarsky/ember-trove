@@ -59,6 +59,18 @@ for f in glob.glob('ui/src/**/*.rs', recursive=True):
 # The scan over-collects (any lowercase literal in an arm can slip in).
 # Unknown names are rejected by the fonts API with HTTP 400, which fails
 # this script loudly — prune the offender below if that happens.
+# Icon names can also come from `common` (`ActivityAction::icon`): the UI
+# prints what that returns into a material-symbols span. Only the helper
+# scan runs there; the other patterns would collect ordinary strings.
+# "flag" was missed this way, and a status change's icon rendered as the
+# word FLAG (found 2026-11-13).
+for f in glob.glob('common/src/**/*.rs', recursive=True):
+    t = open(f).read()
+    for m in re.finditer(r"fn \w*icon\w*\([^)]*\)\s*->\s*&'static str\s*\{", t):
+        end = t.find('\n    }', m.end())
+        for lit in re.findall(r'=>\s*"([a-z][a-z0-9_]{2,40})"', t[m.end():end]):
+            names.add(lit)
+
 print(','.join(sorted(names)))
 EOF
 )

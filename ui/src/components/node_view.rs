@@ -208,17 +208,42 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // viewer's own Focus. It is private to them and
                             // not part of the node, so it loads apart; the
                             // control shows once the answer is known. An
-                            // archived project never shows in Focus, so it
+                            // archived project never shows in Focus, nor
+                            // one that is parked or closed (S6a), so it
                             // has no control.
-                            let focusable = holds_focus(&n.node_type, &n.status);
+                            //
+                            // The declared state (S6a) belongs to the page:
+                            // the state chip writes it, and the Focus
+                            // control and the task list follow it at once.
+                            let project_state = RwSignal::new(n.project_state);
+                            let project_state_at = RwSignal::new(n.project_state_at);
+                            let (kind, lifecycle) = (n.node_type.clone(), n.status.clone());
+                            // Memos: the chip sets the state when it is chosen
+                            // and again when the save answers, usually to the
+                            // same value. Only a real change may reload Focus
+                            // or rebuild the task rows.
+                            let state_now = Memo::new(move |_| project_state.get());
+                            let focusable = Memo::new(move |_| {
+                                holds_focus(&kind, &lifecycle, state_now.get())
+                            });
                             let focus_state = RwSignal::new(None::<bool>);
                             // A failed read is said: the control offers to
                             // load again. It used to leave no control.
                             let focus_failed = RwSignal::new(false);
+                            // Each read is numbered and only the latest
+                            // answer is kept: one sent before a change of
+                            // state must not land over the one sent after.
+                            let focus_read = StoredValue::new(0u32);
                             let load_focus = Callback::new(move |()| {
                                 focus_failed.set(false);
+                                focus_read.update_value(|n| *n += 1);
+                                let this = focus_read.get_value();
                                 wasm_bindgen_futures::spawn_local(async move {
-                                    match crate::api::fetch_focus_item(edit_id).await {
+                                    let result = crate::api::fetch_focus_item(edit_id).await;
+                                    if focus_read.try_get_value() != Some(this) {
+                                        return;
+                                    }
+                                    match result {
                                         Ok(item) => {
                                             let _ = focus_state.try_set(Some(item.is_some()));
                                         }
@@ -232,9 +257,28 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                 failed: focus_failed,
                                 run: load_focus,
                             };
-                            if focusable {
+                            if focusable.get_untracked() {
                                 load_focus.run(());
                             }
+                            // A change of state makes what was known about
+                            // Focus stale (closing removed the entry on the
+                            // server), so the control shows nothing until
+                            // it is read again. Not here, though: the chip
+                            // changes the state when it is chosen, before
+                            // the server has it, and a read sent now would
+                            // answer for the old state. The chip says when
+                            // the choice has settled.
+                            Effect::new(move |seen: Option<()>| {
+                                focusable.track();
+                                if seen.is_some() {
+                                    focus_state.set(None);
+                                }
+                            });
+                            let reload_focus = Callback::new(move |()| {
+                                if focusable.get_untracked() {
+                                    load_focus.run(());
+                                }
+                            });
 
                             view! {
                                 <div class="flex flex-col h-full">
@@ -278,6 +322,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                     node_id=id
                                                     initial=n.project_status.clone()
                                                     editable=is_owner
+                                                />
+                                            })}
+                                            // The declared state (S6a), beside the label.
+                                            {allows(&n.node_type, Capability::ProjectStatus).then(|| view! {
+                                                <crate::components::project_state::ProjectStateChip
+                                                    node_id=id
+                                                    state=project_state
+                                                    at=project_state_at
+                                                    editable=is_owner
+                                                    on_settled=reload_focus
                                                 />
                                             })}
                                             // The home (owner request, 2026-11-12): the
@@ -325,7 +379,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                         >
                                                             <span aria-hidden="true" class="material-symbols-outlined">"edit"</span>
                                                         </button>
-                                                        {focusable.then(|| view! {
+                                                        {move || focusable.get().then(|| view! {
                                                             <FocusToggle node_id=edit_id state=focus_state retry=focus_retry />
                                                         })}
                                                         <button
@@ -415,7 +469,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                                     <span class="material-symbols-outlined" style="font-size:18px;">"edit"</span>
                                                                     "Edit"
                                                                 </button>
-                                                                {focusable.then(|| view! {
+                                                                {move || focusable.get().then(|| view! {
                                                                     <FocusMenuItem
                                                                         node_id=edit_id
                                                                         state=focus_state
@@ -495,7 +549,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         // One editor-prefs fetch per node for both panels (P1 #2).
                                         <crate::components::task_row::EditorPrefsScope>
                                         <TaskPanel node_id=id allowed=tasks_allowed
-                                            can_fix=is_canonical_owner />
+                                            can_fix=is_canonical_owner
+                                            project_state=state_now />
                                         // Note panel — append-only; owner can add, everyone can read
                                         <NotePanel node_id=id is_owner=is_owner />
                                         </crate::components::task_row::EditorPrefsScope>

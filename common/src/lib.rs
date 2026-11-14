@@ -59,6 +59,7 @@ pub mod permission;
 pub mod person;
 pub mod picker;
 pub mod project_focus;
+pub mod project_state;
 pub mod project_status;
 pub mod save_watch;
 pub mod search;
@@ -97,6 +98,7 @@ mod wire_tests {
     fn every_wire_enum_matches_serde() {
         assert_wire!(crate::node::NodeType);
         assert_wire!(crate::node::NodeStatus);
+        assert_wire!(crate::project_state::ProjectState);
         assert_wire!(crate::edge::EdgeType);
         assert_wire!(crate::task::TaskStatus);
         assert_wire!(crate::task::TaskPriority);

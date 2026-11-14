@@ -1,5 +1,7 @@
 //! Activity / audit-log panel — shows who did what on a node.
-use common::activity::{ActivityAction, ActivityEntry, status_change_summary};
+use common::activity::{
+    ActivityAction, ActivityEntry, project_state_change_summary, status_change_summary,
+};
 use common::id::NodeId;
 use leptos::prelude::*;
 
@@ -70,6 +72,11 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
             let label = |k: &str| entry.metadata.get(k).and_then(|v| v.as_str());
             Some(status_change_summary(label("from"), label("to")))
         }
+        // A change of the declared state (S6a), in the states' own words.
+        ActivityAction::ProjectStateChanged => {
+            let state = |k: &str| entry.metadata.get(k).and_then(|v| v.as_str());
+            Some(project_state_change_summary(state("from"), state("to")))
+        }
         // The replaced Brief's headline, else the start of its pitch (#282).
         // Shown as plain text: Leptos escapes it, no markdown is rendered.
         ActivityAction::BriefSuperseded => common::brief::superseded_summary(&entry.metadata),
@@ -102,7 +109,9 @@ fn action_colour(action: &ActivityAction) -> &'static str {
         ActivityAction::CreatedFromTemplate => {
             "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
         }
-        ActivityAction::StatusChanged | ActivityAction::BriefSuperseded => {
+        ActivityAction::StatusChanged
+        | ActivityAction::BriefSuperseded
+        | ActivityAction::ProjectStateChanged => {
             "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300"
         }
     }
@@ -207,6 +216,29 @@ mod tests {
             serde_json::json!({ "from": "Done", "to": null }),
         );
         assert_eq!(action_detail(&cleared).as_deref(), Some("Done cleared"));
+    }
+
+    #[test]
+    fn every_action_has_a_glyph_in_the_font() {
+        // The names come from `common`, which the font script used to
+        // skip: "flag" rendered as the word FLAG (2026-11-13).
+        let names = include_str!("../../icon-names.txt");
+        for action in &ActivityAction::ALL {
+            let icon = action.icon();
+            assert!(
+                names.lines().any(|n| n == icon),
+                "{icon} is not in ui/icon-names.txt: run scripts/refresh-icon-font.sh"
+            );
+        }
+    }
+
+    #[test]
+    fn a_state_change_shows_from_and_to_in_words() {
+        let e = entry(
+            ActivityAction::ProjectStateChanged,
+            serde_json::json!({ "from": "active", "to": "parked" }),
+        );
+        assert_eq!(action_detail(&e).as_deref(), Some("Active \u{2192} Parked"));
     }
 
     /// #239: what stays on others' nodes after an account is deleted reads

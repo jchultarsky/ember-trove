@@ -5,6 +5,38 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-13)
 
+- **v3.21.0 shipped: S6a, project states** (#320, PRs #321 and #322;
+  ONTOLOGY §4, §4.1). PR 1
+  (data and API): migration 051 (`nodes.project_state`,
+  `project_state_at`; each label read once, no label parks),
+  `common::project_state`, `PUT /nodes/{id}/project-state`
+  (`NodeRepo::set_project_state`: the stamp, the History entry and, on a
+  terminal state, the caller's own Focus entry, in one transaction),
+  Focus and the dashboard on active projects, the Data health rule
+  `label_reads_as_another_state`, backup format 10 (PR #321, merged).
+  PR 2 (UI): the state chip on the Project page (`ProjectStateChip`; the
+  page owns the state), the dashboard's Parked group and Park / Make
+  active buttons, the Projects list's State filter, Data health's fix
+  buttons, and My Day's rule (`Task::asks_for_attention`: a task of a
+  project that is not active is out of Today and Overdue, and stays in
+  the Backlog, marked).
+  One release for both, after a Lightsail snapshot. Rules:
+  "Project states" in `.claude/rules/api.md`. Owner decisions,
+  2026-11-13: parked tasks leave Today and Overdue; a collapsed Parked
+  group; un-parking returns a project to Focus; parking a master parks
+  only the master.
+  **For S6b (the cascade):** S6a lets a project be complete or cancelled
+  with open tasks and active sub-projects under it, and migration 051
+  closes the projects whose label says so (on production, as counted on
+  2026-11-13: 32, none with an open task). S6b
+  needs a catch-up: offer the cascade for a project closed before it
+  existed. Also open there: "no active child under a closed master"
+  (S6c), and whether parking should ever reach sub-projects (owner said
+  no for now; production has none).
+  Follow-up noted, not done: the dashboard asks the node list for 500
+  rows and the list caps at 200 (`repo::node::list`); fine at 64
+  projects, wrong past 200.
+
 - **v3.20.0 shipped: S5a, task states** (#314, PRs #316 and #319;
   ONTOLOGY §9.3). PR 1 (data and API): migrations 049 (`waiting`) and 050 (`in_progress` → open,
   `completed_at`), `TaskStatus` Open / Waiting / Done / Cancelled, backup
