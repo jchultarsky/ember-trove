@@ -4,6 +4,7 @@ use common::{
         CreateNodeRequest, Node, NodeDeletionPreview, NodeListResponse, NodeSort, NodeTitleEntry,
         ProjectStatusCount, UpdateNodeRequest,
     },
+    project_state::{DeclareProjectState, ProjectState},
 };
 use gloo_net::http::Request;
 
@@ -23,6 +24,8 @@ pub struct NodeListQuery {
     pub status: Option<String>,
     /// A project status (#143), matched case-insensitively.
     pub project_status: Option<String>,
+    /// Only Projects in this declared state (S6a).
+    pub project_state: Option<ProjectState>,
     pub tag_id: Option<uuid::Uuid>,
     /// Archived nodes too (they are left out by default).
     pub include_archived: bool,
@@ -46,6 +49,9 @@ pub async fn fetch_node_list(
             "project_status={}",
             js_sys::encode_uri_component(ps)
         ));
+    }
+    if let Some(state) = query.project_state {
+        filters.push(format!("project_state={}", state.as_str()));
     }
     if let Some(tid) = query.tag_id {
         filters.push(format!("tag_id={tid}"));
@@ -94,6 +100,16 @@ pub async fn create_node(req: &CreateNodeRequest) -> Result<Node, UiError> {
 
 pub async fn update_node(id: NodeId, req: &UpdateNodeRequest) -> Result<Node, UiError> {
     put_json(&format!("/nodes/{id}"), req).await
+}
+
+/// `PUT /api/nodes/:id/project-state`: declare a Project's state (S6a).
+/// The request names the state, so sending it twice says the same thing.
+pub async fn declare_project_state(id: NodeId, state: ProjectState) -> Result<Node, UiError> {
+    put_json(
+        &format!("/nodes/{id}/project-state"),
+        &DeclareProjectState { state },
+    )
+    .await
 }
 
 /// [`update_node`] that the caller can cancel: the node editor aborts a

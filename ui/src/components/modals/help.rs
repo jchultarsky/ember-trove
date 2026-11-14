@@ -174,6 +174,20 @@ const CONCEPTS: &[Concept] = &[
                backlog and on its Project.",
     },
     Concept {
+        title: "Project states",
+        body: "A Project is active, parked, complete or cancelled. You declare \
+               the state on the Project's page (the icon beside its status \
+               label); it is never worked out from the tasks or read from the \
+               label. Park a project to set it aside on purpose: it leaves \
+               Focus and moves to the Dashboard's Parked group (the pause \
+               button on its card does the same), and its tasks are not carried \
+               into Today or listed as overdue. They stay in the Backlog, \
+               marked. Make it active and it is back where it was. Complete \
+               and cancelled close a project: it leaves the Dashboard and \
+               Focus, and the Projects list finds it by State. For now closing \
+               changes the project alone; its tasks stay as they are.",
+    },
+    Concept {
         title: "Notes",
         body: "Short comments on a Node. A note always belongs to one. Use them \
                for journal-style annotations (\"checked in with the team today\", \

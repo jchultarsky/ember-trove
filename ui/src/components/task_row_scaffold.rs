@@ -375,6 +375,24 @@ pub fn state_badge_view(status: &TaskStatus) -> Option<AnyView> {
     )
 }
 
+/// "Project parked" on a My Day row whose project is parked or closed
+/// (S6a): why an open task is in the Backlog and not carried into Today
+/// or listed as overdue. It shows in Today as well, on a task its person
+/// chose for today, so the wording says what the state does and not where
+/// the row is. Muted like Cancelled: it is information, not urgency.
+pub fn quiet_project_badge_view(state: common::project_state::ProjectState) -> AnyView {
+    let text = format!("Project {}", state.label().to_lowercase());
+    view! {
+        <span class="flex-shrink-0 px-1.5 rounded bg-stone-100 dark:bg-stone-800 \
+                     text-stone-500 dark:text-stone-400"
+            title="Its project is not active: its tasks are not carried over into Today or listed as overdue"
+            data-testid="task-project-state">
+            {text}
+        </span>
+    }
+    .into_any()
+}
+
 /// "Done Nov 12" for the meta line of a done task: the day it was
 /// completed, on the reader's own calendar. A task completed before S5a has
 /// no date, and shows nothing.

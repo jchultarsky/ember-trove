@@ -97,28 +97,32 @@ pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
 /// Returns `true` when the task is currently visible in today's My Day list.
 ///
 /// Mirrors the server's carry-forward rule in `list_my_day`: a task shows up
-/// in My Day when its `focus_date` is on or before `today`, and is either
-/// focused on `today` exactly or still in a non-terminal state. This keeps
+/// in My Day when it is focused on `today` exactly, or on an earlier day
+/// while it still asks for attention (open, and its project not parked or
+/// closed; S6a). `project` is the state of the task's Project. This keeps
 /// the node-detail lightbulb in sync with what actually appears in My Day.
-pub fn is_in_my_day(task: &Task, today: chrono::NaiveDate) -> bool {
+pub fn is_in_my_day(
+    task: &Task,
+    today: chrono::NaiveDate,
+    project: Option<common::project_state::ProjectState>,
+) -> bool {
     // The rule lives in `common` (#281, 3.5).
-    task.in_my_day(today)
+    task.in_my_day(today, project)
 }
 
 // ── Backlog partitioning ────────────────────────────────────────────────────
 
 /// Split backlog tasks into `(overdue, upcoming)`. Overdue = an open task
-/// whose `due_date` is strictly before `today` (`Task::in_overdue_zone`);
-/// everything else (no due date, due today, due later, already done, or
-/// waiting on someone else) stays in the main backlog. Relative order is
-/// preserved within each group.
+/// whose `due_date` is strictly before `today` and whose project is not
+/// parked or closed (`Task::in_overdue_zone`); everything else (no due
+/// date, due today, due later, already done, waiting on someone else, or
+/// on a project that is set aside) stays in the main backlog. Relative
+/// order is preserved within each group.
 pub fn partition_overdue(
     tasks: Vec<MyDayTask>,
     today: chrono::NaiveDate,
 ) -> (Vec<MyDayTask>, Vec<MyDayTask>) {
-    tasks
-        .into_iter()
-        .partition(|t| t.task.in_overdue_zone(today))
+    tasks.into_iter().partition(|t| t.in_overdue_zone(today))
 }
 
 // ── Sorting ─────────────────────────────────────────────────────────────────
@@ -158,7 +162,38 @@ mod tests {
                 completed_at: None,
             },
             node_title: None,
+            project_state: None,
         }
+    }
+
+    #[test]
+    fn a_late_task_of_a_parked_or_closed_project_stays_in_the_backlog() {
+        use common::project_state::ProjectState;
+        let today = NaiveDate::from_ymd_opt(2026, 6, 10).expect("date");
+        let yesterday = NaiveDate::from_ymd_opt(2026, 6, 9);
+        let on = |state: Option<ProjectState>| MyDayTask {
+            project_state: state,
+            ..mk(yesterday, TaskStatus::Open)
+        };
+        let tasks = vec![
+            on(None),
+            on(Some(ProjectState::Active)),
+            on(Some(ProjectState::Parked)),
+            on(Some(ProjectState::Complete)),
+            on(Some(ProjectState::Cancelled)),
+        ];
+        let (overdue, upcoming) = partition_overdue(tasks, today);
+        let states = |rows: &[MyDayTask]| rows.iter().map(|t| t.project_state).collect::<Vec<_>>();
+        assert_eq!(states(&overdue), [None, Some(ProjectState::Active)]);
+        assert_eq!(
+            states(&upcoming),
+            [
+                Some(ProjectState::Parked),
+                Some(ProjectState::Complete),
+                Some(ProjectState::Cancelled)
+            ],
+            "not lost: in the backlog, in their order"
+        );
     }
 
     #[test]

@@ -31,8 +31,22 @@ pub fn TaskPanel(
     /// The reader owns the node, so its older tasks are on their Data
     /// health page to fix.
     can_fix: bool,
+    /// The declared state of this node when it is a Project (S6a), from the
+    /// page: a parked or closed project keeps its tasks out of My Day's
+    /// carry-over, and each row's "in My Day" mark must say the same.
+    #[prop(into)]
+    project_state: Signal<Option<common::project_state::ProjectState>>,
 ) -> impl IntoView {
     let task_refresh = expect_context::<TaskRefresh>().0;
+    // The rows read the state when they are built. A change on the page
+    // (the state chip) builds them again from fresh tasks; the open
+    // editor's draft lives above the rows and survives it (#250).
+    Effect::new(move |seen: Option<()>| {
+        project_state.track();
+        if seen.is_some() {
+            task_refresh.update(|n| *n += 1);
+        }
+    });
     // Captured at setup for the undo closures, which outlive the deleted rows.
     let toast_state = use_context::<ToastState>();
 
@@ -191,7 +205,8 @@ pub fn TaskPanel(
                         drag_over.set(None);
                     }
                 >
-                    <TaskRow task=task task_refresh=task_refresh />
+                    <TaskRow task=task task_refresh=task_refresh
+                            project_state=project_state.get_untracked() />
                 </div>
             }).collect_view()}
 
@@ -214,7 +229,8 @@ pub fn TaskPanel(
                 view! {
                     // Completed rows
                     {showing.then(|| done.into_iter().map(|task| view! {
-                        <TaskRow task=task task_refresh=task_refresh />
+                        <TaskRow task=task task_refresh=task_refresh
+                            project_state=project_state.get_untracked() />
                     }).collect_view())}
 
                     // Disclosure + clear-all bar
@@ -258,7 +274,12 @@ pub fn TaskPanel(
 // ── TaskRow ───────────────────────────────────────────────────────────────────
 
 #[component]
-fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
+fn TaskRow(
+    task: Task,
+    task_refresh: RwSignal<u32>,
+    /// The project's declared state as it was when the row was built.
+    project_state: Option<common::project_state::ProjectState>,
+) -> impl IntoView {
     let task_id = task.id;
     // Captured at setup for the undo closure, which outlives this row.
     let toast_state = use_context::<ToastState>();
@@ -266,7 +287,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
     let due = task.due_date;
 
     let today = crate::components::format_helpers::local_today();
-    let in_my_day = RwSignal::new(is_in_my_day(&task, today));
+    let in_my_day = RwSignal::new(is_in_my_day(&task, today, project_state));
 
     let status_sig = RwSignal::new(task.status.clone());
     let busy = RwSignal::new(false);
@@ -306,6 +327,7 @@ fn TaskRow(task: Task, task_refresh: RwSignal<u32>) -> impl IntoView {
             task_id,
             status_sig.get_untracked(),
             focus_date,
+            project_state,
             Some(RowSignals {
                 status: status_sig,
                 busy,

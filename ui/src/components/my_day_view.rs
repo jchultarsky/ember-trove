@@ -102,16 +102,19 @@ pub fn MyDayView() -> impl IntoView {
     Effect::new(move |_| {
         let today_raw = today_tasks.get().and_then(|r| r.ok()).unwrap_or_default();
         let all_raw = all_open.get().and_then(|r| r.ok()).unwrap_or_default();
+        // One rule decides both zones (`MyDayTask::in_my_day`): the two
+        // feeds are fetched apart, and a zone that trusted its own feed
+        // could show a task the other zone shows too, or neither does.
         let today_zone: Vec<MyDayTask> = today_raw
             .into_iter()
-            .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
+            .filter(|t| t.in_my_day(today))
             .collect();
         let backlog_zone: Vec<MyDayTask> = all_raw
             .into_iter()
             // Everything still to do that isn't in today's zone. Not "no
             // focus date": a waiting task focused on an earlier day is
             // here, not carried over and not lost (S5a).
-            .filter(|t| !t.task.in_my_day(today))
+            .filter(|t| !t.in_my_day(today))
             .collect();
         // Mirror the display order: today → overdue (only while the section
         // is expanded — j/k must not focus hidden rows) → upcoming.
@@ -201,6 +204,7 @@ pub fn MyDayView() -> impl IntoView {
                     mdt.task.id,
                     mdt.task.status.clone(),
                     mdt.task.focus_date,
+                    mdt.project_state,
                     None,
                     TaskCtx {
                         today,
@@ -219,7 +223,7 @@ pub fn MyDayView() -> impl IntoView {
                 // Same rule as the Today zone (focus_date on or before today):
                 // `t` on a carried-over row used to re-stamp it instead of
                 // removing it, contradicting the row's × button.
-                let in_today = mdt.task.in_my_day(today);
+                let in_today = mdt.in_my_day(today);
                 let new_focus = if in_today { None } else { Some(today) };
                 let msg = if in_today {
                     "Removed from today"
@@ -361,7 +365,7 @@ pub fn MyDayView() -> impl IntoView {
                             other => other.and_then(Result::ok).unwrap_or_default(),
                         };
                         let scoped: Vec<MyDayTask> = raw.into_iter()
-                            .filter(|t| t.task.focus_date.is_some_and(|d| d <= today))
+                            .filter(|t| t.in_my_day(today))
                             .collect();
                         view! {
                             <KanbanZoneRow
@@ -395,7 +399,7 @@ pub fn MyDayView() -> impl IntoView {
                             other => other.and_then(Result::ok).unwrap_or_default(),
                         };
                         let scoped: Vec<MyDayTask> = raw.into_iter()
-                            .filter(|t| !t.task.in_my_day(today))
+                            .filter(|t| !t.in_my_day(today))
                             .collect();
                         // Overdue tasks get their own foldable section instead
                         // of mixing into (and topping) the backlog — visible by
@@ -548,11 +552,12 @@ fn KanbanZoneRow(
             } else {
                 view! {
                     <div class="divide-y divide-stone-100 dark:divide-stone-800">
-                        {tasks.into_iter().map(|MyDayTask { task, node_title }| {
+                        {tasks.into_iter().map(|MyDayTask { task, node_title, project_state }| {
                             view! {
                                 <KanbanTaskRow
                                     task=task
                                     node_title=node_title
+                                    project_state=project_state
                                     today=today
                                     zone=zone
                                     refresh=refresh

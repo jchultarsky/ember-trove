@@ -219,6 +219,20 @@ mod tests {
     }
 
     #[test]
+    fn every_action_has_a_glyph_in_the_font() {
+        // The names come from `common`, which the font script used to
+        // skip: "flag" rendered as the word FLAG (2026-11-13).
+        let names = include_str!("../../icon-names.txt");
+        for action in &ActivityAction::ALL {
+            let icon = action.icon();
+            assert!(
+                names.lines().any(|n| n == icon),
+                "{icon} is not in ui/icon-names.txt: run scripts/refresh-icon-font.sh"
+            );
+        }
+    }
+
+    #[test]
     fn a_state_change_shows_from_and_to_in_words() {
         let e = entry(
             ActivityAction::ProjectStateChanged,
