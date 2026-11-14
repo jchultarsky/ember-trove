@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
     activity::ActivityAction,
+    cascade::CascadePlan,
     id::{NodeId, TagId},
     node::{
         CreateNodeRequest, Node, NodeDeletionPreview, NodeListParams, NodeSort, NodeStatus,
@@ -14,7 +15,7 @@ use common::{
     tag::Tag,
 };
 use sqlx::PgPool;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::activity::{ActivityActor, record_in};
 use uuid::Uuid;
@@ -132,7 +133,8 @@ pub trait NodeRepo: Send + Sync {
     /// dashboard pin/unpin button (v2.9.0).
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError>;
 
-    /// Declare a Project's state (S6a; ONTOLOGY §4.1). One transaction:
+    /// Declare a Project's state (S6a, S6b; ONTOLOGY §4.1). One
+    /// transaction, holding the `contains` lock so the tree holds still:
     /// - the state is set, and `project_state_at` stamped when the state
     ///   changes or nobody had declared it yet (so declaring the state a
     ///   project already has records that it was looked at, once, and a
@@ -143,20 +145,68 @@ pub trait NodeRepo: Send + Sync {
     ///   re-opening doesn't put the project back there (§10). Nobody
     ///   else's entry is touched, and nothing records the removal.
     ///
+    /// **The cascade** (S6b). A terminal state closes what is under the
+    /// project: `common::cascade::plan`, recomputed here under the locks.
+    /// - A *change* to a terminal state whose plan closes something needs
+    ///   `confirm`, the token of the plan its sender was shown
+    ///   ([`NodeRepo::cascade_preview`]). Without it, or with the token
+    ///   of a plan that no longer holds, nothing is written and the
+    ///   answer is `PreconditionFailed` (412).
+    /// - The state the project already has, with `confirm`, closes what
+    ///   is still open under it (the catch-up). Without `confirm` a
+    ///   repeat stays the no-op it was: a stale tab or "Keep complete"
+    ///   must not be forced into a cascade.
+    /// - Applied: the plan's sub-Projects take the state, its tasks are
+    ///   cancelled, each project where something closed gets a
+    ///   `cascade_closed` entry, and the actor's own Focus entries on
+    ///   what closed are removed. Only where `actor` holds a grant of
+    ///   their own (`repo::editable_by`): no admin reach.
+    ///
+    /// **Re-opening** (S6c). A change to active, or out of a closed
+    /// state, is refused (`Validation`, naming no node) while the
+    /// project's home is a closed Project its actor can view
+    /// (`common::cascade::reopen_refused`). `sees_all` says the actor
+    /// reads every node (the admin role), and is used for this refusal
+    /// only: it never widens what the cascade closes.
+    ///
     /// A node that is not a Project is refused with the §3.2 reason: the
     /// route gates first, and this keeps a stray call from reaching the
     /// database's CHECK as a 500.
     ///
-    /// Returns the node and whether the node was written. A repeat of a
-    /// state already declared writes nothing (not even when it removes a
-    /// Focus entry, which is not the node's), and the route then tells no
-    /// webhook.
+    /// The outcome says whether the node itself was written (a repeat of
+    /// a declared state writes nothing, and the route then tells no
+    /// webhook) and which other projects the cascade changed.
     async fn set_project_state(
         &self,
         id: NodeId,
         state: ProjectState,
+        confirm: Option<&str>,
         actor: &ActivityActor,
-    ) -> Result<(Node, bool), EmberTroveError>;
+        sees_all: bool,
+    ) -> Result<StateOutcome, EmberTroveError>;
+
+    /// What declaring `state` (a terminal one) on Project `id` would close
+    /// for `actor`: the confirmation's content, with its token. Read on
+    /// one snapshot; nothing is locked or written. `actor` is always the
+    /// person's own subject, never the admin scope: the plan names only
+    /// what that account can view and closes only what it holds a grant
+    /// on.
+    async fn cascade_preview(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        actor: &str,
+    ) -> Result<CascadePlan, EmberTroveError>;
+
+    /// The titles of `ids` that `subject` may view (`None`: an admin,
+    /// every node). For showing a History entry that refers to other
+    /// nodes by id (`common::cascade::presented`): a node the reader
+    /// can't view is simply not in the answer.
+    async fn visible_titles(
+        &self,
+        ids: &[Uuid],
+        subject: Option<&str>,
+    ) -> Result<BTreeMap<Uuid, String>, EmberTroveError>;
 
     /// The project statuses `owner_id` uses on their own project nodes, for
     /// the status picker's suggestions (#143). Case variants are one entry,
@@ -278,6 +328,554 @@ fn not_closed(alias: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" AND ")
+}
+
+// ── Declaring a state, and the cascade (S6a, S6b) ───────────────────────────
+
+/// A project the cascade changed, and whose hooks hear of it: the
+/// project's owner for a state change, the owner of the cancelled tasks
+/// for a task change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Touched {
+    pub id: NodeId,
+    pub owner_id: String,
+}
+
+/// What [`NodeRepo::set_project_state`] did.
+#[derive(Debug, Clone)]
+pub struct StateOutcome {
+    pub node: Node,
+    /// The node itself was written (its state or the date it was declared).
+    pub wrote: bool,
+    /// The sub-Projects the cascade closed.
+    pub closed: Vec<Touched>,
+    /// The projects on which the cascade cancelled tasks, once per owner
+    /// of those tasks.
+    pub cancelled_on: Vec<Touched>,
+}
+
+/// Postgres' SQLSTATEs for "one of two transactions waiting on each other
+/// was ended" and "a lock was not granted within `lock_timeout`".
+const DEADLOCK: &str = "40P01";
+const LOCK_NOT_AVAILABLE: &str = "55P03";
+
+/// How long a state write waits for a row another transaction holds. It
+/// holds the `contains` lock while it waits, and every other state write
+/// and every home write queues behind that: one stuck transaction must
+/// not stop them all for long.
+const LOCK_TIMEOUT: &str = "SET LOCAL lock_timeout = '5s'";
+
+fn sqlstate(e: &sqlx::Error) -> Option<&str> {
+    match e {
+        sqlx::Error::Database(db) => db.code().map(|c| match c {
+            std::borrow::Cow::Borrowed(s) => s,
+            // Compared against constants only; an owned code can't be
+            // returned by reference, and none of ours is one.
+            std::borrow::Cow::Owned(_) => "",
+        }),
+        _ => None,
+    }
+}
+
+/// A failure inside the state transaction: a database error, kept whole so
+/// a deadlock can be told from the rest, or an answer for the caller.
+enum StateError {
+    Db(sqlx::Error),
+    Public(EmberTroveError),
+}
+
+impl From<sqlx::Error> for StateError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl From<EmberTroveError> for StateError {
+    fn from(e: EmberTroveError) -> Self {
+        Self::Public(e)
+    }
+}
+
+impl StateError {
+    fn into_public(self) -> EmberTroveError {
+        match self {
+            Self::Public(e) => e,
+            // Rows held by something slow (or twice in a row by a
+            // deadlock): nothing was written. 409, "try again".
+            Self::Db(e) if matches!(sqlstate(&e), Some(LOCK_NOT_AVAILABLE | DEADLOCK)) => {
+                EmberTroveError::AlreadyExists(
+                    "another change to these projects is in progress: try again".to_string(),
+                )
+            }
+            Self::Db(e) => EmberTroveError::Internal(format!("set project state failed: {e}")),
+        }
+    }
+}
+
+/// The master and the Projects under it, as one actor may act on them.
+struct Subtree {
+    master: common::cascade::NodeIn,
+    /// The master's kind: a state is a Project's.
+    master_kind: NodeType,
+    master_declared_at: Option<DateTime<Utc>>,
+    nodes: Vec<common::cascade::NodeIn>,
+    edges: Vec<(NodeId, NodeId)>,
+    tasks: Vec<common::cascade::TaskIn>,
+    owners: BTreeMap<NodeId, String>,
+    /// Whose each task still to do is: a task's webhook goes to its own
+    /// owner's hooks.
+    task_owners: BTreeMap<common::id::TaskId, String>,
+}
+
+impl Subtree {
+    /// The cascade's plan for declaring `target`, with its token.
+    fn plan(&self, target: ProjectState) -> CascadePlan {
+        let mut plan =
+            common::cascade::plan(&self.master, target, &self.nodes, &self.edges, &self.tasks);
+        plan.token = token_of(&plan, self.master.id);
+        plan
+    }
+
+    fn touched(&self, id: NodeId) -> Touched {
+        Touched {
+            id,
+            owner_id: self.owners.get(&id).cloned().unwrap_or_default(),
+        }
+    }
+}
+
+/// The token that stands for a plan: a hash of its canonical text
+/// (`CascadePlan::fingerprint`). Not a secret: it is made only from what
+/// the plan shows its reader, and the write decides what to close from
+/// the rows under its own locks, never from the token. It can only say
+/// "this is the plan I was shown".
+fn token_of(plan: &CascadePlan, master: NodeId) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(plan.fingerprint(master).as_bytes()))
+}
+
+#[derive(sqlx::FromRow)]
+struct SubtreeRow {
+    id: Uuid,
+    owner_id: String,
+    node_type: String,
+    title: String,
+    project_state: Option<String>,
+    project_state_at: Option<DateTime<Utc>>,
+    editable: bool,
+    viewable: bool,
+}
+
+/// Read `master` and every Project reachable from it down `contains`
+/// edges, their edges, and the tasks still to do on them, as `actor` may
+/// act on them. With `lock`, the node rows and the task rows are locked,
+/// each in id order (the caller's transaction holds the `contains` lock
+/// already, so the edges can't change).
+///
+/// `actor` is a person's own subject, always: `editable` is
+/// `repo::editable_by` (no admin branch), and `viewable` binds it to
+/// `visible_to`, whose "sees everything" case is a NULL that is never
+/// passed here.
+///
+/// Without `walk` only the master's own row is read (and locked): a
+/// change to active or parked reaches nothing below it.
+async fn read_subtree(
+    conn: &mut sqlx::PgConnection,
+    master: NodeId,
+    actor: &str,
+    lock: bool,
+    walk: bool,
+) -> Result<Subtree, StateError> {
+    use common::cascade::{NodeIn, TaskIn};
+    // UNION, not UNION ALL: a loop left in older data ends (as
+    // `edge::closes_loop`). The locking clause names the table; it can't
+    // name the CTE.
+    let rows: Vec<SubtreeRow> = sqlx::query_as(&format!(
+        r#"
+        WITH RECURSIVE sub(id) AS (
+            SELECT $1::uuid
+            UNION
+            SELECT e.target_id FROM edges e JOIN sub s ON e.source_id = s.id
+            WHERE e.edge_type = 'contains' AND $3
+        )
+        SELECT n.id, n.owner_id, n.node_type::text AS node_type, n.title,
+               n.project_state, n.project_state_at,
+               {editable} AS editable, {viewable} AS viewable
+        FROM nodes n JOIN sub ON sub.id = n.id
+        WHERE n.id = $1 OR n.node_type = 'project'
+        ORDER BY n.id
+        {locking}
+        "#,
+        editable = super::editable_by("n.id", 2),
+        viewable = super::visible_to("n", 2),
+        locking = if lock { "FOR NO KEY UPDATE OF n" } else { "" },
+    ))
+    .bind(master.0)
+    .bind(actor)
+    .bind(walk)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    let mut found = None;
+    let mut nodes = Vec::new();
+    let mut owners = BTreeMap::new();
+    for row in rows {
+        let id = NodeId(row.id);
+        owners.insert(id, row.owner_id);
+        let kind = parse_node_type(&row.node_type)?;
+        // A Project always has a state (migration 051's CHECK); one read
+        // without would be a node of another kind.
+        let state = row
+            .project_state
+            .as_deref()
+            .map(parse_project_state)
+            .transpose()?;
+        let node = NodeIn {
+            id,
+            title: row.title,
+            state: state.unwrap_or(ProjectState::Active),
+            editable: row.editable,
+            viewable: row.viewable,
+        };
+        if id == master {
+            found = Some((node, kind, row.project_state_at));
+        } else if state.is_some() {
+            nodes.push(node);
+        }
+    }
+    let Some((master_node, master_kind, master_declared_at)) = found else {
+        return Err(EmberTroveError::NotFound(format!("node {master} not found")).into());
+    };
+
+    let ids: Vec<Uuid> = std::iter::once(master.0)
+        .chain(nodes.iter().map(|n| n.id.0))
+        .collect();
+    let edges: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT source_id, target_id FROM edges \
+         WHERE edge_type = 'contains' AND source_id = ANY($1) AND target_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    // (id, node, title, owner): read only when the walk goes below.
+    let mut tasks: Vec<(Uuid, Uuid, String, String)> = if walk {
+        sqlx::query_as(&format!(
+            "SELECT t.id, t.node_id, t.title, t.owner_id \
+             FROM node_tasks t \
+             WHERE t.node_id = ANY($1) AND t.deleted_at IS NULL AND t.status::text = ANY($2) \
+             ORDER BY t.id {locking}",
+            locking = if lock { "FOR UPDATE OF t" } else { "" },
+        ))
+        .bind(&ids)
+        .bind(super::task::still_to_do())
+        .fetch_all(&mut *conn)
+        .await?
+    } else {
+        Vec::new()
+    };
+    // Read (and locked) in id order; shown by title.
+    tasks.sort_by_key(|task| (task.2.to_lowercase(), task.0));
+    let task_owners = tasks
+        .iter()
+        .map(|(id, _, _, owner)| (common::id::TaskId(*id), owner.clone()))
+        .collect();
+
+    Ok(Subtree {
+        master: master_node,
+        master_kind,
+        master_declared_at,
+        nodes,
+        edges: edges
+            .into_iter()
+            .map(|(home, child)| (NodeId(home), NodeId(child)))
+            .collect(),
+        tasks: tasks
+            .into_iter()
+            .map(|(id, node, title, owner)| TaskIn {
+                id: common::id::TaskId(id),
+                node: NodeId(node),
+                title,
+                others: owner != actor,
+            })
+            .collect(),
+        owners,
+        task_owners,
+    })
+}
+
+/// The 412 for a plan that is not the one its token stands for.
+fn plan_changed() -> StateError {
+    EmberTroveError::PreconditionFailed(
+        "what is under this project changed since you were shown it: \
+         look again before closing it"
+            .to_string(),
+    )
+    .into()
+}
+
+/// History records exactly what a cascade closed (§4.1), so the cascade
+/// closes exactly its plan or nothing. The rows are locked before the plan
+/// is made, so a statement that changed fewer rows than planned should not
+/// happen; if one does (a row changed in a way the locks don't cover), the
+/// transaction is dropped and the person is asked to look again, rather
+/// than a record written of something that did not happen.
+fn written_all(rows: u64, planned: usize) -> Result<(), StateError> {
+    if usize::try_from(rows).ok() == Some(planned) {
+        Ok(())
+    } else {
+        Err(plan_changed())
+    }
+}
+
+/// SQL for "`alias`'s state is terminal": `not_closed`'s opposite, from
+/// the same rule.
+pub(crate) fn is_closed(alias: &str) -> String {
+    let words = ProjectState::ALL
+        .iter()
+        .filter(|state| state.is_terminal())
+        .map(|state| format!("'{}'", state.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{alias}.project_state IN ({words})")
+}
+
+impl PgNodeRepo {
+    /// One attempt at [`NodeRepo::set_project_state`], in one transaction.
+    /// The node comes back without its tags.
+    async fn declare_once(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        confirm: Option<&str>,
+        actor: &ActivityActor,
+        sees_all: bool,
+    ) -> Result<StateOutcome, StateError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(LOCK_TIMEOUT).execute(&mut *tx).await?;
+        // The tree first, as every write that adds a `contains` edge takes
+        // it: nothing is moved under these projects while the walk below
+        // reads them, and state writes apply one after another. (An edge
+        // can still be removed; that only makes the plan smaller, and the
+        // edges are read after the rows are locked.) The error is kept as
+        // the driver's, so a timeout here is the same 409 as one on a row.
+        super::edge::lock_type_raw(&mut tx, &common::edge::EdgeType::Contains).await?;
+        // Then the rows, the master's among them: the History entry needs
+        // the old state, and two declarations sent at once apply in turn.
+        // Only a terminal state reaches below the master, so only it
+        // locks what is there.
+        let subtree =
+            read_subtree(&mut tx, id, &actor.subject_id, true, state.is_terminal()).await?;
+        if !allows(&subtree.master_kind, Capability::ProjectStatus) {
+            return Err(EmberTroveError::Validation(
+                Capability::ProjectStatus.refusal().to_string(),
+            )
+            .into());
+        }
+        let old = subtree.master.state;
+        let changed = old != state;
+
+        // S6c: no re-opening under a closed master the actor can view.
+        // "Can view" is the one place here where the admin role counts:
+        // an admin reads every node, so the refusal tells them nothing,
+        // and without it they alone could re-open under a closed master.
+        // What the cascade *closes* never looks at `sees_all`.
+        if changed && !state.is_terminal() {
+            let master_closed: bool = sqlx::query_scalar(&format!(
+                "SELECT EXISTS (SELECT 1 FROM edges e JOIN nodes p ON p.id = e.source_id \
+                 WHERE e.target_id = $1 AND e.edge_type = 'contains' \
+                   AND p.node_type = 'project' AND {closed} \
+                   AND ($3::bool OR {visible}))",
+                closed = is_closed("p"),
+                visible = super::visible_to("p", 2),
+            ))
+            .bind(id.0)
+            .bind(&actor.subject_id)
+            .bind(sees_all)
+            .fetch_one(&mut *tx)
+            .await?;
+            if common::cascade::reopen_refused(old, state, master_closed) {
+                return Err(EmberTroveError::Validation(
+                    common::cascade::MASTER_IS_CLOSED.to_string(),
+                )
+                .into());
+            }
+        }
+
+        // S6b: what this declaration closes, from the rows just locked.
+        let plan = state.is_terminal().then(|| subtree.plan(state));
+        let cascade = match (&plan, confirm) {
+            (Some(plan), Some(token)) if plan.closes_something() => {
+                if token != plan.token {
+                    return Err(plan_changed());
+                }
+                Some(plan)
+            }
+            // A change that closes something is never made unconfirmed.
+            // (A repeat of the state it has, unconfirmed, cascades
+            // nothing: it stays the no-op it was.)
+            (Some(plan), None) if changed && plan.closes_something() => {
+                return Err(EmberTroveError::PreconditionFailed(format!(
+                    "closing this project also closes {} sub-project(s) and cancels {} \
+                     task(s), which must be confirmed first (if this page offers no \
+                     confirmation, reload it)",
+                    plan.projects.len(),
+                    plan.task_count()
+                ))
+                .into());
+            }
+            // Nothing to close: a token, if one was sent (a retry after
+            // the cascade already ran), is beside the point.
+            _ => None,
+        };
+
+        let wrote = changed || subtree.master_declared_at.is_none();
+        if wrote {
+            // The state it already has, already declared, writes nothing:
+            // `updated_at` is the version an open editor saves against.
+            // `clock_timestamp()`, not `now()`: `now()` is the transaction's
+            // start, before the wait for the locks above, so of two
+            // declarations sent at once the one that landed last could
+            // carry the earlier date (the History entry's rule, #208).
+            sqlx::query(
+                "UPDATE nodes SET project_state = $2, project_state_at = clock_timestamp() \
+                 WHERE id = $1",
+            )
+            .bind(id.0)
+            .bind(state.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+        if changed {
+            let meta = actor.metadata_with(serde_json::json!({
+                "from": old.as_str(),
+                "to": state.as_str(),
+            }));
+            record_in(
+                &mut tx,
+                id,
+                &actor.subject_id,
+                ActivityAction::ProjectStateChanged,
+                meta,
+            )
+            .await?;
+        }
+        if state.is_terminal() {
+            // Whether or not the state changed: a stale tab closing a
+            // project again must still leave no entry of its person's.
+            super::project_focus::remove_on(&mut tx, &actor.subject_id, id).await?;
+        }
+
+        let (mut closed, mut cancelled_on) = (Vec::new(), Vec::new());
+        if let Some(plan) = cascade {
+            let closing: Vec<Uuid> = plan.projects.iter().map(|p| p.id.0).collect();
+            if !closing.is_empty() {
+                let done = sqlx::query(&format!(
+                    "UPDATE nodes n SET project_state = $2, project_state_at = clock_timestamp() \
+                     WHERE n.id = ANY($1) AND NOT {closed}",
+                    closed = is_closed("n"),
+                ))
+                .bind(&closing)
+                .bind(state.as_str())
+                .execute(&mut *tx)
+                .await?;
+                written_all(done.rows_affected(), closing.len())?;
+            }
+            for project in &plan.projects {
+                let meta = actor.metadata_with(serde_json::json!({
+                    "from": project.from.as_str(),
+                    "to": state.as_str(),
+                }));
+                record_in(
+                    &mut tx,
+                    project.id,
+                    &actor.subject_id,
+                    ActivityAction::ProjectStateChanged,
+                    meta,
+                )
+                .await?;
+                // The actor's own entry, as for the master. Nobody else's.
+                super::project_focus::remove_on(&mut tx, &actor.subject_id, project.id).await?;
+                closed.push(subtree.touched(project.id));
+            }
+
+            let task_ids: Vec<Uuid> = plan
+                .tasks
+                .iter()
+                .flat_map(|group| group.tasks.iter().map(|task| task.id.0))
+                .collect();
+            let cancelled = super::task::cancel_open_on(&mut tx, &task_ids).await?;
+            written_all(cancelled, task_ids.len())?;
+
+            // The record of exactly what closed (§4.1), on each project
+            // where something did: the master's lists the sub-Projects, by
+            // id; every entry lists that project's own cancelled tasks.
+            // The master's own entry exists when it has something to
+            // say: a sub-Project closed, or a task of its own cancelled.
+            let closed_ids: Vec<NodeId> = plan.projects.iter().map(|p| p.id).collect();
+            let mut recorded_on = plan.touched_nodes();
+            if !closed_ids.is_empty() {
+                recorded_on.insert(id);
+            }
+            for node in recorded_on {
+                let own_tasks = plan
+                    .tasks
+                    .iter()
+                    .find(|group| group.node_id == node)
+                    .map_or(&[][..], |group| group.tasks.as_slice());
+                let (root, subs) = if node == id {
+                    (None, closed_ids.as_slice())
+                } else {
+                    (Some(id), &[][..])
+                };
+                let meta =
+                    actor.metadata_with(common::cascade::recorded(state, root, subs, own_tasks));
+                record_in(
+                    &mut tx,
+                    node,
+                    &actor.subject_id,
+                    ActivityAction::CascadeClosed,
+                    meta,
+                )
+                .await?;
+            }
+            // One per project and task owner: a task's event goes to its
+            // own owner's hooks, as every task event does.
+            let pairs: BTreeSet<(NodeId, &str)> = plan
+                .tasks
+                .iter()
+                .flat_map(|group| {
+                    group.tasks.iter().filter_map(|task| {
+                        let owner = subtree.task_owners.get(&task.id)?;
+                        Some((group.node_id, owner.as_str()))
+                    })
+                })
+                .collect();
+            cancelled_on = pairs
+                .into_iter()
+                .map(|(id, owner)| Touched {
+                    id,
+                    owner_id: owner.to_string(),
+                })
+                .collect();
+        }
+
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
+            "SELECT {cols} FROM nodes WHERE id = $1",
+            cols = node_cols(""),
+        ))
+        .bind(id.0)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+
+        Ok(StateOutcome {
+            node: row.into_node()?,
+            wrote,
+            closed,
+            cancelled_on,
+        })
+    }
 }
 
 /// Row type for batch tag fetch — includes the owning node_id.
@@ -1058,86 +1656,66 @@ impl NodeRepo for PgNodeRepo {
         &self,
         id: NodeId,
         state: ProjectState,
+        confirm: Option<&str>,
         actor: &ActivityActor,
-    ) -> Result<(Node, bool), EmberTroveError> {
-        let db_err =
-            |e: sqlx::Error| EmberTroveError::Internal(format!("set project state failed: {e}"));
-
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
-        // Lock the row and read what it had (as `update` does): the History
-        // entry needs the old state, and two declarations sent at once
-        // then apply one after the other.
-        let Some((kind, old, declared_at)) =
-            sqlx::query_as::<_, (String, Option<String>, Option<DateTime<Utc>>)>(
-                "SELECT node_type::text, project_state, project_state_at \
-                 FROM nodes WHERE id = $1 FOR NO KEY UPDATE",
-            )
-            .bind(id.0)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?
-        else {
-            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
-        };
-        if !allows(&parse_node_type(&kind)?, Capability::ProjectStatus) {
-            return Err(EmberTroveError::Validation(
-                Capability::ProjectStatus.refusal().to_string(),
-            ));
+        sees_all: bool,
+    ) -> Result<StateOutcome, EmberTroveError> {
+        // The cascade locks many rows, and so do other writers (the
+        // account purge, a task reorder). They take them in one order
+        // (nodes by id, then tasks by id), but a writer this code doesn't
+        // know may not. Postgres ends such a meeting by failing one side:
+        // nothing was written, so that side simply goes again, once.
+        let mut attempt = self.declare_once(id, state, confirm, actor, sees_all).await;
+        if matches!(&attempt, Err(StateError::Db(e)) if sqlstate(e) == Some(DEADLOCK)) {
+            attempt = self.declare_once(id, state, confirm, actor, sees_all).await;
         }
+        let outcome = attempt.map_err(StateError::into_public)?;
 
-        let changed = old.as_deref() != Some(state.as_str());
-        let wrote = changed || declared_at.is_none();
-        if wrote {
-            // The state it already has, already declared, writes nothing:
-            // `updated_at` is the version an open editor saves against.
-            // `clock_timestamp()`, not `now()`: `now()` is the transaction's
-            // start, before the wait for the lock above, so of two
-            // declarations sent at once the one that landed last could
-            // carry the earlier date (the History entry's rule, #208).
-            sqlx::query(
-                "UPDATE nodes SET project_state = $2, project_state_at = clock_timestamp() \
-                 WHERE id = $1",
-            )
-            .bind(id.0)
-            .bind(state.as_str())
+        let mut node = outcome.node;
+        let mut tag_map = fetch_tags_for_nodes(&self.pool, &[id.0]).await?;
+        node.tags = tag_map.remove(&id.0).unwrap_or_default();
+        Ok(StateOutcome { node, ..outcome })
+    }
+
+    async fn cascade_preview(
+        &self,
+        id: NodeId,
+        state: ProjectState,
+        actor: &str,
+    ) -> Result<CascadePlan, EmberTroveError> {
+        let db_err =
+            |e: sqlx::Error| EmberTroveError::Internal(format!("cascade preview failed: {e}"));
+        // One snapshot for the nodes, the edges and the tasks.
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
-        }
-        if changed {
-            let meta = actor.metadata_with(serde_json::json!({
-                "from": old,
-                "to": state.as_str(),
-            }));
-            record_in(
-                &mut tx,
-                id,
-                &actor.subject_id,
-                ActivityAction::ProjectStateChanged,
-                meta,
-            )
-            .await?;
-        }
-        if state.is_terminal() {
-            // Whether or not the state changed: a stale tab closing a
-            // project again must still leave no entry of its person's.
-            super::project_focus::remove_on(&mut tx, &actor.subject_id, id).await?;
-        }
-
-        let row = sqlx::query_as::<_, NodeRow>(&format!(
-            "SELECT {cols} FROM nodes WHERE id = $1",
-            cols = node_cols(""),
-        ))
-        .bind(id.0)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db_err)?;
+        let subtree = read_subtree(&mut tx, id, actor, false, true)
+            .await
+            .map_err(StateError::into_public)?;
         tx.commit().await.map_err(db_err)?;
+        Ok(subtree.plan(state))
+    }
 
-        let mut node = row.into_node()?;
-        let mut tag_map = fetch_tags_for_nodes(&self.pool, &[id.0]).await?;
-        node.tags = tag_map.remove(&id.0).unwrap_or_default();
-        Ok((node, wrote))
+    async fn visible_titles(
+        &self,
+        ids: &[Uuid],
+        subject: Option<&str>,
+    ) -> Result<BTreeMap<Uuid, String>, EmberTroveError> {
+        if ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let rows: Vec<(Uuid, String)> = sqlx::query_as(&format!(
+            "SELECT n.id, n.title FROM nodes n WHERE n.id = ANY($1) AND {visible}",
+            visible = super::visible_to("n", 2),
+        ))
+        .bind(ids)
+        .bind(subject)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("visible titles failed: {e}")))?;
+        Ok(rows.into_iter().collect())
     }
 
     async fn project_status_counts(

@@ -104,10 +104,17 @@ pub async fn update_node(id: NodeId, req: &UpdateNodeRequest) -> Result<Node, Ui
 
 /// `PUT /api/nodes/:id/project-state`: declare a Project's state (S6a).
 /// The request names the state, so sending it twice says the same thing.
+///
+/// Sent without a confirmation: closing a project that has something to
+/// close under it is refused (412) until the confirmation dialog sends
+/// the plan's token (S6b).
 pub async fn declare_project_state(id: NodeId, state: ProjectState) -> Result<Node, UiError> {
     put_json(
         &format!("/nodes/{id}/project-state"),
-        &DeclareProjectState { state },
+        &DeclareProjectState {
+            state,
+            confirm: None,
+        },
     )
     .await
 }

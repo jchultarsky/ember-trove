@@ -36,6 +36,7 @@ pub mod auth;
 pub mod backup;
 pub mod brief;
 pub mod capture;
+pub mod cascade;
 pub mod data_health;
 pub mod edge;
 pub mod editor_pref;

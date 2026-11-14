@@ -4,7 +4,21 @@ use uuid::Uuid;
 
 macro_rules! uuid_newtype {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+        // Ordered (by the UUID's bytes): ids are sorted into canonical
+        // listings and kept in ordered sets (`crate::cascade`).
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Serialize,
+            Deserialize,
+            ToSchema,
+        )]
         #[serde(transparent)]
         pub struct $name(pub Uuid);
 

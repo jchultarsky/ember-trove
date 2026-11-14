@@ -28,6 +28,11 @@ pub enum RuleId {
     /// A Project whose state nobody has declared, with a status label
     /// that reads as a different one (S6a; `project_state::label_disagrees`).
     LabelReadsAsAnotherState,
+    /// A complete or cancelled Project with open tasks, or open
+    /// sub-Projects, still under it (S6b; §4.1). The cascade closes them
+    /// when it is confirmed; a project closed before the cascade existed,
+    /// or given an open sub-Project since, is listed here.
+    OpenUnderClosedProject,
     ContainedReference,
     ContainmentNotAllowed,
     DependsOnArea,
@@ -42,6 +47,7 @@ wire_enum!(RuleId {
     MembershipOnNonProject => "membership_on_non_project",
     StatusOnNonProject => "status_on_non_project",
     LabelReadsAsAnotherState => "label_reads_as_another_state",
+    OpenUnderClosedProject => "open_under_closed_project",
     ContainedReference => "contained_reference",
     ContainmentNotAllowed => "containment_not_allowed",
     DependsOnArea => "depends_on_area",
@@ -57,7 +63,7 @@ impl RuleId {
         match self {
             Self::TaskOnNonProject | Self::StatusOnNonProject => "§3.2",
             Self::OrphanTask => "§9.3",
-            Self::LabelReadsAsAnotherState => "§4.1",
+            Self::LabelReadsAsAnotherState | Self::OpenUnderClosedProject => "§4.1",
             Self::MembershipOnNonProject => "§7.2",
             Self::ContainmentNotAllowed => "§3.3",
             Self::ContainedReference | Self::ContainsCycle => "§6.1",
@@ -75,6 +81,7 @@ impl RuleId {
             Self::MembershipOnNonProject => "People outside a Project",
             Self::StatusOnNonProject => "A project status outside a Project",
             Self::LabelReadsAsAnotherState => "A status label that reads as another state",
+            Self::OpenUnderClosedProject => "Still open under a closed project",
             Self::ContainedReference => "A Reference inside a home",
             Self::ContainmentNotAllowed => "A home that isn't allowed",
             Self::DependsOnArea => "A dependency on an Area",
@@ -94,6 +101,9 @@ impl RuleId {
             Self::StatusOnNonProject => "Only Projects have a project status.",
             Self::LabelReadsAsAnotherState => {
                 "A Project's state is declared, never read from its status label."
+            }
+            Self::OpenUnderClosedProject => {
+                "Closing a Project closes its sub-Projects and cancels its open tasks."
             }
             Self::ContainedReference => {
                 "A Reference is never contained: it's shared, and reached by links."
@@ -121,6 +131,9 @@ impl RuleId {
             Self::StatusOnNonProject => "Clear the status, or keep the note in the body.",
             Self::LabelReadsAsAnotherState => {
                 "Declare the state the label means, or keep the state it has."
+            }
+            Self::OpenUnderClosedProject => {
+                "Close what is still open under it, or make the project active again."
             }
             Self::ContainedReference => "Turn the contains link into a references link.",
             Self::ContainmentNotAllowed => "Move it to an allowed home, or link it instead.",
@@ -238,6 +251,30 @@ pub struct Violation {
     /// every other rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_reading: Option<LabelReadingRef>,
+    /// What a still-open-under-a-closed-project item is about (S6b): the
+    /// project's state and how much is open under it. `None` for every
+    /// other rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub still_open: Option<StillOpenRef>,
+}
+
+/// A closed project and what is still open on or directly under it (S6b).
+/// The "Close them" fix declares `state` again with a confirmation, which
+/// is the cascade's catch-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct StillOpenRef {
+    /// The terminal state the project has.
+    pub state: crate::project_state::ProjectState,
+    /// Its own open and waiting tasks.
+    pub tasks: u32,
+    /// Its direct sub-Projects that are not closed, of those the reader
+    /// can view. Never a count of hidden ones (§14).
+    pub sub_projects: u32,
+    /// Whether the reader could close any of what is counted here: they
+    /// hold a grant of their own on the project (for its tasks) or on
+    /// one of those sub-Projects. It looks one level down, as the counts
+    /// do; the cascade itself goes all the way.
+    pub can_close: bool,
 }
 
 /// A project's status label beside its state (S6a): what the item's fix
@@ -320,7 +357,16 @@ impl Violation {
             membership: None,
             links: Vec::new(),
             label_reading: None,
+            still_open: None,
         }
+    }
+
+    /// Says what a still-open-under-a-closed-project item is about (see
+    /// [`Violation::still_open`]).
+    #[must_use]
+    pub fn with_still_open(mut self, still_open: StillOpenRef) -> Self {
+        self.still_open = Some(still_open);
+        self
     }
 
     /// Says what a label-reads-as-another-state item is about (see

@@ -263,7 +263,17 @@ impl AccountRepo for PgAccountRepo {
         // Lock their nodes: a write that needs one (an upload, a note by a
         // sharee) waits for the purge and then finds it gone, instead of
         // landing in between.
-        sqlx::query("SELECT 1 FROM nodes WHERE owner_id = $1 FOR UPDATE")
+        // In id order: the cascade locks a subtree's nodes the same way
+        // (`NodeRepo::set_project_state`), and two transactions that take
+        // many rows in different orders can deadlock.
+        sqlx::query("SELECT 1 FROM nodes WHERE owner_id = $1 ORDER BY id FOR UPDATE")
+            .bind(subject_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(purge_err)?;
+        // Then their tasks, in id order too, for the same reason: the
+        // statements below hand over and delete them in no fixed order.
+        sqlx::query("SELECT 1 FROM node_tasks WHERE owner_id = $1 ORDER BY id FOR UPDATE")
             .bind(subject_id)
             .execute(&mut *tx)
             .await

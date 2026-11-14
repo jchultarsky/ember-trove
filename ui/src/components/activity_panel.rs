@@ -80,6 +80,9 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
         // The replaced Brief's headline, else the start of its pitch (#282).
         // Shown as plain text: Leptos escapes it, no markdown is rendered.
         ActivityAction::BriefSuperseded => common::brief::superseded_summary(&entry.metadata),
+        // How much a cascade closed here (S6b). The API has already left
+        // out what this reader may not see, so this counts the rest.
+        ActivityAction::CascadeClosed => common::cascade::summary(&entry.metadata),
         _ => None,
     }
 }
@@ -111,7 +114,8 @@ fn action_colour(action: &ActivityAction) -> &'static str {
         }
         ActivityAction::StatusChanged
         | ActivityAction::BriefSuperseded
-        | ActivityAction::ProjectStateChanged => {
+        | ActivityAction::ProjectStateChanged
+        | ActivityAction::CascadeClosed => {
             "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300"
         }
     }
@@ -194,6 +198,26 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
         }
+    }
+
+    #[test]
+    fn a_cascade_says_how_much_it_closed() {
+        let e = entry(
+            ActivityAction::CascadeClosed,
+            serde_json::json!({
+                "state": "complete",
+                "sub_projects": [{ "id": "a", "title": "A" }, { "id": "b", "title": "B" }],
+                "tasks": [{ "id": "t", "title": "T" }],
+                "tasks_total": 1,
+            }),
+        );
+        assert_eq!(action_detail(&e).as_deref(), Some("2 sub-projects, 1 task"));
+        // Nothing this reader may see closed here: the line stands alone.
+        let bare = entry(
+            ActivityAction::CascadeClosed,
+            serde_json::json!({ "state": "complete", "tasks": [] }),
+        );
+        assert_eq!(action_detail(&bare), None);
     }
 
     #[test]

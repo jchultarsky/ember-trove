@@ -215,16 +215,29 @@ async fn closes_loop(
 }
 
 /// Takes the advisory lock for `edge_type` (#224): edges of that type are
-/// checked and written one transaction at a time.
+/// checked and written one transaction at a time. The cascade takes the
+/// `contains` one too (`NodeRepo::set_project_state`), so the tree it
+/// walks holds still.
 async fn lock_type(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     edge_type: &EdgeType,
 ) -> Result<(), EmberTroveError> {
+    lock_type_raw(tx, edge_type)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("edge lock failed: {e}")))
+}
+
+/// [`lock_type`] with the driver's error kept, for a caller that sets a
+/// `lock_timeout` and must tell "timed out waiting" from a failure (the
+/// cascade).
+pub(crate) async fn lock_type_raw(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    edge_type: &EdgeType,
+) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.edges.' || $1))")
         .bind(edge_type.as_str())
         .execute(&mut **tx)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("edge lock failed: {e}")))?;
+        .await?;
     Ok(())
 }
 

@@ -13,7 +13,8 @@ use std::collections::HashMap;
 use common::{
     EmberTroveError,
     data_health::{
-        ITEM_CAP, LabelReadingRef, LinkRef, Ref, RuleCount, RuleId, RuleReport, Violation,
+        ITEM_CAP, LabelReadingRef, LinkRef, Ref, RuleCount, RuleId, RuleReport, StillOpenRef,
+        Violation,
     },
     edge::EdgeType,
     node::NodeType,
@@ -25,7 +26,7 @@ use common::{
 use sqlx::{FromRow, PgConnection, PgPool};
 use uuid::Uuid;
 
-use super::{parse_wire, visible_to};
+use super::{editable_by, node::is_closed, parse_wire, task::still_to_do, visible_to};
 
 #[async_trait]
 pub trait DataHealthRepo: Send + Sync {
@@ -79,6 +80,7 @@ impl DataHealthRepo for PgDataHealthRepo {
             memberships_on_non_projects(&mut tx, owner).await?,
             statuses_on_non_projects(&mut tx, owner).await?,
             labels_reading_as_another_state(&mut tx, owner).await?,
+            open_under_closed_projects(&mut tx, owner).await?,
             contained_reference,
             not_allowed,
             depends_on_areas(&depends_on)?,
@@ -433,6 +435,128 @@ async fn label_reading_count(conn: &mut PgConnection) -> Result<u64, EmberTroveE
     Ok(total)
 }
 
+#[derive(FromRow)]
+struct StillOpenRow {
+    id: Uuid,
+    title: String,
+    archived: bool,
+    project_state: String,
+    tasks: i64,
+    sub_projects: i64,
+    can_close: bool,
+    total: i64,
+}
+
+/// SQL for "a task on `node` that is still to do" (open or waiting, not in
+/// the trash); the states bind as `$param::text[]` (`still_to_do`).
+fn has_task_to_do(node: &str, param: u8) -> String {
+    format!(
+        "FROM node_tasks t WHERE t.node_id = {node}.id AND t.deleted_at IS NULL \
+         AND t.status::text = ANY(${param}::text[])"
+    )
+}
+
+/// SQL for "a Project directly under `node` that is not closed", as alias
+/// `c`.
+fn has_open_sub_project(node: &str) -> String {
+    format!(
+        "FROM edges e JOIN nodes c ON c.id = e.target_id \
+         WHERE e.source_id = {node}.id AND e.edge_type = 'contains' \
+           AND c.node_type = 'project' AND NOT {closed}",
+        closed = is_closed("c"),
+    )
+}
+
+/// My closed Projects with something still open on or directly under
+/// them (S6b; ONTOLOGY §4.1): tasks still to do, or sub-Projects that are
+/// not closed. Closing a project closes these, so they are left from
+/// before the cascade existed, were added since, or are a sub-Project
+/// moved under it (allowed, and listed here: owner decision, 2026-11-14).
+///
+/// One level only. A closed sub-Project with its own leftovers is its
+/// owner's item; the fix (the cascade's catch-up) reaches all the way down
+/// whichever item it starts from.
+///
+/// SECURITY: `owner_id = $1`. A sub-Project counts only when the reader
+/// can view it, so the number never says a hidden node exists (§14);
+/// `can_close` is the reader's own grants (`editable_by`: no admin
+/// branch), the cascade's own rule. Nothing under the project is named.
+async fn open_under_closed_projects(
+    conn: &mut PgConnection,
+    owner: &str,
+) -> Result<RuleReport, EmberTroveError> {
+    let rows: Vec<StillOpenRow> = sqlx::query_as(&format!(
+        r#"
+        SELECT n.id, n.title, n.status = 'archived' AS archived, n.project_state,
+               x.tasks, x.sub_projects,
+               ({mine} AND x.tasks > 0) OR x.closable > 0 AS can_close,
+               count(*) OVER () AS total
+        FROM nodes n
+        CROSS JOIN LATERAL (
+            SELECT (SELECT count(*) {task}) AS tasks,
+                   (SELECT count(*) {sub} AND {seen}) AS sub_projects,
+                   (SELECT count(*) {sub} AND {seen} AND {theirs}) AS closable
+        ) x
+        WHERE n.owner_id = $1
+          AND n.node_type = 'project'
+          AND {closed}
+          AND (x.tasks > 0 OR x.sub_projects > 0)
+        ORDER BY n.title, n.id
+        LIMIT $3
+        "#,
+        mine = editable_by("n.id", 1),
+        task = has_task_to_do("n", 2),
+        sub = has_open_sub_project("n"),
+        seen = visible_to("c", 1),
+        theirs = editable_by("c.id", 1),
+        closed = is_closed("n"),
+    ))
+    .bind(owner)
+    .bind(still_to_do())
+    .bind(LIMIT)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db)?;
+    let count = count_of(rows.first().map(|r| r.total));
+    let mut items = Vec::with_capacity(rows.len());
+    for r in rows {
+        let n = |c: i64| u32::try_from(c).unwrap_or(u32::MAX);
+        items.push(
+            Violation::new(Ref::node(r.id, r.title, r.archived), vec![]).with_still_open(
+                StillOpenRef {
+                    state: project_state(&r.project_state)?,
+                    tasks: n(r.tasks),
+                    sub_projects: n(r.sub_projects),
+                    can_close: r.can_close,
+                },
+            ),
+        );
+    }
+    Ok(RuleReport::with_count(
+        RuleId::OpenUnderClosedProject,
+        count,
+        items,
+    ))
+}
+
+/// The same rule across all data, for the admin view: how many closed
+/// projects, and nothing else. No reader, so every sub-Project counts.
+async fn open_under_closed_count(conn: &mut PgConnection) -> Result<u64, EmberTroveError> {
+    let n: i64 = sqlx::query_scalar(&format!(
+        "SELECT count(*) FROM nodes n \
+         WHERE n.node_type = 'project' AND {closed} \
+           AND (EXISTS (SELECT 1 {task}) OR EXISTS (SELECT 1 {sub}))",
+        closed = is_closed("n"),
+        task = has_task_to_do("n", 1),
+        sub = has_open_sub_project("n"),
+    ))
+    .bind(still_to_do())
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(db)?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}
+
 // ── Rules on edges (§3.3, §6) ─────────────────────────────────────────────────
 
 /// One edge whose two ends the caller can see, with what they may know of
@@ -696,6 +820,10 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::LabelReadsAsAnotherState,
             count: label_reading_count(conn).await?,
+        },
+        RuleCount {
+            rule: RuleId::OpenUnderClosedProject,
+            count: open_under_closed_count(conn).await?,
         },
         RuleCount {
             rule: RuleId::ContainedReference,

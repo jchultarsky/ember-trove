@@ -7660,10 +7660,10 @@ async fn a_project(pool: &PgPool, owner: &str, title: &str, label: Option<&str>)
 #[allow(clippy::expect_used)]
 async fn declare(pool: &PgPool, node: common::id::NodeId, state: ProjectState, who: &str) -> Node {
     PgNodeRepo::new(pool.clone())
-        .set_project_state(node, state, &actor(who))
+        .set_project_state(node, state, None, &actor(who), false)
         .await
         .expect("declare a state")
-        .0
+        .node
 }
 
 /// Whether declaring `state` wrote the node (the route tells webhooks
@@ -7677,10 +7677,10 @@ async fn declare_wrote(
     who: &str,
 ) -> bool {
     PgNodeRepo::new(pool.clone())
-        .set_project_state(node, state, &actor(who))
+        .set_project_state(node, state, None, &actor(who), false)
         .await
         .expect("declare a state")
-        .1
+        .wrote
 }
 
 // Fixture helper; see `create_node`.
@@ -8011,7 +8011,13 @@ async fn a_declared_state_is_stamped_and_logged_once_per_change(pool: PgPool) {
     // Only a Project has a state to declare; a missing node is a 404.
     let article = create_node(&pool, "alice", "an article").await;
     let refused = repo
-        .set_project_state(article.id, ProjectState::Parked, &actor("alice"))
+        .set_project_state(
+            article.id,
+            ProjectState::Parked,
+            None,
+            &actor("alice"),
+            false,
+        )
         .await;
     assert!(
         matches!(&refused, Err(EmberTroveError::Validation(why)) if why == "only Projects have a project status"),
@@ -8022,7 +8028,9 @@ async fn a_declared_state_is_stamped_and_logged_once_per_change(pool: PgPool) {
         .set_project_state(
             common::id::NodeId(uuid::Uuid::new_v4()),
             ProjectState::Parked,
+            None,
             &actor("alice"),
+            false,
         )
         .await;
     assert!(matches!(missing, Err(EmberTroveError::NotFound(_))));
@@ -8040,7 +8048,7 @@ async fn a_state_change_and_its_history_entry_commit_together(pool: PgPool) {
     )
     .await;
     let r = repo
-        .set_project_state(p.id, ProjectState::Cancelled, &actor("alice"))
+        .set_project_state(p.id, ProjectState::Cancelled, None, &actor("alice"), false)
         .await;
     assert!(r.is_err(), "the failed history write fails the declaration");
     let still = repo.get(p.id).await.expect("get");
@@ -8373,8 +8381,8 @@ async fn two_declarations_at_once_apply_in_order(pool: PgPool) {
         let (one, two) = (PgNodeRepo::new(pool.clone()), PgNodeRepo::new(pool.clone()));
         let (a, b) = (actor("alice"), actor("bob"));
         let (r1, r2) = tokio::join!(
-            one.set_project_state(p.id, ProjectState::Parked, &a),
-            two.set_project_state(p.id, ProjectState::Complete, &b),
+            one.set_project_state(p.id, ProjectState::Parked, None, &a, false),
+            two.set_project_state(p.id, ProjectState::Complete, None, &b, false),
         );
         r1.expect("first");
         r2.expect("second");
@@ -8428,7 +8436,7 @@ async fn an_add_to_focus_never_lands_beside_a_close(pool: PgPool) {
         let who = actor("alice");
         let (added, closed) = tokio::join!(
             focus.put("alice", p.id, &WhyChange::Keep),
-            nodes.set_project_state(p.id, ProjectState::Complete, &who),
+            nodes.set_project_state(p.id, ProjectState::Complete, None, &who, false),
         );
         closed.expect("the close always lands");
         if let Err(e) = &added {
@@ -8568,4 +8576,1414 @@ async fn a_restore_survives_an_id_named_twice_as_two_kinds(pool: PgPool) {
     assert_eq!(a.node_type, NodeType::Article);
     assert_eq!(a.project_state, None);
     assert_eq!(a.project_state_at, None);
+}
+
+// ── S6b + S6c: the cascade (#326) ────────────────────────────────────────────
+
+use common::cascade::CascadePlan;
+use common::id::NodeId as Nid;
+
+// Fixture helpers; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn grant(pool: &PgPool, node: Nid, to: &str, role: &str) {
+    sqlx::query(
+        "INSERT INTO permissions (node_id, subject_id, role, granted_by) \
+         VALUES ($1, $2, $3::permission_role, 'test')",
+    )
+    .bind(node.0)
+    .bind(to)
+    .bind(role)
+    .execute(pool)
+    .await
+    .expect("grant");
+}
+
+/// Give `child` the home `home` (a `contains` edge), as raw data.
+async fn under(pool: &PgPool, home: Nid, child: Nid) {
+    raw_edge(pool, home.0, child.0, "contains").await;
+}
+
+#[allow(clippy::expect_used)]
+async fn preview(pool: &PgPool, id: Nid, state: ProjectState, who: &str) -> CascadePlan {
+    PgNodeRepo::new(pool.clone())
+        .cascade_preview(id, state, who)
+        .await
+        .expect("a plan")
+}
+
+async fn close(
+    pool: &PgPool,
+    id: Nid,
+    state: ProjectState,
+    who: &str,
+    confirm: Option<&str>,
+) -> Result<super::node::StateOutcome, EmberTroveError> {
+    PgNodeRepo::new(pool.clone())
+        .set_project_state(id, state, confirm, &actor(who), false)
+        .await
+}
+
+#[allow(clippy::expect_used)]
+async fn state_of(pool: &PgPool, id: Nid) -> String {
+    sqlx::query_scalar("SELECT project_state FROM nodes WHERE id = $1")
+        .bind(id.0)
+        .fetch_one(pool)
+        .await
+        .expect("state")
+}
+
+/// A task's status, and whether it has a completion date.
+#[allow(clippy::expect_used)]
+async fn task_now(pool: &PgPool, id: uuid::Uuid) -> (String, bool) {
+    sqlx::query_as("SELECT status::text, completed_at IS NOT NULL FROM node_tasks WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("task")
+}
+
+/// The stored `cascade_closed` entries of a node, oldest first.
+#[allow(clippy::expect_used)]
+async fn cascade_rows(pool: &PgPool, node: Nid) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT metadata FROM activity_log \
+         WHERE node_id = $1 AND action = 'cascade_closed' ORDER BY created_at",
+    )
+    .bind(node.0)
+    .fetch_all(pool)
+    .await
+    .expect("cascade rows")
+}
+
+fn ids_in(value: &serde_json::Value) -> Vec<String> {
+    let mut ids: Vec<String> = value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|v| v.get("id").unwrap_or(v).as_str().unwrap_or("?").to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
+/// A confirmed close does exactly what its preview said, and nothing
+/// else: the sub-Projects take the state, the tasks still to do are
+/// cancelled with no completion date, a done task keeps its own, the trash
+/// is left alone, and History records each project's part. Unconfirmed, or
+/// confirmed with another plan's token, nothing at all is written. Sent
+/// again afterwards, it is quiet.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_confirmed_close_does_exactly_what_its_preview_said(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let master = a_project(&pool, "alice", "master", None).await;
+    let child = a_project(&pool, "alice", "child", None).await;
+    let parked = a_project(&pool, "alice", "parked child", None).await;
+    declare(&pool, parked.id, ProjectState::Parked, "alice").await;
+    let deep = a_project(&pool, "alice", "grandchild", None).await;
+    under(&pool, master.id, child.id).await;
+    under(&pool, master.id, parked.id).await;
+    under(&pool, child.id, deep.id).await;
+    // Bob may edit the master: his task on it is someone else's to alice.
+    grant(&pool, master.id, "bob", "editor").await;
+
+    let open = raw_task(&pool, "alice", Some(master.id.0), "open on master").await;
+    let bobs = raw_task(&pool, "bob", Some(master.id.0), "bob's, waiting").await;
+    sql(
+        &pool,
+        &format!("UPDATE node_tasks SET status = 'waiting' WHERE id = '{bobs}'"),
+    )
+    .await;
+    let done = raw_task(&pool, "alice", Some(master.id.0), "already done").await;
+    tasks
+        .update(common::id::TaskId(done), status_req(TaskStatus::Done))
+        .await
+        .expect("done");
+    let dropped = raw_task(&pool, "alice", Some(master.id.0), "already cancelled").await;
+    sql(
+        &pool,
+        &format!("UPDATE node_tasks SET status = 'cancelled' WHERE id = '{dropped}'"),
+    )
+    .await;
+    let trashed = raw_task(&pool, "alice", Some(master.id.0), "in the trash").await;
+    sql(
+        &pool,
+        &format!("UPDATE node_tasks SET deleted_at = now() WHERE id = '{trashed}'"),
+    )
+    .await;
+    let on_child = raw_task(&pool, "alice", Some(child.id.0), "on the child").await;
+    let on_deep = raw_task(&pool, "alice", Some(deep.id.0), "on the grandchild").await;
+
+    let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    assert!(plan.closes_something() && plan.own_grant);
+    assert_eq!(
+        plan.projects
+            .iter()
+            .map(|p| p.title.as_str())
+            .collect::<Vec<_>>(),
+        ["child", "parked child", "grandchild"],
+        "outermost first"
+    );
+    assert_eq!(plan.task_count(), 4);
+    assert_eq!(plan.others_task_count(), 1, "bob's");
+    assert!(plan.skipped.is_empty());
+    assert_eq!(plan.token.len(), 64, "a sha-256, in hex");
+
+    // Unconfirmed, and confirmed with something else: 412, nothing moves.
+    for confirm in [None, Some("another-plan"), Some("")] {
+        let refused = close(&pool, master.id, ProjectState::Complete, "alice", confirm).await;
+        assert!(
+            matches!(refused, Err(EmberTroveError::PreconditionFailed(_))),
+            "{confirm:?}: {refused:?}"
+        );
+    }
+    assert_eq!(state_of(&pool, master.id).await, "active");
+    assert_eq!(state_of(&pool, child.id).await, "active");
+    assert_eq!(task_now(&pool, open).await.0, "open");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM activity_log WHERE action = 'cascade_closed'"
+        )
+        .await,
+        0
+    );
+    // The token of "complete" does not confirm "cancelled".
+    let refused = close(
+        &pool,
+        master.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&plan.token),
+    )
+    .await;
+    assert!(matches!(
+        refused,
+        Err(EmberTroveError::PreconditionFailed(_))
+    ));
+
+    let outcome = close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    assert!(outcome.wrote);
+    assert_eq!(outcome.node.project_state, Some(ProjectState::Complete));
+    let touched = |list: &[super::node::Touched]| {
+        let mut ids: Vec<String> = list.iter().map(|t| t.id.to_string()).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    assert_eq!(
+        touched(&outcome.closed),
+        sorted(vec![
+            child.id.to_string(),
+            parked.id.to_string(),
+            deep.id.to_string()
+        ])
+    );
+    assert_eq!(
+        touched(&outcome.cancelled_on),
+        sorted(vec![
+            master.id.to_string(),
+            child.id.to_string(),
+            deep.id.to_string()
+        ])
+    );
+    assert!(outcome.closed.iter().all(|t| t.owner_id == "alice"));
+    // A task's event goes to its own owner's hooks: bob's on the master.
+    let hears = |node: Nid| {
+        let mut owners: Vec<&str> = outcome
+            .cancelled_on
+            .iter()
+            .filter(|t| t.id == node)
+            .map(|t| t.owner_id.as_str())
+            .collect();
+        owners.sort_unstable();
+        owners
+    };
+    assert_eq!(hears(master.id), ["alice", "bob"]);
+    assert_eq!(hears(child.id), ["alice"]);
+
+    for p in [master.id, child.id, parked.id, deep.id] {
+        assert_eq!(state_of(&pool, p).await, "complete");
+    }
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM nodes WHERE project_state = 'complete' AND project_state_at IS NULL").await,
+        0,
+        "each was declared, now"
+    );
+    // Cancelled, never done: no completion date it did not earn.
+    for t in [open, bobs, on_child, on_deep] {
+        assert_eq!(task_now(&pool, t).await, ("cancelled".to_string(), false));
+    }
+    assert_eq!(task_now(&pool, done).await, ("done".to_string(), true));
+    assert_eq!(task_now(&pool, dropped).await.0, "cancelled");
+    assert_eq!(
+        task_now(&pool, trashed).await.0,
+        "open",
+        "the trash is not touched"
+    );
+
+    // History: the master's record names every sub-Project (by id) and
+    // its own tasks; each child's names the master and its own tasks.
+    let on_master = cascade_rows(&pool, master.id).await;
+    assert_eq!(on_master.len(), 1);
+    assert_eq!(on_master[0]["state"], "complete");
+    assert!(on_master[0].get("root").is_none());
+    assert_eq!(
+        ids_in(&on_master[0]["sub_projects"]),
+        sorted(vec![
+            child.id.to_string(),
+            parked.id.to_string(),
+            deep.id.to_string()
+        ])
+    );
+    assert_eq!(
+        ids_in(&on_master[0]["tasks"]),
+        sorted(vec![open.to_string(), bobs.to_string()])
+    );
+    assert_eq!(on_master[0]["actor_name"], "Alice");
+    let on_the_child = cascade_rows(&pool, child.id).await;
+    assert_eq!(on_the_child.len(), 1);
+    assert_eq!(on_the_child[0]["root"], serde_json::json!(master.id));
+    assert_eq!(ids_in(&on_the_child[0]["tasks"]), [on_child.to_string()]);
+    assert!(on_the_child[0].get("sub_projects").is_none());
+    // A project that closed with no task of its own is still recorded.
+    assert_eq!(cascade_rows(&pool, parked.id).await.len(), 1);
+    // And each one's own state change, from the state it had.
+    let changes = state_rows(&pool, parked.id.0).await;
+    let last = &changes[changes.len() - 1].1;
+    assert_eq!(
+        (last["from"].as_str(), last["to"].as_str()),
+        (Some("parked"), Some("complete"))
+    );
+    assert_eq!(state_rows(&pool, child.id.0).await.len(), 1);
+
+    // Nothing is left to close, and the same request again is quiet: no
+    // error for a token that has done its work, and nothing new written.
+    assert!(
+        !preview(&pool, master.id, ProjectState::Complete, "alice")
+            .await
+            .closes_something()
+    );
+    let entries = scalar(&pool, "SELECT count(*) FROM activity_log").await;
+    let again = close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("a retry is quiet");
+    assert!(!again.wrote);
+    assert!(again.closed.is_empty() && again.cancelled_on.is_empty());
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM activity_log").await,
+        entries
+    );
+}
+
+/// The catch-up is asked for, never forced (owner decision, 2026-11-14):
+/// declaring the state a closed project already has, without a token,
+/// stays the no-op it was, whatever is open under it. With the plan's
+/// token it closes that.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_same_state_again_catches_up_only_when_confirmed(pool: PgPool) {
+    let master = a_project(&pool, "alice", "closed before the cascade", None).await;
+    declare(&pool, master.id, ProjectState::Cancelled, "alice").await;
+    // What a release before the cascade could leave behind, or a later
+    // move: an open task, and an open sub-Project.
+    let left = raw_task(&pool, "alice", Some(master.id.0), "left open").await;
+    let child = a_project(&pool, "alice", "moved under it", None).await;
+    under(&pool, master.id, child.id).await;
+    let before = scalar(&pool, "SELECT count(*) FROM activity_log").await;
+
+    let kept = close(&pool, master.id, ProjectState::Cancelled, "alice", None)
+        .await
+        .expect("a repeat needs no confirmation");
+    assert!(!kept.wrote);
+    assert_eq!(task_now(&pool, left).await.0, "open");
+    assert_eq!(state_of(&pool, child.id).await, "active");
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM activity_log").await,
+        before
+    );
+
+    let plan = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
+    assert!(plan.closes_something());
+    let caught = close(
+        &pool,
+        master.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    assert!(!caught.wrote, "the master itself was not written");
+    assert_eq!(caught.closed.len(), 1);
+    assert_eq!(
+        task_now(&pool, left).await,
+        ("cancelled".to_string(), false)
+    );
+    assert_eq!(state_of(&pool, child.id).await, "cancelled");
+    assert_eq!(cascade_rows(&pool, master.id).await.len(), 1);
+    assert_eq!(
+        state_rows(&pool, master.id.0).await.len(),
+        1,
+        "the master's state did not change again"
+    );
+
+    // A catch-up that only cancels a task on a sub-Project is recorded
+    // there, with where it came from. The master gets no empty entry.
+    let late = raw_task(
+        &pool,
+        "alice",
+        Some(child.id.0),
+        "added to the closed child",
+    )
+    .await;
+    let plan = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
+    close(
+        &pool,
+        master.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    assert_eq!(task_now(&pool, late).await.0, "cancelled");
+    assert_eq!(
+        cascade_rows(&pool, master.id).await.len(),
+        1,
+        "no second entry"
+    );
+    let on_child = cascade_rows(&pool, child.id).await;
+    assert_eq!(on_child.len(), 2);
+    assert_eq!(on_child[1]["root"], serde_json::json!(master.id));
+    assert_eq!(ids_in(&on_child[1]["tasks"]), [late.to_string()]);
+}
+
+/// The cascade acts only through the declaring person's own grants
+/// (§14). A sub-Project they may only view stays open, with everything
+/// under it, and is named to them; one they can't see is not in the plan
+/// at all. One shared with them for editing closes, and its owner's
+/// tasks are cancelled and counted as someone else's. The admin role
+/// extends none of it.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_cascade_stays_inside_the_actors_own_grants(pool: PgPool) {
+    let master = a_project(&pool, "alice", "master", None).await;
+    let viewed = a_project(&pool, "bob", "bob's, shared for viewing", None).await;
+    grant(&pool, viewed.id, "alice", "viewer").await;
+    let hidden = a_project(&pool, "carol", "carol's private project", None).await;
+    let edited = a_project(&pool, "dave", "dave's, shared for editing", None).await;
+    grant(&pool, edited.id, "alice", "editor").await;
+    // Alice's own project, but under bob's, which stays open.
+    let below = a_project(&pool, "alice", "alice's, under bob's", None).await;
+    for child in [viewed.id, hidden.id, edited.id] {
+        under(&pool, master.id, child).await;
+    }
+    under(&pool, viewed.id, below.id).await;
+    let on_master = raw_task(&pool, "alice", Some(master.id.0), "on the master").await;
+    let on_viewed = raw_task(&pool, "bob", Some(viewed.id.0), "bob's task").await;
+    let on_hidden = raw_task(&pool, "carol", Some(hidden.id.0), "carol's task").await;
+    let on_edited = raw_task(&pool, "dave", Some(edited.id.0), "dave's task").await;
+    let on_below = raw_task(&pool, "alice", Some(below.id.0), "alice's, under bob's").await;
+
+    // An admin with no grant of their own: every node is theirs to open,
+    // none is theirs to cascade over, and none is named to them here.
+    let for_admin = preview(&pool, master.id, ProjectState::Complete, "root").await;
+    assert!(!for_admin.own_grant);
+    assert!(!for_admin.closes_something());
+    assert!(for_admin.skipped.is_empty(), "{:?}", for_admin.skipped);
+
+    let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    assert_eq!(
+        plan.projects.iter().map(|p| p.id).collect::<Vec<_>>(),
+        [edited.id]
+    );
+    assert_eq!(
+        plan.skipped
+            .iter()
+            .map(|s| s.title.as_str())
+            .collect::<Vec<_>>(),
+        ["bob's, shared for viewing"]
+    );
+    let text = serde_json::to_string(&plan).expect("json");
+    assert!(
+        !text.contains("carol"),
+        "a hidden project is not named: {text}"
+    );
+    assert!(!text.contains(&hidden.id.to_string()));
+    assert!(
+        !text.contains(&below.id.to_string()),
+        "nor what is under a skipped one"
+    );
+    assert_eq!(plan.task_count(), 2);
+    assert_eq!(plan.others_task_count(), 1, "dave's");
+
+    close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    assert_eq!(state_of(&pool, master.id).await, "complete");
+    assert_eq!(state_of(&pool, edited.id).await, "complete");
+    for stays in [viewed.id, hidden.id, below.id] {
+        assert_eq!(state_of(&pool, stays).await, "active");
+    }
+    assert_eq!(task_now(&pool, on_master).await.0, "cancelled");
+    assert_eq!(task_now(&pool, on_edited).await.0, "cancelled");
+    for stays in [on_viewed, on_hidden, on_below] {
+        assert_eq!(task_now(&pool, stays).await.0, "open");
+    }
+    // The skipped ones are still there to be told about, and are not a
+    // reason to ask again.
+    let after = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    assert!(!after.closes_something());
+    assert_eq!(after.skipped.len(), 1);
+    // Once bob closes his, nothing of it "stays open": it is not listed,
+    // and alice's project under it is still not hers to close from here.
+    sql(
+        &pool,
+        &format!(
+            "UPDATE nodes SET project_state = 'cancelled' WHERE id = '{}'",
+            viewed.id.0
+        ),
+    )
+    .await;
+    let after = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    assert!(after.skipped.is_empty(), "{:?}", after.skipped);
+    assert!(!after.closes_something());
+
+    // An admin closing someone's project: the state is theirs to set, and
+    // nothing under it moves, confirmed or not.
+    let theirs = a_project(&pool, "erin", "erin's master", None).await;
+    let her_task = raw_task(&pool, "erin", Some(theirs.id.0), "erin's task").await;
+    let her_child = a_project(&pool, "erin", "erin's child", None).await;
+    under(&pool, theirs.id, her_child.id).await;
+    let by_admin = close(&pool, theirs.id, ProjectState::Cancelled, "root", None)
+        .await
+        .expect("nothing of the admin's own to confirm");
+    assert!(by_admin.wrote && by_admin.closed.is_empty());
+    assert_eq!(state_of(&pool, theirs.id).await, "cancelled");
+    assert_eq!(state_of(&pool, her_child.id).await, "active");
+    assert_eq!(task_now(&pool, her_task).await.0, "open");
+}
+
+/// The token stands for one plan. When what would close has changed since
+/// it was shown (a new task, a new sub-Project, one moved away), the
+/// close is refused and nothing is written. A rename changes nothing that
+/// would close, so it does not.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_plan_that_no_longer_holds_is_refused(pool: PgPool) {
+    let master = a_project(&pool, "alice", "master", None).await;
+    let child = a_project(&pool, "alice", "child", None).await;
+    under(&pool, master.id, child.id).await;
+    let task = raw_task(&pool, "alice", Some(master.id.0), "a task").await;
+    let stale = |pool: PgPool, token: String| async move {
+        let r = close(
+            &pool,
+            master.id,
+            ProjectState::Complete,
+            "alice",
+            Some(&token),
+        )
+        .await;
+        assert!(
+            matches!(r, Err(EmberTroveError::PreconditionFailed(_))),
+            "{r:?}"
+        );
+        assert_eq!(
+            state_of(&pool, master.id).await,
+            "active",
+            "nothing written"
+        );
+    };
+
+    // A task added after the plan was shown.
+    let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    raw_task(&pool, "alice", Some(child.id.0), "added meanwhile").await;
+    stale(pool.clone(), shown.token).await;
+
+    // A sub-Project added.
+    let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    let late = a_project(&pool, "alice", "a late child", None).await;
+    under(&pool, child.id, late.id).await;
+    stale(pool.clone(), shown.token).await;
+
+    // One moved away.
+    let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    sql(
+        &pool,
+        &format!("DELETE FROM edges WHERE target_id = '{}'", late.id.0),
+    )
+    .await;
+    stale(pool.clone(), shown.token).await;
+
+    // One parked meanwhile: it would close from a different state.
+    let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    declare(&pool, child.id, ProjectState::Parked, "alice").await;
+    stale(pool.clone(), shown.token).await;
+
+    // A task that got done meanwhile is one task fewer.
+    let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    PgTaskRepo::new(pool.clone())
+        .update(common::id::TaskId(task), status_req(TaskStatus::Done))
+        .await
+        .expect("done");
+    stale(pool.clone(), shown.token).await;
+
+    // Renamed things are the same things.
+    let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    sql(&pool, "UPDATE node_tasks SET title = title || ', renamed'").await;
+    sql(
+        &pool,
+        &format!(
+            "UPDATE nodes SET title = 'child, renamed' WHERE id = '{}'",
+            child.id.0
+        ),
+    )
+    .await;
+    close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&shown.token),
+    )
+    .await
+    .expect("the same plan");
+    assert_eq!(state_of(&pool, child.id).await, "complete");
+    assert_eq!(task_now(&pool, task).await, ("done".to_string(), true));
+}
+
+/// History is read by everyone who can view its node. A cascade's entry
+/// stores other nodes by id, and each reader is given the titles of those
+/// they can view: the others are left out, uncounted, and a reader who
+/// can't view the master is not told a sub-Project's closing came from
+/// one.
+#[sqlx::test(migrations = "../migrations")]
+async fn history_names_other_nodes_only_to_a_reader_who_can_view_them(pool: PgPool) {
+    use super::activity::{ActivityRepo, PgActivityRepo};
+    let repo = PgNodeRepo::new(pool.clone());
+    let master = a_project(&pool, "alice", "alice's master", None).await;
+    let shared = a_project(&pool, "dave", "dave's project", None).await;
+    grant(&pool, shared.id, "alice", "editor").await;
+    let own = a_project(&pool, "alice", "alice's child", None).await;
+    under(&pool, master.id, shared.id).await;
+    under(&pool, master.id, own.id).await;
+    // Eve may view the master and alice's child, not dave's project.
+    grant(&pool, master.id, "eve", "viewer").await;
+    grant(&pool, own.id, "eve", "viewer").await;
+
+    let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+
+    let shown_to = |reader: Option<&'static str>, node: Nid| {
+        let (repo, pool) = (&repo, pool.clone());
+        async move {
+            let entry = PgActivityRepo::new(pool)
+                .list(node, 50)
+                .await
+                .expect("history")
+                .into_iter()
+                .find(|e| e.action == common::activity::ActivityAction::CascadeClosed)
+                .expect("the cascade's entry");
+            let ids = common::cascade::referenced_nodes(&entry.metadata);
+            let titles = repo.visible_titles(&ids, reader).await.expect("titles");
+            common::cascade::presented(&entry.metadata, &titles)
+        }
+    };
+    let titles = |entry: &serde_json::Value| {
+        let mut t: Vec<String> = entry["sub_projects"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| p["title"].as_str().unwrap_or("?").to_string())
+            .collect();
+        t.sort();
+        t
+    };
+
+    let for_alice = shown_to(Some("alice"), master.id).await.expect("shown");
+    assert_eq!(titles(&for_alice), ["alice's child", "dave's project"]);
+    let for_eve = shown_to(Some("eve"), master.id).await.expect("shown");
+    assert_eq!(titles(&for_eve), ["alice's child"]);
+    let text = for_eve.to_string();
+    assert!(!text.contains("dave"), "{text}");
+    assert!(
+        !text.contains(&shared.id.to_string()),
+        "not even its id: {text}"
+    );
+    assert_eq!(
+        common::cascade::summary(&for_eve).as_deref(),
+        Some("1 sub-project"),
+        "the hidden one is not in the count"
+    );
+    // An admin may read every node, so every title.
+    let for_admin = shown_to(None, master.id).await.expect("shown");
+    assert_eq!(titles(&for_admin).len(), 2);
+
+    // On dave's project: dave can't view alice's master, and is not told
+    // there is one. No task of his was cancelled, so the entry has nothing
+    // for him and he is not shown it; his project's own state change says
+    // what happened to it. Alice is shown where it came from.
+    assert_eq!(shown_to(Some("dave"), shared.id).await, None);
+    let for_alice = shown_to(Some("alice"), shared.id).await.expect("shown");
+    assert_eq!(for_alice["root"]["title"], "alice's master");
+    // With a task of his cancelled, he is shown that, and still no master.
+    let second = a_project(&pool, "alice", "alice's second master", None).await;
+    let his = a_project(&pool, "dave", "dave's second project", None).await;
+    grant(&pool, his.id, "alice", "editor").await;
+    under(&pool, second.id, his.id).await;
+    raw_task(&pool, "dave", Some(his.id.0), "dave's task").await;
+    let plan = preview(&pool, second.id, ProjectState::Cancelled, "alice").await;
+    close(
+        &pool,
+        second.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    let for_dave = shown_to(Some("dave"), his.id).await.expect("his task");
+    assert!(for_dave.get("root").is_none(), "{for_dave}");
+    assert!(!for_dave.to_string().contains(&second.id.to_string()));
+    assert_eq!(
+        common::cascade::summary(&for_dave).as_deref(),
+        Some("1 task")
+    );
+}
+
+/// The cascade removes the declaring person's own Focus entries on what
+/// it closes, as closing one project does (§10), and nobody else's.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_cascade_removes_the_actors_own_focus_entries_on_what_it_closes(pool: PgPool) {
+    let focus = PgFocusRepo::new(pool.clone());
+    let master = a_project(&pool, "alice", "master", None).await;
+    let child = a_project(&pool, "dave", "dave's child", None).await;
+    grant(&pool, child.id, "alice", "editor").await;
+    under(&pool, master.id, child.id).await;
+    for p in [master.id, child.id] {
+        focus.put("alice", p, &WhyChange::Keep).await.unwrap();
+    }
+    focus
+        .put("dave", child.id, &why("dave's reason"))
+        .await
+        .unwrap();
+
+    let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM project_focus WHERE subject_id = 'alice'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM project_focus WHERE subject_id = 'dave'"
+        )
+        .await,
+        1,
+        "hidden while it is closed, and his to keep"
+    );
+    // Nothing in History says whose Focus it was in.
+    let all: Vec<serde_json::Value> = sqlx::query_scalar("SELECT metadata FROM activity_log")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(
+        all.iter()
+            .all(|m| !m.to_string().to_lowercase().contains("focus"))
+    );
+}
+
+/// S6c: reopening affects the master alone, and a sub-Project can't be
+/// made active, or leave a closed state, while its master is closed.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_sub_project_is_not_reopened_under_a_closed_master(pool: PgPool) {
+    let repo = PgNodeRepo::new(pool.clone());
+    let master = a_project(&pool, "alice", "master", None).await;
+    let child = a_project(&pool, "alice", "child", None).await;
+    under(&pool, master.id, child.id).await;
+    let task = raw_task(&pool, "alice", Some(child.id.0), "a task").await;
+    let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+    close(
+        &pool,
+        master.id,
+        ProjectState::Complete,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+
+    let refused = |r: Result<super::node::StateOutcome, EmberTroveError>| matches!(&r, Err(EmberTroveError::Validation(why)) if why == common::cascade::MASTER_IS_CLOSED);
+    // Neither active nor parked (owner decision, 2026-11-14).
+    for to in [ProjectState::Active, ProjectState::Parked] {
+        let r = close(&pool, child.id, to, "alice", None).await;
+        assert!(refused(r), "{to:?}");
+    }
+    assert_eq!(state_of(&pool, child.id).await, "complete");
+    // What re-opens nothing is allowed: a repeat, and the other closed state.
+    close(&pool, child.id, ProjectState::Complete, "alice", None)
+        .await
+        .expect("a repeat");
+    close(&pool, child.id, ProjectState::Cancelled, "alice", None)
+        .await
+        .expect("still closed");
+
+    // Reopening the master affects the master alone.
+    let reopened = close(&pool, master.id, ProjectState::Active, "alice", None)
+        .await
+        .expect("the master re-opens");
+    assert!(reopened.closed.is_empty());
+    assert_eq!(state_of(&pool, child.id).await, "cancelled");
+    assert_eq!(task_now(&pool, task).await.0, "cancelled");
+    // Now the child may be re-opened, deliberately.
+    close(&pool, child.id, ProjectState::Active, "alice", None)
+        .await
+        .expect("its master is active");
+
+    // An open project given a closed master as its home is allowed (owner
+    // decision): it may be set aside there, and not made active from that.
+    let closed = a_project(&pool, "alice", "a closed master", None).await;
+    declare(&pool, closed.id, ProjectState::Complete, "alice").await;
+    let moved = a_project(&pool, "alice", "moved under it", None).await;
+    under(&pool, closed.id, moved.id).await;
+    close(&pool, moved.id, ProjectState::Parked, "alice", None)
+        .await
+        .expect("setting aside re-opens nothing");
+    let r = close(&pool, moved.id, ProjectState::Active, "alice", None).await;
+    assert!(refused(r), "made active under a closed master");
+
+    // A home that is an Area closes nothing.
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let in_area = a_project(&pool, "alice", "in an area", None).await;
+    raw_edge(&pool, area, in_area.id.0, "contains").await;
+    declare(&pool, in_area.id, ProjectState::Complete, "alice").await;
+    close(&pool, in_area.id, ProjectState::Active, "alice", None)
+        .await
+        .expect("an Area is never closed");
+
+    // A master its editor can't view: they are not told it is closed, so
+    // they are not refused (and could do nothing about it).
+    let theirs = a_project(&pool, "bob", "bob's, under alice's closed master", None).await;
+    declare(&pool, theirs.id, ProjectState::Complete, "bob").await;
+    under(&pool, closed.id, theirs.id).await;
+    close(&pool, theirs.id, ProjectState::Active, "bob", None)
+        .await
+        .expect("a hidden master refuses nothing");
+    // An admin reads every node, so the master is not hidden from them
+    // and they are held to the rule like anyone who can view it.
+    declare(&pool, theirs.id, ProjectState::Complete, "bob").await;
+    let by_admin = repo
+        .set_project_state(theirs.id, ProjectState::Active, None, &actor("root"), true)
+        .await;
+    assert!(refused(by_admin), "an admin is not the one exception");
+    // Once bob can view it, he is told.
+    grant(&pool, closed.id, "bob", "viewer").await;
+    let r = close(&pool, theirs.id, ProjectState::Active, "bob", None).await;
+    assert!(refused(r));
+    assert_eq!(
+        repo.get(theirs.id).await.expect("get").project_state,
+        Some(ProjectState::Complete)
+    );
+}
+
+/// Two confirmed closes of one master, sent at once (a double click, two
+/// tabs): the cascade runs once. The second finds nothing left to close
+/// and is quiet.
+#[sqlx::test(migrations = "../migrations")]
+async fn two_confirmed_closes_at_once_cascade_once(pool: PgPool) {
+    for round in 0..10 {
+        let master = a_project(&pool, "alice", &format!("raced master {round}"), None).await;
+        let child = a_project(&pool, "alice", &format!("raced child {round}"), None).await;
+        under(&pool, master.id, child.id).await;
+        let task = raw_task(&pool, "alice", Some(child.id.0), "a task").await;
+        let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+        let (one, two) = tokio::join!(
+            close(
+                &pool,
+                master.id,
+                ProjectState::Complete,
+                "alice",
+                Some(&plan.token)
+            ),
+            close(
+                &pool,
+                master.id,
+                ProjectState::Complete,
+                "alice",
+                Some(&plan.token)
+            ),
+        );
+        one.expect("first");
+        two.expect("second");
+        assert_eq!(state_of(&pool, child.id).await, "complete", "round {round}");
+        assert_eq!(task_now(&pool, task).await.0, "cancelled");
+        assert_eq!(
+            cascade_rows(&pool, master.id).await.len(),
+            1,
+            "round {round}"
+        );
+        assert_eq!(
+            cascade_rows(&pool, child.id).await.len(),
+            1,
+            "round {round}"
+        );
+        assert_eq!(
+            state_rows(&pool, child.id.0).await.len(),
+            1,
+            "round {round}"
+        );
+    }
+}
+
+/// A close and a change to a sub-Project, sent at once, apply one after
+/// the other: either the child changed first and the close is refused
+/// (its plan no longer holds), or the close landed first and the child's
+/// re-opening is refused. Never a closed master over a child that was
+/// re-opened under it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_close_and_a_childs_change_never_interleave(pool: PgPool) {
+    for round in 0..10 {
+        let master = a_project(&pool, "alice", &format!("m {round}"), None).await;
+        let child = a_project(&pool, "alice", &format!("c {round}"), None).await;
+        under(&pool, master.id, child.id).await;
+        declare(&pool, child.id, ProjectState::Complete, "alice").await;
+        let task = raw_task(&pool, "alice", Some(master.id.0), "a task").await;
+        let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+        let (closed, reopened) = tokio::join!(
+            close(
+                &pool,
+                master.id,
+                ProjectState::Complete,
+                "alice",
+                Some(&plan.token)
+            ),
+            close(&pool, child.id, ProjectState::Active, "alice", None),
+        );
+        match (&closed, &reopened) {
+            // The child re-opened first: it is now something the plan
+            // would close, so the plan no longer holds.
+            (Err(EmberTroveError::PreconditionFailed(_)), Ok(_)) => {
+                assert_eq!(state_of(&pool, master.id).await, "active", "round {round}");
+                assert_eq!(task_now(&pool, task).await.0, "open");
+            }
+            // The close landed first: the child stays closed.
+            (Ok(_), Err(EmberTroveError::Validation(_))) => {
+                assert_eq!(state_of(&pool, child.id).await, "complete", "round {round}");
+            }
+            other => panic!("round {round}: {other:?}"),
+        }
+    }
+}
+
+/// A Focus add on a sub-Project and a close of its master, at once: no
+/// entry of the actor's is left on the closed child (it would bring the
+/// child back to Focus when it is re-opened).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_focus_add_never_lands_beside_a_cascade(pool: PgPool) {
+    for round in 0..10 {
+        let master = a_project(&pool, "alice", &format!("m {round}"), None).await;
+        let child = a_project(&pool, "alice", &format!("c {round}"), None).await;
+        under(&pool, master.id, child.id).await;
+        let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+        let focus = PgFocusRepo::new(pool.clone());
+        let (closed, added) = tokio::join!(
+            close(
+                &pool,
+                master.id,
+                ProjectState::Complete,
+                "alice",
+                Some(&plan.token)
+            ),
+            focus.put("alice", child.id, &WhyChange::Keep),
+        );
+        closed.expect("the close lands");
+        if let Err(e) = &added {
+            assert!(
+                matches!(e, EmberTroveError::Validation(_)),
+                "round {round}: {e:?}"
+            );
+        }
+        assert_eq!(state_of(&pool, child.id).await, "complete");
+        assert_eq!(
+            scalar(
+                &pool,
+                &format!(
+                    "SELECT count(*) FROM project_focus WHERE node_id = '{}'",
+                    child.id.0
+                )
+            )
+            .await,
+            0,
+            "round {round}"
+        );
+    }
+}
+
+/// A close and other multi-row writers at once (a task reorder over the
+/// same tasks, the purge of an account whose project is in the tree):
+/// all three finish. They take node rows, then task rows, each in id
+/// order (`a_reorder_takes_its_rows_in_id_order`), so they queue rather
+/// than deadlock.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_cascade_runs_beside_a_reorder_and_a_purge(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    for round in 0..10 {
+        let master = a_project(&pool, "alice", &format!("m {round}"), None).await;
+        let gone = format!("leaver-{round}");
+        let theirs = a_project(&pool, &gone, &format!("theirs {round}"), None).await;
+        grant(&pool, theirs.id, "alice", "editor").await;
+        under(&pool, master.id, theirs.id).await;
+        let mut ids = Vec::new();
+        for n in 0..12 {
+            let node = if n % 2 == 0 { master.id } else { theirs.id };
+            ids.push(raw_task(&pool, "alice", Some(node.0), &format!("t{n}")).await);
+        }
+        let plan = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
+        let order: Vec<(common::id::TaskId, i32)> = ids
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, id)| (common::id::TaskId(*id), i32::try_from(i).unwrap_or(0)))
+            .collect();
+        let (tasks, accounts) = (
+            PgTaskRepo::new(pool.clone()),
+            PgAccountRepo::new(pool.clone()),
+        );
+        let (closed, reordered, purged) = tokio::join!(
+            close(
+                &pool,
+                master.id,
+                ProjectState::Cancelled,
+                "alice",
+                Some(&plan.token)
+            ),
+            tasks.reorder(&order, Some("alice")),
+            accounts.purge(&gone, None),
+        );
+        reordered.expect("the reorder finishes");
+        purged.expect("the purge finishes");
+        // The purge may take the sub-Project away first: the plan then no
+        // longer holds, which is a 412, not a failure.
+        match closed {
+            Ok(_) => assert_eq!(
+                state_of(&pool, master.id).await,
+                "cancelled",
+                "round {round}"
+            ),
+            Err(EmberTroveError::PreconditionFailed(_)) => {
+                assert_eq!(state_of(&pool, master.id).await, "active", "round {round}");
+            }
+            Err(other) => panic!("round {round}: {other:?}"),
+        }
+    }
+}
+
+/// A state write does not wait for ever on a row something else holds. It
+/// holds the tree's lock while it waits, and every other state write
+/// queues behind that, so it gives up, writes nothing, and says to try
+/// again (409).
+#[sqlx::test(migrations = "../migrations")]
+async fn a_state_write_gives_up_on_a_row_held_too_long(pool: PgPool) {
+    let p = a_project(&pool, "alice", "held", None).await;
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM nodes WHERE id = $1 FOR UPDATE")
+        .bind(p.id.0)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let r = close(&pool, p.id, ProjectState::Parked, "alice", None).await;
+    assert!(
+        matches!(&r, Err(EmberTroveError::AlreadyExists(why)) if why.contains("try again")),
+        "{r:?}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    holder.rollback().await.unwrap();
+    // Released: it goes through, and the tree's lock was not left held.
+    close(&pool, p.id, ProjectState::Parked, "alice", None)
+        .await
+        .expect("after the holder let go");
+
+    // The same answer when it is the tree's lock that is held (an edge
+    // write that is stuck): 409, never a 500.
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.edges.contains'))")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let r = close(&pool, p.id, ProjectState::Active, "alice", None).await;
+    assert!(
+        matches!(&r, Err(EmberTroveError::AlreadyExists(why)) if why.contains("try again")),
+        "{r:?}"
+    );
+    holder.rollback().await.unwrap();
+
+    // Parking or re-opening reaches nothing below the project, so it does
+    // not wait for a sub-Project or a task someone else holds.
+    let child = a_project(&pool, "alice", "held child", None).await;
+    under(&pool, p.id, child.id).await;
+    let task = raw_task(&pool, "alice", Some(p.id.0), "held task").await;
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM nodes WHERE id = $1 FOR UPDATE")
+        .bind(child.id.0)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    sqlx::query("SELECT 1 FROM node_tasks WHERE id = $1 FOR UPDATE")
+        .bind(task)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    close(&pool, p.id, ProjectState::Active, "alice", None)
+        .await
+        .expect("nothing under it is needed");
+    assert!(started.elapsed() < std::time::Duration::from_secs(3));
+    holder.rollback().await.unwrap();
+}
+
+/// A reorder takes its task rows in id order whatever order the request
+/// lists them in, as the cascade does. In request order, a reorder and a
+/// cascade over the same tasks could each hold a row the other wants.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_reorder_takes_its_rows_in_id_order(pool: PgPool) {
+    let p = a_project(&pool, "alice", "reordered", None).await;
+    let mut ids = [
+        raw_task(&pool, "alice", Some(p.id.0), "one").await,
+        raw_task(&pool, "alice", Some(p.id.0), "two").await,
+    ];
+    ids.sort();
+    let [first, second] = ids;
+    // Someone holds the later row; the request names it first.
+    let mut holder = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM node_tasks WHERE id = $1 FOR UPDATE")
+        .bind(second)
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let reordering = {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let order = [
+                (common::id::TaskId(second), 0),
+                (common::id::TaskId(first), 1),
+            ];
+            PgTaskRepo::new(pool).reorder(&order, Some("alice")).await
+        })
+    };
+    let mut waiting = 0;
+    for _ in 0..400 {
+        waiting = scalar(
+            &pool,
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        )
+        .await;
+        if waiting > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(waiting, 1, "the reorder never waited");
+    // It waits for the later row while already holding the earlier one.
+    let free = sqlx::query("SELECT 1 FROM node_tasks WHERE id = $1 FOR UPDATE NOWAIT")
+        .bind(first)
+        .execute(&pool)
+        .await;
+    assert!(free.is_err(), "the earlier row was not taken first");
+    holder.rollback().await.unwrap();
+    reordering.await.expect("join").expect("the reorder lands");
+    let order: Vec<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM node_tasks WHERE node_id = $1 ORDER BY sort_order")
+            .bind(p.id.0)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(order, [second, first]);
+}
+
+/// Data health lists the reader's closed projects with something still
+/// open on or directly under them, says how much, and says whether the
+/// reader could close any of it. A sub-Project the reader can't view is
+/// not counted, and the catch-up empties the item. The admin view gets a
+/// count across accounts and nothing else.
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_lists_what_is_still_open_under_a_closed_project(pool: PgPool) {
+    use super::data_health::{DataHealthRepo, PgDataHealthRepo};
+    use common::data_health::{RuleId, StillOpenRef};
+    let rule = RuleId::OpenUnderClosedProject;
+    let item = |report: &std::collections::HashMap<RuleId, common::data_health::RuleReport>,
+                id: Nid| {
+        report[&rule]
+            .items
+            .iter()
+            .find(|v| v.subject.id == id.0)
+            .and_then(|v| v.still_open)
+    };
+
+    // Closed with leftovers: two tasks to do (one waiting), an open
+    // sub-Project of alice's and a parked one of dave's she may edit.
+    let both = a_project(&pool, "alice", "a closed, with both", None).await;
+    declare(&pool, both.id, ProjectState::Cancelled, "alice").await;
+    raw_task(&pool, "alice", Some(both.id.0), "open").await;
+    let waiting = raw_task(&pool, "bob", Some(both.id.0), "waiting").await;
+    sql(
+        &pool,
+        &format!("UPDATE node_tasks SET status = 'waiting' WHERE id = '{waiting}'"),
+    )
+    .await;
+    let done = raw_task(&pool, "alice", Some(both.id.0), "done").await;
+    sql(
+        &pool,
+        &format!("UPDATE node_tasks SET status = 'done', completed_at = now() WHERE id = '{done}'"),
+    )
+    .await;
+    let trashed = raw_task(&pool, "alice", Some(both.id.0), "trashed").await;
+    sql(
+        &pool,
+        &format!("UPDATE node_tasks SET deleted_at = now() WHERE id = '{trashed}'"),
+    )
+    .await;
+    let sub = a_project(&pool, "alice", "open sub", None).await;
+    let parked = a_project(&pool, "dave", "dave's parked sub", None).await;
+    declare(&pool, parked.id, ProjectState::Parked, "dave").await;
+    grant(&pool, parked.id, "alice", "editor").await;
+    // Not counted: a closed sub-Project, one alice can't view, and a
+    // child that is not a Project.
+    let closed_sub = a_project(&pool, "alice", "closed sub", None).await;
+    declare(&pool, closed_sub.id, ProjectState::Complete, "alice").await;
+    let hidden = a_project(&pool, "carol", "carol's hidden sub", None).await;
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    for child in [sub.id, parked.id, closed_sub.id, hidden.id] {
+        under(&pool, both.id, child).await;
+    }
+    raw_edge(&pool, both.id.0, article, "contains").await;
+
+    // Only a sub-Project alice may view, not edit: listed, nothing to close.
+    let viewed_only = a_project(&pool, "alice", "b closed, over bob's", None).await;
+    declare(&pool, viewed_only.id, ProjectState::Complete, "alice").await;
+    let bobs = a_project(&pool, "bob", "bob's sub", None).await;
+    grant(&pool, bobs.id, "alice", "viewer").await;
+    under(&pool, viewed_only.id, bobs.id).await;
+
+    // Not listed: closed with nothing open; closed over a hidden child
+    // only; active or parked with open tasks; someone else's closed
+    // project that alice may edit.
+    let clean = a_project(&pool, "alice", "closed and clean", None).await;
+    declare(&pool, clean.id, ProjectState::Complete, "alice").await;
+    let over_hidden = a_project(&pool, "alice", "closed, over a hidden one", None).await;
+    declare(&pool, over_hidden.id, ProjectState::Complete, "alice").await;
+    let hidden_too = a_project(&pool, "carol", "carol's other", None).await;
+    under(&pool, over_hidden.id, hidden_too.id).await;
+    let active = a_project(&pool, "alice", "active with a task", None).await;
+    raw_task(&pool, "alice", Some(active.id.0), "t").await;
+    let set_aside = a_project(&pool, "alice", "parked with a task", None).await;
+    declare(&pool, set_aside.id, ProjectState::Parked, "alice").await;
+    raw_task(&pool, "alice", Some(set_aside.id.0), "t").await;
+    let daves = a_project(&pool, "dave", "dave's closed, with a task", None).await;
+    declare(&pool, daves.id, ProjectState::Complete, "dave").await;
+    raw_task(&pool, "dave", Some(daves.id.0), "t").await;
+    grant(&pool, daves.id, "alice", "editor").await;
+
+    let report = health(&pool, "alice").await;
+    assert_eq!(
+        subjects(&report, rule),
+        [both.id.0, viewed_only.id.0],
+        "by title"
+    );
+    assert_eq!(report[&rule].count, 2);
+    assert_eq!(
+        item(&report, both.id),
+        Some(StillOpenRef {
+            state: ProjectState::Cancelled,
+            tasks: 2,
+            sub_projects: 2,
+            can_close: true,
+        })
+    );
+    assert_eq!(
+        item(&report, viewed_only.id),
+        Some(StillOpenRef {
+            state: ProjectState::Complete,
+            tasks: 0,
+            sub_projects: 1,
+            can_close: false,
+        })
+    );
+    let text = serde_json::to_string(&report[&rule]).expect("json");
+    assert!(
+        !text.contains("carol") && !text.contains("sub\""),
+        "nothing under it is named: {text}"
+    );
+    // Dave's is in dave's report, not alice's; carol sees none.
+    assert_eq!(subjects(&health(&pool, "dave").await, rule), [daves.id.0]);
+    assert!(subjects(&health(&pool, "carol").await, rule).is_empty());
+
+    // The offer agrees with the cascade on what is directly under the
+    // project: where it says "can close", the plan closes something, and
+    // here, with nothing deeper, where it says not the plan closes
+    // nothing. (It looks one level down; the plan goes all the way.)
+    let plan = preview(&pool, both.id, ProjectState::Cancelled, "alice").await;
+    assert!(plan.closes_something());
+    assert!(
+        !preview(&pool, viewed_only.id, ProjectState::Complete, "alice")
+            .await
+            .closes_something()
+    );
+
+    // Across accounts: counts only, hidden children included (no reader).
+    let counts = PgDataHealthRepo::new(pool.clone())
+        .counts_all()
+        .await
+        .expect("counts");
+    let all = counts.iter().find(|c| c.rule == rule).map(|c| c.count);
+    assert_eq!(all, Some(4), "both, viewed_only, over_hidden, dave's");
+
+    // The catch-up takes the item away.
+    close(
+        &pool,
+        both.id,
+        ProjectState::Cancelled,
+        "alice",
+        Some(&plan.token),
+    )
+    .await
+    .expect("confirmed");
+    assert_eq!(
+        subjects(&health(&pool, "alice").await, rule),
+        [viewed_only.id.0]
+    );
+    // And re-opening the project does too: nothing is open under a closed one.
+    close(&pool, viewed_only.id, ProjectState::Active, "alice", None)
+        .await
+        .expect("active again");
+    assert!(subjects(&health(&pool, "alice").await, rule).is_empty());
+}
+
+/// Postgres ends a deadlock by failing one side. When that side is the
+/// cascade, nothing was written, so it goes again, once, and the person
+/// is not handed an error for a meeting of two transactions.
+///
+/// Arranged, not left to chance: another transaction holds the cascade's
+/// second task row, waits until the cascade is waiting for it, and then
+/// asks for the first. Whichever side Postgres fails, the close must end
+/// well; the round counts only when it was the cascade's.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_cascade_that_loses_a_deadlock_goes_again(pool: PgPool) {
+    let mut cascade_lost = 0;
+    for round in 0..6 {
+        let master = a_project(&pool, "alice", &format!("deadlocked {round}"), None).await;
+        let mut ids = [
+            raw_task(&pool, "alice", Some(master.id.0), "one").await,
+            raw_task(&pool, "alice", Some(master.id.0), "two").await,
+        ];
+        ids.sort();
+        let [first, second] = ids;
+        let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
+
+        let mut other = pool.begin().await.unwrap();
+        let lock = "SELECT 1 FROM node_tasks WHERE id = $1 FOR UPDATE";
+        sqlx::query(lock)
+            .bind(second)
+            .execute(&mut *other)
+            .await
+            .unwrap();
+        let closing = {
+            let (pool, token) = (pool.clone(), plan.token.clone());
+            tokio::spawn(async move {
+                close(
+                    &pool,
+                    master.id,
+                    ProjectState::Complete,
+                    "alice",
+                    Some(&token),
+                )
+                .await
+            })
+        };
+        // Until the cascade holds `first` and waits for `second`.
+        let mut waiting = 0;
+        for _ in 0..400 {
+            waiting = scalar(
+                &pool,
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            )
+            .await;
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(waiting, 1, "round {round}: the cascade never waited");
+        // The other way round: a deadlock. An Ok here means the cascade
+        // was the one failed.
+        let others = sqlx::query(lock).bind(first).execute(&mut *other).await;
+        if others.is_ok() {
+            cascade_lost += 1;
+        }
+        other.rollback().await.unwrap();
+
+        let closed = closing.await.expect("join");
+        assert!(closed.is_ok(), "round {round}: {:?}", closed.err());
+        assert_eq!(state_of(&pool, master.id).await, "complete");
+        for task in [first, second] {
+            assert_eq!(task_now(&pool, task).await.0, "cancelled");
+        }
+        assert_eq!(
+            cascade_rows(&pool, master.id).await.len(),
+            1,
+            "recorded once"
+        );
+        if cascade_lost >= 2 {
+            break;
+        }
+    }
+    assert!(
+        cascade_lost > 0,
+        "the cascade was never the side that failed"
+    );
 }
