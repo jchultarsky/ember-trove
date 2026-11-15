@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- **Tasks no longer repeat** (S5b of the ontology programme, #332;
+  ONTOLOGY §9: a Task is a one-time action). The Repeat choice is gone
+  from the add-task form and the task editor, and so is the repeat mark
+  on a task. Completing a task no longer makes the next one, and
+  reopening a task no longer deletes one.
+  - **A task that repeated becomes a one-time task.** Nothing else about
+    it changes: its title, state, dates, project and place in a list
+    stay. Migration 053 drops `node_tasks.recurrence` and
+    `node_tasks.recurrence_parent_id`; no task is removed.
+  - `Task`, `CreateTaskRequest` and `UpdateTaskRequest` no longer have
+    `recurrence`, and `UpdateTaskRequest` no longer has `today`. A
+    request that still sends them is accepted and they are ignored: a
+    tab left open across the upgrade still shows Repeat, and a task saved
+    from it is a one-time task.
+  - The known fault of a monthly task on the 29th to the 31st settling on
+    the 28th goes with the feature.
+  - **Upgrading a self-hosted instance:** to see what repeats before you
+    upgrade, run `SELECT title, recurrence FROM node_tasks WHERE
+    recurrence IS NOT NULL AND deleted_at IS NULL;`. The rules are not
+    kept anywhere after the migration; take a database backup first if
+    you want them. Stop the old API before the new one starts: the old
+    one can't read the table once the columns are gone.
+
+### Changed
+- **Backup format 12**: an archive no longer carries a task's repeat rule
+  or which task scheduled which. Older releases refuse a format-12
+  archive. Archives of formats 3 to 11 still restore, and a task that
+  repeated comes back as a one-time task.
+
 ## [3.23.0] - 2026-11-15
 
 ### Added

@@ -1,13 +1,13 @@
 //! Shared task helpers — pure functions used by `task_panel`, `my_day_view`,
 //! Data health, and the reusable `TaskRowInner` component.
 //!
-//! Centralises status / priority / recurrence parsing, formatting, and
+//! Centralises status / priority parsing, formatting, and
 //! comparison so that every task-related view speaks the same language.
 
 use std::sync::Arc;
 
 use common::id::TaskId;
-use common::task::{MyDayTask, RecurrenceRule, Task, TaskPriority, TaskStatus};
+use common::task::{MyDayTask, Task, TaskPriority, TaskStatus};
 use leptos::prelude::*;
 
 use crate::components::toast::{ToastLevel, ToastState};
@@ -78,18 +78,6 @@ pub fn priority_color_hex(p: &TaskPriority) -> &'static str {
     }
 }
 
-// ── Recurrence ──────────────────────────────────────────────────────────────
-
-pub fn recurrence_label(r: &RecurrenceRule) -> &'static str {
-    match r {
-        RecurrenceRule::Daily => "Daily",
-        RecurrenceRule::Weekly => "Weekly",
-        RecurrenceRule::Biweekly => "Every 2 weeks",
-        RecurrenceRule::Monthly => "Monthly",
-        RecurrenceRule::Yearly => "Yearly",
-    }
-}
-
 // ── Node type ───────────────────────────────────────────────────────────────
 
 // ── My Day predicate ────────────────────────────────────────────────────────
@@ -155,7 +143,6 @@ mod tests {
                 priority: TaskPriority::Medium,
                 focus_date: None,
                 due_date: due,
-                recurrence: None,
                 sort_order: 0,
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),

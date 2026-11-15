@@ -48,8 +48,7 @@ pub struct TaskCtx {
 /// `status` / `focus_date` are what the caller sees; `spark` is the click
 /// that triggered it (the checkbox), used for the completion spark —
 /// keyboard paths pass `None`. A completion offers an Undo toast that
-/// reverts status (and a carried-over `focus_date`); the API retracts the
-/// next occurrence of a recurring task on that revert.
+/// reverts status (and a carried-over `focus_date`).
 pub fn toggle_done(
     task_id: TaskId,
     status: TaskStatus,
@@ -318,22 +317,21 @@ pub fn patch_task(
     });
 }
 
-/// An inline task editor's form state (title / priority / due / recurrence /
-/// state), shared by every task list. Each list keeps its own markup
+/// An inline task editor's form state (title / priority / due / state),
+/// shared by every task list. Each list keeps its own markup
 /// (task-row contract); this owns the values: seeding from the task, `reset`
 /// on Cancel (it used to reset only the title, so abandoned
-/// priority/due/recurrence edits came back on reopen) and building the PATCH
+/// priority/due edits came back on reopen) and building the PATCH
 /// (`common::task::task_edit_request`).
 #[derive(Clone, Copy)]
 pub struct TaskEditDraft {
     pub title: RwSignal<String>,
     pub priority: RwSignal<String>,
     pub due: RwSignal<String>,
-    pub recurrence: RwSignal<String>,
     /// The state the picker shows, as its wire string (S5a).
     pub status: RwSignal<String>,
-    saved: StoredValue<[String; 4]>,
-    /// The task's own state, as the list last showed it. Unlike the four
+    saved: StoredValue<[String; 3]>,
+    /// The task's own state, as the list last showed it. Unlike the three
     /// fields above, the state also changes outside the editor (the
     /// checkbox, another tab), so this is never "what Save last sent": it
     /// moves only when the task does ([`TaskEditDraft::follow`]). A state
@@ -350,17 +348,13 @@ pub struct TaskEditDraft {
 }
 
 impl TaskEditDraft {
-    /// The editor's four text fields for `task` as saved.
-    fn values_of(task: &Task) -> [String; 4] {
+    /// The editor's three text fields for `task` as saved.
+    fn values_of(task: &Task) -> [String; 3] {
         [
             task.title.clone(),
             task.priority.as_str().to_string(),
             task.due_date
                 .map(|d| d.format("%Y-%m-%d").to_string())
-                .unwrap_or_default(),
-            task.recurrence
-                .as_ref()
-                .map(|r| r.as_str().to_string())
                 .unwrap_or_default(),
         ]
     }
@@ -380,7 +374,6 @@ impl TaskEditDraft {
             title: RwSignal::new(saved[0].clone()),
             priority: RwSignal::new(saved[1].clone()),
             due: RwSignal::new(saved[2].clone()),
-            recurrence: RwSignal::new(saved[3].clone()),
             status: RwSignal::new(status.clone()),
             saved: StoredValue::new(saved),
             base_status: StoredValue::new(status),
@@ -419,11 +412,10 @@ impl TaskEditDraft {
     /// Discard edits: every field back to the last saved values, and the
     /// state back to the task's own.
     pub fn reset(&self) {
-        let [t, p, d, r] = self.saved.get_value();
+        let [t, p, d] = self.saved.get_value();
         self.title.set(t);
         self.priority.set(p);
         self.due.set(d);
-        self.recurrence.set(r);
         self.status.set(self.base_status.get_value());
     }
 
@@ -436,7 +428,6 @@ impl TaskEditDraft {
             self.title.get_untracked(),
             self.priority.get_untracked(),
             self.due.get_untracked(),
-            self.recurrence.get_untracked(),
         ];
         let picked = self.status.get_untracked();
         let dirty = typed != self.saved.get_value() || picked != self.base_status.get_value();
@@ -447,12 +438,11 @@ impl TaskEditDraft {
         push_undo_toast(
             "Edit discarded",
             Arc::new(move || {
-                let [t, p, d, r] = typed.clone();
+                let [t, p, d] = typed.clone();
                 // `try_`: the row may have been refetched away meanwhile.
                 self.title.try_set(t);
                 self.priority.try_set(p);
                 self.due.try_set(d);
-                self.recurrence.try_set(r);
                 self.status.try_set(picked.clone());
                 reopen();
             }),
@@ -469,12 +459,11 @@ impl TaskEditDraft {
             self.title.try_get_untracked(),
             self.priority.try_get_untracked(),
             self.due.try_get_untracked(),
-            self.recurrence.try_get_untracked(),
         ];
         let Some(typed) = typed.into_iter().collect::<Option<Vec<String>>>() else {
             return false;
         };
-        let differs = |other: &[String; 4]| typed.iter().zip(other).any(|(t, o)| t != o);
+        let differs = |other: &[String; 3]| typed.iter().zip(other).any(|(t, o)| t != o);
         let dirty = self.saved.try_with_value(|s| differs(s)).unwrap_or(false);
         let unconfirmed =
             self.pending.try_get_value().unwrap_or(false) && differs(&Self::values_of(task));
@@ -488,7 +477,6 @@ impl TaskEditDraft {
         self.title.dispose();
         self.priority.dispose();
         self.due.dispose();
-        self.recurrence.dispose();
         self.status.dispose();
         self.saved.dispose();
         self.base_status.dispose();
@@ -497,14 +485,13 @@ impl TaskEditDraft {
     }
 
     /// The PATCH for the current values (`None` = blank title, don't save),
-    /// and remember the four text fields as saved so a later Cancel keeps
+    /// and remember the three text fields as saved so a later Cancel keeps
     /// them.
     pub fn take_request(&self) -> Option<UpdateTaskRequest> {
         let vals = [
             self.title.get_untracked(),
             self.priority.get_untracked(),
             self.due.get_untracked(),
-            self.recurrence.get_untracked(),
         ];
         // The state goes only when it differs from the task's own: saving a
         // new title must not re-send a state, and a state whose Save failed
@@ -513,7 +500,7 @@ impl TaskEditDraft {
             &self.status.get_untracked(),
             &self.base_status.get_value(),
         );
-        let req = task_edit_request(&vals[0], &vals[1], &vals[2], &vals[3], status)?;
+        let req = task_edit_request(&vals[0], &vals[1], &vals[2], status)?;
         self.saved.set_value(vals);
         self.sent_status
             .set_value(req.status.as_ref().map(|s| s.as_str().to_string()));

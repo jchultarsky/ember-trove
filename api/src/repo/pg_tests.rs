@@ -57,7 +57,6 @@ fn task_req(title: &str) -> CreateTaskRequest {
         priority: None,
         focus_date: None,
         due_date: None,
-        recurrence: None,
     }
 }
 
@@ -940,91 +939,13 @@ async fn search_title_highlight_is_the_full_title(pool: PgPool) {
     assert!(search_one(&pool, "owner-b", "Sam").await.is_empty());
 }
 
-// ── Recurring-task occurrence link ───────────────────────────────────────────
+// ── Task fixtures ────────────────────────────────────────────────────────────
 
 fn status_req(status: TaskStatus) -> UpdateTaskRequest {
     UpdateTaskRequest {
         status: Some(status),
         ..Default::default()
     }
-}
-
-#[sqlx::test(migrations = "../migrations")]
-async fn retract_occurrence_only_takes_the_owners_open_occurrence(pool: PgPool) {
-    let tasks = PgTaskRepo::new(pool.clone());
-    let parent = tasks
-        .create(None, "owner-a", task_req("weekly review"))
-        .await
-        .expect("create parent");
-    let next = tasks
-        .create_occurrence(parent.id, "owner-a", task_req("weekly review"))
-        .await
-        .expect("create occurrence");
-    // An unrelated task without a link is never touched.
-    let other = tasks
-        .create(None, "owner-a", task_req("unrelated"))
-        .await
-        .expect("create other");
-
-    // Owner-scoped: a mismatched owner retracts nothing.
-    assert_eq!(
-        tasks
-            .retract_occurrence(parent.id, "owner-b")
-            .await
-            .expect("retract (wrong owner)"),
-        0
-    );
-
-    assert_eq!(
-        tasks
-            .retract_occurrence(parent.id, "owner-a")
-            .await
-            .expect("retract"),
-        1
-    );
-    assert!(matches!(
-        tasks.get(next.id).await,
-        Err(EmberTroveError::NotFound(_))
-    ));
-    // Soft delete, so it's restorable; and idempotent.
-    tasks.get_deleted(next.id).await.expect("tombstoned");
-    assert_eq!(
-        tasks
-            .retract_occurrence(parent.id, "owner-a")
-            .await
-            .expect("retract again"),
-        0
-    );
-    tasks.get(other.id).await.expect("unrelated task untouched");
-}
-
-#[sqlx::test(migrations = "../migrations")]
-async fn retract_occurrence_keeps_a_started_occurrence(pool: PgPool) {
-    let tasks = PgTaskRepo::new(pool.clone());
-    let parent = tasks
-        .create(None, "owner-a", task_req("daily standup"))
-        .await
-        .expect("create parent");
-    let next = tasks
-        .create_occurrence(parent.id, "owner-a", task_req("daily standup"))
-        .await
-        .expect("create occurrence");
-    // Since S5a "started" is any state but untouched-open; Waiting is the
-    // one the person can set.
-    tasks
-        .update(next.id, status_req(TaskStatus::Waiting))
-        .await
-        .expect("start occurrence");
-
-    assert_eq!(
-        tasks
-            .retract_occurrence(parent.id, "owner-a")
-            .await
-            .expect("retract"),
-        0,
-        "an occurrence the user already started is their work — keep it"
-    );
-    tasks.get(next.id).await.expect("still live");
 }
 
 // ── My Day membership ─────────────────────────────────────────────────────────
@@ -5940,12 +5861,12 @@ async fn a_restore_replaces_the_people_registry(pool: PgPool) {
     assert_eq!(ids, [kept.id.0], "only the archive's people remain");
 }
 
-/// One row in each table a backup didn't carry before format 5, plus a
-/// recurring task and the occurrence it scheduled. Returns the ids of the
-/// signed webhook, the unsigned one, the parent task and its occurrence.
+/// One row in each table a backup didn't carry before format 5. Returns
+/// the ids of the signed webhook, the unsigned one and the task whose
+/// editor has a saved height.
 // Fixture helper; see `create_node`.
 #[allow(clippy::expect_used)]
-async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 4] {
+async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 3] {
     sqlx::query(
         "INSERT INTO node_templates (name, node_type, body, is_default, created_by)
          VALUES ('Meeting', 'article', '## Agenda', TRUE, 'alice')",
@@ -5959,19 +5880,12 @@ async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 
     .execute(pool)
     .await
     .expect("preset");
-    let parent = raw_task(pool, "alice", Some(node), "water the plants").await;
-    let child = raw_task(pool, "alice", Some(node), "water the plants").await;
-    sqlx::query("UPDATE node_tasks SET recurrence_parent_id = $2 WHERE id = $1")
-        .bind(child)
-        .bind(parent)
-        .execute(pool)
-        .await
-        .expect("link");
+    let task = raw_task(pool, "alice", Some(node), "water the plants").await;
     sqlx::query(
         "INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height, collapsed)
          VALUES ('alice', 'task', $1, 320, FALSE)",
     )
-    .bind(parent)
+    .bind(task)
     .execute(pool)
     .await
     .expect("pref");
@@ -5989,16 +5903,15 @@ async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 
     .fetch_one(pool)
     .await
     .expect("unsigned webhook");
-    [signed, unsigned, parent, child]
+    [signed, unsigned, task]
 }
 
 #[sqlx::test(migrations = "../migrations")]
 async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool: PgPool) {
-    // #281: templates, saved searches, editor prefs, webhooks and the
-    // recurrence link were not in an archive, so a restore onto an empty
-    // database lost them.
+    // #281: templates, saved searches, editor prefs and webhooks were not
+    // in an archive, so a restore onto an empty database lost them.
     let host = create_node(&pool, "alice", "settings host").await;
-    let [signed, unsigned, parent, child] = seed_account_settings(&pool, host.id.0).await;
+    let [signed, unsigned, task] = seed_account_settings(&pool, host.id.0).await;
 
     let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
     let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
@@ -6027,7 +5940,6 @@ async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool
         "DELETE FROM editor_prefs",
         "UPDATE webhooks SET url = 'https://example.com/moved', secret = 'added-later',
                              is_active = FALSE",
-        "UPDATE node_tasks SET recurrence_parent_id = NULL",
         "INSERT INTO search_presets (owner_id, name) VALUES ('alice', 'Made after the backup')",
     ] {
         sqlx::query(sql).execute(&pool).await.expect("live change");
@@ -6062,18 +5974,7 @@ async fn a_backup_and_restore_carry_what_an_account_keeps_outside_its_nodes(pool
             .fetch_one(&pool)
             .await
             .expect("one pref");
-    assert_eq!(pref, ("alice".into(), parent, Some(320)));
-    let linked: Option<uuid::Uuid> =
-        sqlx::query_scalar("SELECT recurrence_parent_id FROM node_tasks WHERE id = $1")
-            .bind(child)
-            .fetch_one(&pool)
-            .await
-            .expect("child");
-    assert_eq!(
-        linked,
-        Some(parent),
-        "the occurrence knows its parent again"
-    );
+    assert_eq!(pref, ("alice".into(), task, Some(320)));
 
     let hook = |id: uuid::Uuid| {
         let pool = pool.clone();
@@ -6338,76 +6239,6 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
             .await
             .expect("standalone");
     assert_eq!(standalone, 1);
-}
-
-// ── One next occurrence per completion (#281, 1.8) ───────────────────────────
-
-#[sqlx::test(migrations = "../migrations")]
-async fn two_completions_at_once_schedule_one_next_occurrence(pool: PgPool) {
-    // A double click, or two devices: both requests read the task as open
-    // and both scheduled the next occurrence. `create_occurrence` now
-    // locks the parent and returns the live occurrence it already has.
-    let live_children = |parent: uuid::Uuid| {
-        let pool = pool.clone();
-        async move {
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM node_tasks
-                 WHERE recurrence_parent_id = $1 AND deleted_at IS NULL",
-            )
-            .bind(parent)
-            .fetch_one(&pool)
-            .await
-            .expect("count")
-        }
-    };
-    for round in 0..10 {
-        let parent = PgTaskRepo::new(pool.clone())
-            .create(None, "owner-a", task_req(&format!("daily {round}")))
-            .await
-            .expect("parent");
-        let (one, two) = (PgTaskRepo::new(pool.clone()), PgTaskRepo::new(pool.clone()));
-        let (r1, r2) = tokio::join!(
-            one.create_occurrence(parent.id, "owner-a", task_req("next")),
-            two.create_occurrence(parent.id, "owner-a", task_req("next")),
-        );
-        let (first, second) = (r1.expect("first"), r2.expect("second"));
-        assert_eq!(first.id, second.id, "both callers get the one occurrence");
-        assert_eq!(live_children(parent.id.0).await, 1, "round {round}");
-    }
-}
-
-#[sqlx::test(migrations = "../migrations")]
-async fn a_retracted_or_deleted_occurrence_is_scheduled_again(pool: PgPool) {
-    let tasks = PgTaskRepo::new(pool.clone());
-    let parent = tasks
-        .create(None, "owner-a", task_req("weekly"))
-        .await
-        .expect("parent");
-    let first = tasks
-        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
-        .await
-        .expect("first");
-    // Reopening the parent retracts it; completing again schedules anew.
-    assert_eq!(
-        tasks
-            .retract_occurrence(parent.id, "owner-a")
-            .await
-            .expect("retract"),
-        1
-    );
-    let second = tasks
-        .create_occurrence(parent.id, "owner-a", task_req("weekly"))
-        .await
-        .expect("second");
-    assert_ne!(first.id, second.id);
-    // A parent that is gone is an error, not a stray task.
-    let missing = common::id::TaskId(uuid::Uuid::new_v4());
-    assert!(
-        tasks
-            .create_occurrence(missing, "owner-a", task_req("weekly"))
-            .await
-            .is_err()
-    );
 }
 
 // ── Reorder follows the edit rule (#281, 2.5) ────────────────────────────────
@@ -10723,5 +10554,302 @@ async fn a_notes_edited_date_survives_a_backup_and_an_older_archive(pool: PgPool
     assert_eq!(
         again.iter().filter(|n| n.edited_at == Some(None)).count(),
         2
+    );
+}
+
+// ── S5b: tasks no longer repeat (#332) ───────────────────────────────────────
+
+/// An archive of formats 3 to 11 may hold repeating tasks, and from format
+/// 5 which task scheduled which. A restore brings each task back as a
+/// one-time task with everything else it had (ONTOLOGY §9; the rule
+/// migration 053 applied), whatever the rule said, and nothing of it is
+/// written again.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_older_archive_restores_its_repeating_tasks_as_one_time_tasks(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let node = common::id::NodeId(insert_raw_node(&pool, "alice", "project", "garden", "").await);
+    let due = chrono::NaiveDate::from_ymd_opt(2026, 11, 8).expect("date");
+    let done = tasks
+        .create(Some(node), "alice", task_req("water the plants"))
+        .await
+        .expect("create");
+    let done = tasks
+        .update(done.id, status_req(TaskStatus::Done))
+        .await
+        .expect("done");
+    let next = tasks
+        .create(
+            Some(node),
+            "alice",
+            CreateTaskRequest {
+                due_date: Some(due),
+                ..task_req("water the plants")
+            },
+        )
+        .await
+        .expect("create the next one");
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+
+    // The same archive as a release before S5b wrote it: a rule on each
+    // task (one of them a word no release ever had), and the links, one of
+    // them to a task the archive doesn't hold.
+    let mut old = serde_json::to_value(&data).expect("json");
+    for row in old["tasks"].as_array_mut().expect("tasks") {
+        let task = row.as_object_mut().expect("task");
+        let rule = if task["id"] == serde_json::json!(done.id) {
+            "weekly"
+        } else {
+            "every other blue moon"
+        };
+        task.insert("recurrence".into(), rule.into());
+    }
+    old["recurrence_links"] = serde_json::json!([
+        { "task_id": next.id, "parent_id": done.id },
+        { "task_id": done.id, "parent_id": uuid::Uuid::from_u128(0xdead) },
+    ]);
+    let old: common::backup::BackupData = serde_json::from_value(old).expect("an older archive");
+
+    // Restored over a database that has moved on.
+    tasks
+        .update(
+            next.id,
+            UpdateTaskRequest {
+                title: Some("renamed since".into()),
+                due_date: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("live change");
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &old)
+        .await
+        .expect("an older archive restores");
+    tx.commit().await.unwrap();
+
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM node_tasks").await, 2);
+    let back = tasks.get(done.id).await.expect("restored");
+    assert_eq!(back.status, TaskStatus::Done);
+    assert_eq!(back.completed_at, done.completed_at);
+    assert_eq!(back.created_at, done.created_at);
+    assert_eq!(back.node_id, Some(node));
+    let back = tasks.get(next.id).await.expect("restored");
+    assert_eq!(back.title, "water the plants");
+    assert_eq!(back.status, TaskStatus::Open);
+    assert_eq!(back.due_date, Some(due));
+    assert_eq!(back.created_at, next.created_at);
+
+    // A one-time task from here on: reopening the first deletes nothing,
+    // and the next archive says nothing of a rule or a link.
+    tasks
+        .update(done.id, status_req(TaskStatus::Open))
+        .await
+        .expect("reopen");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM node_tasks WHERE deleted_at IS NULL"
+        )
+        .await,
+        2
+    );
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let again = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    let written = serde_json::to_value(&again).expect("json");
+    assert!(written.get("recurrence_links").is_none());
+    let rows = written["tasks"].as_array().expect("tasks");
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert!(row.get("recurrence").is_none(), "{row}");
+    }
+}
+
+/// Migration 053: the repeat rule and the link to the task that scheduled
+/// this one are dropped, with the link's index and foreign key. No task is
+/// removed and nothing else about any task changes, in the trash or out of
+/// it, on a node or on none; and a task that was linked is an ordinary task
+/// afterwards.
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(pool: PgPool) {
+    // Put the table back as it was before 053: migration 022's column (the
+    // file also adds `sort_order`, so only its line) and migration 032.
+    sql(&pool, "ALTER TABLE node_tasks ADD COLUMN recurrence TEXT").await;
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/032_task_recurrence_parent.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("re-run migration 032");
+
+    let node = insert_raw_node(&pool, "alice", "project", "garden", "").await;
+    // (title, owner, on the node, state, rule, in the trash)
+    let seeds = [
+        ("never repeated", "alice", true, "open", None, false),
+        ("daily", "alice", true, "open", Some("daily"), false),
+        ("weekly", "alice", true, "waiting", Some("weekly"), false),
+        ("biweekly", "alice", true, "open", Some("biweekly"), false),
+        (
+            "monthly",
+            "alice",
+            true,
+            "cancelled",
+            Some("monthly"),
+            false,
+        ),
+        ("yearly", "alice", true, "open", Some("yearly"), false),
+        (
+            "a word no release had",
+            "alice",
+            true,
+            "open",
+            Some("fortnightly"),
+            false,
+        ),
+        ("on no node", "bob", false, "open", Some("weekly"), false),
+        ("in the trash", "alice", true, "open", Some("daily"), true),
+        (
+            "completed, scheduled the next",
+            "alice",
+            true,
+            "done",
+            Some("weekly"),
+            false,
+        ),
+        ("the next one", "alice", true, "open", Some("weekly"), false),
+    ];
+    let mut ids = std::collections::HashMap::new();
+    for (title, owner, on_node, status, rule, trashed) in seeds {
+        let id: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO node_tasks (owner_id, node_id, title, status, priority, focus_date, \
+                                     due_date, recurrence, sort_order, completed_at, deleted_at, \
+                                     created_at) \
+             VALUES ($1, $2, $3, $4::task_status, 'high', '2026-11-02', '2026-11-03', $5, 7, \
+                     CASE WHEN $4 = 'done' THEN '2026-11-01T10:00:00Z'::timestamptz END, \
+                     CASE WHEN $6 THEN '2026-11-04T10:00:00Z'::timestamptz END, \
+                     '2026-10-01T10:00:00Z') RETURNING id",
+        )
+        .bind(owner)
+        .bind(on_node.then_some(node))
+        .bind(title)
+        .bind(status)
+        .bind(rule)
+        .bind(trashed)
+        .fetch_one(&pool)
+        .await
+        .expect(title);
+        ids.insert(title, id);
+    }
+    let (parent, child) = (ids["completed, scheduled the next"], ids["the next one"]);
+    sqlx::query("UPDATE node_tasks SET recurrence_parent_id = $2 WHERE id = $1")
+        .bind(child)
+        .bind(parent)
+        .execute(&pool)
+        .await
+        .expect("link");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM node_tasks WHERE recurrence IS NOT NULL"
+        )
+        .await,
+        10,
+        "the fixture repeats"
+    );
+    const SELF_KEYS: &str = "SELECT count(*) FROM pg_constraint \
+         WHERE contype = 'f' AND conrelid = 'node_tasks'::regclass \
+           AND confrelid = 'node_tasks'::regclass";
+    assert_eq!(scalar(&pool, SELF_KEYS).await, 1, "032's foreign key");
+
+    // Every task as it is, without the two columns that go. Taken after
+    // the last fixture write: the link above moved the child's `updated_at`.
+    let before: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT id, (to_jsonb(t) - 'recurrence' - 'recurrence_parent_id')::text \
+         FROM node_tasks t ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("before");
+    assert_eq!(before.len(), 11);
+
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/053_tasks_do_not_repeat.sql"
+    ))
+    .execute(&mut *tx)
+    .await
+    .expect("re-run migration 053");
+    tx.commit().await.expect("commit");
+
+    let after: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT id, to_jsonb(t)::text FROM node_tasks t ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("after");
+    assert_eq!(after, before, "every task, and nothing but the two columns");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_name = 'node_tasks' \
+               AND column_name IN ('recurrence', 'recurrence_parent_id')"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_node_tasks_recurrence_parent'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(scalar(&pool, SELF_KEYS).await, 0);
+
+    // What was a series is two ordinary tasks. Completing the second makes
+    // no third; reopening the first, or deleting it for good, leaves the
+    // second alone.
+    let tasks = PgTaskRepo::new(pool.clone());
+    let (parent, child) = (common::id::TaskId(parent), common::id::TaskId(child));
+    let renamed = tasks
+        .update(
+            child,
+            UpdateTaskRequest {
+                title: Some("just a task".into()),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("update");
+    assert_eq!(renamed.title, "just a task");
+    assert!(renamed.completed_at.is_some());
+    tasks
+        .update(parent, status_req(TaskStatus::Open))
+        .await
+        .expect("reopen");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM node_tasks WHERE deleted_at IS NULL"
+        )
+        .await,
+        10,
+        "none made, none retracted"
+    );
+    tasks.delete(child).await.expect("delete");
+    assert_eq!(tasks.restore(child).await.expect("restore").id, child);
+    sqlx::query("DELETE FROM node_tasks WHERE id = $1")
+        .bind(parent.0)
+        .execute(&pool)
+        .await
+        .expect("hard delete");
+    assert_eq!(
+        tasks.get(child).await.expect("still there").title,
+        "just a task"
     );
 }

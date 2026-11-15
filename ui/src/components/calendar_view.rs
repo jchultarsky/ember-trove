@@ -120,7 +120,6 @@ fn MonthGrid(
                         priority: None,
                         focus_date: None,
                         due_date: Some(date),
-                        recurrence: None,
                     };
                     crate::api::create_standalone_task(&req).await.map(|_| {
                         format!(

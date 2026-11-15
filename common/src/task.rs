@@ -103,42 +103,6 @@ impl TaskPriority {
     }
 }
 
-/// How often a recurring task should repeat after being marked Done.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RecurrenceRule {
-    Daily,
-    Weekly,
-    Biweekly,
-    Monthly,
-    Yearly,
-}
-
-wire_enum!(RecurrenceRule {
-    Daily => "daily",
-    Weekly => "weekly",
-    Biweekly => "biweekly",
-    Monthly => "monthly",
-    Yearly => "yearly",
-});
-
-impl RecurrenceRule {
-    /// The next occurrence after `d`. Months and years clamp to the target
-    /// month's last day (Jan 31 → Feb 28/29, Feb 29 → Feb 28 next year), the
-    /// way calendars do. It used to fall back to the 28th for every short
-    /// month, so a series on the 29th–31st drifted to the 28th permanently.
-    pub fn advance(&self, d: NaiveDate) -> NaiveDate {
-        use chrono::Months;
-        match self {
-            RecurrenceRule::Daily => d + chrono::Duration::days(1),
-            RecurrenceRule::Weekly => d + chrono::Duration::weeks(1),
-            RecurrenceRule::Biweekly => d + chrono::Duration::weeks(2),
-            RecurrenceRule::Monthly => d.checked_add_months(Months::new(1)).unwrap_or(d),
-            RecurrenceRule::Yearly => d.checked_add_months(Months::new(12)).unwrap_or(d),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Task {
     pub id: TaskId,
@@ -151,8 +115,6 @@ pub struct Task {
     /// Non-null when this task is in the user's My Day for that date.
     pub focus_date: Option<NaiveDate>,
     pub due_date: Option<NaiveDate>,
-    /// Recurrence rule — when Done a new instance is automatically scheduled.
-    pub recurrence: Option<RecurrenceRule>,
     /// Manual ordering within My Day (0 = default, higher = later in list).
     pub sort_order: i32,
     pub created_at: DateTime<Utc>,
@@ -403,8 +365,6 @@ pub struct CreateTaskRequest {
     pub focus_date: Option<NaiveDate>,
     #[garde(skip)]
     pub due_date: Option<NaiveDate>,
-    #[garde(skip)]
-    pub recurrence: Option<RecurrenceRule>,
 }
 
 /// Every field is optional; `Default` is the no-op PATCH, so callers write
@@ -436,14 +396,6 @@ pub struct UpdateTaskRequest {
     )]
     #[garde(skip)]
     pub due_date: Option<Option<NaiveDate>>,
-    /// `None` = leave unchanged · `Some(None)` = clear recurrence · `Some(Some(r))` = set
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deser_double_opt"
-    )]
-    #[garde(skip)]
-    pub recurrence: Option<Option<RecurrenceRule>>,
     /// `None` = leave unchanged · `Some(None)` = detach from node · `Some(Some(id))` = associate
     #[serde(
         default,
@@ -452,25 +404,6 @@ pub struct UpdateTaskRequest {
     )]
     #[garde(skip)]
     pub node_id: Option<Option<NodeId>>,
-    /// The sender's local date, sent with a completion (#281, 1.9). The
-    /// server only knows the UTC date, and the next occurrence of a
-    /// recurring task with no focus date is counted from "today": in a US
-    /// evening UTC is already tomorrow, so a daily task skipped a day.
-    /// Read through [`local_today`], which ignores an impossible value.
-    /// Never stored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[garde(skip)]
-    pub today: Option<NaiveDate>,
-}
-
-/// The date a request's sender calls today: their `hint` when it is a date
-/// some time zone could be on right now (within a day of the UTC date),
-/// otherwise the UTC date. A wrong or hostile hint can only move the
-/// sender's own next occurrence by a day.
-#[must_use]
-pub fn local_today(hint: Option<NaiveDate>, utc_today: NaiveDate) -> NaiveDate {
-    hint.filter(|d| (*d - utc_today).num_days().abs() <= 1)
-        .unwrap_or(utc_today)
 }
 
 /// A done-toggle expressed as PATCHes: the change, and the one that undoes it.
@@ -521,9 +454,6 @@ pub fn done_toggle(
         ..Default::default()
     };
     if next == TaskStatus::Done {
-        // The server counts a recurring task's next occurrence from the
-        // viewer's day, not from UTC's (#281, 1.9).
-        request.today = Some(today);
         let carried = current.is_actionable() && lets_tasks_ask(project);
         if let Some(earlier) = focus_date.filter(|d| *d < today && carried) {
             request.focus_date = Some(Some(today));
@@ -638,7 +568,7 @@ pub fn changed_state(picked: &str, base: &str) -> Option<TaskStatus> {
 
 /// The PATCH for an inline task edit, from its form values (the strings the
 /// edit form's inputs hold). `None` when the title is blank. An empty due date
-/// or recurrence clears it; an unknown priority is Medium. `status` is the
+/// clears it; an unknown priority is Medium. `status` is the
 /// state picked in the editor, and only when it was changed there: an
 /// edit of the title must not re-send the state the task happens to have.
 /// Shared by every task list's inline editor (`task_actions::TaskEditDraft`).
@@ -646,7 +576,6 @@ pub fn task_edit_request(
     title: &str,
     priority: &str,
     due: &str,
-    recurrence: &str,
     status: Option<TaskStatus>,
 ) -> Option<UpdateTaskRequest> {
     let title = title.trim();
@@ -658,7 +587,6 @@ pub fn task_edit_request(
         status,
         priority: Some(TaskPriority::parse(priority).unwrap_or(TaskPriority::Medium)),
         due_date: Some(due.trim().parse::<NaiveDate>().ok()),
-        recurrence: Some(RecurrenceRule::parse(recurrence)),
         ..Default::default()
     })
 }
@@ -697,41 +625,6 @@ mod overdue_tests {
         // Finished one way or the other: never overdue.
         assert!(!is_overdue(&TaskStatus::Done, Some(day(1)), today));
         assert!(!is_overdue(&TaskStatus::Cancelled, Some(day(1)), today));
-    }
-}
-
-#[cfg(test)]
-mod local_today_tests {
-    use super::{TaskStatus, done_toggle, local_today};
-    use chrono::NaiveDate;
-
-    fn day(d: u32) -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 11, d).expect("date")
-    }
-
-    #[test]
-    fn a_plausible_local_date_wins_over_utc() {
-        // 9 pm in New York on the 9th is already the 10th in UTC.
-        assert_eq!(local_today(Some(day(9)), day(10)), day(9));
-        // Ahead of UTC, and the same day.
-        assert_eq!(local_today(Some(day(11)), day(10)), day(11));
-        assert_eq!(local_today(Some(day(10)), day(10)), day(10));
-    }
-
-    #[test]
-    fn an_impossible_or_missing_date_falls_back_to_utc() {
-        assert_eq!(local_today(None, day(10)), day(10));
-        assert_eq!(local_today(Some(day(8)), day(10)), day(10));
-        assert_eq!(local_today(Some(day(12)), day(10)), day(10));
-    }
-
-    #[test]
-    fn completing_sends_the_viewers_day_and_reopening_does_not() {
-        let done = done_toggle(&TaskStatus::Open, None, day(9), None);
-        assert_eq!(done.request.today, Some(day(9)));
-        let reopen = done_toggle(&TaskStatus::Done, None, day(9), None);
-        assert_eq!(reopen.request.today, None);
-        assert_eq!(done.revert.today, None);
     }
 }
 
@@ -831,7 +724,6 @@ mod tests {
             priority: TaskPriority::Medium,
             focus_date: focus,
             due_date: due,
-            recurrence: None,
             sort_order: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -1156,55 +1048,123 @@ mod tests {
         assert!(!warn_past_due(None, past, today));
     }
 
+    /// A task as this release answers with it: no `recurrence` key.
+    fn one_time_task_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": uuid::Uuid::from_u128(1), "node_id": null, "owner_id": "alice",
+            "title": "t", "status": "open", "priority": "medium",
+            "focus_date": null, "due_date": null, "sort_order": 0,
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+            "completed_at": null,
+        })
+    }
+
     #[test]
-    fn recurrence_advance_clamps_to_month_end_without_drift() {
-        let d = |y, m, dd| NaiveDate::from_ymd_opt(y, m, dd).unwrap();
-        assert_eq!(
-            RecurrenceRule::Monthly.advance(d(2026, 1, 31)),
-            d(2026, 2, 28)
-        );
-        assert_eq!(
-            RecurrenceRule::Monthly.advance(d(2028, 1, 31)),
-            d(2028, 2, 29)
-        );
-        assert_eq!(
-            RecurrenceRule::Monthly.advance(d(2026, 3, 31)),
-            d(2026, 4, 30)
-        );
-        assert_eq!(
-            RecurrenceRule::Monthly.advance(d(2026, 12, 15)),
-            d(2027, 1, 15)
-        );
-        assert_eq!(
-            RecurrenceRule::Yearly.advance(d(2028, 2, 29)),
-            d(2029, 2, 28)
-        );
-        assert_eq!(
-            RecurrenceRule::Weekly.advance(d(2026, 10, 30)),
-            d(2026, 11, 6)
-        );
-        assert_eq!(
-            RecurrenceRule::Biweekly.advance(d(2026, 12, 25)),
-            d(2027, 1, 8)
-        );
+    fn a_task_without_a_repeat_rule_in_its_json_reads() {
+        // S5b: the API no longer sends `recurrence`. A tab left open across
+        // the release must still read a task, alone and in a feed row.
+        let task: Task = serde_json::from_value(one_time_task_json()).expect("a task");
+        assert_eq!(task.title, "t");
+        let mut row = one_time_task_json();
+        row["node_title"] = serde_json::Value::Null;
+        let fed: MyDayTask = serde_json::from_value(row).expect("a feed row");
+        assert_eq!(fed.task.id, task.id);
+    }
+
+    #[test]
+    fn a_task_that_repeated_reads_as_a_one_time_task() {
+        // S5b (ONTOLOGY §9): an older archive, a cached answer or an older
+        // API may still say `recurrence`. It is read past, and never
+        // written again.
+        for rule in ["weekly", "fortnightly"] {
+            let mut old = one_time_task_json();
+            old["recurrence"] = serde_json::json!(rule);
+            let task: Task = serde_json::from_value(old.clone()).expect(rule);
+            let written = serde_json::to_value(&task).expect("json");
+            assert!(written.get("recurrence").is_none(), "{written}");
+            old["node_title"] = serde_json::Value::Null;
+            let fed: MyDayTask = serde_json::from_value(old).expect(rule);
+            let written = serde_json::to_value(&fed).expect("json");
+            assert!(written.get("recurrence").is_none(), "{written}");
+        }
+    }
+
+    #[test]
+    fn a_request_from_an_older_tab_is_read_without_its_repeat_rule() {
+        // A tab left open across the release still sends `recurrence`, and
+        // `today` with a completion. Neither is an error, whatever it holds:
+        // the task saves as a one-time task.
+        for (rule, today) in [("weekly", "2026-11-15"), ("fortnightly", "x")] {
+            let create: CreateTaskRequest = serde_json::from_value(serde_json::json!({
+                "title": "t", "recurrence": rule,
+            }))
+            .expect(rule);
+            let written = serde_json::to_value(&create).expect("json");
+            assert!(written.get("recurrence").is_none(), "{written}");
+
+            let update: UpdateTaskRequest = serde_json::from_value(serde_json::json!({
+                "status": "done", "recurrence": rule, "today": today,
+            }))
+            .expect(rule);
+            assert_eq!(update.status, Some(TaskStatus::Done));
+            let written = serde_json::to_value(&update).expect("json");
+            assert!(written.get("recurrence").is_none(), "{written}");
+            assert!(written.get("today").is_none(), "{written}");
+        }
+        // Clearing the rule, as an older editor's save does, is as harmless.
+        let cleared: UpdateTaskRequest =
+            serde_json::from_value(serde_json::json!({ "title": "t", "recurrence": null }))
+                .expect("null rule");
+        assert_eq!(cleared.title.as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn completing_a_task_sends_its_state_and_nothing_about_a_next_one() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 15).expect("date");
+        let keys = |req: &UpdateTaskRequest| -> Vec<String> {
+            let written = serde_json::to_value(req).expect("json");
+            let mut keys: Vec<String> = written
+                .as_object()
+                .expect("object")
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, _)| k.clone())
+                .collect();
+            keys.sort();
+            keys
+        };
+        let done = done_toggle(&TaskStatus::Open, None, today, None);
+        assert_eq!(keys(&done.request), ["status"]);
+        assert_eq!(keys(&done.revert), ["status"]);
+        // Carried over from an earlier day: the stamp, and still no more.
+        let earlier = NaiveDate::from_ymd_opt(2026, 11, 14).expect("date");
+        let carried = done_toggle(&TaskStatus::Open, Some(earlier), today, None);
+        assert_eq!(keys(&carried.request), ["focus_date", "status"]);
+        assert_eq!(keys(&carried.revert), ["focus_date", "status"]);
     }
 
     #[test]
     fn task_edit_request_maps_form_values() {
-        let r = task_edit_request("  Ship it  ", "high", "2026-11-03", "weekly", None).unwrap();
+        let r = task_edit_request("  Ship it  ", "high", "2026-11-03", None).unwrap();
         assert_eq!(r.status, None, "an unchanged state is not sent");
         assert_eq!(r.title.as_deref(), Some("Ship it"));
         assert_eq!(r.priority, Some(TaskPriority::High));
         assert_eq!(r.due_date, Some(NaiveDate::from_ymd_opt(2026, 11, 3)));
-        assert_eq!(r.recurrence, Some(Some(RecurrenceRule::Weekly)));
-        // Empty due / recurrence clear (Some(None)); unknown priority = Medium.
-        let r = task_edit_request("x", "bogus", "", "", Some(TaskStatus::Waiting)).unwrap();
+        // Nothing else rides along: the task's day and node are not the
+        // editor's to send.
+        assert_eq!(r.focus_date, None);
+        assert_eq!(r.node_id, None);
+        // An empty due date clears it (Some(None)); unknown priority = Medium.
+        let r = task_edit_request("x", "bogus", "", Some(TaskStatus::Waiting)).unwrap();
         assert_eq!(r.status, Some(TaskStatus::Waiting));
         assert_eq!(r.priority, Some(TaskPriority::Medium));
         assert_eq!(r.due_date, Some(None));
-        assert_eq!(r.recurrence, Some(None));
+        // A due date that is no date clears it too, and is never a priority.
+        let r = task_edit_request("x", "low", "high", None).unwrap();
+        assert_eq!(r.priority, Some(TaskPriority::Low));
+        assert_eq!(r.due_date, Some(None));
         // Blank title: no request at all.
-        assert!(task_edit_request("   ", "high", "", "", None).is_none());
+        assert!(task_edit_request("   ", "high", "", None).is_none());
     }
 
     #[test]

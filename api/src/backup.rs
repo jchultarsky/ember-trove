@@ -232,7 +232,6 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
     // Captures (#234).
     let captures = repo::capture::list_all_on(&mut *conn).await?;
     let tasks = repo::task::list_all_on(&mut *conn).await?;
-    let recurrence_links = repo::task::recurrence_links_on(&mut *conn).await?;
     // Project Briefs (#282), all owners, in the same snapshot as their nodes.
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
@@ -275,7 +274,6 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         search_presets: Some(search_presets),
         editor_prefs: Some(editor_prefs),
         webhooks: Some(webhooks),
-        recurrence_links,
         briefs,
         focus: Some(focus),
     })
@@ -879,18 +877,20 @@ pub(crate) async fn restore_into(
         .map_err(|e| ApiError::Internal(format!("insert note failed: {e}")))?;
     }
 
-    // Insert tasks.
+    // Insert tasks. An archive from before S5b may have said that a task
+    // repeats, and which task scheduled which: neither is read any more
+    // (`BackupData`), so each comes back as a one-time task, the rule
+    // migration 053 applied.
     for task in &data.tasks {
         let status_str = task.status.as_str();
         let priority_str = task.priority.as_str();
-        let recurrence_str = task.recurrence.as_ref().map(|v| v.as_str());
         sqlx::query(
             r#"
             INSERT INTO node_tasks
                 (id, node_id, owner_id, title, status, priority, focus_date, due_date,
-                 recurrence, sort_order, created_at, updated_at, completed_at)
+                 sort_order, created_at, updated_at, completed_at)
             VALUES ($1, $2, $3, $4, $5::task_status, $6::task_priority, $7, $8,
-                    $9, $10, $11, $12, $13)
+                    $9, $10, $11, $12)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -902,7 +902,6 @@ pub(crate) async fn restore_into(
         .bind(priority_str)
         .bind(task.focus_date)
         .bind(task.due_date)
-        .bind(recurrence_str)
         .bind(task.sort_order)
         .bind(task.created_at)
         .bind(task.updated_at)
@@ -911,32 +910,6 @@ pub(crate) async fn restore_into(
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert task failed: {e}")))?;
-    }
-
-    // Which task scheduled which occurrence (#281), once every task is in:
-    // the link is a foreign key to another task. A link whose parent isn't
-    // in the archive is dropped; that only disables the retraction for it.
-    if !data.recurrence_links.is_empty() {
-        let tasks: Vec<Uuid> = data.recurrence_links.iter().map(|l| l.task_id.0).collect();
-        let parents: Vec<Uuid> = data
-            .recurrence_links
-            .iter()
-            .map(|l| l.parent_id.0)
-            .collect();
-        sqlx::query(
-            r#"
-            UPDATE node_tasks t
-            SET recurrence_parent_id = l.parent
-            FROM UNNEST($1::uuid[], $2::uuid[]) AS l(task, parent)
-            WHERE t.id = l.task
-              AND EXISTS (SELECT 1 FROM node_tasks p WHERE p.id = l.parent)
-            "#,
-        )
-        .bind(&tasks)
-        .bind(&parents)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| ApiError::Internal(format!("restore recurrence links failed: {e}")))?;
     }
 
     // Insert attachment metadata rows.

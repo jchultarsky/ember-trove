@@ -21,7 +21,7 @@ use common::id::TaskId;
 use common::task::{TaskPriority, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 
-use crate::components::due_date_field::{DUE_INPUT_CLASS, DueDateField};
+use crate::components::due_date_field::DueDateField;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::resizable_editor::ResizableEditor;
 use crate::components::task_actions::TaskEditDraft;
@@ -136,29 +136,6 @@ pub fn CopyTaskButton(#[prop(into)] title: Signal<String>) -> impl IntoView {
         >
             <span aria-hidden="true" class="material-symbols-outlined" style="font-size:16px;">"content_copy"</span>
         </button>
-    }
-}
-
-/// The `<option>`s of every recurrence `<select>`: "No repeat" plus each rule
-/// with its one label (`task_common::recurrence_label`). The copies used to
-/// disagree ("Biweekly" vs "Every 2 weeks"). Each option carries its own
-/// `selected` binding: a `prop:value` on the `<select>` can be applied before
-/// its options exist, which leaves a freshly opened editor on "No repeat".
-#[component]
-pub fn RecurrenceOptions(value: RwSignal<String>) -> impl IntoView {
-    view! {
-        <option value="" selected=move || value.get().is_empty()>"No repeat"</option>
-        {common::task::RecurrenceRule::ALL
-            .iter()
-            .map(|r| {
-                let v = r.as_str();
-                view! {
-                    <option value=v selected=move || value.get() == v>
-                        {crate::components::task_common::recurrence_label(r)}
-                    </option>
-                }
-            })
-            .collect_view()}
     }
 }
 
@@ -415,7 +392,7 @@ const EDITOR_TEXTAREA_CLASS: &str = "w-full bg-stone-100 dark:bg-stone-800 text-
      min-h-[40px] focus:outline-none focus:ring-1 focus:ring-amber-500";
 
 /// The one inline task editor (#132): title, priority, state, due date,
-/// repeat, Save / Cancel — the same controls and keys in My Day and the node
+/// Save / Cancel — the same controls and keys in My Day and the node
 /// panel. The draft semantics live here too: Cancel resets every
 /// field, Escape discards with "Edit discarded · Undo" (`TaskEditDraft`),
 /// and Save hands the list the PATCH. Escape and Ctrl/⌘+Enter work from
@@ -493,13 +470,6 @@ pub fn TaskEditor(
                 // and the picker has no "Done" to show as chosen.
                 {draft.picks_state().then(|| view! { <StatePicker value=draft.status /> })}
                 <DueDateField value=draft.due original=due />
-                <select
-                    class=DUE_INPUT_CLASS
-                    title="Recurrence"
-                    on:change=move |ev| draft.recurrence.set(event_target_value(&ev))
-                >
-                    <RecurrenceOptions value=draft.recurrence />
-                </select>
                 <span class="flex-1" />
                 <IconButton
                     icon="check"
