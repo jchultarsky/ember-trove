@@ -7,8 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **History: the server's half** (S6d of the ontology programme, #329;
-  ONTOLOGY §9.2, §10). The History section itself follows.
+- **History** (S6d of the ontology programme, #329; ONTOLOGY §9.2, §10).
+  - **The Notes section of a node's page is now History**, on every
+    kind: the node's notes, and between them what happened to it (a
+    change of its status or state, a replaced Brief, what closing a
+    project closed, a publish or an archive), each as one line at the
+    moment it happened, newest first. A line that holds more opens: a
+    cascade's shows the sub-projects and tasks it closed, a replaced
+    Brief its old words. The add-note box is where it was.
+  - **Activity is the audit trail** only: who created, edited, tagged,
+    shared or exported the node. What History shows is no longer listed
+    there too.
+  - **"Version History" is now "Versions"**, and the editor's messages
+    say "it stays in Versions". History means one thing.
+  - **Edit and Delete on a note are offered where they work**: Edit to
+    the note's author, Delete to them, the node's owner or an admin. The
+    page used to offer Edit on any note to the node's owner, and the save
+    answered "not found". The Notes feed follows the same rule and shows
+    the "edited" mark too; its "Recently updated" order is "Recently
+    edited".
+  - When the changes can't be loaded, the notes still show, and the page
+    says so. A note being edited is left alone when History reads again.
   - **A note's "edited" mark is now a fact.** `node_notes.edited_at`
     (migration 052) is set when a note's words change and by nothing
     else. The mark used to be worked out from a date that a delete and
@@ -28,6 +47,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     Without `scope` it answers with everything, as before.
   - The notes feed's "Recently updated" order follows the date a note's
     words last changed, no longer the date its row was last written.
+
+### Fixed
+- Adding a note that fails to save now says so and keeps the text. It
+  used to fail without a word.
+- A tab left open across a release no longer loses a node's whole
+  Activity or History list to one entry it doesn't know: that entry is
+  skipped.
 
 ### Changed
 - **Backup format 11**: a note carries `edited_at`. Older releases refuse

@@ -262,7 +262,7 @@ test('a project is parked, made active and completed from its page', async ({ pa
 
   // Only a Project has the control.
   await page.goto(`/nodes/${article.id}`);
-  await expect(page.getByTestId('node-notes')).toBeVisible();
+  await expect(page.getByTestId('node-history')).toBeVisible();
   await expect(page.getByTestId('project-state-chip')).toHaveCount(0);
 
   await page.goto(`/nodes/${p.id}`);
@@ -346,9 +346,8 @@ test('a project is parked, made active and completed from its page', async ({ pa
   await option('active').click();
   await expect(focus).toHaveAccessibleName('Add to Focus');
 
-  const section = page.getByTestId('node-activity');
-  const toggle = section.locator('button[aria-expanded]').first();
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  // History (S6d), open from the start and kept current by the page.
+  const section = page.getByTestId('node-history');
   // One line per change: parked twice above (once by mouse, once after the
   // keyboard made it active), completed and re-opened once.
   await expect(section.getByText('Active → Parked')).toHaveCount(2);

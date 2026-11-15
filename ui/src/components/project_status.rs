@@ -38,6 +38,10 @@ pub fn ProjectStatusChip(
     node_id: NodeId,
     initial: Option<String>,
     editable: bool,
+    /// Run when a new status is saved: the change is in the node's
+    /// History, and the page's History section reads again (S6d).
+    #[prop(optional, into)]
+    on_saved: Option<Callback<()>>,
 ) -> impl IntoView {
     let status = RwSignal::new(initial);
     let open = RwSignal::new(false);
@@ -58,9 +62,16 @@ pub fn ProjectStatusChip(
             expected_updated_at: None,
         };
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = crate::api::update_node(node_id, &req).await {
-                status.try_set(prev);
-                push_toast(ToastLevel::Error, format!("Couldn't save the status: {e}"));
+            match crate::api::update_node(node_id, &req).await {
+                Ok(_) => {
+                    if let Some(saved) = on_saved {
+                        saved.try_run(());
+                    }
+                }
+                Err(e) => {
+                    status.try_set(prev);
+                    push_toast(ToastLevel::Error, format!("Couldn't save the status: {e}"));
+                }
             }
         });
     };

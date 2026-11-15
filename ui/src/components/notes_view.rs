@@ -15,7 +15,7 @@ use crate::components::resizable_editor::ResizableEditor;
 use crate::components::toast::{ToastAction, ToastLevel, ToastState};
 use crate::markdown::render_markdown_plain;
 
-/// Mirror of note_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
+/// Mirror of history_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
 const PALETTE: &[(&str, &str)] = &[
     (
         "default",
@@ -370,7 +370,9 @@ pub fn NotesView() -> impl IntoView {
                 >
                     <option value="newest">"Newest first"</option>
                     <option value="oldest">"Oldest first"</option>
-                    <option value="updated">"Recently updated"</option>
+                    // By the date a note's words last changed (S6d), or
+                    // the date it was written if they never did.
+                    <option value="updated">"Recently edited"</option>
                 </select>
                 // Node filter: a scope, plus the shared picker for one node.
                 <select
@@ -470,8 +472,16 @@ pub fn NotesView() -> impl IntoView {
                                     let node_title = feed_note.node_title.clone();
                                     let body_html = render_markdown_plain(&feed_note.note.body);
                                     let card_class = palette_card_class(&feed_note.note.color).to_string();
-                                    // Local time, not the UTC value printed as-is.
+                                    // Local time, not the UTC value printed as-is. The
+                                    // date is when it was written; an edit adds a mark.
                                     let ts = crate::components::format_helpers::format_timestamp(&feed_note.note.created_at);
+                                    let edited = feed_note.note.edited_at.map(|at| format!(
+                                        "Edited {}",
+                                        crate::components::format_helpers::format_timestamp(&at)
+                                    ));
+                                    // Offered only where it works (S6d): the API
+                                    // says whether this reader may remove it.
+                                    let may_remove = feed_note.note.may_remove;
 
                                     // Header: clickable node label that deep-links to the
                                     // note inside its node (`?note=`).
@@ -510,12 +520,14 @@ pub fn NotesView() -> impl IntoView {
                                             <div class="flex items-start justify-between gap-2 mb-2">
                                                 {header}
                                                 // Delete: instant, with an Undo toast (soft delete).
-                                                <IconButton
-                                                    icon="delete"
-                                                    label="Delete note"
-                                                    variant=IconButtonVariant::Danger
-                                                    on_click=Callback::new(move |()| do_delete(note_id))
-                                                />
+                                                {may_remove.then(|| view! {
+                                                    <IconButton
+                                                        icon="delete"
+                                                        label="Delete note"
+                                                        variant=IconButtonVariant::Danger
+                                                        on_click=Callback::new(move |()| do_delete(note_id))
+                                                    />
+                                                })}
                                             </div>
                                             <div
                                                 class="prose prose-sm max-w-none dark:prose-invert
@@ -525,6 +537,10 @@ pub fn NotesView() -> impl IntoView {
                                             />
                                             <p class="text-xs text-stone-400 dark:text-stone-600 mt-2">
                                                 {ts}
+                                                {edited.map(|when| view! {
+                                                    " \u{b7} "
+                                                    <span title=when.clone() aria-label=when data-testid="note-edited">"edited"</span>
+                                                })}
                                             </p>
                                         </div>
                                     }

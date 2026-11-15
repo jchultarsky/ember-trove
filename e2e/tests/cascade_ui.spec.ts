@@ -168,17 +168,13 @@ test('closing a project shows what closes with it, and going back changes nothin
   // the record. The notice asks the server first: wait for its answer.
   await page.waitForLoadState('networkidle');
   await expect(page.getByTestId('still-open-notice')).toHaveCount(0);
-  const section = page.getByTestId('node-activity');
-  const toggle = section.locator('button[aria-expanded]').first();
-  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  const section = page.getByTestId('node-history');
   await expect(section.getByText('closed what was under it')).toHaveCount(1);
   await expect(section.getByText('1 sub-project, 2 tasks')).toHaveCount(1);
   // On the sub-project's page: where its closing came from.
   await page.goto(`/nodes/${child.id}`);
   await expect(page.getByTestId('project-state-chip')).toContainText(/Complete since/);
-  const childHistory = page.getByTestId('node-activity');
-  const childToggle = childHistory.locator('button[aria-expanded]').first();
-  if ((await childToggle.getAttribute('aria-expanded')) !== 'true') await childToggle.click();
+  const childHistory = page.getByTestId('node-history');
   await expect(childHistory.getByText(`with “${master.title}” · 1 task`)).toHaveCount(1);
 });
 

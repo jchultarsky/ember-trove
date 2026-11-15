@@ -67,9 +67,9 @@ CI job is too slow a feedback loop for selector work.
   sidebar buttons by `data-testid="new-<type>"`.
 
 - **A `title` is not the accessible name of a button with text** (2026-10-25,
-  #123): the Notes toggle has `title="Collapse notes"` but its name is its
-  content ("sticky_note_2 Notes …"), so `getByRole('button', { name:
-  'Collapse notes' })` waits forever. Use `button[title="…"]`, or give the
+  #123): the History toggle has `title="Collapse history"` but its name is its
+  content ("history History …"), so `getByRole('button', { name:
+  'Collapse history' })` waits forever. Use `button[title="…"]`, or give the
   control an `aria-label`.
 
 - **A `<select>` is a combobox too** (2026-10-25, #126): `getByRole('combobox')`
@@ -171,6 +171,21 @@ CI job is too slow a feedback loop for selector work.
   Data health's state fixes) are `aria-disabled` while busy, never
   `disabled`: `toBeEnabled()` says nothing about them. In-app Back and
   Forward need in-app navigation first: a `goto` reloads the app.
+
+- **The History section** (2026-11-14, #329) is `node-history` (it was
+  `node-notes`), open by default. Its list is `history-list`; a note is
+  `history-note` with `data-note-id`, a change is `history-change` with
+  `data-action="status_changed"` and the like, so order is read from the
+  list's children (`order()` in history.spec.ts). A change that holds
+  more has `history-change-toggle` and opens `history-change-details`.
+  The "edited" mark is `note-edited`. Status, state, cascade and Brief
+  lines are **not** in `node-activity` any more: that is the audit trail.
+  Body versions are `node-versions`, titled "Versions".
+- **Timestamps in Postgres tests** (2026-11-14): `Utc::now()` has
+  nanoseconds on Linux and the database keeps microseconds, so an
+  equality against a value read back passes on macOS and fails in CI.
+  Truncate first (`db_grain` in pg_tests), and take "the same instant"
+  from one clock read, not two.
 
 ## Writing new specs
 

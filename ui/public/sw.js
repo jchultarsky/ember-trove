@@ -41,7 +41,11 @@
 //   v15: task states (S5a, #314) — task counts are open / waiting / done /
 //        cancelled and a task may be "waiting"; evicts cached dashboard and
 //        task JSON in the old shape.
-const CACHE_NAME = "ember-trove-v17";
+//   v16: project states (S6a, #320). v17: the cascade (S6b, #326).
+//   v18: History (S6d, #329) — a node's notes carry `edited_at` and the
+//        reader's flags, and its log is read by scope; evicts cached
+//        notes and activity JSON in the old shape.
+const CACHE_NAME = "ember-trove-v18";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

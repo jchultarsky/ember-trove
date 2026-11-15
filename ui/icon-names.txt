@@ -45,12 +45,15 @@ email
 error
 expand_less
 expand_more
+fact_check
 false
 filter_alt_off
 filter_list
 fit_screen
 flag
+gavel
 group
+groups
 help
 help_outline
 history
@@ -70,6 +73,7 @@ keyboard_arrow_up
 label
 label_off
 light_mode
+lightbulb
 link
 link_off
 links
@@ -91,7 +95,6 @@ new_label
 newest
 node
 none
-notes
 nothing
 oldest
 open_in_new
@@ -135,6 +138,7 @@ sticky_note_2
 task_alt
 tasks
 today
+trending_up
 true
 unfold_less
 unfold_more

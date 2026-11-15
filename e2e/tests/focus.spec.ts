@@ -227,7 +227,7 @@ test('a project goes in and out of Focus from its own page', async ({ page, requ
   try {
     // Only a Project has the control.
     await page.goto(`/nodes/${article.id}`);
-    await expect(page.getByTestId('node-notes')).toBeVisible();
+    await expect(page.getByTestId('node-history')).toBeVisible();
     await expect(page.getByTestId('focus-toggle')).toHaveCount(0);
 
     await page.goto(`/nodes/${project.id}`);

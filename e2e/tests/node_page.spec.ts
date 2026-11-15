@@ -9,13 +9,13 @@ import { test, expect, createNode, createNote, type Page } from './fixtures';
 
 const LONG_BODY = Array.from({ length: 80 }, (_, i) => `Paragraph ${i} of a long node.`).join('\n\n');
 
-/** The node page's scroll container. Notes are on every kind (§3.2): Tasks
+/** The node page's scroll container. History is on every kind (§3.2): Tasks
  * and People are only on Projects (#216). */
-const scroller = (page: Page) => page.getByTestId('node-notes').locator('xpath=..');
+const scroller = (page: Page) => page.getByTestId('node-history').locator('xpath=..');
 
 async function gotoNode(page: Page, id: string) {
   await page.goto(`/nodes/${id}`);
-  await expect(page.getByTestId('node-notes')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId('node-history')).toBeVisible({ timeout: 15_000 });
 }
 
 /** Open the header's section outline and jump to `name`. */
@@ -37,15 +37,15 @@ test('the section outline reveals and focuses this node’s sections', async ({ 
     await expect(tasks).toBeFocused();
     await expect(tasks).toBeInViewport();
 
-    // A collapsed Notes section is expanded by the jump.
-    await page.locator('button[title="Collapse notes"]').click();
-    await expect(page.locator('button[title="Expand notes"]')).toBeVisible();
+    // A collapsed History section is expanded by the jump.
+    await page.locator('button[title="Collapse history"]').click();
+    await expect(page.locator('button[title="Expand history"]')).toBeVisible();
     await scroller(page).evaluate((el) => (el.scrollTop = 0));
-    await jumpTo(page, 'Notes');
-    const notes = page.getByTestId('node-notes');
+    await jumpTo(page, 'History');
+    const notes = page.getByTestId('node-history');
     await expect(notes).toBeFocused();
     await expect(notes).toBeInViewport();
-    await expect(page.locator('button[title="Collapse notes"]')).toBeVisible();
+    await expect(page.locator('button[title="Collapse history"]')).toBeVisible();
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }
@@ -61,14 +61,14 @@ test('every section is in the outline and one shared look (#131)', async ({ page
     await page.getByRole('button', { name: 'Sections', exact: true }).click();
     const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
     await expect(items).toHaveText([
-      /Brief/, /Tasks/, /Notes/, /People/, /External Links/, /Connections/, /Local Graph/,
-      /Linked Here/, /Attachments/, /Sharing/, /Version History/, /Activity/,
+      /Brief/, /Tasks/, /History/, /People/, /External Links/, /Connections/, /Local Graph/,
+      /Linked Here/, /Attachments/, /Sharing/, /Versions/, /Activity/,
     ]);
     // Jumping to a collapsed section opens and focuses it.
-    await items.filter({ hasText: 'Version History' }).click();
+    await items.filter({ hasText: 'Versions' }).click();
     const versions = page.getByTestId('node-versions');
     await expect(versions).toBeFocused();
-    await expect(versions.getByRole('button', { name: /Version History/ })).toHaveAttribute('aria-expanded', 'true');
+    await expect(versions.getByRole('button', { name: /Versions/ })).toHaveAttribute('aria-expanded', 'true');
     // One heading style: every section heading is an h2, named like the outline.
     // Public Links went and People came (#147); the Brief came (#282).
     await expect(page.locator('[data-testid^="node-"] h2')).toHaveCount(12);
@@ -91,7 +91,7 @@ test('restoring a version shows the restored body at once', async ({ page, reque
     await expect(body).toHaveText('words three');
 
     const versions = page.getByTestId('node-versions');
-    await versions.getByRole('button', { name: /Version History/ }).click();
+    await versions.getByRole('button', { name: /Versions/ }).click();
     await versions.getByRole('button', { name: 'Restore' }).first().click();
     await expect(page.getByText('Body restored to selected version.')).toBeVisible();
     // The page used to keep showing the body it had loaded.
@@ -114,8 +114,8 @@ test('an Article has no Tasks or People section, and the outline follows (#216)'
     await page.getByRole('button', { name: 'Sections', exact: true }).click();
     const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
     await expect(items).toHaveText([
-      /Notes/, /External Links/, /Connections/, /Local Graph/,
-      /Linked Here/, /Attachments/, /Sharing/, /Version History/, /Activity/,
+      /History/, /External Links/, /Connections/, /Local Graph/,
+      /Linked Here/, /Attachments/, /Sharing/, /Versions/, /Activity/,
     ]);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
@@ -152,7 +152,7 @@ test('adding a task or a note keeps the scroll position', async ({ page, request
     await page.locator('button[title="Add note"]').click();
     await page.getByPlaceholder('Write a note… (Ctrl+Enter to save)').fill(`e2e scroll note ${stamp}`);
     await page.locator('button[title="Save note"]').click();
-    await expect(page.getByTestId('node-notes').getByText(`e2e scroll note ${stamp}`)).toBeVisible();
+    await expect(page.getByTestId('node-history').getByText(`e2e scroll note ${stamp}`)).toBeVisible();
     await page.waitForTimeout(300);
     expect(await box.evaluate((el) => (el as HTMLElement & { __probe?: boolean }).__probe)).toBe(true);
     expect(Math.abs((await box.evaluate((el) => el.scrollTop)) - notesBefore)).toBeLessThan(300);

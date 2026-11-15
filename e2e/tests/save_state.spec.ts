@@ -252,7 +252,7 @@ test.describe('draft staleness and expiry', () => {
       await expect(editor2).toHaveValue('elsewhere');
       const offer = again.getByTestId('draft-recovery');
       await expect(offer).toContainText('has changed since');
-      await expect(offer).toContainText('stays in History');
+      await expect(offer).toContainText('stays in Versions');
 
       // Restoring is still the user's call, and it saves.
       await offer.getByRole('button', { name: 'Restore' }).click();
