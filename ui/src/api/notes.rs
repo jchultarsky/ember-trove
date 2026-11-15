@@ -1,12 +1,17 @@
 use common::{
     id::{NodeId, NoteId},
-    note::{CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteSort, UpdateNoteRequest},
+    note::{
+        CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteSort, ReaderNote,
+        UpdateNoteRequest,
+    },
 };
 
 use super::{delete_empty, get_json, patch_json, post_json};
 use crate::error::UiError;
 
-pub async fn fetch_notes(node_id: NodeId) -> Result<Vec<Note>, UiError> {
+/// A node's notes, newest first, each with what the reader may do to it
+/// (`may_edit`, `may_remove`).
+pub async fn fetch_notes(node_id: NodeId) -> Result<Vec<ReaderNote>, UiError> {
     get_json(&format!("/nodes/{node_id}/notes")).await
 }
 

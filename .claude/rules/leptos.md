@@ -164,8 +164,8 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     dispose a `Callback`'s slot.
   - After a state settles the page re-reads what a cascade can have
     changed: the task list (`TaskRefresh`), History
-    (`ActivityPanel`'s `refresh`) and the notice. A new panel that shows
-    tasks or History on the project page joins `state_settled` in
+    (`history_writes`, read by `HistoryPanel`) and the notice. A new panel
+    that shows tasks or History on the project page joins `state_settled` in
     `node_view.rs`.
   - The dialog shows the server's plan and nothing else. Don't work out
     in the browser what would close. Whether it is a catch-up is the
@@ -187,6 +187,46 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   the focus inside (Escape, the Tab trap). The cascade confirmation is
   also known to the window's key handler (`CascadeConfirm::is_open`):
   Escape goes back and no shortcut acts on the page behind it.
+- **History is one section, `HistoryPanel`** (`history_panel.rs`, S6d,
+  #329): the node's notes and the changes to it, merged by
+  `common::history::merge`. It was the Notes section; its slug and test
+  id are `history`.
+  - **Two reads, never one empty state.** Notes come from `/notes`,
+    changes from `/activity?scope=history`
+    (`api::fetch_history_changes`, which also returns the server's
+    "there are more" header). A failed notes read is `LoadError`; a
+    failed changes read leaves the notes on screen with a line that says
+    so. Don't fold the two failures together.
+  - **The list is a keyed `<For>`, and its frame switches on a memoised
+    phase** (loading / failed / loaded), not on the notes themselves. A
+    read that brings notes again then redraws nothing but the cards
+    whose key changed (a note's key carries its `updated_at`), so an
+    open editor stays. Matching on the notes signal directly rebuilt
+    every card on each answer, whatever the keys said. A saved note is
+    put into the list in place (`NoteCtx::saved`); a failed re-read
+    keeps the notes on screen and says so.
+  - **Empty only when both reads say so**: "Nothing yet" needs the
+    changes read to have answered well. While it is loading, or after it
+    failed, an empty notes list is not an empty History.
+  - **Anything on the page that writes History bumps `history_writes`**
+    in `node_view.rs` (`history_changed`): the state chip
+    (`state_settled`), the status chip (`on_saved`), the Brief
+    (`on_changed`). A new control that changes a node's status, state or
+    Brief does the same.
+  - **A note's buttons come from its flags** (`ReaderNote.may_edit`,
+    `may_remove`), never from who owns the node. The "edited" mark is
+    `edited_at`; nothing reads a note's `updated_at` except the list key.
+  - **A change line is text.** `activity_lines.rs` words every log entry
+    for both History and Activity (`action_detail`, `change_details`).
+    A status label and a Brief's words are free text: never
+    `inner_html`.
+  - A save of a note that changed nothing sends nothing.
+- **A log entry this build can't read is skipped** (`api/activity.rs`,
+  `known`): a tab open across a release must not lose a whole list to
+  one new action.
+- **Words**: History is what occurred about a node; **Versions** is its
+  saved texts ("it stays in Versions"); **Activity** is the audit trail.
+  Don't call body versions "history" on screen.
 - **Focus is the viewer's own** (#282). `FocusToggle` / `FocusMenuItem`
   (`project_focus.rs`) take `state: RwSignal<Option<bool>>` and render
   nothing while it is `None`: a control that guessed "not in Focus" would

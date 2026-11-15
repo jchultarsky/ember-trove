@@ -41,7 +41,7 @@ test.describe('editor exit buttons (#197)', () => {
     }
   });
 
-  test('edit mode: Revert restores the node as opened; the edit stays in History', async ({ page, request }) => {
+  test('edit mode: Revert restores the node as opened; the edit stays in Versions', async ({ page, request }) => {
     const node = await createNode(request, `e2e exit revert ${Date.now()}`, { body: 'as opened' });
     try {
       const editor = await openEditor(page, node.id);
@@ -56,7 +56,7 @@ test.describe('editor exit buttons (#197)', () => {
 
       const fetched = await request.get(`/api/nodes/${node.id}`);
       expect((await fetched.json()).body).toBe('as opened');
-      // The reverted text is recoverable from History.
+      // The reverted text is recoverable from Versions.
       const versions = await (await request.get(`/api/nodes/${node.id}/versions`)).json();
       expect(versions.map((v: { body: string }) => v.body)).toContain('an edit I regret');
     } finally {

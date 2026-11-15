@@ -196,8 +196,19 @@ const CONCEPTS: &[Concept] = &[
         title: "Notes",
         body: "Short comments on a Node. A note always belongs to one. Use them \
                for journal-style annotations (\"checked in with the team today\", \
-               \"deadline pushed to May 8\"). A thought that belongs nowhere yet is a \
-               capture: press n.",
+               \"deadline pushed to May 8\"). A note keeps the date it was written; \
+               edit it and it says \"edited\", in the same place. A thought that \
+               belongs nowhere yet is a capture: press n.",
+    },
+    Concept {
+        title: "History, Versions and Activity",
+        body: "Three sections of a Node's page. History is what happened about \
+               it, newest first: its notes, and between them each change of its \
+               status or state, a Brief that was replaced, what closing a project \
+               closed, and when it was published or archived. Versions keeps the \
+               earlier texts of the body, and lets you go back to one. Activity is \
+               the audit trail: who created, edited, tagged, shared or exported \
+               the node.",
     },
     Concept {
         title: "focus_date vs due_date",

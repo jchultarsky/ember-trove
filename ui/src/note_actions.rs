@@ -1,5 +1,6 @@
-//! Note actions shared by the Notes feed (`notes_view`) and a node's note
-//! panel (`note_panel`), so both surfaces delete notes the same way.
+//! Note actions shared by the Notes feed (`notes_view`) and a node's
+//! History section (`history_panel`), so both surfaces delete notes the
+//! same way.
 
 use common::id::NoteId;
 use leptos::prelude::*;

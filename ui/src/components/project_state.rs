@@ -549,11 +549,17 @@ pub fn StillOpenNotice(
                     <span class="material-symbols-outlined text-stone-500 dark:text-stone-400"
                         style="font-size: 18px;" aria-hidden="true">"info"</span>
                     <span class="min-w-[12rem] flex-1">
-                        {format!(
-                            "This project is {}, and {closes} under it {} still open.",
-                            state.label().to_lowercase(),
-                            if closes.starts_with("1 ") && !closes.contains(" and ") { "is" } else { "are" },
-                        )}
+                        {
+                            // One thing "is", more "are". (Indexed, not an
+                            // `if … else`: the icon font script reads a
+                            // quoted word in an else arm as an icon name.)
+                            let one = closes.starts_with("1 ") && !closes.contains(" and ");
+                            let verb = ["are", "is"][usize::from(one)];
+                            format!(
+                                "This project is {}, and {closes} under it {verb} still open.",
+                                state.label().to_lowercase(),
+                            )
+                        }
                     </span>
                     <button type="button"
                         class="inline-flex items-center gap-1 rounded-md border border-stone-300 \

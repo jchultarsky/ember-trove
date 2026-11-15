@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
-    activity::{ActivityAction, ActivityEntry, ActivityRecord, RecentActivityEntry},
+    activity::{ActivityAction, ActivityEntry, ActivityRecord, ActivityScope, RecentActivityEntry},
     auth::AuthClaims,
     id::{ActivityId, NodeId},
 };
@@ -82,11 +82,13 @@ pub trait ActivityRepo: Send + Sync {
         metadata: serde_json::Value,
     ) -> Result<(), EmberTroveError>;
 
-    /// Return the most recent `limit` entries for a node (newest first).
+    /// Return the most recent `limit` entries for a node (newest first):
+    /// of `scope` (its History, or its audit trail), or of everything.
     async fn list(
         &self,
         node_id: NodeId,
         limit: i64,
+        scope: Option<ActivityScope>,
     ) -> Result<Vec<ActivityEntry>, EmberTroveError>;
 
     /// Return recent activity entries for nodes owned by `owner_id`,
@@ -207,22 +209,27 @@ impl ActivityRepo for PgActivityRepo {
         &self,
         node_id: NodeId,
         limit: i64,
+        scope: Option<ActivityScope>,
     ) -> Result<Vec<ActivityEntry>, EmberTroveError> {
         // Unknown actions are filtered in SQL, before the LIMIT, so rows a
-        // newer release wrote can't take the page's slots (#208).
+        // newer release wrote can't take the page's slots (#208). The
+        // scope is the same filter, narrower, for the same reason: a
+        // node's few History entries must not be crowded out by the audit
+        // lines written since (S6d).
+        let actions = scope.map_or_else(ActivityAction::known_db_strs, ActivityScope::db_strs);
         let rows = sqlx::query_as::<_, ActivityRow>(
             r#"
             SELECT id, node_id, subject_id, action, metadata, created_at
             FROM activity_log
             WHERE node_id = $1
               AND action = ANY($3)
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT $2
             "#,
         )
         .bind(node_id.inner())
         .bind(limit)
-        .bind(ActivityAction::known_db_strs())
+        .bind(actions)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list activity failed: {e}")))?;

@@ -164,7 +164,7 @@ fn kept_note(kept: bool) -> &'static str {
 fn changed_elsewhere_msg(kept: bool) -> String {
     format!(
         "This node was changed somewhere else since you opened it. {}. Retry saves them \
-         over that change (it stays in History).",
+         over that change (it stays in Versions).",
         kept_note(kept)
     )
 }
@@ -190,11 +190,11 @@ fn recovery_message(base: DraftBase) -> &'static str {
         }
         DraftBase::Changed => {
             "This device kept edits to this node that never reached the server, and the \
-             node has changed since. Restoring replaces that change (it stays in History)."
+             node has changed since. Restoring replaces that change (it stays in Versions)."
         }
         DraftBase::Unknown => {
             "This device kept edits to this node that never reached the server. The node \
-             may have changed since; restoring replaces it (it stays in History)."
+             may have changed since; restoring replaces it (it stays in Versions)."
         }
     }
 }
@@ -1236,7 +1236,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // Edit mode autosaves, so leaving never discards (#197): Done keeps the
     // edits, Revert first puts back the node as it was opened. Either way the
     // last state goes through the save executor, then the editor leaves. The
-    // text it replaces stays in History (each body save records a version).
+    // text it replaces stays in Versions (each body save records a version).
     let on_save = move |revert: bool| {
         error_msg.set(None);
         if revert && let Some(o) = opened.get_untracked() {
@@ -1254,7 +1254,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             }
             nav_after_save.set(true);
             // Save is as explicit as Retry: after a "changed elsewhere"
-            // refusal it saves over that change (kept in History).
+            // refusal it saves over that change (kept in Versions).
             if let Some(v) = conflict_version.get_untracked() {
                 base_version.set(Some(v));
                 conflict_version.set(None);
@@ -1562,7 +1562,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                                 class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium
                                     text-stone-600 dark:text-stone-300 bg-stone-100 dark:bg-stone-800
                                     hover:text-stone-900 dark:hover:text-stone-100 transition-colors"
-                                title="Back to the node as you opened it. The edited text stays in History."
+                                title="Back to the node as you opened it. The edited text stays in Versions."
                                 on:click=move |_| on_save(true)
                                 disabled=move || saving.get() || fetching.get()
                             >

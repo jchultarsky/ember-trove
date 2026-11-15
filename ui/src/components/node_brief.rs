@@ -437,7 +437,7 @@ fn BriefEditor(
                     <div class="flex flex-wrap items-center justify-between gap-2"
                         data-testid="brief-remove-confirm">
                         <span class="text-xs text-stone-600 dark:text-stone-300">
-                            "Remove this brief? Its words stay in the project's Activity."
+                            "Remove this brief? Its words stay in the project's History."
                         </span>
                         <div class="flex gap-2">
                             <button type="button" class=QUIET_BUTTON
@@ -496,6 +496,10 @@ pub fn BriefPanel(
     /// The body changed (its Status section moved out): reload the node.
     #[prop(into)]
     on_body_changed: Callback<()>,
+    /// The Brief was saved or removed. A replaced or removed Brief is in
+    /// the project's History, so the page's History section reads again.
+    #[prop(optional, into)]
+    on_changed: Option<Callback<()>>,
 ) -> impl IntoView {
     let open = RwSignal::new(true);
     let refresh = RwSignal::new(0u32);
@@ -518,6 +522,9 @@ pub fn BriefPanel(
     let on_done = Callback::new(move |done: Done| {
         editing.try_set(false);
         refresh.try_update(|n| *n += 1);
+        if let Some(changed) = on_changed {
+            changed.try_run(());
+        }
         if done.body_changed {
             on_body_changed.try_run(());
         }

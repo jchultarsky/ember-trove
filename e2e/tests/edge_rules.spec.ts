@@ -308,7 +308,7 @@ test('the home is in the page header, and the dashboard follows it', async ({ pa
 
     // A Reference is never contained: no chip.
     await page.goto(`/nodes/${reference.id}`);
-    await expect(page.getByTestId('node-notes')).toBeVisible();
+    await expect(page.getByTestId('node-history')).toBeVisible();
     await expect(page.getByTestId('home-chip')).toHaveCount(0);
   } finally {
     for (const n of [area, project, reference]) await request.delete(`/api/nodes/${n.id}`);

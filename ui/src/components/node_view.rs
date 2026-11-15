@@ -8,12 +8,12 @@ use leptos::prelude::*;
 use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::activity_panel::ActivityPanel;
 use crate::components::attachment_panel::AttachmentPanel;
+use crate::components::history_panel::HistoryPanel;
 use crate::components::links_panel::LinksPanel;
 use crate::components::modals::delete_confirm::{DeleteConfirmModal, node_delete_details};
 use crate::components::node_meta::{
     status_color, status_icon, status_label, type_icon, type_label,
 };
-use crate::components::note_panel::NotePanel;
 use crate::components::permission_dialog::PermissionPanel;
 use crate::components::project_focus::{FocusMenuItem, FocusRetry, FocusToggle};
 use crate::components::tag_bar::TagBar;
@@ -68,7 +68,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
     // resource-load race by retrying a few times.
     schedule_focus_task();
     // Same treatment for `/nodes/{id}?note=<note_id>` — clicking a node-attached
-    // note in the central Notes feed lands on it inside the NotePanel.
+    // note in the central Notes feed lands on it inside the History section.
     crate::focus_note::schedule_focus_note();
 
     // Derive node title for the confirm dialog (empty string until node loads).
@@ -285,13 +285,22 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // A settled change of state may have changed
                             // more than the state: closing cancels tasks
                             // and writes History (S6b). The task list, the
-                            // History panel and the "still open" notice
+                            // History section and the "still open" notice
                             // read again.
                             let state_writes = RwSignal::new(0u32);
+                            // Anything on the page that writes the node's
+                            // History says so here, and the section reads
+                            // its changes again: a change of state, of the
+                            // status label, of the Brief (S6d).
+                            let history_writes = RwSignal::new(0u32);
+                            let history_changed = Callback::new(move |()| {
+                                let _ = history_writes.try_update(|n| *n += 1);
+                            });
                             let state_settled = Callback::new(move |()| {
                                 reload_focus.run(());
                                 let _ = state_writes.try_update(|n| *n += 1);
                                 let _ = task_refresh.try_update(|n| *n += 1);
+                                history_changed.run(());
                             });
                             let still_open_refresh = Signal::derive(move || {
                                 state_writes.get().wrapping_add(task_refresh.get())
@@ -344,6 +353,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                     node_id=id
                                                     initial=n.project_status.clone()
                                                     editable=is_owner
+                                                    on_saved=history_changed
                                                 />
                                             })}
                                             // The declared state (S6a), beside the label.
@@ -564,6 +574,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 body=n.body.clone()
                                                 body_version=n.updated_at
                                                 on_body_changed=reload_node
+                                                on_changed=history_changed
                                             />
                                         })}
                                         // Under a Brief, a body that has text gets the
@@ -583,8 +594,11 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         <TaskPanel node_id=id allowed=tasks_allowed
                                             can_fix=is_canonical_owner
                                             project_state=state_now />
-                                        // Note panel — append-only; owner can add, everyone can read
-                                        <NotePanel node_id=id is_owner=is_owner />
+                                        // History (S6d): the node's notes and the changes to it, in one
+                                        // chronology. The owner adds notes; everyone who can read
+                                        // the node reads them.
+                                        <HistoryPanel node_id=id is_owner=is_owner
+                                            changes_refresh=history_writes />
                                         </crate::components::task_row::EditorPrefsScope>
                                         // People (#147): only the node's own owner may change them.
                                         <crate::components::node_people::NodePeoplePanel node_id=id can_edit=is_canonical_owner
@@ -602,7 +616,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                             is_editor=is_owner
                                             on_restore=reload_node
                                         />
-                                        <ActivityPanel node_id=id refresh=state_writes />
+                                        <ActivityPanel node_id=id />
                                     </div>
                                 </div>
                             }.into_any()

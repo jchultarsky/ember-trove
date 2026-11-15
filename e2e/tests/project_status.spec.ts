@@ -63,7 +63,7 @@ test('a new project starts Active and the chip sets, reuses and clears its statu
 
 type Activity = { action: string; metadata: Record<string, unknown> };
 
-test('a status change is recorded once in Activity, as from → to (#208)', async ({
+test('a status change is recorded once in History, as from → to (#208)', async ({
   page,
   request,
 }) => {
@@ -93,12 +93,16 @@ test('a status change is recorded once in Activity, as from → to (#208)', asyn
       project_status: 'Active',
     });
 
-    // The panel shows it as one line.
-    const section = page.getByTestId('node-activity');
-    const toggle = section.locator('button[aria-expanded]').first();
-    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    // History shows it as one line, without a reload (S6d). It is not in
+    // Activity, which is the audit trail.
+    const section = page.getByTestId('node-history');
     await expect(section.getByText('Active \u2192 Blocked')).toHaveCount(1);
     await expect(section.getByText(/changed status/)).toHaveCount(1);
+    const activity = page.getByTestId('node-activity');
+    const toggle = activity.locator('button[aria-expanded]').first();
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+    await expect(activity.getByText(/created/)).toHaveCount(1);
+    await expect(activity.getByText(/changed status/)).toHaveCount(0);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }
