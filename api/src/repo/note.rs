@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use common::{
     EmberTroveError,
     id::{NodeId, NoteId},
-    note::{CreateNoteRequest, FeedNote, Note, NoteSort, UpdateNoteRequest},
+    note::{CreateNoteRequest, FeedNote, Note, NoteSort, ReaderNote, UpdateNoteRequest},
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -36,10 +36,11 @@ pub struct NoteActor<'a> {
     pub admin: bool,
 }
 
-/// SQL: the subject at `$subject` holds one of `roles` on the note's node.
-fn grant_on_note_node(subject: u8, roles: &str) -> String {
+/// SQL: the subject at `$subject` holds one of `roles` on the node of the
+/// note in `notes` (the table's name or its alias in the query).
+fn grant_on_note_node(notes: &str, subject: u8, roles: &str) -> String {
     format!(
-        "EXISTS (SELECT 1 FROM permissions np WHERE np.node_id = node_notes.node_id \
+        "EXISTS (SELECT 1 FROM permissions np WHERE np.node_id = {notes}.node_id \
          AND np.subject_id = ${subject}::text AND np.role::text IN ({roles}))"
     )
 }
@@ -51,12 +52,15 @@ fn grant_on_note_node(subject: u8, roles: &str) -> String {
 /// rights on its node, and so does changing it later. A note used to be
 /// its author's for good, so someone whose share was revoked could still
 /// rewrite or delete what they had left on the node. Revoking a share now
-/// ends that. `subject` and `admin` are placeholders from the code; the
+/// ends that. `notes`, `subject` and `admin` come from the code; the
 /// values are always bound.
-fn author_may_write(subject: u8, admin: u8) -> String {
+///
+/// The same text decides the write and tells a reader whether to offer it
+/// (`may_edit` on [`ReaderNote`]): the two can't disagree.
+fn author_may_write(notes: &str, subject: u8, admin: u8) -> String {
     format!(
-        "(node_notes.owner_id = ${subject}::text AND (${admin}::bool OR {grant}))",
-        grant = grant_on_note_node(subject, "'owner', 'editor'"),
+        "({notes}.owner_id = ${subject}::text AND (${admin}::bool OR {grant}))",
+        grant = grant_on_note_node(notes, subject, "'owner', 'editor'"),
     )
 }
 
@@ -65,11 +69,37 @@ fn author_may_write(subject: u8, admin: u8) -> String {
 /// an admin): a note left by someone who has lost access stays with the
 /// node, and its owner must be able to remove it. Deleting the node always
 /// removed its notes, so this gives an owner nothing new.
-fn may_remove(subject: u8, admin: u8) -> String {
+fn may_remove(notes: &str, subject: u8, admin: u8) -> String {
     format!(
         "({author} OR ${admin}::bool OR {owner})",
-        author = author_may_write(subject, admin),
-        owner = grant_on_note_node(subject, "'owner'"),
+        author = author_may_write(notes, subject, admin),
+        owner = grant_on_note_node(notes, subject, "'owner'"),
+    )
+}
+
+/// The columns of a [`NoteRow`], from the table or from `alias`. Every
+/// statement that fills one names them through this (the `node_cols`
+/// lesson: `FromRow` finds a missing column only when that route runs).
+fn note_cols(alias: &str) -> String {
+    let a = if alias.is_empty() {
+        String::new()
+    } else {
+        format!("{alias}.")
+    };
+    format!(
+        "{a}id, {a}node_id, {a}owner_id, {a}body, {a}color, \
+         {a}created_at, {a}updated_at, {a}edited_at"
+    )
+}
+
+/// The two flags of a [`ReaderNote`], as SELECT columns: the write rules,
+/// read for the subject at `$subject` (their real subject, never the NULL
+/// an admin's list scope uses) and `$admin`.
+fn reader_flags(notes: &str, subject: u8, admin: u8) -> String {
+    format!(
+        "{edit} AS may_edit, {remove} AS may_remove",
+        edit = author_may_write(notes, subject, admin),
+        remove = may_remove(notes, subject, admin),
     )
 }
 
@@ -88,6 +118,10 @@ pub trait NoteRepo: Send + Sync {
     /// Update the body and colour of an existing note. Only its author may,
     /// and only while they can still write on its node. Anyone else gets
     /// `NotFound`, the same as for a note that doesn't exist.
+    ///
+    /// `created_at`, the note's place in the chronology, is never written
+    /// (§9.2). `edited_at` is stamped when the words change and only then:
+    /// a colour, or the same text saved again, leaves it.
     async fn update(
         &self,
         note_id: NoteId,
@@ -106,15 +140,23 @@ pub trait NoteRepo: Send + Sync {
     /// Hard-delete tombstones older than `cutoff`. Returns rows purged.
     async fn purge_deleted_before(&self, cutoff: DateTime<Utc>) -> Result<u64, EmberTroveError>;
 
-    /// All notes for a node, newest first.
-    async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError>;
+    /// All notes for a node, newest first, each with what `reader` may do
+    /// to it. The caller has checked that `reader` may view the node.
+    async fn list_for_node(
+        &self,
+        node_id: NodeId,
+        reader: NoteActor<'_>,
+    ) -> Result<Vec<ReaderNote>, EmberTroveError>;
 
     /// Central feed: notes with node titles, filtered + sorted per `filter`.
     /// `owner_id: Some(sub)` scopes to one user's notes on the nodes they
-    /// can still see; `None` returns all (admin).
+    /// can still see; `None` returns all (admin). `reader` is the caller
+    /// themself, for each note's flags: never the scope, which is `None`
+    /// for an admin.
     async fn feed(
         &self,
         owner_id: Option<&str>,
+        reader: NoteActor<'_>,
         filter: &NoteFeedFilter,
     ) -> Result<Vec<FeedNote>, EmberTroveError>;
 
@@ -144,6 +186,7 @@ struct NoteRow {
     color: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    edited_at: Option<DateTime<Utc>>,
 }
 
 impl NoteRow {
@@ -156,35 +199,42 @@ impl NoteRow {
             color: self.color,
             created_at: self.created_at,
             updated_at: self.updated_at,
+            edited_at: self.edited_at,
         }
     }
 }
 
-/// Feed row = a note plus its parent node's title.
+/// A note with its reader's flags ([`reader_flags`]).
+#[derive(sqlx::FromRow)]
+struct ReaderRow {
+    #[sqlx(flatten)]
+    note: NoteRow,
+    may_edit: bool,
+    may_remove: bool,
+}
+
+impl ReaderRow {
+    fn into_reader_note(self) -> ReaderNote {
+        ReaderNote {
+            note: self.note.into_note(),
+            may_edit: self.may_edit,
+            may_remove: self.may_remove,
+        }
+    }
+}
+
+/// Feed row = a reader's note plus its parent node's title.
 #[derive(sqlx::FromRow)]
 struct FeedRow {
-    id: Uuid,
-    node_id: Uuid,
-    owner_id: String,
-    body: String,
-    color: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    #[sqlx(flatten)]
+    note: ReaderRow,
     node_title: Option<String>,
 }
 
 impl FeedRow {
     fn into_feed_note(self) -> FeedNote {
         FeedNote {
-            note: Note {
-                id: NoteId(self.id),
-                node_id: NodeId(self.node_id),
-                owner_id: self.owner_id,
-                body: self.body,
-                color: self.color,
-                created_at: self.created_at,
-                updated_at: self.updated_at,
-            },
+            note: self.note.into_reader_note(),
             node_title: self.node_title,
         }
     }
@@ -198,13 +248,14 @@ pub(crate) async fn insert_note<'e, E: sqlx::PgExecutor<'e>>(
     owner_id: &str,
     req: &CreateNoteRequest,
 ) -> Result<Note, EmberTroveError> {
-    let row = sqlx::query_as::<_, NoteRow>(
+    let row = sqlx::query_as::<_, NoteRow>(&format!(
         r#"
         INSERT INTO node_notes (node_id, owner_id, body, color)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, node_id, owner_id, body, color, created_at, updated_at
+        RETURNING {cols}
         "#,
-    )
+        cols = note_cols(""),
+    ))
     .bind(node_id.0)
     .bind(owner_id)
     .bind(&req.body)
@@ -221,14 +272,15 @@ pub(crate) async fn insert_note<'e, E: sqlx::PgExecutor<'e>>(
 pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
     ex: E,
 ) -> Result<Vec<Note>, EmberTroveError> {
-    let rows = sqlx::query_as::<_, NoteRow>(
+    let rows = sqlx::query_as::<_, NoteRow>(&format!(
         r#"
-        SELECT id, node_id, owner_id, body, color, created_at, updated_at
+        SELECT {cols}
         FROM node_notes
         WHERE deleted_at IS NULL
         ORDER BY created_at ASC
         "#,
-    )
+        cols = note_cols(""),
+    ))
     .fetch_all(ex)
     .await
     .map_err(|e| EmberTroveError::Internal(format!("list_all notes failed: {e}")))?;
@@ -256,11 +308,17 @@ impl NoteRepo for PgNoteRepo {
         let row = sqlx::query_as::<_, NoteRow>(&format!(
             r#"
             UPDATE node_notes
-            SET body = $1, color = $2
+            SET body = $1, color = $2,
+                -- §9.2: "edited" means its words changed. `body` on the
+                -- right is the row as it was. `clock_timestamp()`, not
+                -- `now()`: the moment of this write, as History's is.
+                edited_at = CASE WHEN body IS DISTINCT FROM $1
+                                 THEN clock_timestamp() ELSE edited_at END
             WHERE id = $3 AND deleted_at IS NULL AND {may}
-            RETURNING id, node_id, owner_id, body, color, created_at, updated_at
+            RETURNING {cols}
             "#,
-            may = author_may_write(4, 5),
+            may = author_may_write("node_notes", 4, 5),
+            cols = note_cols(""),
         ))
         .bind(&req.body)
         .bind(&req.color)
@@ -280,7 +338,7 @@ impl NoteRepo for PgNoteRepo {
         let result = sqlx::query(&format!(
             "UPDATE node_notes SET deleted_at = now()
              WHERE id = $1 AND deleted_at IS NULL AND {may}",
-            may = may_remove(2, 3),
+            may = may_remove("node_notes", 2, 3),
         ))
         .bind(note_id.0)
         .bind(actor.subject)
@@ -303,9 +361,10 @@ impl NoteRepo for PgNoteRepo {
             r#"
             UPDATE node_notes SET deleted_at = NULL
             WHERE id = $1 AND deleted_at IS NOT NULL AND {may}
-            RETURNING id, node_id, owner_id, body, color, created_at, updated_at
+            RETURNING {cols}
             "#,
-            may = may_remove(2, 3),
+            may = may_remove("node_notes", 2, 3),
+            cols = note_cols(""),
         ))
         .bind(note_id.0)
         .bind(actor.subject)
@@ -328,22 +387,30 @@ impl NoteRepo for PgNoteRepo {
         Ok(result.rows_affected())
     }
 
-    async fn list_for_node(&self, node_id: NodeId) -> Result<Vec<Note>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, NoteRow>(
+    async fn list_for_node(
+        &self,
+        node_id: NodeId,
+        reader: NoteActor<'_>,
+    ) -> Result<Vec<ReaderNote>, EmberTroveError> {
+        let rows = sqlx::query_as::<_, ReaderRow>(&format!(
             r#"
-            SELECT id, node_id, owner_id, body, color, created_at, updated_at
+            SELECT {cols}, {flags}
             FROM node_notes
             WHERE node_id = $1
               AND deleted_at IS NULL
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             "#,
-        )
+            cols = note_cols(""),
+            flags = reader_flags("node_notes", 2, 3),
+        ))
         .bind(node_id.0)
+        .bind(reader.subject)
+        .bind(reader.admin)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list notes failed: {e}")))?;
 
-        Ok(rows.into_iter().map(NoteRow::into_note).collect())
+        Ok(rows.into_iter().map(ReaderRow::into_reader_note).collect())
     }
 
     async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError> {
@@ -353,20 +420,26 @@ impl NoteRepo for PgNoteRepo {
     async fn feed(
         &self,
         owner_id: Option<&str>,
+        reader: NoteActor<'_>,
         filter: &NoteFeedFilter,
     ) -> Result<Vec<FeedNote>, EmberTroveError> {
         // ORDER BY can't be a bind param; the column/direction come from a
         // closed enum (no injection). Filters use the guarded `$n IS NULL OR`
-        // pattern so absent filters are no-ops.
+        // pattern so absent filters are no-ops. Each order ends on the id:
+        // the feed is paged by offset, and two notes of one instant must
+        // not swap between pages.
         let order_by = match filter.sort {
-            NoteSort::Newest => "n.created_at DESC",
-            NoteSort::Oldest => "n.created_at ASC",
-            NoteSort::Updated => "n.updated_at DESC",
+            NoteSort::Newest => "n.created_at DESC, n.id DESC",
+            NoteSort::Oldest => "n.created_at ASC, n.id ASC",
+            // "Recently edited": when its words last changed, or when it
+            // was written. Not `updated_at`, which a trip through the
+            // trash moves too.
+            NoteSort::Updated => "COALESCE(n.edited_at, n.created_at) DESC, n.id DESC",
         };
         let sql = format!(
             r#"
             SELECT
-                n.id, n.node_id, n.owner_id, n.body, n.color, n.created_at, n.updated_at,
+                {cols}, {flags},
                 nd.title AS node_title
             FROM node_notes n
             JOIN nodes nd ON nd.id = n.node_id AND {visible}
@@ -383,6 +456,11 @@ impl NoteRepo for PgNoteRepo {
             // caller can no longer see (a revoked share) is not in their
             // feed. #230 hid only the node's title. `$1` is NULL for admins.
             visible = super::visible_to("nd", 1),
+            cols = note_cols("n"),
+            // The flags read the caller's own subject ($8), not the scope
+            // at $1: for an admin that is NULL, and a NULL subject wrote
+            // nothing.
+            flags = reader_flags("n", 8, 9),
         );
 
         // Escape LIKE metacharacters so a `q` of "%" / "_" matches literally
@@ -397,6 +475,8 @@ impl NoteRepo for PgNoteRepo {
             .bind(q_escaped)
             .bind(filter.limit)
             .bind(filter.offset)
+            .bind(reader.subject)
+            .bind(reader.admin)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| EmberTroveError::Internal(format!("feed notes failed: {e}")))?;

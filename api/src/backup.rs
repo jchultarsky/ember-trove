@@ -856,8 +856,9 @@ pub(crate) async fn restore_into(
         };
         sqlx::query(
             r#"
-            INSERT INTO node_notes (id, node_id, owner_id, body, color, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO node_notes
+                (id, node_id, owner_id, body, color, created_at, updated_at, edited_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -870,6 +871,9 @@ pub(crate) async fn restore_into(
         .bind(&note.color)
         .bind(note.created_at)
         .bind(note.updated_at)
+        // Format 11 carries it. An older archive doesn't: the note counts
+        // as edited by the rule migration 052 applied (S6d).
+        .bind(note.restored_edited_at())
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert note failed: {e}")))?;
@@ -1592,6 +1596,7 @@ mod tests {
             color: "default".into(),
             created_at: at,
             updated_at: at,
+            edited_at: None,
         };
         let counts = EntityCounts {
             nodes: 1,

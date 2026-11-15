@@ -21,8 +21,45 @@ pub struct Note {
     /// "default" means neutral / no colour.
     #[serde(default = "default_note_color")]
     pub color: String,
+    /// When the note was written: its place in the chronology (§9.2).
+    /// Never moved, by an edit or by anything else.
     pub created_at: DateTime<Utc>,
+    /// When the row was last written, for any reason (an edit, a colour,
+    /// a trip through the trash). Nothing a person reads: "edited" is
+    /// [`Self::edited_at`].
     pub updated_at: DateTime<Utc>,
+    /// When the note's words were last changed, if they ever were (S6d;
+    /// §9.2: "the note shows that it was edited"). Only a change to the
+    /// text sets it: not a colour, not a delete and restore.
+    #[serde(default)]
+    pub edited_at: Option<DateTime<Utc>>,
+}
+
+/// A note as one reader may act on it (S6d): the note, and whether this
+/// reader may edit it and remove it. The flags are the write routes' own
+/// rules, read for the reader (`repo::note::author_may_write`,
+/// `may_remove`), so a button is offered only where the call would pass.
+/// They say nothing about anyone else.
+///
+/// A wrapper, not fields of [`Note`]: a note is also what a backup reads
+/// and what the write routes answer with, where there is no reader.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ReaderNote {
+    #[serde(flatten)]
+    pub note: Note,
+    /// The reader wrote it and may still edit its node.
+    #[serde(default)]
+    pub may_edit: bool,
+    /// That, or the reader owns the node, or is an admin.
+    #[serde(default)]
+    pub may_remove: bool,
+}
+
+impl std::ops::Deref for ReaderNote {
+    type Target = Note;
+    fn deref(&self) -> &Note {
+        &self.note
+    }
 }
 
 /// Note enriched with the parent node's title — used in the central feed.
@@ -30,8 +67,43 @@ pub struct Note {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FeedNote {
     #[serde(flatten)]
-    pub note: Note,
+    pub note: ReaderNote,
     pub node_title: Option<String>,
+}
+
+/// Whether a note written before `edited_at` existed (migration 052)
+/// counts as edited, and since when: the mark its page showed then, which
+/// was "its row was last written three whole seconds or more after it was
+/// created" (owner decision, 2026-11-14: existing marks are kept).
+///
+/// Some of those marks are wrong (a restore from the trash or a colour
+/// change moved `updated_at` too); what really happened is not
+/// recoverable. Migration 052 applies this rule in SQL, and a Postgres
+/// test holds the two together; restoring an older archive applies it
+/// here ([`restored_edited_at`]).
+#[must_use]
+pub fn legacy_edited_at(
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    ((updated_at - created_at).num_seconds() > 2).then_some(updated_at)
+}
+
+/// A restored note's `edited_at`, from what its archive says:
+/// - nothing (`None`): an archive from before the field (formats 3 to
+///   10), so the legacy rule decides;
+/// - null (`Some(None)`): never edited;
+/// - a date: that date.
+#[must_use]
+pub fn restored_edited_at(
+    archived: Option<Option<DateTime<Utc>>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    match archived {
+        Some(known) => known,
+        None => legacy_edited_at(created_at, updated_at),
+    }
 }
 
 /// Request body for creating a new note.
@@ -65,7 +137,9 @@ pub enum NoteSort {
     Newest,
     /// Oldest created first.
     Oldest,
-    /// Most recently updated first.
+    /// Most recently edited first: by the date a note's words last
+    /// changed, or the date it was written if they never did. The wire
+    /// value stays `updated`.
     Updated,
 }
 
@@ -246,6 +320,88 @@ fn strip_lone_emphasis(text: &str) -> String {
         })
         .map(|(_, &c)| c)
         .collect()
+}
+
+#[cfg(test)]
+mod edited_tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+
+    fn at(secs: i64, millis: i64) -> DateTime<Utc> {
+        let base = Utc
+            .with_ymd_and_hms(2026, 3, 1, 9, 0, 0)
+            .single()
+            .expect("a date");
+        base + Duration::seconds(secs) + Duration::milliseconds(millis)
+    }
+
+    /// The old page showed "edited" when the whole seconds between the two
+    /// dates were more than 2: from 3.000 s, not from 2.001 s.
+    #[test]
+    fn a_legacy_note_counts_as_edited_from_three_whole_seconds() {
+        let created = at(0, 0);
+        assert_eq!(legacy_edited_at(created, created), None);
+        assert_eq!(legacy_edited_at(created, at(2, 0)), None);
+        assert_eq!(legacy_edited_at(created, at(2, 999)), None);
+        assert_eq!(legacy_edited_at(created, at(3, 0)), Some(at(3, 0)));
+        assert_eq!(legacy_edited_at(created, at(3600, 0)), Some(at(3600, 0)));
+        // A clock that ran backwards marks nothing.
+        assert_eq!(legacy_edited_at(at(10, 0), created), None);
+    }
+
+    #[test]
+    fn a_restored_note_takes_what_its_archive_says_about_edits() {
+        let (created, later) = (at(0, 0), at(60, 0));
+        // An archive from before the field: the legacy rule.
+        assert_eq!(restored_edited_at(None, created, later), Some(later));
+        assert_eq!(restored_edited_at(None, created, created), None);
+        // An archive that says "never edited" is believed, whatever
+        // `updated_at` did (a recolour moved it).
+        assert_eq!(restored_edited_at(Some(None), created, later), None);
+        // And one that names a date keeps it.
+        let edited = at(30, 0);
+        assert_eq!(
+            restored_edited_at(Some(Some(edited)), created, later),
+            Some(edited)
+        );
+    }
+
+    #[test]
+    fn a_readers_note_is_the_note_with_two_flags_beside_it() {
+        let note = Note {
+            id: NoteId(uuid::Uuid::from_u128(1)),
+            node_id: NodeId(uuid::Uuid::from_u128(2)),
+            owner_id: "alice".into(),
+            body: "hello".into(),
+            color: "default".into(),
+            created_at: at(0, 0),
+            updated_at: at(0, 0),
+            edited_at: None,
+        };
+        let reader = ReaderNote {
+            note: note.clone(),
+            may_edit: true,
+            may_remove: false,
+        };
+        let json = serde_json::to_value(&reader).expect("json");
+        assert_eq!(
+            json["body"], "hello",
+            "flat: an older page reads it as a note"
+        );
+        assert_eq!(json["may_edit"], true);
+        assert_eq!(json["may_remove"], false);
+        assert_eq!(reader.body, "hello", "and it derefs to the note");
+        // A note without the new fields (an answer cached by an older
+        // release) reads as unedited, with nothing offered.
+        let old = serde_json::json!({
+            "id": note.id, "node_id": note.node_id, "owner_id": "alice",
+            "body": "hello", "created_at": note.created_at,
+            "updated_at": note.updated_at,
+        });
+        let read: ReaderNote = serde_json::from_value(old).expect("an older answer");
+        assert_eq!(read.edited_at, None);
+        assert!(!read.may_edit && !read.may_remove);
+    }
 }
 
 #[cfg(test)]

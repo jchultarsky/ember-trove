@@ -340,6 +340,7 @@ mod tests {
             color: "default".into(),
             created_at: at,
             updated_at: at,
+            edited_at: None,
         }
     }
 

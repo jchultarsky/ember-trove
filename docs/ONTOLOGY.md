@@ -535,6 +535,10 @@ developments — meeting notes, a microblog-like log entry.
 - **Notes are editable; their timestamp is not.** Editing a note keeps its
   original timestamp — its place in the chronology — and the note shows
   that it was edited. Note colours carry no meaning in the model.
+  "Edited" means the note's **words** changed: a colour, or a trip
+  through the trash and back, is not an edit. Only a note's author edits
+  it, while they may still edit its node; they, the node's owner or an
+  admin may remove it (§14).
 - When a Project note gets promoted to something bigger is a matter of
   the owner's judgment, **by design**: the ontology defines no promotion
   trigger.
@@ -590,6 +594,14 @@ Two distinct concepts that are easily confused:
 
 History is distinct from a node's body *version history* — version
 snapshots are a text mechanism, not the semantic record of what occurred.
+In the app the two have different names: **History** is this chronology,
+and saved text versions are **Versions**.
+
+History is also distinct from the node's *audit trail* (who created,
+edited, tagged, shared or exported it), which the app shows apart, as
+Activity. What is in History: notes; a change of the status label; a
+change of the declared state; a cascade's record; a replaced Brief; and,
+on every kind, a move between draft, published and archived.
 
 - **Brief** (#282) — where a Project stands *now*: an optional one-line
   headline, a pitch (the elevator speech) and a few points. A Project has
@@ -791,3 +803,5 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-14 | "Neither active nor parked" under a closed master is read as: no change to active, and none from a closed state to parked. An active sub-Project that was moved under a closed master may still be parked (it re-opens nothing, and refusing would leave it only "close it" or "move it") | Developer's reading of the owner's decision above, building S6b (#326); for the owner to confirm |
 | 2026-11-14 | The cascade does not go through a sub-Project the actor cannot edit, open or closed. A closed one is not listed as "staying open" | Developer, after the independent review of #326; for the owner to confirm |
 | 2026-11-14 | A cascade's webhooks follow the existing rule for each event: `node.updated` to the hooks of each closed Project's owner, `task.updated` (one per Project) to the hooks of the cancelled tasks' owners. An open sub-Project that its master's owner cannot view is in nobody's Data health report | Developer, building S6b (#326) |
+| 2026-11-14 | History in the app (S6d): the Notes section **becomes History** on every kind, notes and changes in one chronology, newest first. Saved text versions are called **Versions**. **Activity** shows only the audit trail; status, state, cascade and Brief changes show in History. Existing "edited" marks on notes are **kept**. A move between draft, published and archived is **recorded in History** from v3.23.0 on, on every kind | Owner, in the developer session (S6d planning, #329) |
+| 2026-11-14 | A note is "edited" when its words change, and by nothing else (a colour, the same text saved again, a delete and restore are not edits); no "edited by", since only its author can edit it. Edit and Delete are offered to a reader only where the write would pass. A change in History can be opened to show exactly what it holds. Note colours stay as decoration. Writing, editing or deleting a note is logged nowhere else: the note is the record | Developer, building S6d (#329); the owner approved the plan |

@@ -6,6 +6,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **History: the server's half** (S6d of the ontology programme, #329;
+  ONTOLOGY §9.2, §10). The History section itself follows.
+  - **A note's "edited" mark is now a fact.** `node_notes.edited_at`
+    (migration 052) is set when a note's words change and by nothing
+    else. The mark used to be worked out from a date that a delete and
+    Undo, or a colour change, also moved. A note's own date never moves.
+    Notes that show "edited" today keep the mark (owner decision).
+  - **Notes say what you may do with each one.** `GET
+    /api/nodes/{id}/notes` and the notes feed answer with `may_edit` (you
+    wrote it and may still edit its node) and `may_remove` (that, or you
+    own the node, or are an admin), from the same rules the writes apply.
+  - **Publishing and archiving are recorded.** A move between Draft,
+    Published and Archived is written to the node's History
+    (`lifecycle_changed`), on every kind, from this release on. Earlier
+    moves were not recorded and can't be recovered.
+  - `GET /api/nodes/{id}/activity?scope=history|audit`: what occurred
+    about the node (status, state, cascade, Brief and lifecycle changes),
+    or who touched it (created, edited, tags, files, sharing, exports).
+    Without `scope` it answers with everything, as before.
+  - The notes feed's "Recently updated" order follows the date a note's
+    words last changed, no longer the date its row was last written.
+
+### Changed
+- **Backup format 11**: a note carries `edited_at`. Older releases refuse
+  a format-11 archive. Archives of formats 3 to 10 still restore: a note
+  counts as edited by the rule the migration applied.
+
 ## [3.22.0] - 2026-11-14
 
 ### Added

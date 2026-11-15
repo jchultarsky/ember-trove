@@ -1274,13 +1274,14 @@ impl NodeRepo for PgNodeRepo {
         let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("update node failed: {e}"));
 
         let mut tx = self.pool.begin().await.map_err(db_err)?;
-        // Lock the row and read the status it had: the History entry needs
-        // the old value, and the lock makes "no row" mean 404 and a failed
-        // precondition below mean 412, with no second lookup. NO KEY UPDATE
-        // is the lock an UPDATE that leaves the key alone takes anyway, so
-        // it doesn't block FK inserts (tags, attachments, activity) meanwhile.
-        let Some(old_status) = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT project_status FROM nodes WHERE id = $1 FOR NO KEY UPDATE",
+        // Lock the row and read the status label and the lifecycle it had:
+        // the History entries need the old values, and the lock makes "no
+        // row" mean 404 and a failed precondition below mean 412, with no
+        // second lookup. NO KEY UPDATE is the lock an UPDATE that leaves
+        // the key alone takes anyway, so it doesn't block FK inserts
+        // (tags, attachments, activity) meanwhile.
+        let Some((old_status, old_lifecycle)) = sqlx::query_as::<_, (Option<String>, String)>(
+            "SELECT project_status, status::text FROM nodes WHERE id = $1 FOR NO KEY UPDATE",
         )
         .bind(id.0)
         .fetch_optional(&mut *tx)
@@ -1349,6 +1350,24 @@ impl NodeRepo for PgNodeRepo {
                 id,
                 &actor.subject_id,
                 ActivityAction::StatusChanged,
+                meta,
+            )
+            .await?;
+        }
+        // S6d (owner decision, 2026-11-14): a move between draft,
+        // published and archived is History too, on every kind. This is
+        // the only statement that writes `nodes.status`; a restore puts
+        // the log back with the nodes.
+        if row.status != old_lifecycle {
+            let meta = actor.metadata_with(serde_json::json!({
+                "from": old_lifecycle,
+                "to": row.status,
+            }));
+            record_in(
+                &mut tx,
+                id,
+                &actor.subject_id,
+                ActivityAction::LifecycleChanged,
                 meta,
             )
             .await?;

@@ -77,6 +77,14 @@ fn action_detail(entry: &ActivityEntry) -> Option<String> {
             let state = |k: &str| entry.metadata.get(k).and_then(|v| v.as_str());
             Some(project_state_change_summary(state("from"), state("to")))
         }
+        // A move between draft, published and archived (S6d).
+        ActivityAction::LifecycleChanged => {
+            let stage = |k: &str| entry.metadata.get(k).and_then(|v| v.as_str());
+            Some(common::activity::lifecycle_change_summary(
+                stage("from"),
+                stage("to"),
+            ))
+        }
         // The replaced Brief's headline, else the start of its pitch (#282).
         // Shown as plain text: Leptos escapes it, no markdown is rendered.
         ActivityAction::BriefSuperseded => common::brief::superseded_summary(&entry.metadata),
@@ -128,7 +136,8 @@ fn action_colour(action: &ActivityAction) -> &'static str {
         ActivityAction::StatusChanged
         | ActivityAction::BriefSuperseded
         | ActivityAction::ProjectStateChanged
-        | ActivityAction::CascadeClosed => {
+        | ActivityAction::CascadeClosed
+        | ActivityAction::LifecycleChanged => {
             "bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300"
         }
     }
@@ -220,6 +229,18 @@ mod tests {
             metadata,
             created_at: chrono::Utc::now(),
         }
+    }
+
+    #[test]
+    fn a_lifecycle_change_shows_from_and_to() {
+        let e = entry(
+            ActivityAction::LifecycleChanged,
+            serde_json::json!({ "from": "draft", "to": "published" }),
+        );
+        assert_eq!(
+            action_detail(&e).as_deref(),
+            Some("Draft \u{2192} Published")
+        );
     }
 
     #[test]

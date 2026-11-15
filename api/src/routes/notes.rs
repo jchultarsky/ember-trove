@@ -10,7 +10,7 @@ use common::{
     id::{NodeId, NoteId},
     note::{
         CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteFeedParams, NoteSort,
-        UpdateNoteRequest,
+        ReaderNote, UpdateNoteRequest,
     },
 };
 use garde::Validate;
@@ -48,14 +48,19 @@ fn actor(claims: &AuthClaims) -> NoteActor<'_> {
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
-/// GET /nodes/:id/notes — list all notes for a node, newest first.
+/// GET /nodes/:id/notes — list all notes for a node, newest first, each
+/// with what the caller may do to it (`may_edit`, `may_remove`: the write
+/// routes' own rules, so the page offers a button only where it works).
 async fn list_notes(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(node_id): Path<Uuid>,
-) -> Result<Json<Vec<Note>>, ApiError> {
+) -> Result<Json<Vec<ReaderNote>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
-    let notes = state.notes.list_for_node(NodeId(node_id)).await?;
+    let notes = state
+        .notes
+        .list_for_node(NodeId(node_id), actor(&claims))
+        .await?;
     Ok(Json(notes))
 }
 
@@ -164,7 +169,7 @@ async fn note_feed(
         offset: i64::from(params.page.unwrap_or(1).max(1) - 1) * per_page,
     };
 
-    let feed = state.notes.feed(owner_id, &filter).await?;
+    let feed = state.notes.feed(owner_id, actor(&claims), &filter).await?;
     Ok(Json(feed))
 }
 

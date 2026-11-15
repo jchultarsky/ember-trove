@@ -73,7 +73,12 @@ pub struct EntityCounts {
 /// closed or parked project as if nothing had been declared, so the
 /// number moves. Archives of 3 to 9 still restore: a project's state is
 /// read from its label, once (`project_state::restored`).
-pub const SCHEMA_VERSION: u32 = 10;
+/// 11 (S6d): a note carries the date its words were last changed
+/// (`edited_at`). An older release would drop it and show no note as
+/// edited, so the number moves. Archives of 3 to 10 still restore: whether
+/// a note counts as edited is read from its two older dates, by the rule
+/// migration 052 applied (`note::legacy_edited_at`).
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -261,6 +266,25 @@ pub struct BackupNote {
     pub color: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When the note's words were last changed (format 11). Three cases,
+    /// so a double option: absent in an archive from before the field,
+    /// null for a note that was never edited, or the date. Read through
+    /// [`BackupNote::restored_edited_at`], never directly: "absent" and
+    /// "null" mean different things.
+    #[serde(
+        default,
+        deserialize_with = "crate::task::deser_double_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub edited_at: Option<Option<DateTime<Utc>>>,
+}
+
+impl BackupNote {
+    /// The `edited_at` to restore (`note::restored_edited_at`).
+    #[must_use]
+    pub fn restored_edited_at(&self) -> Option<DateTime<Utc>> {
+        crate::note::restored_edited_at(self.edited_at, self.created_at, self.updated_at)
+    }
 }
 
 fn default_color() -> String {
@@ -277,6 +301,8 @@ impl From<Note> for BackupNote {
             color: n.color,
             created_at: n.created_at,
             updated_at: n.updated_at,
+            // Always written, null included: this release knows.
+            edited_at: Some(n.edited_at),
         }
     }
 }
@@ -442,6 +468,63 @@ pub struct BackupPreview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Format 11: a note's `edited_at` has three cases in an archive, and
+    /// each restores differently. An archive from before the field must
+    /// not be read as "never edited", and one that says "never edited"
+    /// must not get the old rule applied over it.
+    #[test]
+    fn a_notes_edited_date_survives_an_archive_three_ways() {
+        let note = |edited: &str| {
+            let json = format!(
+                r#"{{
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "node_id": "00000000-0000-0000-0000-000000000002",
+                    "owner_id": "alice", "body": "x",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:10:00Z"{edited}
+                }}"#
+            );
+            serde_json::from_str::<BackupNote>(&json).expect("a note")
+        };
+        let updated = "2026-01-01T00:10:00Z"
+            .parse::<DateTime<Utc>>()
+            .expect("date");
+        // Absent (formats 3 to 10): the legacy rule, here "edited".
+        let old = note("");
+        assert_eq!(old.edited_at, None);
+        assert_eq!(old.restored_edited_at(), Some(updated));
+        // Null: never edited, although `updated_at` moved (a recolour).
+        let never = note(r#", "edited_at": null"#);
+        assert_eq!(never.edited_at, Some(None));
+        assert_eq!(never.restored_edited_at(), None);
+        // A date: kept.
+        let edited = note(r#", "edited_at": "2026-01-01T00:05:00Z""#);
+        let at = "2026-01-01T00:05:00Z"
+            .parse::<DateTime<Utc>>()
+            .expect("date");
+        assert_eq!(edited.restored_edited_at(), Some(at));
+
+        // What this release writes always says which: null is written.
+        let written = serde_json::to_value(&never).expect("json");
+        assert!(
+            written
+                .get("edited_at")
+                .is_some_and(serde_json::Value::is_null)
+        );
+        let from_note = BackupNote::from(Note {
+            id: never.id,
+            node_id: crate::id::NodeId(uuid::Uuid::from_u128(2)),
+            owner_id: "alice".into(),
+            body: "x".into(),
+            color: "default".into(),
+            created_at: never.created_at,
+            updated_at: never.updated_at,
+            edited_at: None,
+        });
+        assert_eq!(from_note.edited_at, Some(None));
+        assert_eq!(SCHEMA_VERSION, 11);
+    }
 
     #[test]
     fn an_archive_with_share_tokens_still_restores() {
