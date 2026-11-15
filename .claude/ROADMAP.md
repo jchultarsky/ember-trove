@@ -5,6 +5,21 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-14)
 
+- **In progress: S6d, the History facet** (#329; ONTOLOGY §9.2, §10).
+  Two PRs, one release (3.23.0), after a Lightsail snapshot (migration
+  052, backup format 11). PR 1 (data and API): `node_notes.edited_at`
+  (set only when a note's words change; existing marks kept by
+  `note::legacy_edited_at`), `ReaderNote` (`may_edit`, `may_remove`: the
+  write rules, read for the reader), `ActivityAction::is_history` and
+  `GET /nodes/{id}/activity?scope=history|audit`, `lifecycle_changed`,
+  `common::history` (the merged chronology, pure). PR 2 (UI): the Notes
+  section becomes History, Activity is the audit trail, "Version
+  History" becomes "Versions". Owner decisions, 2026-11-14: those three,
+  existing "edited" marks kept, publishing and archiving recorded.
+  Follow-ups noted, not done: a non-owner editor can't add a note from
+  the node page (needs the reader's role on the node); History is not
+  paged (one node has 123 notes); Events join History in S11a.
+
 - **v3.22.0 shipped: S6b and S6c, the cascade** (#326, PRs #327 and
   #328; ONTOLOGY §4.1). No migration, backup format unchanged. PR 1
   (rules and API): `common::cascade` (the plan, one pure function shared

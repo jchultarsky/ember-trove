@@ -99,11 +99,68 @@ pub enum ActivityAction {
     /// tasks. The metadata is `cascade::recorded`; it is shown to a reader
     /// through `cascade::presented`, never raw.
     CascadeClosed,
+    /// A node moved between draft, published and archived (S6d; History,
+    /// ONTOLOGY §10; owner decision, 2026-11-14). Every kind has this
+    /// one. Metadata carries `from` and `to`, the wire strings of
+    /// `NodeStatus`. Nothing before v3.23.0 was recorded.
+    LifecycleChanged,
+}
+
+/// The response header `GET /nodes/{id}/activity` sets (to `1`) when the
+/// node has more entries of the asked scope than the answer holds. The
+/// page can't work that out from the count: the route drops an entry its
+/// reader may not see after the limit, and clamps the limit.
+pub const MORE_HEADER: &str = "x-ember-more";
+
+/// Which part of a node's log a reader asks for (S6d).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityScope {
+    /// What occurred about the node: its History (§10).
+    History,
+    /// Who touched the node: created, edited, tagged, shared, exported.
+    Audit,
+}
+
+impl ActivityScope {
+    /// The `scope` query value. Anything else is not a scope.
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "history" => Some(Self::History),
+            "audit" => Some(Self::Audit),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::History => "history",
+            Self::Audit => "audit",
+        }
+    }
+
+    /// Whether `action` is in this scope. Every action is in exactly one.
+    #[must_use]
+    pub fn holds(self, action: &ActivityAction) -> bool {
+        action.is_history() == (self == Self::History)
+    }
+
+    /// The database strings of the actions in this scope, for a read to
+    /// filter on in SQL, before its `LIMIT`.
+    #[must_use]
+    pub fn db_strs(self) -> Vec<&'static str> {
+        ActivityAction::ALL
+            .iter()
+            .filter(|action| self.holds(action))
+            .map(ActivityAction::as_str)
+            .collect()
+    }
 }
 
 impl ActivityAction {
     /// Every action this build knows, in declaration order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Created,
         Self::Edited,
         Self::TagAdded,
@@ -118,7 +175,35 @@ impl ActivityAction {
         Self::BriefSuperseded,
         Self::ProjectStateChanged,
         Self::CascadeClosed,
+        Self::LifecycleChanged,
     ];
+
+    /// Whether this is part of the node's **History** (§10: what occurred
+    /// about it) rather than its audit trail (who touched it). History
+    /// shows these beside the notes; Activity shows the rest.
+    ///
+    /// Exhaustive on purpose: a new action does not compile until it is
+    /// put on one side.
+    #[must_use]
+    pub fn is_history(&self) -> bool {
+        match self {
+            Self::StatusChanged
+            | Self::BriefSuperseded
+            | Self::ProjectStateChanged
+            | Self::CascadeClosed
+            | Self::LifecycleChanged => true,
+            Self::Created
+            | Self::Edited
+            | Self::TagAdded
+            | Self::TagRemoved
+            | Self::AttachmentUploaded
+            | Self::PermissionGranted
+            | Self::PermissionRevoked
+            | Self::Shared
+            | Self::Exported
+            | Self::CreatedFromTemplate => false,
+        }
+    }
 
     /// The database strings of [`Self::ALL`]. Reads filter on these in SQL
     /// (#208), so a row from a newer release neither fails a list nor uses
@@ -146,6 +231,7 @@ impl ActivityAction {
             Self::BriefSuperseded => "brief_superseded",
             Self::ProjectStateChanged => "project_state_changed",
             Self::CascadeClosed => "cascade_closed",
+            Self::LifecycleChanged => "lifecycle_changed",
         }
     }
 
@@ -165,6 +251,7 @@ impl ActivityAction {
             "brief_superseded" => Some(Self::BriefSuperseded),
             "project_state_changed" => Some(Self::ProjectStateChanged),
             "cascade_closed" => Some(Self::CascadeClosed),
+            "lifecycle_changed" => Some(Self::LifecycleChanged),
             _ => None,
         }
     }
@@ -187,6 +274,7 @@ impl ActivityAction {
             Self::BriefSuperseded => "edit_note",
             Self::ProjectStateChanged => "flag",
             Self::CascadeClosed => "checklist",
+            Self::LifecycleChanged => "move_item",
         }
     }
 
@@ -209,6 +297,7 @@ impl ActivityAction {
             Self::BriefSuperseded => "updated the brief",
             Self::ProjectStateChanged => "changed state",
             Self::CascadeClosed => "closed what was under it",
+            Self::LifecycleChanged => "changed stage",
         }
     }
 }
@@ -237,6 +326,19 @@ pub fn project_state_change_summary(from: Option<&str>, to: Option<&str>) -> Str
     status_change_summary(from.map(name).as_deref(), to.map(name).as_deref())
 }
 
+/// One line describing a move between draft, published and archived,
+/// from a `lifecycle_changed` entry's `from` / `to` (S6d): "Draft →
+/// Published". They are wire strings; one this build doesn't know is
+/// shown as it is.
+#[must_use]
+pub fn lifecycle_change_summary(from: Option<&str>, to: Option<&str>) -> String {
+    let name = |s: &str| {
+        crate::node::NodeStatus::parse(s)
+            .map_or_else(|| s.to_string(), |status| status.label().to_string())
+    };
+    status_change_summary(from.map(name).as_deref(), to.map(name).as_deref())
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -256,6 +358,59 @@ mod tests {
         assert_eq!(
             project_state_change_summary(None, Some("complete")),
             "set to Complete"
+        );
+    }
+
+    /// History and the audit trail split every action between them: none
+    /// in both, none in neither (Activity must not list what History
+    /// shows, and nothing may vanish from both).
+    #[test]
+    fn the_two_scopes_split_every_action() {
+        let history = ActivityScope::History.db_strs();
+        let audit = ActivityScope::Audit.db_strs();
+        assert_eq!(
+            history,
+            [
+                "status_changed",
+                "brief_superseded",
+                "project_state_changed",
+                "cascade_closed",
+                "lifecycle_changed"
+            ]
+        );
+        assert_eq!(history.len() + audit.len(), ActivityAction::ALL.len());
+        assert!(history.iter().all(|a| !audit.contains(a)));
+        for action in &ActivityAction::ALL {
+            assert_ne!(
+                ActivityScope::History.holds(action),
+                ActivityScope::Audit.holds(action),
+                "{}",
+                action.as_str()
+            );
+        }
+        assert_eq!(
+            ActivityScope::parse("history"),
+            Some(ActivityScope::History)
+        );
+        assert_eq!(ActivityScope::parse("audit"), Some(ActivityScope::Audit));
+        assert_eq!(ActivityScope::parse("all"), None);
+        assert_eq!(ActivityScope::parse(""), None);
+        assert_eq!(ActivityScope::History.as_str(), "history");
+    }
+
+    #[test]
+    fn a_lifecycle_change_reads_in_the_stages_own_words() {
+        assert_eq!(
+            lifecycle_change_summary(Some("draft"), Some("published")),
+            "Draft \u{2192} Published"
+        );
+        assert_eq!(
+            lifecycle_change_summary(Some("archived"), Some("draft")),
+            "Archived \u{2192} Draft"
+        );
+        assert_eq!(
+            lifecycle_change_summary(Some("published"), Some("retired")),
+            "Published \u{2192} retired"
         );
     }
 
@@ -292,6 +447,7 @@ mod tests {
                 ActivityAction::BriefSuperseded => 11,
                 ActivityAction::ProjectStateChanged => 12,
                 ActivityAction::CascadeClosed => 13,
+                ActivityAction::LifecycleChanged => 14,
             }
         }
         for (i, a) in ActivityAction::ALL.iter().enumerate() {

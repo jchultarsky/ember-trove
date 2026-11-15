@@ -389,7 +389,7 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/{id}/permissions` | Permission grants: all of them for an owner, the caller's own otherwise |
 | POST | `/api/nodes/{id}/permissions` | Grant permission to a user |
 | POST | `/api/nodes/{id}/invite` | Share with an account by email (owner-only); sends SES email. An address with no account is a 422, unless the caller is an admin: then the account is created |
-| GET | `/api/nodes/{id}/activity` | Audit log for this node (viewer+). Email addresses are shown to owners only |
+| GET | `/api/nodes/{id}/activity` | The node's log (viewer+). `?scope=history` is what occurred about it (status, state, cascade, Brief and Draft / Published / Archived changes); `?scope=audit` is who touched it (created, edited, tags, files, sharing, exports); without `scope`, both. The header `x-ember-more: 1` says the node has more than the answer holds. Email addresses are shown to owners only |
 | GET | `/api/nodes/{id}/versions` | Version history (body snapshots) |
 | POST | `/api/nodes/{id}/versions/{vid}/restore` | Restore a past version |
 | POST | `/api/nodes/{id}/duplicate` | Copy a node (body, type and tags) as a Draft titled "… (copy)", owned by the caller |
@@ -504,13 +504,13 @@ The caller's own Focus: private to each account, with no admin bypass.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/nodes/{id}/notes` | List notes for a node (newest first) |
+| GET | `/api/nodes/{id}/notes` | List notes for a node (newest first). Each carries `edited_at` (when its words last changed, or null) and, for the caller, `may_edit` and `may_remove` |
 | POST | `/api/nodes/{id}/notes` | Append a note |
-| PATCH | `/api/notes/{id}` | Edit a note body (owner-only) |
+| PATCH | `/api/notes/{id}` | Edit a note: its author only, while they may still edit its node. The note's date never moves; `edited_at` is set when the words change |
 | DELETE | `/api/notes/{id}` | Delete a note (soft delete — restorable for 30 days) |
 | POST | `/api/notes/{id}/restore` | Un-delete a note (backs the UI's undo toast) |
 | POST | `/api/notes` | A note on the node named in the body (`node_id` required; every note has a node) |
-| GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first) |
+| GET | `/api/notes/feed` | Global notes feed (all accessible nodes, newest first; `sort=updated` is most recently edited first) |
 
 ### Captures
 

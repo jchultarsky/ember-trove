@@ -46,6 +46,7 @@ pub mod form_draft;
 pub mod graph;
 pub mod graph_layout;
 pub mod grid_nav;
+pub mod history;
 pub mod id;
 pub mod inbox;
 pub mod keyboard;

@@ -583,6 +583,11 @@ fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl
                         ActivityAction::ProjectStateChanged => {
                             Some(project_state_change_summary(word("from"), word("to")))
                         }
+                        // And a move between draft, published and archived
+                        // (S6d).
+                        ActivityAction::LifecycleChanged => Some(
+                            common::activity::lifecycle_change_summary(word("from"), word("to")),
+                        ),
                         _ => None,
                     };
                     let title = e.node_title.clone();

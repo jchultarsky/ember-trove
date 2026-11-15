@@ -945,6 +945,7 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
                     color: req.color,
                     created_at: chrono::Utc::now(),
                     updated_at: chrono::Utc::now(),
+                    edited_at: None,
                 })
             }
             Destination::Task { node_id, req } => {
@@ -983,6 +984,30 @@ fn stub_owned(id: common::id::CaptureId, owner: &str) -> Result<(), EmberTroveEr
     Ok(())
 }
 
+/// A note whose body says who the route asked the repo for: the list
+/// scope (for the feed) and the reader its flags are computed for.
+fn echo_note(
+    node: NodeId,
+    scope: Option<Option<&str>>,
+    reader: crate::repo::note::NoteActor<'_>,
+) -> common::note::ReaderNote {
+    let scope = scope.map_or_else(String::new, |s| format!("scope={} ", s.unwrap_or("all")));
+    common::note::ReaderNote {
+        note: Note {
+            id: common::id::NoteId(Uuid::from_u128(1)),
+            node_id: node,
+            owner_id: "someone".to_string(),
+            body: format!("{scope}reader={} admin={}", reader.subject, reader.admin),
+            color: "default".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            edited_at: None,
+        },
+        may_edit: false,
+        may_remove: reader.admin,
+    }
+}
+
 struct StubNoteRepo;
 #[async_trait]
 impl NoteRepo for StubNoteRepo {
@@ -1002,8 +1027,21 @@ impl NoteRepo for StubNoteRepo {
     ) -> Result<Note, EmberTroveError> {
         unimplemented!()
     }
-    async fn list_for_node(&self, _: NodeId) -> Result<Vec<Note>, EmberTroveError> {
-        unimplemented!()
+    async fn list_for_node(
+        &self,
+        node: NodeId,
+        reader: crate::repo::note::NoteActor<'_>,
+    ) -> Result<Vec<common::note::ReaderNote>, EmberTroveError> {
+        // Only a node the caller may view reaches the repo.
+        assert!(
+            matches!(
+                node.0.as_u128(),
+                AZ_OWNED_NODE | AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE
+            ),
+            "unexpected node {node}"
+        );
+        // The body says who the route read it for.
+        Ok(vec![echo_note(node, None, reader)])
     }
     async fn delete(
         &self,
@@ -1025,6 +1063,7 @@ impl NoteRepo for StubNoteRepo {
             color: "yellow".to_string(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            edited_at: None,
         })
     }
     async fn purge_deleted_before(
@@ -1035,10 +1074,14 @@ impl NoteRepo for StubNoteRepo {
     }
     async fn feed(
         &self,
-        _: Option<&str>,
+        scope: Option<&str>,
+        reader: crate::repo::note::NoteActor<'_>,
         _: &crate::repo::note::NoteFeedFilter,
     ) -> Result<Vec<FeedNote>, EmberTroveError> {
-        unimplemented!()
+        Ok(vec![FeedNote {
+            note: echo_note(NodeId(Uuid::nil()), Some(scope), reader),
+            node_title: None,
+        }])
     }
     async fn list_all(&self) -> Result<Vec<Note>, EmberTroveError> {
         unimplemented!()
@@ -1662,23 +1705,66 @@ impl ActivityRepo for StubActivityRepo {
     ) -> Result<(), EmberTroveError> {
         Ok(())
     }
-    async fn list(&self, node: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
-        if node.0.as_u128() == AZ_PARKED_PROJECT {
-            return Ok(cascade_history(node));
+    async fn list(
+        &self,
+        node: NodeId,
+        limit: i64,
+        scope: Option<common::activity::ActivityScope>,
+    ) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+        // What the real one does: only the actions of the scope asked for.
+        let in_scope = |e: &ActivityEntry| scope.is_none_or(|s| s.holds(&e.action));
+        // AZ_MY_PROJECT has exactly three History entries, and gives as
+        // many of them as it is asked for.
+        if node.0.as_u128() == AZ_MY_PROJECT {
+            return Ok((1..=3u128)
+                .map(|n| ActivityEntry {
+                    id: common::id::ActivityId(Uuid::from_u128(n)),
+                    node_id: node,
+                    subject_id: "test-sub".to_string(),
+                    action: ActivityAction::StatusChanged,
+                    metadata: serde_json::json!({ "from": "a", "to": "b" }),
+                    created_at: chrono::Utc::now(),
+                })
+                .filter(in_scope)
+                .take(usize::try_from(limit).unwrap_or(0))
+                .collect());
         }
-        Ok(vec![ActivityEntry {
-            id: common::id::ActivityId(Uuid::from_u128(1)),
+        if node.0.as_u128() == AZ_PARKED_PROJECT {
+            return Ok(cascade_history(node).into_iter().filter(in_scope).collect());
+        }
+        let entry = |n: u128, action: ActivityAction, metadata: serde_json::Value| ActivityEntry {
+            id: common::id::ActivityId(Uuid::from_u128(n)),
             node_id: node,
             subject_id: "creator".to_string(),
-            action: ActivityAction::PermissionGranted,
-            metadata: serde_json::json!({
-                "actor_name": "Cre Ator",
-                "actor_email": "creator@example.com",
-                "invited_email": "guest@example.com",
-                "role": "viewer",
-            }),
+            action,
+            metadata,
             created_at: chrono::Utc::now(),
-        }])
+        };
+        // One audit line first (older tests read `body[0]`), then one
+        // History line.
+        let entries = vec![
+            entry(
+                1,
+                ActivityAction::PermissionGranted,
+                serde_json::json!({
+                    "actor_name": "Cre Ator",
+                    "actor_email": "creator@example.com",
+                    "invited_email": "guest@example.com",
+                    "role": "viewer",
+                }),
+            ),
+            entry(
+                2,
+                ActivityAction::StatusChanged,
+                serde_json::json!({
+                    "actor_name": "Cre Ator",
+                    "actor_email": "creator@example.com",
+                    "from": "Active",
+                    "to": "Blocked",
+                }),
+            ),
+        ];
+        Ok(entries.into_iter().filter(in_scope).collect())
     }
     async fn list_recent_for_owner(
         &self,
@@ -3354,6 +3440,144 @@ async fn history_shows_email_addresses_to_owners_only() {
     assert_eq!(meta["invited_email"], "guest@example.com");
 }
 
+/// S6d: `scope` splits a node's log into its History and its audit trail.
+/// SECURITY: rights come first (a stranger gets 403 whatever they send),
+/// and the email rule holds in every scope.
+#[tokio::test]
+async fn the_activity_scope_is_read_after_the_rights_check() {
+    let actions = |body: &serde_json::Value| -> Vec<String> {
+        body.as_array()
+            .into_iter()
+            .flatten()
+            .map(|e| e["action"].as_str().unwrap_or("?").to_string())
+            .collect()
+    };
+    // A stranger: 403 for a good scope and for nonsense alike.
+    for tail in ["activity?scope=history", "activity?scope=nonsense"] {
+        let (status, _) = nested_get(AZ_FOREIGN_NODE, tail).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{tail}");
+    }
+    // A viewer: nonsense is a 422, and each scope is its own list.
+    let (status, _) = nested_get(AZ_VIEW_NODE, "activity?scope=nonsense").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = nested_get(AZ_VIEW_NODE, "activity?scope=").await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "empty is not a scope"
+    );
+    let (status, history) = nested_get(AZ_VIEW_NODE, "activity?scope=history").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(actions(&history), ["status_changed"]);
+    let (_, audit) = nested_get(AZ_VIEW_NODE, "activity?scope=audit").await;
+    assert_eq!(actions(&audit), ["permission_granted"]);
+    // No scope: everything, as an older page asks. Not the audit trail
+    // alone.
+    let (_, all) = nested_get(AZ_VIEW_NODE, "activity").await;
+    assert_eq!(actions(&all), ["permission_granted", "status_changed"]);
+
+    // Emails: owners only, in History as in the audit trail.
+    assert!(!history.to_string().contains("@example.com"), "{history}");
+    assert_eq!(history[0]["metadata"]["actor_name"], "Cre Ator");
+    assert_eq!(history[0]["metadata"]["to"], "Blocked");
+    assert!(!audit.to_string().contains("@example.com"), "{audit}");
+    let (_, owners) = nested_get(AZ_OWNED_NODE, "activity?scope=history").await;
+    assert_eq!(owners[0]["metadata"]["actor_email"], "creator@example.com");
+}
+
+/// The answer says when the node has more entries than it holds, in a
+/// header: the page can't tell from the count (an entry its reader may
+/// not see is left out after the limit).
+#[tokio::test]
+async fn the_activity_read_says_when_there_are_more() {
+    let read = |tail: &'static str| async move {
+        let resp = claims_app("/nodes", crate::routes::nodes::router())
+            .oneshot(
+                Request::get(format!("/nodes/{}/{tail}", Uuid::from_u128(AZ_MY_PROJECT)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let more = resp
+            .headers()
+            .get(common::activity::MORE_HEADER)
+            .map(|v| v.to_str().unwrap_or("?").to_string());
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        (json.as_array().map_or(0, Vec::len), more)
+    };
+    // Three exist. Asked for two: two, and "more".
+    assert_eq!(
+        read("activity?scope=history&limit=2").await,
+        (2, Some("1".to_string()))
+    );
+    // Asked for three or more: all three, and no header.
+    assert_eq!(read("activity?scope=history&limit=3").await, (3, None));
+    assert_eq!(read("activity?scope=history").await, (3, None));
+    // The audit scope of the same node has none, so nothing more.
+    assert_eq!(read("activity?scope=audit&limit=1").await, (0, None));
+}
+
+/// S6d: the notes a node's page reads carry what the caller may do to each
+/// one, so the repo must be asked as the caller. SECURITY: a stranger is
+/// refused before any note is read; the feed's flags are for the caller
+/// even when an admin's list has no owner scope.
+#[tokio::test]
+async fn the_note_reads_ask_as_the_caller() {
+    let get = |claims: common::auth::AuthClaims, path: String| async move {
+        let resp = Router::new()
+            .nest(
+                "/nodes/{node_id}/notes",
+                crate::routes::notes::node_note_router(),
+            )
+            .nest("/notes", crate::routes::notes::note_router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    };
+    let notes_of = |node: u128| format!("/nodes/{}/notes", Uuid::from_u128(node));
+
+    let (status, body) = get(fake_claims(), notes_of(AZ_VIEW_NODE)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["body"], "reader=test-sub admin=false");
+    // The flags are on the wire, beside the note's own fields.
+    assert_eq!(body[0]["may_edit"], false);
+    assert_eq!(body[0]["may_remove"], false);
+    assert!(body[0].get("edited_at").is_some());
+    // A stranger: refused, and nothing of a note in the answer.
+    let (status, body) = get(fake_claims(), notes_of(AZ_FOREIGN_NODE)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(!body.to_string().contains("reader="), "{body}");
+    // An admin reads any node, as themself.
+    let admin = common::auth::AuthClaims {
+        sub: "the-admin".to_string(),
+        ..admin_claims()
+    };
+    let (status, body) = get(admin.clone(), notes_of(AZ_FOREIGN_NODE)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body[0]["body"], "reader=the-admin admin=true");
+
+    // The feed: an admin's list has no owner scope, and its flags are
+    // still read for the admin's own subject, never for "nobody".
+    let (status, body) = get(admin, "/notes/feed".to_string()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body[0]["body"], "scope=all reader=the-admin admin=true");
+    let (_, body) = get(fake_claims(), "/notes/feed".to_string()).await;
+    assert_eq!(
+        body[0]["body"],
+        "scope=test-sub reader=test-sub admin=false"
+    );
+}
+
 /// SECURITY: a tag is its owner's. Attaching someone else's by id and
 /// reading the node's tags back showed its name, colour and owner; ids
 /// leak through History. A foreign tag answers exactly like a missing one.
@@ -4859,7 +5083,12 @@ impl ActivityRepo for RecordingActivityRepo {
         self.0.lock().expect("lock").push(action);
         Ok(())
     }
-    async fn list(&self, _: NodeId, _: i64) -> Result<Vec<ActivityEntry>, EmberTroveError> {
+    async fn list(
+        &self,
+        _: NodeId,
+        _: i64,
+        _: Option<common::activity::ActivityScope>,
+    ) -> Result<Vec<ActivityEntry>, EmberTroveError> {
         Ok(vec![])
     }
     async fn list_recent_for_owner(
@@ -5453,6 +5682,17 @@ async fn history_routes_show_a_cascade_as_its_reader_may_see_it() {
         assert_eq!(json.as_array().map(Vec::len), Some(2), "{path}");
         assert!(text.contains(&hidden), "{path}: an admin reads every node");
     }
+    // S6d: the same holds when the page asks for the History scope, which
+    // is how it reads a cascade from now on. The audit scope has none.
+    let node = format!("/nodes/{}/activity", az_node(AZ_PARKED_PROJECT));
+    let (json, text) = get(fake_claims(), format!("{node}?scope=history")).await;
+    assert_eq!(json.as_array().map(Vec::len), Some(1));
+    assert!(
+        text.contains(&viewable) && !text.contains(&hidden),
+        "{text}"
+    );
+    let (json, _) = get(fake_claims(), format!("{node}?scope=audit")).await;
+    assert_eq!(json.as_array().map(Vec::len), Some(0));
 }
 
 #[tokio::test]

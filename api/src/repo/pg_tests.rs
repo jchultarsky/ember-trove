@@ -1475,7 +1475,14 @@ async fn note_feed_drops_a_note_on_a_node_no_longer_shared(pool: PgPool) {
         let (notes, filter) = (&notes, &filter);
         async move {
             notes
-                .feed(owner, filter)
+                .feed(
+                    owner,
+                    super::note::NoteActor {
+                        subject: owner.unwrap_or("root"),
+                        admin: owner.is_none(),
+                    },
+                    filter,
+                )
                 .await
                 .expect("feed")
                 .into_iter()
@@ -2398,10 +2405,13 @@ async fn activity_reads_skip_an_action_this_build_does_not_know(pool: PgPool) {
     .await
     .expect("age rows");
 
-    let listed = repo.list(NodeId(node.id.0), 50).await.expect("list");
+    let listed = repo.list(NodeId(node.id.0), 50, None).await.expect("list");
     assert_eq!(listed.len(), 1, "the unknown rows are skipped, not fatal");
     assert_eq!(listed[0].action, ActivityAction::Edited);
-    let page = repo.list(NodeId(node.id.0), 1).await.expect("short page");
+    let page = repo
+        .list(NodeId(node.id.0), 1, None)
+        .await
+        .expect("short page");
     assert_eq!(
         page.len(),
         1,
@@ -4487,6 +4497,7 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         color: "default".into(),
         created_at: at,
         updated_at: at,
+        edited_at: None,
     };
     // A format-3 archive: one note on a node, one without.
     let (on_node, loose) = (
@@ -9244,7 +9255,7 @@ async fn history_names_other_nodes_only_to_a_reader_who_can_view_them(pool: PgPo
         let (repo, pool) = (&repo, pool.clone());
         async move {
             let entry = PgActivityRepo::new(pool)
-                .list(node, 50)
+                .list(node, 50, None)
                 .await
                 .expect("history")
                 .into_iter()
@@ -10021,5 +10032,696 @@ async fn a_cascade_that_loses_a_deadlock_goes_again(pool: PgPool) {
     assert!(
         cascade_lost > 0,
         "the cascade was never the side that failed"
+    );
+}
+
+// ── S6d: the History facet (#329) ────────────────────────────────────────────
+
+/// A note inserted as raw data, with its two dates given: `updated_after`
+/// seconds (and milliseconds) after `created`. An INSERT fires no update
+/// trigger, so the dates stay as given.
+#[allow(clippy::expect_used)]
+async fn raw_note(
+    pool: &PgPool,
+    node: Nid,
+    owner: &str,
+    body: &str,
+    created: chrono::DateTime<Utc>,
+    updated_after_ms: i64,
+) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO node_notes (node_id, owner_id, body, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    )
+    .bind(node.0)
+    .bind(owner)
+    .bind(body)
+    .bind(created)
+    .bind(created + Duration::milliseconds(updated_after_ms))
+    .fetch_one(pool)
+    .await
+    .expect("raw note")
+}
+
+type NoteDates = (
+    chrono::DateTime<Utc>,
+    chrono::DateTime<Utc>,
+    Option<chrono::DateTime<Utc>>,
+);
+
+/// (created_at, updated_at, edited_at) of a note.
+#[allow(clippy::expect_used)]
+async fn note_dates(pool: &PgPool, id: uuid::Uuid) -> NoteDates {
+    sqlx::query_as("SELECT created_at, updated_at, edited_at FROM node_notes WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("note dates")
+}
+
+/// `t` at the grain Postgres keeps (microseconds). A value from the
+/// machine's clock can carry nanoseconds on Linux; compared with what the
+/// database gives back it would then differ, though it is the same moment.
+#[allow(clippy::expect_used)]
+fn db_grain(t: chrono::DateTime<Utc>) -> chrono::DateTime<Utc> {
+    chrono::DateTime::from_timestamp_micros(t.timestamp_micros()).expect("in range")
+}
+
+fn note_edit(body: &str, color: &str) -> common::note::UpdateNoteRequest {
+    common::note::UpdateNoteRequest {
+        body: body.to_string(),
+        color: color.to_string(),
+    }
+}
+
+/// Migration 052 keeps the "edited" marks the page showed (owner decision,
+/// 2026-11-14), by the rule of `common::note::legacy_edited_at`: a live
+/// note whose row was last written three whole seconds or more after it
+/// was created. A trashed note gets none, and the migration itself looks
+/// like an edit to nothing: no `updated_at` moves.
+#[sqlx::test(migrations = "../migrations")]
+async fn migration_052_marks_what_showed_edited_and_moves_no_updated_at(pool: PgPool) {
+    let node = create_node(&pool, "alice", "notes before 052").await;
+    // Microsecond precision, as the database keeps it.
+    let created = chrono::DateTime::parse_from_rfc3339("2026-06-01T09:00:00.250Z")
+        .expect("date")
+        .with_timezone(&Utc);
+    let gaps_ms: [i64; 8] = [0, 1, 2_000, 2_999, 3_000, 3_001, 60_000, 86_400_000];
+    let mut live = Vec::new();
+    for gap in gaps_ms {
+        live.push(raw_note(&pool, node.id, "alice", &format!("gap {gap}"), created, gap).await);
+    }
+    // In the trash: deleting it is what moved `updated_at`.
+    let trashed = raw_note(&pool, node.id, "alice", "trashed", created, 600_000).await;
+    sqlx::query("UPDATE node_notes SET deleted_at = updated_at WHERE id = $1")
+        .bind(trashed)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Put the table back as it was before 052: no column, and the trigger
+    // of migration 010, which knows no switch. Then pin `updated_at`
+    // again (the statement above moved the trashed note's).
+    sql(&pool, "ALTER TABLE node_notes DROP COLUMN edited_at").await;
+    sql(
+        &pool,
+        "CREATE OR REPLACE FUNCTION update_node_notes_updated_at() RETURNS TRIGGER \
+         LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = NOW(); RETURN NEW; END; $$",
+    )
+    .await;
+    sql(&pool, "ALTER TABLE node_notes DISABLE TRIGGER USER").await;
+    sqlx::query("UPDATE node_notes SET updated_at = $2 WHERE id = $1")
+        .bind(trashed)
+        .bind(created + Duration::milliseconds(600_000))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sql(&pool, "ALTER TABLE node_notes ENABLE TRIGGER USER").await;
+
+    // Migrations run in a transaction; SET LOCAL needs one.
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::raw_sql(include_str!("../../../migrations/052_note_edited_at.sql"))
+        .execute(&mut *tx)
+        .await
+        .expect("re-run migration 052");
+    tx.commit().await.expect("commit");
+
+    let mut marked = 0;
+    for (id, gap) in live.iter().zip(gaps_ms) {
+        let (created_at, updated_at, edited_at) = note_dates(&pool, *id).await;
+        assert_eq!(created_at, created, "gap {gap}: created_at");
+        assert_eq!(
+            updated_at,
+            created + Duration::milliseconds(gap),
+            "gap {gap}: the migration is not an edit"
+        );
+        assert_eq!(
+            edited_at,
+            common::note::legacy_edited_at(created_at, updated_at),
+            "gap {gap}: the SQL and the rule agree"
+        );
+        marked += usize::from(edited_at.is_some());
+    }
+    assert_eq!(marked, 4, "3.000 s and up, and nothing under");
+    let (_, updated_at, edited_at) = note_dates(&pool, trashed).await;
+    assert_eq!(edited_at, None, "a trashed note showed no mark");
+    assert_eq!(updated_at, created + Duration::milliseconds(600_000));
+
+    // Afterwards the trigger works as before for an ordinary write, and
+    // honours the switch a later backfill will need.
+    sqlx::query("UPDATE node_notes SET color = 'amber' WHERE id = $1")
+        .bind(live[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(note_dates(&pool, live[0]).await.1 > created + Duration::days(1));
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL ember.keep_updated_at = 'on'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE node_notes SET color = 'rose' WHERE id = $1")
+        .bind(live[1])
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        note_dates(&pool, live[1]).await.1,
+        created + Duration::milliseconds(1)
+    );
+}
+
+/// §9.2: a note's timestamp never moves, and "edited" means its words
+/// changed. A colour, the same text saved again, and a trip through the
+/// trash are not edits, though each moves the row's `updated_at`.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_notes_edited_date_moves_only_when_its_words_change(pool: PgPool) {
+    let notes = PgNoteRepo::new(pool.clone());
+    let node = create_node(&pool, "alice", "edited marks").await;
+    own(&pool, node.id, "alice").await;
+    let created = db_grain(Utc::now() - Duration::days(30));
+    let id = raw_note(&pool, node.id, "alice", "first words", created, 0).await;
+    let note_id = common::id::NoteId(id);
+    let alice = note_actor("alice");
+    assert_eq!(
+        note_dates(&pool, id).await.2,
+        None,
+        "a new note is unedited"
+    );
+
+    // Not edits: a colour, and the same words again.
+    let recoloured = notes
+        .update(note_id, alice, note_edit("first words", "amber"))
+        .await
+        .expect("recolour");
+    assert_eq!(recoloured.edited_at, None);
+    assert_eq!(recoloured.color, "amber");
+    assert!(recoloured.updated_at > created, "the row was written");
+    notes
+        .update(note_id, alice, note_edit("first words", "amber"))
+        .await
+        .expect("same again");
+    // Nor a trip through the trash.
+    notes.delete(note_id, alice).await.expect("delete");
+    let restored = notes.restore(note_id, alice).await.expect("restore");
+    assert_eq!(restored.edited_at, None, "Undo is not an edit");
+    assert_eq!(restored.created_at, created);
+
+    // An edit: stamped now (by the database's clock, as the stamp is),
+    // and the note stays where it was written.
+    let before: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let edited = notes
+        .update(note_id, alice, note_edit("second words", "amber"))
+        .await
+        .expect("edit");
+    let first_edit = edited.edited_at.expect("stamped");
+    assert!(first_edit >= before, "{first_edit} before {before}");
+    assert_eq!(edited.created_at, created, "its place in the chronology");
+    assert_eq!(note_dates(&pool, id).await.0, created);
+
+    // What follows that is not an edit leaves the stamp as it is.
+    for (body, color) in [("second words", "rose"), ("second words", "rose")] {
+        let after = notes
+            .update(note_id, alice, note_edit(body, color))
+            .await
+            .expect("not an edit");
+        assert_eq!(after.edited_at, Some(first_edit));
+    }
+    notes.delete(note_id, alice).await.expect("delete");
+    let back = notes.restore(note_id, alice).await.expect("restore");
+    assert_eq!(back.edited_at, Some(first_edit));
+    // A second edit moves it; a change of whitespace is a change of words.
+    let again = notes
+        .update(note_id, alice, note_edit("second words ", "rose"))
+        .await
+        .expect("edit");
+    assert!(again.edited_at.expect("stamped") > first_edit);
+    assert_eq!(again.created_at, created);
+
+    // The list and the backup's read carry the date.
+    let listed = notes.list_for_node(node.id, alice).await.expect("list");
+    assert_eq!(listed[0].edited_at, again.edited_at);
+    let all = notes.list_all().await.expect("all");
+    assert_eq!(all[0].edited_at, again.edited_at);
+}
+
+/// The flags a reader is given are the write rules themselves: for every
+/// kind of reader, `may_edit` is whether an edit succeeds and `may_remove`
+/// whether a delete does. The page then offers a button only where it
+/// works, and the two can't drift (they are one SQL text).
+#[sqlx::test(migrations = "../migrations")]
+async fn the_note_flags_are_the_write_rules(pool: PgPool) {
+    let notes = PgNoteRepo::new(pool.clone());
+    let node = create_node(&pool, "alice", "whose note").await;
+    own(&pool, node.id, "alice").await;
+    grant(&pool, node.id, "bob", "editor").await;
+    grant(&pool, node.id, "carol", "editor").await;
+    grant(&pool, node.id, "vera", "viewer").await;
+    let note = notes
+        .create(
+            node.id,
+            "bob",
+            common::note::CreateNoteRequest {
+                body: "bob's note".to_string(),
+                color: "default".to_string(),
+            },
+        )
+        .await
+        .expect("note");
+    let admin = |subject: &'static str| super::note::NoteActor {
+        subject,
+        admin: true,
+    };
+
+    // (who, expected may_edit, expected may_remove)
+    let check = |who: super::note::NoteActor<'static>, edit: bool, remove: bool| {
+        let (notes, pool) = (&notes, pool.clone());
+        async move {
+            let listed = notes.list_for_node(node.id, who).await.expect("list");
+            let flags = (listed[0].may_edit, listed[0].may_remove);
+            assert_eq!(flags, (edit, remove), "{}: the flags", who.subject);
+            // The edit: the same words, so nothing changes when it lands.
+            let edited = notes
+                .update(note.id, who, note_edit("bob's note", "default"))
+                .await;
+            assert_eq!(edited.is_ok(), flags.0, "{}: edit vs may_edit", who.subject);
+            if !flags.0 {
+                assert!(matches!(edited, Err(EmberTroveError::NotFound(_))));
+            }
+            // The delete, put back by the node's owner.
+            let deleted = notes.delete(note.id, who).await;
+            assert_eq!(
+                deleted.is_ok(),
+                flags.1,
+                "{}: delete vs may_remove",
+                who.subject
+            );
+            if deleted.is_ok() {
+                // Who may delete may restore: the same rule.
+                notes.restore(note.id, who).await.expect("restore");
+            }
+            let live: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM node_notes WHERE id = $1 AND deleted_at IS NULL",
+            )
+            .bind(note.id.0)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(live, 1);
+        }
+    };
+    // Its author, an editor of the node: both.
+    check(note_actor("bob"), true, true).await;
+    // The node's owner: may remove it, not put words in it.
+    check(note_actor("alice"), false, true).await;
+    // Another editor, a viewer, a stranger: neither.
+    check(note_actor("carol"), false, false).await;
+    check(note_actor("vera"), false, false).await;
+    check(note_actor("mallory"), false, false).await;
+    // An admin who did not write it: may remove any note, edit only theirs.
+    check(admin("root"), false, true).await;
+
+    // The author loses the edit with the share (owner decision, 2026-11-10).
+    sql(
+        &pool,
+        "UPDATE permissions SET role = 'viewer' WHERE subject_id = 'bob'",
+    )
+    .await;
+    check(note_actor("bob"), false, false).await;
+    sql(&pool, "DELETE FROM permissions WHERE subject_id = 'bob'").await;
+    check(note_actor("bob"), false, false).await;
+
+    // The feed gives the same flags. A person's feed is their own notes;
+    // an admin's is everyone's, and its flags are still the admin's own.
+    let filter = super::note::NoteFeedFilter {
+        limit: 50,
+        ..Default::default()
+    };
+    sql(
+        &pool,
+        &format!(
+            "INSERT INTO permissions (node_id, subject_id, role, granted_by) \
+             VALUES ('{}', 'bob', 'editor', 'alice')",
+            node.id.0
+        ),
+    )
+    .await;
+    let bobs = notes
+        .feed(Some("bob"), note_actor("bob"), &filter)
+        .await
+        .expect("feed");
+    assert_eq!(
+        (bobs[0].note.may_edit, bobs[0].note.may_remove),
+        (true, true)
+    );
+    let admins = notes
+        .feed(None, admin("root"), &filter)
+        .await
+        .expect("feed");
+    assert_eq!(
+        (admins[0].note.may_edit, admins[0].note.may_remove),
+        (false, true),
+        "not theirs to edit; an admin may remove any"
+    );
+    // An admin's own note is theirs to edit, with no grant on the node.
+    let own_note = notes
+        .create(
+            node.id,
+            "root",
+            common::note::CreateNoteRequest {
+                body: "root's note".to_string(),
+                color: "default".to_string(),
+            },
+        )
+        .await
+        .expect("note");
+    let admins = notes
+        .feed(None, admin("root"), &filter)
+        .await
+        .expect("feed");
+    let theirs = admins
+        .iter()
+        .find(|f| f.note.id == own_note.id)
+        .expect("the admin's note");
+    assert!(theirs.note.may_edit && theirs.note.may_remove);
+}
+
+/// The feed's "Recently edited" order follows a note's words: an edit
+/// moves a note up, and a trip through the trash (which moves the row's
+/// `updated_at`) does not. Every order is the same on every read.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_feed_orders_by_the_edit_not_by_the_last_write(pool: PgPool) {
+    let notes = PgNoteRepo::new(pool.clone());
+    let node = create_node(&pool, "alice", "feed order").await;
+    own(&pool, node.id, "alice").await;
+    let day = |n: i64| db_grain(Utc::now() - Duration::days(10 - n));
+    let one = raw_note(&pool, node.id, "alice", "one", day(1), 0).await;
+    let two = raw_note(&pool, node.id, "alice", "two", day(2), 0).await;
+    let three = raw_note(&pool, node.id, "alice", "three", day(3), 0).await;
+    // Two notes of one instant (one clock read, not two): their order
+    // must not depend on the plan.
+    let instant = day(4);
+    let twin_a = raw_note(&pool, node.id, "alice", "twin", instant, 0).await;
+    let twin_b = raw_note(&pool, node.id, "alice", "twin", instant, 0).await;
+    let (hi, lo) = if twin_a > twin_b {
+        (twin_a, twin_b)
+    } else {
+        (twin_b, twin_a)
+    };
+    let alice = note_actor("alice");
+    let order = |sort: common::note::NoteSort| {
+        let notes = &notes;
+        async move {
+            let filter = super::note::NoteFeedFilter {
+                sort,
+                limit: 50,
+                ..Default::default()
+            };
+            notes
+                .feed(Some("alice"), alice, &filter)
+                .await
+                .expect("feed")
+                .into_iter()
+                .map(|f| f.note.id.0)
+                .collect::<Vec<_>>()
+        }
+    };
+    use common::note::NoteSort::{Newest, Oldest, Updated};
+    assert_eq!(order(Newest).await, [hi, lo, three, two, one]);
+    assert_eq!(order(Oldest).await, [one, two, three, lo, hi]);
+    // Nothing edited: by when each was written.
+    assert_eq!(order(Updated).await, [hi, lo, three, two, one]);
+
+    // The oldest is edited: it leads. Its place by date does not change.
+    notes
+        .update(
+            common::id::NoteId(one),
+            alice,
+            note_edit("one, edited", "default"),
+        )
+        .await
+        .expect("edit");
+    assert_eq!(order(Updated).await, [one, hi, lo, three, two]);
+    assert_eq!(order(Newest).await, [hi, lo, three, two, one]);
+    // Another is deleted and brought back, and a third recoloured: the
+    // rows were written, the words were not.
+    notes
+        .delete(common::id::NoteId(two), alice)
+        .await
+        .expect("delete");
+    notes
+        .restore(common::id::NoteId(two), alice)
+        .await
+        .expect("restore");
+    notes
+        .update(common::id::NoteId(three), alice, note_edit("three", "lime"))
+        .await
+        .expect("recolour");
+    assert_eq!(order(Updated).await, [one, hi, lo, three, two]);
+}
+
+/// A node's History is read apart from its audit trail, and the filter
+/// runs before the limit: a few changes are not crowded out by the many
+/// audit lines written since. The two scopes share no row and miss none.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_history_scope_is_not_crowded_out_by_the_audit_trail(pool: PgPool) {
+    use super::activity::{ActivityRepo, PgActivityRepo};
+    use common::activity::{ActivityAction, ActivityScope};
+    let node = create_node(&pool, "alice", "busy node").await;
+    let repo = PgActivityRepo::new(pool.clone());
+    let first = insert_raw_activity(&pool, node.id.0, "status_changed").await;
+    let second = insert_raw_activity(&pool, node.id.0, "lifecycle_changed").await;
+    for n in 0..60 {
+        let action = ["edited", "tag_added", "exported"][n % 3];
+        insert_raw_activity(&pool, node.id.0, action).await;
+    }
+    // Something a newer release wrote is in neither.
+    insert_raw_activity(&pool, node.id.0, "teleported").await;
+
+    let history = repo
+        .list(node.id, 50, Some(ActivityScope::History))
+        .await
+        .expect("history");
+    assert_eq!(
+        history.iter().map(|e| e.id.0).collect::<Vec<_>>(),
+        [second, first],
+        "both, newest first, past 60 newer audit rows"
+    );
+    let audit = repo
+        .list(node.id, 200, Some(ActivityScope::Audit))
+        .await
+        .expect("audit");
+    // 60 written here, and the node's own `created`? No: the fixture
+    // writes none (the route logs it, not the repo).
+    assert_eq!(audit.len(), 60);
+    assert!(audit.iter().all(|e| !e.action.is_history()));
+    // Unscoped, as an older page asks: the newest of everything known.
+    let all = repo.list(node.id, 50, None).await.expect("all");
+    assert_eq!(all.len(), 50);
+    assert!(
+        all.iter()
+            .all(|e| e.action != ActivityAction::StatusChanged)
+    );
+    let everything = repo.list(node.id, 200, None).await.expect("all");
+    assert_eq!(everything.len(), history.len() + audit.len());
+}
+
+#[allow(clippy::expect_used)]
+async fn lifecycle_rows(pool: &PgPool, node: uuid::Uuid) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT metadata FROM activity_log \
+         WHERE node_id = $1 AND action = 'lifecycle_changed' ORDER BY created_at",
+    )
+    .bind(node)
+    .fetch_all(pool)
+    .await
+    .expect("lifecycle rows")
+}
+
+/// S6d (owner decision, 2026-11-14): a move between draft, published and
+/// archived is written to History, on every kind, once per change, with
+/// from and to, in the transaction that makes it. A save that leaves the
+/// lifecycle alone, or that is refused, writes none.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_lifecycle_change_is_logged_once_with_from_and_to(pool: PgPool) {
+    use common::node::NodeStatus;
+    let repo = PgNodeRepo::new(pool.clone());
+    // An Article: History is on every kind, not only Projects.
+    let n = create_node(&pool, "alice", "an article to publish").await;
+    assert_eq!(n.status, NodeStatus::Draft);
+    let to = |status: NodeStatus| {
+        let mut req = status_upd(None, None);
+        req.status = Some(status);
+        req
+    };
+
+    let published = repo
+        .update(n.id, to(NodeStatus::Published), &actor("alice"))
+        .await
+        .expect("publish");
+    assert_eq!(published.status, NodeStatus::Published);
+    let rows = lifecycle_rows(&pool, n.id.0).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["from"], "draft");
+    assert_eq!(rows[0]["to"], "published");
+    assert_eq!(rows[0]["actor_name"], "Alice");
+
+    // The same again, and a save that says nothing of it: no entry.
+    repo.update(n.id, to(NodeStatus::Published), &actor("alice"))
+        .await
+        .expect("same");
+    let mut title_only = status_upd(None, None);
+    title_only.title = Some("an article, renamed".to_string());
+    repo.update(n.id, title_only, &actor("alice"))
+        .await
+        .expect("title");
+    assert_eq!(lifecycle_rows(&pool, n.id.0).await.len(), 1);
+
+    // A refused save (a stale version) writes nothing at all.
+    let mut stale = to(NodeStatus::Archived);
+    stale.expected_updated_at = Some(n.updated_at - Duration::seconds(5));
+    let refused = repo.update(n.id, stale, &actor("alice")).await;
+    assert!(matches!(
+        refused,
+        Err(EmberTroveError::PreconditionFailed(_))
+    ));
+    assert_eq!(lifecycle_rows(&pool, n.id.0).await.len(), 1);
+    assert_eq!(
+        repo.get(n.id).await.expect("get").status,
+        NodeStatus::Published
+    );
+
+    // Archived, and back out: each is a change.
+    repo.update(n.id, to(NodeStatus::Archived), &actor("bob"))
+        .await
+        .expect("archive");
+    repo.update(n.id, to(NodeStatus::Draft), &actor("alice"))
+        .await
+        .expect("back to draft");
+    let rows = lifecycle_rows(&pool, n.id.0).await;
+    let moves: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|r| {
+            (
+                r["from"].as_str().unwrap_or("?"),
+                r["to"].as_str().unwrap_or("?"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        moves,
+        [
+            ("draft", "published"),
+            ("published", "archived"),
+            ("archived", "draft")
+        ]
+    );
+
+    // A Project's status label and its lifecycle in one save: one entry
+    // of each, and no other action.
+    let mut req = node_req("a project to archive");
+    req.node_type = NodeType::Project;
+    req.project_status = Some("Active".to_string());
+    let p = repo.create("alice", req).await.expect("create");
+    let mut both = status_upd(Some(Some("Done")), None);
+    both.status = Some(NodeStatus::Archived);
+    repo.update(p.id, both, &actor("alice"))
+        .await
+        .expect("both");
+    let actions: Vec<String> = sqlx::query_scalar(
+        "SELECT action FROM activity_log WHERE node_id = $1 ORDER BY created_at, action",
+    )
+    .bind(p.id.0)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(actions, ["status_changed", "lifecycle_changed"]);
+
+    // Together or not at all: when the History write fails, the node is
+    // not archived either.
+    sql(
+        &pool,
+        "ALTER TABLE activity_log ADD CONSTRAINT no_lifecycle_rows \
+         CHECK (action <> 'lifecycle_changed') NOT VALID",
+    )
+    .await;
+    let r = repo
+        .update(n.id, to(NodeStatus::Archived), &actor("alice"))
+        .await;
+    assert!(r.is_err(), "the failed history write fails the update");
+    assert_eq!(repo.get(n.id).await.expect("get").status, NodeStatus::Draft);
+}
+
+/// Backup format 11 carries a note's `edited_at`, and a restore keeps
+/// what the archive says: a date, or "never". An archive from before the
+/// field says nothing, and its notes are marked by the rule migration 052
+/// applied, so a restore of yesterday's backup shows the marks it had.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_notes_edited_date_survives_a_backup_and_an_older_archive(pool: PgPool) {
+    use common::backup::{BackupData, BackupNote};
+    use common::id::NoteId;
+    let host = create_node(&pool, "alice", "restore host").await;
+    let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
+    let created = Utc::now() - Duration::days(3);
+    let later = created + Duration::hours(1);
+    let edited = created + Duration::minutes(5);
+    let note = |body: &str, updated, edited_at| BackupNote {
+        id: NoteId(uuid::Uuid::new_v4()),
+        node_id: Some(host.id),
+        owner_id: "alice".into(),
+        body: body.into(),
+        color: "default".into(),
+        created_at: created,
+        updated_at: updated,
+        edited_at,
+    };
+    let archived = [
+        // Format 11: a date; "never", though the row was written later.
+        note("edited, says when", later, Some(Some(edited))),
+        note("recoloured, never edited", later, Some(None)),
+        // Formats 3 to 10: nothing said. Marked by the old rule, or not.
+        note("old archive, row written later", later, None),
+        note("old archive, untouched", created, None),
+    ];
+    let data = BackupData {
+        nodes,
+        notes: archived.to_vec(),
+        ..BackupData::default()
+    };
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.unwrap();
+
+    let expected = [Some(edited), None, Some(later), None];
+    for (note, want) in archived.iter().zip(expected) {
+        let (created_at, updated_at, edited_at) = note_dates(&pool, note.id.0).await;
+        // Postgres keeps microseconds; compare at that grain.
+        let micros = |d: chrono::DateTime<Utc>| d.timestamp_micros();
+        assert_eq!(micros(created_at), micros(created), "{}", note.body);
+        assert_eq!(micros(updated_at), micros(note.updated_at), "{}", note.body);
+        assert_eq!(edited_at.map(micros), want.map(micros), "{}", note.body);
+    }
+    // And what a backup taken now writes says which for every note.
+    let again: Vec<BackupNote> = PgNoteRepo::new(pool.clone())
+        .list_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(BackupNote::from)
+        .collect();
+    assert_eq!(again.len(), 4);
+    assert!(
+        again.iter().all(|n| n.edited_at.is_some()),
+        "null is written"
+    );
+    assert_eq!(
+        again.iter().filter(|n| n.edited_at == Some(None)).count(),
+        2
     );
 }

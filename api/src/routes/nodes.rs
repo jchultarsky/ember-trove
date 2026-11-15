@@ -638,14 +638,15 @@ fn copied_status(src: &Node) -> Option<String> {
     Some(label)
 }
 
-/// Whether an update changes the project status and nothing else: what the
-/// status chip sends.
-fn is_status_only(req: &UpdateNodeRequest) -> bool {
-    req.project_status.is_some()
+/// Whether an update changes only what History records by itself, the
+/// project status or the lifecycle (draft, published, archived), and
+/// nothing an "Edited" line is for: what the status chip and a bare
+/// publish or archive send.
+fn is_history_only(req: &UpdateNodeRequest) -> bool {
+    (req.project_status.is_some() || req.status.is_some())
         && req.title.is_none()
         && req.body.is_none()
         && req.metadata.is_none()
-        && req.status.is_none()
 }
 
 async fn update_node(
@@ -667,7 +668,7 @@ async fn update_node(
     if matches!(req.project_status, Some(Some(_))) {
         require_capability(&state, NodeId(id), Capability::ProjectStatus).await?;
     }
-    let status_only = is_status_only(&req);
+    let history_only = is_history_only(&req);
     let node = state
         .nodes
         .update(NodeId(id), req, &ActivityActor::from_claims(&claims))
@@ -686,13 +687,14 @@ async fn update_node(
         &claims.sub,
     )
     .await;
-    // A status-only save (the status chip) is already in History as
-    // `status_changed`; an "Edited" line beside it would say it twice (#208).
+    // A save that only changes the status label or the lifecycle is in
+    // History as `status_changed` / `lifecycle_changed`, when it changed
+    // anything; an "Edited" line beside it would say it twice (#208, S6d).
     // Otherwise coalesce rapid consecutive edits by the same user into one
     // entry so autosave doesn't flood the dashboard recap. The window is
     // measured from the last *Edited* entry, so a status change in between
     // doesn't split an editing session.
-    let log_edit = !status_only
+    let log_edit = !history_only
         && match state
             .activity
             .latest_of(node.id, ActivityAction::Edited)
@@ -1334,9 +1336,18 @@ pub(crate) async fn log_activity(
 ///
 /// Returns the most recent activity entries for a node.
 /// Defaults to the last 50. Requires Viewer permission.
+///
+/// `scope` (S6d) narrows it: `history` is what occurred about the node
+/// (its History, §10: status, state, cascade, Brief and lifecycle
+/// changes), `audit` is who touched it (created, edited, tags, files,
+/// sharing, exports). Absent, it is everything, as before. Anything else
+/// is a 422.
 #[derive(Debug, serde::Deserialize)]
 struct ActivityParams {
     limit: Option<i64>,
+    /// Kept as text and read after the rights check: a stranger gets the
+    /// same 403 whatever they send.
+    scope: Option<String>,
 }
 
 async fn list_activity(
@@ -1344,10 +1355,24 @@ async fn list_activity(
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
     Query(params): Query<ActivityParams>,
-) -> Result<Json<Vec<ActivityEntry>>, ApiError> {
+) -> Result<(axum::http::HeaderMap, Json<Vec<ActivityEntry>>), ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
-    let entries = state.activity.list(NodeId(id), limit).await?;
+    let scope = params
+        .scope
+        .as_deref()
+        .map(|s| {
+            common::activity::ActivityScope::parse(s)
+                .ok_or_else(|| ApiError::Validation("scope must be history or audit".to_string()))
+        })
+        .transpose()?;
+    // One more than asked, to know whether there are more. The answer
+    // says so in a header (`MORE_HEADER`): the count can't, since an
+    // entry may still be left out below, after the limit.
+    let mut entries = state.activity.list(NodeId(id), limit + 1, scope).await?;
+    let wanted = usize::try_from(limit).unwrap_or(usize::MAX);
+    let more = entries.len() > wanted;
+    entries.truncate(wanted);
     // SECURITY: other nodes an entry refers to are named only if this
     // reader may view them (S6b).
     let mut entries = present_for(&state, &claims, entries, |e| e).await?;
@@ -1360,7 +1385,14 @@ async fn list_activity(
     {
         common::activity::redact_emails(&mut entries);
     }
-    Ok(Json(entries))
+    let mut headers = axum::http::HeaderMap::new();
+    if more {
+        headers.insert(
+            common::activity::MORE_HEADER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+    }
+    Ok((headers, Json(entries)))
 }
 
 // ── Export ────────────────────────────────────────────────────────────────────
@@ -1877,32 +1909,50 @@ mod tests {
     }
 
     #[test]
-    fn only_a_bare_status_change_is_status_only() {
+    fn a_save_of_only_what_history_records_logs_no_edit() {
         // #208: the status chip's save is logged as status_changed alone.
         let chip = UpdateNodeRequest {
             project_status: Some(Some("Blocked".into())),
             ..upd()
         };
-        assert!(is_status_only(&chip));
+        assert!(is_history_only(&chip));
         let clear = UpdateNodeRequest {
             project_status: Some(None),
             ..upd()
         };
-        assert!(is_status_only(&clear), "clearing is a status change too");
+        assert!(is_history_only(&clear), "clearing is a status change too");
         let precondition = UpdateNodeRequest {
             expected_updated_at: Some(chrono::Utc::now()),
             ..chip.clone()
         };
         assert!(
-            is_status_only(&precondition),
+            is_history_only(&precondition),
             "a version check isn't an edit"
         );
+        // S6d: so is a bare publish or archive (lifecycle_changed), alone
+        // or with the status label.
+        let publish = UpdateNodeRequest {
+            status: Some(common::node::NodeStatus::Published),
+            ..upd()
+        };
+        assert!(is_history_only(&publish));
+        let both = UpdateNodeRequest {
+            status: Some(common::node::NodeStatus::Archived),
+            ..chip.clone()
+        };
+        assert!(is_history_only(&both));
         let with_body = UpdateNodeRequest {
             body: Some("x".into()),
             ..chip.clone()
         };
-        assert!(!is_status_only(&with_body), "an edit still logs Edited");
-        assert!(!is_status_only(&upd()), "no status, not status-only");
+        assert!(!is_history_only(&with_body), "an edit still logs Edited");
+        // The editor saves the lifecycle with the text: that is an edit.
+        let full_save = UpdateNodeRequest {
+            title: Some("t".into()),
+            ..publish.clone()
+        };
+        assert!(!is_history_only(&full_save));
+        assert!(!is_history_only(&upd()), "nothing History records");
     }
 
     #[test]

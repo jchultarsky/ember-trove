@@ -182,7 +182,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -394,6 +394,63 @@ cargo check && cargo clippy -- -D warnings
   way, so a project whose only closable leftover is deeper says
   `can_close: false` here; the deeper project is its own owner's item.
   The admin view gets the count.
+
+## History and notes (S6d, #329)
+
+- **History is notes plus the log's `is_history` actions**
+  (`ActivityAction::is_history`: status label, state, cascade, replaced
+  Brief, lifecycle). Everything else in `activity_log` is the audit
+  trail. The match is exhaustive: a new action does not compile until it
+  is put on one side. `ActivityScope` is the two sides; its `db_strs()`
+  is the SQL filter.
+- `GET /nodes/{id}/activity?scope=history|audit`: rights first
+  (`require_viewer`), then the scope is parsed (422 for anything else),
+  so a stranger gets 403 whatever they send. The filter runs in SQL
+  before the `LIMIT` (#208's lesson: a node's few History rows must not
+  be crowded out). `present_for` and `redact_emails` apply in every
+  scope. No scope means everything: older tabs ask that way.
+- The route reads one row more than asked and sets
+  `common::activity::MORE_HEADER` (`x-ember-more: 1`) when the node has
+  more. The page must not infer that from the count: `present_for` drops
+  an entry its reader may not see **after** the limit, so a cut read can
+  come back short.
+- **The chronology is merged in `common::history::merge`**, by the page,
+  from the two reads. There is no `/history` route on purpose: rights and
+  redaction stay in the one route that has them, and the notes still load
+  when the changes don't. A server route that needs the merged list calls
+  the same function.
+- **A note's `created_at` is never written after insert** (§9.2: its
+  place in the chronology). `edited_at` is stamped by `NoteRepo::update`
+  when `body IS DISTINCT FROM` the new text, and by nothing else: not a
+  colour, not a delete or restore. Nothing a person reads may use a
+  note's `updated_at`, which every row write moves (the trigger). The
+  feed's `sort=updated` orders by `COALESCE(edited_at, created_at)`.
+- **Notes read for a person are `ReaderNote`**: the note plus `may_edit`
+  and `may_remove`, computed by `reader_flags` from the same SQL text
+  the writes check (`author_may_write`, `may_remove`). Bind the reader's
+  own subject, never a list scope: an admin's scope is NULL, and NULL
+  wrote nothing. `the_note_flags_are_the_write_rules` holds each flag to
+  whether the write succeeds. `Note` (no flags) is what the backup reads
+  and the write routes return.
+- Every statement that fills a `NoteRow` names its columns through
+  `note_cols(alias)`.
+- **Lifecycle** (draft, published, archived): `PgNodeRepo::update` is the
+  only writer of `nodes.status` and logs `lifecycle_changed` (from, to)
+  in its transaction when it changed. A new writer of that column must
+  log it too. A save that **sends** only the status label or the
+  lifecycle logs no `edited` line (`is_history_only`): the status chip,
+  or an API client's bare publish. The app's editor sends the title and
+  the body with the lifecycle, so a publish from it is an `edited` line
+  (coalesced as any edit) and a `lifecycle_changed` one.
+- **Legacy "edited" marks**: `common::note::legacy_edited_at` is the one
+  rule (the row was last written three whole seconds or more after it was
+  created), applied by migration 052 to live notes and by a restore of an
+  archive from before format 11. `BackupNote.edited_at` is a double
+  option: absent (older archive, the rule decides), null (never edited),
+  or the date. Read it through `restored_edited_at()`.
+- Writing, editing or deleting a note is not logged in `activity_log`
+  and fires no webhook: the note is the record, and its text stays in
+  one table.
 
 ## Focus (#282, proposal B)
 
