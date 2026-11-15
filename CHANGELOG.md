@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.23.0] - 2026-11-15
+
 ### Added
 - **History** (S6d of the ontology programme, #329; ONTOLOGY §9.2, §10).
   - **The Notes section of a node's page is now History**, on every

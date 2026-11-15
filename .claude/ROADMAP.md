@@ -3,24 +3,29 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-14)
+## Current state (2026-11-15)
 
-- **In progress: S6d, the History facet** (#329; ONTOLOGY §9.2, §10).
-  Two PRs, one release (3.23.0), after a Lightsail snapshot (migration
-  052, backup format 11). PR 1 (data and API): `node_notes.edited_at`
-  (set only when a note's words change; existing marks kept by
-  `note::legacy_edited_at`), `ReaderNote` (`may_edit`, `may_remove`: the
-  write rules, read for the reader), `ActivityAction::is_history` and
-  `GET /nodes/{id}/activity?scope=history|audit`, `lifecycle_changed`,
-  `common::history` (the merged chronology, pure) (PR #330). PR 2 (UI):
-  `HistoryPanel` replaces the Notes section (notes and changes in one
-  keyed list; a change line opens to what it holds), Activity asks for
-  the audit scope, "Version History" becomes "Versions", the Notes feed
-  shows the mark and offers Delete by `may_remove`. Owner decisions, 2026-11-14: those three,
-  existing "edited" marks kept, publishing and archiving recorded.
+- **v3.23.0 shipped: S6d, the History facet** (#329, PRs #330 and #331;
+  ONTOLOGY §9.2, §10). Migration 052, backup format 11; a Lightsail
+  snapshot was taken before the tag. PR 1 (data and API):
+  `node_notes.edited_at` (set only when a note's words change; existing
+  marks kept by `note::legacy_edited_at`), `ReaderNote` (`may_edit`,
+  `may_remove`: the write rules, read for the reader),
+  `ActivityAction::is_history` and `GET
+  /nodes/{id}/activity?scope=history|audit` (it says in `x-ember-more`
+  when there are more), `lifecycle_changed`, `common::history` (the
+  merged chronology, pure). PR 2 (UI): `HistoryPanel` replaces the Notes
+  section (notes and changes in one keyed list; a change line opens to
+  what it holds), Activity asks for the audit scope, "Version History"
+  is "Versions", the Notes feed shows the mark and offers Delete by
+  `may_remove`. Rules: "History and notes" in `.claude/rules/api.md`,
+  and the History bullet in `.claude/rules/leptos.md`. Owner decisions, 2026-11-14: Notes becomes
+  History, Versions, Activity is the audit trail only, existing "edited"
+  marks kept, publishing and archiving recorded.
   Follow-ups noted, not done: a non-owner editor can't add a note from
   the node page (needs the reader's role on the node); History is not
   paged (one node has 123 notes); Events join History in S11a.
+  **Next:** S5b (recurrence removed), or the owner's choice.
 
 - **v3.22.0 shipped: S6b and S6c, the cascade** (#326, PRs #327 and
   #328; ONTOLOGY §4.1). No migration, backup format unchanged. PR 1
