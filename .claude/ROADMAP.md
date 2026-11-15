@@ -12,9 +12,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
   `note::legacy_edited_at`), `ReaderNote` (`may_edit`, `may_remove`: the
   write rules, read for the reader), `ActivityAction::is_history` and
   `GET /nodes/{id}/activity?scope=history|audit`, `lifecycle_changed`,
-  `common::history` (the merged chronology, pure). PR 2 (UI): the Notes
-  section becomes History, Activity is the audit trail, "Version
-  History" becomes "Versions". Owner decisions, 2026-11-14: those three,
+  `common::history` (the merged chronology, pure) (PR #330). PR 2 (UI):
+  `HistoryPanel` replaces the Notes section (notes and changes in one
+  keyed list; a change line opens to what it holds), Activity asks for
+  the audit scope, "Version History" becomes "Versions", the Notes feed
+  shows the mark and offers Delete by `may_remove`. Owner decisions, 2026-11-14: those three,
   existing "edited" marks kept, publishing and archiving recorded.
   Follow-ups noted, not done: a non-owner editor can't add a note from
   the node page (needs the reader's role on the node); History is not

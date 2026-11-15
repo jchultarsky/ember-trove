@@ -284,7 +284,7 @@ test('only a project has a brief, and a viewer only reads it', async ({ page, re
   });
   try {
     await page.goto(`/nodes/${article.id}`);
-    await expect(page.getByTestId('node-notes')).toBeVisible();
+    await expect(page.getByTestId('node-history')).toBeVisible();
     await expect(page.getByTestId('node-brief')).toHaveCount(0);
 
     await putBrief(request, project.id, { headline: 'Shared story', pitch: '', points: [] });

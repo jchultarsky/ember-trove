@@ -19,7 +19,9 @@ pub enum NodeSection {
     /// The Project Brief (#282): where the project stands now.
     Brief,
     Tasks,
-    Notes,
+    /// What occurred about the node (S6d; ONTOLOGY §10): its notes and
+    /// the changes to it, in one chronology. Was "Notes".
+    History,
     People,
     Links,
     Connections,
@@ -36,7 +38,7 @@ impl NodeSection {
     pub const ALL: [NodeSection; 12] = [
         NodeSection::Brief,
         NodeSection::Tasks,
-        NodeSection::Notes,
+        NodeSection::History,
         NodeSection::People,
         NodeSection::Links,
         NodeSection::Connections,
@@ -52,7 +54,7 @@ impl NodeSection {
         match self {
             NodeSection::Brief => "Brief",
             NodeSection::Tasks => "Tasks",
-            NodeSection::Notes => "Notes",
+            NodeSection::History => "History",
             NodeSection::People => "People",
             NodeSection::Links => "External Links",
             NodeSection::Connections => "Connections",
@@ -60,18 +62,20 @@ impl NodeSection {
             NodeSection::LinkedHere => "Linked Here",
             NodeSection::Attachments => "Attachments",
             NodeSection::Sharing => "Sharing",
-            NodeSection::Versions => "Version History",
+            // Saved text versions. Not "History": that word is the
+            // section above (owner decision, 2026-11-14).
+            NodeSection::Versions => "Versions",
             NodeSection::Activity => "Activity",
         }
     }
 
-    /// Tasks, Notes and People share their titles with the sidebar's global
+    /// Tasks and People share their titles with the sidebar's global
     /// entries, so their icons must differ from the sidebar's (#173).
     pub fn icon(self) -> &'static str {
         match self {
             NodeSection::Brief => "segment",
             NodeSection::Tasks => "check_box",
-            NodeSection::Notes => "notes",
+            NodeSection::History => "history",
             NodeSection::People => "person",
             NodeSection::Links => "open_in_new",
             NodeSection::Connections => "hub",
@@ -80,17 +84,17 @@ impl NodeSection {
             NodeSection::Attachments => "attach_file",
             NodeSection::Sharing => "group",
             NodeSection::Versions => "history_edu",
-            NodeSection::Activity => "history",
+            NodeSection::Activity => "fact_check",
         }
     }
 
-    /// DOM / test id fragment: `node-<slug>` (`node-tasks`, `node-notes`
-    /// are kept from #123).
+    /// DOM / test id fragment: `node-<slug>` (`node-tasks` is kept from
+    /// #123; `node-notes` became `node-history` with the section, S6d).
     pub fn slug(self) -> &'static str {
         match self {
             NodeSection::Brief => "brief",
             NodeSection::Tasks => "tasks",
-            NodeSection::Notes => "notes",
+            NodeSection::History => "history",
             NodeSection::People => "people",
             NodeSection::Links => "links",
             NodeSection::Connections => "connections",
@@ -392,14 +396,15 @@ mod tests {
     }
 
     /// #173: the same glyph next to the same word reads as the same control,
-    /// so a node's own Tasks / Notes / People must not look like the
-    /// sidebar's global entries.
+    /// so a node's own Tasks / People must not look like the sidebar's
+    /// global entries. History holds the node's notes and must not borrow
+    /// the global Notes glyph either.
     #[test]
     fn sections_named_like_global_entries_use_their_own_icons() {
         use crate::components::sidebar::{NOTES_ICON, PEOPLE_ICON, TASKS_ICON};
         for (section, global_icon) in [
             (NodeSection::Tasks, TASKS_ICON),
-            (NodeSection::Notes, NOTES_ICON),
+            (NodeSection::History, NOTES_ICON),
             (NodeSection::People, PEOPLE_ICON),
         ] {
             assert_ne!(section.icon(), global_icon, "{section:?}");

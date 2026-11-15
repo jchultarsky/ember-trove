@@ -1,5 +1,6 @@
-//! Node version history panel — shows previous body snapshots and lets editors
-//! restore to any of them.
+//! The Versions section of a node page (called "Version History" until
+//! S6d, when History came to mean what occurred about the node): previous
+//! body snapshots, and for editors a way back to any of them.
 use common::id::NodeId;
 use leptos::prelude::*;
 

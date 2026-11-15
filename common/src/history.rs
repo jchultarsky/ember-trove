@@ -70,8 +70,8 @@ pub struct Chronology {
     pub items: Vec<HistoryItem>,
     /// Set when the changes that were read are not all of them (the
     /// server said there are more): changes made before this moment are
-    /// not in `items`. The notes are all there. The page says so at that
-    /// point rather than show a chronology that looks complete and is
+    /// not in `items`. The notes are all there. The page says so, under
+    /// the list, rather than show a chronology that looks complete and is
     /// not.
     pub changes_cut_at: Option<DateTime<Utc>>,
 }

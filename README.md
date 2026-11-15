@@ -24,8 +24,9 @@ Ember Trove is a web-based personal knowledge management (PKM) application where
 - **Tasks & My Day** — per-node task lists with create / toggle / edit / delete. Daily planning view aggregates today's tasks across all nodes.
 - **Focus** — put the few projects that hold your attention at the top of the dashboard, in your own order, each with its Brief, how long it has been there and an optional "why now" line. Private to you: nobody else sees what is in your Focus.
 - **Notes feed** — append-only timestamped notes per node, editable after creation, surfaced in a global newest-first feed. On a node page each note collapses to its first line (Markdown stripped, so it doubles as a title), with Collapse all / Expand all; collapse state is saved per account.
-- **Node versioning** — body snapshot on every save; version history timeline with one-click restore.
-- **Activity log** — per-node audit trail of 10 action types (created, updated, tag changes, permission changes, attachments, etc.).
+- **History** — every node's page has one chronology of what happened about it: its notes, and between them each change of its status or state, a replaced Brief, what closing a project closed, and when it was published or archived. A note keeps the date it was written; an edited note says so.
+- **Versions** — body snapshot on every save; a timeline of earlier texts with one-click restore.
+- **Activity** — per-node audit trail: who created, edited, tagged, shared or exported it. (What happened *about* the node is its History.)
 - **Node pinning** — pin important nodes; pinned nodes sort first in the list and are highlighted with an amber ring in the graph. The star on a project's dashboard card pins and unpins it.
 - **Node templates** — create reusable Markdown templates for each node type; "Use" pre-fills the editor body.
 - **Quick capture** — `n` opens a blank sticky note; Ctrl/Cmd+Enter sticks it on the Captures wall (Tasks → Captures), where each capture waits to become exactly one thing: a node, a note on a node, or a task in a Project.

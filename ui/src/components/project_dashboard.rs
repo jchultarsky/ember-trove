@@ -571,7 +571,7 @@ fn ActivityGroup(label: &'static str, entries: Vec<RecentActivityEntry>) -> impl
                 {entries.into_iter().map(|e| {
                     let time = e.entry.created_at.format("%-I:%M %p").to_string();
                     let icon = e.entry.action.icon();
-                    let action_label = e.entry.action.label();
+                    let action_label = crate::components::activity_lines::action_label(&e.entry);
                     // A status change says what it became, not just that it
                     // changed (#208).
                     let word = |k: &str| e.entry.metadata.get(k).and_then(|v| v.as_str());

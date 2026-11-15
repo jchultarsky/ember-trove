@@ -53,13 +53,13 @@ test("a node's notes and tasks say the load failed", async ({ page, request }) =
     await page.goto(`/nodes/${node.id}`);
     await expect(page.getByText('Couldn’t load this node’s tasks')).toBeVisible();
     await expect(page.getByText('No tasks yet.')).toHaveCount(0);
-    // The notes section may start collapsed: open it if its toggle is there.
-    const notes = page.getByText('Couldn’t load this node’s notes');
+    // The History section may start collapsed: open it if its toggle is there.
+    const notes = page.getByText('Couldn’t load this node’s history');
     if (!(await notes.isVisible())) {
-      await page.locator('button[title="Expand notes"]').click();
+      await page.locator('button[title="Expand history"]').click();
     }
     await expect(notes).toBeVisible();
-    await expect(page.getByText('No notes yet.')).toHaveCount(0);
+    await expect(page.getByTestId('history-empty')).toHaveCount(0);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);
   }

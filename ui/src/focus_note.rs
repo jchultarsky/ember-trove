@@ -3,7 +3,7 @@
 //! highlight it. Used by `NodeView` so that clicking a node-attached note in
 //! the central Notes feed jumps to the node and lands on that note.
 //!
-//! Polls a few times because the node's `NotePanel` loads its notes via
+//! Polls a few times because the node's `HistoryPanel` loads its notes via
 //! `LocalResource` and may not be in the DOM when the URL changes. Reuses the
 //! `focus-task-flash` CSS animation. Strips the `?note=` param after focusing
 //! so a refresh doesn't re-fire.
@@ -48,7 +48,7 @@ pub fn schedule_focus_note() {
     }
 }
 
-/// Read the `?note=<id>` param if present (so the NotePanel can auto-expand to
+/// Read the `?note=<id>` param if present (so the HistoryPanel can auto-expand to
 /// reveal a focused note that would otherwise be hidden behind "Show N more").
 #[must_use]
 pub fn pending_focus_note() -> Option<String> {
