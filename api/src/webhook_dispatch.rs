@@ -7,6 +7,10 @@
 //!
 //! Wired into the node/task CRUD handlers (`routes/nodes.rs`, `routes/tasks.rs`)
 //! using the canonical event-name constants in `common::webhook`.
+//!
+//! A node event goes to the hooks of the node's owner ([`dispatch`]). A
+//! task event goes to the hooks of the task's author, and only while that
+//! person can still see the task's node ([`dispatch_task_event`]).
 
 use std::sync::Arc;
 
@@ -16,6 +20,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 use tracing::warn;
 
+use crate::repo::node::NodeRepo;
 use crate::repo::webhook::WebhookRepo;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -67,6 +72,60 @@ pub fn dispatch(
             });
         }
     });
+}
+
+/// Send a task event to the hooks of the task's author (`task_owner`),
+/// if that person can still see the task's node.
+///
+/// SECURITY (owner decision, 2026-11-16): a task follows its node's
+/// rights, not its author's (ruling of 2026-11-10). Task events used to
+/// go to the author's hooks whatever their rights now, so someone whose
+/// share had ended kept hearing about each change to the tasks they had
+/// written there: the event, the node's id, who did it and when.
+///
+/// "Can see" is the rule the task lists use (`visible_to`): they own the
+/// node or hold a grant on it. It is read for the author as an ordinary
+/// account. An admin reads every node by their role, but the role is in
+/// their token, and this is not their request: an admin's hooks hear
+/// about their tasks on nodes they own or were given, and no others.
+///
+/// The question is asked after the response, with the event. If it can't
+/// be answered, nothing is sent.
+pub fn dispatch_task_event(
+    webhooks: Arc<dyn WebhookRepo>,
+    nodes: Arc<dyn NodeRepo>,
+    event: &str,
+    node_id: NodeId,
+    triggered_by: &str,
+    task_owner: &str,
+) {
+    let (event, triggered_by, task_owner) = (
+        event.to_string(),
+        triggered_by.to_string(),
+        task_owner.to_string(),
+    );
+    tokio::spawn(async move {
+        let seen = nodes.visible_titles(&[node_id.0], Some(&task_owner)).await;
+        if sees_node(seen, node_id) {
+            dispatch(webhooks, &event, Some(node_id), &triggered_by, &task_owner);
+        }
+    });
+}
+
+/// Whether the read of what someone may view says they see `node`. A
+/// failed read is "no": better a missed event than one sent to someone
+/// who should not have it.
+fn sees_node(
+    seen: Result<std::collections::BTreeMap<uuid::Uuid, String>, common::EmberTroveError>,
+    node: NodeId,
+) -> bool {
+    match seen {
+        Ok(titles) => titles.contains_key(&node.0),
+        Err(e) => {
+            warn!("webhook: could not tell who sees a node, so nothing is sent: {e}");
+            false
+        }
+    }
 }
 
 /// How many webhook deliveries may be in flight at once, across every
@@ -188,7 +247,27 @@ mod tests {
 
     use tokio::sync::Semaphore;
 
-    use super::in_a_slot;
+    use super::{in_a_slot, sees_node};
+
+    #[test]
+    fn a_task_event_is_for_someone_who_sees_the_node_and_a_failed_read_is_a_no() {
+        let node = common::id::NodeId(uuid::Uuid::from_u128(7));
+        let other = uuid::Uuid::from_u128(8);
+        let seen = |ids: &[uuid::Uuid]| {
+            Ok(ids
+                .iter()
+                .map(|id| (*id, "a title".to_string()))
+                .collect::<std::collections::BTreeMap<_, _>>())
+        };
+        assert!(sees_node(seen(&[node.0]), node));
+        assert!(!sees_node(seen(&[]), node), "not theirs to see");
+        assert!(
+            !sees_node(seen(&[other]), node),
+            "another node is not this one"
+        );
+        let failed = Err(common::EmberTroveError::Internal("down".to_string()));
+        assert!(!sees_node(failed, node), "fails closed");
+    }
 
     #[tokio::test]
     async fn work_runs_when_a_slot_is_free_and_gives_it_back() {

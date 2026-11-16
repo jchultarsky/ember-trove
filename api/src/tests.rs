@@ -1935,6 +1935,22 @@ impl SearchPresetRepo for StubSearchPresetRepo {
 /// The account whose webhook list is full (`StubWebhookRepo::list`).
 const HOOK_HOARDER: &str = "hook-hoarder";
 
+thread_local! {
+    /// The events whose dispatch reached the webhook list, in order. Each
+    /// test runs on its own thread.
+    static HOOK_EVENTS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The events dispatched since the last look, once the spawned dispatch
+/// tasks have had their turn.
+async fn hook_events() -> Vec<String> {
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    HOOK_EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()))
+}
+
 struct StubWebhookRepo;
 #[async_trait]
 impl WebhookRepo for StubWebhookRepo {
@@ -1958,8 +1974,10 @@ impl WebhookRepo for StubWebhookRepo {
             })
             .collect())
     }
-    async fn list_active_for_event(&self, _: &str) -> Result<Vec<Webhook>, EmberTroveError> {
+    async fn list_active_for_event(&self, event: &str) -> Result<Vec<Webhook>, EmberTroveError> {
         // Handlers fire-and-forget webhook dispatch; nothing is subscribed.
+        // The event is noted: a dispatch that got this far was let through.
+        HOOK_EVENTS.with(|e| e.borrow_mut().push(event.to_string()));
         Ok(vec![])
     }
     async fn create(&self, _: &str, _: CreateWebhookRequest) -> Result<Webhook, EmberTroveError> {
@@ -3129,6 +3147,65 @@ async fn task_patch(task: u128, body: serde_json::Value) -> StatusCode {
         .await
         .unwrap()
         .status()
+}
+
+/// SECURITY (owner decision, 2026-11-16): a task event goes to the hooks
+/// of the task's author only while that person can still see the task's
+/// node. It used to go to them whatever their rights: someone whose share
+/// had ended kept hearing about every change to the tasks they wrote
+/// there, against the ruling that a task follows its node's rights.
+#[tokio::test]
+async fn a_task_event_goes_to_its_authors_hooks_only_while_they_see_the_node() {
+    hook_events().await;
+    // The caller's own task on their own Project: they hear of it.
+    assert_eq!(
+        task_patch(0xa2_0199, serde_json::json!({ "title": "renamed" })).await,
+        StatusCode::OK
+    );
+    assert_eq!(hook_events().await, ["task.updated"]);
+
+    // Someone else's task on a node the caller edits. Its author holds
+    // nothing on that node (any more): the change is made, and nothing
+    // is sent their way.
+    assert_eq!(
+        task_patch(AZ_EDIT_TASK, serde_json::json!({ "title": "renamed" })).await,
+        StatusCode::OK
+    );
+    assert_eq!(hook_events().await, Vec::<String>::new());
+}
+
+/// Every place a route sends a task event sends it through
+/// `dispatch_task_event`, which asks who still sees the node. A plain
+/// `dispatch` with a task event would skip the question.
+#[test]
+fn every_task_event_is_sent_through_the_check() {
+    for (file, source) in [
+        ("routes/tasks.rs", include_str!("routes/tasks.rs")),
+        ("routes/nodes.rs", include_str!("routes/nodes.rs")),
+        ("routes/captures.rs", include_str!("routes/captures.rs")),
+    ] {
+        let mut sent = 0;
+        // Each `dispatch…(` call, up to its closing `);`.
+        for (at, _) in source.match_indices("dispatch") {
+            let call = &source[at..];
+            let Some(end) = call.find(");") else {
+                continue;
+            };
+            let call = &call[..end];
+            // A call, not an import or a path that only names the module.
+            let is_call = call.starts_with("dispatch(") || call.starts_with("dispatch_task_event(");
+            if !is_call || !call.contains("EVENT_TASK_") {
+                continue;
+            }
+            assert!(
+                call.starts_with("dispatch_task_event("),
+                "{file}: a task event sent without the check: {}",
+                &call[..call.len().min(80)]
+            );
+            sent += 1;
+        }
+        assert!(sent > 0, "{file} sends task events");
+    }
 }
 
 #[tokio::test]

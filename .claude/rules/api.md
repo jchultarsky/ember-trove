@@ -787,10 +787,8 @@ cargo check && cargo clippy -- -D warnings
   through `escape_like`.
 - Add and remove answer with the fresh `TaskDependencies`. `may_edit` is
   `require_task_editor`'s rule read for the reader, so the page offers a
-  control only where the call would pass. **No webhook**: the task is
-  unchanged, and a task event goes to the hooks of the task's author,
-  who may no longer see its node (noted for the owner, 2026-11-16: that
-  holds for every task event).
+  control only where the call would pass. **No webhook**: the task
+  itself is unchanged.
 - **Whose view a call is made for is tested**: the route tests' stub
   records the `viewer` it was given (`assert_all_seen_as`). An ordinary
   account is `Some(sub)`, an admin `None`. A route that passed `None`
@@ -832,6 +830,18 @@ cargo check && cargo clippy -- -D warnings
   `invite` answers a non-admin 422 (`NO_ACCOUNT_FOR_ADDRESS`) before
   anything is asked of Cognito beyond the lookup. Any new route that can
   reach `UserDirectory::create_user` needs `is_admin`.
+
+- **A task event is sent with `dispatch_task_event`, never `dispatch`**
+  (owner decision, 2026-11-16). It goes to the hooks of the task's
+  author only while that person can still see the task's node
+  (`NodeRepo::visible_titles`, the `visible_to` rule: they own it or hold
+  a grant). A task follows its node's rights: someone whose share ended
+  used to keep hearing about the tasks they wrote there. The author is
+  read as an ordinary account (`Some(subject)`), so an admin's hooks hear
+  only about nodes the admin owns or was given; a failed read sends
+  nothing. `every_task_event_is_sent_through_the_check` reads the route
+  files and fails on a task event passed to plain `dispatch`. Node events
+  stay with `dispatch`, to the node's owner.
 
 - **Every grant path calls `guard_canonical_owner`**: grant, update,
   revoke *and invite*. `PermissionRepo::grant` is an upsert, so any new
