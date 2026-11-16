@@ -5,6 +5,22 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-15)
 
+- **v3.24.0 shipped: S5b, tasks no longer repeat** (#332, PR #333;
+  ONTOLOGY §9, owner ruling 4 of 2026-10-30). Migration 053 drops
+  `node_tasks.recurrence` and `recurrence_parent_id`; backup format 12;
+  a Lightsail snapshot was taken before the tag. Gone: `RecurrenceRule`,
+  `series_effect`, `create_occurrence` / `retract_occurrence`,
+  `UpdateTaskRequest.today` and `common::task::local_today`,
+  `recurrence_links` in the archive, the Repeat choice and the repeat
+  mark. A task that repeated is a one-time task, live or restored from an
+  older archive. My calls, approved in the plan: the columns are dropped
+  and nothing is kept aside; a tab left open across the release has its
+  Repeat pick ignored, not refused; no restore-preview warning; the
+  `repeat` glyph stays in the icon font until the next icon change.
+  Rules: "Task rules" and "What a backup holds" in
+  `.claude/rules/api.md`. A migration's test now stands on the schema
+  before it (`apply_migrations` in `pg_tests.rs`).
+
 - **v3.23.0 shipped: S6d, the History facet** (#329, PRs #330 and #331;
   ONTOLOGY §9.2, §10). Migration 052, backup format 11; a Lightsail
   snapshot was taken before the tag. PR 1 (data and API):
@@ -25,7 +41,6 @@ Keep it current as part of each change (see `POLICY.md` §10).
   Follow-ups noted, not done: a non-owner editor can't add a note from
   the node page (needs the reader's role on the node); History is not
   paged (one node has 123 notes); Events join History in S11a.
-  **Next:** S5b (recurrence removed), or the owner's choice.
 
 - **v3.22.0 shipped: S6b and S6c, the cascade** (#326, PRs #327 and
   #328; ONTOLOGY §4.1). No migration, backup format unchanged. PR 1
@@ -49,8 +64,6 @@ Keep it current as part of each change (see `POLICY.md` §10).
   Known and left: an admin closing someone else's project with no share
   of their own closes it alone, with no dialog; the chip and the notice
   are offered to the owner, not to other editors.
-  **Next:** S6d (the History facet) or S5b (recurrence removed), the
-  owner's call.
 
 - **v3.21.0 shipped: S6a, project states** (#320, PRs #321 and #322;
   ONTOLOGY §4, §4.1). PR 1
@@ -182,12 +195,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
   entries marked v3.14.0 below: correctness and conformance, the UI
   section, the docs, the reuse items, plus #257, #259 and the phone-width
   pass of #262. The review's security findings were handled in v3.16.0.
-- **The monthly recurrence drift is not fixed, on purpose** (owner
-  decision 2026-11-10). A monthly task on the 29th to 31st moves to the
-  28th in February and stays there (#281, 1.9). A fix was built (a stored
-  day of the month, a migration, a backup format bump) and dropped
-  unmerged: ONTOLOGY §9 and slice S5b remove recurring tasks, so the
-  bug goes with the feature. Don't fix it before S5b.
+- **The monthly recurrence drift was never fixed, on purpose** (owner
+  decision 2026-11-10; #281, 1.9). It went with the feature in S5b
+  (v3.24.0): tasks no longer repeat.
 - **v3.15.0: copy a task's text** (#269, PR #271): a Copy action on
   each task row.
 
@@ -205,8 +215,7 @@ Keep it current as part of each change (see `POLICY.md` §10).
 - **v3.14.0: review task fixes 1.8, 1.9 (UTC day) and 2.5** (#281).
   One next occurrence per parent, under a row lock; the next occurrence
   counts from the sender's `today`; reorder follows `require_task_editor`.
-  Still open from 1.9: a monthly task on the 29th to 31st settles on the
-  28th after a short month (needs a stored anchor day; owner to decide).
+  The occurrence parts went with recurring tasks in S5b (v3.24.0).
 - **v3.14.0: failures are shown** (#281, 1.7 and the dropped errors of
   §5). `LoadError` replaces the empty state after a failed fetch in ten
   views; bulk delete, revoke, link delete and attachment delete report

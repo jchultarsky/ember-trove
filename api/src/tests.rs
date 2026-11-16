@@ -696,7 +696,6 @@ fn stub_task(id: TaskId) -> Task {
         priority: TaskPriority::Medium,
         focus_date: None,
         due_date: None,
-        recurrence: None,
         sort_order: 0,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
@@ -726,17 +725,6 @@ impl TaskRepo for StubTaskRepo {
         }
     }
     async fn list_for_node(&self, _: NodeId, _: &str) -> Result<Vec<Task>, EmberTroveError> {
-        unimplemented!()
-    }
-    async fn create_occurrence(
-        &self,
-        _: TaskId,
-        _: &str,
-        _: CreateTaskRequest,
-    ) -> Result<Task, EmberTroveError> {
-        unimplemented!()
-    }
-    async fn retract_occurrence(&self, _: TaskId, _: &str) -> Result<u64, EmberTroveError> {
         unimplemented!()
     }
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError> {
@@ -3132,6 +3120,37 @@ async fn task_patch(task: u128, body: serde_json::Value) -> StatusCode {
 async fn update_task_owner_can_edit_their_own_task() {
     let status = task_patch(0xa2_0199, serde_json::json!({ "title": "renamed" })).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_repeat_rule_from_an_older_tab_is_ignored_not_refused() {
+    // S5b (ONTOLOGY §9): tasks no longer repeat. A tab left open across the
+    // release still sends `recurrence`, and `today` with a completion. The
+    // request is read without them, whatever they hold, and the answer
+    // names no rule.
+    for (rule, today) in [("weekly", "2026-11-15"), ("fortnightly", "x")] {
+        let status = task_patch(
+            0xa2_0199,
+            serde_json::json!({ "status": "done", "recurrence": rule, "today": today }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "update with {rule:?}");
+
+        let resp = claims_app("/tasks", crate::routes::tasks::task_router())
+            .oneshot(post_json(
+                "/tasks",
+                serde_json::json!({ "title": "t", "recurrence": rule }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED, "create with {rule:?}");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(task["title"], "t");
+        assert!(task.get("recurrence").is_none(), "{task}");
+    }
 }
 
 #[tokio::test]

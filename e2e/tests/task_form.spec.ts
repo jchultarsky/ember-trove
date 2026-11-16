@@ -57,6 +57,8 @@ test('node page: adding a task with ☀ on puts it in My Day', async ({ page, re
     await page.goto(`/nodes/${node.id}`);
     await page.locator('button[title="Add task"]').first().click();
     const form = page.getByTestId('new-task-form');
+    // A task doesn't repeat (S5b): the form offers no Repeat choice.
+    await expect(form.locator('select')).toHaveCount(0);
     await form.getByPlaceholder('Task title…').fill(title);
     const sun = form.getByRole('button', { name: 'Add to My Day' });
     await sun.click();
@@ -377,53 +379,74 @@ test('a double Enter in the add-task form creates the task once', async ({ page,
 // ── Inline task editor (shared TaskEditDraft) ─────────────────────────────────
 //
 // Every list's editor opens on the task's saved values, Cancel discards ALL
-// field edits (it used to reset only the title), and the node panel can edit
-// recurrence like the other lists.
+// field edits (it used to reset only the title), and Save stores each field
+// in its own place. The fields are title, priority, due date and state: a
+// task doesn't repeat (S5b), so the editor has no Repeat choice.
 
-type FullTask = Task & { priority: string; recurrence: string | null };
+type FullTask = Task & { priority: string; due_date: string | null; status: string };
 
 /** The editor's priority radio group (`PriorityPicker`, #132). */
 const priorityOf = (scope: Locator) => scope.getByRole('radiogroup', { name: 'Priority' });
 const expectPriority = (scope: Locator, label: 'Low' | 'Medium' | 'High') =>
   expect(priorityOf(scope).getByRole('radio', { name: label })).toHaveAttribute('aria-checked', 'true');
+/** The editor's due date input (filled, never typed into: e2e.md). */
+const dueOf = (scope: Locator) => scope.getByTestId('due-date-field').locator('input[type="date"]');
+/** One choice of the editor's state picker (`StatePicker`, S5a). */
+const stateOf = (scope: Locator, name: 'Open' | 'Waiting' | 'Cancelled') =>
+  scope.getByTestId('state-picker').getByRole('radio', { name });
+const expectState = (scope: Locator, name: 'Open' | 'Waiting' | 'Cancelled') =>
+  expect(stateOf(scope, name)).toHaveAttribute('aria-checked', 'true');
 
-test('node panel editor: opens on saved values, Cancel resets all, saves recurrence', async ({
+test('node panel editor: opens on saved values, Cancel resets all, Save stores each field', async ({
   page,
   request,
 }) => {
   const stamp = Date.now();
   const node = await createNode(request, `e2e editor node ${stamp}`, { node_type: 'project' });
   try {
+    const title = `e2e editor ${stamp}`;
     const created = await request.post(`/api/nodes/${node.id}/tasks`, {
-      data: { title: `e2e editor ${stamp}`, priority: 'high', recurrence: 'weekly' },
+      data: { title, priority: 'high', due_date: localISO(5) },
     });
     expect(created.ok()).toBeTruthy();
     const task = await created.json();
 
     await page.goto(`/nodes/${node.id}`);
     const row = page.locator(`[data-task-id="${task.id}"]`);
+    const expectSaved = async () => {
+      await expect(row.locator('textarea')).toHaveValue(title);
+      await expectPriority(row, 'High');
+      await expect(dueOf(row)).toHaveValue(localISO(5));
+      await expectState(row, 'Open');
+    };
     await row.locator('button[title="Edit task"]').click();
-    const repeat = row.locator('select[title="Recurrence"]');
-    await expectPriority(row, 'High');
-    await expect(repeat).toHaveValue('weekly');
+    await expectSaved();
 
     // Abandon edits to every field: reopening shows the saved values.
+    await row.locator('textarea').fill('abandoned');
     await priorityOf(row).getByRole('radio', { name: 'Low' }).click();
     await expectPriority(row, 'Low');
-    await repeat.selectOption('daily');
+    await dueOf(row).fill(localISO(9));
+    await stateOf(row, 'Waiting').click();
+    await expectState(row, 'Waiting');
     await row.getByRole('button', { name: 'Cancel' }).click();
     await row.locator('button[title="Edit task"]').click();
-    await expectPriority(row, 'High');
-    await expect(repeat).toHaveValue('weekly');
+    await expectSaved();
 
-    await repeat.selectOption('monthly');
+    // Save three fields at once: each lands in its own place, and the
+    // state, left alone, stays.
+    const renamed = `e2e editor saved ${stamp}`;
+    await row.locator('textarea').fill(renamed);
+    await priorityOf(row).getByRole('radio', { name: 'Low' }).click();
+    await dueOf(row).fill(localISO(9));
     await row.getByRole('button', { name: 'Save' }).click();
     await expect
       .poll(async () => {
         const tasks: FullTask[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
-        return tasks.find((t) => t.id === task.id)?.recurrence;
+        const t = tasks.find((t) => t.id === task.id);
+        return t && [t.title, t.priority, t.due_date, t.status];
       })
-      .toBe('monthly');
+      .toEqual([renamed, 'low', localISO(9), 'open']);
   } finally {
     const tasks: Task[] = await (await request.get(`/api/nodes/${node.id}/tasks`)).json();
     for (const t of tasks) await request.delete(`/api/tasks/${t.id}`);
@@ -438,25 +461,28 @@ test('My Day editor: opens on saved values and Cancel resets every field', async
   await withProject(request, 'e2e myday editor node', async (node) => {
     const title = `e2e myday editor ${Date.now()}`;
     const created = await request.post(`/api/nodes/${node.id}/tasks`, {
-      data: { title, priority: 'low', recurrence: 'yearly', focus_date: localISO(0) },
+      data: { title, priority: 'low', due_date: localISO(3), focus_date: localISO(0) },
     });
     expect(created.ok()).toBeTruthy();
     const task = await created.json();
     await page.goto('/tasks/my-day');
     const row = page.locator(`[data-task-id="${task.id}"]`);
+    const expectSaved = async () => {
+      await expect(row.locator('textarea')).toHaveValue(title);
+      await expectPriority(row, 'Low');
+      await expect(dueOf(row)).toHaveValue(localISO(3));
+      await expectState(row, 'Open');
+    };
     await row.getByRole('button', { name: 'Edit task' }).click();
-    const repeat = row.locator('select[title="Recurrence"]');
-    await expectPriority(row, 'Low');
-    await expect(repeat).toHaveValue('yearly');
-    // One label per rule everywhere (this list used to say "Biweekly").
-    await expect(repeat.locator('option[value="biweekly"]')).toHaveText('Every 2 weeks');
+    await expectSaved();
 
+    await row.locator('textarea').fill('abandoned');
     await priorityOf(row).getByRole('radio', { name: 'High' }).click();
-    await repeat.selectOption('');
+    await dueOf(row).fill('');
+    await stateOf(row, 'Cancelled').click();
     await row.getByRole('button', { name: 'Cancel' }).click();
     await row.getByRole('button', { name: 'Edit task' }).click();
-    await expectPriority(row, 'Low');
-    await expect(repeat).toHaveValue('yearly');
+    await expectSaved();
   });
 });
 
@@ -519,7 +545,9 @@ test('My Day and the node panel share one task editor', async ({ page, request }
         await expect(editor.locator('textarea')).toBeVisible();
         await expect(priorityOf(editor).getByRole('radio')).toHaveText(['Low', 'Medium', 'High']);
         await expect(editor.getByTestId('due-date-field')).toBeVisible();
-        await expect(editor.locator('select[title="Recurrence"]')).toBeVisible();
+        // A task doesn't repeat (S5b): the editor has no Repeat choice,
+        // and with it no select at all.
+        await expect(editor.locator('select')).toHaveCount(0);
         await expect(editor.getByRole('button', { name: 'Save' })).toBeVisible();
         await expect(editor.getByRole('button', { name: 'Cancel' })).toBeVisible();
 

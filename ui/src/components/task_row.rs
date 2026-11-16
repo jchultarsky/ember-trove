@@ -28,7 +28,7 @@
 //! ## Inline edit (v2.6.2)
 //!
 //! The pencil button toggles an inline edit form (title, priority,
-//! due_date, recurrence).  No `focus_date` field — that's binary, owned
+//! due_date, state).  No `focus_date` field — that's binary, owned
 //! by the zone-swap button.  Save persists via PATCH; Esc cancels.
 //!
 //! Keyboard triage (Phase 5 / v2.7.0) will plug in here without
@@ -403,8 +403,8 @@ pub fn KanbanTaskRow(
 
     let on_pencil = move |ev: web_sys::MouseEvent| {
         ev.stop_propagation();
-        // Opens on the saved values (an abandoned edit of priority/due/
-        // recurrence used to survive).
+        // Opens on the saved values (an abandoned edit of priority or due
+        // date used to survive).
         saved_task.with_value(|t| session.open(t));
     };
 

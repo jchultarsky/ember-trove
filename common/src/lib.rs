@@ -104,7 +104,6 @@ mod wire_tests {
         assert_wire!(crate::edge::EdgeType);
         assert_wire!(crate::task::TaskStatus);
         assert_wire!(crate::task::TaskPriority);
-        assert_wire!(crate::task::RecurrenceRule);
         assert_wire!(crate::permission::PermissionRole);
         assert_wire!(crate::data_health::RuleId);
         assert_wire!(crate::data_health::RefKind);

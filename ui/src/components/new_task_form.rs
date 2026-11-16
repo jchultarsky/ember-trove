@@ -1,5 +1,5 @@
 //! The add-task form of a Project's `TaskPanel`: icon submit,
-//! priority/due/recurrence controls and an inline error.
+//! priority/due controls and an inline error.
 //!
 //! It always creates the task on its node. The Inbox's variant with an
 //! optional Project picker went with the Inbox (S4c, #240): a task needs its
@@ -18,7 +18,7 @@ use leptos::prelude::*;
 use crate::components::due_date_field::DueDateField;
 use crate::components::format_helpers::local_today;
 use crate::components::task_common::parse_priority;
-use crate::components::task_row_scaffold::{PriorityPicker, RecurrenceOptions};
+use crate::components::task_row_scaffold::PriorityPicker;
 
 /// Reusable "new task" form.
 ///
@@ -36,7 +36,6 @@ pub fn NewTaskForm(
     let new_title = RwSignal::new(String::new());
     let new_priority = RwSignal::new("medium".to_string());
     let new_due = RwSignal::new(String::new());
-    let new_recurrence = RwSignal::new(String::new());
     let new_my_day = RwSignal::new(false);
     let adding = RwSignal::new(false);
     let add_error = RwSignal::new(Option::<String>::None);
@@ -54,7 +53,6 @@ pub fn NewTaskForm(
         }
         let priority = parse_priority(&new_priority.get_untracked());
         let due_date = new_due.get_untracked().trim().parse::<NaiveDate>().ok();
-        let recurrence = common::task::RecurrenceRule::parse(&new_recurrence.get_untracked());
         let focus_date = new_my_day.get_untracked().then(local_today);
         adding.set(true);
         add_error.set(None);
@@ -66,14 +64,12 @@ pub fn NewTaskForm(
                 priority: Some(priority),
                 focus_date,
                 due_date,
-                recurrence,
             };
             match crate::api::create_task(node_id, &req).await {
                 Ok(_) => {
                     new_title.set(String::new());
                     new_priority.set("medium".to_string());
                     new_due.set(String::new());
-                    new_recurrence.set(String::new());
                     new_my_day.set(false);
                     refresh.update(|n| *n += 1);
                     if let Some(cb) = on_added {
@@ -106,15 +102,6 @@ pub fn NewTaskForm(
             <div class="flex items-center gap-2 flex-wrap">
                 <PriorityPicker value=new_priority />
                 <DueDateField value=new_due />
-                <select
-                    class="text-xs bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-300
-                        rounded-lg px-2 py-1 focus:outline-none"
-                    title="Recurrence"
-                    prop:value=move || new_recurrence.get()
-                    on:change=move |ev| new_recurrence.set(event_target_value(&ev))
-                >
-                    <RecurrenceOptions value=new_recurrence />
-                </select>
                 // My Day — same glyph as the row action; filled when on.
                 <button
                     type="button"
