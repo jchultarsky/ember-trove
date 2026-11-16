@@ -27,9 +27,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
   place for read-only readers to open the list; a count of dependencies
   in a Project's delete confirmation (it would have to be worked out per
   reader); a Data health rule. **Noted for the owner, not changed:**
-  every task webhook goes to the hooks of the task's author, whatever
-  their rights on its node now; someone who may only view a task can
-  make their own tasks wait for it. Rules: "Task dependencies" in
+  someone who may only view a task can make their own tasks wait for
+  it. (Task webhooks going to the task's author whatever their rights
+  now was noted here too; fixed right after, owner decision of
+  2026-11-16: `dispatch_task_event`.) Rules: "Task dependencies" in
   `.claude/rules/api.md` and `.claude/rules/leptos.md`; the picker
   bullet in `.claude/rules/e2e.md`.
 

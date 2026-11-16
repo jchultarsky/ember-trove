@@ -6,6 +6,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **A task's webhook events follow its node's rights.** `task.created`,
+  `task.updated` and `task.deleted` go to the webhooks of the task's
+  author. They used to go there whatever that person's rights on the
+  task's node now: someone whose share had ended kept hearing about each
+  change to the tasks they had written there (the event, the node's id,
+  who made the change and when; never the title). Now an event is sent
+  only while the author can still see the node: they own it or hold a
+  grant on it, the rule the task lists use (ONTOLOGY §14, owner ruling of
+  2026-11-10: a task follows its node's rights, not its author's).
+  - An admin's webhooks hear about their tasks on nodes they own or were
+    given, and no longer about tasks they wrote on other people's nodes
+    without a grant: the admin role is in the token of a request, and a
+    webhook is sent for someone who is not making one.
+  - If the server can't tell who sees the node, nothing is sent. A task
+    moved onto a node its author can't see is no longer told to them.
+  - Sending an event reads only the receiving account's webhooks; it
+    used to read every account's, addresses and secrets included, and
+    pick out the receiver's afterwards.
+  - Node events are unchanged: they go to the node's owner.
+
 ## [3.26.0] - 2026-11-16
 
 ### Added

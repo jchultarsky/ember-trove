@@ -29,7 +29,7 @@ use crate::{
     error::ApiError,
     routes::capability::require_capability,
     state::AppState,
-    webhook_dispatch::dispatch,
+    webhook_dispatch::dispatch_task_event,
 };
 
 /// Mounts under `/nodes/:node_id/tasks` and `/tasks`.
@@ -135,10 +135,11 @@ async fn create_task(
         .tasks
         .create(NodeId(node_id), &claims.sub, req)
         .await?;
-    dispatch(
+    dispatch_task_event(
         state.webhooks.clone(),
+        state.nodes.clone(),
         EVENT_TASK_CREATED,
-        Some(task.node_id),
+        task.node_id,
         &claims.sub,
         &task.owner_id,
     );
@@ -169,10 +170,11 @@ async fn create_task_named_in_body(
     require_editor(state.permissions.as_ref(), &claims, node_id).await?;
     require_capability(&state, node_id, Capability::Tasks).await?;
     let task = state.tasks.create(node_id, &claims.sub, req).await?;
-    dispatch(
+    dispatch_task_event(
         state.webhooks.clone(),
+        state.nodes.clone(),
         EVENT_TASK_CREATED,
-        Some(task.node_id),
+        task.node_id,
         &claims.sub,
         &task.owner_id,
     );
@@ -226,10 +228,11 @@ async fn update_task(
 
     let updated = state.tasks.update(TaskId(id), req).await?;
 
-    dispatch(
+    dispatch_task_event(
         state.webhooks.clone(),
+        state.nodes.clone(),
         EVENT_TASK_UPDATED,
-        Some(updated.node_id),
+        updated.node_id,
         &claims.sub,
         &updated.owner_id,
     );
@@ -249,10 +252,11 @@ async fn delete_task(
     require_task_editor(&state, &claims, &existing).await?;
     let (owner_id, node_id) = (existing.owner_id.clone(), existing.node_id);
     state.tasks.delete(TaskId(id)).await?;
-    dispatch(
+    dispatch_task_event(
         state.webhooks.clone(),
+        state.nodes.clone(),
         EVENT_TASK_DELETED,
-        Some(node_id),
+        node_id,
         &claims.sub,
         &owner_id,
     );
@@ -274,10 +278,11 @@ async fn restore_task(
         .map_err(or_missing_row(TASK))?;
     require_task_editor(&state, &claims, &existing).await?;
     let restored = state.tasks.restore(TaskId(id)).await?;
-    dispatch(
+    dispatch_task_event(
         state.webhooks.clone(),
+        state.nodes.clone(),
         EVENT_TASK_UPDATED,
-        Some(restored.node_id),
+        restored.node_id,
         &claims.sub,
         &restored.owner_id,
     );
@@ -385,8 +390,7 @@ async fn add_dependency(
         .add(task_id, other)
         .await
         .map_err(or_missing_row(TASK))?;
-    // No webhook: the task itself is unchanged, and task events go to the
-    // hooks of the task's author, who may no longer see its node.
+    // No webhook: the task itself is unchanged.
     let fresh = dependencies_for(&state, &claims, &task).await?;
     Ok((StatusCode::CREATED, Json(fresh)))
 }
