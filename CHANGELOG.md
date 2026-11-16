@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.25.0] - 2026-11-16
+
 ### Changed
 - **A task always has a Project** (S5c of the ontology programme, #335;
   ONTOLOGY §9.3: "exactly one Project. No orphan Tasks"). No page has
