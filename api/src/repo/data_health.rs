@@ -116,9 +116,9 @@ impl DataHealthRepo for PgDataHealthRepo {
 struct TaskRow {
     id: Uuid,
     title: String,
-    node_id: Option<Uuid>,
-    node_title: Option<String>,
-    node_archived: Option<bool>,
+    node_id: Uuid,
+    node_title: String,
+    node_archived: bool,
     closed: bool,
     total: i64,
 }
@@ -164,14 +164,9 @@ async fn tasks_on_non_projects(
 }
 
 fn task_violation(r: TaskRow) -> Violation {
-    let archived = r.node_archived.unwrap_or(false);
-    let related = match (r.node_id, r.node_title) {
-        (Some(id), Some(title)) => vec![Ref::node(id, title, archived)],
-        _ => vec![],
-    };
     Violation::new(
-        Ref::task(r.id, r.title, r.node_id, archived).with_closed(r.closed),
-        related,
+        Ref::task(r.id, r.title, r.node_id, r.node_archived).with_closed(r.closed),
+        vec![Ref::node(r.node_id, r.node_title, r.node_archived)],
     )
 }
 

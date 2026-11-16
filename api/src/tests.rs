@@ -689,7 +689,7 @@ fn authz_task(id: TaskId) -> Task {
     };
     Task {
         owner_id: owner.to_string(),
-        node_id: Some(az_node(node)),
+        node_id: az_node(node),
         ..stub_task(id)
     }
 }
@@ -699,7 +699,7 @@ fn authz_task(id: TaskId) -> Task {
 fn stub_task(id: TaskId) -> Task {
     Task {
         id,
-        node_id: Some(az_node(AZ_TASKS_PROJECT)),
+        node_id: az_node(AZ_TASKS_PROJECT),
         owner_id: "test-sub".to_string(),
         title: "stub".to_string(),
         status: TaskStatus::Open,
@@ -727,7 +727,7 @@ impl TaskRepo for StubTaskRepo {
         match node.0.as_u128() {
             AZ_MY_PROJECT => Ok(Task {
                 owner_id: owner.to_string(),
-                node_id: Some(node),
+                node_id: node,
                 title: req.title,
                 ..stub_task(TaskId(Uuid::new_v4()))
             }),
@@ -760,7 +760,7 @@ impl TaskRepo for StubTaskRepo {
             panic!("capability bypass: task {id} moved onto an Article");
         }
         let mut task = authz_task(id);
-        if let Some(node) = req.node_id {
+        if let Some(Some(node)) = req.node_id {
             task.node_id = node;
         }
         if let Some(title) = req.title {
@@ -950,7 +950,7 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
                 Made::Task {
                     project: node_id,
                     task: Task {
-                        node_id: Some(node_id),
+                        node_id,
                         owner_id: owner.to_string(),
                         title: req.title,
                         ..stub_task(TaskId(Uuid::new_v4()))

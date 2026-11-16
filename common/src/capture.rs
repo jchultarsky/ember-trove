@@ -11,10 +11,10 @@ use garde::Validate;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::backup::BackupNote;
+use crate::backup::{BackupNote, BackupTask};
 use crate::id::{CaptureId, NodeId, NoteId, TaskId};
 use crate::node::NodeType;
-use crate::task::{Task, TaskPriority, TaskStatus};
+use crate::task::{TaskPriority, TaskStatus};
 
 /// The longest a capture may be, in characters (the database's CHECK).
 pub const MAX_LEN: usize = 10_000;
@@ -281,7 +281,7 @@ pub fn nodeless_task_text(title: &str, status: &TaskStatus, due: Option<NaiveDat
 /// owner and times; the text is [`nodeless_task_text`]. `None` for a task
 /// that has a node.
 #[must_use]
-pub fn from_nodeless_task(task: &Task) -> Option<Capture> {
+pub fn from_nodeless_task(task: &BackupTask) -> Option<Capture> {
     task.node_id.is_none().then(|| Capture {
         id: CaptureId(task.id.0),
         owner_id: task.owner_id.clone(),
@@ -605,13 +605,13 @@ mod tests {
 
     // ── S5c: a task with no Project becomes a capture ───────────────────
 
-    fn loose_task(status: TaskStatus, due: Option<NaiveDate>, title: &str) -> Task {
+    fn loose_task(status: TaskStatus, due: Option<NaiveDate>, title: &str) -> BackupTask {
         let at = |day| {
             Utc.with_ymd_and_hms(2025, 10, day, 9, 0, 0)
                 .single()
                 .expect("date")
         };
-        Task {
+        BackupTask {
             id: TaskId(uuid::Uuid::from_u128(9)),
             node_id: None,
             owner_id: "alice".into(),
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn a_task_on_a_node_is_no_capture() {
-        let on_a_node = Task {
+        let on_a_node = BackupTask {
             node_id: Some(NodeId(uuid::Uuid::from_u128(1))),
             ..loose_task(TaskStatus::Open, None, "call the bank")
         };

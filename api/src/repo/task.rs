@@ -143,7 +143,7 @@ impl PgTaskRepo {
 #[derive(sqlx::FromRow)]
 struct TaskRow {
     id: Uuid,
-    node_id: Option<Uuid>,
+    node_id: Uuid,
     owner_id: String,
     title: String,
     status: String,
@@ -168,7 +168,7 @@ impl TaskRow {
     fn into_task(self) -> Result<Task, EmberTroveError> {
         Ok(Task {
             id: TaskId(self.id),
-            node_id: self.node_id.map(NodeId),
+            node_id: NodeId(self.node_id),
             owner_id: self.owner_id,
             title: self.title,
             status: parse_status(&self.status)?,
@@ -184,12 +184,13 @@ impl TaskRow {
 }
 
 /// For the owner's task feeds, which `LEFT JOIN nodes n` on the node being
-/// visible to the reader: keep a task with no node, or whose node they see.
+/// visible to the reader: keep a task whose node they see. (Every task has
+/// a node since S5c; until then one with none was kept too.)
 ///
 /// SECURITY (owner decision, 2026-11-10): a task on a node its owner can no
 /// longer see (a revoked share) is not in their feeds. #230 hid only the
 /// node's title and kept the task.
-const ON_A_NODE_THEY_SEE: &str = "(t.node_id IS NULL OR n.id IS NOT NULL)";
+const ON_A_NODE_THEY_SEE: &str = "n.id IS NOT NULL";
 
 /// A task's priority as an `ORDER BY` rank: high, medium, low. One
 /// definition for every task list (#281, 3.5; it was written out five
@@ -239,7 +240,7 @@ fn asks_for_attention() -> String {
             .map(ProjectState::as_str)
             .collect(),
     );
-    // No state: a task on no node, or on a node that is not a Project.
+    // No state: a task on a node that is not a Project (older data).
     format!(
         "(t.status::text IN ({actionable}) \
           AND (n.project_state IS NULL OR n.project_state IN ({asking})))"
@@ -273,7 +274,7 @@ const COMPLETED_AT_AFTER: &str = "CASE \
 #[derive(sqlx::FromRow)]
 struct MyDayRow {
     id: Uuid,
-    node_id: Option<Uuid>,
+    node_id: Uuid,
     owner_id: String,
     title: String,
     status: String,
@@ -583,7 +584,7 @@ impl TaskRepo for PgTaskRepo {
             ORDER BY
                 t.sort_order ASC,
                 {T_PRIORITY_RANK},
-                t.node_id NULLS FIRST,
+                t.node_id,
                 t.created_at
             "#,
             visible = super::visible_to("n", 3),
@@ -911,13 +912,12 @@ impl TaskRepo for PgTaskRepo {
             ) AS u
             WHERE node_tasks.id = u.id
               AND node_tasks.deleted_at IS NULL
-              -- The routes' rule (`require_task_editor`): on a node, its
-              -- editors; on none, the task's owner. Owning a task on a
-              -- node is not enough (a revoked share). An admin (NULL)
-              -- passes here, by this caller's choice.
+              -- The routes' rule (`require_task_editor`): the editors of
+              -- the task's node. Owning the task is not enough (a revoked
+              -- share). An admin (NULL) passes here, by this caller's
+              -- choice.
               AND (
                 $3::text IS NULL
-                OR (node_tasks.node_id IS NULL AND node_tasks.owner_id = $3::text)
                 OR {edits_its_node}
               )
             "#,

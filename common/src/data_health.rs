@@ -187,13 +187,13 @@ impl Ref {
 
     /// `archived` is the task's node's: its link leads to a hidden node.
     #[must_use]
-    pub fn task(id: Uuid, label: impl Into<String>, node_id: Option<Uuid>, archived: bool) -> Self {
+    pub fn task(id: Uuid, label: impl Into<String>, node_id: Uuid, archived: bool) -> Self {
         Self {
             kind: RefKind::Task,
             id,
             label: label.into(),
             archived,
-            node_id,
+            node_id: Some(node_id),
             closed: false,
         }
     }
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn a_ref_round_trips_and_omits_an_empty_node_link() {
-        let task = Ref::task(Uuid::from_u128(1), "t", Some(Uuid::from_u128(2)), true);
+        let task = Ref::task(Uuid::from_u128(1), "t", Uuid::from_u128(2), true);
         let json = serde_json::to_value(&task).expect("ser");
         assert_eq!(json["kind"], "task");
         assert_eq!(json["archived"], true, "the task's node is archived");
