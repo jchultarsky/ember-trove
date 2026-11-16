@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.26.0] - 2026-11-16
+
 ### Added
 - **A task can wait for another task** (S5d of the ontology programme,
   #338; ONTOLOGY §9.3, §6.4: "hard prerequisites, surfaced as blockers,
