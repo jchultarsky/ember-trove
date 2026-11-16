@@ -30,7 +30,7 @@ use crate::{
     repo::capture::{Destination, Made},
     routes::{capability::require_capability, nodes::node_created},
     state::AppState,
-    webhook_dispatch::dispatch,
+    webhook_dispatch::dispatch_task_event,
 };
 
 pub fn router() -> Router<AppState> {
@@ -195,10 +195,11 @@ async fn convert_capture(
             node_id: note.node_id,
         },
         Made::Task { project, task } => {
-            dispatch(
+            dispatch_task_event(
                 state.webhooks.clone(),
+                state.nodes.clone(),
                 EVENT_TASK_CREATED,
-                Some(project),
+                project,
                 &claims.sub,
                 &task.owner_id,
             );

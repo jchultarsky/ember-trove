@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-16)
 
+- **v3.26.1 shipped: a task's webhook events follow its node's rights**
+  (PR #341; owner decision of 2026-11-16, after the security review of
+  S5d). `task.created`, `task.updated` and `task.deleted` went to the
+  hooks of the task's author whatever their rights on its node now; they
+  are sent only while the author can still see the node (owns it or
+  holds a grant: `dispatch_task_event`, `NodeRepo::visible_titles`). The
+  node `dispatch` refuses a task event; `list_active_for_event` reads
+  only the receiver's hooks. An admin's hooks follow the same rule
+  without the admin role. No migration. **Noted for the owner, not
+  changed:** a suspended account's webhooks keep firing, for node events
+  too. Rule: the `dispatch_task_event` bullet under "Security rules" in
+  `.claude/rules/api.md`.
+
 - **v3.26.0 shipped: S5d, a task can depend on another task** (#338,
   PRs #339 and #340; ONTOLOGY §9.3, §6.4). Owner decisions (2026-11-16):
   build it lean with its UI; a task may depend on any task its person can
@@ -27,9 +40,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
   place for read-only readers to open the list; a count of dependencies
   in a Project's delete confirmation (it would have to be worked out per
   reader); a Data health rule. **Noted for the owner, not changed:**
-  every task webhook goes to the hooks of the task's author, whatever
-  their rights on its node now; someone who may only view a task can
-  make their own tasks wait for it. Rules: "Task dependencies" in
+  someone who may only view a task can make their own tasks wait for
+  it. (Task webhooks going to the task's author whatever their rights
+  now was noted here too; fixed right after, owner decision of
+  2026-11-16: `dispatch_task_event`.) Rules: "Task dependencies" in
   `.claude/rules/api.md` and `.claude/rules/leptos.md`; the picker
   bullet in `.claude/rules/e2e.md`.
 

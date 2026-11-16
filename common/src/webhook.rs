@@ -75,6 +75,14 @@ pub fn available_events() -> &'static [&'static str] {
     ]
 }
 
+/// Whether `event` is about a task. A task event has its own way out
+/// (`webhook_dispatch::dispatch_task_event`): it follows the rights on the
+/// task's node, where a node event goes to the node's owner.
+#[must_use]
+pub fn is_task_event(event: &str) -> bool {
+    event.starts_with("task.")
+}
+
 /// Default subscription when a create request omits `events`: all of them.
 fn default_events() -> Vec<String> {
     available_events()
@@ -86,6 +94,25 @@ fn default_events() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_event_is_a_nodes_or_a_tasks() {
+        let tasks: Vec<_> = available_events()
+            .iter()
+            .filter(|e| is_task_event(e))
+            .collect();
+        assert_eq!(
+            tasks,
+            [
+                &EVENT_TASK_CREATED,
+                &EVENT_TASK_UPDATED,
+                &EVENT_TASK_DELETED
+            ]
+        );
+        for event in [EVENT_NODE_CREATED, EVENT_NODE_UPDATED, EVENT_NODE_DELETED] {
+            assert!(!is_task_event(event), "{event}");
+        }
+    }
 
     #[test]
     fn available_events_are_unique_and_shaped() {

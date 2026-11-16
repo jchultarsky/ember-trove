@@ -153,7 +153,8 @@ async fn declare_project_state(
     // its own owner's hooks (the master only when it was written: a
     // repeat of a declared state is no update). A project whose tasks
     // were cancelled has had tasks updated, told to those tasks' owners'
-    // hooks, as every task event is. One event per project and owner,
+    // hooks, as every task event is: only to an owner who can still see
+    // the project (`dispatch_task_event`). One event per project and owner,
     // not per task: the payload names the node, not the task.
     if outcome.wrote {
         dispatch(
@@ -174,10 +175,11 @@ async fn declare_project_state(
         );
     }
     for touched in &outcome.cancelled_on {
-        dispatch(
+        crate::webhook_dispatch::dispatch_task_event(
             state.webhooks.clone(),
+            state.nodes.clone(),
             common::webhook::EVENT_TASK_UPDATED,
-            Some(touched.id),
+            touched.id,
             &claims.sub,
             &touched.owner_id,
         );

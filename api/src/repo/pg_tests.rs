@@ -12208,3 +12208,88 @@ async fn an_account_purge_keeps_the_links_of_tasks_it_hands_over(pool: PgPool) {
         "the handed-over task still waits; the rest went with their tasks"
     );
 }
+
+// ── Task webhooks follow the node's rights (2026-11-16) ──────────────────────
+
+/// Who a task event may be sent to: the task's author while they can see
+/// the task's node, by the rule the task lists use. That is its owner,
+/// with or without a grant row (some nodes have none), and anyone
+/// holding a grant; not someone whose grant was taken back, and not a
+/// stranger. (`webhook_dispatch::dispatch_task_event` asks exactly this.)
+#[sqlx::test(migrations = "../migrations")]
+async fn a_task_event_is_for_an_author_who_still_sees_the_node(pool: PgPool) {
+    let nodes = PgNodeRepo::new(pool.clone());
+    // Straight into the table: its owner holds no grant row.
+    let node = insert_raw_node(&pool, "alice", "project", "shared plan", "").await;
+    let sees = |who: &'static str| {
+        let nodes = &nodes;
+        async move {
+            nodes
+                .visible_titles(&[node], Some(who))
+                .await
+                .expect("visible titles")
+                .contains_key(&node)
+        }
+    };
+
+    assert!(sees("alice").await, "its owner, with no grant row");
+    assert!(!sees("bob").await, "a stranger");
+    share(&pool, node, "bob").await;
+    assert!(sees("bob").await, "while the share lasts");
+    sql(&pool, "DELETE FROM permissions WHERE subject_id = 'bob'").await;
+    assert!(!sees("bob").await, "the share ended: no more events");
+    // A node that is gone is seen by nobody.
+    let gone = uuid::Uuid::new_v4();
+    let none = nodes
+        .visible_titles(&[gone], Some("alice"))
+        .await
+        .expect("visible titles");
+    assert!(none.is_empty());
+}
+
+/// Sending an event reads one account's webhooks: active ones subscribed
+/// to that event. It used to read every account's (their addresses and
+/// secrets too) and pick the receiver's out afterwards.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_event_reads_only_its_receivers_active_subscribed_webhooks(pool: PgPool) {
+    use super::webhook::{PgWebhookRepo, WebhookRepo};
+    for (owner, url, events, active) in [
+        ("alice", "https://a.example/tasks", "{task.updated}", true),
+        ("alice", "https://a.example/nodes", "{node.updated}", true),
+        ("alice", "https://a.example/off", "{task.updated}", false),
+        ("bob", "https://b.example/tasks", "{task.updated}", true),
+    ] {
+        sqlx::query(
+            "INSERT INTO webhooks (owner_id, url, secret, events, is_active) \
+             VALUES ($1, $2, 'a secret', $3::text[], $4)",
+        )
+        .bind(owner)
+        .bind(url)
+        .bind(events)
+        .bind(active)
+        .execute(&pool)
+        .await
+        .expect("a webhook");
+    }
+    let hooks = PgWebhookRepo::new(pool.clone());
+    let read = |event: &'static str, owner: &'static str| {
+        let hooks = &hooks;
+        async move {
+            let found = hooks
+                .list_active_for_event(event, owner)
+                .await
+                .expect("list");
+            found.into_iter().map(|h| h.url).collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        read("task.updated", "alice").await,
+        ["https://a.example/tasks"]
+    );
+    assert_eq!(
+        read("task.updated", "bob").await,
+        ["https://b.example/tasks"]
+    );
+    assert_eq!(read("node.updated", "bob").await, Vec::<String>::new());
+    assert_eq!(read("task.updated", "carol").await, Vec::<String>::new());
+}

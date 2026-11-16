@@ -14,7 +14,14 @@ pub trait WebhookRepo: Send + Sync + 'static {
     async fn list(&self, owner_id: &str) -> Result<Vec<Webhook>, EmberTroveError>;
 
     /// Return all active webhooks that subscribe to a given event.
-    async fn list_active_for_event(&self, event: &str) -> Result<Vec<Webhook>, EmberTroveError>;
+    /// `owner`'s active webhooks subscribed to `event`: the only hooks an
+    /// event is ever delivered to. Scoped in the query, so a dispatch
+    /// never reads another account's addresses or secrets.
+    async fn list_active_for_event(
+        &self,
+        event: &str,
+        owner: &str,
+    ) -> Result<Vec<Webhook>, EmberTroveError>;
 
     /// Create a new webhook.
     async fn create(
@@ -132,12 +139,17 @@ impl WebhookRepo for PgWebhookRepo {
         Ok(rows.into_iter().map(WebhookRow::into_webhook).collect())
     }
 
-    async fn list_active_for_event(&self, event: &str) -> Result<Vec<Webhook>, EmberTroveError> {
+    async fn list_active_for_event(
+        &self,
+        event: &str,
+        owner: &str,
+    ) -> Result<Vec<Webhook>, EmberTroveError> {
         let rows = sqlx::query_as::<_, WebhookRow>(
             "SELECT id, owner_id, url, secret, events, is_active, created_at, updated_at \
-             FROM webhooks WHERE is_active = TRUE AND $1 = ANY(events)",
+             FROM webhooks WHERE is_active = TRUE AND $1 = ANY(events) AND owner_id = $2",
         )
         .bind(event)
+        .bind(owner)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list active webhooks: {e}")))?;
