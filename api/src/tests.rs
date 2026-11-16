@@ -238,6 +238,10 @@ impl NodeRepo for StubNodeRepo {
     ) -> Result<std::collections::BTreeMap<Uuid, String>, EmberTroveError> {
         // The rule of the real one: what `subject` may view. Here that is
         // whatever the authz world grants them a row on.
+        VISIBLE_ASKS.with(|a| {
+            let mut asks = a.borrow_mut();
+            asks.extend(ids.iter().map(|id| (*id, subject.map(str::to_string))));
+        });
         let all = authz_permissions();
         Ok(ids
             .iter()
@@ -598,6 +602,11 @@ const AZ_EDIT_TASK: u128 = 0xa2_0103;
 const AZ_REVOKED_TASK: u128 = 0xa2_0104;
 /// The caller's own task on a node they may now only view.
 const AZ_DEMOTED_TASK: u128 = 0xa2_0105;
+/// A task on the caller's own Project, written by someone who holds
+/// nothing on that Project (any more) and never owned it.
+const AZ_DEPARTED_TASK: u128 = 0xa2_0106;
+/// A task written by "guest" on a node guest may view and the caller owns.
+const AZ_GUEST_TASK: u128 = 0xa2_0107;
 
 /// The caller's own tag, and someone else's.
 const AZ_MY_TAG: u128 = 0xa2_0301;
@@ -684,6 +693,8 @@ fn authz_task(id: TaskId) -> Task {
         AZ_EDIT_TASK => ("someone-else", AZ_EDIT_NODE),
         AZ_REVOKED_TASK => ("test-sub", AZ_FOREIGN_NODE),
         AZ_DEMOTED_TASK => ("test-sub", AZ_VIEW_NODE),
+        AZ_DEPARTED_TASK => ("departed", AZ_TASKS_PROJECT),
+        AZ_GUEST_TASK => ("guest", AZ_OWNED_NODE),
         // Any other id: the caller's own task on their own Project.
         _ => ("test-sub", AZ_TASKS_PROJECT),
     };
@@ -1936,15 +1947,25 @@ impl SearchPresetRepo for StubSearchPresetRepo {
 const HOOK_HOARDER: &str = "hook-hoarder";
 
 thread_local! {
-    /// The events whose dispatch reached the webhook list, in order. Each
-    /// test runs on its own thread.
-    static HOOK_EVENTS: std::cell::RefCell<Vec<String>> =
+    /// The events whose dispatch reached the webhook list, each with the
+    /// account whose hooks it was for, in order. Each test runs on its
+    /// own thread.
+    static HOOK_EVENTS: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// Each "may this account view these nodes" asked of the stub
+    /// (`visible_titles`): the node, and for whom.
+    static VISIBLE_ASKS: std::cell::RefCell<Vec<(Uuid, Option<String>)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The events dispatched since the last look, once the spawned dispatch
-/// tasks have had their turn.
-async fn hook_events() -> Vec<String> {
+/// Who was asked about since the last look.
+fn visible_asks() -> Vec<(Uuid, Option<String>)> {
+    VISIBLE_ASKS.with(|a| std::mem::take(&mut *a.borrow_mut()))
+}
+
+/// The events dispatched since the last look, with whose hooks each was
+/// for, once the spawned dispatch tasks have had their turn.
+async fn hook_events() -> Vec<(String, String)> {
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
@@ -1974,10 +1995,15 @@ impl WebhookRepo for StubWebhookRepo {
             })
             .collect())
     }
-    async fn list_active_for_event(&self, event: &str) -> Result<Vec<Webhook>, EmberTroveError> {
+    async fn list_active_for_event(
+        &self,
+        event: &str,
+        owner: &str,
+    ) -> Result<Vec<Webhook>, EmberTroveError> {
         // Handlers fire-and-forget webhook dispatch; nothing is subscribed.
-        // The event is noted: a dispatch that got this far was let through.
-        HOOK_EVENTS.with(|e| e.borrow_mut().push(event.to_string()));
+        // The event and whose hooks were asked for are noted: a dispatch
+        // that got this far was let through, to that account.
+        HOOK_EVENTS.with(|e| e.borrow_mut().push((event.to_string(), owner.to_string())));
         Ok(vec![])
     }
     async fn create(&self, _: &str, _: CreateWebhookRequest) -> Result<Webhook, EmberTroveError> {
@@ -3156,55 +3182,75 @@ async fn task_patch(task: u128, body: serde_json::Value) -> StatusCode {
 /// there, against the ruling that a task follows its node's rights.
 #[tokio::test]
 async fn a_task_event_goes_to_its_authors_hooks_only_while_they_see_the_node() {
+    let project = Uuid::from_u128(AZ_TASKS_PROJECT);
+    let asked_for = |who: &str| vec![(project, Some(who.to_string()))];
     hook_events().await;
-    // The caller's own task on their own Project: they hear of it.
+    visible_asks();
+
+    // The caller's own task on their own Project: the question is asked
+    // for them, and the event goes to their hooks.
     assert_eq!(
         task_patch(0xa2_0199, serde_json::json!({ "title": "renamed" })).await,
         StatusCode::OK
     );
-    assert_eq!(hook_events().await, ["task.updated"]);
+    let sent = hook_events().await;
+    assert_eq!(visible_asks(), asked_for("test-sub"));
+    assert_eq!(sent, [("task.updated".to_string(), "test-sub".to_string())]);
 
-    // Someone else's task on a node the caller edits. Its author holds
-    // nothing on that node (any more): the change is made, and nothing
-    // is sent their way.
+    // A task on the same Project written by someone who holds nothing on
+    // it. The change is made; the question is asked for **them**, not
+    // for the caller; and nothing is sent, to them or to anyone.
     assert_eq!(
-        task_patch(AZ_EDIT_TASK, serde_json::json!({ "title": "renamed" })).await,
+        task_patch(AZ_DEPARTED_TASK, serde_json::json!({ "title": "renamed" })).await,
         StatusCode::OK
     );
-    assert_eq!(hook_events().await, Vec::<String>::new());
+    let sent = hook_events().await;
+    assert_eq!(visible_asks(), asked_for("departed"), "the check ran");
+    assert_eq!(sent, Vec::<(String, String)>::new());
+
+    // A task written by someone who does still see its node, changed by
+    // the caller: it goes to the author's hooks, not the caller's.
+    assert_eq!(
+        task_patch(AZ_GUEST_TASK, serde_json::json!({ "title": "renamed" })).await,
+        StatusCode::OK
+    );
+    let sent = hook_events().await;
+    assert_eq!(
+        visible_asks(),
+        [(Uuid::from_u128(AZ_OWNED_NODE), Some("guest".to_string()))]
+    );
+    assert_eq!(sent, [("task.updated".to_string(), "guest".to_string())]);
 }
 
-/// Every place a route sends a task event sends it through
-/// `dispatch_task_event`, which asks who still sees the node. A plain
-/// `dispatch` with a task event would skip the question.
-#[test]
-fn every_task_event_is_sent_through_the_check() {
-    for (file, source) in [
-        ("routes/tasks.rs", include_str!("routes/tasks.rs")),
-        ("routes/nodes.rs", include_str!("routes/nodes.rs")),
-        ("routes/captures.rs", include_str!("routes/captures.rs")),
-    ] {
-        let mut sent = 0;
-        // Each `dispatch…(` call, up to its closing `);`.
-        for (at, _) in source.match_indices("dispatch") {
-            let call = &source[at..];
-            let Some(end) = call.find(");") else {
-                continue;
-            };
-            let call = &call[..end];
-            // A call, not an import or a path that only names the module.
-            let is_call = call.starts_with("dispatch(") || call.starts_with("dispatch_task_event(");
-            if !is_call || !call.contains("EVENT_TASK_") {
-                continue;
-            }
-            assert!(
-                call.starts_with("dispatch_task_event("),
-                "{file}: a task event sent without the check: {}",
-                &call[..call.len().min(80)]
-            );
-            sent += 1;
-        }
-        assert!(sent > 0, "{file} sends task events");
+/// A task event has one way out, `dispatch_task_event`, which asks who
+/// still sees the node. The node dispatch refuses one, so a call site
+/// that passes it there (by a variable, a literal, a helper) sends
+/// nothing: it can't skip the question.
+#[tokio::test]
+async fn the_node_dispatch_refuses_a_task_event() {
+    use common::webhook::{EVENT_NODE_UPDATED, EVENT_TASK_DELETED, EVENT_TASK_UPDATED};
+    let send = |event: &'static str| {
+        crate::webhook_dispatch::dispatch(
+            Arc::new(StubWebhookRepo),
+            event,
+            Some(az_node(AZ_TASKS_PROJECT)),
+            "test-sub",
+            "test-sub",
+        );
+    };
+    hook_events().await;
+    send(EVENT_NODE_UPDATED);
+    assert_eq!(
+        hook_events().await,
+        [(EVENT_NODE_UPDATED.to_string(), "test-sub".to_string())]
+    );
+    for event in [EVENT_TASK_UPDATED, EVENT_TASK_DELETED, "task.anything"] {
+        send(event);
+        assert_eq!(
+            hook_events().await,
+            Vec::<(String, String)>::new(),
+            "{event}"
+        );
     }
 }
 

@@ -20,7 +20,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     given, and no longer about tasks they wrote on other people's nodes
     without a grant: the admin role is in the token of a request, and a
     webhook is sent for someone who is not making one.
-  - If the server can't tell who sees the node, nothing is sent.
+  - If the server can't tell who sees the node, nothing is sent. A task
+    moved onto a node its author can't see is no longer told to them.
+  - Sending an event reads only the receiving account's webhooks; it
+    used to read every account's, addresses and secrets included, and
+    pick out the receiver's afterwards.
   - Node events are unchanged: they go to the node's owner.
 
 ## [3.26.0] - 2026-11-16

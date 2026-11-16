@@ -1,9 +1,10 @@
 //! Fire-and-forget webhook delivery.
 //!
-//! After a node or task mutation, call [`dispatch`] with the event name and
-//! optional node ID.  Active webhooks subscribed to that event are fetched from
-//! the repo, scoped to the resource owner, and an HTTP POST is spawned for each
-//! one.  Delivery failures are logged but never propagate back to the caller.
+//! After a node mutation, call [`dispatch`]; after a task mutation,
+//! [`dispatch_task_event`]. The active webhooks of the one account the
+//! event is for, subscribed to that event, are fetched from the repo, and
+//! an HTTP POST is spawned for each. Delivery failures are logged but
+//! never propagate back to the caller.
 //!
 //! Wired into the node/task CRUD handlers (`routes/nodes.rs`, `routes/tasks.rs`)
 //! using the canonical event-name constants in `common::webhook`.
@@ -25,12 +26,33 @@ use crate::repo::webhook::WebhookRepo;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Spawn fire-and-forget tasks that POST webhook payloads to subscribers.
+/// Send a **node** event to the webhooks of the node's owner.
 ///
 /// SECURITY: only delivers to webhooks owned by `owner_id` (the owner of the
 /// resource that triggered the event), so one tenant's events never fan out to
 /// another tenant's endpoint (cross-tenant metadata leak).
+///
+/// SECURITY: a task event is refused here, whatever passes it: it must
+/// go through [`dispatch_task_event`], which first asks whether its
+/// receiver still sees the task's node. Refused means not sent.
 pub fn dispatch(
+    webhooks: Arc<dyn WebhookRepo>,
+    event: &str,
+    node_id: Option<NodeId>,
+    triggered_by: &str,
+    owner_id: &str,
+) {
+    if common::webhook::is_task_event(event) {
+        warn!("a task event was passed to the node dispatch: not sent");
+        return;
+    }
+    fan_out(webhooks, event, node_id, triggered_by, owner_id);
+}
+
+/// Spawn fire-and-forget tasks that POST the payload to `owner_id`'s
+/// subscribed webhooks. Private: the two ways in above decide who an
+/// event is for.
+fn fan_out(
     webhooks: Arc<dyn WebhookRepo>,
     event: &str,
     node_id: Option<NodeId>,
@@ -41,14 +63,15 @@ pub fn dispatch(
     let triggered_by = triggered_by.to_string();
     let owner_id = owner_id.to_string();
     tokio::spawn(async move {
-        let mut hooks = match webhooks.list_active_for_event(&event).await {
+        let mut hooks = match webhooks.list_active_for_event(&event, &owner_id).await {
             Ok(h) => h,
             Err(e) => {
                 warn!("webhook list_active_for_event failed: {e}");
                 return;
             }
         };
-        // Only fan out to the resource owner's own webhooks.
+        // The query reads only this owner's hooks; kept as a second
+        // check that nothing else is ever delivered to.
         hooks.retain(|h| h.owner_id == owner_id);
 
         for hook in hooks {
@@ -90,7 +113,8 @@ pub fn dispatch(
 /// about their tasks on nodes they own or were given, and no others.
 ///
 /// The question is asked after the response, with the event. If it can't
-/// be answered, nothing is sent.
+/// be answered, nothing is sent. A task moved onto a node its author
+/// can't see is no longer told to them either.
 pub fn dispatch_task_event(
     webhooks: Arc<dyn WebhookRepo>,
     nodes: Arc<dyn NodeRepo>,
@@ -107,7 +131,7 @@ pub fn dispatch_task_event(
     tokio::spawn(async move {
         let seen = nodes.visible_titles(&[node_id.0], Some(&task_owner)).await;
         if sees_node(seen, node_id) {
-            dispatch(webhooks, &event, Some(node_id), &triggered_by, &task_owner);
+            fan_out(webhooks, &event, Some(node_id), &triggered_by, &task_owner);
         }
     });
 }

@@ -412,7 +412,8 @@ cargo check && cargo clippy -- -D warnings
 - **Webhooks** after commit, each by its event's existing rule:
   `node.updated` per project whose state changed, to that project's
   owner's hooks; `task.updated` per project whose tasks were cancelled,
-  to the hooks of those tasks' owners (once per owner).
+  to the hooks of those tasks' owners (once per owner), and only to an
+  owner who can still see the project (`dispatch_task_event`).
 - **Re-opening (S6c)** is `common::cascade::reopen_refused`: under a
   closed home that is a Project the actor can view, no change to active,
   and none from a closed state to parked (422, `MASTER_IS_CLOSED`, names
@@ -839,9 +840,16 @@ cargo check && cargo clippy -- -D warnings
   used to keep hearing about the tasks they wrote there. The author is
   read as an ordinary account (`Some(subject)`), so an admin's hooks hear
   only about nodes the admin owns or was given; a failed read sends
-  nothing. `every_task_event_is_sent_through_the_check` reads the route
-  files and fails on a task event passed to plain `dispatch`. Node events
-  stay with `dispatch`, to the node's owner.
+  nothing. The node `dispatch` **refuses** a task event
+  (`common::webhook::is_task_event`), so a call site can't skip the
+  question however it passes one (`the_node_dispatch_refuses_a_task_event`);
+  the delivery itself is the private `fan_out`. Node events stay with
+  `dispatch`, to the node's owner. `WebhookRepo::list_active_for_event`
+  takes the owner and reads only their hooks. A task moved onto a node
+  its author can't see is no longer told to them. "Sees" is the lists'
+  rule (`visible_to`: owns it or holds a grant), not the routes'
+  (`permissions` only); they differ for a creator whose Owner row an
+  admin removed.
 
 - **Every grant path calls `guard_canonical_owner`**: grant, update,
   revoke *and invite*. `PermissionRepo::grant` is an upsert, so any new
