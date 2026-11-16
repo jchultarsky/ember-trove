@@ -172,7 +172,11 @@ const CONCEPTS: &[Concept] = &[
                box when it is done; set Waiting or Cancelled in the task's editor. A \
                waiting task is on someone or something else: My Day doesn't \
                carry it over or list it as overdue, and it stays in the \
-               backlog and on its Project.",
+               backlog and on its Project. A task can wait for other tasks: \
+               add them under Blocked by in its editor, and it shows Blocked \
+               until each of them is done. Being blocked changes nothing \
+               else: the task stays in its lists and can still be ticked \
+               off.",
     },
     Concept {
         title: "Project states",

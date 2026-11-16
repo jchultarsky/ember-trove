@@ -44,8 +44,8 @@ use crate::components::task_actions::{
 };
 use crate::components::task_common::status_done;
 use crate::components::task_row_scaffold::{
-    CopyTaskButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, due_badge_view,
-    priority_dot_view, quiet_project_badge_view, state_badge_view,
+    CopyTaskButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody, blocked_badge_view,
+    due_badge_view, priority_dot_view, quiet_project_badge_view, state_badge_view,
 };
 use crate::components::toast::ToastState;
 
@@ -260,10 +260,16 @@ pub fn KanbanTaskRow(
     /// Today's carry-over and Overdue; the row then says why it is in the
     /// Backlog.
     project_state: Option<common::project_state::ProjectState>,
+    /// How many tasks it still waits for, among those the reader sees
+    /// (S5d). The row says "Blocked"; its place in the lists is unchanged.
+    blocked_by: u32,
     today: NaiveDate,
     zone: KanbanZone,
     refresh: RwSignal<u32>,
 ) -> impl IntoView {
+    // The row's own count, kept current by the editor's dependencies
+    // section; the list's next load brings the server's.
+    let blocked_by = RwSignal::new(blocked_by);
     let task_id = task.id;
     let node_id = task.node_id;
     let priority = task.priority.clone();
@@ -508,6 +514,8 @@ pub fn KanbanTaskRow(
                             <TaskEditor
                                 draft=draft
                                 task_id=task_id
+                                node_id=node_id
+                                blocked_by=blocked_by
                                 due=due
                                 on_save=on_save
                                 close=Callback::new(move |()| editing_id_sig.set(None))
@@ -552,6 +560,12 @@ pub fn KanbanTaskRow(
                         })}
                         // Waiting or Cancelled, said in words (S5a).
                         {move || state_badge_view(&status_sig.get())}
+                        // Still waits for another task (S5d). Not on a
+                        // finished one.
+                        {move || {
+                            common::task_dependency::is_blocked(&status_sig.get(), blocked_by.get())
+                                .then(|| blocked_badge_view(blocked_by.get()))
+                        }}
                         // Its project is parked or closed (S6a).
                         {quiet_project.map(quiet_project_badge_view)}
                         // Carryover badge: the date IS the question; ✓

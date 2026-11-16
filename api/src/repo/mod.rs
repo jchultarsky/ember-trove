@@ -26,6 +26,7 @@ pub mod search;
 pub mod search_presets;
 pub mod tag;
 pub mod task;
+pub mod task_dependency;
 pub mod template;
 pub mod webhook;
 

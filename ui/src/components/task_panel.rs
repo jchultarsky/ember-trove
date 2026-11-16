@@ -1,6 +1,6 @@
 use common::{
     id::{NodeId, TaskId},
-    task::{Task, TaskStatus, UpdateTaskRequest},
+    task::{ListedTask, TaskStatus, UpdateTaskRequest},
 };
 use leptos::prelude::*;
 
@@ -14,7 +14,8 @@ use crate::components::task_common::{is_in_my_day, sort_tasks_by_order, status_d
 use crate::components::task_row::{EditSession, EditingTaskId, TaskEditorHeights};
 use crate::components::task_row_scaffold::{
     CopyTaskButton, MyDayButton, TITLE_CLASS, TaskCheckbox, TaskEditor, TaskRowBody,
-    action_btn_class, completed_badge_view, due_badge_view, priority_dot_view, state_badge_view,
+    action_btn_class, blocked_badge_view, completed_badge_view, due_badge_view, priority_dot_view,
+    state_badge_view,
 };
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use common::ontology::Capability;
@@ -69,8 +70,8 @@ pub fn TaskPanel(
 
     // Drag-to-reorder state — open tasks are kept in a local signal so
     // optimistic reorders survive the next resource refetch.
-    let open_tasks: RwSignal<Vec<Task>> = RwSignal::new(Vec::new());
-    let done_tasks: RwSignal<Vec<Task>> = RwSignal::new(Vec::new());
+    let open_tasks: RwSignal<Vec<ListedTask>> = RwSignal::new(Vec::new());
+    let done_tasks: RwSignal<Vec<ListedTask>> = RwSignal::new(Vec::new());
     let drag_src: RwSignal<Option<usize>> = RwSignal::new(None);
     let drag_over: RwSignal<Option<usize>> = RwSignal::new(None);
 
@@ -275,12 +276,18 @@ pub fn TaskPanel(
 
 #[component]
 fn TaskRow(
-    task: Task,
+    /// The task, with how many tasks it still waits for (S5d).
+    task: ListedTask,
     task_refresh: RwSignal<u32>,
     /// The project's declared state as it was when the row was built.
     project_state: Option<common::project_state::ProjectState>,
 ) -> impl IntoView {
+    // The row's own count, kept current by the editor's dependencies
+    // section; the list's next load brings the server's.
+    let blocked_by = RwSignal::new(task.blocked_by);
+    let task = task.task;
     let task_id = task.id;
+    let node_id = task.node_id;
     // Captured at setup for the undo closure, which outlives this row.
     let toast_state = use_context::<ToastState>();
     let prio = task.priority.clone();
@@ -363,6 +370,8 @@ fn TaskRow(
                             <TaskEditor
                                 draft=draft
                                 task_id=task_id
+                                node_id=node_id
+                                blocked_by=blocked_by
                                 due=due
                                 on_save=on_save
                                 close=Callback::new(move |()| {
@@ -400,6 +409,12 @@ fn TaskRow(
                         // Waiting or Cancelled, said in words. Reads the
                         // live status: it was read once at setup (S5a).
                         {move || state_badge_view(&status_sig.get())}
+                        // Still waits for another task (S5d). Not on a
+                        // finished one.
+                        {move || {
+                            common::task_dependency::is_blocked(&status_sig.get(), blocked_by.get())
+                                .then(|| blocked_badge_view(blocked_by.get()))
+                        }}
                         // When it was completed. Only while it is still
                         // ticked: an untick is shown before the refetch.
                         {completed_at.map(|at| move || {

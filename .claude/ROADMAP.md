@@ -5,6 +5,34 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-16)
 
+- **v3.26.0 shipped: S5d, a task can depend on another task** (#338,
+  PRs #339 and #340; ONTOLOGY §9.3, §6.4). Owner decisions (2026-11-16):
+  build it lean with its UI; a task may depend on any task its person can
+  see. Migration 055 (`task_dependencies`, no account column); backup
+  format 13; a Lightsail snapshot was taken before the tag. PR 1 (data
+  and API): the rules in `common::task_dependency`;
+  `repo::task_dependency` (the loop check under an advisory lock with a
+  two-second lock timeout, lists cut to what the reader sees, the
+  picker's candidates); five routes on `task_router`; `blocked_by` on the
+  node's task list and the three feeds. PR 2 (the app): the editor's
+  "Blocked by" and "Blocks" lists, the picker and the "Blocked" chip
+  (`task_dependencies.rs`). **Changed by the reviews, against the plan:**
+  the plan said a prerequisite someone isn't shown could not be removed
+  by them. It still decides loop refusals, so an editor could have left
+  one in another person's tasks for good. Whoever may edit a task is now
+  told how many it has that they aren't shown, and can remove them (the
+  hidden-home rule, #228); the limit of 50 counts every link; no webhook
+  is sent for a dependency. **Not in this slice:** blockers through a
+  chain and node-level blockers (S7b); a chip on the dashboard cards; a
+  place for read-only readers to open the list; a count of dependencies
+  in a Project's delete confirmation (it would have to be worked out per
+  reader); a Data health rule. **Noted for the owner, not changed:**
+  every task webhook goes to the hooks of the task's author, whatever
+  their rights on its node now; someone who may only view a task can
+  make their own tasks wait for it. Rules: "Task dependencies" in
+  `.claude/rules/api.md` and `.claude/rules/leptos.md`; the picker
+  bullet in `.claude/rules/e2e.md`.
+
 - **v3.25.0 shipped: S5c, a task needs a Project** (#335, PRs #336 and
   #337; ONTOLOGY §9.3, §9.1). Migration 054 turned tasks with no node
   into captures and made `node_tasks.node_id` `NOT NULL`; backup format

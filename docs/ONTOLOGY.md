@@ -570,6 +570,29 @@ Project (or a sub-Project) — the mirror image of the Project definition.
 - **Dependencies:** task-to-task dependencies mirror the node-level
   `depends_on` definition (§6.4) — hard prerequisites, surfaced as
   blockers, never enforced, cycles rejected.
+  - A Task may wait for **any Task its person can see**, in any Project.
+    Adding the link takes edit rights on the Task that waits and view
+    rights on the other, as a node-level `depends_on` does. Removing it
+    takes edit rights on the Task that waits.
+  - A prerequisite holds its dependents back until it is **Done**. A
+    Cancelled one never lets them go: the dependent says what it waits
+    for, and its person removes the link.
+  - *Surfaced, never enforced:* a blocked Task says so, and nothing else
+    changes. It keeps its place in My Day and in every list, and can be
+    worked on and completed.
+  - A prerequisite in the trash neither shows nor counts; restored, it
+    does again. One on a Project a reader cannot see is not shown to
+    that reader and not counted for them (§14), so the same Task can read
+    as blocked for one person and not for another.
+  - A prerequisite that is not shown (in the trash, or on a Project the
+    reader cannot see) still counts for the loop rule. So whoever may
+    edit a Task is told **how many** of its prerequisites they are not
+    shown, never which, and may remove them: the rule a home its reader
+    cannot see has (§6.1). Someone who may only view the Task is told
+    nothing of them.
+  - Moving a Task keeps its dependencies. Closing a Project cancels its
+    Tasks (§4.1), so what waited for them stays blocked, and says by
+    what.
 - **No recurring Tasks.** A Task is a one-time action; recurrence implies
   scheduling beyond the task itself. The repeat behaviour shipped before
   this ontology is removed, and existing repeating Tasks become one-time
@@ -807,3 +830,5 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-14 | A note is "edited" when its words change, and by nothing else (a colour, the same text saved again, a delete and restore are not edits); no "edited by", since only its author can edit it. Edit and Delete are offered to a reader only where the write would pass. A change in History can be opened to show exactly what it holds. Note colours stay as decoration. Writing, editing or deleting a note is logged nowhere else: the note is the record | Developer, building S6d (#329); the owner approved the plan |
 | 2026-11-15 | Recurring Tasks removed in the app (S5b, ruling 4): the rule and the link between a task and the one that scheduled it are dropped from the data, and nothing is kept aside; no task is removed. An older backup restores a task that repeated as a one-time task, without a warning. A request that still names a repeat rule (a tab left open across the release) is accepted and the rule ignored | Developer, building S5b (#332); in the plan the owner approved |
 | 2026-11-16 | A Task without a Project is no longer possible (S5c; supersedes the line of 2026-11-01 that listed such a Task in Data health). The API refuses to make one, or to take a Task off its Project; moving a Task to another Project stays. The ones that were left **became captures** (§9.1: "the role of the orphan is played by a capture"), at the upgrade and whenever an older backup is restored, with the Task's id, owner, dates and trash state. The capture's text is the title; a Task still to do with a due date has the date in front, and a finished one is marked *Done* or *Cancelled*. Priority, My Day, list order and the completion date are not carried. The restore preview says how many Tasks come back as captures. The database requires a node, not yet a Project: a Task on another kind of node is still refused by the API and listed in Data health | Developer, building S5c (#335); in the plan the owner approved |
+| 2026-11-16 | Task dependencies are built now, and lean (S5d): stored, listed and changed in the task editor ("Blocked by", "Blocks"), with a "Blocked" mark on task rows. Blockers shown through a chain, and node-level blockers, wait for the blockers slice. A Task may depend on **any Task its person can see**, in any Project | Owner, in the developer session (S5d planning, #338) |
+| 2026-11-16 | A blocked Task stays where it is in every list and can be completed (unlike Waiting, which leaves Today and Overdue). A prerequisite blocks until it is Done, a Cancelled one for good. One in the trash, or on a Project the reader can't see, neither shows nor counts as blocking. The loop check looks at every link, hidden and trashed ones included, so a refusal can tell someone that a chain exists, never through what. Because such a link still decides those refusals, whoever may edit a Task is told how many of its prerequisites they are not shown, unnamed, and may remove them (the hidden-home rule of 2026-10-31, applied after the security review of this slice; the plan had said such a link could not be removed). Adding takes edit rights on the Task that waits and view rights on the other; removing takes edit rights on the Task that waits. A Task waits for at most 50 Tasks, every link counted. The picker offers Tasks still to do on Projects the person owns or was given, never widened for an admin, without archived Projects. A backup holds the links (format 13); a restore leaves out a link to a Task it doesn't bring back, and any loop | Developer, building S5d (#338); in the plan the owner approved |

@@ -97,6 +97,20 @@ fn loose_tasks(tasks: &[common::backup::BackupTask]) -> usize {
         .count()
 }
 
+/// The archive's task dependencies as a restore lands them (S5d): only
+/// between tasks it restores (a task with no node becomes a capture, so
+/// it is not one), each pair once, and no loop. One function for the
+/// preview and the restore, so the preview's count is what happens.
+fn restorable_dependencies(data: &BackupData) -> common::task_dependency::RestoredLinks {
+    let tasks = data
+        .tasks
+        .iter()
+        .filter(|t| t.node_id.is_some())
+        .map(|t| t.id)
+        .collect();
+    common::task_dependency::restorable(data.task_dependencies.clone(), &tasks)
+}
+
 /// The restore preview's line about them: a count, never a title.
 fn loose_tasks_warning(tasks: &[common::backup::BackupTask]) -> Option<String> {
     let n = loose_tasks(tasks);
@@ -271,6 +285,8 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         .map(Into::into)
         .collect();
     // Project Briefs (#282), all owners, in the same snapshot as their nodes.
+    // Which task waits for which (S5d), between the live tasks above.
+    let task_dependencies = repo::task_dependency::list_all_on(&mut *conn).await?;
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
     let focus = repo::project_focus::list_all_on(&mut *conn).await?;
@@ -314,6 +330,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         webhooks: Some(webhooks),
         briefs,
         focus: Some(focus),
+        task_dependencies,
     })
 }
 
@@ -520,6 +537,7 @@ pub async fn preview_restore(
         Ok(data) => {
             entity_counts = counts_as_restored(entity_counts, &data.notes, &data.tasks);
             warnings.extend(loose_tasks_warning(&data.tasks));
+            warnings.extend(restorable_dependencies(&data).warning());
             warnings.extend(edge_rules_warning(&data));
             warnings.extend(folded_links_warnings(&data));
             warnings.extend(webhooks_warning(data.webhooks_switched_off()));
@@ -962,6 +980,26 @@ pub(crate) async fn restore_into(
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert task failed: {e}")))?;
+    }
+
+    // Insert which task waits for which (S5d, format 13; an older archive
+    // has none). After the tasks: each link needs both of its tasks. The
+    // table is empty here: its rows went with the tasks, which went with
+    // the nodes. A loop is never inserted (`restorable_dependencies`).
+    for link in restorable_dependencies(data).kept {
+        sqlx::query(
+            r#"
+            INSERT INTO task_dependencies (task_id, depends_on_id, created_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(link.task_id.0)
+        .bind(link.depends_on_id.0)
+        .bind(link.created_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("insert task dependency failed: {e}")))?;
     }
 
     // Insert attachment metadata rows.

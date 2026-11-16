@@ -212,6 +212,34 @@ pub struct MyDayTask {
     /// hidden node.
     #[serde(default)]
     pub project_state: Option<ProjectState>,
+    /// How many tasks this one still waits for (S5d): its prerequisites
+    /// that are live, on a node this reader can view, and not Done
+    /// (`task_dependency::holds_back`). 0 from an answer cached before
+    /// the count existed.
+    #[serde(default)]
+    pub blocked_by: u32,
+}
+
+/// A task in its node's list, for one reader (S5d): the task, and how
+/// many tasks it still waits for.
+///
+/// A wrapper, not a field of [`Task`]: the count is worked out per reader
+/// and never stored, and a `Task` is also what a write answers with and
+/// what a backup reads, where there is no reader.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ListedTask {
+    #[serde(flatten)]
+    pub task: Task,
+    /// See [`MyDayTask::blocked_by`].
+    #[serde(default)]
+    pub blocked_by: u32,
+}
+
+impl std::ops::Deref for ListedTask {
+    type Target = Task;
+    fn deref(&self) -> &Task {
+        &self.task
+    }
 }
 
 impl MyDayTask {
@@ -846,6 +874,7 @@ mod tests {
             task: task_in(TaskStatus::Open, Some(day(9)), Some(day(9))),
             node_title: project.map(|_| "p".to_string()),
             project_state: project,
+            blocked_by: 0,
         };
         for project in projects() {
             let t = on(project);
@@ -1229,5 +1258,37 @@ mod tests {
         );
         let back: UpdateTaskRequest = serde_json::from_value(json).unwrap();
         assert!(back.focus_date.is_none() && back.due_date.is_none());
+    }
+
+    /// S5d: the blocked count rides beside the task, in the task's own
+    /// words, and an answer from before the count reads as "not blocked".
+    #[test]
+    fn a_listed_task_is_the_task_plus_its_blocked_count() {
+        let task = task_in(TaskStatus::Open, None, None);
+        let plain = serde_json::to_value(&task).expect("serializes");
+        let listed = serde_json::to_value(ListedTask {
+            task: task.clone(),
+            blocked_by: 2,
+        })
+        .expect("serializes");
+        let mut expected = plain.clone();
+        expected["blocked_by"] = serde_json::json!(2);
+        assert_eq!(listed, expected);
+
+        let old: ListedTask = serde_json::from_value(plain.clone()).expect("an older answer");
+        assert_eq!(old.blocked_by, 0);
+        assert_eq!(old.title, task.title, "it reads as its task");
+
+        let mut feed = plain;
+        feed["node_title"] = serde_json::json!("p");
+        let old: MyDayTask = serde_json::from_value(feed).expect("an older feed row");
+        assert_eq!(old.blocked_by, 0);
+        // A Task itself never carries the count: it is per reader.
+        assert!(
+            serde_json::to_value(&task)
+                .expect("serializes")
+                .get("blocked_by")
+                .is_none()
+        );
     }
 }

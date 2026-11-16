@@ -156,6 +156,13 @@ pub fn MyDayView() -> impl IntoView {
         if crate::keyboard::active_element_is_editable() {
             return;
         }
+        // Nor while a task's editor is open: it has its own keys, and
+        // focus can sit on something in it that isn't a field (a link,
+        // or nothing at all after a control is removed). `d` must not
+        // delete the cursor's task from there.
+        if editing_id.get_untracked().is_some() {
+            return;
+        }
 
         let flat = flat_tasks.get_untracked();
         if flat.is_empty() {
@@ -550,12 +557,13 @@ fn KanbanZoneRow(
             } else {
                 view! {
                     <div class="divide-y divide-stone-100 dark:divide-stone-800">
-                        {tasks.into_iter().map(|MyDayTask { task, node_title, project_state }| {
+                        {tasks.into_iter().map(|MyDayTask { task, node_title, project_state, blocked_by }| {
                             view! {
                                 <KanbanTaskRow
                                     task=task
                                     node_title=node_title
                                     project_state=project_state
+                                    blocked_by=blocked_by
                                     today=today
                                     zone=zone
                                     refresh=refresh

@@ -194,6 +194,9 @@ async fn main() -> anyhow::Result<()> {
         people: Arc::new(repo::person::PgPersonRepo::new(pool.clone())),
         briefs: Arc::new(repo::brief::PgBriefRepo::new(pool.clone())),
         focus: Arc::new(repo::project_focus::PgFocusRepo::new(pool.clone())),
+        task_dependencies: Arc::new(repo::task_dependency::PgTaskDependencyRepo::new(
+            pool.clone(),
+        )),
         data_health: Arc::new(repo::data_health::PgDataHealthRepo::new(pool.clone())),
         search: Arc::new(PgSearchRepo::new(pool.clone())),
         graph: Arc::new(PgGraphRepo::new(pool.clone())),
