@@ -22,6 +22,13 @@ cargo check && cargo clippy -- -D warnings
   startup via `sqlx::migrate!()`. Add a new numbered file; never edit an applied migration.
 - CI validates migrations against `postgres:16` with `sqlx-cli` **pinned to 0.8.6** to
   match the `sqlx` dependency.
+- **A migration's test stands on the schema before it** (2026-11-15):
+  `#[sqlx::test(migrations = false)]`, then
+  `apply_migrations(&pool, |v| v < N)`, seed, run N, compare, then
+  `|v| v > N` before any repo call. Rebuilding the old shape by hand on a
+  fully migrated database hides everything the migration does that a
+  second run leaves alone (a changed default, a dropped index): the
+  053 test missed both until it was rewritten this way.
 - **Data backfills that need Rust logic** (#143): put them in `api/src/backfill.rs`,
   not SQL regex. Each one claims a `data_backfills` row in its own transaction
   (`INSERT … ON CONFLICT DO NOTHING`; claimed = `rows_affected() == 1`), so it runs

@@ -15,8 +15,9 @@ use leptos::prelude::*;
 
 use crate::components::format_helpers::local_today;
 
-/// Compact input classes shared by the row edit forms and the add-task form.
-pub const DUE_INPUT_CLASS: &str = "text-xs bg-stone-100 dark:bg-stone-700 \
+/// The date input's compact classes, in the row edit forms and the
+/// add-task form alike.
+const DUE_INPUT_CLASS: &str = "text-xs bg-stone-100 dark:bg-stone-700 \
      text-stone-700 dark:text-stone-300 rounded-lg px-2 py-0.5 \
      focus:outline-none focus:ring-1 focus:ring-amber-500";
 

@@ -10668,22 +10668,31 @@ async fn an_older_archive_restores_its_repeating_tasks_as_one_time_tasks(pool: P
     }
 }
 
+/// Runs the migrations whose number `wanted` accepts, in order, on a
+/// database made with `#[sqlx::test(migrations = false)]`. A migration
+/// test uses it to stand on the schema just before its migration, so it
+/// sees everything the migration does and not only what a second run of
+/// it would change.
+async fn apply_migrations(pool: &PgPool, wanted: impl Fn(i64) -> bool) {
+    for migration in sqlx::migrate!("../migrations").iter() {
+        if wanted(migration.version) {
+            let ran = sqlx::raw_sql(&migration.sql).execute(pool).await;
+            assert!(ran.is_ok(), "migration {}: {ran:?}", migration.version);
+        }
+    }
+}
+
 /// Migration 053: the repeat rule and the link to the task that scheduled
 /// this one are dropped, with the link's index and foreign key. No task is
 /// removed and nothing else about any task changes, in the trash or out of
 /// it, on a node or on none; and a task that was linked is an ordinary task
 /// afterwards.
-#[sqlx::test(migrations = "../migrations")]
+#[sqlx::test(migrations = false)]
 async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(pool: PgPool) {
-    // Put the table back as it was before 053: migration 022's column (the
-    // file also adds `sort_order`, so only its line) and migration 032.
-    sql(&pool, "ALTER TABLE node_tasks ADD COLUMN recurrence TEXT").await;
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/032_task_recurrence_parent.sql"
-    ))
-    .execute(&pool)
-    .await
-    .expect("re-run migration 032");
+    // A database that has never seen 053. Rebuilding the old columns on a
+    // fully migrated one would hide whatever else 053 did to the table:
+    // it would already be done before the first look.
+    apply_migrations(&pool, |version| version < 53).await;
 
     let node = insert_raw_node(&pool, "alice", "project", "garden", "").await;
     // (title, owner, on the node, state, rule, in the trash)
@@ -10764,6 +10773,36 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
            AND confrelid = 'node_tasks'::regclass";
     assert_eq!(scalar(&pool, SELF_KEYS).await, 1, "032's foreign key");
 
+    // The table's own shape, without what 053 takes away: every other
+    // column (type, null, default), index, constraint and trigger.
+    const SHAPE: &str = "SELECT string_agg(line, chr(10) ORDER BY line) FROM ( \
+           SELECT 'column ' || column_name || ' ' || udt_name || ' ' || is_nullable || ' ' \
+                  || coalesce(column_default, '-') AS line \
+           FROM information_schema.columns \
+           WHERE table_name = 'node_tasks' \
+             AND column_name NOT IN ('recurrence', 'recurrence_parent_id') \
+           UNION ALL \
+           SELECT 'index ' || indexdef FROM pg_indexes \
+           WHERE tablename = 'node_tasks' AND indexname <> 'idx_node_tasks_recurrence_parent' \
+           UNION ALL \
+           SELECT 'constraint ' || conname || ' ' || pg_get_constraintdef(oid) \
+           FROM pg_constraint \
+           WHERE conrelid = 'node_tasks'::regclass \
+             AND NOT (contype = 'f' AND confrelid = 'node_tasks'::regclass) \
+           UNION ALL \
+           SELECT 'trigger ' || tgname || ' ' || pg_get_triggerdef(oid) FROM pg_trigger \
+           WHERE tgrelid = 'node_tasks'::regclass AND NOT tgisinternal \
+         ) shape";
+    let shape = || async {
+        sqlx::query_scalar::<_, String>(SHAPE)
+            .fetch_one(&pool)
+            .await
+            .expect("shape")
+    };
+    let shape_before = shape().await;
+    assert!(shape_before.contains("column sort_order"), "{shape_before}");
+    assert!(shape_before.contains("constraint node_tasks_completed_only_when_done"));
+
     // Every task as it is, without the two columns that go. Taken after
     // the last fixture write: the link above moved the child's `updated_at`.
     let before: Vec<(uuid::Uuid, String)> = sqlx::query_as(
@@ -10775,14 +10814,7 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
     .expect("before");
     assert_eq!(before.len(), 11);
 
-    let mut tx = pool.begin().await.expect("tx");
-    sqlx::raw_sql(include_str!(
-        "../../../migrations/053_tasks_do_not_repeat.sql"
-    ))
-    .execute(&mut *tx)
-    .await
-    .expect("re-run migration 053");
-    tx.commit().await.expect("commit");
+    apply_migrations(&pool, |version| version == 53).await;
 
     let after: Vec<(uuid::Uuid, String)> =
         sqlx::query_as("SELECT id, to_jsonb(t)::text FROM node_tasks t ORDER BY id")
@@ -10790,6 +10822,7 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
             .await
             .expect("after");
     assert_eq!(after, before, "every task, and nothing but the two columns");
+    assert_eq!(shape().await, shape_before, "and nothing else of the table");
     assert_eq!(
         scalar(
             &pool,
@@ -10809,6 +10842,9 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
         0
     );
     assert_eq!(scalar(&pool, SELF_KEYS).await, 0);
+
+    // The repo below is written for the newest schema.
+    apply_migrations(&pool, |version| version > 53).await;
 
     // What was a series is two ordinary tasks. Completing the second makes
     // no third; reopening the first, or deleting it for good, leaves the

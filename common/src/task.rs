@@ -1048,7 +1048,10 @@ mod tests {
         assert!(!warn_past_due(None, past, today));
     }
 
-    /// A task as this release answers with it: no `recurrence` key.
+    /// A task as this release answers with it: no `recurrence` key. (A tab
+    /// from before S5b reads it too: its field was a plain `Option`, and
+    /// that was checked on the code before the removal. Nothing here can
+    /// hold older code to it.)
     fn one_time_task_json() -> serde_json::Value {
         serde_json::json!({
             "id": uuid::Uuid::from_u128(1), "node_id": null, "owner_id": "alice",
@@ -1057,18 +1060,6 @@ mod tests {
             "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
             "completed_at": null,
         })
-    }
-
-    #[test]
-    fn a_task_without_a_repeat_rule_in_its_json_reads() {
-        // S5b: the API no longer sends `recurrence`. A tab left open across
-        // the release must still read a task, alone and in a feed row.
-        let task: Task = serde_json::from_value(one_time_task_json()).expect("a task");
-        assert_eq!(task.title, "t");
-        let mut row = one_time_task_json();
-        row["node_title"] = serde_json::Value::Null;
-        let fed: MyDayTask = serde_json::from_value(row).expect("a feed row");
-        assert_eq!(fed.task.id, task.id);
     }
 
     #[test]

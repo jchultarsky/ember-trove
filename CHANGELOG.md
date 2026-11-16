@@ -6,6 +6,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Backup format 12**: an archive no longer carries a task's repeat rule
+  or which task scheduled which. Older releases refuse a format-12
+  archive. Archives of formats 3 to 11 still restore, and a task that
+  repeated comes back as a one-time task.
+
 ### Removed
 - **Tasks no longer repeat** (S5b of the ontology programme, #332;
   ONTOLOGY §9: a Task is a one-time action). The Repeat choice is gone
@@ -29,12 +35,6 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     kept anywhere after the migration; take a database backup first if
     you want them. Stop the old API before the new one starts: the old
     one can't read the table once the columns are gone.
-
-### Changed
-- **Backup format 12**: an archive no longer carries a task's repeat rule
-  or which task scheduled which. Older releases refuse a format-12
-  archive. Archives of formats 3 to 11 still restore, and a task that
-  repeated comes back as a one-time task.
 
 ## [3.23.0] - 2026-11-15
 

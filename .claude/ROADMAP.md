@@ -63,8 +63,6 @@ Keep it current as part of each change (see `POLICY.md` §10).
   Known and left: an admin closing someone else's project with no share
   of their own closes it alone, with no dialog; the chip and the notice
   are offered to the owner, not to other editors.
-  **Next:** S6d (the History facet) or S5b (recurrence removed), the
-  owner's call.
 
 - **v3.21.0 shipped: S6a, project states** (#320, PRs #321 and #322;
   ONTOLOGY §4, §4.1). PR 1
