@@ -1,0 +1,421 @@
+//! Tasks that wait for other tasks (S5d; `common::task_dependency`,
+//! migration 055).
+//!
+//! SECURITY: a link is shown and counted only to a reader who can see its
+//! other task: that task is live (not in the trash) and on a node they
+//! can view (ONTOLOGY §14). [`shown_to`] is the one spelling of that
+//! rule, and [`blocked_by_count`] the one spelling of "how many
+//! prerequisites hold this task back"; the lists here, the remove, and
+//! the task feeds in `repo::task` all use them, so none can drift.
+//!
+//! Two things look at every link, hidden and trashed ones included: the
+//! loop check, and through it the picker's candidates. They have to: a
+//! loop is not a storable state, and a link through a trashed task comes
+//! back when the task is restored. So someone who may edit one task and
+//! view another can learn that a chain runs between them, never through
+//! what. Node edges tell the same (`repo::edge::closes_loop`).
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use common::{
+    EmberTroveError,
+    id::{NodeId, TaskId},
+    task::TaskStatus,
+    task_dependency::{
+        CANDIDATE_LIMIT, DependencyRefusal, MAX_PREREQUISITES, TaskDependency, TaskLink,
+        holding_back_states,
+    },
+};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use super::{escape_like, visible_to};
+
+/// What the API says for a task that isn't there, or that its caller
+/// can't see: one sentence for both.
+const TASK_NOT_FOUND: &str = "task not found";
+
+#[async_trait]
+pub trait TaskDependencyRepo: Send + Sync {
+    /// The tasks `task` waits for, and the tasks that wait for it, as
+    /// `viewer` sees them (`None`: an admin, who reads every node). The
+    /// caller has checked that `viewer` may view `task`.
+    async fn list(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(Vec<TaskLink>, Vec<TaskLink>), EmberTroveError>;
+
+    /// Make `task` wait for `depends_on`. The caller has checked the
+    /// rights on both. Refuses a loop and a task with too many
+    /// prerequisites (422), and a repeat (409); a task deleted meanwhile
+    /// is NotFound.
+    async fn add(
+        &self,
+        task: TaskId,
+        depends_on: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(), EmberTroveError>;
+
+    /// Stop `task` waiting for `depends_on`. Only a link `viewer` is
+    /// shown is removed; any other, and no link at all, is the same
+    /// NotFound.
+    async fn remove(
+        &self,
+        task: TaskId,
+        depends_on: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(), EmberTroveError>;
+
+    /// The tasks `subject` could make `task` wait for, matching `q`:
+    /// still to do, on a node they own or were given, and not one that
+    /// would be refused. `subject` is the person, never an admin's
+    /// "everyone": the picker is not widened.
+    async fn candidates(
+        &self,
+        task: TaskId,
+        subject: &str,
+        q: &str,
+    ) -> Result<Vec<TaskLink>, EmberTroveError>;
+}
+
+/// SQL predicate: the task aliased `task`, on the node aliased `node`,
+/// is one the reader bound at `$param` is shown: it is not in the trash,
+/// and they can view its node.
+///
+/// SECURITY: the aliases and `param` come from the code, never from a
+/// request; the reader is always a bind parameter.
+pub(crate) fn shown_to(task: &str, node: &str, param: u8) -> String {
+    format!(
+        "({task}.deleted_at IS NULL AND {})",
+        visible_to(node, param)
+    )
+}
+
+/// SQL predicate: the task aliased `task` still holds its dependents
+/// back. Built from `common::task_dependency::holds_back` through its
+/// list of states, so the SQL can't name a different set. The words are
+/// the enum's own wire strings, never text from a request.
+pub(crate) fn holds_back_sql(task: &str) -> String {
+    let states = holding_back_states()
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{task}.status::text IN ({states})")
+}
+
+/// SQL expression: how many prerequisites of the task whose id is the
+/// expression `task_id` hold it back, for the reader bound at `$param`.
+/// A correlated count with its own visibility test: a prerequisite sits
+/// on its own node, which is not the node the outer query joined.
+pub(crate) fn blocked_by_count(task_id: &str, param: u8) -> String {
+    format!(
+        "(SELECT count(*)::int4 FROM task_dependencies bd \
+          JOIN node_tasks bp ON bp.id = bd.depends_on_id \
+          JOIN nodes bn ON bn.id = bp.node_id \
+          WHERE bd.task_id = {task_id} AND {shown} AND {holds})",
+        shown = shown_to("bp", "bn", param),
+        holds = holds_back_sql("bp"),
+    )
+}
+
+/// A count read as `int4` (never negative) as the `u32` the DTOs carry.
+pub(crate) fn as_count(n: i32) -> u32 {
+    u32::try_from(n).unwrap_or(0)
+}
+
+/// Every link between two live tasks. A free function so the backup can
+/// run it on its one snapshot transaction (`backup::read_snapshot`): the
+/// archive holds live tasks only, so a link to a trashed one would name
+/// a task it doesn't carry.
+pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
+    ex: E,
+) -> Result<Vec<TaskDependency>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, DateTime<Utc>)>(
+        r#"
+        SELECT d.task_id, d.depends_on_id, d.created_at
+        FROM task_dependencies d
+        JOIN node_tasks a ON a.id = d.task_id AND a.deleted_at IS NULL
+        JOIN node_tasks b ON b.id = d.depends_on_id AND b.deleted_at IS NULL
+        ORDER BY d.created_at, d.task_id, d.depends_on_id
+        "#,
+    )
+    .fetch_all(ex)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("list task dependencies failed: {e}")))?;
+    Ok(rows
+        .into_iter()
+        .map(|(task, depends_on, created_at)| TaskDependency {
+            task_id: TaskId(task),
+            depends_on_id: TaskId(depends_on),
+            created_at,
+        })
+        .collect())
+}
+
+pub struct PgTaskDependencyRepo {
+    pool: PgPool,
+}
+
+impl PgTaskDependencyRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct LinkRow {
+    id: Uuid,
+    title: String,
+    status: String,
+    node_id: Uuid,
+    node_title: String,
+}
+
+impl LinkRow {
+    fn into_link(self) -> Result<TaskLink, EmberTroveError> {
+        Ok(TaskLink {
+            id: TaskId(self.id),
+            title: self.title,
+            status: super::parse_wire(&self.status, "task_status", TaskStatus::parse)?,
+            node_id: NodeId(self.node_id),
+            node_title: self.node_title,
+        })
+    }
+}
+
+/// The columns of a [`LinkRow`]: the other task `p` and its node `pn`.
+const LINK_COLS: &str =
+    "p.id, p.title, p.status::text AS status, p.node_id, pn.title AS node_title";
+
+fn links(rows: Vec<LinkRow>) -> Result<Vec<TaskLink>, EmberTroveError> {
+    rows.into_iter().map(LinkRow::into_link).collect()
+}
+
+/// Would `task` waiting for `depends_on` close a loop: does `depends_on`
+/// already wait for `task`, directly or through others? Over every link,
+/// whoever can see it. The caller holds the lock.
+async fn closes_loop(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    task: TaskId,
+    depends_on: TaskId,
+) -> Result<bool, EmberTroveError> {
+    // UNION (not UNION ALL), as the edges' check: a loop that got in by
+    // another way must not recurse forever.
+    sqlx::query_scalar(
+        r#"
+        WITH RECURSIVE reach(id) AS (
+            SELECT depends_on_id FROM task_dependencies WHERE task_id = $2
+            UNION
+            SELECT d.depends_on_id FROM task_dependencies d JOIN reach r ON d.task_id = r.id
+        )
+        SELECT EXISTS (SELECT 1 FROM reach WHERE id = $1)
+        "#,
+    )
+    .bind(task.0)
+    .bind(depends_on.0)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| EmberTroveError::Internal(format!("dependency check failed: {e}")))
+}
+
+#[async_trait]
+impl TaskDependencyRepo for PgTaskDependencyRepo {
+    async fn list(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(Vec<TaskLink>, Vec<TaskLink>), EmberTroveError> {
+        let failed =
+            |e: sqlx::Error| EmberTroveError::Internal(format!("list dependencies failed: {e}"));
+        let shown = shown_to("p", "pn", 2);
+        let blocked_by = sqlx::query_as::<_, LinkRow>(&format!(
+            r#"
+            SELECT {LINK_COLS}
+            FROM task_dependencies d
+            JOIN node_tasks p ON p.id = d.depends_on_id
+            JOIN nodes pn ON pn.id = p.node_id
+            WHERE d.task_id = $1 AND {shown}
+            ORDER BY d.created_at, p.id
+            "#
+        ))
+        .bind(task.0)
+        .bind(viewer)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(failed)?;
+        let blocks = sqlx::query_as::<_, LinkRow>(&format!(
+            r#"
+            SELECT {LINK_COLS}
+            FROM task_dependencies d
+            JOIN node_tasks p ON p.id = d.task_id
+            JOIN nodes pn ON pn.id = p.node_id
+            WHERE d.depends_on_id = $1 AND {shown}
+            ORDER BY d.created_at, p.id
+            "#
+        ))
+        .bind(task.0)
+        .bind(viewer)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(failed)?;
+        Ok((links(blocked_by)?, links(blocks)?))
+    }
+
+    async fn add(
+        &self,
+        task: TaskId,
+        depends_on: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(), EmberTroveError> {
+        let failed =
+            |e: sqlx::Error| EmberTroveError::Internal(format!("add dependency failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(failed)?;
+
+        // One lock for all task dependencies: without it two inserts
+        // could each pass the loop check below and together close one
+        // (the edges' rule, #224).
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.task_dependencies'))")
+            .execute(&mut *tx)
+            .await
+            .map_err(failed)?;
+
+        // The limit counts what the caller is shown, so reaching it tells
+        // them nothing about links they can't see.
+        let shown: i64 = sqlx::query_scalar(&format!(
+            r#"
+            SELECT count(*)
+            FROM task_dependencies d
+            JOIN node_tasks p ON p.id = d.depends_on_id
+            JOIN nodes pn ON pn.id = p.node_id
+            WHERE d.task_id = $1 AND {shown}
+            "#,
+            shown = shown_to("p", "pn", 2),
+        ))
+        .bind(task.0)
+        .bind(viewer)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(failed)?;
+        if usize::try_from(shown).unwrap_or(usize::MAX) >= MAX_PREREQUISITES {
+            return Err(EmberTroveError::Validation(
+                DependencyRefusal::TooMany.message(),
+            ));
+        }
+
+        if closes_loop(&mut tx, task, depends_on).await? {
+            return Err(EmberTroveError::Validation(
+                DependencyRefusal::Loop.message(),
+            ));
+        }
+
+        sqlx::query("INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1, $2)")
+            .bind(task.0)
+            .bind(depends_on.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| match &e {
+                sqlx::Error::Database(d)
+                    if d.constraint() == Some("task_dependencies_not_itself") =>
+                {
+                    EmberTroveError::Validation(DependencyRefusal::Itself.message())
+                }
+                sqlx::Error::Database(d) if d.is_unique_violation() => {
+                    EmberTroveError::AlreadyExists(
+                        "this task already waits for that one".to_string(),
+                    )
+                }
+                // Either task was deleted for good since the route read it
+                // (the trash emptied, its node deleted, its account purged).
+                sqlx::Error::Database(d) if d.is_foreign_key_violation() => {
+                    EmberTroveError::NotFound(TASK_NOT_FOUND.to_string())
+                }
+                _ => failed(e),
+            })?;
+        tx.commit().await.map_err(failed)
+    }
+
+    async fn remove(
+        &self,
+        task: TaskId,
+        depends_on: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(), EmberTroveError> {
+        let result = sqlx::query(&format!(
+            r#"
+            DELETE FROM task_dependencies d
+            USING node_tasks p, nodes pn
+            WHERE d.task_id = $1 AND d.depends_on_id = $2
+              AND p.id = d.depends_on_id AND pn.id = p.node_id
+              AND {shown}
+            "#,
+            shown = shown_to("p", "pn", 3),
+        ))
+        .bind(task.0)
+        .bind(depends_on.0)
+        .bind(viewer)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("remove dependency failed: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Err(EmberTroveError::NotFound(
+                "dependency not found".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn candidates(
+        &self,
+        task: TaskId,
+        subject: &str,
+        q: &str,
+    ) -> Result<Vec<TaskLink>, EmberTroveError> {
+        let still_to_do = super::task::still_to_do()
+            .iter()
+            .map(|s| format!("'{s}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // `waits`: every task that already waits for this one, directly
+        // or through others. Making this task wait for one of them would
+        // close a loop, which `add` refuses ([`closes_loop`] walks the
+        // same links the other way), so the picker never offers it.
+        let rows = sqlx::query_as::<_, LinkRow>(&format!(
+            r#"
+            WITH RECURSIVE waits(id) AS (
+                SELECT task_id FROM task_dependencies WHERE depends_on_id = $1
+                UNION
+                SELECT d.task_id FROM task_dependencies d JOIN waits w ON d.depends_on_id = w.id
+            )
+            SELECT {LINK_COLS}
+            FROM node_tasks p
+            JOIN nodes pn ON pn.id = p.node_id
+            WHERE p.id <> $1
+              AND {shown}
+              AND p.status::text IN ({still_to_do})
+              AND pn.status <> 'archived'::node_status
+              AND NOT EXISTS (
+                  SELECT 1 FROM task_dependencies x
+                  WHERE x.task_id = $1 AND x.depends_on_id = p.id)
+              AND p.id NOT IN (SELECT id FROM waits)
+              AND ($3 = '' OR p.title ILIKE '%' || $3 || '%' ESCAPE '\')
+            ORDER BY
+                (p.node_id = (SELECT node_id FROM node_tasks WHERE id = $1)) DESC,
+                lower(p.title) COLLATE "C",
+                p.id
+            LIMIT $4
+            "#,
+            shown = shown_to("p", "pn", 2),
+        ))
+        .bind(task.0)
+        .bind(subject)
+        .bind(escape_like(q.trim()))
+        .bind(CANDIDATE_LIMIT)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("dependency candidates failed: {e}")))?;
+        links(rows)
+    }
+}

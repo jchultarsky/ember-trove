@@ -93,7 +93,12 @@ pub struct EntityCounts {
 /// included, restores as a capture (`capture::from_nodeless_task`,
 /// migration 054's rule): that is read from the task, never from this
 /// number.
-pub const SCHEMA_VERSION: u32 = 12;
+/// 13 (S5d, #338): the archive carries the dependencies between tasks
+/// (`task_dependencies`). An older release would restore it without them
+/// and say nothing, so the number moves. Archives of 3 to 12 still
+/// restore: they have none, and since every restore replaces the tasks,
+/// none is left behind.
+pub const SCHEMA_VERSION: u32 = 13;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -504,6 +509,14 @@ pub struct BackupData {
     /// keeps the live entries whose project the archive brings back.
     #[serde(default)]
     pub focus: Option<Vec<BackupFocus>>,
+    // ── Format 13: task dependencies (S5d, #338) ──────────────────────────
+    /// Which task waits for which, between tasks the archive holds. A
+    /// plain list like `briefs`: a link hangs on its two tasks, every
+    /// restore replaces the tasks, so an older archive (which has none)
+    /// leaves no link behind. Restore leaves out a link with a missing
+    /// end, and loops (`task_dependency::without_loops`).
+    #[serde(default)]
+    pub task_dependencies: Vec<crate::task_dependency::TaskDependency>,
 }
 
 impl BackupData {
@@ -634,7 +647,39 @@ mod tests {
         for task in written["tasks"].as_array().expect("tasks") {
             assert!(task.get("recurrence").is_none(), "{task}");
         }
-        assert_eq!(SCHEMA_VERSION, 12);
+    }
+
+    /// Format 13 (S5d): the archive carries which task waits for which.
+    /// An older archive has no such list and reads as none.
+    #[test]
+    fn an_archive_carries_task_dependencies_and_an_older_one_has_none() {
+        assert_eq!(SCHEMA_VERSION, 13);
+        let older: BackupData = serde_json::from_str(
+            r#"{"nodes":[],"edges":[],"tags":[],"notes":[],"tasks":[],"attachments":[]}"#,
+        )
+        .expect("an older archive");
+        assert!(older.task_dependencies.is_empty());
+
+        let link = crate::task_dependency::TaskDependency {
+            task_id: crate::id::TaskId(uuid::Uuid::from_u128(1)),
+            depends_on_id: crate::id::TaskId(uuid::Uuid::from_u128(2)),
+            created_at: DateTime::<Utc>::UNIX_EPOCH,
+        };
+        let data = BackupData {
+            task_dependencies: vec![link.clone()],
+            ..BackupData::default()
+        };
+        let written = serde_json::to_value(&data).expect("json");
+        assert_eq!(
+            written["task_dependencies"][0],
+            serde_json::json!({
+                "task_id": "00000000-0000-0000-0000-000000000001",
+                "depends_on_id": "00000000-0000-0000-0000-000000000002",
+                "created_at": "1970-01-01T00:00:00Z"
+            })
+        );
+        let back: BackupData = serde_json::from_value(written).expect("reads back");
+        assert_eq!(back.task_dependencies, vec![link]);
     }
 
     fn live_task() -> Task {

@@ -636,7 +636,7 @@ async fn task_soft_delete_restore_and_purge(pool: PgPool) {
         .expect("create task");
     let listed = || async {
         tasks
-            .list_for_node(project, "owner-a")
+            .list_for_node(project, Some("owner-a"))
             .await
             .expect("its project's tasks")
             .len()
@@ -11306,4 +11306,764 @@ async fn an_update_never_takes_a_task_off_its_node(pool: PgPool) {
         .await
         .expect("update");
     assert_eq!(untouched.node_id, other);
+}
+
+// ── S5d: a task can depend on another task (#338) ────────────────────────────
+
+use super::task_dependency::{PgTaskDependencyRepo, TaskDependencyRepo};
+use common::id::TaskId as Tid;
+
+/// A link straight into the table, past the repo's checks.
+// Fixture helpers; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_dep(pool: &PgPool, task: uuid::Uuid, depends_on: uuid::Uuid) {
+    sqlx::query("INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1, $2)")
+        .bind(task)
+        .bind(depends_on)
+        .execute(pool)
+        .await
+        .expect("raw dependency");
+}
+
+#[allow(clippy::expect_used)]
+async fn set_task_state(pool: &PgPool, task: uuid::Uuid, state: &str) {
+    sqlx::query(
+        "UPDATE node_tasks SET status = $2::task_status, \
+         completed_at = CASE WHEN $2 = 'done' THEN now() END WHERE id = $1",
+    )
+    .bind(task)
+    .bind(state)
+    .execute(pool)
+    .await
+    .expect("task state");
+}
+
+#[allow(clippy::expect_used)]
+async fn trash_task(pool: &PgPool, task: uuid::Uuid) {
+    sqlx::query("UPDATE node_tasks SET deleted_at = now() WHERE id = $1")
+        .bind(task)
+        .execute(pool)
+        .await
+        .expect("trash a task");
+}
+
+#[allow(clippy::expect_used)]
+async fn dep_pairs(pool: &PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT a.title, b.title FROM task_dependencies d \
+         JOIN node_tasks a ON a.id = d.task_id JOIN node_tasks b ON b.id = d.depends_on_id \
+         ORDER BY a.title COLLATE \"C\", b.title COLLATE \"C\"",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("dependency pairs")
+}
+
+fn titles(links: &[common::task_dependency::TaskLink]) -> Vec<&str> {
+    links.iter().map(|l| l.title.as_str()).collect()
+}
+
+/// The 422 a refused dependency answers with.
+// Fixture helper; see `create_node`.
+#[allow(clippy::panic)]
+fn dep_refusal(result: Result<(), EmberTroveError>) -> String {
+    match result {
+        Err(EmberTroveError::Validation(message)) => message,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// Migration 055 adds the table and touches no task. The table holds a
+/// pair once and never a task with itself, and a task deleted for good
+/// takes its links with it, from either side.
+#[sqlx::test(migrations = false)]
+async fn migration_055_adds_task_dependencies_and_leaves_every_task_as_it_was(pool: PgPool) {
+    apply_migrations(&pool, |version| version < 55).await;
+
+    let node = insert_raw_node(&pool, "alice", "project", "garden", "").await;
+    let a = raw_task(&pool, "alice", node, "a").await;
+    let b = raw_task(&pool, "alice", node, "b").await;
+    let c = raw_task(&pool, "alice", node, "c").await;
+    trash_task(&pool, c).await;
+    set_task_state(&pool, b, "done").await;
+
+    let exists = "SELECT count(*) FROM pg_tables WHERE tablename = 'task_dependencies'";
+    assert_eq!(scalar(&pool, exists).await, 0, "not there before 055");
+    let tasks = "SELECT md5(string_agg(t::text, ',' ORDER BY t.id)) FROM node_tasks t";
+    let rows_before: String = sqlx::query_scalar(tasks).fetch_one(&pool).await.unwrap();
+    let shape_before = table_shape(&pool, "node_tasks").await;
+
+    apply_migrations(&pool, |version| version == 55).await;
+
+    let rows_after: String = sqlx::query_scalar(tasks).fetch_one(&pool).await.unwrap();
+    assert_eq!(rows_after, rows_before, "no task changed");
+    assert_eq!(table_shape(&pool, "node_tasks").await, shape_before);
+
+    let shape = table_shape(&pool, "task_dependencies").await;
+    for line in [
+        "column task_id uuid NO -",
+        "column depends_on_id uuid NO -",
+        "column created_at timestamptz NO now()",
+        "constraint task_dependencies_pkey PRIMARY KEY (task_id, depends_on_id)",
+        "constraint task_dependencies_not_itself CHECK ((task_id <> depends_on_id))",
+        "constraint task_dependencies_task_id_fkey FOREIGN KEY (task_id) \
+         REFERENCES node_tasks(id) ON DELETE CASCADE",
+        "constraint task_dependencies_depends_on_id_fkey FOREIGN KEY (depends_on_id) \
+         REFERENCES node_tasks(id) ON DELETE CASCADE",
+        "task_dependencies_depends_on_idx ON public.task_dependencies USING btree (depends_on_id)",
+    ] {
+        assert!(shape.contains(line), "missing `{line}` in:\n{shape}");
+    }
+    assert_eq!(shape.lines().count(), 9, "nothing else:\n{shape}");
+
+    raw_dep(&pool, a, b).await;
+    raw_dep(&pool, a, c).await;
+    raw_dep(&pool, b, c).await;
+    let insert = "INSERT INTO task_dependencies (task_id, depends_on_id) VALUES ($1, $2)";
+    let itself = sqlx::query(insert).bind(a).bind(a).execute(&pool).await;
+    assert!(itself.is_err(), "a task can't wait for itself");
+    let again = sqlx::query(insert).bind(a).bind(b).execute(&pool).await;
+    assert!(again.is_err(), "a pair is stored once");
+    let nobody = sqlx::query(insert)
+        .bind(a)
+        .bind(uuid::Uuid::new_v4())
+        .execute(&pool)
+        .await;
+    assert!(nobody.is_err(), "both ends are tasks");
+
+    // A second run changes nothing and loses nothing.
+    apply_migrations(&pool, |version| version == 55).await;
+    assert_eq!(table_shape(&pool, "task_dependencies").await, shape);
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
+        3
+    );
+
+    // The prerequisite's side: c goes, and a → c and b → c with it.
+    sql(&pool, &format!("DELETE FROM node_tasks WHERE id = '{c}'")).await;
+    assert_eq!(dep_pairs(&pool).await, [("a".to_string(), "b".to_string())]);
+    // The waiting side: a goes, and a → b with it.
+    sql(&pool, &format!("DELETE FROM node_tasks WHERE id = '{a}'")).await;
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
+        0
+    );
+
+    apply_migrations(&pool, |version| version > 55).await;
+}
+
+/// §6.4: "cycles are rejected". However the loop would run: straight
+/// back, round a chain, through a task in the trash or through one the
+/// caller can't see. A diamond is no loop.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_loop_of_dependencies_is_refused_however_it_runs(pool: PgPool) {
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let alice = Some("alice");
+    let p = a_project(&pool, "alice", "loops", None).await.id.0;
+    let hidden = a_project(&pool, "bob", "bob's own", None).await.id.0;
+    let task = |title: &'static str| raw_task(&pool, "alice", p, title);
+    let (a, b, c, d) = (
+        task("a").await,
+        task("b").await,
+        task("c").await,
+        task("d").await,
+    );
+    let add = |x: uuid::Uuid, y: uuid::Uuid| deps.add(Tid(x), Tid(y), alice);
+
+    add(a, b).await.expect("a waits for b");
+    assert!(
+        dep_refusal(add(b, a).await).contains("loop"),
+        "straight back"
+    );
+    add(b, c).await.expect("b waits for c");
+    assert!(
+        dep_refusal(add(c, a).await).contains("loop"),
+        "round a chain"
+    );
+    // A diamond: a → b → c and a → d → c.
+    add(a, d).await.expect("a waits for d");
+    add(d, c).await.expect("d waits for c");
+    add(a, c).await.expect("and straight for c: still no loop");
+
+    // The same pair again is a repeat (409), not a loop.
+    assert!(matches!(
+        add(a, b).await,
+        Err(EmberTroveError::AlreadyExists(_))
+    ));
+    // A task with itself: refused by the table, said as the rule.
+    assert!(dep_refusal(add(a, a).await).contains("itself"));
+
+    // Through the trash: x → y → z, with y in the trash. Restoring y
+    // would bring the chain back, so z → x is a loop now.
+    let (x, y, z) = (task("x").await, task("y").await, task("z").await);
+    add(x, y).await.expect("x waits for y");
+    add(y, z).await.expect("y waits for z");
+    trash_task(&pool, y).await;
+    assert!(
+        dep_refusal(add(z, x).await).contains("loop"),
+        "through the trash"
+    );
+
+    // Through a task alice can't see: m → h → n, h on bob's own node.
+    let (m, n) = (task("m").await, task("n").await);
+    let h = raw_task(&pool, "bob", hidden, "hidden").await;
+    raw_dep(&pool, m, h).await;
+    raw_dep(&pool, h, n).await;
+    let refused = dep_refusal(add(n, m).await);
+    assert!(refused.contains("loop"), "through a hidden task: {refused}");
+    assert!(
+        !refused.contains("hidden"),
+        "and it names nothing: {refused}"
+    );
+
+    // A task that isn't there: the route's 404, never a 500.
+    let gone = add(a, uuid::Uuid::new_v4()).await;
+    assert!(
+        matches!(gone, Err(EmberTroveError::NotFound(_))),
+        "{gone:?}"
+    );
+}
+
+/// A loop that got in some other way must not hang the check that walks it.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_old_loop_of_dependencies_does_not_hang_the_check(pool: PgPool) {
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let p = a_project(&pool, "alice", "old loop", None).await.id.0;
+    let x = raw_task(&pool, "alice", p, "x").await;
+    let y = raw_task(&pool, "alice", p, "y").await;
+    let z = raw_task(&pool, "alice", p, "z").await;
+    raw_dep(&pool, x, y).await;
+    raw_dep(&pool, y, x).await;
+    deps.add(Tid(z), Tid(x), Some("alice"))
+        .await
+        .expect("into the old loop");
+    let refused = dep_refusal(deps.add(Tid(y), Tid(z), Some("alice")).await);
+    assert!(refused.contains("loop"), "{refused}");
+    // The picker walks the same links the other way.
+    deps.candidates(Tid(z), "alice", "")
+        .await
+        .expect("the picker ends too");
+}
+
+/// Two inserts at once, each of which alone is fine: only one may land.
+/// This is what the advisory lock is for; without it both pass the check.
+#[sqlx::test(migrations = "../migrations")]
+async fn two_dependencies_added_at_once_cannot_close_a_loop(pool: PgPool) {
+    let p = a_project(&pool, "alice", "at once", None).await.id.0;
+    let a = raw_task(&pool, "alice", p, "a").await;
+    let b = raw_task(&pool, "alice", p, "b").await;
+    for _ in 0..10 {
+        sql(&pool, "DELETE FROM task_dependencies").await;
+        let (one, two) = (
+            PgTaskDependencyRepo::new(pool.clone()),
+            PgTaskDependencyRepo::new(pool.clone()),
+        );
+        let (r1, r2) = tokio::join!(
+            one.add(Tid(a), Tid(b), Some("alice")),
+            two.add(Tid(b), Tid(a), Some("alice"))
+        );
+        assert_eq!(
+            usize::from(r1.is_ok()) + usize::from(r2.is_ok()),
+            1,
+            "exactly one of a → b and b → a: {r1:?} / {r2:?}"
+        );
+    }
+}
+
+/// The limit counts what the caller is shown: not a prerequisite on a
+/// node they can't see, and not one in the trash. So reaching it says
+/// nothing about links that are hidden from them.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_dependency_limit_counts_only_what_its_caller_sees(pool: PgPool) {
+    use common::task_dependency::MAX_PREREQUISITES;
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let shared = a_project(&pool, "alice", "shared", None).await.id;
+    grant(&pool, shared, "bob", "editor").await;
+    let bobs = a_project(&pool, "bob", "bob's own", None).await.id.0;
+    let t = raw_task(&pool, "alice", shared.0, "the task").await;
+
+    let mut on_shared = Vec::new();
+    for i in 0..MAX_PREREQUISITES - 5 {
+        let p = raw_task(&pool, "alice", shared.0, &format!("shared {i}")).await;
+        raw_dep(&pool, t, p).await;
+        on_shared.push(p);
+    }
+    for i in 0..5 {
+        let p = raw_task(&pool, "bob", bobs, &format!("bob's {i}")).await;
+        raw_dep(&pool, t, p).await;
+    }
+    let one_more = raw_task(&pool, "alice", shared.0, "one more").await;
+    let another = raw_task(&pool, "alice", shared.0, "another").await;
+
+    // Bob sees all fifty: no more for him.
+    let refused = dep_refusal(deps.add(Tid(t), Tid(one_more), Some("bob")).await);
+    assert!(refused.contains("at most 50"), "{refused}");
+    // One of them goes to the trash: he sees forty-nine, and may add.
+    trash_task(&pool, on_shared[0]).await;
+    deps.add(Tid(t), Tid(one_more), Some("bob"))
+        .await
+        .expect("under the limit again");
+    // Alice sees forty-five, though the table holds fifty-one for the task.
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
+        51
+    );
+    deps.add(Tid(t), Tid(another), Some("alice"))
+        .await
+        .expect("the limit is hers by what she sees");
+}
+
+/// §14: both lists hold only live tasks on nodes the reader can view.
+/// Removing a link the caller isn't shown answers like no link at all,
+/// and removes nothing.
+#[sqlx::test(migrations = "../migrations")]
+async fn dependencies_are_shown_and_removed_only_through_tasks_the_reader_sees(pool: PgPool) {
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let tasks = PgTaskRepo::new(pool.clone());
+    let shared = a_project(&pool, "alice", "shared", None).await.id.0;
+    share(&pool, shared, "bob").await;
+    let private = a_project(&pool, "alice", "private", None).await.id.0;
+    let t = raw_task(&pool, "alice", shared, "the task").await;
+    let p_shared = raw_task(&pool, "alice", shared, "p shared").await;
+    let p_private = raw_task(&pool, "alice", private, "p private").await;
+    let p_trashed = raw_task(&pool, "alice", shared, "p trashed").await;
+    let p_done = raw_task(&pool, "alice", shared, "p done").await;
+    let d_shared = raw_task(&pool, "alice", shared, "d shared").await;
+    let d_private = raw_task(&pool, "alice", private, "d private").await;
+    for p in [p_shared, p_private, p_trashed, p_done] {
+        deps.add(Tid(t), Tid(p), Some("alice")).await.expect("add");
+    }
+    for d in [d_shared, d_private] {
+        deps.add(Tid(d), Tid(t), Some("alice")).await.expect("add");
+    }
+    set_task_state(&pool, p_done, "done").await;
+    tasks.delete(Tid(p_trashed)).await.expect("to the trash");
+
+    let (blocked_by, blocks) = deps.list(Tid(t), Some("alice")).await.expect("alice");
+    assert_eq!(titles(&blocked_by), ["p shared", "p private", "p done"]);
+    assert_eq!(titles(&blocks), ["d shared", "d private"]);
+    let private_one = &blocked_by[1];
+    assert_eq!(private_one.node_title, "private");
+    assert_eq!(private_one.node_id.0, private);
+    assert_eq!(
+        blocked_by[2].status,
+        TaskStatus::Done,
+        "shown with its state"
+    );
+
+    // Bob views the shared project only.
+    let (blocked_by, blocks) = deps.list(Tid(t), Some("bob")).await.expect("bob");
+    assert_eq!(titles(&blocked_by), ["p shared", "p done"]);
+    assert_eq!(titles(&blocks), ["d shared"]);
+    // An admin reads every node, and still nothing from the trash.
+    let (blocked_by, blocks) = deps.list(Tid(t), None).await.expect("an admin");
+    assert_eq!(blocked_by.len(), 3);
+    assert_eq!(blocks.len(), 2);
+
+    // Removing: a link to a task bob can't see, one to a task in the
+    // trash, and no link at all are the same answer, and nothing goes.
+    let count = || scalar(&pool, "SELECT count(*) FROM task_dependencies");
+    for (other, who) in [
+        (p_private, "bob"),
+        (p_trashed, "alice"),
+        (d_shared, "alice"),
+        (uuid::Uuid::new_v4(), "alice"),
+    ] {
+        let answer = deps.remove(Tid(t), Tid(other), Some(who)).await;
+        assert!(
+            matches!(&answer, Err(EmberTroveError::NotFound(m)) if m == "dependency not found"),
+            "{answer:?}"
+        );
+    }
+    assert_eq!(count().await, 6);
+    deps.remove(Tid(t), Tid(p_shared), Some("alice"))
+        .await
+        .expect("a link she is shown");
+    assert_eq!(count().await, 5);
+    let (blocked_by, _) = deps.list(Tid(t), Some("alice")).await.expect("alice");
+    assert_eq!(titles(&blocked_by), ["p private", "p done"]);
+
+    // Out of the trash again, the link shows again: it was never removed.
+    tasks.restore(Tid(p_trashed)).await.expect("restore");
+    let (blocked_by, _) = deps.list(Tid(t), Some("alice")).await.expect("alice");
+    assert_eq!(titles(&blocked_by), ["p private", "p trashed", "p done"]);
+}
+
+/// The count on a task row is `task_dependency::holds_back`, cut to what
+/// the reader is shown, and the same on every list that carries it.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_blocked_count_is_one_rule_on_every_task_list(pool: PgPool) {
+    use common::task_dependency::holds_back;
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let tasks = PgTaskRepo::new(pool.clone());
+    let today = Utc::now().date_naive();
+    let project = a_project(&pool, "alice", "counted", None).await.id;
+    let hidden = a_project(&pool, "bob", "bob's own", None).await.id.0;
+
+    // One task per state of its single prerequisite.
+    for state in TaskStatus::ALL {
+        let waiting = raw_task(&pool, "alice", project.0, &format!("on {}", state.as_str())).await;
+        let p = raw_task(&pool, "alice", project.0, &format!("is {}", state.as_str())).await;
+        raw_dep(&pool, waiting, p).await;
+        set_task_state(&pool, p, state.as_str()).await;
+    }
+    let listed = tasks
+        .list_for_node(project, Some("alice"))
+        .await
+        .expect("the project's tasks");
+    for state in TaskStatus::ALL {
+        let title = format!("on {}", state.as_str());
+        let row = listed.iter().find(|t| t.title == title).expect("listed");
+        assert_eq!(row.blocked_by, u32::from(holds_back(state)), "{title}");
+    }
+    assert!(
+        listed
+            .iter()
+            .filter(|t| t.title.starts_with("is "))
+            .all(|t| t.blocked_by == 0),
+        "a prerequisite is not blocked by its dependent"
+    );
+
+    // One task with a prerequisite in every state, live and in the
+    // trash, on a node alice sees and on one she doesn't.
+    let t = raw_task(&pool, "alice", project.0, "everything at once").await;
+    sqlx::query("UPDATE node_tasks SET focus_date = $2, due_date = $2 WHERE id = $1")
+        .bind(t)
+        .bind(today)
+        .execute(&pool)
+        .await
+        .expect("into My Day and the calendar");
+    let (mut hers, mut everyones) = (0u32, 0u32);
+    for state in TaskStatus::ALL {
+        for trashed in [false, true] {
+            for (node, owner, seen) in [(project.0, "alice", true), (hidden, "bob", false)] {
+                let p = raw_task(&pool, owner, node, "a prerequisite").await;
+                raw_dep(&pool, t, p).await;
+                set_task_state(&pool, p, state.as_str()).await;
+                if trashed {
+                    trash_task(&pool, p).await;
+                }
+                let counts = holds_back(state) && !trashed;
+                everyones += u32::from(counts);
+                hers += u32::from(counts && seen);
+            }
+        }
+    }
+    assert_eq!((hers, everyones), (3, 6), "the fixture is what it says");
+
+    for (viewer, expected) in [(Some("alice"), hers), (None, everyones)] {
+        let on_node = tasks
+            .list_for_node(project, viewer)
+            .await
+            .expect("node list");
+        let my_day = tasks
+            .list_my_day("alice", viewer, today)
+            .await
+            .expect("my day");
+        let calendar = tasks
+            .list_by_due_range("alice", viewer, today, today)
+            .await
+            .expect("calendar");
+        let backlog = tasks
+            .list_open_for_owner("alice", viewer)
+            .await
+            .expect("backlog");
+        let node_count = on_node.iter().find(|x| x.id.0 == t).map(|x| x.blocked_by);
+        assert_eq!(node_count, Some(expected), "node list as {viewer:?}");
+        for (name, feed) in [
+            ("my day", &my_day),
+            ("calendar", &calendar),
+            ("backlog", &backlog),
+        ] {
+            let count = feed.iter().find(|x| x.task.id.0 == t).map(|x| x.blocked_by);
+            assert_eq!(count, Some(expected), "{name} as {viewer:?}");
+        }
+    }
+    // The lists and the count agree: what `list` shows as holding back.
+    let (blocked_by, _) = deps.list(Tid(t), Some("alice")).await.expect("list");
+    let holding = blocked_by.iter().filter(|l| holds_back(&l.status)).count();
+    assert_eq!(u32::try_from(holding).expect("small"), hers);
+}
+
+/// The picker: tasks still to do, on nodes the person owns or was given,
+/// the same Project's first. Everything it offers can be added, and what
+/// would be refused as a loop is never offered.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_dependency_picker_offers_only_what_can_be_added(pool: PgPool) {
+    use common::task_dependency::CANDIDATE_LIMIT;
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let home = a_project(&pool, "alice", "home", None).await.id.0;
+    let other = a_project(&pool, "alice", "other", None).await.id.0;
+    let archived = a_project(&pool, "alice", "archived", None).await.id.0;
+    sql(
+        &pool,
+        &format!("UPDATE nodes SET status = 'archived' WHERE id = '{archived}'"),
+    )
+    .await;
+    let bobs = a_project(&pool, "bob", "bob's own", None).await.id.0;
+    let given = a_project(&pool, "bob", "given to alice", None).await.id.0;
+    share(&pool, given, "alice").await;
+
+    let t = raw_task(&pool, "alice", home, "the task").await;
+    let on = |node: uuid::Uuid, owner: &'static str, title: &'static str| {
+        raw_task(&pool, owner, node, title)
+    };
+    on(home, "alice", "Beta same").await;
+    on(home, "alice", "alpha same").await;
+    let waiting = on(home, "alice", "gamma waiting").await;
+    set_task_state(&pool, waiting, "waiting").await;
+    on(other, "alice", "alpha other").await;
+    on(given, "bob", "alpha given").await;
+    let done = on(home, "alice", "alpha done").await;
+    set_task_state(&pool, done, "done").await;
+    let cancelled = on(home, "alice", "alpha cancelled").await;
+    set_task_state(&pool, cancelled, "cancelled").await;
+    let trashed = on(home, "alice", "alpha trashed").await;
+    trash_task(&pool, trashed).await;
+    on(archived, "alice", "alpha archived").await;
+    on(bobs, "bob", "alpha hidden").await;
+    let already = on(home, "alice", "alpha already").await;
+    raw_dep(&pool, t, already).await;
+    // These wait for the task, one of them through the other: the task
+    // waiting for either would close a loop.
+    let dependent = on(home, "alice", "alpha dependent").await;
+    let further = on(other, "alice", "alpha further").await;
+    raw_dep(&pool, dependent, t).await;
+    raw_dep(&pool, further, dependent).await;
+
+    let offered = deps.candidates(Tid(t), "alice", "").await.expect("offered");
+    assert_eq!(
+        titles(&offered),
+        [
+            // Her own Project first, then the rest, each by title.
+            "alpha same",
+            "Beta same",
+            "gamma waiting",
+            "alpha given",
+            "alpha other",
+        ]
+    );
+    assert_eq!(offered[3].node_title, "given to alice");
+    assert_eq!(offered[2].status, TaskStatus::Waiting);
+
+    // Search text: any case, and `%` and `_` mean themselves.
+    let found = |q: &'static str| {
+        let deps = &deps;
+        async move {
+            let offered = deps.candidates(Tid(t), "alice", q).await.expect("offered");
+            offered.into_iter().map(|l| l.title).collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        found("ALPHA").await,
+        ["alpha same", "alpha given", "alpha other"]
+    );
+    assert_eq!(found("  same ").await, ["alpha same", "Beta same"]);
+    on(home, "alice", "100% sure").await;
+    on(home, "alice", "100 sure").await;
+    on(home, "alice", "a_b").await;
+    on(home, "alice", "axb").await;
+    assert_eq!(found("100%").await, ["100% sure"]);
+    assert_eq!(found("a_b").await, ["a_b"]);
+    assert_eq!(found("no such task").await, Vec::<String>::new());
+
+    // Someone with no node of their own, an admin included, is offered
+    // nothing: the picker is bound to the person and never widened.
+    let offered = deps.candidates(Tid(t), "an-admin", "").await.expect("none");
+    assert!(offered.is_empty(), "{offered:?}");
+    // Bob is offered his own and the Project he gave, not alice's.
+    let his = deps.candidates(Tid(t), "bob", "alpha").await.expect("bob");
+    assert_eq!(titles(&his), ["alpha given", "alpha hidden"]);
+
+    // Everything offered can be added; the loop-makers can't.
+    let everything = deps.candidates(Tid(t), "alice", "").await.expect("offered");
+    for link in &everything {
+        deps.add(Tid(t), link.id, Some("alice"))
+            .await
+            .unwrap_or_else(|e| panic!("offered but refused: {} ({e:?})", link.title));
+    }
+    for loop_maker in [dependent, further] {
+        let refused = dep_refusal(deps.add(Tid(t), Tid(loop_maker), Some("alice")).await);
+        assert!(refused.contains("loop"), "{refused}");
+    }
+    // At most `CANDIDATE_LIMIT` at once.
+    for i in 0..12 {
+        raw_task(&pool, "alice", other, &format!("many {i:02}")).await;
+    }
+    let many = deps
+        .candidates(Tid(t), "alice", "many")
+        .await
+        .expect("many");
+    assert_eq!(i64::try_from(many.len()).expect("small"), CANDIDATE_LIMIT);
+    assert_eq!(many[0].title, "many 00");
+}
+
+/// A link goes when either of its tasks is deleted for good: the trash
+/// being emptied, or its node deleted. The trash alone keeps it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_dependency_goes_with_its_tasks_and_not_before(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let nodes = PgNodeRepo::new(pool.clone());
+    let keep = a_project(&pool, "alice", "kept", None).await.id;
+    let going = a_project(&pool, "alice", "going", None).await.id;
+    let a = raw_task(&pool, "alice", keep.0, "a").await;
+    let b = raw_task(&pool, "alice", keep.0, "b").await;
+    let c = raw_task(&pool, "alice", going.0, "c").await;
+    raw_dep(&pool, a, b).await;
+    raw_dep(&pool, a, c).await;
+    raw_dep(&pool, c, b).await;
+    let count = || scalar(&pool, "SELECT count(*) FROM task_dependencies");
+
+    tasks.delete(Tid(b)).await.expect("to the trash");
+    assert_eq!(count().await, 3, "the trash keeps the links");
+    tasks
+        .purge_deleted_before(Utc::now() + Duration::days(1))
+        .await
+        .expect("empty the trash");
+    assert_eq!(dep_pairs(&pool).await, [("a".to_string(), "c".to_string())]);
+
+    nodes.delete(going).await.expect("delete the node");
+    assert_eq!(count().await, 0, "its task went, and the link with it");
+}
+
+/// Format 13: a backup holds the links between its tasks and a restore
+/// brings them back. A link to a task that is not restored, a repeat and
+/// a loop are left out, and an archive from before the format restores
+/// with none.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_backup_carries_task_dependencies_and_a_restore_brings_them_back(pool: PgPool) {
+    use common::task_dependency::TaskDependency;
+    let project = a_project(&pool, "alice", "backed up", None).await.id.0;
+    let a = raw_task(&pool, "alice", project, "a").await;
+    let b = raw_task(&pool, "alice", project, "b").await;
+    let c = raw_task(&pool, "alice", project, "c").await;
+    let trashed = raw_task(&pool, "alice", project, "trashed").await;
+    raw_dep(&pool, a, b).await;
+    raw_dep(&pool, b, c).await;
+    raw_dep(&pool, a, trashed).await;
+    trash_task(&pool, trashed).await;
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    let held: Vec<(uuid::Uuid, uuid::Uuid)> = data
+        .task_dependencies
+        .iter()
+        .map(|l| (l.task_id.0, l.depends_on_id.0))
+        .collect();
+    assert_eq!(held.len(), 2, "not the link to a task in the trash");
+    assert!(held.contains(&(a, b)) && held.contains(&(b, c)), "{held:?}");
+
+    // Changes after the backup: a link more, a link fewer.
+    raw_dep(&pool, a, c).await;
+    sql(
+        &pool,
+        &format!("DELETE FROM task_dependencies WHERE task_id = '{b}'"),
+    )
+    .await;
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    tx.commit().await.expect("commit");
+    assert_eq!(
+        dep_pairs(&pool).await,
+        [
+            ("a".to_string(), "b".to_string()),
+            ("b".to_string(), "c".to_string())
+        ],
+        "as the backup had them"
+    );
+    let created: Vec<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT created_at FROM task_dependencies ORDER BY created_at")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let mut archived: Vec<_> = data
+        .task_dependencies
+        .iter()
+        .map(|l| l.created_at)
+        .collect();
+    archived.sort();
+    assert_eq!(created, archived, "with their dates");
+
+    // An archive edited by hand: a loop, a repeat, a link to a task it
+    // doesn't hold. None stops the restore, and none is inserted.
+    let link = |task: uuid::Uuid, depends_on: uuid::Uuid| TaskDependency {
+        task_id: Tid(task),
+        depends_on_id: Tid(depends_on),
+        created_at: Utc::now(),
+    };
+    let mut edited = data.clone();
+    edited.task_dependencies = vec![
+        link(a, b),
+        link(a, b),
+        link(b, c),
+        link(c, b),
+        link(a, uuid::Uuid::new_v4()),
+        link(c, c),
+    ];
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &edited)
+        .await
+        .expect("an edited archive still restores");
+    tx.commit().await.expect("commit");
+    assert_eq!(dep_pairs(&pool).await, [("a".to_string(), "b".to_string())]);
+
+    // An archive from before format 13 has no list: it restores with
+    // none, and leaves none behind (the tasks are replaced).
+    let mut older = data.clone();
+    older.task_dependencies = Vec::new();
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &older)
+        .await
+        .expect("an older archive");
+    tx.commit().await.expect("commit");
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
+        0
+    );
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM node_tasks").await, 3);
+}
+
+/// The account purge and task dependencies (the table has no account
+/// column, so the purge has no step for it): a task handed over to the
+/// node's owner keeps its links, and a link to a task that is deleted
+/// goes with it.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_account_purge_keeps_the_links_of_tasks_it_hands_over(pool: PgPool) {
+    use super::account::{AccountRepo, PgAccountRepo};
+    seed_two_accounts(&pool).await;
+    for (task, depends_on) in [
+        ("a live on b", "b on b"),
+        ("b on b", "a on a private"),
+        ("b on a", "a on a"),
+        ("a deleted on b", "b on b"),
+    ] {
+        sql(
+            &pool,
+            &format!(
+                "INSERT INTO task_dependencies (task_id, depends_on_id) \
+                 SELECT a.id, b.id FROM node_tasks a, node_tasks b \
+                 WHERE a.title = '{task}' AND b.title = '{depends_on}'"
+            ),
+        )
+        .await;
+    }
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
+        4
+    );
+
+    PgAccountRepo::new(pool.clone())
+        .purge(PURGE_A, None)
+        .await
+        .expect("purge");
+
+    assert_eq!(
+        dep_pairs(&pool).await,
+        [("a live on b".to_string(), "b on b".to_string())],
+        "the handed-over task still waits; the rest went with their tasks"
+    );
 }

@@ -6,6 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **A task can wait for another task** (S5d of the ontology programme,
+  #338; ONTOLOGY §9.3, §6.4: "hard prerequisites, surfaced as blockers,
+  never enforced, cycles rejected").
+  - A task may depend on any task its person can see, in any Project
+    (owner decision, 2026-11-16). A prerequisite holds a task back until
+    it is Done; a Cancelled one never lets it go.
+  - **Nothing is enforced or reordered.** A blocked task keeps its place
+    in My Day and every list and can be completed.
+  - `GET /api/tasks/{id}/dependencies` answers `blocked_by` (the tasks it
+    waits for), `blocks` (the tasks that wait for it) and `may_edit`.
+    `POST` adds one (`{"depends_on": "<task id>"}`), and
+    `DELETE /api/tasks/{id}/dependencies/{other}` removes one; both
+    answer with the fresh lists. Adding or removing takes edit rights on
+    the task that waits and view rights on the other.
+  - A loop is refused (**422**), and so is a task waiting for itself; a
+    repeat is **409**. A task waits for at most 50 tasks.
+  - `GET /api/tasks/{id}/dependencies/candidates?q=` lists what the
+    picker offers: tasks still to do on Projects the caller owns or was
+    given, the same Project's first, never one that would make a loop.
+  - The task lists carry `blocked_by`, the number of prerequisites that
+    still hold a task back: `GET /api/nodes/{id}/tasks`, My Day, the
+    backlog and the calendar.
+  - A prerequisite in the trash neither shows nor counts; restoring it
+    brings the link back. Moving a task keeps its links.
+  - Migration 055 adds `task_dependencies`. No task is changed.
+  - **Backup format 13**: an archive holds the links between its tasks.
+    A restore leaves out a link to a task it doesn't bring back, and any
+    loop, and the preview says how many. Archives of formats 3 to 12
+    still restore. **A release before 3.26 refuses a 3.26 archive**: it
+    would restore it without the dependencies and say nothing.
+
+### Security
+- **A task dependency shows only what its reader can see.** A
+  prerequisite on a Project the reader can't view is not listed and not
+  counted for them, and on add and on remove it answers exactly like a
+  task that doesn't exist (404). The other task is looked at only after
+  the caller has shown they may edit the task that waits.
+  - The limit of 50 counts only prerequisites the caller sees, so
+    reaching it says nothing about hidden ones.
+  - An admin's picker is not widened: it offers the admin's own tasks and
+    the ones shared with them, not every account's titles.
+  - **What it can still tell:** the loop check has to look at every link,
+    hidden ones included (a loop is not a storable state). Someone who
+    may edit one task and view another can learn from a refusal that a
+    chain of dependencies runs between them, never through which tasks.
+    Node links (`depends_on`) have told the same since 3.1.0.
+
 ## [3.25.0] - 2026-11-16
 
 ### Changed

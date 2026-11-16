@@ -474,12 +474,16 @@ details.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/nodes/{id}/tasks` | List tasks for a node |
+| GET | `/api/nodes/{id}/tasks` | List tasks for a node. Each carries `blocked_by`: how many tasks it still waits for, among those the caller can see |
 | POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
 | PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. `node_id` moves the task to another Project; `node_id: null` (taking it off its Project) is **422**. A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
-| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day, plus open tasks carried over from an earlier day; a waiting, done or cancelled task doesn't carry over (default: today in UTC; the UI sends the local date) |
+| GET | `/api/tasks/{id}/dependencies` | The tasks this one waits for (`blocked_by`), the tasks that wait for it (`blocks`), and whether the caller may change them (`may_edit`). Only live tasks on nodes the caller can view are listed |
+| POST | `/api/tasks/{id}/dependencies` | Make the task wait for another: `{"depends_on": "<task id>"}`. Needs edit rights on the task and view rights on the other; a task the caller can't see answers **404**, like one that doesn't exist. A loop, a task waiting for itself, or a 51st prerequisite is **422**; a repeat is **409**. Answers with the fresh lists. A prerequisite holds the task back until it is done; nothing is enforced |
+| DELETE | `/api/tasks/{id}/dependencies/{other}` | Stop the task waiting for `other`. Needs edit rights on the task. No such link, or one to a task the caller can't see, is **404**. Answers with the fresh lists |
+| GET | `/api/tasks/{id}/dependencies/candidates?q=` | What the picker offers: up to 8 tasks still to do on Projects the caller owns or was given, the same Project's first, never one that would make a loop |
+| GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day, plus open tasks carried over from an earlier day; a waiting, done or cancelled task doesn't carry over (default: today in UTC; the UI sends the local date). Each carries `blocked_by`, as do the backlog and the calendar |
 | GET | `/api/tasks/all` | Every open task of the caller, with its node's title (the My Day backlog) |
 | POST | `/api/tasks` | Create a task on the Project its body names in `node_id`. A body that names none is refused (**422**): a task needs a Project, and loose input is a capture |
 | PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |

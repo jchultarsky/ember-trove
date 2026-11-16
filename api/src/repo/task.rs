@@ -5,8 +5,8 @@ use common::{
     id::{NodeId, TaskId},
     project_state::ProjectState,
     task::{
-        CreateTaskRequest, MyDayTask, Task, TaskCounts, TaskPriority, TaskStatus, TaskSummary,
-        UpdateTaskRequest,
+        CreateTaskRequest, ListedTask, MyDayTask, Task, TaskCounts, TaskPriority, TaskStatus,
+        TaskSummary, UpdateTaskRequest,
     },
 };
 use sqlx::PgPool;
@@ -26,11 +26,14 @@ pub trait TaskRepo: Send + Sync {
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError>;
 
+    /// A node's live tasks, each with how many tasks it still waits for
+    /// as `viewer` sees them (`None`: an admin, who reads every node).
+    /// The caller has checked that `viewer` may view the node.
     async fn list_for_node(
         &self,
         node_id: NodeId,
-        owner_id: &str,
-    ) -> Result<Vec<Task>, EmberTroveError>;
+        viewer: Option<&str>,
+    ) -> Result<Vec<ListedTask>, EmberTroveError>;
 
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError>;
 
@@ -206,11 +209,22 @@ const T_PRIORITY_RANK: &str =
 /// are NULL for a node they can't see; such a task is not listed at all,
 /// [`ON_A_NODE_THEY_SEE`]). One list for the three feeds: `FromRow` finds
 /// a missing column only when that feed runs.
-const FEED_COLS: &str = "t.id, t.node_id, t.owner_id, t.title, \
-     t.status::text AS status, t.priority::text AS priority, \
-     t.focus_date, t.due_date, t.sort_order, \
-     t.created_at, t.updated_at, t.completed_at, \
-     n.title AS node_title, n.project_state AS project_state";
+///
+/// `viewer` is the placeholder the feed binds its reader at: the count of
+/// what still holds the task back (S5d) is cut to what that reader can
+/// see, by its own test (`task_dependency::blocked_by_count`), since a
+/// prerequisite sits on its own node.
+fn feed_cols(viewer: u8) -> String {
+    format!(
+        "t.id, t.node_id, t.owner_id, t.title, \
+         t.status::text AS status, t.priority::text AS priority, \
+         t.focus_date, t.due_date, t.sort_order, \
+         t.created_at, t.updated_at, t.completed_at, \
+         n.title AS node_title, n.project_state AS project_state, \
+         {blocked_by} AS blocked_by",
+        blocked_by = super::task_dependency::blocked_by_count("t.id", viewer),
+    )
+}
 
 /// SQL for `Task::asks_for_attention` in a feed query (`t` the task, `n`
 /// its visible node): the task can be acted on and its project, if it is
@@ -288,6 +302,7 @@ struct MyDayRow {
     completed_at: Option<DateTime<Utc>>,
     node_title: Option<String>,
     project_state: Option<String>,
+    blocked_by: i32,
 }
 
 fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
@@ -315,7 +330,16 @@ fn my_day_row_to_task(r: MyDayRow) -> Result<MyDayTask, EmberTroveError> {
         task,
         node_title: r.node_title,
         project_state,
+        blocked_by: super::task_dependency::as_count(r.blocked_by),
     })
+}
+
+/// A [`TaskRow`] with its reader's blocked count, for a node's list.
+#[derive(sqlx::FromRow)]
+struct ListedRow {
+    #[sqlx(flatten)]
+    task: TaskRow,
+    blocked_by: i32,
 }
 
 /// The task states that are still to do (open, waiting): what a cascade
@@ -428,23 +452,33 @@ impl TaskRepo for PgTaskRepo {
     async fn list_for_node(
         &self,
         node_id: NodeId,
-        _owner_id: &str,
-    ) -> Result<Vec<Task>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TaskRow>(&format!(
+        viewer: Option<&str>,
+    ) -> Result<Vec<ListedTask>, EmberTroveError> {
+        let rows = sqlx::query_as::<_, ListedRow>(&format!(
             r#"
-            SELECT {SELECT_COLS}
+            SELECT {SELECT_COLS},
+                   {blocked_by} AS blocked_by
             FROM node_tasks
             WHERE node_id = $1
               AND deleted_at IS NULL
             ORDER BY sort_order ASC, created_at ASC
-            "#
+            "#,
+            blocked_by = super::task_dependency::blocked_by_count("node_tasks.id", 2),
         ))
         .bind(node_id.0)
+        .bind(viewer)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("list tasks failed: {e}")))?;
 
-        rows.into_iter().map(TaskRow::into_task).collect()
+        rows.into_iter()
+            .map(|r| {
+                Ok(ListedTask {
+                    blocked_by: super::task_dependency::as_count(r.blocked_by),
+                    task: r.task.into_task()?,
+                })
+            })
+            .collect()
     }
 
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError> {
@@ -566,7 +600,7 @@ impl TaskRepo for PgTaskRepo {
         let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
-                {FEED_COLS}
+                {feed_cols}
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
@@ -588,6 +622,7 @@ impl TaskRepo for PgTaskRepo {
                 t.node_id,
                 t.created_at
             "#,
+            feed_cols = feed_cols(3),
             visible = super::visible_to("n", 3),
             on_a_node_they_see = ON_A_NODE_THEY_SEE,
             asks_for_attention = asks_for_attention(),
@@ -612,7 +647,7 @@ impl TaskRepo for PgTaskRepo {
         let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
-                {FEED_COLS}
+                {feed_cols}
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
@@ -624,6 +659,7 @@ impl TaskRepo for PgTaskRepo {
                 {T_PRIORITY_RANK},
                 t.created_at
             "#,
+            feed_cols = feed_cols(4),
             visible = super::visible_to("n", 4),
             on_a_node_they_see = ON_A_NODE_THEY_SEE,
         ))
@@ -650,7 +686,7 @@ impl TaskRepo for PgTaskRepo {
         let rows = sqlx::query_as::<_, MyDayRow>(&format!(
             r#"
             SELECT
-                {FEED_COLS}
+                {feed_cols}
             FROM node_tasks t
             LEFT JOIN nodes n ON n.id = t.node_id AND {visible}
             WHERE t.owner_id = $1
@@ -662,6 +698,7 @@ impl TaskRepo for PgTaskRepo {
                 {T_PRIORITY_RANK},
                 t.created_at ASC
             "#,
+            feed_cols = feed_cols(2),
             visible = super::visible_to("n", 2),
             on_a_node_they_see = ON_A_NODE_THEY_SEE,
         ))

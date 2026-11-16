@@ -2,7 +2,7 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, patch, post, put},
+    routing::{delete, get, patch, post, put},
 };
 use chrono::NaiveDate;
 use common::{
@@ -11,9 +11,10 @@ use common::{
     node::{NodeListParams, NodeType},
     ontology::Capability,
     task::{
-        CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTasksRequest, Task, TaskCounts,
-        UpdateTaskRequest,
+        CreateTaskRequest, ListedTask, MyDayTask, ProjectDashboardEntry, ReorderTasksRequest, Task,
+        TaskCounts, UpdateTaskRequest,
     },
+    task_dependency::{AddDependencyRequest, TaskDependencies, TaskLink, refused_outright},
     webhook::{EVENT_TASK_CREATED, EVENT_TASK_DELETED, EVENT_TASK_UPDATED},
 };
 use garde::Validate;
@@ -22,7 +23,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::permissions::{
-        can_view, or_missing, or_missing_row, require_editor, require_viewer, subject_scope,
+        can_view, missing, or_missing, or_missing_row, require_editor, require_viewer,
+        subject_scope,
     },
     error::ApiError,
     routes::capability::require_capability,
@@ -41,6 +43,12 @@ pub fn task_router() -> Router<AppState> {
         .route("/all", get(list_all_open))
         .route("/{id}", patch(update_task).delete(delete_task))
         .route("/{id}/restore", post(restore_task))
+        .route(
+            "/{id}/dependencies",
+            get(list_dependencies).post(add_dependency),
+        )
+        .route("/{id}/dependencies/candidates", get(dependency_candidates))
+        .route("/{id}/dependencies/{other}", delete(remove_dependency))
         .route("/reorder", put(reorder_tasks))
 }
 
@@ -100,11 +108,11 @@ async fn list_tasks(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(node_id): Path<Uuid>,
-) -> Result<Json<Vec<Task>>, ApiError> {
+) -> Result<Json<Vec<ListedTask>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     let tasks = state
         .tasks
-        .list_for_node(NodeId(node_id), &claims.sub)
+        .list_for_node(NodeId(node_id), subject_scope(&claims))
         .await?;
     Ok(Json(tasks))
 }
@@ -270,6 +278,179 @@ async fn restore_task(
         &restored.owner_id,
     );
     Ok(Json(restored))
+}
+
+// ── Dependencies (S5d; ONTOLOGY §9.3, §6.4) ───────────────────────────────────
+
+/// What a link that isn't there, or isn't the caller's to know of, is called.
+const DEPENDENCY: &str = "dependency";
+
+/// The longest text the picker's search takes: a title's own limit.
+const MAX_CANDIDATE_QUERY: usize = 500;
+
+/// `task`'s dependencies as the caller sees them. A task on a node they
+/// can't view reads as missing. `may_edit` is [`require_task_editor`]'s
+/// rule read for them, so the page offers add and remove only where the
+/// call would pass.
+async fn dependencies_for(
+    state: &AppState,
+    claims: &AuthClaims,
+    task: &Task,
+) -> Result<TaskDependencies, ApiError> {
+    let permissions = state.permissions.as_ref();
+    let may_edit = match require_editor(permissions, claims, task.node_id).await {
+        Ok(()) => true,
+        Err(ApiError::Forbidden(_)) => false,
+        Err(e) => return Err(e),
+    };
+    if !may_edit && !can_view(permissions, claims, task.node_id).await? {
+        return Err(missing(TASK));
+    }
+    let (blocked_by, blocks) = state
+        .task_dependencies
+        .list(task.id, subject_scope(claims))
+        .await?;
+    Ok(TaskDependencies {
+        blocked_by,
+        blocks,
+        may_edit,
+    })
+}
+
+/// GET /tasks/{id}/dependencies — the tasks this one waits for, and the
+/// tasks that wait for it. Needs view rights on the task's node. Both
+/// lists hold only live tasks on nodes the caller can view.
+async fn list_dependencies(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TaskDependencies>, ApiError> {
+    let task = state
+        .tasks
+        .get(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
+    dependencies_for(&state, &claims, &task).await.map(Json)
+}
+
+/// POST /tasks/{id}/dependencies — make the task wait for another.
+///
+/// The order of the checks is the rule (the edges' order, #224):
+/// 1. what the request alone settles (a task waiting for itself);
+/// 2. the task, and edit rights on it;
+/// 3. the other task, which needs view rights on its node;
+/// 4. the structure, in the repo: the limit, no loop, no repeat.
+///
+/// SECURITY: the other task is looked at only after the caller has proved
+/// they may edit this one, and it answers the same 404 whether it doesn't
+/// exist or sits on a node they can't view. So the route can't be used to
+/// test an id.
+async fn add_dependency(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<AddDependencyRequest>,
+) -> Result<(StatusCode, Json<TaskDependencies>), ApiError> {
+    let (task_id, other) = (TaskId(id), req.depends_on);
+    if let Some(refusal) = refused_outright(task_id, other) {
+        return Err(ApiError::Validation(refusal.message()));
+    }
+    let task = state
+        .tasks
+        .get(task_id)
+        .await
+        .map_err(or_missing_row(TASK))?;
+    require_task_editor(&state, &claims, &task).await?;
+
+    let prerequisite = state.tasks.get(other).await.map_err(or_missing_row(TASK))?;
+    if !can_view(state.permissions.as_ref(), &claims, prerequisite.node_id).await? {
+        return Err(missing(TASK));
+    }
+
+    state
+        .task_dependencies
+        .add(task_id, other, subject_scope(&claims))
+        .await
+        .map_err(or_missing_row(TASK))?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_UPDATED,
+        Some(task.node_id),
+        &claims.sub,
+        &task.owner_id,
+    );
+    let fresh = dependencies_for(&state, &claims, &task).await?;
+    Ok((StatusCode::CREATED, Json(fresh)))
+}
+
+/// DELETE /tasks/{id}/dependencies/{other} — stop the task waiting for
+/// `other`. Needs edit rights on the task.
+///
+/// SECURITY: `other` is checked only inside the delete itself: a link is
+/// removed only when the caller is shown its other task. No link, a link
+/// to a task in the trash and a link to a task they can't see all answer
+/// the same 404.
+async fn remove_dependency(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path((id, other)): Path<(Uuid, Uuid)>,
+) -> Result<Json<TaskDependencies>, ApiError> {
+    let task = state
+        .tasks
+        .get(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
+    require_task_editor(&state, &claims, &task).await?;
+    state
+        .task_dependencies
+        .remove(task.id, TaskId(other), subject_scope(&claims))
+        .await
+        .map_err(or_missing_row(DEPENDENCY))?;
+    dispatch(
+        state.webhooks.clone(),
+        EVENT_TASK_UPDATED,
+        Some(task.node_id),
+        &claims.sub,
+        &task.owner_id,
+    );
+    dependencies_for(&state, &claims, &task).await.map(Json)
+}
+
+#[derive(Deserialize)]
+struct CandidateQuery {
+    #[serde(default)]
+    q: String,
+}
+
+/// GET /tasks/{id}/dependencies/candidates?q= — the tasks the picker
+/// offers: still to do, not already a prerequisite, and never one that
+/// `add` would refuse as a loop. Needs edit rights on the task.
+///
+/// SECURITY: bound to the caller's own account, never an admin's
+/// "everyone": an admin's picker offers their own tasks and the ones
+/// shared with them, not every account's titles.
+async fn dependency_candidates(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Query(query): Query<CandidateQuery>,
+) -> Result<Json<Vec<TaskLink>>, ApiError> {
+    if query.q.chars().count() > MAX_CANDIDATE_QUERY {
+        return Err(ApiError::Validation(format!(
+            "search text is at most {MAX_CANDIDATE_QUERY} characters"
+        )));
+    }
+    let task = state
+        .tasks
+        .get(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
+    require_task_editor(&state, &claims, &task).await?;
+    let offered = state
+        .task_dependencies
+        .candidates(task.id, &claims.sub, &query.q)
+        .await?;
+    Ok(Json(offered))
 }
 
 /// PUT /tasks/reorder — bulk update sort_order for drag-to-reorder in My Day

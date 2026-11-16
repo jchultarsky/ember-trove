@@ -69,6 +69,7 @@ pub mod session_retry;
 pub mod slug;
 pub mod tag;
 pub mod task;
+pub mod task_dependency;
 pub mod template;
 pub mod version;
 pub mod webhook;

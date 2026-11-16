@@ -190,7 +190,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12, task dependencies 13)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -258,7 +258,18 @@ cargo check && cargo clippy -- -D warnings
   purpose.
 - Changing what an archive holds, or where, bumps
   `common::backup::SCHEMA_VERSION`, so older releases refuse it.
-- **S5c did not bump it** (still 12): an archive holds the same things in
+- **Task dependencies (S5d, format 13)** are
+  `task_dependencies: Vec<TaskDependency>`, read by
+  `repo::task_dependency::list_all_on` inside the snapshot: links between
+  live tasks only, since the archive holds no trashed task. A plain
+  `Vec`, like Briefs: a link hangs on its tasks, and every restore
+  replaces the tasks. `restore_into` inserts them after the tasks, from
+  `backup::restorable_dependencies` (`task_dependency::restorable`): a
+  link needs both its tasks restored (a task with no node becomes a
+  capture, so it is not one), a pair comes back once, and no loop comes
+  back. The preview calls the same function, so its count is what the
+  restore does.
+- **S5c did not bump it** (it stayed 12): an archive holds the same things in
   the same places, only never a task without a node, so the release
   before can restore one made after. A rule that turns old content into
   something else on restore (a task with no node into a capture) reads the
@@ -683,13 +694,90 @@ cargo check && cargo clippy -- -D warnings
   Today (`asks_for_attention`). A waiting task, or one of a parked
   project, ticked in the Backlog stays where it was.
 - The three feeds (My Day, Backlog, Calendar) read one column list,
-  `FEED_COLS`, and carry `project_state` from the **same** join as
+  `feed_cols(n)`, and carry `project_state` from the **same** join as
   `node_title`: the one that checks the reader may see the node. Never
   add a second join to `nodes` in a feed.
 - Never use the server's UTC date for a user-facing day when the client
   can say. `done_toggle` stamps `focus_date` with the viewer's own
   `today`, and the My Day and calendar reads take their day from the
   request.
+
+## Task dependencies (S5d, #338)
+
+- "Task A waits for task B" is a row of `task_dependencies(task_id,
+  depends_on_id, created_at)` (migration 055). The rules are
+  `common::task_dependency`; the SQL is `repo::task_dependency`. The
+  table has **no account column**: a link follows its two tasks
+  (`ON DELETE CASCADE` both ways), so the account purge has no step for
+  it. Don't add `created_by`: the purge test sweeps such columns.
+- **Surfaced, never enforced** (ONTOLOGY §6.4, §12). A blocked task is in
+  every list it was in, and can be completed. Don't make `blocked_by`
+  part of `asks_for_attention`, the feeds' `WHERE`, or any order.
+- **Shown only through tasks the reader sees.** `shown_to(task, node, $n)`
+  is the one spelling: the other task is live (not in the trash) and on a
+  node the reader can view. `blocked_by_count(task_id, $n)` is the one
+  spelling of "how many prerequisites hold this back": `shown_to` plus
+  `holds_back_sql`, which is built from `task_dependency::holds_back`
+  (everything but Done; a Cancelled prerequisite blocks for good).
+  The two lists, the remove, the limit, the node's task list and the
+  three feeds all use them
+  (`the_blocked_count_is_one_rule_on_every_task_list`). Anything new that
+  shows or counts a dependency does too.
+- The count rides on `ListedTask` (the node's list) and `MyDayTask` (the
+  feeds), **never on `Task`**: it is per reader and not stored, and a
+  `Task` is also what a write answers with and what a backup reads. In a
+  feed it is a correlated subquery with its own `visible_to`: a
+  prerequisite sits on its own node, so this is not the "second join to
+  nodes" the feeds forbid. `feed_cols(n)` takes the placeholder the feed
+  binds its reader at.
+- `POST /tasks/{id}/dependencies` checks, in order:
+  1. a task named as its own prerequisite (`refused_outright`, 422, from
+     the request alone);
+  2. the task, then `require_task_editor`;
+  3. the other task: `or_missing_row(TASK)`, then `can_view` on its node,
+     and a hidden one is `missing(TASK)`: the same 404 as one that doesn't
+     exist. It is never looked at before step 2 has passed;
+  4. the repo: the limit, the loop check, the insert.
+  `a_dependency_is_added_only_by_an_editor_onto_a_task_they_can_see` and
+  `a_prerequisite_the_caller_cannot_see_reads_exactly_like_a_missing_one`
+  hold the order; the stub panics on a write that got past a check.
+- `DELETE /tasks/{id}/dependencies/{other}` checks the task and
+  `require_task_editor`, and `other` **only inside the delete**: it
+  removes only a link whose other task the caller is shown. No link, a
+  link to a trashed task and a link to a hidden one are the same 404. So
+  a link someone can't see is not theirs to remove (stricter than node
+  edges, on purpose: it does nothing for them, since they aren't shown or
+  counted it).
+- **The loop check looks at every link**, trashed and hidden included
+  (`closes_loop`, the edges' CTE with `UNION`), inside a transaction that
+  holds `pg_advisory_xact_lock(hashtext('ember.task_dependencies'))`.
+  Without the lock two inserts close a loop together:
+  `two_dependencies_added_at_once_cannot_close_a_loop` fails with it
+  removed (checked 2026-11-16). A refusal names no task. It can tell
+  someone who may edit one task and view another that a chain runs
+  between them; node edges tell the same.
+- **The limit (`MAX_PREREQUISITES`, 50) counts what the caller is shown**,
+  never every row: a count of all rows would tell them how many hidden
+  links a task has.
+- `add` does not lock the two task rows. A task trashed in the same
+  instant leaves an inert link (the reads leave it out); one deleted for
+  good fails the foreign key, mapped to the route's 404.
+- **The picker (`…/dependencies/candidates`) is bound to the person**:
+  the repo takes `subject: &str`, never `Option`, and the route passes
+  `claims.sub`. An admin's picker is not widened, unlike `/nodes/lookup`.
+  It offers tasks still to do, not on an archived node, not already a
+  prerequisite, and never one `add` would refuse as a loop: its `waits`
+  CTE walks the same links as `closes_loop`, the other way
+  (`the_dependency_picker_offers_only_what_can_be_added`). `q` goes
+  through `escape_like`.
+- Add and remove answer with the fresh `TaskDependencies` and send
+  `task.updated`. `may_edit` is `require_task_editor`'s rule read for
+  the reader, so the page offers a control only where the call would
+  pass.
+- **Not counted in the node deletion preview** (a departure from the rule
+  below, 2026-11-16): a link to a task on another node goes with a
+  deleted node's tasks, uncounted. A count would have to be worked out
+  per reader to stay inside what they can see.
 
 ## Node deletion preview (#281)
 
