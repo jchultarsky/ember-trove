@@ -156,6 +156,13 @@ pub fn MyDayView() -> impl IntoView {
         if crate::keyboard::active_element_is_editable() {
             return;
         }
+        // Nor while a task's editor is open: it has its own keys, and
+        // focus can sit on something in it that isn't a field (a link,
+        // or nothing at all after a control is removed). `d` must not
+        // delete the cursor's task from there.
+        if editing_id.get_untracked().is_some() {
+            return;
+        }
 
         let flat = flat_tasks.get_untracked();
         if flat.is_empty() {

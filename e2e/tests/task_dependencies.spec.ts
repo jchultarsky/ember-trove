@@ -192,13 +192,36 @@ test('a dependency is added and removed in the task editor, and the row says Blo
   const other = page.locator(`[data-task-id="${buy.id}"]`);
   await expect(row.getByTestId('task-blocked')).toHaveCount(0);
 
+  // Which searches the picker sends.
+  const asked: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/dependencies/candidates')) asked.push(r.url());
+  });
+
   let section = await openDependencies(page, paint.id);
   await expect(section).toContainText('Changes here apply at once.');
   // Nothing is asked before the field is focused; then the nearest tasks.
+  // (Other specs' tasks may be offered too: count this test's own.)
+  await expect(picker(section)).toBeVisible();
+  expect(asked).toEqual([]);
   await picker(section).click();
-  const options = section.getByRole('option');
-  await expect(options).toHaveCount(2);
-  await expect(options.filter({ hasText: `paint ${stamp}` })).toHaveCount(1); // not itself
+  const mine = () => section.getByRole('option').filter({ hasText: String(stamp) });
+  await expect(mine()).toHaveCount(2); // the other two tasks, not itself
+  expect(asked.length, 'one search for one focus and click').toBe(1);
+
+  // Escape closes the list, then clears the text, and only then is the
+  // editor's.
+  await picker(section).fill('buy');
+  await expect(section.getByRole('option', { selected: true })).toContainText(
+    `buy paint ${stamp}`,
+  );
+  await picker(section).press('Escape');
+  await expect(section.getByRole('option')).toHaveCount(0);
+  await expect(picker(section)).toHaveValue('buy');
+  await picker(section).press('Escape');
+  await expect(picker(section)).toHaveValue('');
+  await expect(row.getByTestId('task-editor')).toBeVisible();
+
   await picker(section).fill('buy');
   await expect(section.getByRole('option', { selected: true })).toContainText(
     `buy paint ${stamp}`,
@@ -212,12 +235,27 @@ test('a dependency is added and removed in the task editor, and the row says Blo
   await expect(list.getByTestId('dependency-project')).toHaveCount(0);
   // The picker stays, empty, and no longer offers it.
   await expect(picker(section)).toHaveValue('');
+  await expect(picker(section)).toBeFocused();
+  // It still has the focus, so only a click reopens its list.
   await picker(section).click();
-  await expect(section.getByRole('option')).toHaveCount(1);
-  await expect(section.getByRole('option')).toContainText(`clean brushes ${stamp}`);
+  await expect(mine()).toHaveCount(1);
+  await expect(mine()).toContainText(`clean brushes ${stamp}`);
 
-  // Cancel leaves the dependency: it was applied at once.
+  // Its title goes to the task: here, the row on this same page, with
+  // no navigation (the page is already the right one).
+  await list.getByRole('link', { name: `buy paint ${stamp}` }).click();
+  await expect(other).toHaveClass(/focus-task-flash/);
+  expect(new URL(page.url()).search).toBe('');
+  await expect(row.getByTestId('task-editor')).toBeVisible();
+
+  // Cancel leaves the dependency: it was applied at once. The list loads
+  // again once the editor has gone, so a row rebuilt later (a reorder)
+  // shows the new count.
+  const reloaded = page.waitForResponse(
+    (r) => r.url().endsWith(`/api/nodes/${project.id}/tasks`) && r.request().method() === 'GET',
+  );
   await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
+  await reloaded;
   const chip = row.getByTestId('task-blocked');
   await expect(chip).toBeVisible();
   await expect(chip).toHaveAttribute('title', 'Blocked by 1 task');
@@ -233,16 +271,26 @@ test('a dependency is added and removed in the task editor, and the row says Blo
   // Done: the task is free again. Reopened: blocked again.
   await other.getByTitle('Toggle done').click();
   await expect(chip).toHaveCount(0);
+  // Still listed in the editor, as done: linked, and no longer in the way.
+  section = await openDependencies(page, paint.id);
+  const doneItem = section.getByTestId('dependency');
+  await expect(doneItem.getByTestId('task-state')).toHaveText('Done');
+  await expect(doneItem.getByRole('link')).toHaveClass(/line-through/);
+  await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
   await page.getByRole('button', { name: /completed · show/ }).click();
   await other.getByTitle('Toggle done').click();
   await expect(chip).toBeVisible();
 
-  // Remove it.
+  // Remove it. The button goes with its row; the keyboard stays with the
+  // editor, so Escape closes the editor and does not leave the page.
   section = await openDependencies(page, paint.id);
   const remove = section.getByRole('button', { name: `Stop waiting for buy paint ${stamp}` });
   await remove.click();
   await expect(section.getByTestId('blocked-by-list')).toHaveCount(0);
-  await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
+  await expect(section).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(row.getByTestId('task-editor')).toHaveCount(0);
+  expect(new URL(page.url()).pathname).toBe(`/nodes/${project.id}`);
   await expect(chip).toHaveCount(0);
   expect(await blockedBy(request, project.id, paint.id)).toBe(0);
 });
@@ -254,10 +302,12 @@ test('a blocked task keeps its place in My Day and says so', async ({ page, requ
   const title = `send the invoice ${stamp}`;
   const task = await addTask(request, project.id, { title, focus_date: localISO(0) });
   const first = await addTask(request, elsewhere.id, { title: `agree the price ${stamp}` });
+  await addTask(request, elsewhere.id, { title: `get the order number ${stamp}` });
   expect((await waitFor(request, task.id, first.id)).status()).toBe(201);
 
   await page.goto('/tasks/my-day');
-  const row = page.locator(`[data-task-id="${task.id}"]`);
+  // In Today, where an unblocked task with today's focus date is.
+  const row = page.getByTestId('zone-today').locator(`[data-task-id="${task.id}"]`);
   await expect(row).toBeVisible();
   await expect(row.getByTestId('task-blocked')).toHaveAttribute('title', 'Blocked by 1 task');
 
@@ -266,7 +316,18 @@ test('a blocked task keeps its place in My Day and says so', async ({ page, requ
   const item = row.getByTestId('blocked-by-list').getByTestId('dependency');
   await expect(item).toContainText(`agree the price ${stamp}`);
   await expect(item.getByTestId('dependency-project')).toHaveText(elsewhere.title);
+
+  // A second one, picked with the mouse, from My Day's editor.
+  const section = row.getByTestId('task-dependencies');
+  await picker(section).fill('order number');
+  const option = section.getByRole('option').filter({ hasText: `get the order number ${stamp}` });
+  await expect(option).toBeVisible();
+  await option.click();
+  await expect(row.getByTestId('blocked-by-list').getByTestId('dependency')).toHaveCount(2);
+
   await row.getByTestId('task-editor').getByRole('button', { name: 'Cancel' }).click();
+  await expect(row.getByTestId('task-blocked')).toHaveAttribute('title', 'Blocked by 2 tasks');
+  await expect(row).toBeVisible(); // still in Today
 
   // Ticked off like any other task.
   await row.getByTitle('Toggle done').click();

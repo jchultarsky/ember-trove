@@ -49,13 +49,23 @@ pub fn schedule_focus_task() {
     }
 }
 
-fn try_focus_task(task_id: &str, win: &web_sys::Window) {
+/// Scroll to the row of a task that is on this page now, and flash it:
+/// `false` when no such row is in the DOM. For a link to a task that may
+/// be right here (S5d: a prerequisite in the same list). Navigating to
+/// `?task=` on the page already shown does nothing: the router doesn't
+/// run a route again for a new query, and the param is read on mount.
+pub fn focus_task_here(task_id: uuid::Uuid) -> bool {
+    web_sys::window().is_some_and(|win| try_focus_task(&task_id.to_string(), &win))
+}
+
+/// Whether the row was found (and scrolled to).
+fn try_focus_task(task_id: &str, win: &web_sys::Window) -> bool {
     let Some(doc) = win.document() else {
-        return;
+        return false;
     };
     let selector = format!("[data-task-id=\"{task_id}\"]");
     let Ok(Some(el)) = doc.query_selector(&selector) else {
-        return;
+        return false;
     };
 
     // Scroll into view, centred so the user can see surrounding context.
@@ -99,4 +109,5 @@ fn try_focus_task(task_id: &str, win: &web_sys::Window) {
         cleanup.as_ref().unchecked_ref(),
         1800,
     );
+    true
 }

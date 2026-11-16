@@ -66,7 +66,13 @@ fn LinkRow(
 ) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let title = plain_title(&link);
-    let href = crate::components::task_common::task_href(link.id.0, link.node_id.0);
+    // A finished task sits in its node's folded "completed" list, where
+    // `?task=` can't land: link to the node (as Data health does).
+    let href = if link.status.is_terminal() {
+        format!("/nodes/{}", link.node_id.0)
+    } else {
+        crate::components::task_common::task_href(link.id.0, link.node_id.0)
+    };
     let target = href.clone();
     let id = link.id;
     let elsewhere = (link.node_id != own_node).then(|| link.node_title.clone());
@@ -87,7 +93,22 @@ fn LinkRow(
                 // The editor keeps clicks to itself (rows navigate on
                 // click), so the router never sees this one: navigate here.
                 on:click=move |ev: web_sys::MouseEvent| {
+                    // A modified click is the browser's (a new tab).
+                    if ev.button() != 0
+                        || ev.ctrl_key()
+                        || ev.meta_key()
+                        || ev.shift_key()
+                        || ev.alt_key()
+                    {
+                        return;
+                    }
                     ev.prevent_default();
+                    // Its row may be on this very page (the same
+                    // Project's list): go to it. Navigating to `?task=`
+                    // on the page already shown does nothing.
+                    if crate::focus_task::focus_task_here(id.0) {
+                        return;
+                    }
                     navigate.get_value()(&target, Default::default());
                 }
             >
@@ -195,6 +216,28 @@ fn TaskPicker(
         });
     });
 
+    // Asks the first time only: setting `armed` again would run the
+    // search again on every click and blank the answer meanwhile.
+    let arm_and_open = move || {
+        if !armed.get_untracked() {
+            armed.set(true);
+        }
+        open.set(true);
+    };
+
+    // Keep the highlighted option in view: the list scrolls.
+    Effect::new(move |_| {
+        if let Some(i) = active.get()
+            && let Some(el) = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.get_element_by_id(&opt_id.get_value()(i)))
+        {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            el.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    });
+
     let fresh =
         move || answers.with_untracked(|a| a.as_deref() == Some(query.get_untracked().as_str()));
     let commit = move |i: usize| {
@@ -222,6 +265,8 @@ fn TaskPicker(
                     ev.key() == "ArrowDown",
                 ));
             }
+            // Ctrl/⌘+Enter saves the task from any control: the editor's.
+            "Enter" if ev.ctrl_key() || ev.meta_key() => {}
             "Enter" => {
                 // Never the editor's Save: Enter here is about the list.
                 ev.prevent_default();
@@ -275,16 +320,10 @@ fn TaskPicker(
                         query.set(event_target_value(&ev));
                         open.set(true);
                     }
-                    on:focus=move |_| {
-                        armed.set(true);
-                        open.set(true);
-                    }
+                    on:focus=move |_| arm_and_open()
                     // After a task is added the field keeps its focus, so
                     // no focus event comes: a click must open the list too.
-                    on:click=move |_| {
-                        armed.set(true);
-                        open.set(true);
-                    }
+                    on:click=move |_| arm_and_open()
                     on:blur=move |_| open.set(false)
                     on:keydown=on_keydown
                 />
@@ -349,7 +388,11 @@ fn TaskPicker(
                                     // mid-press.
                                     on:mousedown=move |ev: web_sys::MouseEvent| {
                                         ev.prevent_default();
-                                        if common::picker::is_pointer_press(ev.detail()) {
+                                        // The main button only: a right-click
+                                        // must not write a dependency.
+                                        if ev.button() == 0
+                                            && common::picker::is_pointer_press(ev.detail())
+                                        {
                                             commit(i);
                                         }
                                     }
@@ -376,6 +419,14 @@ fn TaskPicker(
             })}
         </div>
     }
+}
+
+/// Whether no element has the focus (it is on the page's body).
+fn focus_is_nowhere() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.active_element())
+        .is_none_or(|el| el.tag_name().eq_ignore_ascii_case("BODY"))
 }
 
 /// One change to a task's dependencies.
@@ -429,6 +480,24 @@ pub fn TaskDependenciesSection(
     let load = RwSignal::new(0u32);
     let offer = RwSignal::new(0u32);
     let busy = RwSignal::new(false);
+    let root: NodeRef<leptos::html::Div> = NodeRef::new();
+
+    // The lists hold each task's count as they last loaded it. Once
+    // something here changed, they must load again when the editor goes,
+    // or a row rebuilt from that snapshot (a reorder, a section folded and
+    // opened) would show the old count. After the unmount, not during it.
+    let changed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let task_refresh = expect_context::<crate::app::TaskRefresh>().0;
+    on_cleanup({
+        let changed = changed.clone();
+        move || {
+            if changed.load(std::sync::atomic::Ordering::Relaxed) {
+                wasm_bindgen_futures::spawn_local(async move {
+                    task_refresh.try_update(|n| *n += 1);
+                });
+            }
+        }
+    });
 
     // What the server says now, into the lists and the row's count.
     let apply = move |fresh: TaskDependencies| {
@@ -449,11 +518,12 @@ pub fn TaskDependenciesSection(
     });
 
     // One change at a time; each answers with the fresh lists.
-    let change = move |change: Change| {
+    let change = Callback::new(move |change: Change| {
         if busy.get_untracked() {
             return;
         }
         busy.set(true);
+        let changed = changed.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let (result, failed) = match change {
                 Change::Add(other) => (
@@ -472,16 +542,27 @@ pub fn TaskDependenciesSection(
             busy.try_set(false);
             match result {
                 Ok(fresh) => {
+                    changed.store(true, std::sync::atomic::Ordering::Relaxed);
                     apply(fresh);
                     offer.try_update(|n| *n += 1);
                 }
                 Err(e) => push_toast(ToastLevel::Error, format!("{failed}: {e}")),
             }
+            // The button that was pressed may be gone with its row (a
+            // remove), leaving the focus on nothing: the next key would
+            // then go to the page's own shortcuts, not the editor. Put it
+            // back in the section, once the lists have been redrawn.
+            gloo_timers::future::TimeoutFuture::new(0).await;
+            if focus_is_nowhere()
+                && let Some(section) = root.try_get_untracked().flatten()
+            {
+                let _ = section.focus();
+            }
         });
-    };
-    let on_pick = Callback::new(move |link: TaskLink| change(Change::Add(link.id)));
-    let on_remove = Callback::new(move |other: TaskId| change(Change::Remove(other)));
-    let on_remove_not_shown = Callback::new(move |()| change(Change::RemoveNotShown));
+    });
+    let on_pick = Callback::new(move |link: TaskLink| change.run(Change::Add(link.id)));
+    let on_remove = Callback::new(move |other: TaskId| change.run(Change::Remove(other)));
+    let on_remove_not_shown = Callback::new(move |()| change.run(Change::RemoveNotShown));
 
     // Which of the three the section shows. A memo, so a change to the
     // lists doesn't rebuild the section around the picker.
@@ -513,7 +594,12 @@ pub fn TaskDependenciesSection(
         "font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400";
     view! {
         <div
-            class="pt-2 border-t border-stone-200 dark:border-stone-700 space-y-1.5 text-xs"
+            node_ref=root
+            // Focusable by script only: where the focus returns after a
+            // remove (see `change`).
+            tabindex="-1"
+            class="pt-2 border-t border-stone-200 dark:border-stone-700 space-y-1.5 text-xs
+                focus:outline-none"
             role="group"
             aria-label="Dependencies"
             data-testid="task-dependencies"
