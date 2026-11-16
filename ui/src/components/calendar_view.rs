@@ -288,9 +288,10 @@ fn MonthGrid(
                                         title=title.clone()
                                         on:click=move |ev: web_sys::MouseEvent| {
                                             ev.stop_propagation();
-                                            if let Some(nid) = node_id {
-                                                navigate.get_value()(&format!("/nodes/{nid}"), Default::default());
-                                            }
+                                            navigate.get_value()(
+                                                &format!("/nodes/{node_id}"),
+                                                Default::default(),
+                                            );
                                         }
                                         inner_html=crate::markdown::render_markdown_inline(&title)
                                     ></button>

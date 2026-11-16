@@ -4703,7 +4703,7 @@ async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
     else {
         panic!("a task")
     };
-    assert_eq!((p, task.node_id), (project.id, Some(project.id)));
+    assert_eq!((p, task.node_id), (project.id, project.id));
 
     // Each capture went with its conversion: hard-deleted, no tombstone.
     assert_eq!(live(pool.clone()).await, 0);
@@ -7432,7 +7432,7 @@ async fn task_states_and_completion_dates_survive_a_backup_round_trip(pool: PgPo
     let archived = |id| {
         data.tasks
             .iter()
-            .find(|t: &&common::task::Task| t.id == id)
+            .find(|t: &&common::backup::BackupTask| t.id == id)
             .expect("in the archive")
     };
     assert_eq!(archived(done.id).completed_at, done.completed_at);
@@ -10632,7 +10632,7 @@ async fn an_older_archive_restores_its_repeating_tasks_as_one_time_tasks(pool: P
     assert_eq!(back.status, TaskStatus::Done);
     assert_eq!(back.completed_at, done.completed_at);
     assert_eq!(back.created_at, done.created_at);
-    assert_eq!(back.node_id, Some(node));
+    assert_eq!(back.node_id, node);
     let back = tasks.get(next.id).await.expect("restored");
     assert_eq!(back.title, "water the plants");
     assert_eq!(back.status, TaskStatus::Open);
@@ -10947,8 +10947,9 @@ async fn capture_rows(pool: &PgPool) -> Vec<CaptureRow> {
 #[sqlx::test(migrations = false)]
 async fn migration_054_turns_tasks_with_no_node_into_captures_and_requires_a_node(pool: PgPool) {
     use chrono::Datelike;
+    use common::backup::BackupTask;
     use common::id::TaskId;
-    use common::task::{Task, TaskPriority};
+    use common::task::TaskPriority;
 
     apply_migrations(&pool, |version| version < 54).await;
 
@@ -11083,7 +11084,7 @@ async fn migration_054_turns_tasks_with_no_node_into_captures_and_requires_a_nod
     let mut expected: Vec<CaptureRow> = capture_rows(&pool).await;
     assert_eq!(expected.len(), 1, "the capture that was already there");
     for (id, owner_id, title, status, due_date, created_at, updated_at, deleted_at) in rows {
-        let task = Task {
+        let task = BackupTask {
             id: TaskId(id),
             node_id: None,
             owner_id,
@@ -11198,27 +11199,28 @@ async fn migration_054_turns_tasks_with_no_node_into_captures_and_requires_a_nod
 #[sqlx::test(migrations = "../migrations")]
 async fn a_restore_turns_a_task_with_no_node_into_a_capture(pool: PgPool) {
     use super::capture::{CaptureRepo, PgCaptureRepo};
-    use common::backup::BackupData;
+    use common::backup::{BackupData, BackupTask};
     use common::id::TaskId;
-    use common::task::{Task, TaskPriority};
+    use common::task::TaskPriority;
 
     let host = a_project(&pool, "alice", "restore task host", None).await;
     let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
     let at = Utc::now() - Duration::days(40);
-    let task = |n: u128, node: Option<common::id::NodeId>, status: TaskStatus, title: &str| Task {
-        id: TaskId(uuid::Uuid::from_u128(n)),
-        node_id: node,
-        owner_id: "alice".into(),
-        title: title.into(),
-        status,
-        priority: TaskPriority::High,
-        focus_date: None,
-        due_date: chrono::NaiveDate::from_ymd_opt(2025, 11, 7),
-        sort_order: 3,
-        created_at: at,
-        updated_at: at,
-        completed_at: None,
-    };
+    let task =
+        |n: u128, node: Option<common::id::NodeId>, status: TaskStatus, title: &str| BackupTask {
+            id: TaskId(uuid::Uuid::from_u128(n)),
+            node_id: node,
+            owner_id: "alice".into(),
+            title: title.into(),
+            status,
+            priority: TaskPriority::High,
+            focus_date: None,
+            due_date: chrono::NaiveDate::from_ymd_opt(2025, 11, 7),
+            sort_order: 3,
+            created_at: at,
+            updated_at: at,
+            completed_at: None,
+        };
     let on_node = task(1, Some(host.id), TaskStatus::Open, "on its project");
     let loose = task(2, None, TaskStatus::Open, "call the bank");
     let loose_done = task(3, None, TaskStatus::Done, "post the letter");
@@ -11284,7 +11286,7 @@ async fn an_update_never_takes_a_task_off_its_node(pool: PgPool) {
         .update(task.id, asked_to_detach)
         .await
         .expect("update");
-    assert_eq!(after.node_id, Some(project), "still on its Project");
+    assert_eq!(after.node_id, project, "still on its Project");
     assert_eq!(after.title, "renamed");
 
     // A move still moves, and leaving the node out still leaves it.
@@ -11298,10 +11300,10 @@ async fn an_update_never_takes_a_task_off_its_node(pool: PgPool) {
         )
         .await
         .expect("move");
-    assert_eq!(moved.node_id, Some(other));
+    assert_eq!(moved.node_id, other);
     let untouched = tasks
         .update(task.id, status_req(TaskStatus::Waiting))
         .await
         .expect("update");
-    assert_eq!(untouched.node_id, Some(other));
+    assert_eq!(untouched.node_id, other);
 }

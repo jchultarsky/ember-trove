@@ -30,6 +30,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     same places, so 3.24 can restore an archive made by this release.
   - The calendar's day composer creates its task through
     `POST /api/nodes/{id}/tasks`. Nothing a page does has changed.
+  - A task's `node_id` in an API answer is always an id, never `null`
+    (`Task.node_id` is a `NodeId` in the code). An archive's tasks are
+    written exactly as before.
   - **Upgrading a self-hosted instance:** to see what will become a
     capture, run `SELECT title, status, due_date FROM node_tasks WHERE
     node_id IS NULL AND deleted_at IS NULL;` before you upgrade, and move

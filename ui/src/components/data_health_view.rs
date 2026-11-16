@@ -39,7 +39,7 @@ fn ref_href(r: &Ref) -> Option<String> {
             Some(if r.closed {
                 format!("/nodes/{node}")
             } else {
-                task_href(r.id, Some(node))
+                task_href(r.id, node)
             })
         }
         RefKind::Person => Some(format!("/people/{}", r.id)),
@@ -1036,7 +1036,7 @@ mod tests {
             Some(format!("/nodes/{id}"))
         );
         assert_eq!(
-            ref_href(&Ref::task(id, "t", Some(node), false)),
+            ref_href(&Ref::task(id, "t", node, false)),
             Some(format!("/nodes/{node}?task={id}"))
         );
         assert_eq!(
@@ -1049,7 +1049,7 @@ mod tests {
     fn a_closed_task_links_to_its_list_not_into_the_collapsed_section() {
         let id = Uuid::from_u128(1);
         let node = Uuid::from_u128(2);
-        let done = Ref::task(id, "t", Some(node), false).with_closed(true);
+        let done = Ref::task(id, "t", node, false).with_closed(true);
         assert_eq!(ref_href(&done), Some(format!("/nodes/{node}")));
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
     #[test]
     fn each_s2_rule_offers_its_fixes_and_the_rest_offer_none() {
         let id = Uuid::from_u128(1);
-        let task = Violation::new(Ref::task(id, "t", Some(Uuid::from_u128(2)), false), vec![]);
+        let task = Violation::new(Ref::task(id, "t", Uuid::from_u128(2), false), vec![]);
         assert_eq!(
             fixes_for(RuleId::TaskOnNonProject, &task),
             vec![Fix::MoveToProject, Fix::DeleteTask],
@@ -1253,7 +1253,7 @@ mod tests {
     fn delete_finished_takes_only_the_finished_tasks_of_a_task_card() {
         let task = |n: u128, closed: bool| {
             Violation::new(
-                Ref::task(Uuid::from_u128(n), "t", Some(Uuid::nil()), false).with_closed(closed),
+                Ref::task(Uuid::from_u128(n), "t", Uuid::nil(), false).with_closed(closed),
                 vec![],
             )
         };

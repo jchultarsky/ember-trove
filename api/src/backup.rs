@@ -69,7 +69,7 @@ fn activity_warning(counts: &EntityCounts) -> Option<String> {
 fn counts_as_restored(
     mut counts: EntityCounts,
     notes: &[BackupNote],
-    tasks: &[common::task::Task],
+    tasks: &[common::backup::BackupTask],
 ) -> EntityCounts {
     let as_u32 = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
     let notes_moved = as_u32(
@@ -90,7 +90,7 @@ fn counts_as_restored(
 
 /// How many of an archive's tasks have no Project (S5c, ONTOLOGY §9.3).
 /// The restore lands each as a capture (`capture::from_nodeless_task`).
-fn loose_tasks(tasks: &[common::task::Task]) -> usize {
+fn loose_tasks(tasks: &[common::backup::BackupTask]) -> usize {
     tasks
         .iter()
         .filter(|t| common::capture::from_nodeless_task(t).is_some())
@@ -98,7 +98,7 @@ fn loose_tasks(tasks: &[common::task::Task]) -> usize {
 }
 
 /// The restore preview's line about them: a count, never a title.
-fn loose_tasks_warning(tasks: &[common::task::Task]) -> Option<String> {
+fn loose_tasks_warning(tasks: &[common::backup::BackupTask]) -> Option<String> {
     let n = loose_tasks(tasks);
     (n > 0).then(|| {
         format!(
@@ -263,7 +263,13 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         .collect();
     // Captures (#234).
     let captures = repo::capture::list_all_on(&mut *conn).await?;
-    let tasks = repo::task::list_all_on(&mut *conn).await?;
+    // Each as the archive holds a task (`BackupTask`): word for word what
+    // `Task` writes, so the format is unchanged.
+    let tasks: Vec<common::backup::BackupTask> = repo::task::list_all_on(&mut *conn)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect();
     // Project Briefs (#282), all owners, in the same snapshot as their nodes.
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
@@ -1636,9 +1642,9 @@ mod tests {
         assert_eq!((out.notes, out.captures), (3, 0));
     }
 
-    fn task(n: u128, node: Option<u128>) -> common::task::Task {
+    fn task(n: u128, node: Option<u128>) -> common::backup::BackupTask {
         let at = chrono::Utc::now();
-        common::task::Task {
+        common::backup::BackupTask {
             id: common::id::TaskId(Uuid::from_u128(n)),
             node_id: node.map(|m| NodeId(Uuid::from_u128(m))),
             owner_id: "alice".into(),

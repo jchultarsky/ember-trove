@@ -22,8 +22,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::permissions::{
-        can_view, is_admin, missing, or_missing, or_missing_row, require_editor, require_viewer,
-        subject_scope,
+        can_view, or_missing, or_missing_row, require_editor, require_viewer, subject_scope,
     },
     error::ApiError,
     routes::capability::require_capability,
@@ -71,10 +70,8 @@ pub fn dashboard_activity_router() -> Router<AppState> {
 /// Who may change a task: an editor of its node (or an admin). One rule
 /// for update, delete and restore (#281, 3.3; it was written out three
 /// times), and the one `TaskRepo::reorder` applies in SQL.
-///
-/// A task always has a node since S5c (migration 054), so the "on no
-/// node: its owner" arm below can't be reached; it goes when
-/// `Task::node_id` stops being an `Option`.
+/// A task always has a node (S5c), so there is no other case: until then
+/// a task on no node was its owner's to change.
 ///
 /// SECURITY (owner decision, 2026-11-10): owning a task on a node is not a
 /// way in. The owner used to pass whatever their rights on the node, so
@@ -86,13 +83,7 @@ async fn require_task_editor(
     claims: &AuthClaims,
     task: &Task,
 ) -> Result<(), ApiError> {
-    let Some(node) = task.node_id else {
-        return if task.owner_id == claims.sub || is_admin(claims) {
-            Ok(())
-        } else {
-            Err(missing(TASK))
-        };
-    };
+    let node = task.node_id;
     // A refusal is a 403 only for someone who can see the task's node;
     // for anyone else the task reads as missing (`permissions::or_missing`).
     let check = require_editor(state.permissions.as_ref(), claims, node).await;
@@ -135,7 +126,7 @@ async fn create_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_CREATED,
-        task.node_id,
+        Some(task.node_id),
         &claims.sub,
         &task.owner_id,
     );
@@ -169,7 +160,7 @@ async fn create_task_named_in_body(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_CREATED,
-        task.node_id,
+        Some(task.node_id),
         &claims.sub,
         &task.owner_id,
     );
@@ -216,7 +207,7 @@ async fn update_task(
         require_editor(state.permissions.as_ref(), &claims, dest).await?;
         // §3.2 (#216): only onto a Project. Staying on the current node is
         // not a move, so a task already on a non-Project stays editable.
-        if existing.node_id != Some(dest) {
+        if existing.node_id != dest {
             require_capability(&state, dest, Capability::Tasks).await?;
         }
     }
@@ -226,7 +217,7 @@ async fn update_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_UPDATED,
-        updated.node_id,
+        Some(updated.node_id),
         &claims.sub,
         &updated.owner_id,
     );
@@ -249,7 +240,7 @@ async fn delete_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_DELETED,
-        node_id,
+        Some(node_id),
         &claims.sub,
         &owner_id,
     );
@@ -257,8 +248,8 @@ async fn delete_task(
 }
 
 /// POST /tasks/:id/restore — un-delete a soft-deleted task. Backs the undo
-/// toast; authorization mirrors delete (owner, admin, or editor of the parent
-/// node).
+/// toast; authorization mirrors delete (`require_task_editor`: an editor of
+/// the task's node, or an admin).
 async fn restore_task(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -274,7 +265,7 @@ async fn restore_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_UPDATED,
-        restored.node_id,
+        Some(restored.node_id),
         &claims.sub,
         &restored.owner_id,
     );

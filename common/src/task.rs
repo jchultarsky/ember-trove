@@ -106,11 +106,10 @@ impl TaskPriority {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Task {
     pub id: TaskId,
-    /// The task's Project (ONTOLOGY §9.3). Always set since S5c: the
-    /// database requires it (migration 054). `None` is read only from an
-    /// older archive, whose restore turns such a task into a capture
-    /// (`capture::from_nodeless_task`).
-    pub node_id: Option<NodeId>,
+    /// The task's Project (ONTOLOGY §9.3: exactly one). The database
+    /// requires it (migration 054). An archive may still hold a task
+    /// without one: that is a [`crate::backup::BackupTask`], never this.
+    pub node_id: NodeId,
     pub owner_id: String,
     pub title: String,
     pub status: TaskStatus,
@@ -139,16 +138,6 @@ pub fn is_overdue(status: &TaskStatus, due: Option<NaiveDate>, today: NaiveDate)
 }
 
 impl Task {
-    /// The completion date a restore writes: the archived one, and only
-    /// for a done task. The database refuses a date on any other state
-    /// (migration 050), and one such row in a hand-edited archive must not
-    /// fail the whole restore.
-    #[must_use]
-    pub fn restorable_completed_at(&self) -> Option<DateTime<Utc>> {
-        self.completed_at
-            .filter(|_| self.status == TaskStatus::Done)
-    }
-
     /// See [`is_overdue`].
     #[must_use]
     pub fn is_overdue(&self, today: NaiveDate) -> bool {
@@ -160,7 +149,7 @@ impl Task {
     /// Project is not set aside or closed
     /// (`project_state::lets_tasks_ask`; S6a, owner decision 2026-11-13).
     /// `project` is the state of the task's Project, `None` for a task on
-    /// no Project.
+    /// a node that is not a Project (older data).
     ///
     /// The one rule behind My Day's carry-over and its Overdue zone. Both
     /// take the project's state as a required argument, so no caller can
@@ -208,17 +197,19 @@ pub struct TaskCounts {
 }
 
 /// A task enriched with its parent node's title, returned by the My Day endpoint.
-/// `node_title` is `None` for a task with no Project, and for a node the
-/// caller can no longer see (#230).
+/// The feeds leave out a task whose node the caller can no longer see
+/// (2026-11-10), so `node_title` is set on every row they return; it stays
+/// an `Option` so a row without one can only read as "unavailable" (#230).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MyDayTask {
     #[serde(flatten)]
     pub task: Task,
     pub node_title: Option<String>,
     /// The declared state of the task's Project (S6a), from the same
-    /// visibility-scoped read as `node_title`: `None` for a task on no
-    /// Project. A task on a node its reader can't see is not in the feeds
-    /// at all, so this says nothing about a hidden node.
+    /// visibility-scoped read as `node_title`: `None` for a task on a node
+    /// that is not a Project (older data). A task on a node its reader
+    /// can't see is not in the feeds at all, so this says nothing about a
+    /// hidden node.
     #[serde(default)]
     pub project_state: Option<ProjectState>,
 }
@@ -239,13 +230,11 @@ impl MyDayTask {
 
 /// Where a feed task (`MyDayTask`) lives, for its parent chip (#230).
 ///
-/// The feeds null `node_title` when the task's node is no longer visible to
-/// the caller (a revoked share), while `node_id` stays: the task is still
-/// theirs. That case must not read as "No Project".
+/// Every task has a node (S5c), and the feeds list only tasks whose node
+/// the caller sees, so a row normally has its title. One without is
+/// shown as unavailable, never with a title the caller may not read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskParent {
-    /// A task with no Project (Data health lists it; S4c, #240).
-    NoProject,
     /// A task on a node the caller can see, with its title.
     Node(String),
     /// A task on a node the caller can no longer see.
@@ -253,17 +242,13 @@ pub enum TaskParent {
 }
 
 impl TaskParent {
-    pub fn of(node_id: Option<NodeId>, node_title: Option<String>) -> Self {
-        match (node_id, node_title) {
-            (None, _) => Self::NoProject,
-            (Some(_), Some(title)) => Self::Node(title),
-            (Some(_), None) => Self::Unavailable,
-        }
+    /// From the feed's `node_title`: `None` is a node its reader can't see.
+    pub fn of(node_title: Option<String>) -> Self {
+        node_title.map_or(Self::Unavailable, Self::Node)
     }
 
     pub fn label(&self) -> &str {
         match self {
-            Self::NoProject => "No Project",
             Self::Node(title) => title,
             Self::Unavailable => "Node unavailable",
         }
@@ -272,7 +257,6 @@ impl TaskParent {
     /// Material Symbols glyph for the chip.
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::NoProject => "link_off",
             Self::Node(_) => "rocket_launch",
             Self::Unavailable => "lock",
         }
@@ -418,7 +402,7 @@ pub struct UpdateTaskRequest {
     pub due_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(Some(id))` = move to that Project.
     /// `Some(None)` (an explicit null) asked to take the task off its
-    /// node; it is refused since S5c ([`a_move_not_a_detach`]). It stays
+    /// node; it is refused since S5c (`a_move_not_a_detach`). It stays
     /// a double option so that the refusal is ours, with its reason, and
     /// not a parser's.
     #[serde(
@@ -458,7 +442,7 @@ impl DoneToggle {
 ///
 /// Only a task that **was** carried over is stamped: one that asked for
 /// attention ([`Task::asks_for_attention`]: open, on a project that is
-/// active, or on none). A waiting task, or one of a parked or closed
+/// active, or on a node that is not a Project). A waiting task, or one of a parked or closed
 /// project, sat in the Backlog; ticking it there must not drop it into
 /// Today as done, where it never was. `project` is the state of the task's
 /// Project, required for the same reason as in [`Task::in_my_day`].
@@ -700,22 +684,17 @@ mod tests {
     }
 
     #[test]
-    fn task_parent_tells_no_project_from_an_unavailable_node() {
-        let id = Some(NodeId(uuid::Uuid::nil()));
-        assert_eq!(TaskParent::of(None, None), TaskParent::NoProject);
-        let shown = TaskParent::of(id, Some("Plan".into()));
+    fn task_parent_tells_a_node_the_reader_sees_from_one_they_cannot() {
+        let shown = TaskParent::of(Some("Plan".into()));
         assert_eq!(shown, TaskParent::Node("Plan".into()));
         assert_eq!((shown.label(), shown.icon()), ("Plan", "rocket_launch"));
         assert!(shown.is_reachable());
-        // #230: a node the caller lost access to has no title, but the task
-        // has a Project: it isn't "No Project".
-        let gone = TaskParent::of(id, None);
+        // #230: a node the caller lost access to has no title. The chip
+        // says so, and its page is not offered.
+        let gone = TaskParent::of(None);
         assert_eq!(gone, TaskParent::Unavailable);
         assert_eq!((gone.label(), gone.icon()), ("Node unavailable", "lock"));
         assert!(!gone.is_reachable());
-        // No Project opens Data health, which can fix it.
-        assert!(TaskParent::NoProject.is_reachable());
-        assert_eq!(TaskParent::NoProject.label(), "No Project");
     }
 
     #[test]
@@ -763,7 +742,7 @@ mod tests {
     fn task_in(status: TaskStatus, focus: Option<NaiveDate>, due: Option<NaiveDate>) -> Task {
         Task {
             id: TaskId(uuid::Uuid::from_u128(1)),
-            node_id: None,
+            node_id: NodeId(uuid::Uuid::from_u128(2)),
             owner_id: "alice".to_string(),
             title: "t".to_string(),
             status,
@@ -878,7 +857,8 @@ mod tests {
         }
         // A feed from before S6a has no such field: nothing is held back.
         let old: MyDayTask = serde_json::from_value(serde_json::json!({
-            "id": uuid::Uuid::from_u128(1), "node_id": null, "owner_id": "alice",
+            "id": uuid::Uuid::from_u128(1), "node_id": uuid::Uuid::from_u128(2),
+            "owner_id": "alice",
             "title": "t", "status": "open", "priority": "medium",
             "focus_date": null, "due_date": null, "recurrence": null, "sort_order": 0,
             "created_at": Utc::now(), "updated_at": Utc::now(), "node_title": null,
@@ -910,50 +890,31 @@ mod tests {
 
     #[test]
     fn a_task_from_before_s5a_has_no_completion_date() {
-        // An archive of format 8 or older has no `completed_at`, and may
-        // say `in_progress`.
-        let task: Task = serde_json::from_value(serde_json::json!({
-            "id": uuid::Uuid::from_u128(1),
-            "node_id": null,
-            "owner_id": "alice",
-            "title": "old",
-            "status": "in_progress",
-            "priority": "medium",
-            "focus_date": null,
-            "due_date": null,
-            "recurrence": null,
-            "sort_order": 0,
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-        }))
-        .expect("an old task");
+        // `Task` still reads JSON without `completed_at`, and reads
+        // `in_progress` as open: a client may send the old word, and it
+        // is never refused. (What an archive of that age holds is read as
+        // a `backup::BackupTask`; its tests are there.)
+        let mut old = one_time_task_json();
+        old["status"] = serde_json::json!("in_progress");
+        old.as_object_mut().expect("object").remove("completed_at");
+        let task: Task = serde_json::from_value(old).expect("an old task");
         assert_eq!(task.status, TaskStatus::Open);
         assert_eq!(task.completed_at, None);
+    }
 
-        // A restore keeps a completion date on a done task only.
-        let at = Utc::now();
-        for (status, kept) in [
-            (TaskStatus::Done, Some(at)),
-            (TaskStatus::Open, None),
-            (TaskStatus::Waiting, None),
-            (TaskStatus::Cancelled, None),
-        ] {
-            let t = Task {
-                status,
-                completed_at: Some(at),
-                ..task.clone()
-            };
-            assert_eq!(t.restorable_completed_at(), kept, "{:?}", t.status);
-        }
-        assert_eq!(
-            Task {
-                status: TaskStatus::Done,
-                ..task
-            }
-            .restorable_completed_at(),
-            None,
-            "a done task from before S5a keeps its empty date"
-        );
+    /// S5c (ONTOLOGY §9.3): a task has exactly one Project, and the type
+    /// says so. JSON with no node is not a task: nothing live answers with
+    /// one since migration 054, and an archive's tasks are read as
+    /// `backup::BackupTask`, which may have none.
+    #[test]
+    fn a_task_without_a_node_is_not_a_task() {
+        let mut loose = one_time_task_json();
+        loose["node_id"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<Task>(loose.clone()).is_err());
+        loose.as_object_mut().expect("object").remove("node_id");
+        assert!(serde_json::from_value::<Task>(loose).is_err());
+        let task: Task = serde_json::from_value(one_time_task_json()).expect("a task");
+        assert_eq!(task.node_id, NodeId(uuid::Uuid::from_u128(2)));
     }
 
     #[test]
@@ -1100,7 +1061,8 @@ mod tests {
     /// hold older code to it.)
     fn one_time_task_json() -> serde_json::Value {
         serde_json::json!({
-            "id": uuid::Uuid::from_u128(1), "node_id": null, "owner_id": "alice",
+            "id": uuid::Uuid::from_u128(1), "node_id": uuid::Uuid::from_u128(2),
+            "owner_id": "alice",
             "title": "t", "status": "open", "priority": "medium",
             "focus_date": null, "due_date": null, "sort_order": 0,
             "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",

@@ -645,9 +645,16 @@ cargo check && cargo clippy -- -D warnings
     (noted for the owner on #204, 2026-11-16; not changed).
 - Who may change a task is `require_task_editor` (routes/tasks.rs): an
   editor of its node; an admin always. `TaskRepo::reorder` applies the
-  same rule in SQL and skips the rest. (Both still carry an arm for a task
-  on no node, unreachable since 054; it goes with `Task::node_id`'s
-  `Option`.)
+  same rule in SQL and skips the rest. There is no other case: until S5c
+  a task on no node was its owner's to change.
+- **`Task::node_id` is a `NodeId`, not an `Option`** (S5c). An archive's
+  tasks are `common::backup::BackupTask`, the one type that still allows
+  none; it writes word for word what `Task` writes
+  (`an_archived_task_is_written_exactly_as_the_task_itself`), which is
+  why the format stays 12. A new field on `Task` goes on `BackupTask`
+  too, in the same place, or that test fails. A feed's `LEFT JOIN nodes`
+  with `ON_A_NODE_THEY_SEE` now means "its node is one the reader sees",
+  nothing else.
 - A list's admin scope is `subject_scope(&claims)`, never an inline
   `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
   `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are

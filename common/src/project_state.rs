@@ -86,8 +86,7 @@ impl ProjectState {
 }
 
 /// Whether a task's project lets it ask for attention. `None` is a task
-/// on no node, or on a node that is not a Project (older data): nothing
-/// holds it back.
+/// on a node that is not a Project (older data): nothing holds it back.
 #[must_use]
 pub fn lets_tasks_ask(project: Option<ProjectState>) -> bool {
     project.is_none_or(|s| s.asks_for_attention())

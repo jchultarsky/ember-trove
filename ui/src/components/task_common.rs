@@ -42,14 +42,9 @@ pub fn undo_restore_task(
 // ── Status ──────────────────────────────────────────────────────────────────
 
 /// Where a task opens: on its node's page, where `?task=` scrolls to and
-/// highlights it. Every task has a node since S5c (#335), so the `None`
-/// arm is never taken; it goes when `Task::node_id` stops being an
-/// `Option`.
-pub fn task_href(task: uuid::Uuid, node: Option<uuid::Uuid>) -> String {
-    match node {
-        Some(nid) => format!("/nodes/{nid}?task={task}"),
-        None => "/data-health".to_string(),
-    }
+/// highlights it. Every task has one (S5c, #335).
+pub fn task_href(task: uuid::Uuid, node: uuid::Uuid) -> String {
+    format!("/nodes/{node}?task={task}")
 }
 
 /// Returns `true` for terminal statuses (Done, Cancelled).
@@ -136,7 +131,7 @@ mod tests {
         MyDayTask {
             task: Task {
                 id: TaskId(uuid::Uuid::new_v4()),
-                node_id: None,
+                node_id: common::id::NodeId(uuid::Uuid::nil()),
                 owner_id: "t".to_string(),
                 title: "t".to_string(),
                 status,
