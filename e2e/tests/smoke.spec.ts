@@ -68,8 +68,8 @@ test.describe('quick capture', () => {
     const captures: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
     const created = captures.find((c) => c.body === text);
     expect(created).toBeTruthy();
-    const inbox: { title: string }[] = await (await request.get('/api/tasks/inbox')).json();
-    expect(inbox.some((t) => t.title.includes(text))).toBe(false);
+    const tasks: { title: string }[] = await (await request.get('/api/tasks/all')).json();
+    expect(tasks.some((t) => t.title.includes(text))).toBe(false);
     await request.delete(`/api/captures/${created!.id}`);
   });
 });

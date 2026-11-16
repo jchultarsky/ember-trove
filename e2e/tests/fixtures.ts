@@ -108,6 +108,56 @@ export async function createNode(
   return resp.json();
 }
 
+/** Create a Project: the only kind of node that holds tasks (ONTOLOGY §9.3). */
+export async function createProject(request: APIRequestContext, title: string) {
+  return createNode(request, title, { node_type: 'project' });
+}
+
+/**
+ * Add a task to a Project via the API. A task needs its Project (S5c):
+ * `POST /api/tasks` without one is refused, so a spec that wants a task
+ * makes its Project first and deletes the Project to clean up (its tasks
+ * go with it).
+ */
+export async function addTask(
+  request: APIRequestContext,
+  projectId: string,
+  data: { title: string; [field: string]: unknown },
+) {
+  const resp = await request.post(`/api/nodes/${projectId}/tasks`, { data });
+  expect(resp.ok()).toBeTruthy();
+  return resp.json();
+}
+
+/** Every task on a node, whatever its state (tombstones excluded). */
+export async function tasksOf(request: APIRequestContext, nodeId: string) {
+  const resp = await request.get(`/api/nodes/${nodeId}/tasks`);
+  expect(resp.ok()).toBeTruthy();
+  return (await resp.json()) as {
+    id: string;
+    title: string;
+    status: string;
+    focus_date: string | null;
+  }[];
+}
+
+/**
+ * Delete the caller's nodes whose title starts with `prefix`, and with
+ * them their tasks and notes. For a spec's retry-safe wipe
+ * (`.claude/rules/e2e.md`): a few rounds, in case more are left than one
+ * lookup returns.
+ */
+export async function deleteNodesByPrefix(request: APIRequestContext, prefix: string) {
+  for (let round = 0; round < 5; round++) {
+    const hits: { id: string; title: string }[] = await (
+      await request.get(`/api/nodes/lookup?q=${encodeURIComponent(prefix.trim())}&limit=20`)
+    ).json();
+    const mine = hits.filter((n) => n.title.startsWith(prefix));
+    if (mine.length === 0) break;
+    for (const n of mine) await request.delete(`/api/nodes/${n.id}`);
+  }
+}
+
 /** Add a note to a node via the API. */
 export async function createNote(request: APIRequestContext, nodeId: string, body: string) {
   const resp = await request.post(`/api/nodes/${nodeId}/notes`, { data: { body, color: 'default' } });

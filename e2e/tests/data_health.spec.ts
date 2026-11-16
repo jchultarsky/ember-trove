@@ -1,4 +1,14 @@
-import { test, expect, createNode, type APIRequestContext } from './fixtures';
+import {
+  test,
+  expect,
+  createNode,
+  createProject,
+  addTask,
+  tasksOf,
+  deleteNodesByPrefix,
+  type APIRequestContext,
+  type Page,
+} from './fixtures';
 
 /**
  * The Data health page (#208): the caller's data that doesn't fit the data
@@ -18,53 +28,73 @@ const subjectsOf = async (request: APIRequestContext, rule: string): Promise<str
  * attempt left behind before starting, and everything after. */
 const PREFIX = 'e2e dh ';
 
-async function wipe(request: APIRequestContext) {
-  // Title lookup (own nodes, prefix first); a few rounds in case more
-  // leftovers exist than one page returns.
-  for (let round = 0; round < 5; round++) {
-    const hits: { id: string; title: string }[] = await (
-      await request.get(`/api/nodes/lookup?q=${encodeURIComponent(PREFIX.trim())}&limit=20`)
-    ).json();
-    const mine = hits.filter((n) => n.title.startsWith(PREFIX));
-    if (mine.length === 0) break;
-    for (const n of mine) await request.delete(`/api/nodes/${n.id}`);
-  }
-  const inbox = await (await request.get('/api/tasks/inbox')).json();
-  for (const t of inbox ?? []) {
-    if (typeof t.title === 'string' && t.title.startsWith(PREFIX)) {
-      await request.delete(`/api/tasks/${t.id}`);
-    }
-  }
+const wipe = (request: APIRequestContext) => deleteNodesByPrefix(request, PREFIX);
+
+/**
+ * Serve the page a "Tasks outside a Project" card that lists the real tasks
+ * on `home`. The API refuses a task on anything but a Project (#216) and a
+ * task with no Project at all (S5c), so no call can make the data this card
+ * is for: only older data has it. `home` is a real Project standing in for
+ * that older node, and the items are read from it on every load, so the
+ * card's fixes run against the real API and the card shows what they did.
+ */
+async function serveTasksOutsideAProject(
+  page: Page,
+  request: APIRequestContext,
+  home: { id: string; title: string },
+) {
+  await page.route('**/api/data-health', async (route) => {
+    const items = (await tasksOf(request, home.id)).map((t) => ({
+      subject: {
+        kind: 'task',
+        id: t.id,
+        label: t.title,
+        node_id: home.id,
+        closed: t.status === 'done' || t.status === 'cancelled',
+      },
+      related: [{ kind: 'node', id: home.id, label: home.title }],
+      more: 0,
+    }));
+    await route.fulfill({
+      json: { rules: [{ rule: 'task_on_non_project', count: items.length, items }] },
+    });
+  });
 }
 
-const inboxIds = async (request: APIRequestContext): Promise<string[]> =>
-  ((await (await request.get('/api/tasks/inbox')).json()) as { id: string }[]).map((t) => t.id);
+const idsOn = async (request: APIRequestContext, nodeId: string): Promise<string[]> =>
+  (await tasksOf(request, nodeId)).map((t) => t.id);
 
-test('the page lists data that breaks the model, linked to where it lives', async ({
-  page,
-  request,
-  otherRequest,
-}) => {
+test('what the model forbids is refused, and has no card', async ({ page, request }) => {
   await wipe(request);
   try {
     const stamp = Date.now();
     const area = await createNode(request, `${PREFIX}area ${stamp}`, { node_type: 'area' });
-    const a = await createNode(request, `${PREFIX}pair a ${stamp}`, { node_type: 'project' });
-    const b = await createNode(request, `${PREFIX}pair b ${stamp}`, { node_type: 'project' });
-    // A task on an Area is refused now (§3.2, #216): it can no longer be
-    // made through the API, so that rule is covered by the pg tests, and
-    // here the refusal itself is checked.
+    const a = await createProject(request, `${PREFIX}pair a ${stamp}`);
+    const b = await createProject(request, `${PREFIX}pair b ${stamp}`);
+    // A task on an Area is refused (§3.2, #216): it can no longer be made
+    // through the API, so that rule is covered by the pg tests, and here
+    // the refusal itself is checked.
     const onArea = await request.post(`/api/nodes/${area.id}/tasks`, {
       data: { title: `${PREFIX}task on area ${stamp}` },
     });
     expect(onArea.status()).toBe(422);
     expect((await onArea.json()).error).toBe('only Projects have tasks');
-    // A task with no Project at all.
-    const orphanResp = await request.post('/api/tasks', {
-      data: { title: `${PREFIX}orphan ${stamp}` },
+    // A task with no Project at all is refused too (§9.3, S5c), whether
+    // it is made that way or taken off its Project.
+    const loose = await request.post('/api/tasks', {
+      data: { title: `${PREFIX}loose ${stamp}` },
     });
-    expect(orphanResp.ok()).toBeTruthy();
-    const orphan = await orphanResp.json();
+    expect(loose.status()).toBe(422);
+    expect((await loose.json()).error).toBe('a task needs a Project');
+    const task = await addTask(request, a.id, { title: `${PREFIX}stays ${stamp}` });
+    const detached = await request.patch(`/api/tasks/${task.id}`, { data: { node_id: null } });
+    expect(detached.status()).toBe(422);
+    expect((await detached.json()).error).toContain('a task needs a Project');
+    expect(await idsOn(request, a.id)).toEqual([task.id]);
+    // Moving it to another Project is still an edit like any other.
+    const moved = await request.patch(`/api/tasks/${task.id}`, { data: { node_id: b.id } });
+    expect(moved.ok()).toBeTruthy();
+    expect(await idsOn(request, b.id)).toEqual([task.id]);
     // related_to is stored once (#226): the reverse is the same link, so
     // that rule can no longer be broken through the API. The pg tests cover
     // the rule on older data; here the refusal itself is checked.
@@ -78,20 +108,23 @@ test('the page lists data that breaks the model, linked to where it lives', asyn
     expect(ba.status()).toBe(409);
     expect((await ba.json()).error).toBe('already linked as related to');
 
-    // The API reports each under its rule, to the owner only.
-    expect(await subjectsOf(request, 'orphan_task')).toContain(orphan.id);
-    expect(await subjectsOf(otherRequest, 'orphan_task')).not.toContain(orphan.id);
-
-    // The page shows them, each in its rule's card. A task with no Project
-    // lives only here since S4c (#240), so it is named without a link.
+    // "Tasks with no Project" is no rule any more: not in the report, and
+    // no card on the page.
+    const report: Report = await (await request.get('/api/data-health')).json();
+    const rules = report.rules.map((r) => r.rule);
+    expect(rules).toContain('task_on_non_project');
+    expect(rules).not.toContain('orphan_task');
+    expect(await subjectsOf(request, 'task_on_non_project')).not.toContain(task.id);
+    // Looked at only once the page has its report: before that there is
+    // no card of any kind.
+    const loaded = page.waitForResponse(
+      (r) => r.url().endsWith('/api/data-health') && r.request().method() === 'GET',
+    );
     await page.goto('/data-health');
+    expect((await loaded).ok()).toBeTruthy();
     await expect(page.getByRole('heading', { name: 'Data health' })).toBeVisible();
-    const orphanCard = page.getByTestId('data-health-orphan_task');
-    await expect(orphanCard).toContainText(orphan.title);
-    await expect(orphanCard.locator('a[href*="/tasks/inbox"]')).toHaveCount(0);
-    // Each card explains its rule and how to fix it.
-    await expect(orphanCard).toContainText('A task belongs to exactly one Project.');
-    await expect(orphanCard).toContainText('To fix:');
+    await expect(page.getByTestId('data-health-task_on_non_project')).toHaveCount(0);
+    await expect(page.getByTestId('data-health-orphan_task')).toHaveCount(0);
   } finally {
     await wipe(request);
   }
@@ -126,7 +159,9 @@ test('a task outside a Project links into its node', async ({ page, request }) =
     );
     await page.goto('/data-health');
     const card = page.getByTestId('data-health-task_on_non_project');
+    // Each card explains its rule and how to fix it.
     await expect(card).toContainText('Only Projects have tasks.');
+    await expect(card).toContainText('To fix:');
     await expect(card.locator(`a[href="/nodes/${node.id}?task=${taskId}"]`)).toBeVisible();
     await expect(card.locator(`a[href="/nodes/${node.id}"]`)).toBeVisible();
   } finally {
@@ -134,26 +169,27 @@ test('a task outside a Project links into its node', async ({ page, request }) =
   }
 });
 
-test('"Move to a Project" fixes an orphan task in one step (#216)', async ({ page, request }) => {
+test('"Move to a Project" fixes a task outside a Project in one step (#216)', async ({
+  page,
+  request,
+}) => {
   await wipe(request);
   try {
     const stamp = Date.now();
-    const project = await createNode(request, `${PREFIX}move target ${stamp}`, {
-      node_type: 'project',
-    });
+    const project = await createProject(request, `${PREFIX}move target ${stamp}`);
     const article = await createNode(request, `${PREFIX}move article ${stamp}`);
-    const orphan = await (
-      await request.post('/api/tasks', { data: { title: `${PREFIX}to move ${stamp}` } })
-    ).json();
+    const home = await createProject(request, `${PREFIX}legacy home ${stamp}`);
+    const task = await addTask(request, home.id, { title: `${PREFIX}to move ${stamp}` });
 
     // The API itself refuses the wrong destination.
-    const refused = await request.patch(`/api/tasks/${orphan.id}`, {
+    const refused = await request.patch(`/api/tasks/${task.id}`, {
       data: { node_id: article.id },
     });
     expect(refused.status()).toBe(422);
 
+    await serveTasksOutsideAProject(page, request, home);
     await page.goto('/data-health');
-    const card = page.getByTestId('data-health-orphan_task');
+    const card = page.getByTestId('data-health-task_on_non_project');
     const row = card.getByTestId('data-health-item').filter({ hasText: `${PREFIX}to move ${stamp}` });
     await row.getByRole('button', { name: /Move to a Project/ }).click();
     const picker = row.getByRole('combobox', { name: 'Move to a Project…' });
@@ -165,10 +201,9 @@ test('"Move to a Project" fixes an orphan task in one step (#216)', async ({ pag
     await picker.press('Enter');
 
     await expect(page.locator('[role="status"]').getByText(/Moved to/)).toBeVisible();
-    await expect(card.getByText(`${PREFIX}to move ${stamp}`)).toHaveCount(0);
-    await expect
-      .poll(async () => (await (await request.get(`/api/nodes/${project.id}/tasks`)).json()).length)
-      .toBe(1);
+    await expect(page.getByText(`${PREFIX}to move ${stamp}`)).toHaveCount(0);
+    await expect.poll(() => idsOn(request, project.id)).toEqual([task.id]);
+    expect(await idsOn(request, home.id)).toEqual([]);
   } finally {
     await wipe(request);
   }
@@ -182,60 +217,47 @@ test('a task can be deleted from Data health, and Undo brings it back', async ({
   try {
     const stamp = Date.now();
     const title = `${PREFIX}delete one ${stamp}`;
-    const task = await (await request.post('/api/tasks', { data: { title } })).json();
+    const home = await createProject(request, `${PREFIX}legacy home ${stamp}`);
+    const task = await addTask(request, home.id, { title });
+    await serveTasksOutsideAProject(page, request, home);
     await page.goto('/data-health');
-    const card = page.getByTestId('data-health-orphan_task');
+    const card = page.getByTestId('data-health-task_on_non_project');
     const row = card.getByTestId('data-health-item').filter({ hasText: title });
     await row.getByRole('button', { name: 'Delete task' }).click();
     const confirm = row.getByRole('group', { name: 'Confirm delete' });
     await expect(confirm).toContainText(title);
     await confirm.getByRole('button', { name: 'Delete' }).click();
-    await expect(card.getByText(title)).toHaveCount(0);
-    expect(await inboxIds(request)).not.toContain(task.id);
+    await expect(page.getByText(title)).toHaveCount(0);
+    expect(await idsOn(request, home.id)).not.toContain(task.id);
 
     // Undo restores it, and the report shows it again.
     await page.locator('[role="status"]').getByRole('button', { name: 'Undo' }).click();
     await expect(card.getByText(title)).toBeVisible();
+    expect(await idsOn(request, home.id)).toContain(task.id);
   } finally {
     await wipe(request);
   }
 });
 
-test('"Delete finished" clears the done and cancelled orphan tasks, with Undo', async ({
+test('"Delete finished" clears the done and cancelled tasks of a card, with Undo', async ({
   page,
   request,
 }) => {
   await wipe(request);
   try {
     const stamp = Date.now();
-    const make = async (title: string, status?: string) => {
-      const t = await (await request.post('/api/tasks', { data: { title } })).json();
-      if (status) {
-        const r = await request.patch(`/api/tasks/${t.id}`, { data: { status } });
-        expect(r.ok()).toBeTruthy();
-      }
-      return t;
-    };
+    const home = await createProject(request, `${PREFIX}legacy home ${stamp}`);
+    const make = (title: string, status?: string) =>
+      addTask(request, home.id, status ? { title, status } : { title });
     const done = await make(`${PREFIX}done ${stamp}`, 'done');
     const cancelled = await make(`${PREFIX}cancelled ${stamp}`, 'cancelled');
     const open = await make(`${PREFIX}still open ${stamp}`);
-    const ours = new Set([done.id, cancelled.id, open.id]);
 
-    // The bulk button acts on what its card lists. Show only this test's
-    // tasks, so it can never delete another spec's data in the shared DB.
-    await page.route('**/api/data-health', async (route) => {
-      const real = await (await route.fetch()).json();
-      for (const r of real.rules) {
-        if (r.rule === 'orphan_task') {
-          r.items = r.items.filter((i: { subject: { id: string } }) => ours.has(i.subject.id));
-          r.count = r.items.length;
-        }
-      }
-      await route.fulfill({ json: real });
-    });
-
+    // The bulk button acts on what its card lists: this test's tasks only,
+    // so it can never delete another spec's data in the shared DB.
+    await serveTasksOutsideAProject(page, request, home);
     await page.goto('/data-health');
-    const card = page.getByTestId('data-health-orphan_task');
+    const card = page.getByTestId('data-health-task_on_non_project');
     await card
       .getByTestId('delete-finished')
       .getByRole('button', { name: 'Delete the 2 finished tasks (done or cancelled)' })
@@ -247,7 +269,7 @@ test('"Delete finished" clears the done and cancelled orphan tasks, with Undo', 
     await expect(card.getByText(`${PREFIX}done ${stamp}`)).toHaveCount(0);
     await expect(card.getByText(`${PREFIX}cancelled ${stamp}`)).toHaveCount(0);
     await expect(card.getByText(`${PREFIX}still open ${stamp}`)).toBeVisible();
-    let left = await inboxIds(request);
+    let left = await idsOn(request, home.id);
     expect(left).not.toContain(done.id);
     expect(left).not.toContain(cancelled.id);
     expect(left).toContain(open.id);
@@ -256,7 +278,7 @@ test('"Delete finished" clears the done and cancelled orphan tasks, with Undo', 
     await page.locator('[role="status"]').getByRole('button', { name: 'Undo' }).click();
     await expect(card.getByText(`${PREFIX}done ${stamp}`)).toBeVisible();
     await expect(card.getByText(`${PREFIX}cancelled ${stamp}`)).toBeVisible();
-    left = await inboxIds(request);
+    left = await idsOn(request, home.id);
     expect(left).toContain(done.id);
     expect(left).toContain(cancelled.id);
   } finally {

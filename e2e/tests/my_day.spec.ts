@@ -1,17 +1,35 @@
-import { test, expect, localISO, type APIRequestContext } from './fixtures';
+import {
+  test,
+  expect,
+  localISO,
+  createProject,
+  addTask,
+  tasksOf,
+  deleteNodesByPrefix,
+  type APIRequestContext,
+} from './fixtures';
 
 /** My Day: carryover "still today?" prompt and the foldable overdue section. */
+
+// A task needs its Project (S5c, ONTOLOGY §9.3), so each test makes one for
+// its tasks. Deleting the Project takes them with it; the wipe removes what
+// a crashed attempt left (retry-safety, .claude/rules/e2e.md). The title
+// holds no word a test looks for in a row ("carried", "done", "Overdue").
+const HOST_PREFIX = 'e2e myday host ';
+
+const host = (request: APIRequestContext) =>
+  createProject(request, `${HOST_PREFIX}${Date.now()}`);
+
+test.beforeEach(async ({ request }) => deleteNodesByPrefix(request, HOST_PREFIX));
+test.afterEach(async ({ request }) => deleteNodesByPrefix(request, HOST_PREFIX));
 
 test('carried-over task prompts "still today?" — Yes re-stamps to today', async ({
   page,
   request,
 }) => {
   const title = `e2e carryover ${Date.now()}`;
-  const created = await request.post('/api/tasks', {
-    data: { title, focus_date: localISO(-1) },
-  });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
+  const project = await host(request);
+  await addTask(request, project.id, { title, focus_date: localISO(-1) });
 
   try {
     await page.goto('/tasks/my-day');
@@ -27,7 +45,7 @@ test('carried-over task prompts "still today?" — Yes re-stamps to today', asyn
     await expect(fresh).toBeVisible();
     await expect(fresh.getByText(/carried/)).not.toBeVisible();
   } finally {
-    await request.delete(`/api/tasks/${task.id}`);
+    await request.delete(`/api/nodes/${project.id}`);
   }
 });
 
@@ -42,11 +60,8 @@ test('long task titles wrap on phone widths, truncate on desktop', async ({
   const title =
     `e2e wrap ${stamp} — a deliberately verbose task title that cannot ` +
     `possibly fit on a single 375px-wide line of small text`;
-  const created = await request.post('/api/tasks', {
-    data: { title, focus_date: localISO(0) },
-  });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
+  const project = await host(request);
+  await addTask(request, project.id, { title, focus_date: localISO(0) });
   const SINGLE_LINE_MAX_PX = 30; // text-sm line ≈ 20px; 2 wrapped lines ≥ 36px
 
   try {
@@ -61,17 +76,14 @@ test('long task titles wrap on phone widths, truncate on desktop', async ({
     const desktop = await titleEl.boundingBox();
     expect(desktop!.height).toBeLessThan(SINGLE_LINE_MAX_PX);
   } finally {
-    await request.delete(`/api/tasks/${task.id}`);
+    await request.delete(`/api/nodes/${project.id}`);
   }
 });
 
 test('overdue tasks group into a foldable section', async ({ page, request }) => {
   const title = `e2e overdue ${Date.now()}`;
-  const created = await request.post('/api/tasks', {
-    data: { title, due_date: localISO(-3) },
-  });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
+  const project = await host(request);
+  await addTask(request, project.id, { title, due_date: localISO(-3) });
 
   try {
     await page.goto('/tasks/my-day');
@@ -85,46 +97,26 @@ test('overdue tasks group into a foldable section', async ({ page, request }) =>
     await expect(row).not.toBeVisible();
     await expect(section.getByText(/Overdue · \d+/)).toBeVisible();
   } finally {
-    await request.delete(`/api/tasks/${task.id}`);
+    await request.delete(`/api/nodes/${project.id}`);
   }
 });
 
 // ── Completion: Undo toast, carried-over "done today", one task stays one ──
 //
-// Standalone (Inbox) fixtures so `/api/tasks/inbox` — every status, minus
-// tombstones — can both verify server state and wipe leftovers. Wiped
-// before AND after each attempt (retry-safety, .claude/rules/e2e.md).
-
-type InboxTask = { id: string; title: string; status: string; focus_date: string | null };
+// The server's state is read from the task's Project: every task on it,
+// whatever its status, minus tombstones (`tasksOf`).
 
 const COMPLETE_PREFIX = 'e2e complete';
 
-async function inboxTasks(request: APIRequestContext, prefix: string): Promise<InboxTask[]> {
-  const resp = await request.get('/api/tasks/inbox');
-  expect(resp.ok()).toBeTruthy();
-  return ((await resp.json()) as InboxTask[]).filter((t) => t.title.startsWith(prefix));
-}
-
-async function wipeCompletion(request: APIRequestContext) {
-  for (const t of await inboxTasks(request, COMPLETE_PREFIX)) {
-    await request.delete(`/api/tasks/${t.id}`);
-  }
-}
-
 test.describe('completing a task', () => {
-  test.beforeEach(async ({ request }) => wipeCompletion(request));
-  test.afterEach(async ({ request }) => wipeCompletion(request));
 
   test('carried-over task stays in Today as done; Undo restores it', async ({
     page,
     request,
   }) => {
     const title = `${COMPLETE_PREFIX} carried ${Date.now()}`;
-    const created = await request.post('/api/tasks', {
-      data: { title, focus_date: localISO(-2) },
-    });
-    expect(created.ok()).toBeTruthy();
-    const task = await created.json();
+    const project = await host(request);
+    const task = await addTask(request, project.id, { title, focus_date: localISO(-2) });
 
     await page.goto('/tasks/my-day');
     const row = page.locator('[data-task-id]', { hasText: title });
@@ -153,7 +145,7 @@ test.describe('completing a task', () => {
     );
     // Undo restores the original commitment date, not just the status.
     await expect(row.getByTestId('carryover-prompt')).toBeVisible();
-    const [after] = (await inboxTasks(request, title)).filter((t) => t.id === task.id);
+    const [after] = (await tasksOf(request, project.id)).filter((t) => t.id === task.id);
     expect(after).toMatchObject({ status: 'open', focus_date: localISO(-2) });
   });
 
@@ -165,11 +157,12 @@ test.describe('completing a task', () => {
     // left open across that release still sends, a repeat rule: it is read
     // past, not refused, and the answer names none.
     const title = `${COMPLETE_PREFIX} once ${Date.now()}`;
-    const created = await request.post('/api/tasks', {
-      data: { title, focus_date: localISO(0), recurrence: 'daily' },
+    const project = await host(request);
+    const task = await addTask(request, project.id, {
+      title,
+      focus_date: localISO(0),
+      recurrence: 'daily',
     });
-    expect(created.ok()).toBeTruthy();
-    const task = await created.json();
     expect(task).not.toHaveProperty('recurrence');
 
     // The save's own answer, not a toast: whatever a completion does on the
@@ -179,7 +172,7 @@ test.describe('completing a task', () => {
         (r) => r.request().method() === 'PATCH' && r.url().endsWith(`/api/tasks/${task.id}`),
       );
     const onServer = async () =>
-      (await inboxTasks(request, title)).map((t) => [t.id, t.status]);
+      (await tasksOf(request, project.id)).map((t) => [t.id, t.status]);
 
     await page.goto('/tasks/my-day');
     const row = page.locator('[data-task-id]', { hasText: title });
@@ -203,11 +196,8 @@ test('t on a carried-over task removes it from today (not re-stamped)', async ({
   request,
 }) => {
   const title = `${COMPLETE_PREFIX} t-key ${Date.now()}`;
-  const created = await request.post('/api/tasks', {
-    data: { title, focus_date: localISO(-2) },
-  });
-  expect(created.ok()).toBeTruthy();
-  const task = await created.json();
+  const project = await host(request);
+  const task = await addTask(request, project.id, { title, focus_date: localISO(-2) });
   try {
     await page.goto('/tasks/my-day');
     const row = page.locator(`[data-task-id="${task.id}"]`);
@@ -226,11 +216,12 @@ test('t on a carried-over task removes it from today (not re-stamped)', async ({
     // removing it (the Today zone is focus_date <= today).
     await expect
       .poll(async () => {
-        const inbox = (await (await request.get('/api/tasks/inbox')).json()) as InboxTask[];
-        return inbox.find((t) => t.id === task.id)?.focus_date ?? null;
+        const [now] = (await tasksOf(request, project.id)).filter((t) => t.id === task.id);
+        // `undefined` while the task isn't listed: only a cleared date counts.
+        return now ? now.focus_date : undefined;
       })
       .toBeNull();
   } finally {
-    await request.delete(`/api/tasks/${task.id}`);
+    await request.delete(`/api/nodes/${project.id}`);
   }
 });

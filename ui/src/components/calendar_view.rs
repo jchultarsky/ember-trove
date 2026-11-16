@@ -121,7 +121,7 @@ fn MonthGrid(
                         focus_date: None,
                         due_date: Some(date),
                     };
-                    crate::api::create_standalone_task(&req).await.map(|_| {
+                    crate::api::create_task(node_id, &req).await.map(|_| {
                         format!(
                             "Task added to {name} \u{2014} due {}",
                             date.format("%b %-d")

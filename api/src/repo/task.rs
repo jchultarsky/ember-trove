@@ -16,10 +16,12 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait TaskRepo: Send + Sync {
-    /// Create a task. `node_id = None` produces a standalone (inbox) task.
+    /// Create a task on `node_id`, its Project (S5c: a task always has
+    /// one; the route has checked that the node is a Project). The
+    /// request's own `node_id` is not read here.
     async fn create(
         &self,
-        node_id: Option<NodeId>,
+        node_id: NodeId,
         owner_id: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError>;
@@ -61,9 +63,6 @@ pub trait TaskRepo: Send + Sync {
         viewer: Option<&str>,
         date: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError>;
-
-    /// Standalone tasks (node_id IS NULL) owned by `owner_id`.
-    async fn list_inbox(&self, owner_id: &str) -> Result<Vec<Task>, EmberTroveError>;
 
     /// Tasks with a due_date in [from, to] inclusive, ordered by due_date then priority.
     /// `viewer` scopes `node_title` as in [`TaskRepo::list_my_day`].
@@ -362,12 +361,10 @@ pub(crate) async fn cancel_open_on(
 /// conversion (#234) can do it inside its transaction.
 pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
     ex: E,
-    node_id: Option<NodeId>,
+    node_id: NodeId,
     owner_id: &str,
     req: &CreateTaskRequest,
 ) -> Result<Task, EmberTroveError> {
-    // node_id from path param takes precedence; fall back to body field.
-    let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
     let status = req.status.as_ref().map_or("open", |s| s.as_str());
     let priority = req.priority.as_ref().map_or("medium", |p| p.as_str());
 
@@ -381,7 +378,7 @@ pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
         RETURNING {SELECT_COLS}
         "#
     ))
-    .bind(resolved_node_id)
+    .bind(node_id.0)
     .bind(owner_id)
     .bind(&req.title)
     .bind(status)
@@ -419,7 +416,7 @@ pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
 impl TaskRepo for PgTaskRepo {
     async fn create(
         &self,
-        node_id: Option<NodeId>,
+        node_id: NodeId,
         owner_id: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError> {
@@ -464,8 +461,12 @@ impl TaskRepo for PgTaskRepo {
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
         let status_s = req.status.as_ref().map(|s| s.as_str().to_string());
         let priority_s = req.priority.as_ref().map(|p| p.as_str().to_string());
-        let node_id_update = req.node_id.is_some();
-        let node_id_val = req.node_id.and_then(|n| n).map(|n| n.0);
+        // A move, or nothing. A request to take the task off its node
+        // (`Some(None)`) is refused by `UpdateTaskRequest::validate`
+        // before it gets here; were one to arrive all the same, it would
+        // leave the node as it is, not ask the database for a NULL it
+        // refuses (S5c, migration 054).
+        let move_to = req.node_id.flatten().map(|n| n.0);
 
         let row = sqlx::query_as::<_, TaskRow>(&format!(
             r#"
@@ -476,7 +477,7 @@ impl TaskRepo for PgTaskRepo {
                 priority   = COALESCE($4::task_priority, priority),
                 focus_date = CASE WHEN $5  THEN $6  ELSE focus_date END,
                 due_date   = CASE WHEN $7  THEN $8  ELSE due_date   END,
-                node_id    = CASE WHEN $9  THEN $10 ELSE node_id    END
+                node_id    = COALESCE($9, node_id)
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING {SELECT_COLS}
             "#
@@ -489,8 +490,7 @@ impl TaskRepo for PgTaskRepo {
         .bind(req.focus_date.and_then(|d| d))
         .bind(req.due_date.is_some())
         .bind(req.due_date.and_then(|d| d))
-        .bind(node_id_update)
-        .bind(node_id_val)
+        .bind(move_to)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("update task failed: {e}")))?
@@ -598,28 +598,6 @@ impl TaskRepo for PgTaskRepo {
         .map_err(|e| EmberTroveError::Internal(format!("list my day failed: {e}")))?;
 
         rows.into_iter().map(my_day_row_to_task).collect()
-    }
-
-    async fn list_inbox(&self, owner_id: &str) -> Result<Vec<Task>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
-            SELECT {SELECT_COLS}
-            FROM node_tasks
-            WHERE owner_id = $1
-              AND deleted_at IS NULL
-              AND node_id IS NULL
-            ORDER BY
-                sort_order ASC,
-                {PRIORITY_RANK},
-                created_at ASC
-            "#
-        ))
-        .bind(owner_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list inbox failed: {e}")))?;
-
-        rows.into_iter().map(TaskRow::into_task).collect()
     }
 
     async fn list_by_due_range(
