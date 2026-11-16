@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use common::id::TaskId;
+use common::id::{NodeId, TaskId};
 use common::task::{TaskPriority, TaskStatus, UpdateTaskRequest};
 use leptos::prelude::*;
 
@@ -26,6 +26,7 @@ use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::resizable_editor::ResizableEditor;
 use crate::components::task_actions::TaskEditDraft;
 use crate::components::task_common::WAITING_TONE;
+use crate::components::task_dependencies::TaskDependenciesSection;
 use crate::components::task_row::TaskEditorHeights;
 
 /// Standard task checkbox classes (5×5, amber hover) — pair with an amber
@@ -352,6 +353,28 @@ pub fn state_badge_view(status: &TaskStatus) -> Option<AnyView> {
     )
 }
 
+/// "Blocked" on a row whose task still waits for another (S5d): by how
+/// many is in its tooltip and its accessible text. Neutral like Cancelled:
+/// it is information, never urgency, and nothing about the task changes
+/// (ONTOLOGY §6.4: surfaced, never enforced). The caller decides whether
+/// to show it (`common::task_dependency::is_blocked`).
+pub fn blocked_badge_view(blocked_by: u32) -> AnyView {
+    let label = common::task_dependency::blocked_label(blocked_by);
+    let rest = label.trim_start_matches("Blocked").to_string();
+    view! {
+        <span class="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 rounded \
+                     bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
+            title=label
+            data-testid="task-blocked">
+            <span class="material-symbols-outlined" style="font-size:12px;"
+                aria-hidden="true">"block"</span>
+            "Blocked"
+            <span class="sr-only">{rest}</span>
+        </span>
+    }
+    .into_any()
+}
+
 /// "Project parked" on a My Day row whose project is parked or closed
 /// (S6a): why an open task is in the Backlog and not carried into Today
 /// or listed as overdue. It shows in Today as well, on a task its person
@@ -402,6 +425,13 @@ const EDITOR_TEXTAREA_CLASS: &str = "w-full bg-stone-100 dark:bg-stone-800 text-
 pub fn TaskEditor(
     draft: TaskEditDraft,
     task_id: TaskId,
+    /// The task's node: its dependencies name another Project's tasks by
+    /// their Project.
+    node_id: NodeId,
+    /// The row's count of what still holds the task back. The
+    /// dependencies section keeps it current, so the row's "Blocked" chip
+    /// is right when the editor closes.
+    blocked_by: RwSignal<u32>,
     /// The task's saved due date (the past-date warning's baseline).
     due: Option<NaiveDate>,
     /// Runs after the editor closed, with the PATCH to send (blank title =
@@ -480,6 +510,9 @@ pub fn TaskEditor(
                 />
                 <IconButton icon="close" label="Cancel" stop_propagation=true on_click=cancel />
             </div>
+            // What the task waits for (S5d). Not part of the draft: a
+            // change there applies at once.
+            <TaskDependenciesSection task_id=task_id node_id=node_id blocked_by=blocked_by />
         </div>
     }
 }

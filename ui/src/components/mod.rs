@@ -54,6 +54,7 @@ pub mod tag_bar;
 pub mod tag_manager;
 pub mod task_actions;
 pub mod task_common;
+pub mod task_dependencies;
 pub mod task_panel;
 pub mod task_row;
 pub mod task_row_scaffold;

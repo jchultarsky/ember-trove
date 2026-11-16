@@ -11740,8 +11740,9 @@ async fn an_add_that_cannot_have_the_lock_in_time_says_try_again(pool: PgPool) {
         matches!(&answer, Err(EmberTroveError::AlreadyExists(m)) if m.contains("try again")),
         "{answer:?}"
     );
+    // The lock's own limit (two seconds), not the five a statement gets.
     assert!(
-        waited >= std::time::Duration::from_secs(1) && waited < std::time::Duration::from_secs(10),
+        waited >= std::time::Duration::from_secs(1) && waited < std::time::Duration::from_secs(4),
         "it waited for the lock, and not for long: {waited:?}"
     );
     assert_eq!(

@@ -48,7 +48,10 @@
 //   v19: Data health drops the orphan_task rule (S5c, #335: a task always
 //        has a Project) — evicts cached reports that still list it, which
 //        the new bundle can't read.
-const CACHE_NAME = "ember-trove-v19";
+//   v20: task dependencies (S5d, #338) — the task lists carry `blocked_by`;
+//        evicts cached task JSON without it, which would show a blocked
+//        task as free.
+const CACHE_NAME = "ember-trove-v20";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

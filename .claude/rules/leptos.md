@@ -242,6 +242,27 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   never adds an entry; a control whose state failed to load offers a
   retry (`FocusRetry`). The age and its tooltip use the reader's own
   calendar (`local_date`, `local_today`), never UTC.
+- **Task dependencies live in the shared `TaskEditor`** (S5d, #338):
+  `TaskDependenciesSection` (`task_dependencies.rs`) is its third child,
+  so My Day and the node page both have it. What it changes **applies at
+  once** and is not part of the draft (the ☀ button's precedent); it is
+  set apart and says so. Don't route it through `TaskEditDraft` or Save.
+  - The row owns its blocked count as a signal (`blocked_by`), and the
+    section sets it from what it loads and after each change. Don't bump
+    the list's refresh from the section: a refetch rebuilds the open
+    editor.
+  - The section's parts each read the lists; the picker reads only
+    `may_edit`. A change replaces the lists and must leave the picker
+    mounted, with its focus.
+  - Controls follow the API's `may_edit`, and the "not shown" line its
+    `not_shown`: nothing about who sees what is decided in the browser.
+  - `TaskPicker` is its own combobox: it answers an empty query, and asks
+    nothing before it is focused. A click must open its list as well as
+    a focus (after an add it still has the focus).
+  - The "Blocked" chip is `blocked_badge_view`, shown where
+    `task_dependency::is_blocked` says. Neutral tone: it is information,
+    and the task's place in every list is unchanged.
+  - A linked task's title is plain text (`markdown_inline_plain_text`).
 - **A node's home is shown and edited in two places that share one
   counter** (2026-11-12): `HomeChip` in the page header and `HomeRow` in
   Connections (`node_home.rs`). `NodeView` owns the counter

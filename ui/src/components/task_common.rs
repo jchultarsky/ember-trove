@@ -112,7 +112,7 @@ pub fn partition_overdue(
 
 /// Sort tasks by `sort_order` first, then `created_at` as a tiebreak.
 /// Used by TaskPanel (node-scoped task list).
-pub fn sort_tasks_by_order(tasks: &mut [Task]) {
+pub fn sort_tasks_by_order(tasks: &mut [common::task::ListedTask]) {
     tasks.sort_by(|a, b| {
         a.sort_order
             .cmp(&b.sort_order)
