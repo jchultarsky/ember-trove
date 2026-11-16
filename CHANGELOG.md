@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.26.1] - 2026-11-16
+
 ### Security
 - **A task's webhook events follow its node's rights.** `task.created`,
   `task.updated` and `task.deleted` go to the webhooks of the task's
