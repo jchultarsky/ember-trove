@@ -145,6 +145,7 @@ mod tests {
             },
             node_title: None,
             project_state: None,
+            blocked_by: 0,
         }
     }
 

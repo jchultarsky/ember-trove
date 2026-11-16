@@ -44,6 +44,9 @@ pub struct AppState {
     pub briefs: Arc<dyn crate::repo::brief::BriefRepo>,
     /// Focus (#282). Private to each account, no admin bypass.
     pub focus: Arc<dyn crate::repo::project_focus::FocusRepo>,
+    /// Tasks that wait for other tasks (S5d). Keyed by task; routes check
+    /// the rights on each task's node.
+    pub task_dependencies: Arc<dyn crate::repo::task_dependency::TaskDependencyRepo>,
     pub search: Arc<dyn SearchRepo>,
     pub graph: Arc<dyn GraphRepo>,
     pub backup: Arc<dyn BackupRepo>,

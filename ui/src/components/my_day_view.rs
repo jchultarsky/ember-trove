@@ -550,7 +550,7 @@ fn KanbanZoneRow(
             } else {
                 view! {
                     <div class="divide-y divide-stone-100 dark:divide-stone-800">
-                        {tasks.into_iter().map(|MyDayTask { task, node_title, project_state }| {
+                        {tasks.into_iter().map(|MyDayTask { task, node_title, project_state, blocked_by: _ }| {
                             view! {
                                 <KanbanTaskRow
                                     task=task

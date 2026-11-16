@@ -356,8 +356,8 @@ pub struct StateOutcome {
 
 /// Postgres' SQLSTATEs for "one of two transactions waiting on each other
 /// was ended" and "a lock was not granted within `lock_timeout`".
-const DEADLOCK: &str = "40P01";
-const LOCK_NOT_AVAILABLE: &str = "55P03";
+pub(crate) const DEADLOCK: &str = "40P01";
+pub(crate) const LOCK_NOT_AVAILABLE: &str = "55P03";
 
 /// How long a state write waits for a row another transaction holds. It
 /// holds the `contains` lock while it waits, and every other state write
@@ -365,7 +365,7 @@ const LOCK_NOT_AVAILABLE: &str = "55P03";
 /// not stop them all for long.
 const LOCK_TIMEOUT: &str = "SET LOCAL lock_timeout = '5s'";
 
-fn sqlstate(e: &sqlx::Error) -> Option<&str> {
+pub(crate) fn sqlstate(e: &sqlx::Error) -> Option<&str> {
     match e {
         sqlx::Error::Database(db) => db.code().map(|c| match c {
             std::borrow::Cow::Borrowed(s) => s,
