@@ -737,9 +737,10 @@ impl TaskRepo for StubTaskRepo {
     async fn list_for_node(
         &self,
         _: NodeId,
-        _: Option<&str>,
+        viewer: Option<&str>,
     ) -> Result<Vec<common::task::ListedTask>, EmberTroveError> {
-        unimplemented!()
+        saw_viewer("list_for_node", viewer);
+        Ok(Vec::new())
     }
     async fn get(&self, id: TaskId) -> Result<Task, EmberTroveError> {
         if id.0.as_u128() == AZ_MISSING {
@@ -3865,6 +3866,14 @@ async fn a_foreign_thing_reads_exactly_like_a_missing_one() {
             none(),
         ),
         (
+            "/tasks",
+            tasks::task_router,
+            "DELETE",
+            format!("/tasks/{}/dependencies/not-shown", id(AZ_FOREIGN_TASK)),
+            format!("/tasks/{}/dependencies/not-shown", id(AZ_MISSING)),
+            none(),
+        ),
+        (
             "/attachments",
             attachments::router,
             "GET",
@@ -4037,6 +4046,13 @@ async fn a_viewer_is_still_told_no_rather_than_not_found() {
             tasks::task_router,
             "GET",
             format!("/tasks/{}/dependencies/candidates", id(AZ_VIEW_TASK)),
+            none(),
+        ),
+        (
+            "/tasks",
+            tasks::task_router,
+            "DELETE",
+            format!("/tasks/{}/dependencies/not-shown", id(AZ_VIEW_TASK)),
             none(),
         ),
         (
@@ -5524,6 +5540,34 @@ fn az_task_is_visible(task: TaskId) -> bool {
     )
 }
 
+thread_local! {
+    /// The reader each stub call was made for, in order: what the route
+    /// passed as "whose view". Each test runs on its own thread.
+    static VIEWERS: std::cell::RefCell<Vec<(&'static str, Option<String>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn saw_viewer(call: &'static str, viewer: Option<&str>) {
+    VIEWERS.with(|v| v.borrow_mut().push((call, viewer.map(str::to_string))));
+}
+
+/// The readers recorded since the last look, emptied.
+fn viewers_seen() -> Vec<(&'static str, Option<String>)> {
+    VIEWERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
+/// Every stub call so far was made for `expected`, and there was one.
+/// SECURITY: a route that passed `None` (everyone's view) for an ordinary
+/// account would show and remove what that account can't see, with every
+/// status code unchanged.
+fn assert_all_seen_as(expected: Option<&str>) {
+    let seen = viewers_seen();
+    assert!(!seen.is_empty(), "no call recorded its reader");
+    for (call, viewer) in &seen {
+        assert_eq!(viewer.as_deref(), expected, "{call} was read as {viewer:?}");
+    }
+}
+
 /// Panics on any call a route should have refused, so a missing check
 /// can't pass on its status code alone.
 struct StubTaskDependencyRepo;
@@ -5544,8 +5588,7 @@ impl crate::repo::task_dependency::TaskDependencyRepo for StubTaskDependencyRepo
             az_task_is_visible(task),
             "dependencies read for a task its caller can't see: {task}"
         );
-        // An admin reads every node (`None`); anyone else reads as themself.
-        assert!(matches!(viewer, None | Some("test-sub")), "{viewer:?}");
+        saw_viewer("list", viewer);
         let link = common::task_dependency::TaskLink {
             id: TaskId(Uuid::from_u128(AZ_MY_OTHER_TASK)),
             title: "the other one".to_string(),
@@ -5555,12 +5598,7 @@ impl crate::repo::task_dependency::TaskDependencyRepo for StubTaskDependencyRepo
         };
         Ok((vec![link], Vec::new()))
     }
-    async fn add(
-        &self,
-        task: TaskId,
-        depends_on: TaskId,
-        _viewer: Option<&str>,
-    ) -> Result<(), EmberTroveError> {
+    async fn add(&self, task: TaskId, depends_on: TaskId) -> Result<(), EmberTroveError> {
         assert!(
             az_task_is_editable(task),
             "authorization bypass: a dependency was added to task {task}"
@@ -5584,16 +5622,38 @@ impl crate::repo::task_dependency::TaskDependencyRepo for StubTaskDependencyRepo
             _ => Ok(()),
         }
     }
+    async fn not_shown(&self, task: TaskId, viewer: Option<&str>) -> Result<u32, EmberTroveError> {
+        // An admin (who reads as `None`) may edit every task.
+        assert!(
+            az_task_is_editable(task) || viewer.is_none(),
+            "someone who may not edit task {task} was told what they aren't shown"
+        );
+        saw_viewer("not_shown", viewer);
+        Ok(3)
+    }
+    async fn remove_not_shown(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<u64, EmberTroveError> {
+        assert!(
+            az_task_is_editable(task),
+            "authorization bypass: hidden dependencies were removed from task {task}"
+        );
+        saw_viewer("remove_not_shown", viewer);
+        Ok(3)
+    }
     async fn remove(
         &self,
         task: TaskId,
         depends_on: TaskId,
-        _viewer: Option<&str>,
+        viewer: Option<&str>,
     ) -> Result<(), EmberTroveError> {
         assert!(
             az_task_is_editable(task),
             "authorization bypass: a dependency was removed from task {task}"
         );
+        saw_viewer("remove", viewer);
         // As the real repo: a link to a task the caller isn't shown, and
         // no link at all, are the same "not found".
         if az_task_is_visible(depends_on) {
@@ -5706,6 +5766,8 @@ async fn a_dependency_is_added_only_by_an_editor_onto_a_task_they_can_see() {
         assert!(fresh.may_edit);
         assert_eq!(fresh.blocked_by.len(), 1);
     }
+    // What came back was read as the caller, never as "everyone".
+    assert_all_seen_as(Some("test-sub"));
     // Someone else's task on a node the caller edits is theirs to change.
     assert_eq!(
         add_dep(AZ_EDIT_TASK, AZ_MY_TASK).await.0,
@@ -5765,6 +5827,9 @@ async fn a_dependency_is_removed_only_by_an_editor_and_a_hidden_one_reads_as_non
     let fresh: common::task_dependency::TaskDependencies =
         serde_json::from_str(&body).expect("the fresh lists");
     assert!(fresh.may_edit);
+    // The delete was made for the caller: it removes only what they are
+    // shown. Passed as "everyone", it would remove a hidden link.
+    assert_all_seen_as(Some("test-sub"));
 
     for task in [AZ_VIEW_TASK, AZ_DEMOTED_TASK] {
         assert_eq!(
@@ -5804,7 +5869,12 @@ async fn dependencies_are_read_by_viewers_and_say_who_may_change_them() {
         let deps: common::task_dependency::TaskDependencies =
             serde_json::from_str(&body).expect("the lists");
         assert_eq!(deps.may_edit, may_edit, "{task:#x}");
+        // How many prerequisites they aren't shown is for someone who may
+        // edit the task, and nobody else (the stub panics if a viewer's
+        // read reaches it).
+        assert_eq!(deps.not_shown, if may_edit { 3 } else { 0 }, "{task:#x}");
     }
+    assert_all_seen_as(Some("test-sub"));
     // An admin reads and changes every task.
     let (status, body) = dep_request(
         admin_claims(),
@@ -5815,6 +5885,70 @@ async fn dependencies_are_read_by_viewers_and_say_who_may_change_them() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains(r#""may_edit":true"#), "{body}");
+    // An admin reads every node: `None`. Nobody else ever does.
+    assert_all_seen_as(None);
+}
+
+/// `DELETE /tasks/{id}/dependencies/not-shown`: an editor of the task
+/// removes the prerequisites they aren't shown, in one go, as themself.
+#[tokio::test]
+async fn hidden_prerequisites_are_removed_only_by_an_editor_of_the_task() {
+    let clear = |task: u128| {
+        dep_request(
+            fake_claims(),
+            "DELETE",
+            format!("{}/not-shown", dep_uri(task)),
+            serde_json::json!({}),
+        )
+    };
+    let (status, body) = clear(AZ_MY_TASK).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let fresh: common::task_dependency::TaskDependencies =
+        serde_json::from_str(&body).expect("the fresh lists");
+    assert!(fresh.may_edit);
+    let seen = viewers_seen();
+    assert_eq!(seen[0].0, "remove_not_shown", "{seen:?}");
+    assert!(
+        seen.iter().all(|(_, v)| v.as_deref() == Some("test-sub")),
+        "{seen:?}"
+    );
+
+    for task in [AZ_VIEW_TASK, AZ_DEMOTED_TASK] {
+        assert_eq!(clear(task).await.0, StatusCode::FORBIDDEN, "{task:#x}");
+    }
+    let missing = clear(AZ_MISSING).await;
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+    for task in [AZ_FOREIGN_TASK, AZ_REVOKED_TASK] {
+        assert_eq!(clear(task).await, missing, "{task:#x}");
+    }
+}
+
+/// `GET /nodes/{id}/tasks` counts what holds each task back for its
+/// reader: an ordinary account as itself, an admin as someone who reads
+/// every node.
+#[tokio::test]
+async fn a_nodes_task_list_is_read_for_its_reader() {
+    for (claims, expected) in [(fake_claims(), Some("test-sub")), (admin_claims(), None)] {
+        let resp = Router::new()
+            .nest(
+                "/nodes/{node_id}/tasks",
+                crate::routes::tasks::node_task_router(),
+            )
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(
+                Request::get(format!(
+                    "/nodes/{}/tasks",
+                    Uuid::from_u128(AZ_TASKS_PROJECT)
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_all_seen_as(expected);
+    }
 }
 
 /// `GET …/dependencies/candidates`: for editors of the task, and bound to
@@ -5848,11 +5982,21 @@ async fn the_dependency_picker_is_for_editors_and_is_never_widened() {
             .0,
         StatusCode::NOT_FOUND
     );
+    // Refused from the request alone: too long, or a control character
+    // (a NUL can't be sent to the database, and answered as a 500).
     let long = "x".repeat(501);
-    assert_eq!(
-        get(fake_claims(), candidates(AZ_MY_TASK, &long)).await.0,
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    for (task, q) in [
+        (AZ_MY_TASK, long.as_str()),
+        (AZ_MY_TASK, "a%00b"),
+        (AZ_FOREIGN_TASK, "a%00b"),
+        (AZ_MISSING, "a%0Ab"),
+    ] {
+        assert_eq!(
+            get(fake_claims(), candidates(task, q)).await.0,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{task:#x}"
+        );
+    }
 }
 
 #[tokio::test]

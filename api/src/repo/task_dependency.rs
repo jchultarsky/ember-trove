@@ -14,6 +14,14 @@
 //! back when the task is restored. So someone who may edit one task and
 //! view another can learn that a chain runs between them, never through
 //! what. Node edges tell the same (`repo::edge::closes_loop`).
+//!
+//! A link nobody is shown would otherwise stay for good and still decide
+//! those refusals: someone could plant one in another person's tasks, or
+//! leave one behind when their share ends (security review, 2026-11-16).
+//! So whoever may edit a task is told how many of its prerequisites they
+//! aren't shown ([`TaskDependencyRepo::not_shown`]), never which, and may
+//! remove them ([`TaskDependencyRepo::remove_not_shown`]). It is the rule
+//! a home its reader can't see got (owner decision, 2026-10-31).
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -29,7 +37,20 @@ use common::{
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::{escape_like, visible_to};
+use super::node::{DEADLOCK, LOCK_NOT_AVAILABLE, sqlstate};
+use super::{escape_like, visible_among_many, visible_to};
+
+/// Postgres' SQLSTATE for a statement ended by `statement_timeout`.
+const QUERY_CANCELED: &str = "57014";
+
+/// `add` holds one lock for every account's dependencies while it checks
+/// and writes. It must neither wait for it for long nor hold it for long:
+/// a stuck or very slow one would queue every other add behind it, each
+/// on a connection of its own.
+const ADD_TIMEOUTS: [&str; 2] = [
+    "SET LOCAL lock_timeout = '2s'",
+    "SET LOCAL statement_timeout = '5s'",
+];
 
 /// What the API says for a task that isn't there, or that its caller
 /// can't see: one sentence for both.
@@ -49,13 +70,22 @@ pub trait TaskDependencyRepo: Send + Sync {
     /// Make `task` wait for `depends_on`. The caller has checked the
     /// rights on both. Refuses a loop and a task with too many
     /// prerequisites (422), and a repeat (409); a task deleted meanwhile
-    /// is NotFound.
-    async fn add(
+    /// is NotFound. When the lock isn't had in time: 409, "try again".
+    async fn add(&self, task: TaskId, depends_on: TaskId) -> Result<(), EmberTroveError>;
+
+    /// How many of `task`'s prerequisites `viewer` is not shown: in the
+    /// trash, or on a node they can't view. For someone who may edit
+    /// `task` only: the caller has checked that.
+    async fn not_shown(&self, task: TaskId, viewer: Option<&str>) -> Result<u32, EmberTroveError>;
+
+    /// Remove every link from `task` to a prerequisite `viewer` is not
+    /// shown, and say how many went. The caller has checked that `viewer`
+    /// may edit `task`.
+    async fn remove_not_shown(
         &self,
         task: TaskId,
-        depends_on: TaskId,
         viewer: Option<&str>,
-    ) -> Result<(), EmberTroveError>;
+    ) -> Result<u64, EmberTroveError>;
 
     /// Stop `task` waiting for `depends_on`. Only a link `viewer` is
     /// shown is removed; any other, and no link at all, is the same
@@ -201,7 +231,7 @@ async fn closes_loop(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     task: TaskId,
     depends_on: TaskId,
-) -> Result<bool, EmberTroveError> {
+) -> Result<bool, sqlx::Error> {
     // UNION (not UNION ALL), as the edges' check: a loop that got in by
     // another way must not recurse forever.
     sqlx::query_scalar(
@@ -218,7 +248,6 @@ async fn closes_loop(
     .bind(depends_on.0)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| EmberTroveError::Internal(format!("dependency check failed: {e}")))
 }
 
 #[async_trait]
@@ -264,15 +293,23 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
         Ok((links(blocked_by)?, links(blocks)?))
     }
 
-    async fn add(
-        &self,
-        task: TaskId,
-        depends_on: TaskId,
-        viewer: Option<&str>,
-    ) -> Result<(), EmberTroveError> {
-        let failed =
-            |e: sqlx::Error| EmberTroveError::Internal(format!("add dependency failed: {e}"));
+    async fn add(&self, task: TaskId, depends_on: TaskId) -> Result<(), EmberTroveError> {
+        // The lock not had in time, a statement that ran too long, or a
+        // deadlock: nothing was written. 409, "try again", as the cascade
+        // answers.
+        let failed = |e: sqlx::Error| match sqlstate(&e) {
+            Some(LOCK_NOT_AVAILABLE | QUERY_CANCELED | DEADLOCK) => EmberTroveError::AlreadyExists(
+                "another change to task dependencies is in progress: try again".to_string(),
+            ),
+            _ => EmberTroveError::Internal(format!("add dependency failed: {e}")),
+        };
         let mut tx = self.pool.begin().await.map_err(failed)?;
+        for timeout in ADD_TIMEOUTS {
+            sqlx::query(timeout)
+                .execute(&mut *tx)
+                .await
+                .map_err(failed)?;
+        }
 
         // One lock for all task dependencies: without it two inserts
         // could each pass the loop check below and together close one
@@ -282,30 +319,25 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
             .await
             .map_err(failed)?;
 
-        // The limit counts what the caller is shown, so reaching it tells
-        // them nothing about links they can't see.
-        let shown: i64 = sqlx::query_scalar(&format!(
-            r#"
-            SELECT count(*)
-            FROM task_dependencies d
-            JOIN node_tasks p ON p.id = d.depends_on_id
-            JOIN nodes pn ON pn.id = p.node_id
-            WHERE d.task_id = $1 AND {shown}
-            "#,
-            shown = shown_to("p", "pn", 2),
-        ))
-        .bind(task.0)
-        .bind(viewer)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(failed)?;
-        if usize::try_from(shown).unwrap_or(usize::MAX) >= MAX_PREREQUISITES {
+        // Every link of the task counts, whoever is shown it: the limit
+        // bounds what is stored. (A count of the shown ones alone could
+        // be stepped round through the trash.)
+        let held: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM task_dependencies WHERE task_id = $1")
+                .bind(task.0)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(failed)?;
+        if usize::try_from(held).unwrap_or(usize::MAX) >= MAX_PREREQUISITES {
             return Err(EmberTroveError::Validation(
                 DependencyRefusal::TooMany.message(),
             ));
         }
 
-        if closes_loop(&mut tx, task, depends_on).await? {
+        if closes_loop(&mut tx, task, depends_on)
+            .await
+            .map_err(failed)?
+        {
             return Err(EmberTroveError::Validation(
                 DependencyRefusal::Loop.message(),
             ));
@@ -367,6 +399,48 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
         Ok(())
     }
 
+    async fn not_shown(&self, task: TaskId, viewer: Option<&str>) -> Result<u32, EmberTroveError> {
+        let n: i32 = sqlx::query_scalar(&format!(
+            r#"
+            SELECT count(*)::int4
+            FROM task_dependencies d
+            JOIN node_tasks p ON p.id = d.depends_on_id
+            JOIN nodes pn ON pn.id = p.node_id
+            WHERE d.task_id = $1 AND NOT {shown}
+            "#,
+            shown = shown_to("p", "pn", 2),
+        ))
+        .bind(task.0)
+        .bind(viewer)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("count dependencies failed: {e}")))?;
+        Ok(as_count(n))
+    }
+
+    async fn remove_not_shown(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<u64, EmberTroveError> {
+        let result = sqlx::query(&format!(
+            r#"
+            DELETE FROM task_dependencies d
+            USING node_tasks p, nodes pn
+            WHERE d.task_id = $1
+              AND p.id = d.depends_on_id AND pn.id = p.node_id
+              AND NOT {shown}
+            "#,
+            shown = shown_to("p", "pn", 2),
+        ))
+        .bind(task.0)
+        .bind(viewer)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("remove dependencies failed: {e}")))?;
+        Ok(result.rows_affected())
+    }
+
     async fn candidates(
         &self,
         task: TaskId,
@@ -393,7 +467,8 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
             FROM node_tasks p
             JOIN nodes pn ON pn.id = p.node_id
             WHERE p.id <> $1
-              AND {shown}
+              AND p.deleted_at IS NULL
+              AND {visible}
               AND p.status::text IN ({still_to_do})
               AND pn.status <> 'archived'::node_status
               AND NOT EXISTS (
@@ -407,7 +482,10 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
                 p.id
             LIMIT $4
             "#,
-            shown = shown_to("p", "pn", 2),
+            // `shown_to`'s rule in the spelling for a scan over many of
+            // the person's nodes (`visible_among_many`): this reads every
+            // task still to do, not the few links of one task.
+            visible = visible_among_many("pn", 2),
         ))
         .bind(task.0)
         .bind(subject)

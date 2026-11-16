@@ -48,6 +48,10 @@ pub fn task_router() -> Router<AppState> {
             get(list_dependencies).post(add_dependency),
         )
         .route("/{id}/dependencies/candidates", get(dependency_candidates))
+        .route(
+            "/{id}/dependencies/not-shown",
+            delete(remove_dependencies_not_shown),
+        )
         .route("/{id}/dependencies/{other}", delete(remove_dependency))
         .route("/reorder", put(reorder_tasks))
 }
@@ -306,13 +310,20 @@ async fn dependencies_for(
     if !may_edit && !can_view(permissions, claims, task.node_id).await? {
         return Err(missing(TASK));
     }
-    let (blocked_by, blocks) = state
-        .task_dependencies
-        .list(task.id, subject_scope(claims))
-        .await?;
+    let viewer = subject_scope(claims);
+    let (blocked_by, blocks) = state.task_dependencies.list(task.id, viewer).await?;
+    // SECURITY: how many prerequisites the reader isn't shown is told only
+    // to someone who may edit the task (they can remove them); a viewer
+    // is told nothing of what they can't see.
+    let not_shown = if may_edit {
+        state.task_dependencies.not_shown(task.id, viewer).await?
+    } else {
+        0
+    };
     Ok(TaskDependencies {
         blocked_by,
         blocks,
+        not_shown,
         may_edit,
     })
 }
@@ -340,6 +351,8 @@ async fn list_dependencies(
 /// 2. the task, and edit rights on it;
 /// 3. the other task, which needs view rights on its node;
 /// 4. the structure, in the repo: the limit, no loop, no repeat.
+///
+/// No webhook is sent, here or on remove: the task itself is unchanged.
 ///
 /// SECURITY: the other task is looked at only after the caller has proved
 /// they may edit this one, and it answers the same 404 whether it doesn't
@@ -369,16 +382,11 @@ async fn add_dependency(
 
     state
         .task_dependencies
-        .add(task_id, other, subject_scope(&claims))
+        .add(task_id, other)
         .await
         .map_err(or_missing_row(TASK))?;
-    dispatch(
-        state.webhooks.clone(),
-        EVENT_TASK_UPDATED,
-        Some(task.node_id),
-        &claims.sub,
-        &task.owner_id,
-    );
+    // No webhook: the task itself is unchanged, and task events go to the
+    // hooks of the task's author, who may no longer see its node.
     let fresh = dependencies_for(&state, &claims, &task).await?;
     Ok((StatusCode::CREATED, Json(fresh)))
 }
@@ -406,13 +414,34 @@ async fn remove_dependency(
         .remove(task.id, TaskId(other), subject_scope(&claims))
         .await
         .map_err(or_missing_row(DEPENDENCY))?;
-    dispatch(
-        state.webhooks.clone(),
-        EVENT_TASK_UPDATED,
-        Some(task.node_id),
-        &claims.sub,
-        &task.owner_id,
-    );
+    dependencies_for(&state, &claims, &task).await.map(Json)
+}
+
+/// DELETE /tasks/{id}/dependencies/not-shown — remove every prerequisite
+/// of the task that the caller is not shown: one in the trash, or on a
+/// node they can't view. Needs edit rights on the task. Answers with the
+/// fresh lists, whether or not there was anything to remove.
+///
+/// SECURITY: such a link is never named, but it still decides which
+/// dependencies are refused as loops. Without this, someone could leave
+/// one in another person's tasks for good (security review, 2026-11-16).
+/// The task's editors are told how many there are (`not_shown`) and take
+/// them all out here: the rule a hidden home got (#228).
+async fn remove_dependencies_not_shown(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TaskDependencies>, ApiError> {
+    let task = state
+        .tasks
+        .get(TaskId(id))
+        .await
+        .map_err(or_missing_row(TASK))?;
+    require_task_editor(&state, &claims, &task).await?;
+    state
+        .task_dependencies
+        .remove_not_shown(task.id, subject_scope(&claims))
+        .await?;
     dependencies_for(&state, &claims, &task).await.map(Json)
 }
 
@@ -435,9 +464,12 @@ async fn dependency_candidates(
     Path(id): Path<Uuid>,
     Query(query): Query<CandidateQuery>,
 ) -> Result<Json<Vec<TaskLink>>, ApiError> {
-    if query.q.chars().count() > MAX_CANDIDATE_QUERY {
+    // From the request alone, before any task is looked up. A control
+    // character can't be in a title, and a NUL can't be sent to the
+    // database at all (it would answer as a 500).
+    if query.q.chars().count() > MAX_CANDIDATE_QUERY || query.q.chars().any(char::is_control) {
         return Err(ApiError::Validation(format!(
-            "search text is at most {MAX_CANDIDATE_QUERY} characters"
+            "search text is at most {MAX_CANDIDATE_QUERY} characters, with no control characters"
         )));
     }
     let task = state

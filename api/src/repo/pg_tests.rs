@@ -11458,7 +11458,6 @@ async fn migration_055_adds_task_dependencies_and_leaves_every_task_as_it_was(po
 #[sqlx::test(migrations = "../migrations")]
 async fn a_loop_of_dependencies_is_refused_however_it_runs(pool: PgPool) {
     let deps = PgTaskDependencyRepo::new(pool.clone());
-    let alice = Some("alice");
     let p = a_project(&pool, "alice", "loops", None).await.id.0;
     let hidden = a_project(&pool, "bob", "bob's own", None).await.id.0;
     let task = |title: &'static str| raw_task(&pool, "alice", p, title);
@@ -11468,7 +11467,7 @@ async fn a_loop_of_dependencies_is_refused_however_it_runs(pool: PgPool) {
         task("c").await,
         task("d").await,
     );
-    let add = |x: uuid::Uuid, y: uuid::Uuid| deps.add(Tid(x), Tid(y), alice);
+    let add = |x: uuid::Uuid, y: uuid::Uuid| deps.add(Tid(x), Tid(y));
 
     add(a, b).await.expect("a waits for b");
     assert!(
@@ -11534,15 +11533,16 @@ async fn an_old_loop_of_dependencies_does_not_hang_the_check(pool: PgPool) {
     let z = raw_task(&pool, "alice", p, "z").await;
     raw_dep(&pool, x, y).await;
     raw_dep(&pool, y, x).await;
-    deps.add(Tid(z), Tid(x), Some("alice"))
-        .await
-        .expect("into the old loop");
-    let refused = dep_refusal(deps.add(Tid(y), Tid(z), Some("alice")).await);
+    deps.add(Tid(z), Tid(x)).await.expect("into the old loop");
+    let refused = dep_refusal(deps.add(Tid(y), Tid(z)).await);
     assert!(refused.contains("loop"), "{refused}");
-    // The picker walks the same links the other way.
-    deps.candidates(Tid(z), "alice", "")
+    // The picker walks the same links the other way, from inside the old
+    // loop: everything that waits for x, which x itself does through y.
+    let offered = deps
+        .candidates(Tid(x), "alice", "")
         .await
         .expect("the picker ends too");
+    assert!(offered.is_empty(), "y and z both wait for x: {offered:?}");
 }
 
 /// Two inserts at once, each of which alone is fine: only one may land.
@@ -11558,10 +11558,7 @@ async fn two_dependencies_added_at_once_cannot_close_a_loop(pool: PgPool) {
             PgTaskDependencyRepo::new(pool.clone()),
             PgTaskDependencyRepo::new(pool.clone()),
         );
-        let (r1, r2) = tokio::join!(
-            one.add(Tid(a), Tid(b), Some("alice")),
-            two.add(Tid(b), Tid(a), Some("alice"))
-        );
+        let (r1, r2) = tokio::join!(one.add(Tid(a), Tid(b)), two.add(Tid(b), Tid(a)));
         assert_eq!(
             usize::from(r1.is_ok()) + usize::from(r2.is_ok()),
             1,
@@ -11570,11 +11567,15 @@ async fn two_dependencies_added_at_once_cannot_close_a_loop(pool: PgPool) {
     }
 }
 
-/// The limit counts what the caller is shown: not a prerequisite on a
-/// node they can't see, and not one in the trash. So reaching it says
-/// nothing about links that are hidden from them.
+/// The limit counts every link of the task, whoever is shown it, so it
+/// bounds what is stored: it can't be stepped round through the trash or
+/// through a node the caller can't see. Someone who may edit the task is
+/// told how many of its prerequisites they aren't shown, and can remove
+/// those.
 #[sqlx::test(migrations = "../migrations")]
-async fn the_dependency_limit_counts_only_what_its_caller_sees(pool: PgPool) {
+async fn the_dependency_limit_counts_every_link_and_editors_can_clear_what_they_are_not_shown(
+    pool: PgPool,
+) {
     use common::task_dependency::MAX_PREREQUISITES;
     let deps = PgTaskDependencyRepo::new(pool.clone());
     let shared = a_project(&pool, "alice", "shared", None).await.id;
@@ -11593,24 +11594,163 @@ async fn the_dependency_limit_counts_only_what_its_caller_sees(pool: PgPool) {
         raw_dep(&pool, t, p).await;
     }
     let one_more = raw_task(&pool, "alice", shared.0, "one more").await;
-    let another = raw_task(&pool, "alice", shared.0, "another").await;
 
-    // Bob sees all fifty: no more for him.
-    let refused = dep_refusal(deps.add(Tid(t), Tid(one_more), Some("bob")).await);
-    assert!(refused.contains("at most 50"), "{refused}");
-    // One of them goes to the trash: he sees forty-nine, and may add.
+    // Fifty links: no more, for bob who sees them all and for alice who
+    // sees forty-five.
+    for _ in ["bob", "alice"] {
+        let refused = dep_refusal(deps.add(Tid(t), Tid(one_more)).await);
+        assert!(refused.contains("at most 50"), "{refused}");
+    }
+    // Nor after one of them goes to the trash: the link is still there.
     trash_task(&pool, on_shared[0]).await;
-    deps.add(Tid(t), Tid(one_more), Some("bob"))
+    let refused = dep_refusal(deps.add(Tid(t), Tid(one_more)).await);
+    assert!(refused.contains("at most 50"), "{refused}");
+
+    // Who isn't shown what: alice not bob's five nor the trashed one;
+    // bob, and an admin, only the trashed one.
+    let not_shown = |who: Option<&'static str>| {
+        let deps = &deps;
+        async move { deps.not_shown(Tid(t), who).await.expect("count") }
+    };
+    assert_eq!(not_shown(Some("alice")).await, 6);
+    assert_eq!(not_shown(Some("bob")).await, 1);
+    assert_eq!(not_shown(None).await, 1);
+    // A task that has none.
+    assert_eq!(
+        deps.not_shown(Tid(one_more), Some("alice")).await.unwrap(),
+        0
+    );
+
+    // Alice takes out the ones she isn't shown, and only those.
+    let removed = deps
+        .remove_not_shown(Tid(t), Some("alice"))
         .await
-        .expect("under the limit again");
-    // Alice sees forty-five, though the table holds fifty-one for the task.
+        .expect("clear");
+    assert_eq!(removed, 6);
+    assert_eq!(not_shown(Some("alice")).await, 0);
+    let (shown, _) = deps.list(Tid(t), Some("alice")).await.expect("list");
+    assert_eq!(
+        shown.len(),
+        MAX_PREREQUISITES - 6,
+        "what she saw is untouched"
+    );
     assert_eq!(
         scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
-        51
+        44
     );
-    deps.add(Tid(t), Tid(another), Some("alice"))
+    // A second time there is nothing to remove.
+    assert_eq!(
+        deps.remove_not_shown(Tid(t), Some("alice")).await.unwrap(),
+        0
+    );
+    deps.add(Tid(t), Tid(one_more))
         .await
-        .expect("the limit is hers by what she sees");
+        .expect("under the limit again");
+}
+
+/// SECURITY (review of 2026-11-16): a link whose other task a person
+/// can't see still decides which dependencies are refused as loops. An
+/// editor of someone's Project could tie two of its tasks together
+/// through a task of their own, and the Project's owner could neither see
+/// why "C waits for A" was refused nor undo it, even after ending the
+/// share. The owner is told that A waits for something they aren't shown,
+/// and removes it. The same goes for a chain through the trash.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_chain_planted_through_a_hidden_task_can_be_found_and_removed(pool: PgPool) {
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let hers = a_project(&pool, "alice", "alice's", None).await.id;
+    grant(&pool, hers, "bob", "editor").await;
+    let his = a_project(&pool, "bob", "bob's own", None).await.id.0;
+    let a = raw_task(&pool, "alice", hers.0, "a").await;
+    let c = raw_task(&pool, "alice", hers.0, "c").await;
+    let b = raw_task(&pool, "bob", his, "b").await;
+
+    // Bob: a waits for his b, and his b waits for c.
+    deps.add(Tid(a), Tid(b)).await.expect("a → b");
+    deps.add(Tid(b), Tid(c)).await.expect("b → c");
+    // The share ends.
+    sql(
+        &pool,
+        "DELETE FROM permissions WHERE subject_id = 'bob' AND role = 'editor'",
+    )
+    .await;
+
+    // Alice sees nothing between a and c, and can't make c wait for a.
+    let (blocked_by, blocks) = deps.list(Tid(a), Some("alice")).await.expect("list");
+    assert!(blocked_by.is_empty() && blocks.is_empty());
+    assert!(dep_refusal(deps.add(Tid(c), Tid(a)).await).contains("loop"));
+    // She can't name the link to remove it.
+    assert!(deps.remove(Tid(a), Tid(b), Some("alice")).await.is_err());
+
+    // But she is told a waits for something she isn't shown, and removes it.
+    assert_eq!(deps.not_shown(Tid(a), Some("alice")).await.unwrap(), 1);
+    assert_eq!(deps.not_shown(Tid(c), Some("alice")).await.unwrap(), 0);
+    assert_eq!(
+        deps.remove_not_shown(Tid(a), Some("alice")).await.unwrap(),
+        1
+    );
+    deps.add(Tid(c), Tid(a)).await.expect("c → a, now");
+    // Bob's own link, from his task, is his: it stays.
+    assert_eq!(
+        dep_pairs(&pool).await,
+        [
+            ("b".to_string(), "c".to_string()),
+            ("c".to_string(), "a".to_string())
+        ]
+    );
+
+    // Through the trash, all her own: x → y → z, y in the trash.
+    let x = raw_task(&pool, "alice", hers.0, "x").await;
+    let y = raw_task(&pool, "alice", hers.0, "y").await;
+    let z = raw_task(&pool, "alice", hers.0, "z").await;
+    deps.add(Tid(x), Tid(y)).await.expect("x → y");
+    deps.add(Tid(y), Tid(z)).await.expect("y → z");
+    trash_task(&pool, y).await;
+    assert!(dep_refusal(deps.add(Tid(z), Tid(x)).await).contains("loop"));
+    // An admin isn't shown a trashed task either, and is told the same.
+    assert_eq!(deps.not_shown(Tid(x), None).await.unwrap(), 1);
+    assert_eq!(
+        deps.remove_not_shown(Tid(x), Some("alice")).await.unwrap(),
+        1
+    );
+    deps.add(Tid(z), Tid(x)).await.expect("z → x, now");
+}
+
+/// `add` holds one lock for every account's dependencies. If it can't
+/// have it in time it gives up with "try again" (409): it must not sit
+/// on a connection waiting behind a stuck one.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_add_that_cannot_have_the_lock_in_time_says_try_again(pool: PgPool) {
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let p = a_project(&pool, "alice", "busy", None).await.id.0;
+    let a = raw_task(&pool, "alice", p, "a").await;
+    let b = raw_task(&pool, "alice", p, "b").await;
+
+    // Someone else holds the lock and doesn't let go.
+    let mut holder = pool.begin().await.expect("tx");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('ember.task_dependencies'))")
+        .execute(&mut *holder)
+        .await
+        .expect("hold the lock");
+
+    let started = std::time::Instant::now();
+    let answer = deps.add(Tid(a), Tid(b)).await;
+    let waited = started.elapsed();
+    assert!(
+        matches!(&answer, Err(EmberTroveError::AlreadyExists(m)) if m.contains("try again")),
+        "{answer:?}"
+    );
+    assert!(
+        waited >= std::time::Duration::from_secs(1) && waited < std::time::Duration::from_secs(10),
+        "it waited for the lock, and not for long: {waited:?}"
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM task_dependencies").await,
+        0
+    );
+
+    holder.rollback().await.expect("let go");
+    deps.add(Tid(a), Tid(b)).await.expect("free again");
 }
 
 /// §14: both lists hold only live tasks on nodes the reader can view.
@@ -11631,10 +11771,10 @@ async fn dependencies_are_shown_and_removed_only_through_tasks_the_reader_sees(p
     let d_shared = raw_task(&pool, "alice", shared, "d shared").await;
     let d_private = raw_task(&pool, "alice", private, "d private").await;
     for p in [p_shared, p_private, p_trashed, p_done] {
-        deps.add(Tid(t), Tid(p), Some("alice")).await.expect("add");
+        deps.add(Tid(t), Tid(p)).await.expect("add");
     }
     for d in [d_shared, d_private] {
-        deps.add(Tid(d), Tid(t), Some("alice")).await.expect("add");
+        deps.add(Tid(d), Tid(t)).await.expect("add");
     }
     set_task_state(&pool, p_done, "done").await;
     tasks.delete(Tid(p_trashed)).await.expect("to the trash");
@@ -11878,12 +12018,12 @@ async fn the_dependency_picker_offers_only_what_can_be_added(pool: PgPool) {
     // Everything offered can be added; the loop-makers can't.
     let everything = deps.candidates(Tid(t), "alice", "").await.expect("offered");
     for link in &everything {
-        deps.add(Tid(t), link.id, Some("alice"))
+        deps.add(Tid(t), link.id)
             .await
             .unwrap_or_else(|e| panic!("offered but refused: {} ({e:?})", link.title));
     }
     for loop_maker in [dependent, further] {
-        let refused = dep_refusal(deps.add(Tid(t), Tid(loop_maker), Some("alice")).await);
+        let refused = dep_refusal(deps.add(Tid(t), Tid(loop_maker)).await);
         assert!(refused.contains("loop"), "{refused}");
     }
     // At most `CANDIDATE_LIMIT` at once.

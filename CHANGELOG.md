@@ -16,13 +16,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - **Nothing is enforced or reordered.** A blocked task keeps its place
     in My Day and every list and can be completed.
   - `GET /api/tasks/{id}/dependencies` answers `blocked_by` (the tasks it
-    waits for), `blocks` (the tasks that wait for it) and `may_edit`.
-    `POST` adds one (`{"depends_on": "<task id>"}`), and
+    waits for), `blocks` (the tasks that wait for it), `may_edit` and
+    `not_shown`. `POST` adds one (`{"depends_on": "<task id>"}`), and
     `DELETE /api/tasks/{id}/dependencies/{other}` removes one; both
-    answer with the fresh lists. Adding or removing takes edit rights on
-    the task that waits and view rights on the other.
+    answer with the fresh lists. Adding takes edit rights on the task
+    that waits and view rights on the other; removing takes edit rights
+    on the task that waits.
   - A loop is refused (**422**), and so is a task waiting for itself; a
-    repeat is **409**. A task waits for at most 50 tasks.
+    repeat is **409**. A task waits for at most 50 tasks, every link
+    counted. No webhook is sent for a dependency: the task itself is
+    unchanged.
   - `GET /api/tasks/{id}/dependencies/candidates?q=` lists what the
     picker offers: tasks still to do on Projects the caller owns or was
     given, the same Project's first, never one that would make a loop.
@@ -44,8 +47,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   counted for them, and on add and on remove it answers exactly like a
   task that doesn't exist (404). The other task is looked at only after
   the caller has shown they may edit the task that waits.
-  - The limit of 50 counts only prerequisites the caller sees, so
-    reaching it says nothing about hidden ones.
+  - **A prerequisite nobody is shown can't be left behind.** Such a link
+    (to a task in the trash, or on a Project its reader can't see) still
+    decides which dependencies are refused as loops. An editor of a
+    shared Project could have tied two of its tasks together through a
+    task of their own, and the Project's owner could neither see why nor
+    undo it, even after ending the share. So someone who may edit a task
+    is told how many of its prerequisites they aren't shown (`not_shown`;
+    never which, and 0 for anyone who may only view the task), and
+    `DELETE /api/tasks/{id}/dependencies/not-shown` removes them. It is
+    the rule a home its reader can't see already has.
+  - The limit of 50 counts every link of the task, so it can't be
+    stepped round through the trash. Adding holds one lock for every
+    account's dependencies; it gives up after two seconds with **409**
+    ("try again"), and never waits on a connection behind a stuck one.
   - An admin's picker is not widened: it offers the admin's own tasks and
     the ones shared with them, not every account's titles.
   - **What it can still tell:** the loop check has to look at every link,

@@ -21,9 +21,11 @@ use crate::id::{NodeId, TaskId};
 use crate::ontology::cyclic_components;
 use crate::task::TaskStatus;
 
-/// The most tasks one task may wait for. A person never needs more, and
-/// the lists are sent whole. The API counts only prerequisites its caller
-/// can see, so the limit says nothing about hidden ones.
+/// The most tasks one task may wait for: every link counts, shown to the
+/// caller or not, so it bounds what is stored and what the loop check
+/// walks. Only someone who may edit the task can reach it, and they are
+/// told how many of its prerequisites they aren't shown
+/// ([`TaskDependencies::not_shown`]), so the limit tells them nothing more.
 pub const MAX_PREREQUISITES: usize = 50;
 
 /// How many tasks the picker offers at once.
@@ -49,6 +51,15 @@ pub struct TaskDependencies {
     /// The tasks that wait for this one. Read-only here: a link is
     /// changed from the task that waits.
     pub blocks: Vec<TaskLink>,
+    /// How many more tasks this one waits for that this reader is not
+    /// shown: in the trash, or on a node they can't view. Told **only to
+    /// someone who may edit the task** (0 for anyone else), never named,
+    /// and theirs to remove in one go. Without it such a link would stay
+    /// for good, unseen, and still decide which dependencies are refused
+    /// as loops (the rule a hidden home got: owner decision, 2026-10-31).
+    /// They are not counted as blocking.
+    #[serde(default)]
+    pub not_shown: u32,
     /// Whether this reader may add and remove prerequisites: the rule the
     /// write routes apply, read for the reader, so a control is offered
     /// only where the call would pass.
@@ -336,6 +347,8 @@ mod tests {
                 task(TaskStatus::Cancelled),
             ],
             blocks: vec![task(TaskStatus::Open)],
+            // Not shown, so not counted as holding the task back.
+            not_shown: 4,
             may_edit: true,
         };
         assert_eq!(deps.holding_back(), 2);
@@ -432,8 +445,15 @@ mod tests {
                 .expect("one left out")
                 .starts_with("1 task dependency in this backup is left out"),
         );
-        // A link to a task that is not restored never joins a loop check.
         assert_eq!(restorable(Vec::new(), &tasks), RestoredLinks::default());
+
+        // A link to a task that is not restored never joins the loop
+        // check: 1 → 2 → 99 → 1 is a loop only through a task that isn't
+        // coming back, so 1 → 2 is kept.
+        let through_nothing = restorable(vec![link(1, 2), link(2, 99), link(99, 1)], &tasks);
+        assert_eq!(pairs(&through_nothing.kept), [(1, 2)]);
+        assert_eq!(through_nothing.without_a_task, 2);
+        assert_eq!(through_nothing.in_a_loop, 0);
     }
 
     #[test]
@@ -442,5 +462,6 @@ mod tests {
         let deps: TaskDependencies =
             serde_json::from_str(r#"{"blocked_by":[],"blocks":[]}"#).expect("parses");
         assert!(!deps.may_edit);
+        assert_eq!(deps.not_shown, 0);
     }
 }

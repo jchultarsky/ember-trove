@@ -11,7 +11,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   and API): migration 055 (`task_dependencies`, no account column), the
   rules in `common::task_dependency`, `repo::task_dependency` (the loop
   check under an advisory lock, lists cut to what the reader sees, the
-  picker's candidates), four routes on `task_router`, `blocked_by` on the
+  picker's candidates, the count and removal of prerequisites an editor
+  isn't shown), five routes on `task_router`, `blocked_by` on the
   node's task list and the three feeds, backup format 13. PR 2: the
   editor's "Blocked by" and "Blocks" lists, the picker, the "Blocked"
   chip. **Not in this slice:** blockers through a chain and node-level
