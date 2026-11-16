@@ -173,7 +173,6 @@ async fn convert_capture(
                     priority,
                     focus_date: None,
                     due_date,
-                    recurrence: None,
                 },
             }
         }

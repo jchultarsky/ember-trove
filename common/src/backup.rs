@@ -9,7 +9,7 @@ use crate::{
     edge::Edge,
     favorite::Favorite,
     graph::NodePosition,
-    id::{AttachmentId, NodeId, TaskId, WebhookId},
+    id::{AttachmentId, NodeId, WebhookId},
     node::Node,
     node_link::NodeLink,
     node_version::NodeVersion,
@@ -78,7 +78,14 @@ pub struct EntityCounts {
 /// edited, so the number moves. Archives of 3 to 10 still restore: whether
 /// a note counts as edited is read from its two older dates, by the rule
 /// migration 052 applied (`note::legacy_edited_at`).
-pub const SCHEMA_VERSION: u32 = 11;
+/// 12 (S5b, #332): tasks no longer repeat, so a task carries no
+/// `recurrence` and the archive no `recurrence_links`. The number moves
+/// because what an archive holds changed (`.claude/rules/api.md`, "What a
+/// backup holds"), not because an older release would misread it: it
+/// would restore every task, as it is, with no rule. Archives of 3 to 11
+/// still restore: both are read past, and a task that repeated comes back
+/// as a one-time task, the rule migration 053 applied.
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -241,15 +248,6 @@ impl BackupWebhook {
     pub fn restored_active_over_live(&self, live_has_secret: bool) -> bool {
         self.is_active && (!self.had_secret || live_has_secret)
     }
-}
-
-/// A recurring task's occurrence and the task whose completion scheduled it
-/// (`node_tasks.recurrence_parent_id`). Without it, reopening a restored
-/// completed task can't retract the occurrence it scheduled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RecurrenceLink {
-    pub task_id: TaskId,
-    pub parent_id: TaskId,
 }
 
 /// A note as an archive holds it. Before format 4 a note could have no
@@ -426,9 +424,10 @@ pub struct BackupData {
     /// Webhooks, all owners, without their signing secrets.
     #[serde(default)]
     pub webhooks: Option<Vec<BackupWebhook>>,
-    /// Which task scheduled which occurrence. Empty in older archives.
-    #[serde(default)]
-    pub recurrence_links: Vec<RecurrenceLink>,
+    // `recurrence_links` (which task scheduled which occurrence) was here
+    // from format 5 until tasks stopped repeating (S5b, format 12). Older
+    // archives still carry it, and a task's `recurrence`; serde ignores
+    // both, so their repeating tasks restore as one-time tasks.
     // ── Format 6: Project Briefs (#282) ───────────────────────────────────
     /// Each project's current Brief. Replaced Briefs are History entries
     /// and travel in `activity`. A Brief belongs to its node, so restoring
@@ -523,7 +522,55 @@ mod tests {
             edited_at: None,
         });
         assert_eq!(from_note.edited_at, Some(None));
-        assert_eq!(SCHEMA_VERSION, 11);
+    }
+
+    #[test]
+    fn an_archive_with_repeating_tasks_restores_them_as_one_time_tasks() {
+        // S5b (ONTOLOGY §9): formats 3 to 11 may carry a task's repeat rule
+        // and, from format 5, which task scheduled which. Both are read
+        // past, the rule migration 053 applied, and never written again.
+        let json = r#"{
+            "nodes": [], "edges": [], "tags": [], "notes": [], "attachments": [],
+            "tasks": [{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "node_id": null, "owner_id": "alice", "title": "water the plants",
+                "status": "done", "priority": "medium",
+                "focus_date": null, "due_date": "2026-11-01",
+                "recurrence": "weekly", "sort_order": 0,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-02T00:00:00Z",
+                "completed_at": "2026-01-02T00:00:00Z"
+            }, {
+                "id": "00000000-0000-0000-0000-000000000002",
+                "node_id": null, "owner_id": "alice", "title": "water the plants",
+                "status": "open", "priority": "medium",
+                "focus_date": null, "due_date": "2026-11-08",
+                "recurrence": "a rule no release ever had", "sort_order": 0,
+                "created_at": "2026-01-02T00:00:00Z",
+                "updated_at": "2026-01-02T00:00:00Z"
+            }],
+            "recurrence_links": [{
+                "task_id": "00000000-0000-0000-0000-000000000002",
+                "parent_id": "00000000-0000-0000-0000-000000000001"
+            }]
+        }"#;
+        let data: BackupData = serde_json::from_str(json).expect("an older archive");
+        assert_eq!(data.tasks.len(), 2, "both tasks, each on its own");
+        assert_eq!(
+            data.tasks[0].due_date.map(|d| d.to_string()).as_deref(),
+            Some("2026-11-01")
+        );
+        assert!(data.tasks[0].completed_at.is_some());
+
+        let written = serde_json::to_value(&data).expect("json");
+        assert!(
+            written.get("recurrence_links").is_none(),
+            "no links are written"
+        );
+        for task in written["tasks"].as_array().expect("tasks") {
+            assert!(task.get("recurrence").is_none(), "{task}");
+        }
+        assert_eq!(SCHEMA_VERSION, 12);
     }
 
     #[test]
@@ -549,7 +596,6 @@ mod tests {
         // live templates, presets, prefs and webhooks alone.
         assert!(data.node_templates.is_none() && data.search_presets.is_none());
         assert!(data.editor_prefs.is_none() && data.webhooks.is_none());
-        assert!(data.recurrence_links.is_empty());
         // Format 8's Focus too: absent, so restore keeps the live entries.
         assert!(data.focus.is_none());
     }

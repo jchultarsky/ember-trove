@@ -89,7 +89,7 @@ test('overdue tasks group into a foldable section', async ({ page, request }) =>
   }
 });
 
-// ── Completion: Undo toast, carried-over "done today", recurring retraction ──
+// ── Completion: Undo toast, carried-over "done today", one task stays one ──
 //
 // Standalone (Inbox) fixtures so `/api/tasks/inbox` — every status, minus
 // tombstones — can both verify server state and wipe leftovers. Wiped
@@ -157,32 +157,44 @@ test.describe('completing a task', () => {
     expect(after).toMatchObject({ status: 'open', focus_date: localISO(-2) });
   });
 
-  test('undoing a recurring completion leaves no duplicate occurrence', async ({
+  test('completing a task makes no second one, and Undo reopens that one', async ({
     page,
     request,
   }) => {
-    const title = `${COMPLETE_PREFIX} recurring ${Date.now()}`;
+    // S5b (ONTOLOGY §9): tasks no longer repeat. The fixture is what a tab
+    // left open across that release still sends, a repeat rule: it is read
+    // past, not refused, and the answer names none.
+    const title = `${COMPLETE_PREFIX} once ${Date.now()}`;
     const created = await request.post('/api/tasks', {
       data: { title, focus_date: localISO(0), recurrence: 'daily' },
     });
     expect(created.ok()).toBeTruthy();
     const task = await created.json();
+    expect(task).not.toHaveProperty('recurrence');
+
+    // The save's own answer, not a toast: whatever a completion does on the
+    // server, it has done by the time the PATCH answers.
+    const saved = () =>
+      page.waitForResponse(
+        (r) => r.request().method() === 'PATCH' && r.url().endsWith(`/api/tasks/${task.id}`),
+      );
+    const onServer = async () =>
+      (await inboxTasks(request, title)).map((t) => [t.id, t.status]);
 
     await page.goto('/tasks/my-day');
     const row = page.locator('[data-task-id]', { hasText: title });
+    const completed = saved();
     await row.locator('button[title="Toggle done"]').click();
+    expect((await completed).ok()).toBeTruthy();
+    // Completing used to schedule tomorrow's occurrence: two tasks.
+    expect(await onServer()).toEqual([[task.id, 'done']]);
+
     const toast = page.locator('[role="status"]');
     await expect(toast.getByText('Task completed')).toBeVisible();
-
-    // Completion scheduled tomorrow's occurrence.
-    await expect.poll(async () => (await inboxTasks(request, title)).length).toBe(2);
-
+    const reopened = saved();
     await toast.getByRole('button', { name: 'Undo' }).click();
-    // Regression: reopening left the occurrence behind, so completing again
-    // produced a duplicate. Only the original — reopened — remains.
-    await expect
-      .poll(async () => (await inboxTasks(request, title)).map((t) => [t.id, t.status]))
-      .toEqual([[task.id, 'open']]);
+    expect((await reopened).ok()).toBeTruthy();
+    expect(await onServer()).toEqual([[task.id, 'open']]);
   });
 });
 

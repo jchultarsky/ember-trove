@@ -12,7 +12,7 @@ use common::{
     ontology::Capability,
     task::{
         CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTasksRequest, Task, TaskCounts,
-        TaskStatus, UpdateTaskRequest,
+        UpdateTaskRequest,
     },
     webhook::{EVENT_TASK_CREATED, EVENT_TASK_DELETED, EVENT_TASK_UPDATED},
 };
@@ -67,69 +67,6 @@ pub fn dashboard_router() -> Router<AppState> {
 /// home Dashboard's "What changed today / yesterday" section (v2.9.0).
 pub fn dashboard_activity_router() -> Router<AppState> {
     Router::new().route("/", get(dashboard_activity))
-}
-
-// ── Recurrence helpers ────────────────────────────────────────────────────────
-
-/// What a status change does to a recurring task's series.
-#[derive(Debug)]
-enum SeriesEffect {
-    /// Nothing to schedule or retract.
-    Unchanged,
-    /// Completed: schedule the next occurrence. `owner_id` is the series
-    /// owner — never the caller, who may be a node editor completing someone
-    /// else's task.
-    ScheduleNext {
-        owner_id: String,
-        req: CreateTaskRequest,
-    },
-    /// Reopened a completed instance: the occurrence its completion scheduled
-    /// is now a duplicate-in-waiting, so retract it.
-    RetractNext,
-}
-
-/// Decide the series side effect of moving `pre` to `new_status`. Pure, so
-/// the transition table is unit-tested without a repo.
-fn series_effect(pre: &Task, new_status: Option<&TaskStatus>, today: NaiveDate) -> SeriesEffect {
-    let Some(new_status) = new_status else {
-        return SeriesEffect::Unchanged;
-    };
-    match (&pre.status, new_status) {
-        (from, TaskStatus::Done) if !from.is_terminal() => {
-            let Some(rule) = &pre.recurrence else {
-                return SeriesEffect::Unchanged;
-            };
-            let base_focus = pre.focus_date.unwrap_or(today);
-            SeriesEffect::ScheduleNext {
-                owner_id: pre.owner_id.clone(),
-                req: CreateTaskRequest {
-                    title: pre.title.clone(),
-                    node_id: pre.node_id,
-                    status: Some(TaskStatus::Open),
-                    priority: Some(pre.priority.clone()),
-                    focus_date: Some(rule.advance(base_focus)),
-                    due_date: pre.due_date.map(|d| rule.advance(d)),
-                    recurrence: Some(rule.clone()),
-                },
-            }
-        }
-        // Keyed on the link, not on `pre.recurrence`: the rule may have been
-        // cleared since the completion that scheduled the occurrence.
-        // Reopened, as open or as waiting (S5a).
-        (TaskStatus::Done, TaskStatus::Open | TaskStatus::Waiting) => SeriesEffect::RetractNext,
-        _ => SeriesEffect::Unchanged,
-    }
-}
-
-/// The next occurrence goes on the task's node as it is *after* the
-/// update, so a task completed and moved in one request takes its series
-/// with it (#216). Otherwise it would land on the node the task just left.
-fn scheduled_on(
-    mut req: CreateTaskRequest,
-    node_after_update: Option<NodeId>,
-) -> CreateTaskRequest {
-    req.node_id = node_after_update;
-    req
 }
 
 /// Who may change a task. On a node: an editor of that node (or an admin).
@@ -283,38 +220,7 @@ async fn update_task(
         }
     }
 
-    let effect = series_effect(
-        &existing,
-        req.status.as_ref(),
-        // The sender's day when they sent a plausible one (#281, 1.9).
-        common::task::local_today(req.today, chrono::Utc::now().date_naive()),
-    );
-
     let updated = state.tasks.update(TaskId(id), req).await?;
-
-    // Best-effort: the status update itself has succeeded either way.
-    match effect {
-        SeriesEffect::Unchanged => {}
-        SeriesEffect::ScheduleNext { owner_id, req } => {
-            let req = scheduled_on(req, updated.node_id);
-            if let Err(e) = state
-                .tasks
-                .create_occurrence(TaskId(id), &owner_id, req)
-                .await
-            {
-                tracing::warn!(task_id = %id, error = %e, "scheduling next occurrence failed");
-            }
-        }
-        SeriesEffect::RetractNext => {
-            if let Err(e) = state
-                .tasks
-                .retract_occurrence(TaskId(id), &existing.owner_id)
-                .await
-            {
-                tracing::warn!(task_id = %id, error = %e, "retracting next occurrence failed");
-            }
-        }
-    }
 
     dispatch(
         state.webhooks.clone(),
@@ -603,123 +509,4 @@ async fn dashboard_activity(
     let entries =
         crate::routes::nodes::present_for(&state, &claims, entries, |e| &mut e.entry).await?;
     Ok(Json(entries))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use common::task::RecurrenceRule;
-
-    fn task(status: TaskStatus, recurrence: Option<RecurrenceRule>) -> Task {
-        Task {
-            id: TaskId(Uuid::new_v4()),
-            node_id: None,
-            owner_id: "series-owner".to_string(),
-            title: "water plants".to_string(),
-            status,
-            priority: common::task::TaskPriority::Medium,
-            focus_date: NaiveDate::from_ymd_opt(2026, 3, 9),
-            due_date: NaiveDate::from_ymd_opt(2026, 3, 10),
-            recurrence,
-            sort_order: 0,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-            completed_at: None,
-        }
-    }
-
-    fn today() -> NaiveDate {
-        NaiveDate::from_ymd_opt(2026, 3, 12).unwrap()
-    }
-
-    #[test]
-    fn the_next_occurrence_follows_the_task_to_its_node_after_the_update() {
-        // #216: complete and move in one request, and the series moves too.
-        let pre = task(TaskStatus::Open, Some(RecurrenceRule::Weekly));
-        let SeriesEffect::ScheduleNext { req, .. } =
-            series_effect(&pre, Some(&TaskStatus::Done), today())
-        else {
-            panic!("expected ScheduleNext");
-        };
-        assert_eq!(req.node_id, None, "built from the task before the update");
-        let project = NodeId(Uuid::from_u128(7));
-        assert_eq!(
-            scheduled_on(req.clone(), Some(project)).node_id,
-            Some(project)
-        );
-        assert_eq!(scheduled_on(req, None).node_id, None);
-    }
-
-    #[test]
-    fn completing_recurring_task_schedules_next_for_series_owner() {
-        let pre = task(TaskStatus::Open, Some(RecurrenceRule::Weekly));
-        let SeriesEffect::ScheduleNext { owner_id, req } =
-            series_effect(&pre, Some(&TaskStatus::Done), today())
-        else {
-            panic!("expected ScheduleNext");
-        };
-        // Regression (security): the occurrence used to be created for the
-        // *caller*, so a node editor completing someone else's recurring task
-        // took ownership of the series.
-        assert_eq!(owner_id, "series-owner");
-        assert_eq!(req.status, Some(TaskStatus::Open));
-        assert_eq!(req.focus_date, NaiveDate::from_ymd_opt(2026, 3, 16));
-        assert_eq!(req.due_date, NaiveDate::from_ymd_opt(2026, 3, 17));
-        assert_eq!(req.recurrence, Some(RecurrenceRule::Weekly));
-    }
-
-    #[test]
-    fn completing_from_waiting_also_schedules() {
-        let pre = task(TaskStatus::Waiting, Some(RecurrenceRule::Daily));
-        assert!(matches!(
-            series_effect(&pre, Some(&TaskStatus::Done), today()),
-            SeriesEffect::ScheduleNext { .. }
-        ));
-    }
-
-    #[test]
-    fn completing_non_recurring_or_already_terminal_is_unchanged() {
-        let plain = task(TaskStatus::Open, None);
-        assert!(matches!(
-            series_effect(&plain, Some(&TaskStatus::Done), today()),
-            SeriesEffect::Unchanged
-        ));
-        for from in [TaskStatus::Done, TaskStatus::Cancelled] {
-            let pre = task(from, Some(RecurrenceRule::Daily));
-            assert!(matches!(
-                series_effect(&pre, Some(&TaskStatus::Done), today()),
-                SeriesEffect::Unchanged
-            ));
-        }
-    }
-
-    #[test]
-    fn reopening_completed_task_retracts_next() {
-        for to in [TaskStatus::Open, TaskStatus::Waiting] {
-            let pre = task(TaskStatus::Done, Some(RecurrenceRule::Daily));
-            assert!(matches!(
-                series_effect(&pre, Some(&to), today()),
-                SeriesEffect::RetractNext
-            ));
-        }
-        // Rule cleared after completion: the scheduled occurrence still exists.
-        let pre = task(TaskStatus::Done, None);
-        assert!(matches!(
-            series_effect(&pre, Some(&TaskStatus::Open), today()),
-            SeriesEffect::RetractNext
-        ));
-    }
-
-    #[test]
-    fn non_status_edits_and_cancelling_are_unchanged() {
-        let pre = task(TaskStatus::Done, Some(RecurrenceRule::Daily));
-        assert!(matches!(
-            series_effect(&pre, None, today()),
-            SeriesEffect::Unchanged
-        ));
-        assert!(matches!(
-            series_effect(&pre, Some(&TaskStatus::Cancelled), today()),
-            SeriesEffect::Unchanged
-        ));
-    }
 }

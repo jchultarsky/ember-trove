@@ -22,6 +22,13 @@ cargo check && cargo clippy -- -D warnings
   startup via `sqlx::migrate!()`. Add a new numbered file; never edit an applied migration.
 - CI validates migrations against `postgres:16` with `sqlx-cli` **pinned to 0.8.6** to
   match the `sqlx` dependency.
+- **A migration's test stands on the schema before it** (2026-11-15):
+  `#[sqlx::test(migrations = false)]`, then
+  `apply_migrations(&pool, |v| v < N)`, seed, run N, compare, then
+  `|v| v > N` before any repo call. Rebuilding the old shape by hand on a
+  fully migrated database hides everything the migration does that a
+  second run leaves alone (a changed default, a dropped index): the
+  053 test missed both until it was rewritten this way.
 - **Data backfills that need Rust logic** (#143): put them in `api/src/backfill.rs`,
   not SQL regex. Each one claims a `data_backfills` row in its own transaction
   (`INSERT … ON CONFLICT DO NOTHING`; claimed = `rows_affected() == 1`), so it runs
@@ -182,7 +189,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
@@ -239,6 +246,13 @@ cargo check && cargo clippy -- -D warnings
   format number. The insert's `ON CONFLICT` branch (an id named twice,
   only in a damaged archive) keeps the stored kind, so it sets the state
   against that kind.
+- **Tasks don't repeat (S5b, format 12)**: a task carries no
+  `recurrence` and the archive no `recurrence_links`. Formats 3 to 11
+  may hold both. Neither has a field any more, so serde reads past them
+  and a task that repeated restores as a one-time task (migration 053's
+  rule). Don't give either a field again "to be safe": an unknown rule
+  word then fails the whole restore
+  (`an_older_archive_restores_its_repeating_tasks_as_one_time_tasks`).
 - The trash (soft-deleted notes, tasks, captures) is not backed up, on
   purpose.
 - Changing what an archive holds, or where, bumps
@@ -605,9 +619,15 @@ cargo check && cargo clippy -- -D warnings
   `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
   `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
   `common::task::is_overdue` and `Task::in_my_day`.
-- `TaskRepo::create_occurrence` locks the parent row and returns the live
-  occurrence it already has: a parent has at most one. Without the lock,
-  `two_completions_at_once_schedule_one_next_occurrence` fails.
+- **A task happens once** (S5b, #332; ONTOLOGY §9). Migration 053
+  dropped `recurrence` and `recurrence_parent_id`. Completing a task
+  writes that task and nothing else; reopening one deletes nothing.
+  `update_task` is: validate, the rights checks, the update, the webhook.
+  Recurrence comes back only as a new owner decision.
+  - A tab from before S5b still sends `recurrence`, and `today` with a
+    completion. No request type refuses unknown keys, so both are read
+    past (`a_repeat_rule_from_an_older_tab_is_ignored_not_refused`).
+    Don't add `deny_unknown_fields` to a task request.
 - **A task asks for attention only when it is open and its project is
   active** (S5a, S6a): `Task::asks_for_attention(project)`. My Day's
   carry-over (`Task::in_my_day`) and its Overdue zone
@@ -626,10 +646,10 @@ cargo check && cargo clippy -- -D warnings
   `FEED_COLS`, and carry `project_state` from the **same** join as
   `node_title`: the one that checks the reader may see the node. Never
   add a second join to `nodes` in a feed.
-- "Today" for a recurring task's next occurrence is the sender's:
-  `UpdateTaskRequest.today`, read through `common::task::local_today`
-  (within a day of UTC, else UTC). `done_toggle` sends it. Never use the
-  server's UTC date for a user-facing day when the client can say.
+- Never use the server's UTC date for a user-facing day when the client
+  can say. `done_toggle` stamps `focus_date` with the viewer's own
+  `today`, and the My Day and calendar reads take their day from the
+  request.
 
 ## Node deletion preview (#281)
 

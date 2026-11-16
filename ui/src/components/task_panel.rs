@@ -293,7 +293,7 @@ fn TaskRow(
     let busy = RwSignal::new(false);
     let focus_date = task.focus_date;
 
-    // Inline editing — title, priority, due date, recurrence. The open
+    // Inline editing — title, priority, due date, state. The open
     // editor and its draft survive a refetch (#250).
     let editing_id = expect_context::<EditingTaskId>().0;
     let editing = move || editing_id.get() == Some(task_id);
@@ -340,7 +340,6 @@ fn TaskRow(
     let on_delete = move |_| delete_with_undo(task_id, Some(busy), ctx, || {});
 
     let title_display = task.title.clone();
-    let has_recurrence = task.recurrence.is_some();
     let completed_at = task.completed_at;
 
     view! {
@@ -356,7 +355,7 @@ fn TaskRow(
 
             // Title + meta
             <div class="flex-1 min-w-0">
-                // Title — display or inline edit form (title + priority + due + repeat)
+                // Title — display or inline edit form (title + priority + due + state)
                 {move || if editing() {
                     let draft = saved_task.with_value(|t| session.draft(t));
                     view! {
@@ -398,12 +397,6 @@ fn TaskRow(
                             d,
                             common::task::is_overdue(&status_sig.get(), Some(d), today),
                         ))}
-                        {has_recurrence.then(|| view! {
-                            <span class="flex items-center gap-0.5 text-stone-400 dark:text-stone-500"
-                                title="Recurring task">
-                                <span class="material-symbols-outlined" style="font-size:12px;">"repeat"</span>
-                            </span>
-                        })}
                         // Waiting or Cancelled, said in words. Reads the
                         // live status: it was read once at setup (S5a).
                         {move || state_badge_view(&status_sig.get())}

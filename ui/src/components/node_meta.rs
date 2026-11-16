@@ -65,7 +65,8 @@ pub fn status_color(status: &str) -> &'static str {
 /// types with one label each (`EdgeType::USER_SELECTABLE`,
 /// `option_label`). The Connections form and the graph's New Edge dialog
 /// had hand-written lists that already disagreed (#133). Each option binds
-/// its own `selected`, like `RecurrenceOptions`.
+/// its own `selected`: a `prop:value` on the `<select>` can be applied
+/// before its options exist, which leaves it on the first one.
 #[leptos::component]
 pub fn EdgeTypeOptions(value: leptos::prelude::RwSignal<String>) -> impl leptos::IntoView {
     use leptos::prelude::*;
