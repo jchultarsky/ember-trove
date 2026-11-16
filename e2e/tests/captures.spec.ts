@@ -1,4 +1,13 @@
-import { test, expect, createNode, type APIRequestContext, type Page } from './fixtures';
+import {
+  test,
+  expect,
+  createNode,
+  createProject,
+  addTask,
+  deleteNodesByPrefix,
+  type APIRequestContext,
+  type Page,
+} from './fixtures';
 
 /**
  * Captures (#234, ONTOLOGY §9.1): unclassified input on the Captures wall
@@ -10,6 +19,8 @@ import { test, expect, createNode, type APIRequestContext, type Page } from './f
  */
 
 const PREFIX = 'e2e cap ';
+/** The Project that holds the one task this spec makes. */
+const HOST_PREFIX = 'e2e cap host ';
 
 async function wipe(request: APIRequestContext) {
   const mine: { id: string; body: string }[] = await (await request.get('/api/captures')).json();
@@ -367,24 +378,25 @@ test('the old Inbox URLs land on Captures, the share marker included', async ({ 
   await expect(page.getByRole('tab', { name: 'Captures' })).toHaveAttribute('aria-selected', 'true');
 });
 
-test('an empty wall says so; a task with no Project is not a capture', async ({
-  page,
-  otherRequest,
-}) => {
+test('an empty wall says so; a task is not a capture', async ({ page, otherRequest }) => {
   // The second identity's wall, emptied (it has nothing else to keep).
   const theirs: { id: string }[] = await (await otherRequest.get('/api/captures')).json();
   for (const c of theirs) await otherRequest.delete(`/api/captures/${c.id}`);
-  // A task with no Project: Data health lists it, the wall doesn't.
-  const title = `${PREFIX}${Date.now()} loose task`;
-  const task = await (await otherRequest.post('/api/tasks', { data: { title } })).json();
+  // A task lives on its Project (§9.3): the wall never lists one. The
+  // Project is wiped by its title on a retry too, should this attempt
+  // die before its `finally`.
+  const title = `${PREFIX}${Date.now()} a task`;
+  await deleteNodesByPrefix(otherRequest, HOST_PREFIX);
   try {
+    const project = await createProject(otherRequest, `${HOST_PREFIX}${Date.now()}`);
+    await addTask(otherRequest, project.id, { title });
     await page.setExtraHTTPHeaders({ 'x-e2e-subject': 'other' });
     await page.goto('/tasks/captures');
     await expect(page.getByText('Nothing captured')).toBeVisible();
     await expect(page.getByText(title)).toHaveCount(0);
   } finally {
     await page.setExtraHTTPHeaders({});
-    await otherRequest.delete(`/api/tasks/${task.id}`);
+    await deleteNodesByPrefix(otherRequest, HOST_PREFIX);
   }
 });
 

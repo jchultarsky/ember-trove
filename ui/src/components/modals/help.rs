@@ -164,8 +164,9 @@ const CONCEPTS: &[Concept] = &[
     },
     Concept {
         title: "Tasks",
-        body: "Discrete actionable work, always in a Project. A task left without \
-               one shows up in Data health, which offers to move it. Has a \
+        body: "Discrete actionable work, always in a Project: a task can be moved \
+               to another Project, never left without one. Something that isn't \
+               a task yet is a capture. Has a \
                state (open, waiting, done or cancelled), priority, focus_date \
                and due_date. A task happens once: it doesn't repeat. Tick the \
                box when it is done; set Waiting or Cancelled in the task's editor. A \

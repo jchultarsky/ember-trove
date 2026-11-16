@@ -85,6 +85,14 @@ pub struct EntityCounts {
 /// would restore every task, as it is, with no rule. Archives of 3 to 11
 /// still restore: both are read past, and a task that repeated comes back
 /// as a one-time task, the rule migration 053 applied.
+/// Still 12 after S5c (#335), on purpose: a task always has a node now,
+/// but an archive holds the same things in the same places, only never a
+/// task without one. So the release before can restore an archive made
+/// by this one, which keeps a way back after a rollback. The other way
+/// round, a task with no node in an archive of **any** format, this one's
+/// included, restores as a capture (`capture::from_nodeless_task`,
+/// migration 054's rule): that is read from the task, never from this
+/// number.
 pub const SCHEMA_VERSION: u32 = 12;
 
 /// The oldest format this release restores. Format 3 differs from 4 only

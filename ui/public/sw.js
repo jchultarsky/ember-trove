@@ -45,7 +45,10 @@
 //   v18: History (S6d, #329) — a node's notes carry `edited_at` and the
 //        reader's flags, and its log is read by scope; evicts cached
 //        notes and activity JSON in the old shape.
-const CACHE_NAME = "ember-trove-v18";
+//   v19: Data health drops the orphan_task rule (S5c, #335: a task always
+//        has a Project) — evicts cached reports that still list it, which
+//        the new bundle can't read.
+const CACHE_NAME = "ember-trove-v19";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

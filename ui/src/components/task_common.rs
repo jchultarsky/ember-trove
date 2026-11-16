@@ -42,9 +42,9 @@ pub fn undo_restore_task(
 // ── Status ──────────────────────────────────────────────────────────────────
 
 /// Where a task opens: on its node's page, where `?task=` scrolls to and
-/// highlights it. A task with no Project has no list of its own any more
-/// (S4c, #240): it opens Data health, whose `OrphanTask` rule lists it with
-/// "Move to a Project".
+/// highlights it. Every task has a node since S5c (#335), so the `None`
+/// arm is never taken; it goes when `Task::node_id` stops being an
+/// `Option`.
 pub fn task_href(task: uuid::Uuid, node: Option<uuid::Uuid>) -> String {
     match node {
         Some(nid) => format!("/nodes/{nid}?task={task}"),

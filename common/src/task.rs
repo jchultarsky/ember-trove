@@ -106,7 +106,10 @@ impl TaskPriority {
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Task {
     pub id: TaskId,
-    /// `None` for standalone (inbox) tasks not yet associated with a node.
+    /// The task's Project (ONTOLOGY §9.3). Always set since S5c: the
+    /// database requires it (migration 054). `None` is read only from an
+    /// older archive, whose restore turns such a task into a capture
+    /// (`capture::from_nodeless_task`).
     pub node_id: Option<NodeId>,
     pub owner_id: String,
     pub title: String,
@@ -338,6 +341,21 @@ pub struct ProjectDashboardEntry {
     pub brief: Option<crate::brief::ProjectBrief>,
 }
 
+/// Why a task can't be made without a Project or taken off its own
+/// (S5c, ONTOLOGY §9.3: "exactly one Project. No orphan Tasks"). The
+/// loose thing is a capture (§9.1).
+pub const A_TASK_NEEDS_A_PROJECT: &str = "a task needs a Project";
+
+/// An update may move a task to another Project; it may not leave it on
+/// none. Decided from the request alone, before any task is looked up,
+/// so the refusal says nothing about the task it names.
+fn a_move_not_a_detach(node_id: &Option<Option<NodeId>>, _ctx: &()) -> garde::Result {
+    match node_id {
+        Some(None) => Err(garde::Error::new(A_TASK_NEEDS_A_PROJECT)),
+        None | Some(Some(_)) => Ok(()),
+    }
+}
+
 /// Deserialises `Option<Option<T>>` correctly:
 /// - field absent        → `None`           (via `#[serde(default)]`)
 /// - field present/null  → `Some(None)`
@@ -354,7 +372,9 @@ where
 pub struct CreateTaskRequest {
     #[garde(length(min = 1, max = 500), custom(crate::node::not_blank))]
     pub title: String,
-    /// If absent, the task is standalone (no node association).
+    /// The task's Project. `POST /nodes/{id}/tasks` takes it from the
+    /// path; `POST /tasks` needs it here and refuses a request without
+    /// it ([`A_TASK_NEEDS_A_PROJECT`]; S5c, ONTOLOGY §9.3).
     #[garde(skip)]
     pub node_id: Option<NodeId>,
     #[garde(skip)]
@@ -396,13 +416,17 @@ pub struct UpdateTaskRequest {
     )]
     #[garde(skip)]
     pub due_date: Option<Option<NaiveDate>>,
-    /// `None` = leave unchanged · `Some(None)` = detach from node · `Some(Some(id))` = associate
+    /// `None` = leave unchanged · `Some(Some(id))` = move to that Project.
+    /// `Some(None)` (an explicit null) asked to take the task off its
+    /// node; it is refused since S5c ([`a_move_not_a_detach`]). It stays
+    /// a double option so that the refusal is ours, with its reason, and
+    /// not a parser's.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deser_double_opt"
     )]
-    #[garde(skip)]
+    #[garde(custom(a_move_not_a_detach))]
     pub node_id: Option<Option<NodeId>>,
 }
 
@@ -652,6 +676,28 @@ mod update_validation_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S5c (ONTOLOGY §9.3): a task belongs to exactly one Project, so an
+    /// update may move it and may not take it off. Refused from the
+    /// request alone, so the answer says nothing about any task.
+    #[test]
+    fn a_task_update_may_move_the_task_but_not_take_it_off_its_project() {
+        let from = |json: &str| serde_json::from_str::<UpdateTaskRequest>(json).expect("parses");
+        let detach = from(r#"{"node_id": null}"#);
+        assert_eq!(detach.node_id, Some(None), "an explicit null is read");
+        let refused = detach.validate().expect_err("a detach is refused");
+        assert!(
+            refused.to_string().contains(A_TASK_NEEDS_A_PROJECT),
+            "{refused}"
+        );
+        let node = uuid::Uuid::from_u128(7);
+        assert!(
+            from(&format!(r#"{{"node_id": "{node}"}}"#))
+                .validate()
+                .is_ok()
+        );
+        assert!(from(r#"{"title": "renamed"}"#).validate().is_ok());
+    }
 
     #[test]
     fn task_parent_tells_no_project_from_an_unavailable_node() {

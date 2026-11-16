@@ -14,7 +14,7 @@ use utoipa::ToSchema;
 use crate::backup::BackupNote;
 use crate::id::{CaptureId, NodeId, NoteId, TaskId};
 use crate::node::NodeType;
-use crate::task::TaskPriority;
+use crate::task::{Task, TaskPriority, TaskStatus};
 
 /// The longest a capture may be, in characters (the database's CHECK).
 pub const MAX_LEN: usize = 10_000;
@@ -242,6 +242,53 @@ pub fn from_nodeless_note(note: &BackupNote) -> Option<Capture> {
         color: CaptureColor::Default,
         created_at: note.created_at,
         updated_at: note.updated_at,
+    })
+}
+
+/// The lead of a loose task's due date: the calendar's wording
+/// ([`dated`]) with the year, since the task may be an old one.
+/// Migration 054 writes the same with `to_char(.., 'Dy FMDD Mon YYYY')`.
+const LOOSE_TASK_DUE: &str = "%a %-d %b %Y";
+
+/// What a task with no Project says as a capture (S5c, ONTOLOGY §9.3 and
+/// §9.1: "the role of the orphan is played by a capture"). Migration 054
+/// applies the same rule in SQL, and the pg test holds the two together.
+///
+/// - Still to do (open or waiting): the title, led by its due date if it
+///   has one ("Fri 7 Nov 2025: call the bank").
+/// - Finished: the title marked "Done: " or "Cancelled: ", so it doesn't
+///   read as new work. Its due date is not carried.
+///
+/// The title goes in as it is. No trimming: Postgres and Rust don't agree
+/// on what whitespace is, and a title of spaces must not become an empty
+/// capture, which the database refuses.
+///
+/// A capture has no place for priority, My Day, the order in a list or
+/// the completion date: those are not carried.
+#[must_use]
+pub fn nodeless_task_text(title: &str, status: &TaskStatus, due: Option<NaiveDate>) -> String {
+    match (status, due) {
+        (TaskStatus::Done | TaskStatus::Cancelled, _) => format!("{}: {title}", status.label()),
+        (TaskStatus::Open | TaskStatus::Waiting, Some(due)) => {
+            format!("{}: {title}", due.format(LOOSE_TASK_DUE))
+        }
+        (TaskStatus::Open | TaskStatus::Waiting, None) => title.to_string(),
+    }
+}
+
+/// A task with no Project becomes a capture (S5c): migration 054's rule,
+/// kept here for restoring an archive that still holds one. Same id,
+/// owner and times; the text is [`nodeless_task_text`]. `None` for a task
+/// that has a node.
+#[must_use]
+pub fn from_nodeless_task(task: &Task) -> Option<Capture> {
+    task.node_id.is_none().then(|| Capture {
+        id: CaptureId(task.id.0),
+        owner_id: task.owner_id.clone(),
+        body: nodeless_task_text(&task.title, &task.status, task.due_date),
+        color: CaptureColor::Default,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
     })
 }
 
@@ -554,5 +601,105 @@ mod tests {
     fn a_dated_capture_leads_with_its_day() {
         let day = NaiveDate::from_ymd_opt(2026, 11, 7).expect("date");
         assert_eq!(dated(day, "  call the bank "), "Sat 7 Nov: call the bank");
+    }
+
+    // ── S5c: a task with no Project becomes a capture ───────────────────
+
+    fn loose_task(status: TaskStatus, due: Option<NaiveDate>, title: &str) -> Task {
+        let at = |day| {
+            Utc.with_ymd_and_hms(2025, 10, day, 9, 0, 0)
+                .single()
+                .expect("date")
+        };
+        Task {
+            id: TaskId(uuid::Uuid::from_u128(9)),
+            node_id: None,
+            owner_id: "alice".into(),
+            title: title.into(),
+            status,
+            priority: TaskPriority::High,
+            focus_date: NaiveDate::from_ymd_opt(2025, 10, 3),
+            due_date: due,
+            sort_order: 4,
+            created_at: at(1),
+            updated_at: at(2),
+            completed_at: None,
+        }
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> Option<NaiveDate> {
+        Some(NaiveDate::from_ymd_opt(y, m, d).expect("date"))
+    }
+
+    #[test]
+    fn a_task_with_no_project_becomes_a_capture_keeping_its_id_owner_and_times() {
+        let task = loose_task(TaskStatus::Open, None, "call the bank");
+        let c = from_nodeless_task(&task).expect("a capture");
+        assert_eq!(c.id.0, task.id.0, "same id");
+        assert_eq!(c.owner_id, "alice");
+        assert_eq!(c.body, "call the bank");
+        assert_eq!(c.color, CaptureColor::Default);
+        assert_eq!(
+            (c.created_at, c.updated_at),
+            (task.created_at, task.updated_at)
+        );
+    }
+
+    #[test]
+    fn a_task_on_a_node_is_no_capture() {
+        let on_a_node = Task {
+            node_id: Some(NodeId(uuid::Uuid::from_u128(1))),
+            ..loose_task(TaskStatus::Open, None, "call the bank")
+        };
+        assert!(from_nodeless_task(&on_a_node).is_none());
+    }
+
+    #[test]
+    fn a_loose_tasks_text_says_when_it_was_due_or_that_it_is_finished() {
+        use TaskStatus::{Cancelled, Done, Open, Waiting};
+        let cases = [
+            // Still to do: the due date leads, with its year (the task
+            // may be old), and a one-digit day has no padding.
+            (Open, None, "call the bank"),
+            (Open, day(2025, 11, 7), "Fri 7 Nov 2025: call the bank"),
+            (Waiting, day(2026, 1, 31), "Sat 31 Jan 2026: call the bank"),
+            (Waiting, None, "call the bank"),
+            // Finished: marked, so it doesn't read as new work. Its due
+            // date is not carried.
+            (Done, None, "Done: call the bank"),
+            (Done, day(2025, 11, 7), "Done: call the bank"),
+            (Cancelled, day(2025, 11, 7), "Cancelled: call the bank"),
+        ];
+        for (status, due, want) in cases {
+            let label = format!("{status:?} {due:?}");
+            assert_eq!(
+                nodeless_task_text("call the bank", &status, due),
+                want,
+                "{label}"
+            );
+            let c = from_nodeless_task(&loose_task(status, due, "call the bank"));
+            assert_eq!(c.expect("a capture").body, want, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_loose_tasks_title_is_carried_as_it_is() {
+        // Not trimmed: migration 054 doesn't, and a title of spaces must
+        // not become an empty capture, which the database refuses.
+        assert_eq!(
+            nodeless_task_text("  padded  ", &TaskStatus::Open, None),
+            "  padded  "
+        );
+        assert_eq!(nodeless_task_text(" ", &TaskStatus::Open, None), " ");
+        assert_eq!(
+            nodeless_task_text(" x ", &TaskStatus::Done, None),
+            "Done:  x "
+        );
+        // The longest title, in characters, still fits a capture with
+        // its longest lead.
+        let long = "é".repeat(TITLE_MAX_LEN);
+        let text = nodeless_task_text(&long, &TaskStatus::Cancelled, None);
+        assert_eq!(text.chars().count(), TITLE_MAX_LEN + "Cancelled: ".len());
+        assert!(text.chars().count() <= MAX_LEN);
     }
 }

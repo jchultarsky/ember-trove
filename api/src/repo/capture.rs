@@ -289,7 +289,7 @@ impl CaptureRepo for PgCaptureRepo {
             }
             Destination::Task { node_id, req } => Made::Task {
                 project: node_id,
-                task: super::task::insert_task(&mut *tx, Some(node_id), owner, &req).await?,
+                task: super::task::insert_task(&mut *tx, node_id, owner, &req).await?,
             },
         };
         tx.commit().await.map_err(db("convert capture"))?;

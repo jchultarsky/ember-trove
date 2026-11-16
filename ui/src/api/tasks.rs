@@ -20,10 +20,6 @@ pub async fn list_open_tasks() -> Result<Vec<MyDayTask>, UiError> {
     get_json("/tasks/all").await
 }
 
-pub async fn create_standalone_task(req: &CreateTaskRequest) -> Result<Task, UiError> {
-    post_json("/tasks", req).await
-}
-
 pub async fn create_task(node_id: NodeId, req: &CreateTaskRequest) -> Result<Task, UiError> {
     post_json(&format!("/nodes/{node_id}/tasks"), req).await
 }

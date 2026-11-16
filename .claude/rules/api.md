@@ -131,8 +131,9 @@ cargo check && cargo clippy -- -D warnings
   workers; `common::inbox::capture_text` builds the text.
 - Restore accepts formats 3 to the current one (`OLDEST_RESTORABLE`). A format-3 note
   without a node becomes a capture (`capture::from_nodeless_note`, 043's
-  rule). Restore also clears the live captures, nodeless tasks and people,
-  which the `nodes` cascade never reached.
+  rule), and so does a task without one, from an archive of any format
+  (`capture::from_nodeless_task`, 054's rule; S5c). Restore also clears
+  the live captures and people, which the `nodes` cascade never reached.
 - `POST /captures/{id}/convert` (S4b): the route checks the destination
   first, as its create route would (editor on the node or home, the
   containment table, `Capability::Tasks`). Then `CaptureRepo::convert`
@@ -257,6 +258,13 @@ cargo check && cargo clippy -- -D warnings
   purpose.
 - Changing what an archive holds, or where, bumps
   `common::backup::SCHEMA_VERSION`, so older releases refuse it.
+- **S5c did not bump it** (still 12): an archive holds the same things in
+  the same places, only never a task without a node, so the release
+  before can restore one made after. A rule that turns old content into
+  something else on restore (a task with no node into a capture) reads the
+  content itself, never the format number: a format-12 archive made by
+  3.24 can still hold such a task
+  (`a_restore_turns_a_task_with_no_node_into_a_capture`).
 
 ## Project states (S6a, #320)
 
@@ -612,9 +620,34 @@ cargo check && cargo clippy -- -D warnings
   terminal". The dashboard's counts and its list (`counts_for_nodes`,
   `list_open_for_nodes`: open before waiting) are the two that name them.
 
-- Who may change a task is `require_task_editor` (routes/tasks.rs): on a
-  node, an editor of that node; on none, its owner; an admin always.
-  `TaskRepo::reorder` applies the same rule in SQL and skips the rest.
+- **A task has exactly one Project** (S5c, #335; ONTOLOGY §9.3).
+  - `node_tasks.node_id` is `NOT NULL` (migration 054, which turned the
+    tasks with no node into captures; `capture::nodeless_task_text` is
+    the same rule in Rust and `migration_054_…` holds the two together).
+  - `POST /tasks` refuses a body that names no node, in the handler
+    (`CreateTaskRequest` is shared with `POST /nodes/{id}/tasks`, whose
+    body names none). `PATCH /tasks/{id}` refuses `node_id: null` in
+    `UpdateTaskRequest::validate`. Both are 422s decided from the request
+    alone, before any lookup, so they say nothing about a task: don't
+    move either check after the fetch
+    (`a_task_cannot_be_taken_off_its_project_and_the_refusal_names_no_task`).
+  - `TaskRepo::create` and `insert_task` take a `NodeId`; `update` writes
+    `COALESCE($9, node_id)`, so nothing asks the database for a NULL.
+  - "The node is a Project" is still the API's rule only
+    (`Capability::Tasks`, with the exemption for a task that stays where
+    it is). There is no database rule for the kind: a restore of an older
+    archive may still land a task on an Area or a Reference, and Data
+    health lists it (`task_on_non_project`). A test may still put a task
+    on a non-Project through the repo or raw SQL; it can't make one with
+    no node.
+  - Moving a task needs editor rights on both Projects. An editor of a
+    shared Project can therefore move a task to a Project only they see
+    (noted for the owner on #204, 2026-11-16; not changed).
+- Who may change a task is `require_task_editor` (routes/tasks.rs): an
+  editor of its node; an admin always. `TaskRepo::reorder` applies the
+  same rule in SQL and skips the rest. (Both still carry an arm for a task
+  on no node, unreachable since 054; it goes with `Task::node_id`'s
+  `Option`.)
 - A list's admin scope is `subject_scope(&claims)`, never an inline
   `if is_admin`. A task list's priority order is `PRIORITY_RANK` /
   `T_PRIORITY_RANK` (repo/task.rs). "Overdue" and "in My Day" are
@@ -665,8 +698,11 @@ cargo check && cargo clippy -- -D warnings
 ## Security rules from the 2026-11-10 audit
 
 - **A note or task follows its node's rights, not its author's** (owner
-  decision). `require_task_editor`: on a node, an editor of the node; the
-  task's owner passes only for a task on no node. Notes:
+  decision). `require_task_editor`: an editor of the task's node, never
+  its owner as such. Since S5c a task can't be taken off its node either
+  (422): that was one way to keep a task after a share ended. A move to
+  another Project the editor may edit is the other, and is still allowed
+  (the owner's to decide; see "Task rules"). Notes:
   `repo::note::author_may_write` (author **and** still an editor) for
   update, `may_remove` (that, or the node's owner, or an admin) for
   delete and restore; the routes pass a `NoteActor`. The owner's feeds
