@@ -629,18 +629,23 @@ async fn graph_position_writes_stay_owner_scoped(pool: PgPool) {
 #[sqlx::test(migrations = "../migrations")]
 async fn task_soft_delete_restore_and_purge(pool: PgPool) {
     let tasks = PgTaskRepo::new(pool.clone());
+    let project = a_project(&pool, "owner-a", "a project", None).await.id;
     let task = tasks
-        .create(None, "owner-a", task_req("inbox task"))
+        .create(project, "owner-a", task_req("a task"))
         .await
         .expect("create task");
+    let listed = || async {
+        tasks
+            .list_for_node(project, "owner-a")
+            .await
+            .expect("its project's tasks")
+            .len()
+    };
 
-    // Visible in the inbox (standalone task), then tombstoned by delete.
-    assert_eq!(tasks.list_inbox("owner-a").await.expect("inbox").len(), 1);
+    // Listed on its Project, then tombstoned by delete.
+    assert_eq!(listed().await, 1);
     tasks.delete(task.id).await.expect("soft delete");
-    assert!(
-        tasks.list_inbox("owner-a").await.expect("inbox").is_empty(),
-        "soft-deleted task must not appear in the inbox"
-    );
+    assert_eq!(listed().await, 0, "a soft-deleted task is not listed");
 
     // Deleting an already-deleted task is NotFound (tombstone is idempotent-safe).
     assert!(matches!(
@@ -651,7 +656,7 @@ async fn task_soft_delete_restore_and_purge(pool: PgPool) {
     // Restore brings it back.
     let restored = tasks.restore(task.id).await.expect("restore");
     assert_eq!(restored.id, task.id);
-    assert_eq!(tasks.list_inbox("owner-a").await.expect("inbox").len(), 1);
+    assert_eq!(listed().await, 1);
 
     // Delete again, purge everything tombstoned up to now — the row is gone
     // for good and restore must fail.
@@ -763,7 +768,7 @@ async fn search_pagination_totals_and_per_source_snippets(pool: PgPool) {
         .expect("note");
     PgTaskRepo::new(pool.clone())
         .create(
-            Some(host.id),
+            host.id,
             "owner-a",
             CreateTaskRequest {
                 node_id: Some(host.id),
@@ -829,7 +834,7 @@ async fn search_ignores_soft_deleted_notes_and_tasks(pool: PgPool) {
         .expect("note");
     let task = tasks
         .create(
-            Some(host.id),
+            host.id,
             "owner-a",
             CreateTaskRequest {
                 node_id: Some(host.id),
@@ -959,16 +964,17 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
         focus_date: Some(focus),
         ..task_req(title)
     };
+    let project = a_project(&pool, "owner-a", "a project", None).await.id;
     let done_today = tasks
-        .create(None, "owner-a", mk("done today", today))
+        .create(project, "owner-a", mk("done today", today))
         .await
         .expect("create");
     let carried_open = tasks
-        .create(None, "owner-a", mk("carried open", earlier))
+        .create(project, "owner-a", mk("carried open", earlier))
         .await
         .expect("create");
     let carried_done = tasks
-        .create(None, "owner-a", mk("carried done", earlier))
+        .create(project, "owner-a", mk("carried done", earlier))
         .await
         .expect("create");
     for t in [&done_today, &carried_done] {
@@ -999,8 +1005,8 @@ async fn my_day_keeps_done_tasks_only_when_focused_today(pool: PgPool) {
 /// open (a Waiting task doesn't carry over; S5a, owner decision
 /// 2026-11-13) and its project is not parked or closed (S6a, owner
 /// decision 2026-11-13). The query and `Task::in_my_day` are one rule: for
-/// every task state, focused today or earlier, on no node, on an Article
-/// (older data) and on a Project in each state, the list holds exactly
+/// every task state, focused today or earlier, on an Article (older
+/// data) and on a Project in each state, the list holds exactly
 /// the tasks the rule names, and each row carries its project's state. A
 /// task the list leaves out is still in the backlog's feed.
 #[sqlx::test(migrations = "../migrations")]
@@ -1011,11 +1017,12 @@ async fn my_day_carries_over_only_what_asks_for_attention(pool: PgPool) {
     let earlier = today - Duration::days(2);
 
     // Where a task can be: (label, node, the state the feed should carry).
-    let mut places: Vec<(String, Option<common::id::NodeId>, Option<ProjectState>)> =
-        vec![("no node".to_string(), None, None)];
+    // An Article has no state (older data: only raw SQL or the repo can
+    // still put a task there), and each Project state follows.
+    let mut places: Vec<(String, common::id::NodeId, Option<ProjectState>)> = Vec::new();
     let article = create_node(&pool, "owner-a", "an article").await;
     own(&pool, article.id, "owner-a").await;
-    places.push(("an article".to_string(), Some(article.id), None));
+    places.push(("an article".to_string(), article.id, None));
     for state in ProjectState::ALL {
         let p = a_project(
             &pool,
@@ -1025,7 +1032,7 @@ async fn my_day_carries_over_only_what_asks_for_attention(pool: PgPool) {
         )
         .await;
         declare(&pool, p.id, *state, "owner-a").await;
-        places.push((p.title.clone(), Some(p.id), Some(*state)));
+        places.push((p.title.clone(), p.id, Some(*state)));
     }
 
     let mut made = Vec::new();
@@ -1070,10 +1077,10 @@ async fn my_day_carries_over_only_what_asks_for_attention(pool: PgPool) {
         assert_eq!(row.project_state, *state, "{}", row.task.title);
         assert!(row.in_my_day(today), "{}", row.task.title);
     }
-    // What the rule comes to. Focused today: every task (4 states x 6
+    // What the rule comes to. Focused today: every task (4 states x 5
     // places). Carried over: the open one, where nothing holds it back
-    // (no node, the article, the active project).
-    assert_eq!(listed.len(), 4 * places.len() + 3);
+    // (the article, the active project).
+    assert_eq!(listed.len(), 4 * places.len() + 2);
     let carried = |status: TaskStatus, place: &str| {
         made.iter()
             .map(|(t, _)| t)
@@ -1088,7 +1095,7 @@ async fn my_day_carries_over_only_what_asks_for_attention(pool: PgPool) {
     assert!(ids.contains(&carried(TaskStatus::Open, "active project")));
     assert!(ids.contains(&carried(TaskStatus::Open, "an article")));
     let quiet = [
-        carried(TaskStatus::Waiting, "no node"),
+        carried(TaskStatus::Waiting, "an article"),
         carried(TaskStatus::Open, "parked project"),
         carried(TaskStatus::Open, "complete project"),
         carried(TaskStatus::Open, "cancelled project"),
@@ -1144,7 +1151,7 @@ async fn a_feed_never_carries_the_state_of_a_node_its_reader_cannot_see(pool: Pg
     declare(&pool, hidden.id, ProjectState::Parked, "bob").await;
     let task = tasks
         .create(
-            Some(hidden.id),
+            hidden.id,
             "alice",
             CreateTaskRequest {
                 focus_date: Some(today),
@@ -1265,7 +1272,7 @@ async fn task_feeds_drop_a_task_on_a_node_no_longer_shared(pool: PgPool) {
         .expect("share");
     let task = tasks
         .create(
-            Some(node.id),
+            node.id,
             "bob",
             CreateTaskRequest {
                 focus_date: Some(today),
@@ -1314,17 +1321,18 @@ async fn task_feeds_drop_a_task_on_a_node_no_longer_shared(pool: PgPool) {
         .await
         .expect("reorder");
     assert_eq!(order(pool.clone()).await, 7);
-    // A task of his on no node is still his to reorder.
-    let loose = tasks
-        .create(None, "bob", task_req("bob's own"))
+    // A task on a Project of his own is still his to reorder.
+    let bobs_project = a_project(&pool, "bob", "bob's project", None).await.id;
+    let his = tasks
+        .create(bobs_project, "bob", task_req("bob's own"))
         .await
         .expect("create");
     tasks
-        .reorder(&[(loose.id, 9)], Some("bob"))
+        .reorder(&[(his.id, 9)], Some("bob"))
         .await
         .expect("reorder");
     let moved: i32 = sqlx::query_scalar("SELECT sort_order FROM node_tasks WHERE id = $1")
-        .bind(loose.id.0)
+        .bind(his.id.0)
         .fetch_one(&pool)
         .await
         .expect("sort order");
@@ -1338,7 +1346,7 @@ async fn task_feeds_drop_a_task_on_a_node_no_longer_shared(pool: PgPool) {
     // The node's owner still sees it on her own tasks.
     let own = tasks
         .create(
-            Some(node.id),
+            node.id,
             "alice",
             CreateTaskRequest {
                 focus_date: Some(today),
@@ -2723,7 +2731,7 @@ async fn share(pool: &PgPool, node: uuid::Uuid, with: &str) {
 
 // Fixture helper; see `create_node`.
 #[allow(clippy::expect_used)]
-async fn raw_task(pool: &PgPool, owner: &str, node: Option<uuid::Uuid>, title: &str) -> uuid::Uuid {
+async fn raw_task(pool: &PgPool, owner: &str, node: uuid::Uuid, title: &str) -> uuid::Uuid {
     sqlx::query_scalar(
         "INSERT INTO node_tasks (owner_id, node_id, title) VALUES ($1, $2, $3) RETURNING id",
     )
@@ -2770,10 +2778,11 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
 
     let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
     let project = insert_raw_node(&pool, "alice", "project", "a project", "").await;
-    let on_article = raw_task(&pool, "alice", Some(article), "task on an article").await;
-    raw_task(&pool, "alice", Some(project), "task on a project").await;
-    let orphan = raw_task(&pool, "alice", None, "inbox task").await;
-    let bobs_orphan = raw_task(&pool, "bob", None, "bob's inbox task").await;
+    let on_article = raw_task(&pool, "alice", article, "task on an article").await;
+    raw_task(&pool, "alice", project, "task on a project").await;
+    // Bob's own: each person is told of what is on their own nodes.
+    let bobs_area = insert_raw_node(&pool, "bob", "area", "bob's area", "").await;
+    let bobs = raw_task(&pool, "bob", bobs_area, "bob's task on an area").await;
     raw_exec(
         &pool,
         "UPDATE nodes SET project_status = 'Active', status = 'archived' WHERE id = $1",
@@ -2799,8 +2808,7 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
     assert_eq!(item.subject.node_id, Some(article), "links to its node");
     assert!(item.subject.archived, "its node is archived");
     assert_eq!(item.related[0].id, article);
-    assert_eq!(subjects(&alice, RuleId::OrphanTask), vec![orphan]);
-    assert!(!alice[&RuleId::OrphanTask].items[0].subject.closed);
+    assert!(!item.subject.closed);
     assert_eq!(subjects(&alice, RuleId::StatusOnNonProject), vec![article]);
     assert!(alice[&RuleId::StatusOnNonProject].items[0].subject.archived);
     assert_eq!(
@@ -2817,12 +2825,8 @@ async fn data_health_lists_what_a_kind_may_not_carry(pool: PgPool) {
     );
 
     let bob = health(&pool, "bob").await;
-    assert_eq!(subjects(&bob, RuleId::OrphanTask), vec![bobs_orphan]);
-    for rule in [
-        RuleId::TaskOnNonProject,
-        RuleId::StatusOnNonProject,
-        RuleId::MembershipOnNonProject,
-    ] {
+    assert_eq!(subjects(&bob, RuleId::TaskOnNonProject), vec![bobs]);
+    for rule in [RuleId::StatusOnNonProject, RuleId::MembershipOnNonProject] {
         assert!(
             subjects(&bob, rule).is_empty(),
             "bob sees none of alice's {rule:?}"
@@ -2891,13 +2895,15 @@ async fn data_health_finds_area_dependencies_with_their_link(pool: PgPool) {
 async fn data_health_keeps_an_exact_count_past_the_item_cap(pool: PgPool) {
     use common::data_health::{ITEM_CAP, RuleId};
 
+    // Tasks on an Area: older data, which only raw SQL can still make.
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
     for i in 0..(ITEM_CAP + 5) {
-        raw_task(&pool, "alice", None, &format!("inbox {i}")).await;
+        raw_task(&pool, "alice", area, &format!("task {i}")).await;
     }
     let alice = health(&pool, "alice").await;
-    let orphans = &alice[&RuleId::OrphanTask];
-    assert_eq!(orphans.count, (ITEM_CAP + 5) as u64);
-    assert_eq!(orphans.items.len(), ITEM_CAP);
+    let outside = &alice[&RuleId::TaskOnNonProject];
+    assert_eq!(outside.count, (ITEM_CAP + 5) as u64);
+    assert_eq!(outside.items.len(), ITEM_CAP);
     assert_eq!(
         alice.len(),
         RuleId::ALL.len(),
@@ -2959,8 +2965,6 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
     use super::data_health::{DataHealthRepo, PgDataHealthRepo};
     use common::data_health::RuleId;
 
-    raw_task(&pool, "alice", None, "alice inbox").await;
-    raw_task(&pool, "bob", None, "bob inbox").await;
     // A cross-owner loop counts once, not once per owner.
     let a = insert_raw_node(&pool, "alice", "project", "a", "").await;
     let b = insert_raw_node(&pool, "bob", "project", "b", "").await;
@@ -2969,6 +2973,18 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
     let area = insert_raw_node(&pool, "bob", "area", "an area", "").await;
     let reference = insert_raw_node(&pool, "bob", "reference", "a ref", "").await;
     raw_edge(&pool, area, reference, "contains").await;
+    // A task outside a Project in each account; one in the trash is not
+    // counted.
+    let article = insert_raw_node(&pool, "alice", "article", "an article", "").await;
+    raw_task(&pool, "alice", article, "alice's, on an article").await;
+    raw_task(&pool, "bob", area, "bob's, on an area").await;
+    let trashed = raw_task(&pool, "bob", area, "bob's, deleted").await;
+    raw_exec(
+        &pool,
+        "UPDATE node_tasks SET deleted_at = now() WHERE id = $1",
+        &[trashed],
+    )
+    .await;
 
     let counts: std::collections::HashMap<RuleId, u64> = PgDataHealthRepo::new(pool.clone())
         .counts_all()
@@ -2978,7 +2994,7 @@ async fn admin_data_health_counts_everything_once_and_names_nothing(pool: PgPool
         .map(|c| (c.rule, c.count))
         .collect();
     assert_eq!(counts.len(), RuleId::ALL.len(), "every rule counted");
-    assert_eq!(counts[&RuleId::OrphanTask], 2, "both accounts");
+    assert_eq!(counts[&RuleId::TaskOnNonProject], 2, "both accounts");
     assert_eq!(counts[&RuleId::DependsOnCycle], 1, "one loop, once");
     assert_eq!(counts[&RuleId::ContainedReference], 1);
     assert_eq!(
@@ -3013,11 +3029,12 @@ async fn a_loop_is_shown_through_the_readers_own_node(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../migrations")]
-async fn data_health_marks_closed_tasks_and_lists_the_newest_first(pool: PgPool) {
+async fn data_health_marks_closed_tasks_and_lists_a_nodes_tasks_as_they_were_made(pool: PgPool) {
     use common::data_health::RuleId;
 
-    let older = raw_task(&pool, "alice", None, "older").await;
-    let newer = raw_task(&pool, "alice", None, "newer").await;
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let older = raw_task(&pool, "alice", area, "older").await;
+    let newer = raw_task(&pool, "alice", area, "newer").await;
     raw_exec(
         &pool,
         "UPDATE node_tasks SET created_at = now() - interval '1 day', status = 'done' \
@@ -3027,10 +3044,13 @@ async fn data_health_marks_closed_tasks_and_lists_the_newest_first(pool: PgPool)
     .await;
 
     let alice = health(&pool, "alice").await;
-    let orphans = &alice[&RuleId::OrphanTask];
-    assert_eq!(subjects(&alice, RuleId::OrphanTask), vec![newer, older]);
-    assert!(!orphans.items[0].subject.closed);
-    assert!(orphans.items[1].subject.closed, "done: links to its list");
+    let outside = &alice[&RuleId::TaskOnNonProject];
+    assert_eq!(
+        subjects(&alice, RuleId::TaskOnNonProject),
+        vec![older, newer]
+    );
+    assert!(outside.items[0].subject.closed, "done: links to its list");
+    assert!(!outside.items[1].subject.closed);
 }
 
 #[sqlx::test(migrations = "../migrations")]
@@ -4394,8 +4414,8 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
     use common::backup::{BackupData, BackupNote};
     use common::id::NoteId;
 
-    // What the live database holds before the restore: a capture and a
-    // task with no Project. Neither is in the archive, so neither survives.
+    // What the live database holds before the restore: a capture. It is
+    // not in the archive, so it doesn't survive.
     let captures = PgCaptureRepo::new(pool.clone());
     captures
         .create(
@@ -4405,7 +4425,6 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         )
         .await
         .unwrap();
-    raw_task(&pool, "alice", None, "live inbox task").await;
 
     let host = create_node(&pool, "alice", "restore capture host").await;
     let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
@@ -4458,11 +4477,6 @@ async fn a_restore_turns_old_nodeless_notes_into_captures_and_clears_whats_live(
         .await
         .unwrap();
     assert_eq!(notes, vec![on_node.id.0]);
-    let inbox: i64 = sqlx::query_scalar("SELECT count(*) FROM node_tasks WHERE node_id IS NULL")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(inbox, 0, "the live inbox task didn't survive the restore");
 }
 
 /// #273: a capture's colour survives a backup and restore. The archive's
@@ -4689,7 +4703,7 @@ async fn a_capture_converts_into_exactly_one_thing(pool: PgPool) {
     else {
         panic!("a task")
     };
-    assert_eq!((p, task.node_id), (project.id, Some(project.id)));
+    assert_eq!((p, task.node_id), (project.id, project.id));
 
     // Each capture went with its conversion: hard-deleted, no tombstone.
     assert_eq!(live(pool.clone()).await, 0);
@@ -4872,7 +4886,7 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
         format!("INSERT INTO node_tasks (node_id, owner_id, title, focus_date, deleted_at) VALUES
             ('{b_node}', '{a}', 'a live on b', CURRENT_DATE, NULL),
             ('{b_node}', '{a}', 'a deleted on b', NULL, now()),
-            (NULL, '{a}', 'a standalone', NULL, NULL),
+            ('{a_private}', '{a}', 'a on a private', NULL, NULL),
             ('{a_shared}', '{a}', 'a on a', NULL, NULL),
             ('{a_shared}', '{b}', 'b on a', NULL, NULL),
             ('{b_node}', '{b}', 'b on b', NULL, NULL)"),
@@ -5792,14 +5806,8 @@ async fn a_backup_reads_every_table_as_of_one_instant(pool: PgPool) {
         .await
         .expect("a late focus entry");
     let late = create_node(&pool, "alice", "created mid-backup").await;
-    raw_task(&pool, "alice", Some(late.id.0), "its task").await;
-    raw_task(
-        &pool,
-        "alice",
-        Some(before.id.0),
-        "a late task on the old node",
-    )
-    .await;
+    raw_task(&pool, "alice", late.id.0, "its task").await;
+    raw_task(&pool, "alice", before.id.0, "a late task on the old node").await;
 
     let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
     let nodes: Vec<uuid::Uuid> = data.nodes.iter().map(|n| n.id.0).collect();
@@ -5880,7 +5888,7 @@ async fn seed_account_settings(pool: &PgPool, node: uuid::Uuid) -> [uuid::Uuid; 
     .execute(pool)
     .await
     .expect("preset");
-    let task = raw_task(pool, "alice", Some(node), "water the plants").await;
+    let task = raw_task(pool, "alice", node, "water the plants").await;
     sqlx::query(
         "INSERT INTO editor_prefs (owner_id, entity_kind, entity_id, height, collapsed)
          VALUES ('alice', 'task', $1, 320, FALSE)",
@@ -6152,7 +6160,7 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
             "INSERT INTO node_tasks (node_id, owner_id, title, deleted_at) VALUES
             ('{d}', 'alice', 'a1', NULL), ('{d}', 'alice', 'a2', NULL),
             ('{d}', 'bob', 'b1', NULL), ('{d}', 'bob', 'trashed', now()),
-            ('{s}', 'bob', 'elsewhere', NULL), (NULL, 'alice', 'standalone', NULL)"
+            ('{s}', 'bob', 'elsewhere', NULL)"
         ),
         format!(
             "INSERT INTO node_notes (node_id, owner_id, body, deleted_at) VALUES
@@ -6233,12 +6241,6 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
         .await
         .expect("briefs");
     assert_eq!(briefs, [s], "the deleted node's Brief went with it");
-    let standalone: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM node_tasks WHERE node_id IS NULL")
-            .fetch_one(&pool)
-            .await
-            .expect("standalone");
-    assert_eq!(standalone, 1);
 }
 
 // ── Reorder follows the edit rule (#281, 2.5) ────────────────────────────────
@@ -6261,7 +6263,7 @@ async fn reorder_reaches_tasks_the_caller_may_edit_and_no_others(pool: PgPool) {
         let tasks = PgTaskRepo::new(pool.clone());
         async move {
             tasks
-                .create(Some(node), owner, task_req(title))
+                .create(node, owner, task_req(title))
                 .await
                 .expect("task")
                 .id
@@ -7245,8 +7247,9 @@ async fn migration_050_folds_in_progress_into_open_and_adds_the_completion_date(
 #[sqlx::test(migrations = "../migrations")]
 async fn a_task_carries_its_completion_date_only_while_done(pool: PgPool) {
     let tasks = PgTaskRepo::new(pool.clone());
+    let project = a_project(&pool, "alice", "a project", None).await.id;
     let task = tasks
-        .create(None, "alice", task_req("write the report"))
+        .create(project, "alice", task_req("write the report"))
         .await
         .expect("create");
     assert_eq!(task.completed_at, None);
@@ -7312,7 +7315,7 @@ async fn a_task_carries_its_completion_date_only_while_done(pool: PgPool) {
     // A task created done is completed now; one created otherwise is not.
     let born_done = tasks
         .create(
-            None,
+            project,
             "alice",
             CreateTaskRequest {
                 status: Some(TaskStatus::Done),
@@ -7324,7 +7327,7 @@ async fn a_task_carries_its_completion_date_only_while_done(pool: PgPool) {
     assert!(born_done.completed_at.is_some());
     let born_waiting = tasks
         .create(
-            None,
+            project,
             "alice",
             CreateTaskRequest {
                 status: Some(TaskStatus::Waiting),
@@ -7357,7 +7360,7 @@ async fn the_dashboard_counts_each_state_and_lists_actionable_tasks_first(pool: 
         async move {
             tasks
                 .create(
-                    Some(node),
+                    node,
                     "alice",
                     CreateTaskRequest {
                         status: Some(status),
@@ -7404,7 +7407,7 @@ async fn task_states_and_completion_dates_survive_a_backup_round_trip(pool: PgPo
     let tasks = PgTaskRepo::new(pool.clone());
     let node = common::id::NodeId(insert_raw_node(&pool, "alice", "project", "p", "").await);
     let done = tasks
-        .create(Some(node), "alice", task_req("done"))
+        .create(node, "alice", task_req("done"))
         .await
         .expect("create");
     let done = tasks
@@ -7413,7 +7416,7 @@ async fn task_states_and_completion_dates_survive_a_backup_round_trip(pool: PgPo
         .expect("done");
     let waiting = tasks
         .create(
-            Some(node),
+            node,
             "alice",
             CreateTaskRequest {
                 status: Some(TaskStatus::Waiting),
@@ -7429,7 +7432,7 @@ async fn task_states_and_completion_dates_survive_a_backup_round_trip(pool: PgPo
     let archived = |id| {
         data.tasks
             .iter()
-            .find(|t: &&common::task::Task| t.id == id)
+            .find(|t: &&common::backup::BackupTask| t.id == id)
             .expect("in the archive")
     };
     assert_eq!(archived(done.id).completed_at, done.completed_at);
@@ -8533,32 +8536,32 @@ async fn a_confirmed_close_does_exactly_what_its_preview_said(pool: PgPool) {
     // Bob may edit the master: his task on it is someone else's to alice.
     grant(&pool, master.id, "bob", "editor").await;
 
-    let open = raw_task(&pool, "alice", Some(master.id.0), "open on master").await;
-    let bobs = raw_task(&pool, "bob", Some(master.id.0), "bob's, waiting").await;
+    let open = raw_task(&pool, "alice", master.id.0, "open on master").await;
+    let bobs = raw_task(&pool, "bob", master.id.0, "bob's, waiting").await;
     sql(
         &pool,
         &format!("UPDATE node_tasks SET status = 'waiting' WHERE id = '{bobs}'"),
     )
     .await;
-    let done = raw_task(&pool, "alice", Some(master.id.0), "already done").await;
+    let done = raw_task(&pool, "alice", master.id.0, "already done").await;
     tasks
         .update(common::id::TaskId(done), status_req(TaskStatus::Done))
         .await
         .expect("done");
-    let dropped = raw_task(&pool, "alice", Some(master.id.0), "already cancelled").await;
+    let dropped = raw_task(&pool, "alice", master.id.0, "already cancelled").await;
     sql(
         &pool,
         &format!("UPDATE node_tasks SET status = 'cancelled' WHERE id = '{dropped}'"),
     )
     .await;
-    let trashed = raw_task(&pool, "alice", Some(master.id.0), "in the trash").await;
+    let trashed = raw_task(&pool, "alice", master.id.0, "in the trash").await;
     sql(
         &pool,
         &format!("UPDATE node_tasks SET deleted_at = now() WHERE id = '{trashed}'"),
     )
     .await;
-    let on_child = raw_task(&pool, "alice", Some(child.id.0), "on the child").await;
-    let on_deep = raw_task(&pool, "alice", Some(deep.id.0), "on the grandchild").await;
+    let on_child = raw_task(&pool, "alice", child.id.0, "on the child").await;
+    let on_deep = raw_task(&pool, "alice", deep.id.0, "on the grandchild").await;
 
     let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
     assert!(plan.closes_something() && plan.own_grant);
@@ -8746,7 +8749,7 @@ async fn the_same_state_again_catches_up_only_when_confirmed(pool: PgPool) {
     declare(&pool, master.id, ProjectState::Cancelled, "alice").await;
     // What a release before the cascade could leave behind, or a later
     // move: an open task, and an open sub-Project.
-    let left = raw_task(&pool, "alice", Some(master.id.0), "left open").await;
+    let left = raw_task(&pool, "alice", master.id.0, "left open").await;
     let child = a_project(&pool, "alice", "moved under it", None).await;
     under(&pool, master.id, child.id).await;
     let before = scalar(&pool, "SELECT count(*) FROM activity_log").await;
@@ -8789,7 +8792,7 @@ async fn the_same_state_again_catches_up_only_when_confirmed(pool: PgPool) {
 
     // A catch-up's token is for a master that is still closed. Re-opened
     // meanwhile, the same token would close it again: refused instead.
-    let later = raw_task(&pool, "alice", Some(master.id.0), "added later").await;
+    let later = raw_task(&pool, "alice", master.id.0, "added later").await;
     let shown = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
     assert!(shown.is_catch_up());
     close(&pool, master.id, ProjectState::Active, "alice", None)
@@ -8825,13 +8828,7 @@ async fn the_same_state_again_catches_up_only_when_confirmed(pool: PgPool) {
     // A catch-up that only cancels a task on a sub-Project is recorded
     // there, with where it came from. The master gets no empty entry.
     let on_master_before = cascade_rows(&pool, master.id).await.len();
-    let late = raw_task(
-        &pool,
-        "alice",
-        Some(child.id.0),
-        "added to the closed child",
-    )
-    .await;
+    let late = raw_task(&pool, "alice", child.id.0, "added to the closed child").await;
     let plan = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
     close(
         &pool,
@@ -8874,11 +8871,11 @@ async fn the_cascade_stays_inside_the_actors_own_grants(pool: PgPool) {
         under(&pool, master.id, child).await;
     }
     under(&pool, viewed.id, below.id).await;
-    let on_master = raw_task(&pool, "alice", Some(master.id.0), "on the master").await;
-    let on_viewed = raw_task(&pool, "bob", Some(viewed.id.0), "bob's task").await;
-    let on_hidden = raw_task(&pool, "carol", Some(hidden.id.0), "carol's task").await;
-    let on_edited = raw_task(&pool, "dave", Some(edited.id.0), "dave's task").await;
-    let on_below = raw_task(&pool, "alice", Some(below.id.0), "alice's, under bob's").await;
+    let on_master = raw_task(&pool, "alice", master.id.0, "on the master").await;
+    let on_viewed = raw_task(&pool, "bob", viewed.id.0, "bob's task").await;
+    let on_hidden = raw_task(&pool, "carol", hidden.id.0, "carol's task").await;
+    let on_edited = raw_task(&pool, "dave", edited.id.0, "dave's task").await;
+    let on_below = raw_task(&pool, "alice", below.id.0, "alice's, under bob's").await;
 
     // An admin with no grant of their own: every node is theirs to open,
     // none is theirs to cascade over, and none is named to them here.
@@ -8953,7 +8950,7 @@ async fn the_cascade_stays_inside_the_actors_own_grants(pool: PgPool) {
     // An admin closing someone's project: the state is theirs to set, and
     // nothing under it moves, confirmed or not.
     let theirs = a_project(&pool, "erin", "erin's master", None).await;
-    let her_task = raw_task(&pool, "erin", Some(theirs.id.0), "erin's task").await;
+    let her_task = raw_task(&pool, "erin", theirs.id.0, "erin's task").await;
     let her_child = a_project(&pool, "erin", "erin's child", None).await;
     under(&pool, theirs.id, her_child.id).await;
     let by_admin = close(&pool, theirs.id, ProjectState::Cancelled, "root", None)
@@ -8974,7 +8971,7 @@ async fn a_plan_that_no_longer_holds_is_refused(pool: PgPool) {
     let master = a_project(&pool, "alice", "master", None).await;
     let child = a_project(&pool, "alice", "child", None).await;
     under(&pool, master.id, child.id).await;
-    let task = raw_task(&pool, "alice", Some(master.id.0), "a task").await;
+    let task = raw_task(&pool, "alice", master.id.0, "a task").await;
     let stale = |pool: PgPool, token: String| async move {
         let r = close(
             &pool,
@@ -8997,7 +8994,7 @@ async fn a_plan_that_no_longer_holds_is_refused(pool: PgPool) {
 
     // A task added after the plan was shown.
     let shown = preview(&pool, master.id, ProjectState::Complete, "alice").await;
-    raw_task(&pool, "alice", Some(child.id.0), "added meanwhile").await;
+    raw_task(&pool, "alice", child.id.0, "added meanwhile").await;
     stale(pool.clone(), shown.token).await;
 
     // A sub-Project added.
@@ -9139,7 +9136,7 @@ async fn history_names_other_nodes_only_to_a_reader_who_can_view_them(pool: PgPo
     let his = a_project(&pool, "dave", "dave's second project", None).await;
     grant(&pool, his.id, "alice", "editor").await;
     under(&pool, second.id, his.id).await;
-    raw_task(&pool, "dave", Some(his.id.0), "dave's task").await;
+    raw_task(&pool, "dave", his.id.0, "dave's task").await;
     let plan = preview(&pool, second.id, ProjectState::Cancelled, "alice").await;
     close(
         &pool,
@@ -9222,7 +9219,7 @@ async fn a_sub_project_is_not_reopened_under_a_closed_master(pool: PgPool) {
     let master = a_project(&pool, "alice", "master", None).await;
     let child = a_project(&pool, "alice", "child", None).await;
     under(&pool, master.id, child.id).await;
-    let task = raw_task(&pool, "alice", Some(child.id.0), "a task").await;
+    let task = raw_task(&pool, "alice", child.id.0, "a task").await;
     let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
     close(
         &pool,
@@ -9316,7 +9313,7 @@ async fn two_confirmed_closes_at_once_cascade_once(pool: PgPool) {
         let master = a_project(&pool, "alice", &format!("raced master {round}"), None).await;
         let child = a_project(&pool, "alice", &format!("raced child {round}"), None).await;
         under(&pool, master.id, child.id).await;
-        let task = raw_task(&pool, "alice", Some(child.id.0), "a task").await;
+        let task = raw_task(&pool, "alice", child.id.0, "a task").await;
         let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
         let (one, two) = tokio::join!(
             close(
@@ -9368,7 +9365,7 @@ async fn a_close_and_a_childs_change_never_interleave(pool: PgPool) {
         let child = a_project(&pool, "alice", &format!("c {round}"), None).await;
         under(&pool, master.id, child.id).await;
         declare(&pool, child.id, ProjectState::Complete, "alice").await;
-        let task = raw_task(&pool, "alice", Some(master.id.0), "a task").await;
+        let task = raw_task(&pool, "alice", master.id.0, "a task").await;
         let plan = preview(&pool, master.id, ProjectState::Complete, "alice").await;
         let (closed, reopened) = tokio::join!(
             close(
@@ -9457,7 +9454,7 @@ async fn a_cascade_runs_beside_a_reorder_and_a_purge(pool: PgPool) {
         let mut ids = Vec::new();
         for n in 0..12 {
             let node = if n % 2 == 0 { master.id } else { theirs.id };
-            ids.push(raw_task(&pool, "alice", Some(node.0), &format!("t{n}")).await);
+            ids.push(raw_task(&pool, "alice", node.0, &format!("t{n}")).await);
         }
         let plan = preview(&pool, master.id, ProjectState::Cancelled, "alice").await;
         let order: Vec<(common::id::TaskId, i32)> = ids
@@ -9543,7 +9540,7 @@ async fn a_state_write_gives_up_on_a_row_held_too_long(pool: PgPool) {
     // not wait for a sub-Project or a task someone else holds.
     let child = a_project(&pool, "alice", "held child", None).await;
     under(&pool, p.id, child.id).await;
-    let task = raw_task(&pool, "alice", Some(p.id.0), "held task").await;
+    let task = raw_task(&pool, "alice", p.id.0, "held task").await;
     let mut holder = pool.begin().await.unwrap();
     sqlx::query("SELECT 1 FROM nodes WHERE id = $1 FOR UPDATE")
         .bind(child.id.0)
@@ -9570,8 +9567,8 @@ async fn a_state_write_gives_up_on_a_row_held_too_long(pool: PgPool) {
 async fn a_reorder_takes_its_rows_in_id_order(pool: PgPool) {
     let p = a_project(&pool, "alice", "reordered", None).await;
     let mut ids = [
-        raw_task(&pool, "alice", Some(p.id.0), "one").await,
-        raw_task(&pool, "alice", Some(p.id.0), "two").await,
+        raw_task(&pool, "alice", p.id.0, "one").await,
+        raw_task(&pool, "alice", p.id.0, "two").await,
     ];
     ids.sort();
     let [first, second] = ids;
@@ -9646,20 +9643,20 @@ async fn data_health_lists_what_is_still_open_under_a_closed_project(pool: PgPoo
     // sub-Project of alice's and a parked one of dave's she may edit.
     let both = a_project(&pool, "alice", "a closed, with both", None).await;
     declare(&pool, both.id, ProjectState::Cancelled, "alice").await;
-    raw_task(&pool, "alice", Some(both.id.0), "open").await;
-    let waiting = raw_task(&pool, "bob", Some(both.id.0), "waiting").await;
+    raw_task(&pool, "alice", both.id.0, "open").await;
+    let waiting = raw_task(&pool, "bob", both.id.0, "waiting").await;
     sql(
         &pool,
         &format!("UPDATE node_tasks SET status = 'waiting' WHERE id = '{waiting}'"),
     )
     .await;
-    let done = raw_task(&pool, "alice", Some(both.id.0), "done").await;
+    let done = raw_task(&pool, "alice", both.id.0, "done").await;
     sql(
         &pool,
         &format!("UPDATE node_tasks SET status = 'done', completed_at = now() WHERE id = '{done}'"),
     )
     .await;
-    let trashed = raw_task(&pool, "alice", Some(both.id.0), "trashed").await;
+    let trashed = raw_task(&pool, "alice", both.id.0, "trashed").await;
     sql(
         &pool,
         &format!("UPDATE node_tasks SET deleted_at = now() WHERE id = '{trashed}'"),
@@ -9697,13 +9694,13 @@ async fn data_health_lists_what_is_still_open_under_a_closed_project(pool: PgPoo
     let hidden_too = a_project(&pool, "carol", "carol's other", None).await;
     under(&pool, over_hidden.id, hidden_too.id).await;
     let active = a_project(&pool, "alice", "active with a task", None).await;
-    raw_task(&pool, "alice", Some(active.id.0), "t").await;
+    raw_task(&pool, "alice", active.id.0, "t").await;
     let set_aside = a_project(&pool, "alice", "parked with a task", None).await;
     declare(&pool, set_aside.id, ProjectState::Parked, "alice").await;
-    raw_task(&pool, "alice", Some(set_aside.id.0), "t").await;
+    raw_task(&pool, "alice", set_aside.id.0, "t").await;
     let daves = a_project(&pool, "dave", "dave's closed, with a task", None).await;
     declare(&pool, daves.id, ProjectState::Complete, "dave").await;
-    raw_task(&pool, "dave", Some(daves.id.0), "t").await;
+    raw_task(&pool, "dave", daves.id.0, "t").await;
     grant(&pool, daves.id, "alice", "editor").await;
 
     let report = health(&pool, "alice").await;
@@ -9795,8 +9792,8 @@ async fn a_cascade_that_loses_a_deadlock_goes_again(pool: PgPool) {
     for round in 0..6 {
         let master = a_project(&pool, "alice", &format!("deadlocked {round}"), None).await;
         let mut ids = [
-            raw_task(&pool, "alice", Some(master.id.0), "one").await,
-            raw_task(&pool, "alice", Some(master.id.0), "two").await,
+            raw_task(&pool, "alice", master.id.0, "one").await,
+            raw_task(&pool, "alice", master.id.0, "two").await,
         ];
         ids.sort();
         let [first, second] = ids;
@@ -10570,7 +10567,7 @@ async fn an_older_archive_restores_its_repeating_tasks_as_one_time_tasks(pool: P
     let node = common::id::NodeId(insert_raw_node(&pool, "alice", "project", "garden", "").await);
     let due = chrono::NaiveDate::from_ymd_opt(2026, 11, 8).expect("date");
     let done = tasks
-        .create(Some(node), "alice", task_req("water the plants"))
+        .create(node, "alice", task_req("water the plants"))
         .await
         .expect("create");
     let done = tasks
@@ -10579,7 +10576,7 @@ async fn an_older_archive_restores_its_repeating_tasks_as_one_time_tasks(pool: P
         .expect("done");
     let next = tasks
         .create(
-            Some(node),
+            node,
             "alice",
             CreateTaskRequest {
                 due_date: Some(due),
@@ -10635,7 +10632,7 @@ async fn an_older_archive_restores_its_repeating_tasks_as_one_time_tasks(pool: P
     assert_eq!(back.status, TaskStatus::Done);
     assert_eq!(back.completed_at, done.completed_at);
     assert_eq!(back.created_at, done.created_at);
-    assert_eq!(back.node_id, Some(node));
+    assert_eq!(back.node_id, node);
     let back = tasks.get(next.id).await.expect("restored");
     assert_eq!(back.title, "water the plants");
     assert_eq!(back.status, TaskStatus::Open);
@@ -10843,7 +10840,9 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
     );
     assert_eq!(scalar(&pool, SELF_KEYS).await, 0);
 
-    // The repo below is written for the newest schema.
+    // The repo below is written for the newest schema. On the way there
+    // 054 turns the task on no node into a capture (S5c): 053 itself left
+    // it as it was, which the comparison above has shown.
     apply_migrations(&pool, |version| version > 53).await;
 
     // What was a series is two ordinary tasks. Completing the second makes
@@ -10874,8 +10873,8 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
             "SELECT count(*) FROM node_tasks WHERE deleted_at IS NULL"
         )
         .await,
-        10,
-        "none made, none retracted"
+        9,
+        "none made, none retracted (ten, less the one that is a capture now)"
     );
     tasks.delete(child).await.expect("delete");
     assert_eq!(tasks.restore(child).await.expect("restore").id, child);
@@ -10888,4 +10887,423 @@ async fn migration_053_drops_the_repeat_rule_and_leaves_every_task_as_it_was(poo
         tasks.get(child).await.expect("still there").title,
         "just a task"
     );
+}
+
+// ── S5c: a task needs a Project (#335) ───────────────────────────────────────
+
+/// One table's shape as text: every column (type, null, default), index,
+/// constraint and trigger. A migration test compares it before and after.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn table_shape(pool: &PgPool, table: &str) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT string_agg(line, chr(10) ORDER BY line) FROM ( \
+           SELECT 'column ' || column_name || ' ' || udt_name || ' ' || is_nullable || ' ' \
+                  || coalesce(column_default, '-') AS line \
+           FROM information_schema.columns WHERE table_name = $1 \
+           UNION ALL \
+           SELECT 'index ' || indexdef FROM pg_indexes WHERE tablename = $1 \
+           UNION ALL \
+           SELECT 'constraint ' || conname || ' ' || pg_get_constraintdef(oid) \
+           FROM pg_constraint WHERE conrelid = $1::regclass \
+           UNION ALL \
+           SELECT 'trigger ' || tgname || ' ' || pg_get_triggerdef(oid) FROM pg_trigger \
+           WHERE tgrelid = $1::regclass AND NOT tgisinternal \
+         ) shape",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .expect("table shape")
+}
+
+/// A capture row as the database holds it, tombstone included.
+type CaptureRow = (
+    uuid::Uuid,
+    String,
+    String,
+    String,
+    chrono::DateTime<Utc>,
+    chrono::DateTime<Utc>,
+    Option<chrono::DateTime<Utc>>,
+);
+
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn capture_rows(pool: &PgPool) -> Vec<CaptureRow> {
+    sqlx::query_as(
+        "SELECT id, owner_id, body, color, created_at, updated_at, deleted_at \
+         FROM captures ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("captures")
+}
+
+/// Migration 054 (ONTOLOGY §9.3, §9.1): every task with no node becomes a
+/// capture, with the text `common::capture::from_nodeless_task` gives, its
+/// id, owner, dates and tombstone; a task on a node is not touched; and
+/// `node_tasks.node_id` is then required.
+#[sqlx::test(migrations = false)]
+async fn migration_054_turns_tasks_with_no_node_into_captures_and_requires_a_node(pool: PgPool) {
+    use chrono::Datelike;
+    use common::backup::BackupTask;
+    use common::id::TaskId;
+    use common::task::TaskPriority;
+
+    apply_migrations(&pool, |version| version < 54).await;
+
+    let node = insert_raw_node(&pool, "alice", "project", "garden", "").await;
+    // A capture that is already there stays as it is.
+    sql(
+        &pool,
+        "INSERT INTO captures (owner_id, body, color) VALUES ('alice', 'already here', 'rose')",
+    )
+    .await;
+
+    // One due date a month: between them every weekday, and one- and
+    // two-digit days, so the SQL's wording meets chrono's on each.
+    let dates: Vec<chrono::NaiveDate> = [
+        (2025, 1, 6),
+        (2025, 2, 11),
+        (2025, 3, 19),
+        (2025, 4, 24),
+        (2025, 5, 2),
+        (2025, 6, 7),
+        (2025, 7, 13),
+        (2025, 8, 31),
+        (2025, 9, 1),
+        (2025, 10, 10),
+        (2025, 11, 7),
+        (2026, 12, 25),
+    ]
+    .into_iter()
+    .map(|(y, m, d)| chrono::NaiveDate::from_ymd_opt(y, m, d).expect("date"))
+    .collect();
+    let weekdays: std::collections::HashSet<_> = dates.iter().map(|d| d.weekday()).collect();
+    assert_eq!(weekdays.len(), 7, "the fixture covers every weekday");
+
+    const STATES: [&str; 4] = ["open", "waiting", "done", "cancelled"];
+    // (title, state, due date, in the trash, on the node)
+    let mut seeds: Vec<(String, &str, Option<chrono::NaiveDate>, bool, bool)> = Vec::new();
+    for (i, date) in dates.iter().enumerate() {
+        // Every state meets a due date, live and in the trash.
+        for (j, state) in STATES.iter().enumerate() {
+            seeds.push((
+                format!("due {i} {state}"),
+                state,
+                Some(*date),
+                (i + j) % 3 == 0,
+                false,
+            ));
+        }
+    }
+    for state in STATES {
+        seeds.push((format!("no date, {state}"), state, None, false, false));
+        seeds.push((format!("trashed, {state}"), state, None, true, false));
+        // On the node: these must come through untouched.
+        seeds.push((
+            format!("on the node, {state}"),
+            state,
+            dates.first().copied(),
+            false,
+            true,
+        ));
+        seeds.push((
+            format!("on the node, trashed, {state}"),
+            state,
+            None,
+            true,
+            true,
+        ));
+    }
+    // Titles the rule must carry as they are.
+    seeds.push(("  padded  ".into(), "open", None, false, false));
+    seeds.push((" ".into(), "open", None, false, false));
+    seeds.push((" ".into(), "done", None, false, false));
+    seeds.push((
+        "é".repeat(500),
+        "cancelled",
+        dates.last().copied(),
+        false,
+        false,
+    ));
+    seeds.push((
+        "it's 100% \"quoted\"".into(),
+        "waiting",
+        dates.get(4).copied(),
+        false,
+        false,
+    ));
+
+    for (n, (title, state, due, trashed, on_node)) in seeds.iter().enumerate() {
+        let owner = if n % 5 == 0 { "bob" } else { "alice" };
+        sqlx::query(
+            "INSERT INTO node_tasks (owner_id, node_id, title, status, priority, focus_date, \
+                                     due_date, sort_order, completed_at, deleted_at, created_at, \
+                                     updated_at) \
+             VALUES ($1, $2, $3, $4::task_status, 'high', '2025-10-03', $5, 7, \
+                     CASE WHEN $4 = 'done' THEN '2025-10-04T10:00:00Z'::timestamptz END, \
+                     CASE WHEN $6 THEN '2025-10-20T10:00:00Z'::timestamptz END, \
+                     '2025-10-01T10:00:00Z'::timestamptz + make_interval(mins => $7), \
+                     '2025-10-02T10:00:00Z'::timestamptz + make_interval(mins => $7))",
+        )
+        .bind(owner)
+        .bind(on_node.then_some(node))
+        .bind(title)
+        .bind(state)
+        .bind(due)
+        .bind(trashed)
+        .bind(i32::try_from(n).expect("small"))
+        .execute(&pool)
+        .await
+        .expect("seed task");
+    }
+    let loose = i64::try_from(seeds.iter().filter(|s| !s.4).count()).expect("small");
+    let on_node = i64::try_from(seeds.iter().filter(|s| s.4).count()).expect("small");
+    assert_eq!((loose, on_node), (61, 8), "the fixture");
+
+    // What the Rust rule makes of each task with no node, tombstone kept.
+    type LooseRow = (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        Option<chrono::NaiveDate>,
+        chrono::DateTime<Utc>,
+        chrono::DateTime<Utc>,
+        Option<chrono::DateTime<Utc>>,
+    );
+    let rows: Vec<LooseRow> = sqlx::query_as(
+        "SELECT id, owner_id, title, status::text, due_date, created_at, updated_at, deleted_at \
+         FROM node_tasks WHERE node_id IS NULL",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("loose tasks");
+    let mut expected: Vec<CaptureRow> = capture_rows(&pool).await;
+    assert_eq!(expected.len(), 1, "the capture that was already there");
+    for (id, owner_id, title, status, due_date, created_at, updated_at, deleted_at) in rows {
+        let task = BackupTask {
+            id: TaskId(id),
+            node_id: None,
+            owner_id,
+            title,
+            status: TaskStatus::parse(&status).expect("a state"),
+            priority: TaskPriority::High,
+            focus_date: None,
+            due_date,
+            sort_order: 7,
+            created_at,
+            updated_at,
+            completed_at: None,
+        };
+        let c = common::capture::from_nodeless_task(&task).expect("no node: a capture");
+        expected.push((
+            c.id.0,
+            c.owner_id,
+            c.body,
+            c.color.as_str().to_string(),
+            c.created_at,
+            c.updated_at,
+            deleted_at,
+        ));
+    }
+    expected.sort_by_key(|c| c.0);
+
+    const ON_A_NODE: &str =
+        "SELECT id, to_jsonb(t)::text FROM node_tasks t WHERE node_id IS NOT NULL ORDER BY id";
+    let kept_before: Vec<(uuid::Uuid, String)> = sqlx::query_as(ON_A_NODE)
+        .fetch_all(&pool)
+        .await
+        .expect("before");
+    let tasks_shape = table_shape(&pool, "node_tasks").await;
+    let captures_shape = table_shape(&pool, "captures").await;
+    assert!(
+        tasks_shape.contains("column node_id uuid YES -"),
+        "{tasks_shape}"
+    );
+
+    apply_migrations(&pool, |version| version == 54).await;
+
+    // Each task with no node is a capture, as the Rust rule has it.
+    assert_eq!(capture_rows(&pool).await, expected);
+    // Nothing else happened: the tasks on a node, and both tables' shape
+    // apart from the one column that is now required.
+    let kept_after: Vec<(uuid::Uuid, String)> = sqlx::query_as(ON_A_NODE)
+        .fetch_all(&pool)
+        .await
+        .expect("after");
+    assert_eq!(kept_after, kept_before, "a task on a node is not touched");
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM node_tasks").await,
+        on_node
+    );
+    assert_eq!(
+        table_shape(&pool, "node_tasks").await,
+        tasks_shape.replace("column node_id uuid YES -", "column node_id uuid NO -"),
+        "node_id is required, and nothing else of the table changed"
+    );
+    assert_eq!(table_shape(&pool, "captures").await, captures_shape);
+
+    // A task with no node can't be written any more.
+    let refused = sqlx::query(
+        "INSERT INTO node_tasks (owner_id, node_id, title) VALUES ('alice', NULL, 'x')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(refused.is_err(), "a task with no node must be refused");
+    let detached = sqlx::query("UPDATE node_tasks SET node_id = NULL")
+        .execute(&pool)
+        .await;
+    assert!(detached.is_err(), "a task can't be taken off its node");
+
+    // A second run finds nothing to do.
+    apply_migrations(&pool, |version| version == 54).await;
+    assert_eq!(capture_rows(&pool).await, expected);
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM node_tasks").await,
+        on_node
+    );
+
+    // On the newest schema, each person finds their own on the wall, and
+    // what was in the trash is still in the trash.
+    apply_migrations(&pool, |version| version > 54).await;
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+    let wall = PgCaptureRepo::new(pool.clone());
+    for owner in ["alice", "bob"] {
+        let live: Vec<uuid::Uuid> = wall
+            .list(owner)
+            .await
+            .expect("wall")
+            .into_iter()
+            .map(|c| c.id.0)
+            .collect();
+        let mut want: Vec<uuid::Uuid> = expected
+            .iter()
+            .filter(|c| c.1 == owner && c.6.is_none())
+            .map(|c| c.0)
+            .collect();
+        let mut got = live.clone();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "{owner}'s wall");
+        assert!(!want.is_empty(), "{owner} had loose tasks");
+    }
+}
+
+/// S5c: an archive may still hold a task with no node (any format up to
+/// this release's could). The restore lands it as a capture, by the rule
+/// migration 054 applied, and never as a task: the table would refuse it,
+/// and the whole restore with it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_restore_turns_a_task_with_no_node_into_a_capture(pool: PgPool) {
+    use super::capture::{CaptureRepo, PgCaptureRepo};
+    use common::backup::{BackupData, BackupTask};
+    use common::id::TaskId;
+    use common::task::TaskPriority;
+
+    let host = a_project(&pool, "alice", "restore task host", None).await;
+    let nodes = PgNodeRepo::new(pool.clone()).list_all().await.unwrap();
+    let at = Utc::now() - Duration::days(40);
+    let task =
+        |n: u128, node: Option<common::id::NodeId>, status: TaskStatus, title: &str| BackupTask {
+            id: TaskId(uuid::Uuid::from_u128(n)),
+            node_id: node,
+            owner_id: "alice".into(),
+            title: title.into(),
+            status,
+            priority: TaskPriority::High,
+            focus_date: None,
+            due_date: chrono::NaiveDate::from_ymd_opt(2025, 11, 7),
+            sort_order: 3,
+            created_at: at,
+            updated_at: at,
+            completed_at: None,
+        };
+    let on_node = task(1, Some(host.id), TaskStatus::Open, "on its project");
+    let loose = task(2, None, TaskStatus::Open, "call the bank");
+    let loose_done = task(3, None, TaskStatus::Done, "post the letter");
+    let data = BackupData {
+        nodes,
+        tasks: vec![on_node.clone(), loose.clone(), loose_done.clone()],
+        ..BackupData::default()
+    };
+    let mut tx = pool.begin().await.unwrap();
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("an archive with a task on no node still restores");
+    tx.commit().await.unwrap();
+
+    let tasks: Vec<(uuid::Uuid, uuid::Uuid)> =
+        sqlx::query_as("SELECT id, node_id FROM node_tasks ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        tasks,
+        vec![(on_node.id.0, host.id.0)],
+        "only the one on a node"
+    );
+
+    let mut wall = PgCaptureRepo::new(pool.clone())
+        .list("alice")
+        .await
+        .unwrap();
+    wall.sort_by_key(|c| c.id.0);
+    let said: Vec<(uuid::Uuid, &str)> = wall.iter().map(|c| (c.id.0, c.body.as_str())).collect();
+    assert_eq!(
+        said,
+        vec![
+            (loose.id.0, "Fri 7 Nov 2025: call the bank"),
+            (loose_done.id.0, "Done: post the letter"),
+        ],
+        "same ids, and the text of `capture::nodeless_task_text`"
+    );
+    assert!(wall.iter().all(|c| c.created_at == wall[0].created_at));
+}
+
+/// S5c, the repo's own guard: the route refuses a request to take a task
+/// off its node before it gets here. Were one to arrive, the task stays
+/// where it is and the update's other fields still land; the database is
+/// never asked for the NULL it refuses, which would answer as a 500.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_update_never_takes_a_task_off_its_node(pool: PgPool) {
+    let tasks = PgTaskRepo::new(pool.clone());
+    let project = a_project(&pool, "alice", "home", None).await.id;
+    let other = a_project(&pool, "alice", "elsewhere", None).await.id;
+    let task = tasks
+        .create(project, "alice", task_req("stay put"))
+        .await
+        .expect("create");
+
+    let asked_to_detach = UpdateTaskRequest {
+        title: Some("renamed".into()),
+        node_id: Some(None),
+        ..Default::default()
+    };
+    let after = tasks
+        .update(task.id, asked_to_detach)
+        .await
+        .expect("update");
+    assert_eq!(after.node_id, project, "still on its Project");
+    assert_eq!(after.title, "renamed");
+
+    // A move still moves, and leaving the node out still leaves it.
+    let moved = tasks
+        .update(
+            task.id,
+            UpdateTaskRequest {
+                node_id: Some(Some(other)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("move");
+    assert_eq!(moved.node_id, other);
+    let untouched = tasks
+        .update(task.id, status_req(TaskStatus::Waiting))
+        .await
+        .expect("update");
+    assert_eq!(untouched.node_id, other);
 }

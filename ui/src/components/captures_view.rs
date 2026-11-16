@@ -3,9 +3,8 @@
 //! reworded, converted into exactly one thing (`ConvertCaptureDialog`), or
 //! deliberately deleted, with Undo. Inbox Zero is the goal.
 //!
-//! It shows captures only (S4c, owner decision on #240). A task with no
-//! Project is not a capture: Data health's `OrphanTask` rule lists it,
-//! with "Move to a Project".
+//! It shows captures only (S4c, owner decision on #240). A task always
+//! has its Project (S5c, ONTOLOGY §9.3); the loose thing is a capture.
 //!
 //! Captures have their own identity (#240): a wall of sticky notes
 //! (`StickyPaper`), not task-style rows, each showing how long it has

@@ -22,7 +22,7 @@
 //!
 //!   `j` / `↓`   focus next row (across both zones, in display order)
 //!   `k` / `↑`   focus previous row
-//!   `Enter`     open the focused task in its parent node (or Data health)
+//!   `Enter`     open the focused task in its parent node
 //!   `Space`     toggle done on the focused task
 //!   `t`         toggle the focused task between Today and Backlog
 //!   `e`         open inline edit on the focused task
@@ -186,10 +186,8 @@ pub fn MyDayView() -> impl IntoView {
                 };
                 ev.prevent_default();
                 let mdt = &flat[idx];
-                let target = crate::components::task_common::task_href(
-                    mdt.task.id.0,
-                    mdt.task.node_id.map(|n| n.0),
-                );
+                let target =
+                    crate::components::task_common::task_href(mdt.task.id.0, mdt.task.node_id.0);
                 navigate.get_value()(&target, Default::default());
             }
             " " => {

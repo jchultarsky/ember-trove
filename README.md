@@ -476,13 +476,12 @@ details.
 |--------|------|-------------|
 | GET | `/api/nodes/{id}/tasks` | List tasks for a node |
 | POST | `/api/nodes/{id}/tasks` | Create task (the node must be a Project, else **422**) |
-| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. A bad title is **422** |
+| PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. `node_id` moves the task to another Project; `node_id: null` (taking it off its Project) is **422**. A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
 | GET | `/api/my-day?date=YYYY-MM-DD` | The caller's tasks focused on that day, plus open tasks carried over from an earlier day; a waiting, done or cancelled task doesn't carry over (default: today in UTC; the UI sends the local date) |
 | GET | `/api/tasks/all` | Every open task of the caller, with its node's title (the My Day backlog) |
-| POST | `/api/tasks` | Create a task from the body: on the Project named by `node_id`, or on none (still allowed; Data health lists such tasks) |
-| GET | `/api/tasks/inbox` | The caller's tasks with no node. No page lists them since Captures; Data health does |
+| POST | `/api/tasks` | Create a task on the Project its body names in `node_id`. A body that names none is refused (**422**): a task needs a Project, and loose input is a capture |
 | PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
 | GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
 | GET | `/api/dashboard/projects` | The caller's Projects with task counts (open, waiting, done, cancelled), project status, the current Brief and the top tasks still to do (open before waiting) |

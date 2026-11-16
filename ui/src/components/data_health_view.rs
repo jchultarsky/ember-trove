@@ -30,8 +30,7 @@ use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toa
 
 /// Where an item lives in the app. A done or cancelled task sits in its
 /// list's collapsed "completed" section, where `?task=` can't land, so it
-/// links to the list itself. A task with no Project lives only here (S4c:
-/// the Inbox no longer lists it), so it has no link.
+/// links to the list itself.
 fn ref_href(r: &Ref) -> Option<String> {
     match r.kind {
         RefKind::Node => Some(format!("/nodes/{}", r.id)),
@@ -40,7 +39,7 @@ fn ref_href(r: &Ref) -> Option<String> {
             Some(if r.closed {
                 format!("/nodes/{node}")
             } else {
-                task_href(r.id, Some(node))
+                task_href(r.id, node)
             })
         }
         RefKind::Person => Some(format!("/people/{}", r.id)),
@@ -50,7 +49,7 @@ fn ref_href(r: &Ref) -> Option<String> {
 /// A one-click fix for an item (#216).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fix {
-    /// Put the task on a Project (a task on a non-Project, or with none).
+    /// Put the task on a Project (a task on a node of another kind).
     MoveToProject,
     /// Clear a project status off a non-Project.
     ClearStatus,
@@ -120,7 +119,7 @@ fn still_open_words(s: &common::data_health::StillOpenRef) -> String {
 /// the node's owner (the API's rule), so it's offered only to them.
 fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
     match rule {
-        RuleId::TaskOnNonProject | RuleId::OrphanTask if v.subject.kind == RefKind::Task => {
+        RuleId::TaskOnNonProject if v.subject.kind == RefKind::Task => {
             vec![Fix::MoveToProject, Fix::DeleteTask]
         }
         RuleId::StatusOnNonProject => vec![Fix::ClearStatus],
@@ -218,7 +217,7 @@ fn is_loop(rule: RuleId) -> bool {
 /// The finished tasks (done or cancelled) a task card lists: what its
 /// "Delete finished" button deletes.
 fn finished_tasks(report: &RuleReport) -> Vec<TaskId> {
-    if !matches!(report.rule, RuleId::TaskOnNonProject | RuleId::OrphanTask) {
+    if report.rule != RuleId::TaskOnNonProject {
         return Vec::new();
     }
     report
@@ -1037,13 +1036,8 @@ mod tests {
             Some(format!("/nodes/{id}"))
         );
         assert_eq!(
-            ref_href(&Ref::task(id, "t", Some(node), false)),
+            ref_href(&Ref::task(id, "t", node, false)),
             Some(format!("/nodes/{node}?task={id}"))
-        );
-        assert_eq!(
-            ref_href(&Ref::task(id, "t", None, false)),
-            None,
-            "a task with no Project lives only on this page"
         );
         assert_eq!(
             ref_href(&Ref::person(id, "p")),
@@ -1055,10 +1049,8 @@ mod tests {
     fn a_closed_task_links_to_its_list_not_into_the_collapsed_section() {
         let id = Uuid::from_u128(1);
         let node = Uuid::from_u128(2);
-        let done = Ref::task(id, "t", Some(node), false).with_closed(true);
+        let done = Ref::task(id, "t", node, false).with_closed(true);
         assert_eq!(ref_href(&done), Some(format!("/nodes/{node}")));
-        let done_orphan = Ref::task(id, "t", None, false).with_closed(true);
-        assert_eq!(ref_href(&done_orphan), None);
     }
 
     #[test]
@@ -1140,14 +1132,12 @@ mod tests {
     #[test]
     fn each_s2_rule_offers_its_fixes_and_the_rest_offer_none() {
         let id = Uuid::from_u128(1);
-        let task = Violation::new(Ref::task(id, "t", None, false), vec![]);
-        for rule in [RuleId::TaskOnNonProject, RuleId::OrphanTask] {
-            assert_eq!(
-                fixes_for(rule, &task),
-                vec![Fix::MoveToProject, Fix::DeleteTask],
-                "a task can be homed or deliberately deleted"
-            );
-        }
+        let task = Violation::new(Ref::task(id, "t", Uuid::from_u128(2), false), vec![]);
+        assert_eq!(
+            fixes_for(RuleId::TaskOnNonProject, &task),
+            vec![Fix::MoveToProject, Fix::DeleteTask],
+            "a task can be homed or deliberately deleted"
+        );
         let node = Violation::new(Ref::node(id, "n", false), vec![]);
         assert_eq!(
             fixes_for(RuleId::StatusOnNonProject, &node),
@@ -1263,12 +1253,12 @@ mod tests {
     fn delete_finished_takes_only_the_finished_tasks_of_a_task_card() {
         let task = |n: u128, closed: bool| {
             Violation::new(
-                Ref::task(Uuid::from_u128(n), "t", None, false).with_closed(closed),
+                Ref::task(Uuid::from_u128(n), "t", Uuid::nil(), false).with_closed(closed),
                 vec![],
             )
         };
         let card = RuleReport::new(
-            RuleId::OrphanTask,
+            RuleId::TaskOnNonProject,
             vec![task(1, true), task(2, false), task(3, true)],
         );
         assert_eq!(
@@ -1282,9 +1272,9 @@ mod tests {
     #[test]
     fn a_capped_rule_says_how_many_it_shows() {
         let item = Violation::new(Ref::node(Uuid::nil(), "n", false), vec![]);
-        let capped = RuleReport::with_count(RuleId::OrphanTask, 341, vec![item.clone()]);
+        let capped = RuleReport::with_count(RuleId::TaskOnNonProject, 341, vec![item.clone()]);
         assert_eq!(shown_of(&capped).as_deref(), Some("Showing 1 of 341"));
-        let whole = RuleReport::new(RuleId::OrphanTask, vec![item]);
+        let whole = RuleReport::new(RuleId::TaskOnNonProject, vec![item]);
         assert_eq!(shown_of(&whole), None);
     }
 }

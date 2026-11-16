@@ -146,6 +146,19 @@ CI job is too slow a feedback loop for selector work.
   (2026-11-13): `KEEP_STACK=1` keeps the volume, and the API then refuses
   to start ("migration N was previously applied but has been modified").
   Tear the stack down (`docker compose -p <project> down -v`) first.
+- **A task fixture needs a Project** (2026-11-16, S5c). `POST /api/tasks`
+  without a `node_id` is a 422 and `GET /api/tasks/inbox` is gone. Use
+  `createProject`, `addTask` and `tasksOf` from `fixtures.ts`; delete the
+  Project to clean up (its tasks go with it) and wipe by title prefix with
+  `deleteNodesByPrefix` before and after. `createNode` still defaults to
+  an Article, which holds no task. A Project's title shows in each task
+  row's chip, so keep words a test looks for in a row out of it.
+- **No API call makes data that breaks the model any more** (2026-11-16):
+  a task with no Project was the last. To test a Data health card and its
+  fixes, serve the report to the page over real rows
+  (`serveTasksOutsideAProject` in data_health.spec.ts builds it from a
+  real Project's tasks on every load), so the fixes still hit the real
+  API.
 - **Service workers can't be exercised here** (2026-10-25, #129). The e2e
   origin (`http://host.docker.internal`) isn't a secure context. Mapping
   `localhost` to it (`--host-resolver-rules`) gives a secure context, but

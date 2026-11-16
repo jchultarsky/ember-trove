@@ -22,7 +22,6 @@ pub const RELATED_CAP: usize = 20;
 #[serde(rename_all = "snake_case")]
 pub enum RuleId {
     TaskOnNonProject,
-    OrphanTask,
     MembershipOnNonProject,
     StatusOnNonProject,
     /// A Project whose state nobody has declared, with a status label
@@ -43,7 +42,6 @@ pub enum RuleId {
 
 wire_enum!(RuleId {
     TaskOnNonProject => "task_on_non_project",
-    OrphanTask => "orphan_task",
     MembershipOnNonProject => "membership_on_non_project",
     StatusOnNonProject => "status_on_non_project",
     LabelReadsAsAnotherState => "label_reads_as_another_state",
@@ -62,7 +60,6 @@ impl RuleId {
     pub fn section(self) -> &'static str {
         match self {
             Self::TaskOnNonProject | Self::StatusOnNonProject => "§3.2",
-            Self::OrphanTask => "§9.3",
             Self::LabelReadsAsAnotherState | Self::OpenUnderClosedProject => "§4.1",
             Self::MembershipOnNonProject => "§7.2",
             Self::ContainmentNotAllowed => "§3.3",
@@ -77,7 +74,6 @@ impl RuleId {
     pub fn title(self) -> &'static str {
         match self {
             Self::TaskOnNonProject => "Tasks outside a Project",
-            Self::OrphanTask => "Tasks with no Project",
             Self::MembershipOnNonProject => "People outside a Project",
             Self::StatusOnNonProject => "A project status outside a Project",
             Self::LabelReadsAsAnotherState => "A status label that reads as another state",
@@ -96,7 +92,6 @@ impl RuleId {
     pub fn explanation(self) -> &'static str {
         match self {
             Self::TaskOnNonProject => "Only Projects have tasks.",
-            Self::OrphanTask => "A task belongs to exactly one Project.",
             Self::MembershipOnNonProject => "Only Projects have people.",
             Self::StatusOnNonProject => "Only Projects have a project status.",
             Self::LabelReadsAsAnotherState => {
@@ -124,7 +119,6 @@ impl RuleId {
     pub fn fix_hint(self) -> &'static str {
         match self {
             Self::TaskOnNonProject => "Move the task to a Project.",
-            Self::OrphanTask => "Assign it to a Project, or turn it into a capture.",
             Self::MembershipOnNonProject => {
                 "Add the person to a related Project, then remove them here."
             }
@@ -169,8 +163,7 @@ pub struct Ref {
     /// The node is archived (hidden from lists); for a task, its node is.
     #[serde(default)]
     pub archived: bool,
-    /// A task's node, for the link; `None` for an orphan task and for
-    /// nodes and people.
+    /// A task's node, for the link; `None` for nodes and people.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<Uuid>,
     /// A task that is done or cancelled: lists keep those in a collapsed
@@ -194,13 +187,13 @@ impl Ref {
 
     /// `archived` is the task's node's: its link leads to a hidden node.
     #[must_use]
-    pub fn task(id: Uuid, label: impl Into<String>, node_id: Option<Uuid>, archived: bool) -> Self {
+    pub fn task(id: Uuid, label: impl Into<String>, node_id: Uuid, archived: bool) -> Self {
         Self {
             kind: RefKind::Task,
             id,
             label: label.into(),
             archived,
-            node_id,
+            node_id: Some(node_id),
             closed: false,
         }
     }
@@ -529,9 +522,19 @@ mod tests {
     #[test]
     fn a_counted_report_keeps_the_sql_count_and_caps_items() {
         let items: Vec<Violation> = (0..(ITEM_CAP as u128 + 1)).map(item).collect();
-        let r = RuleReport::with_count(RuleId::OrphanTask, 9_999, items);
+        let r = RuleReport::with_count(RuleId::TaskOnNonProject, 9_999, items);
         assert_eq!(r.count, 9_999);
         assert_eq!(r.items.len(), ITEM_CAP);
+    }
+
+    /// S5c: a task always has a node (migration 054), so "Tasks with no
+    /// Project" is no rule any more. A report an older release cached
+    /// still names it, and can't be read: `sw.js` evicts those (v19).
+    #[test]
+    fn a_task_with_no_project_is_no_longer_a_rule() {
+        assert!(serde_json::from_str::<RuleId>(r#""orphan_task""#).is_err());
+        assert!(serde_json::from_str::<RuleId>(r#""task_on_non_project""#).is_ok());
+        assert!(RuleId::ALL.iter().all(|r| r.as_str() != "orphan_task"));
     }
 
     #[test]
@@ -563,18 +566,18 @@ mod tests {
     #[test]
     fn a_long_report_keeps_the_exact_count_and_the_first_items() {
         let items: Vec<Violation> = (0..(ITEM_CAP as u128 + 37)).map(item).collect();
-        let report = RuleReport::new(RuleId::OrphanTask, items);
+        let report = RuleReport::new(RuleId::TaskOnNonProject, items);
         assert_eq!(report.count, ITEM_CAP as u64 + 37);
         assert_eq!(report.items.len(), ITEM_CAP);
         assert_eq!(report.items[0], item(0), "the first ones, in order");
 
-        let short = RuleReport::new(RuleId::OrphanTask, vec![item(1)]);
+        let short = RuleReport::new(RuleId::TaskOnNonProject, vec![item(1)]);
         assert_eq!((short.count, short.items.len()), (1, 1));
     }
 
     #[test]
     fn a_ref_round_trips_and_omits_an_empty_node_link() {
-        let task = Ref::task(Uuid::from_u128(1), "t", Some(Uuid::from_u128(2)), true);
+        let task = Ref::task(Uuid::from_u128(1), "t", Uuid::from_u128(2), true);
         let json = serde_json::to_value(&task).expect("ser");
         assert_eq!(json["kind"], "task");
         assert_eq!(json["archived"], true, "the task's node is archived");

@@ -67,8 +67,8 @@ test('Escape closes the composer without creating anything', async ({ page, requ
   await input.press('Escape');
   await expect(input).not.toBeVisible();
 
-  const inbox = await (await request.get('/api/tasks/inbox')).json();
-  expect(inbox.some((t: { title: string }) => t.title === 'never created')).toBe(false);
+  const tasks = await (await request.get('/api/tasks/all')).json();
+  expect(tasks.some((t: { title: string }) => t.title === 'never created')).toBe(false);
   const captures = await (await request.get('/api/captures')).json();
   expect(captures.some((c: { body: string }) => c.body.includes('never created'))).toBe(false);
 });

@@ -17,9 +17,8 @@
 //! Two ways to interact with the row body:
 //! * **Click** the row body (anywhere outside the action buttons or the
 //!   inline edit form) → navigate to the parent node, scrolled and
-//!   briefly highlighted on the task.  A task with no Project opens Data
-//!   health, which lists it with "Move to a Project".  Action buttons call `stopPropagation()` so they never
-//!   trigger the row-click.
+//!   briefly highlighted on the task.  Action buttons call
+//!   `stopPropagation()` so they never trigger the row-click.
 //! * **Drag** the row body → HTML5 native drag.  `dataTransfer` carries
 //!   the task id; the destination zone fires the same PATCH the tap
 //!   button would.  Mousedown-then-move triggers drag; mousedown-then-up
@@ -252,12 +251,12 @@ impl TaskEditorHeights {
 #[component]
 pub fn KanbanTaskRow(
     task: Task,
-    /// Pre-resolved parent node title; `None` for a task with no Project
-    /// and for a node the caller can no longer see (#230). The chip says
-    /// which (`common::task::TaskParent`).
+    /// Pre-resolved parent node title; `None` for a node the caller can
+    /// no longer see (#230), which the chip then says
+    /// (`common::task::TaskParent`).
     node_title: Option<String>,
     /// The declared state of the task's Project (S6a), `None` for a task
-    /// on no Project. A parked or closed project keeps its tasks out of
+    /// on a node that is not a Project (older data). A parked or closed project keeps its tasks out of
     /// Today's carry-over and Overdue; the row then says why it is in the
     /// Backlog.
     project_state: Option<common::project_state::ProjectState>,
@@ -271,14 +270,14 @@ pub fn KanbanTaskRow(
     let due = task.due_date;
     let focus = task.focus_date;
     // #230: a node the caller can no longer see has no title: say so,
-    // rather than "No Project" or a stale title.
-    let parent_kind = common::task::TaskParent::of(task.node_id, node_title);
+    // rather than show a stale one.
+    let parent_kind = common::task::TaskParent::of(node_title);
     let parent = parent_kind.label().to_string();
     let node_icon = parent_kind.icon();
     let parent_reachable = parent_kind.is_reachable();
     let has_node = matches!(parent_kind, common::task::TaskParent::Node(_));
-    // Only a visible Project is amber. No Project is a data problem and an
-    // unavailable node is a fact, neither is urgency: stone.
+    // Only a visible Project is amber. An unavailable node is a fact, not
+    // urgency: stone.
     let (chip_icon_class, chip_text_class) = if has_node {
         (
             "material-symbols-outlined text-amber-600 dark:text-amber-500",
@@ -294,7 +293,6 @@ pub fn KanbanTaskRow(
     };
     let row_title = match parent_kind {
         common::task::TaskParent::Node(_) => "Click to open the task in its parent node",
-        common::task::TaskParent::NoProject => "No Project: click to fix it in Data health",
         common::task::TaskParent::Unavailable => {
             "You no longer have access to this task\u{2019}s node"
         }
@@ -428,7 +426,7 @@ pub fn KanbanTaskRow(
             },
         );
     };
-    // ── Row click → focus + navigate to parent (or Data health) ──────
+    // ── Row click → focus + navigate to parent ───────────────────────
     let on_row_click = move |_ev: web_sys::MouseEvent| {
         // Don't navigate while editing — clicks inside the edit form
         // would otherwise jump the user away mid-typing.
@@ -443,7 +441,7 @@ pub fn KanbanTaskRow(
         if !parent_reachable {
             return;
         }
-        let target = crate::components::task_common::task_href(task_id.0, node_id.map(|n| n.0));
+        let target = crate::components::task_common::task_href(task_id.0, node_id.0);
         navigate.get_value()(&target, Default::default());
     };
 

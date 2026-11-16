@@ -16,10 +16,12 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait TaskRepo: Send + Sync {
-    /// Create a task. `node_id = None` produces a standalone (inbox) task.
+    /// Create a task on `node_id`, its Project (S5c: a task always has
+    /// one; the route has checked that the node is a Project). The
+    /// request's own `node_id` is not read here.
     async fn create(
         &self,
-        node_id: Option<NodeId>,
+        node_id: NodeId,
         owner_id: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError>;
@@ -51,19 +53,17 @@ pub trait TaskRepo: Send + Sync {
 
     /// Tasks the caller has marked for focus on `date` (My Day), with node titles.
     ///
-    /// `viewer` scopes the joined `node_title` (#230): it is `NULL` when the
-    /// node is no longer visible to that subject (a revoked share), so a
-    /// task never shows a node's live title to someone who lost access.
-    /// `None` = admin (sees every node); routes pass `subject_scope`.
+    /// `viewer` scopes the join to the task's node: a task on a node that
+    /// subject can no longer see (a revoked share) is left out
+    /// ([`ON_A_NODE_THEY_SEE`]), so no row shows a node's title to someone
+    /// who lost access. `None` = admin (sees every node); routes pass
+    /// `subject_scope`.
     async fn list_my_day(
         &self,
         owner_id: &str,
         viewer: Option<&str>,
         date: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError>;
-
-    /// Standalone tasks (node_id IS NULL) owned by `owner_id`.
-    async fn list_inbox(&self, owner_id: &str) -> Result<Vec<Task>, EmberTroveError>;
 
     /// Tasks with a due_date in [from, to] inclusive, ordered by due_date then priority.
     /// `viewer` scopes `node_title` as in [`TaskRepo::list_my_day`].
@@ -115,12 +115,12 @@ pub trait TaskRepo: Send + Sync {
     /// All tasks across all owners — used for full backup.
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError>;
 
-    /// Bulk update sort_order for drag-to-reorder; only touches rows owned by `owner_id`.
+    /// Bulk update sort_order for drag-to-reorder.
     /// Sets `sort_order` on the tasks `subject` may edit, by the rule of
-    /// `PATCH /tasks/:id`: their own, or one on a node they edit (#281,
-    /// 2.5; it was owner-only, so an editor's drag on a shared node's
-    /// task was silently dropped). `None` is an admin. Any other id is
-    /// skipped without an error, as before.
+    /// `PATCH /tasks/:id`: those on a node they edit (#281, 2.5; it was
+    /// owner-only, so an editor's drag on a shared node's task was
+    /// silently dropped). Owning a task is not enough. `None` is an
+    /// admin. Any other id is skipped without an error, as before.
     async fn reorder(
         &self,
         updates: &[(TaskId, i32)],
@@ -144,7 +144,7 @@ impl PgTaskRepo {
 #[derive(sqlx::FromRow)]
 struct TaskRow {
     id: Uuid,
-    node_id: Option<Uuid>,
+    node_id: Uuid,
     owner_id: String,
     title: String,
     status: String,
@@ -169,7 +169,7 @@ impl TaskRow {
     fn into_task(self) -> Result<Task, EmberTroveError> {
         Ok(Task {
             id: TaskId(self.id),
-            node_id: self.node_id.map(NodeId),
+            node_id: NodeId(self.node_id),
             owner_id: self.owner_id,
             title: self.title,
             status: parse_status(&self.status)?,
@@ -185,12 +185,13 @@ impl TaskRow {
 }
 
 /// For the owner's task feeds, which `LEFT JOIN nodes n` on the node being
-/// visible to the reader: keep a task with no node, or whose node they see.
+/// visible to the reader: keep a task whose node they see. (Every task has
+/// a node since S5c; until then one with none was kept too.)
 ///
 /// SECURITY (owner decision, 2026-11-10): a task on a node its owner can no
 /// longer see (a revoked share) is not in their feeds. #230 hid only the
 /// node's title and kept the task.
-const ON_A_NODE_THEY_SEE: &str = "(t.node_id IS NULL OR n.id IS NOT NULL)";
+const ON_A_NODE_THEY_SEE: &str = "n.id IS NOT NULL";
 
 /// A task's priority as an `ORDER BY` rank: high, medium, low. One
 /// definition for every task list (#281, 3.5; it was written out five
@@ -240,7 +241,7 @@ fn asks_for_attention() -> String {
             .map(ProjectState::as_str)
             .collect(),
     );
-    // No state: a task on no node, or on a node that is not a Project.
+    // No state: a task on a node that is not a Project (older data).
     format!(
         "(t.status::text IN ({actionable}) \
           AND (n.project_state IS NULL OR n.project_state IN ({asking})))"
@@ -274,7 +275,7 @@ const COMPLETED_AT_AFTER: &str = "CASE \
 #[derive(sqlx::FromRow)]
 struct MyDayRow {
     id: Uuid,
-    node_id: Option<Uuid>,
+    node_id: Uuid,
     owner_id: String,
     title: String,
     status: String,
@@ -362,12 +363,10 @@ pub(crate) async fn cancel_open_on(
 /// conversion (#234) can do it inside its transaction.
 pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
     ex: E,
-    node_id: Option<NodeId>,
+    node_id: NodeId,
     owner_id: &str,
     req: &CreateTaskRequest,
 ) -> Result<Task, EmberTroveError> {
-    // node_id from path param takes precedence; fall back to body field.
-    let resolved_node_id = node_id.or(req.node_id).map(|n| n.0);
     let status = req.status.as_ref().map_or("open", |s| s.as_str());
     let priority = req.priority.as_ref().map_or("medium", |p| p.as_str());
 
@@ -381,7 +380,7 @@ pub(crate) async fn insert_task<'e, E: sqlx::PgExecutor<'e>>(
         RETURNING {SELECT_COLS}
         "#
     ))
-    .bind(resolved_node_id)
+    .bind(node_id.0)
     .bind(owner_id)
     .bind(&req.title)
     .bind(status)
@@ -419,7 +418,7 @@ pub(crate) async fn list_all_on<'e, E: sqlx::PgExecutor<'e>>(
 impl TaskRepo for PgTaskRepo {
     async fn create(
         &self,
-        node_id: Option<NodeId>,
+        node_id: NodeId,
         owner_id: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError> {
@@ -464,8 +463,12 @@ impl TaskRepo for PgTaskRepo {
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
         let status_s = req.status.as_ref().map(|s| s.as_str().to_string());
         let priority_s = req.priority.as_ref().map(|p| p.as_str().to_string());
-        let node_id_update = req.node_id.is_some();
-        let node_id_val = req.node_id.and_then(|n| n).map(|n| n.0);
+        // A move, or nothing. A request to take the task off its node
+        // (`Some(None)`) is refused by `UpdateTaskRequest::validate`
+        // before it gets here; were one to arrive all the same, it would
+        // leave the node as it is, not ask the database for a NULL it
+        // refuses (S5c, migration 054).
+        let move_to = req.node_id.flatten().map(|n| n.0);
 
         let row = sqlx::query_as::<_, TaskRow>(&format!(
             r#"
@@ -476,7 +479,7 @@ impl TaskRepo for PgTaskRepo {
                 priority   = COALESCE($4::task_priority, priority),
                 focus_date = CASE WHEN $5  THEN $6  ELSE focus_date END,
                 due_date   = CASE WHEN $7  THEN $8  ELSE due_date   END,
-                node_id    = CASE WHEN $9  THEN $10 ELSE node_id    END
+                node_id    = COALESCE($9, node_id)
             WHERE id = $1 AND deleted_at IS NULL
             RETURNING {SELECT_COLS}
             "#
@@ -489,8 +492,7 @@ impl TaskRepo for PgTaskRepo {
         .bind(req.focus_date.and_then(|d| d))
         .bind(req.due_date.is_some())
         .bind(req.due_date.and_then(|d| d))
-        .bind(node_id_update)
-        .bind(node_id_val)
+        .bind(move_to)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("update task failed: {e}")))?
@@ -583,7 +585,7 @@ impl TaskRepo for PgTaskRepo {
             ORDER BY
                 t.sort_order ASC,
                 {T_PRIORITY_RANK},
-                t.node_id NULLS FIRST,
+                t.node_id,
                 t.created_at
             "#,
             visible = super::visible_to("n", 3),
@@ -598,28 +600,6 @@ impl TaskRepo for PgTaskRepo {
         .map_err(|e| EmberTroveError::Internal(format!("list my day failed: {e}")))?;
 
         rows.into_iter().map(my_day_row_to_task).collect()
-    }
-
-    async fn list_inbox(&self, owner_id: &str) -> Result<Vec<Task>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, TaskRow>(&format!(
-            r#"
-            SELECT {SELECT_COLS}
-            FROM node_tasks
-            WHERE owner_id = $1
-              AND deleted_at IS NULL
-              AND node_id IS NULL
-            ORDER BY
-                sort_order ASC,
-                {PRIORITY_RANK},
-                created_at ASC
-            "#
-        ))
-        .bind(owner_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| EmberTroveError::Internal(format!("list inbox failed: {e}")))?;
-
-        rows.into_iter().map(TaskRow::into_task).collect()
     }
 
     async fn list_by_due_range(
@@ -933,13 +913,12 @@ impl TaskRepo for PgTaskRepo {
             ) AS u
             WHERE node_tasks.id = u.id
               AND node_tasks.deleted_at IS NULL
-              -- The routes' rule (`require_task_editor`): on a node, its
-              -- editors; on none, the task's owner. Owning a task on a
-              -- node is not enough (a revoked share). An admin (NULL)
-              -- passes here, by this caller's choice.
+              -- The routes' rule (`require_task_editor`): the editors of
+              -- the task's node. Owning the task is not enough (a revoked
+              -- share). An admin (NULL) passes here, by this caller's
+              -- choice.
               AND (
                 $3::text IS NULL
-                OR (node_tasks.node_id IS NULL AND node_tasks.owner_id = $3::text)
                 OR {edits_its_node}
               )
             "#,

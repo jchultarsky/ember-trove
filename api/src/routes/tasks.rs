@@ -22,8 +22,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::permissions::{
-        can_view, is_admin, missing, or_missing, or_missing_row, require_editor, require_viewer,
-        subject_scope,
+        can_view, or_missing, or_missing_row, require_editor, require_viewer, subject_scope,
     },
     error::ApiError,
     routes::capability::require_capability,
@@ -38,8 +37,7 @@ pub fn node_task_router() -> Router<AppState> {
 
 pub fn task_router() -> Router<AppState> {
     Router::new()
-        .route("/", post(create_standalone_task))
-        .route("/inbox", get(list_inbox))
+        .route("/", post(create_task_named_in_body))
         .route("/all", get(list_all_open))
         .route("/{id}", patch(update_task).delete(delete_task))
         .route("/{id}/restore", post(restore_task))
@@ -69,10 +67,11 @@ pub fn dashboard_activity_router() -> Router<AppState> {
     Router::new().route("/", get(dashboard_activity))
 }
 
-/// Who may change a task. On a node: an editor of that node (or an admin).
-/// On no node: its owner (or an admin). One rule for update, delete and
-/// restore (#281, 3.3; it was written out three times), and the one
-/// `TaskRepo::reorder` applies in SQL.
+/// Who may change a task: an editor of its node (or an admin). One rule
+/// for update, delete and restore (#281, 3.3; it was written out three
+/// times), and the one `TaskRepo::reorder` applies in SQL.
+/// A task always has a node (S5c), so there is no other case: until then
+/// a task on no node was its owner's to change.
 ///
 /// SECURITY (owner decision, 2026-11-10): owning a task on a node is not a
 /// way in. The owner used to pass whatever their rights on the node, so
@@ -84,13 +83,7 @@ async fn require_task_editor(
     claims: &AuthClaims,
     task: &Task,
 ) -> Result<(), ApiError> {
-    let Some(node) = task.node_id else {
-        return if task.owner_id == claims.sub || is_admin(claims) {
-            Ok(())
-        } else {
-            Err(missing(TASK))
-        };
-    };
+    let node = task.node_id;
     // A refusal is a 403 only for someone who can see the task's node;
     // for anyone else the task reads as missing (`permissions::or_missing`).
     let check = require_editor(state.permissions.as_ref(), claims, node).await;
@@ -128,53 +121,50 @@ async fn create_task(
     require_capability(&state, NodeId(node_id), Capability::Tasks).await?;
     let task = state
         .tasks
-        .create(Some(NodeId(node_id)), &claims.sub, req)
+        .create(NodeId(node_id), &claims.sub, req)
         .await?;
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_CREATED,
-        task.node_id,
+        Some(task.node_id),
         &claims.sub,
         &task.owner_id,
     );
     Ok((StatusCode::CREATED, Json(task)))
 }
 
-/// POST /tasks — create a standalone (inbox) task with no parent node.
-async fn create_standalone_task(
+/// POST /tasks — create a task on the Project its body names
+/// (`POST /nodes/{id}/tasks` takes it from the path, and is what the app's
+/// pages use; this one stays for a tab left open across 3.25, whose
+/// calendar composer posts here, and for other API clients).
+///
+/// S5c (ONTOLOGY §9.3): a body that names no Project is refused. It used
+/// to make a task on no node (the old Inbox); the loose thing is a capture
+/// now (§9.1). The refusal is decided from the request alone, before
+/// anything is looked up.
+async fn create_task_named_in_body(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateTaskRequest>,
 ) -> Result<(StatusCode, Json<Task>), ApiError> {
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
-    // If a parent node is specified, verify the caller has editor access.
-    if let Some(nid) = req.node_id {
-        require_editor(state.permissions.as_ref(), &claims, nid).await?;
-        require_capability(&state, nid, Capability::Tasks).await?;
-    }
-    let node_id = req.node_id;
+    let Some(node_id) = req.node_id else {
+        return Err(ApiError::Validation(
+            common::task::A_TASK_NEEDS_A_PROJECT.to_string(),
+        ));
+    };
+    require_editor(state.permissions.as_ref(), &claims, node_id).await?;
+    require_capability(&state, node_id, Capability::Tasks).await?;
     let task = state.tasks.create(node_id, &claims.sub, req).await?;
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_CREATED,
-        task.node_id,
+        Some(task.node_id),
         &claims.sub,
         &task.owner_id,
     );
     Ok((StatusCode::CREATED, Json(task)))
-}
-
-/// GET /tasks/inbox — standalone tasks (node_id IS NULL) for the authenticated user.
-///
-/// No page lists these since S4c (#240): Data health's `OrphanTask` rule
-/// does. The route stays until S5c forbids tasks without a Project.
-async fn list_inbox(
-    State(state): State<AppState>,
-    Extension(claims): Extension<AuthClaims>,
-) -> Result<Json<Vec<Task>>, ApiError> {
-    let tasks = state.tasks.list_inbox(&claims.sub).await?;
-    Ok(Json(tasks))
 }
 
 /// Backlog feed for the My Day Kanban — every open task across every node,
@@ -210,12 +200,14 @@ async fn update_task(
 
     // SECURITY: moving a task onto a node (node_id: Some(Some(_))) requires
     // editor access to the DESTINATION — the check above only covers the
-    // task's current node. Mirrors create_standalone_task.
+    // task's current node. Mirrors `create_task_named_in_body`. Taking a
+    // task off its node (`Some(None)`) never gets this far: `validate()`
+    // above refuses it (S5c).
     if let Some(Some(dest)) = req.node_id {
         require_editor(state.permissions.as_ref(), &claims, dest).await?;
         // §3.2 (#216): only onto a Project. Staying on the current node is
         // not a move, so a task already on a non-Project stays editable.
-        if existing.node_id != Some(dest) {
+        if existing.node_id != dest {
             require_capability(&state, dest, Capability::Tasks).await?;
         }
     }
@@ -225,7 +217,7 @@ async fn update_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_UPDATED,
-        updated.node_id,
+        Some(updated.node_id),
         &claims.sub,
         &updated.owner_id,
     );
@@ -248,7 +240,7 @@ async fn delete_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_DELETED,
-        node_id,
+        Some(node_id),
         &claims.sub,
         &owner_id,
     );
@@ -256,8 +248,8 @@ async fn delete_task(
 }
 
 /// POST /tasks/:id/restore — un-delete a soft-deleted task. Backs the undo
-/// toast; authorization mirrors delete (owner, admin, or editor of the parent
-/// node).
+/// toast; authorization mirrors delete (`require_task_editor`: an editor of
+/// the task's node, or an admin).
 async fn restore_task(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -273,7 +265,7 @@ async fn restore_task(
     dispatch(
         state.webhooks.clone(),
         EVENT_TASK_UPDATED,
-        restored.node_id,
+        Some(restored.node_id),
         &claims.sub,
         &restored.owner_id,
     );

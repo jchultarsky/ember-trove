@@ -98,9 +98,8 @@ impl NodeRepo for StubNodeRepo {
         let (owner, node_type) = match id.0.as_u128() {
             AZ_OWNED_NODE => ("creator", NodeType::Article),
             AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => ("someone-else", NodeType::Article),
-            AZ_MY_PROJECT | AZ_ARCHIVED_PROJECT | AZ_PARKED_PROJECT | AZ_CLOSED_PROJECT => {
-                ("test-sub", NodeType::Project)
-            }
+            AZ_MY_PROJECT | AZ_ARCHIVED_PROJECT | AZ_PARKED_PROJECT | AZ_CLOSED_PROJECT
+            | AZ_TASKS_PROJECT => ("test-sub", NodeType::Project),
             AZ_VIEW_PROJECT => ("someone-else", NodeType::Project),
             AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
@@ -555,6 +554,10 @@ const AZ_VIEW_PROJECT: u128 = 0xa2_0008;
 /// one complete. Every other Project in this world is active.
 const AZ_PARKED_PROJECT: u128 = 0xa2_0009;
 const AZ_CLOSED_PROJECT: u128 = 0xa2_000a;
+/// The caller's own active Project that holds their own tasks in this
+/// world (S5c: every task has a node). It is not `AZ_MY_PROJECT`, so
+/// moving such a task onto `AZ_MY_PROJECT` is a real move.
+const AZ_TASKS_PROJECT: u128 = 0xa2_000b;
 /// The token of the stub's cascade plan for AZ_PARKED_PROJECT, the one
 /// project in this world with something to close under it (S6b).
 const AZ_CASCADE_TOKEN: &str = "the-plan-i-was-shown";
@@ -585,7 +588,7 @@ const AZ_MY_WIKI_EDGE: u128 = 0xa2_0e37;
 const AZ_FOREIGN_WIKI_EDGE: u128 = 0xa2_0e38;
 const AZ_SEEN_HOME_EDGE: u128 = 0xa2_0e36;
 
-/// Someone else's standalone task.
+/// Someone else's task on a node the caller can't see.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
 /// Someone else's task on a node the caller can only view.
 const AZ_VIEW_TASK: u128 = 0xa2_0102;
@@ -658,6 +661,12 @@ fn authz_permissions() -> Vec<Permission> {
             "test-sub",
             PermissionRole::Owner,
         ),
+        row(
+            0xa2_020d,
+            AZ_TASKS_PROJECT,
+            "test-sub",
+            PermissionRole::Owner,
+        ),
         row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
         row(
             AZ_PERM_FOREIGN,
@@ -670,26 +679,27 @@ fn authz_permissions() -> Vec<Permission> {
 
 fn authz_task(id: TaskId) -> Task {
     let (owner, node) = match id.0.as_u128() {
-        AZ_FOREIGN_TASK => ("someone-else", None),
-        AZ_VIEW_TASK => ("someone-else", Some(az_node(AZ_VIEW_NODE))),
-        AZ_EDIT_TASK => ("someone-else", Some(az_node(AZ_EDIT_NODE))),
-        AZ_REVOKED_TASK => ("test-sub", Some(az_node(AZ_FOREIGN_NODE))),
-        AZ_DEMOTED_TASK => ("test-sub", Some(az_node(AZ_VIEW_NODE))),
-        _ => ("test-sub", None),
+        AZ_FOREIGN_TASK => ("someone-else", AZ_FOREIGN_NODE),
+        AZ_VIEW_TASK => ("someone-else", AZ_VIEW_NODE),
+        AZ_EDIT_TASK => ("someone-else", AZ_EDIT_NODE),
+        AZ_REVOKED_TASK => ("test-sub", AZ_FOREIGN_NODE),
+        AZ_DEMOTED_TASK => ("test-sub", AZ_VIEW_NODE),
+        // Any other id: the caller's own task on their own Project.
+        _ => ("test-sub", AZ_TASKS_PROJECT),
     };
     Task {
         owner_id: owner.to_string(),
-        node_id: node,
+        node_id: az_node(node),
         ..stub_task(id)
     }
 }
 
-/// Canned task for the restore-handler tests. Owned by [`fake_claims`]'s sub
-/// so the handler's owner check passes.
+/// Canned task for the restore-handler tests: [`fake_claims`]'s own, on
+/// their own Project, so the handler's "editor of its node" check passes.
 fn stub_task(id: TaskId) -> Task {
     Task {
         id,
-        node_id: None,
+        node_id: az_node(AZ_TASKS_PROJECT),
         owner_id: "test-sub".to_string(),
         title: "stub".to_string(),
         status: TaskStatus::Open,
@@ -708,20 +718,20 @@ struct StubTaskRepo;
 impl TaskRepo for StubTaskRepo {
     async fn create(
         &self,
-        node: Option<NodeId>,
+        node: NodeId,
         owner: &str,
         req: CreateTaskRequest,
     ) -> Result<Task, EmberTroveError> {
-        // Only a standalone task or one on the caller's Project may get
-        // here; anything else is a gate the handler skipped (#216).
-        match node.map(|n| n.0.as_u128()) {
-            None | Some(AZ_MY_PROJECT) => Ok(Task {
+        // Only a task on the caller's Project may get here; anything else
+        // is a gate the handler skipped (#216).
+        match node.0.as_u128() {
+            AZ_MY_PROJECT => Ok(Task {
                 owner_id: owner.to_string(),
                 node_id: node,
                 title: req.title,
                 ..stub_task(TaskId(Uuid::new_v4()))
             }),
-            Some(other) => panic!("capability bypass: task created on node {other:#x}"),
+            other => panic!("capability bypass: task created on node {other:#x}"),
         }
     }
     async fn list_for_node(&self, _: NodeId, _: &str) -> Result<Vec<Task>, EmberTroveError> {
@@ -736,6 +746,8 @@ impl TaskRepo for StubTaskRepo {
     async fn update(&self, id: TaskId, req: UpdateTaskRequest) -> Result<Task, EmberTroveError> {
         // A write the handler should have refused fails the test loudly
         // instead of quietly returning 200 (see the authz world below).
+        // S5c: a detach is refused from the request alone.
+        assert_ne!(req.node_id, Some(None), "a detach reached the repo");
         let dest = req.node_id.flatten().map(|n| n.0.as_u128());
         if matches!(
             id.0.as_u128(),
@@ -748,7 +760,7 @@ impl TaskRepo for StubTaskRepo {
             panic!("capability bypass: task {id} moved onto an Article");
         }
         let mut task = authz_task(id);
-        if let Some(node) = req.node_id {
+        if let Some(Some(node)) = req.node_id {
             task.node_id = node;
         }
         if let Some(title) = req.title {
@@ -789,9 +801,6 @@ impl TaskRepo for StubTaskRepo {
         _: Option<&str>,
         _: NaiveDate,
     ) -> Result<Vec<MyDayTask>, EmberTroveError> {
-        unimplemented!()
-    }
-    async fn list_inbox(&self, _: &str) -> Result<Vec<Task>, EmberTroveError> {
         unimplemented!()
     }
     async fn list_open_for_owner(
@@ -941,7 +950,7 @@ impl crate::repo::capture::CaptureRepo for StubCaptureRepo {
                 Made::Task {
                     project: node_id,
                     task: Task {
-                        node_id: Some(node_id),
+                        node_id,
                         owner_id: owner.to_string(),
                         title: req.title,
                         ..stub_task(TaskId(Uuid::new_v4()))
@@ -1794,7 +1803,7 @@ impl crate::repo::data_health::DataHealthRepo for StubDataHealthRepo {
     }
     async fn counts_all(&self) -> Result<Vec<common::data_health::RuleCount>, EmberTroveError> {
         Ok(vec![common::data_health::RuleCount {
-            rule: common::data_health::RuleId::OrphanTask,
+            rule: common::data_health::RuleId::TaskOnNonProject,
             count: 3,
         }])
     }
@@ -2485,7 +2494,7 @@ fn fake_claims() -> common::auth::AuthClaims {
 }
 
 #[tokio::test]
-async fn task_restore_returns_restored_task_for_owner() {
+async fn task_restore_returns_restored_task_for_an_editor_of_its_project() {
     let app = Router::new()
         .nest("/tasks", crate::routes::tasks::task_router())
         .layer(axum::Extension(fake_claims()))
@@ -3117,7 +3126,7 @@ async fn task_patch(task: u128, body: serde_json::Value) -> StatusCode {
 }
 
 #[tokio::test]
-async fn update_task_owner_can_edit_their_own_task() {
+async fn update_task_an_editor_of_its_project_can_edit_a_task() {
     let status = task_patch(0xa2_0199, serde_json::json!({ "title": "renamed" })).await;
     assert_eq!(status, StatusCode::OK);
 }
@@ -3139,7 +3148,11 @@ async fn a_repeat_rule_from_an_older_tab_is_ignored_not_refused() {
         let resp = claims_app("/tasks", crate::routes::tasks::task_router())
             .oneshot(post_json(
                 "/tasks",
-                serde_json::json!({ "title": "t", "recurrence": rule }),
+                serde_json::json!({
+                    "title": "t",
+                    "node_id": Uuid::from_u128(AZ_MY_PROJECT),
+                    "recurrence": rule,
+                }),
             ))
             .await
             .unwrap();
@@ -3195,7 +3208,7 @@ async fn update_task_refuses_a_move_onto_an_editable_non_project() {
 }
 
 #[tokio::test]
-async fn update_task_refuses_someone_elses_standalone_task() {
+async fn update_task_refuses_someone_elses_task_on_a_node_the_caller_cannot_see() {
     // Refused as "no such task": the caller has no way to know it exists
     // (`a_foreign_thing_reads_exactly_like_a_missing_one`).
     let status = task_patch(AZ_FOREIGN_TASK, serde_json::json!({ "title": "x" })).await;
@@ -5291,7 +5304,7 @@ async fn admin_data_health_counts_are_admin_only_and_carry_no_content() {
     let body = body_json(ok).await;
     assert_eq!(
         body,
-        serde_json::json!([{ "rule": "orphan_task", "count": 3 }])
+        serde_json::json!([{ "rule": "task_on_non_project", "count": 3 }])
     );
 }
 
@@ -5363,29 +5376,55 @@ async fn the_task_gate_never_tells_a_stranger_a_nodes_kind() {
     );
 }
 
+/// S5c (ONTOLOGY §9.3): `POST /tasks` names the task's Project in its
+/// body. Without one there is no task: the loose thing is a capture.
 #[tokio::test]
-async fn a_standalone_task_can_name_only_a_project() {
-    let post = |node: Option<u128>| async move {
-        let mut body = serde_json::json!({ "title": "t" });
-        if let Some(n) = node {
-            body["node_id"] = serde_json::json!(Uuid::from_u128(n));
-        }
+async fn a_task_must_name_its_project() {
+    let post = |body: serde_json::Value| async move {
         let resp = claims_app("/tasks", crate::routes::tasks::task_router())
             .oneshot(post_json("/tasks", body))
             .await
             .unwrap();
-        resp.status()
+        status_and_error(resp).await
     };
-    assert_eq!(
-        post(None).await,
-        StatusCode::CREATED,
-        "no node: still allowed until S5c"
-    );
-    assert_eq!(post(Some(AZ_MY_PROJECT)).await, StatusCode::CREATED);
-    assert_eq!(
-        post(Some(AZ_MY_ARTICLE)).await,
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    let on = |node: u128| serde_json::json!({ "title": "t", "node_id": Uuid::from_u128(node) });
+    // No Project, or an explicit null: refused, and the stub repo (which
+    // takes a node) is never asked.
+    for body in [
+        serde_json::json!({ "title": "t" }),
+        serde_json::json!({ "title": "t", "node_id": null }),
+    ] {
+        let (status, why) = post(body.clone()).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(why, common::task::A_TASK_NEEDS_A_PROJECT, "{body}");
+    }
+    assert_eq!(post(on(AZ_MY_PROJECT)).await.0, StatusCode::CREATED);
+    let (status, why) = post(on(AZ_MY_ARTICLE)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(why, "only Projects have tasks");
+}
+
+/// S5c: a task may be moved, never taken off its Project. The refusal is
+/// decided from the request alone, before any task is looked up, so it is
+/// the same answer for the caller's own task, one on a node they may only
+/// view, someone else's on a node they can't see, and one that isn't there.
+#[tokio::test]
+async fn a_task_cannot_be_taken_off_its_project_and_the_refusal_names_no_task() {
+    let mut answers = Vec::new();
+    for task in [0xa2_0199, AZ_VIEW_TASK, AZ_FOREIGN_TASK, AZ_MISSING] {
+        let resp = claims_app("/tasks", crate::routes::tasks::task_router())
+            .oneshot(patch_json(
+                &format!("/tasks/{}", Uuid::from_u128(task)),
+                serde_json::json!({ "title": "renamed", "node_id": null }),
+            ))
+            .await
+            .unwrap();
+        answers.push(status_and_error(resp).await);
+    }
+    let (status, why) = &answers[0];
+    assert_eq!(*status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(why.contains(common::task::A_TASK_NEEDS_A_PROJECT), "{why}");
+    assert!(answers.iter().all(|a| a == &answers[0]), "{answers:?}");
 }
 
 #[tokio::test]

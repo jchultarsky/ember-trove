@@ -6,6 +6,66 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.25.0] - 2026-11-16
+
+### Changed
+- **A task always has a Project** (S5c of the ontology programme, #335;
+  ONTOLOGY §9.3: "exactly one Project. No orphan Tasks"). No page has
+  made a task without one since Captures (3.5.0); now the API and the
+  database don't allow it either.
+  - `POST /api/tasks` refuses a body that names no `node_id` (**422**, "a
+    task needs a Project"). It used to make a task on no node.
+  - `PATCH /api/tasks/{id}` refuses `node_id: null` (**422**): a task can
+    be moved to another Project, not taken off its own.
+  - **A task with no Project becomes a capture** (§9.1: "the role of the
+    orphan is played by a capture"), at the upgrade and when an older
+    backup is restored. The capture keeps the task's id, owner, dates and
+    trash state. Its text is the title; a task still to do with a due
+    date has the date in front ("Fri 7 Nov 2025: call the bank"), and a
+    finished one is marked "Done:" or "Cancelled:". Priority, My Day, list
+    order and the completion date are not carried.
+  - Migration 054 does that and makes `node_tasks.node_id` `NOT NULL`. A
+    task on a node is not touched.
+  - The restore preview says how many of a backup's tasks have no Project
+    and will come back as captures, and counts them as captures.
+  - The backup format stays 12: an archive holds the same things in the
+    same places, so 3.24 can restore an archive made by this release.
+  - The calendar's day composer creates its task through
+    `POST /api/nodes/{id}/tasks`. Nothing a page does has changed.
+  - A task's `node_id` in an API answer is always an id, never `null`
+    (`Task.node_id` is a `NodeId` in the code). An archive's tasks are
+    written exactly as before.
+  - **Upgrading a self-hosted instance:** to see what will become a
+    capture, run `SELECT title, status, due_date FROM node_tasks WHERE
+    node_id IS NULL AND deleted_at IS NULL;` before you upgrade, and move
+    any you want kept as tasks to a Project (Data health, "Tasks with no
+    Project"). Stop the old API before the new one starts.
+
+### Removed
+- **Data health no longer has "Tasks with no Project"**: it can't happen
+  any more. "Tasks outside a Project" stays, for a task that older data
+  left on an Area, an Article or a Reference.
+- `GET /api/tasks/inbox`. No page has called it since 3.7.0.
+
+### Security
+- **Detaching a task from its Project is refused.** An editor of a
+  Project shared with them could take a task off it (`node_id: null`)
+  and, if they had written it, keep it as their own after the share
+  ended. What a person wrote on a shared node stays with the node
+  (ONTOLOGY §14, owner ruling of 2026-11-10). The refusal is the same
+  answer whether or not the task exists or is the caller's.
+  - **Not changed:** an editor can still *move* a task to another Project
+    they may edit, one of their own included. That takes editor rights on
+    both Projects, as before.
+
+### Tooling
+- The e2e suite's task fixtures live on a Project (`createProject`,
+  `addTask`, `tasksOf`, `deleteNodesByPrefix` in `e2e/tests/fixtures.ts`).
+  Data health's task fixes are tested on the "Tasks outside a Project"
+  card, served to the page over real tasks.
+- The service worker's cache is `ember-trove-v19`: a Data health report
+  cached by 3.24 names the retired rule.
+
 ## [3.24.0] - 2026-11-15
 
 ### Changed

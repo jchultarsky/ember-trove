@@ -62,18 +62,50 @@ fn activity_warning(counts: &EntityCounts) -> Option<String> {
     })
 }
 
-/// The counts the preview shows, as the restore will land them: a format-3
-/// note without a node comes back as a capture (#234), so it counts there
-/// and not as a note. A no-op for format 4, whose notes all have a node.
-fn counts_as_restored(mut counts: EntityCounts, notes: &[BackupNote]) -> EntityCounts {
-    let moved = notes
-        .iter()
-        .filter(|n| common::capture::from_nodeless_note(n).is_some())
-        .count();
-    let moved = u32::try_from(moved).unwrap_or(u32::MAX);
-    counts.notes = counts.notes.saturating_sub(moved);
-    counts.captures = counts.captures.saturating_add(moved);
+/// The counts the preview shows, as the restore will land them: a note
+/// without a node (a format-3 archive, #234) and a task without one (any
+/// archive made before S5c) come back as captures, so each counts there
+/// and not as what it was. A no-op for an archive that holds neither.
+fn counts_as_restored(
+    mut counts: EntityCounts,
+    notes: &[BackupNote],
+    tasks: &[common::backup::BackupTask],
+) -> EntityCounts {
+    let as_u32 = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let notes_moved = as_u32(
+        notes
+            .iter()
+            .filter(|n| common::capture::from_nodeless_note(n).is_some())
+            .count(),
+    );
+    let tasks_moved = as_u32(loose_tasks(tasks));
+    counts.notes = counts.notes.saturating_sub(notes_moved);
+    counts.tasks = counts.tasks.saturating_sub(tasks_moved);
+    counts.captures = counts
+        .captures
+        .saturating_add(notes_moved)
+        .saturating_add(tasks_moved);
     counts
+}
+
+/// How many of an archive's tasks have no Project (S5c, ONTOLOGY §9.3).
+/// The restore lands each as a capture (`capture::from_nodeless_task`).
+fn loose_tasks(tasks: &[common::backup::BackupTask]) -> usize {
+    tasks
+        .iter()
+        .filter(|t| common::capture::from_nodeless_task(t).is_some())
+        .count()
+}
+
+/// The restore preview's line about them: a count, never a title.
+fn loose_tasks_warning(tasks: &[common::backup::BackupTask]) -> Option<String> {
+    let n = loose_tasks(tasks);
+    (n > 0).then(|| {
+        format!(
+            "{n} task(s) in this backup have no Project: a task needs one now, so they will \
+             come back as captures. A finished one is marked Done or Cancelled."
+        )
+    })
 }
 
 /// Only archives this release can read restore (#222): its own format,
@@ -231,7 +263,13 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         .collect();
     // Captures (#234).
     let captures = repo::capture::list_all_on(&mut *conn).await?;
-    let tasks = repo::task::list_all_on(&mut *conn).await?;
+    // Each as the archive holds a task (`BackupTask`): word for word what
+    // `Task` writes, so the format is unchanged.
+    let tasks: Vec<common::backup::BackupTask> = repo::task::list_all_on(&mut *conn)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect();
     // Project Briefs (#282), all owners, in the same snapshot as their nodes.
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
@@ -480,7 +518,8 @@ pub async fn preview_restore(
     // still shows, saying it couldn't check.
     match extract_data(&archive_bytes) {
         Ok(data) => {
-            entity_counts = counts_as_restored(entity_counts, &data.notes);
+            entity_counts = counts_as_restored(entity_counts, &data.notes, &data.tasks);
+            warnings.extend(loose_tasks_warning(&data.tasks));
             warnings.extend(edge_rules_warning(&data));
             warnings.extend(folded_links_warnings(&data));
             warnings.extend(webhooks_warning(data.webhooks_switched_off()));
@@ -662,16 +701,12 @@ pub(crate) async fn restore_into(
         .await
         .map_err(|e| ApiError::Internal(format!("delete favorites failed: {e}")))?;
 
-    // What no node holds, which the cascade above never reached: tasks
-    // without a Project, the captures (#234) and the people registry (#281:
-    // memberships went with the nodes, the people themselves did not). A
-    // restore used to leave them, so the live database's own survived next
-    // to the archive's.
+    // What no node holds, which the cascade above never reached: the
+    // captures (#234) and the people registry (#281: memberships went with
+    // the nodes, the people themselves did not). A restore used to leave
+    // them, so the live database's own survived next to the archive's.
+    // (Every task has a node since S5c, so the cascade took them all.)
     for (what, sql) in [
-        (
-            "nodeless tasks",
-            "DELETE FROM node_tasks WHERE node_id IS NULL",
-        ),
         ("captures", "DELETE FROM captures"),
         ("people", "DELETE FROM people"),
     ] {
@@ -825,12 +860,25 @@ pub(crate) async fn restore_into(
     }
 
     // Captures (#234): the archive's own, plus, from a format-3 archive,
-    // its notes without a node (`capture::from_nodeless_note`, 043's rule).
-    let captures = data.captures.iter().cloned().chain(
-        data.notes
-            .iter()
-            .filter_map(common::capture::from_nodeless_note),
-    );
+    // its notes without a node (`capture::from_nodeless_note`, 043's rule),
+    // plus its tasks without one (`capture::from_nodeless_task`, 054's
+    // rule; S5c). Which tasks those are is read from each task, never from
+    // the archive's format number: an archive of any format up to this
+    // release's may hold one.
+    let captures = data
+        .captures
+        .iter()
+        .cloned()
+        .chain(
+            data.notes
+                .iter()
+                .filter_map(common::capture::from_nodeless_note),
+        )
+        .chain(
+            data.tasks
+                .iter()
+                .filter_map(common::capture::from_nodeless_task),
+        );
     for capture in captures {
         sqlx::query(
             "INSERT INTO captures (id, owner_id, body, color, created_at, updated_at) \
@@ -880,8 +928,12 @@ pub(crate) async fn restore_into(
     // Insert tasks. An archive from before S5b may have said that a task
     // repeats, and which task scheduled which: neither is read any more
     // (`BackupData`), so each comes back as a one-time task, the rule
-    // migration 053 applied.
+    // migration 053 applied. A task with no node is not a task any more
+    // (S5c): it went in with the captures above.
     for task in &data.tasks {
+        let Some(node_id) = task.node_id else {
+            continue;
+        };
         let status_str = task.status.as_str();
         let priority_str = task.priority.as_str();
         sqlx::query(
@@ -895,7 +947,7 @@ pub(crate) async fn restore_into(
             "#,
         )
         .bind(task.id.0)
-        .bind(task.node_id.map(|n| n.0))
+        .bind(node_id.0)
         .bind(&task.owner_id)
         .bind(&task.title)
         .bind(status_str)
@@ -1583,11 +1635,59 @@ mod tests {
             captures: 0,
         };
         let notes = [note(1, None), note(2, Some(9)), note(3, None)];
-        let out = counts_as_restored(counts.clone(), &notes);
+        let out = counts_as_restored(counts.clone(), &notes, &[]);
         assert_eq!((out.notes, out.captures), (1, 2));
         // Format 4: every note has a node, nothing moves.
-        let out = counts_as_restored(counts, &notes[1..2]);
+        let out = counts_as_restored(counts, &notes[1..2], &[]);
         assert_eq!((out.notes, out.captures), (3, 0));
+    }
+
+    fn task(n: u128, node: Option<u128>) -> common::backup::BackupTask {
+        let at = chrono::Utc::now();
+        common::backup::BackupTask {
+            id: common::id::TaskId(Uuid::from_u128(n)),
+            node_id: node.map(|m| NodeId(Uuid::from_u128(m))),
+            owner_id: "alice".into(),
+            title: "call the bank".into(),
+            status: common::task::TaskStatus::Open,
+            priority: common::task::TaskPriority::Medium,
+            focus_date: None,
+            due_date: None,
+            sort_order: 0,
+            created_at: at,
+            updated_at: at,
+            completed_at: None,
+        }
+    }
+
+    /// S5c: a task with no Project in an archive comes back as a capture
+    /// (`capture::from_nodeless_task`), so the preview counts it there and
+    /// says so.
+    #[test]
+    fn a_preview_counts_tasks_with_no_project_as_captures_and_says_so() {
+        let counts = EntityCounts {
+            nodes: 1,
+            edges: 0,
+            tags: 0,
+            notes: 0,
+            tasks: 3,
+            attachments: 0,
+            people: 0,
+            activity: 0,
+            captures: 4,
+        };
+        let tasks = [task(1, None), task(2, Some(9)), task(3, None)];
+        let out = counts_as_restored(counts.clone(), &[], &tasks);
+        assert_eq!((out.tasks, out.captures), (1, 6));
+        let warning = loose_tasks_warning(&tasks).expect("two have no Project");
+        assert!(warning.starts_with("2 task(s)"), "{warning}");
+        assert!(warning.contains("captures"), "{warning}");
+        assert!(!warning.contains("call the bank"), "counts only: {warning}");
+
+        // Every task on a node: nothing moves, nothing is said.
+        let out = counts_as_restored(counts, &[], &tasks[1..2]);
+        assert_eq!((out.tasks, out.captures), (3, 4));
+        assert_eq!(loose_tasks_warning(&tasks[1..2]), None);
     }
 
     #[test]

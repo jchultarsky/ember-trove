@@ -18,7 +18,7 @@ use crate::{
     person::{MembershipRecord, Person},
     search::SearchPreset,
     tag::Tag,
-    task::Task,
+    task::{Task, TaskPriority, TaskStatus},
     template::NodeTemplate,
 };
 
@@ -85,6 +85,14 @@ pub struct EntityCounts {
 /// would restore every task, as it is, with no rule. Archives of 3 to 11
 /// still restore: both are read past, and a task that repeated comes back
 /// as a one-time task, the rule migration 053 applied.
+/// Still 12 after S5c (#335), on purpose: a task always has a node now,
+/// but an archive holds the same things in the same places, only never a
+/// task without one. So the release before can restore an archive made
+/// by this one, which keeps a way back after a rollback. The other way
+/// round, a task with no node in an archive of **any** format, this one's
+/// included, restores as a capture (`capture::from_nodeless_task`,
+/// migration 054's rule): that is read from the task, never from this
+/// number.
 pub const SCHEMA_VERSION: u32 = 12;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
@@ -305,6 +313,62 @@ impl From<Note> for BackupNote {
     }
 }
 
+/// A task as an archive holds it. Until S5c (migration 054) a task could
+/// have no node; an archive made before then, of any format, may hold
+/// one, and restore lands it as a capture
+/// (`capture::from_nodeless_task`). Everything a [`Task`] has, in the same
+/// words and order, with an optional node: what is written for a task is
+/// exactly what `Task` itself would write, so the format stays 12.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupTask {
+    pub id: crate::id::TaskId,
+    #[serde(default)]
+    pub node_id: Option<crate::id::NodeId>,
+    pub owner_id: String,
+    pub title: String,
+    pub status: TaskStatus,
+    pub priority: TaskPriority,
+    pub focus_date: Option<chrono::NaiveDate>,
+    pub due_date: Option<chrono::NaiveDate>,
+    pub sort_order: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Format 9 (S5a). An older archive has none, and none is made up.
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl BackupTask {
+    /// The completion date a restore writes: the archived one, and only
+    /// for a done task. The database refuses a date on any other state
+    /// (migration 050), and one such row in a hand-edited archive must not
+    /// fail the whole restore.
+    #[must_use]
+    pub fn restorable_completed_at(&self) -> Option<DateTime<Utc>> {
+        self.completed_at
+            .filter(|_| self.status == TaskStatus::Done)
+    }
+}
+
+impl From<Task> for BackupTask {
+    fn from(t: Task) -> Self {
+        Self {
+            id: t.id,
+            node_id: Some(t.node_id),
+            owner_id: t.owner_id,
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            focus_date: t.focus_date,
+            due_date: t.due_date,
+            sort_order: t.sort_order,
+            created_at: t.created_at,
+            updated_at: t.updated_at,
+            completed_at: t.completed_at,
+        }
+    }
+}
+
 /// Top-level manifest written as `manifest.json` inside the archive.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct BackupManifest {
@@ -367,7 +431,7 @@ pub struct BackupData {
     pub edges: Vec<Edge>,
     pub tags: Vec<Tag>,
     pub notes: Vec<BackupNote>,
-    pub tasks: Vec<Task>,
+    pub tasks: Vec<BackupTask>,
     /// Attachment metadata only; raw bytes are stored as separate entries in the archive.
     pub attachments: Vec<Attachment>,
     // ── Added in schema_version 2 ─────────────────────────────────────────
@@ -571,6 +635,91 @@ mod tests {
             assert!(task.get("recurrence").is_none(), "{task}");
         }
         assert_eq!(SCHEMA_VERSION, 12);
+    }
+
+    fn live_task() -> Task {
+        serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::from_u128(1), "node_id": uuid::Uuid::from_u128(2),
+            "owner_id": "alice", "title": "call the bank", "status": "done",
+            "priority": "high", "focus_date": "2026-11-02", "due_date": "2026-11-03",
+            "sort_order": 4, "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z", "completed_at": "2026-01-02T00:00:00Z",
+        }))
+        .expect("a task")
+    }
+
+    /// S5c: the archive's task type differs from `Task` only in allowing
+    /// no node. What it writes for a live task is, key for key, what
+    /// `Task` writes, so an archive made by this release is one the
+    /// release before reads (the format is still 12).
+    #[test]
+    fn an_archived_task_is_written_exactly_as_the_task_itself() {
+        // Once with every optional field set, once with none: a field
+        // left out when empty would differ only in the second.
+        let full = live_task();
+        let bare = Task {
+            status: TaskStatus::Open,
+            focus_date: None,
+            due_date: None,
+            completed_at: None,
+            ..full.clone()
+        };
+        for task in [full, bare] {
+            let as_task = serde_json::to_string(&task).expect("json");
+            let archived = serde_json::to_string(&BackupTask::from(task.clone())).expect("json");
+            assert_eq!(archived, as_task);
+            // And what it wrote is a task again.
+            let back: Task = serde_json::from_str(&archived).expect("a task");
+            assert_eq!(back.node_id, task.node_id);
+        }
+    }
+
+    #[test]
+    fn an_archived_task_may_have_no_node_and_keeps_a_date_only_when_done() {
+        // An archive made before S5c: `node_id` null, or (hand-edited)
+        // missing. Format 8 or older: no `completed_at`, and `in_progress`.
+        let old = |node: &str| -> BackupTask {
+            serde_json::from_str(&format!(
+                r#"{{"id": "00000000-0000-0000-0000-000000000001", {node}
+                    "owner_id": "alice", "title": "old", "status": "in_progress",
+                    "priority": "medium", "focus_date": null, "due_date": null,
+                    "recurrence": null, "sort_order": 0,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z"}}"#
+            ))
+            .expect("an old archive's task")
+        };
+        for task in [old(r#""node_id": null,"#), old("")] {
+            assert_eq!(task.node_id, None);
+            assert_eq!(task.status, TaskStatus::Open);
+            assert_eq!(task.completed_at, None);
+        }
+
+        // A restore keeps a completion date on a done task only.
+        let at = Utc::now();
+        let task = BackupTask::from(live_task());
+        for (status, kept) in [
+            (TaskStatus::Done, Some(at)),
+            (TaskStatus::Open, None),
+            (TaskStatus::Waiting, None),
+            (TaskStatus::Cancelled, None),
+        ] {
+            let t = BackupTask {
+                status,
+                completed_at: Some(at),
+                ..task.clone()
+            };
+            assert_eq!(t.restorable_completed_at(), kept, "{:?}", t.status);
+        }
+        let never_dated = BackupTask {
+            completed_at: None,
+            ..task
+        };
+        assert_eq!(
+            never_dated.restorable_completed_at(),
+            None,
+            "a done task from before S5a keeps its empty date"
+        );
     }
 
     #[test]

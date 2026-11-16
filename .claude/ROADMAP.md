@@ -3,7 +3,30 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-15)
+## Current state (2026-11-16)
+
+- **v3.25.0 shipped: S5c, a task needs a Project** (#335, PRs #336 and
+  #337; ONTOLOGY §9.3, §9.1). Migration 054 turned tasks with no node
+  into captures and made `node_tasks.node_id` `NOT NULL`; backup format
+  still 12; a Lightsail snapshot was taken before the tag. PR 1 (the
+  rule): `POST /tasks` without a node and `PATCH` with `node_id: null`
+  are 422s decided from the request alone; `GET /tasks/inbox` and Data
+  health's `orphan_task` rule are gone; a restore lands a task with no
+  node as a capture (`capture::from_nodeless_task`) and the preview says
+  so; the service worker's cache is v19. PR 2 (the type follows):
+  `Task.node_id: NodeId`, `BackupTask` for what an archive holds, and
+  the arms for a task on no node removed (`require_task_editor`,
+  `reorder`, `TaskParent::NoProject`, `task_href`). My calls, approved in
+  the plan: the capture's text (the title; a due date in front; "Done:"
+  or "Cancelled:"); priority and My Day not carried; no format bump.
+  **Not in this slice:** a database rule that a task's node is a
+  Project. The API refuses it and Data health lists older data; a
+  database rule would make a restore of an older archive rewrite tasks
+  on an Area or a Reference. **Noted for the owner, not changed:** an
+  editor of a shared Project can move a task to a Project only they see.
+  Rules: "Task rules", "Captures" and "What a backup holds" in
+  `.claude/rules/api.md`; the task-fixture and served-report bullets in
+  `.claude/rules/e2e.md`.
 
 - **v3.24.0 shipped: S5b, tasks no longer repeat** (#332, PR #333;
   ONTOLOGY §9, owner ruling 4 of 2026-10-30). Migration 053 drops
@@ -319,7 +342,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
     redirect and keep `?captured=1` for installed service workers). It holds
     captures only, as a sticky-note wall with ages; task triage and the
     Inbox add-task form are gone, so no UI path makes a task without a
-    Project. Data health lists those (`OrphanTask`).
+    Project. Data health listed those (`OrphanTask`) until S5c made them
+  impossible.
   - Wall keys: j/k and arrows (`common::grid_nav`), Enter/c, e, d; ignored
     while any dialog is open (`keyboard::modal_open`).
   - Notes' compose box: "Capture it" (Muse's v3.5.0 friction item).

@@ -76,7 +76,6 @@ impl DataHealthRepo for PgDataHealthRepo {
         let [contained_reference, not_allowed] = containment(&contains)?;
         let reports = vec![
             tasks_on_non_projects(&mut tx, owner).await?,
-            orphan_tasks(&mut tx, owner).await?,
             memberships_on_non_projects(&mut tx, owner).await?,
             statuses_on_non_projects(&mut tx, owner).await?,
             labels_reading_as_another_state(&mut tx, owner).await?,
@@ -117,9 +116,9 @@ impl DataHealthRepo for PgDataHealthRepo {
 struct TaskRow {
     id: Uuid,
     title: String,
-    node_id: Option<Uuid>,
-    node_title: Option<String>,
-    node_archived: Option<bool>,
+    node_id: Uuid,
+    node_title: String,
+    node_archived: bool,
     closed: bool,
     total: i64,
 }
@@ -165,41 +164,10 @@ async fn tasks_on_non_projects(
 }
 
 fn task_violation(r: TaskRow) -> Violation {
-    let archived = r.node_archived.unwrap_or(false);
-    let related = match (r.node_id, r.node_title) {
-        (Some(id), Some(title)) => vec![Ref::node(id, title, archived)],
-        _ => vec![],
-    };
     Violation::new(
-        Ref::task(r.id, r.title, r.node_id, archived).with_closed(r.closed),
-        related,
+        Ref::task(r.id, r.title, r.node_id, r.node_archived).with_closed(r.closed),
+        vec![Ref::node(r.node_id, r.node_title, r.node_archived)],
     )
-}
-
-/// My tasks that belong to no node at all (today's Inbox), any status.
-async fn orphan_tasks(conn: &mut PgConnection, owner: &str) -> Result<RuleReport, EmberTroveError> {
-    let rows: Vec<TaskRow> = sqlx::query_as(
-        r#"
-        SELECT t.id, t.title, NULL::uuid AS node_id, NULL::text AS node_title,
-               NULL::bool AS node_archived,
-               t.status IN ('done', 'cancelled') AS closed, count(*) OVER () AS total
-        FROM node_tasks t
-        WHERE t.owner_id = $1
-          AND t.node_id IS NULL
-          AND t.deleted_at IS NULL
-        -- Newest first: a long list shows what was just captured.
-        ORDER BY t.created_at DESC, t.id
-        LIMIT $2
-        "#,
-    )
-    .bind(owner)
-    .bind(LIMIT)
-    .fetch_all(&mut *conn)
-    .await
-    .map_err(db)?;
-    let count = count_of(rows.first().map(|r| r.total));
-    let items = rows.into_iter().map(task_violation).collect();
-    Ok(RuleReport::with_count(RuleId::OrphanTask, count, items))
 }
 
 #[derive(FromRow)]
@@ -741,7 +709,6 @@ fn loops(edges: &[EdgeRow], edge_type: EdgeType, rule: RuleId) -> RuleReport {
 #[derive(FromRow)]
 struct SqlCounts {
     task_on_non_project: i64,
-    orphan_task: i64,
     membership_on_non_project: i64,
     status_on_non_project: i64,
     depends_on_area: i64,
@@ -760,8 +727,6 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         SELECT
           (SELECT count(*) FROM node_tasks t JOIN nodes n ON n.id = t.node_id
             WHERE n.node_type <> 'project' AND t.deleted_at IS NULL) AS task_on_non_project,
-          (SELECT count(*) FROM node_tasks
-            WHERE node_id IS NULL AND deleted_at IS NULL) AS orphan_task,
           (SELECT count(*) FROM node_people m JOIN nodes n ON n.id = m.node_id
             WHERE n.node_type <> 'project') AS membership_on_non_project,
           (SELECT count(*) FROM nodes
@@ -804,10 +769,6 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::TaskOnNonProject,
             count: n(sql.task_on_non_project),
-        },
-        RuleCount {
-            rule: RuleId::OrphanTask,
-            count: n(sql.orphan_task),
         },
         RuleCount {
             rule: RuleId::MembershipOnNonProject,
