@@ -5,10 +5,10 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-15)
 
-- **In progress: S5b, tasks no longer repeat** (#332; ONTOLOGY §9, owner
-  ruling 4 of 2026-10-30). One PR, one release (3.24.0), after a
-  Lightsail snapshot (migration 053 drops `node_tasks.recurrence` and
-  `recurrence_parent_id`; backup format 12). Gone: `RecurrenceRule`,
+- **v3.24.0 shipped: S5b, tasks no longer repeat** (#332, PR #333;
+  ONTOLOGY §9, owner ruling 4 of 2026-10-30). Migration 053 drops
+  `node_tasks.recurrence` and `recurrence_parent_id`; backup format 12;
+  a Lightsail snapshot was taken before the tag. Gone: `RecurrenceRule`,
   `series_effect`, `create_occurrence` / `retract_occurrence`,
   `UpdateTaskRequest.today` and `common::task::local_today`,
   `recurrence_links` in the archive, the Repeat choice and the repeat
@@ -18,7 +18,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   Repeat pick ignored, not refused; no restore-preview warning; the
   `repeat` glyph stays in the icon font until the next icon change.
   Rules: "Task rules" and "What a backup holds" in
-  `.claude/rules/api.md`.
+  `.claude/rules/api.md`. A migration's test now stands on the schema
+  before it (`apply_migrations` in `pg_tests.rs`).
 
 - **v3.23.0 shipped: S6d, the History facet** (#329, PRs #330 and #331;
   ONTOLOGY §9.2, §10). Migration 052, backup format 11; a Lightsail

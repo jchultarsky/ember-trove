@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.24.0] - 2026-11-15
+
 ### Changed
 - **Backup format 12**: an archive no longer carries a task's repeat rule
   or which task scheduled which. Older releases refuse a format-12
