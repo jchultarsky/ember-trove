@@ -248,8 +248,8 @@ async fn delete_task(
 }
 
 /// POST /tasks/:id/restore — un-delete a soft-deleted task. Backs the undo
-/// toast; authorization mirrors delete (owner, admin, or editor of the parent
-/// node).
+/// toast; authorization mirrors delete (`require_task_editor`: an editor of
+/// the task's node, or an admin).
 async fn restore_task(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,

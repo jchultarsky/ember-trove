@@ -149,7 +149,7 @@ impl Task {
     /// Project is not set aside or closed
     /// (`project_state::lets_tasks_ask`; S6a, owner decision 2026-11-13).
     /// `project` is the state of the task's Project, `None` for a task on
-    /// no Project.
+    /// a node that is not a Project (older data).
     ///
     /// The one rule behind My Day's carry-over and its Overdue zone. Both
     /// take the project's state as a required argument, so no caller can
@@ -197,7 +197,9 @@ pub struct TaskCounts {
 }
 
 /// A task enriched with its parent node's title, returned by the My Day endpoint.
-/// `node_title` is `None` for a node the caller can no longer see (#230).
+/// The feeds leave out a task whose node the caller can no longer see
+/// (2026-11-10), so `node_title` is set on every row they return; it stays
+/// an `Option` so a row without one can only read as "unavailable" (#230).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct MyDayTask {
     #[serde(flatten)]
@@ -228,9 +230,9 @@ impl MyDayTask {
 
 /// Where a feed task (`MyDayTask`) lives, for its parent chip (#230).
 ///
-/// Every task has a node (S5c). The feeds null `node_title` when that node
-/// is no longer visible to the caller (a revoked share): the chip then
-/// says so, and never shows a title the caller may not read.
+/// Every task has a node (S5c), and the feeds list only tasks whose node
+/// the caller sees, so a row normally has its title. One without is
+/// shown as unavailable, never with a title the caller may not read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskParent {
     /// A task on a node the caller can see, with its title.
@@ -400,7 +402,7 @@ pub struct UpdateTaskRequest {
     pub due_date: Option<Option<NaiveDate>>,
     /// `None` = leave unchanged · `Some(Some(id))` = move to that Project.
     /// `Some(None)` (an explicit null) asked to take the task off its
-    /// node; it is refused since S5c ([`a_move_not_a_detach`]). It stays
+    /// node; it is refused since S5c (`a_move_not_a_detach`). It stays
     /// a double option so that the refusal is ours, with its reason, and
     /// not a parser's.
     #[serde(
@@ -440,7 +442,7 @@ impl DoneToggle {
 ///
 /// Only a task that **was** carried over is stamped: one that asked for
 /// attention ([`Task::asks_for_attention`]: open, on a project that is
-/// active, or on none). A waiting task, or one of a parked or closed
+/// active, or on a node that is not a Project). A waiting task, or one of a parked or closed
 /// project, sat in the Backlog; ticking it there must not drop it into
 /// Today as done, where it never was. `project` is the state of the task's
 /// Project, required for the same reason as in [`Task::in_my_day`].
@@ -888,9 +890,10 @@ mod tests {
 
     #[test]
     fn a_task_from_before_s5a_has_no_completion_date() {
-        // An answer cached before S5a has no `completed_at`, and may say
-        // `in_progress`. (What an archive of that age holds is read as a
-        // `backup::BackupTask`; its tests are there.)
+        // `Task` still reads JSON without `completed_at`, and reads
+        // `in_progress` as open: a client may send the old word, and it
+        // is never refused. (What an archive of that age holds is read as
+        // a `backup::BackupTask`; its tests are there.)
         let mut old = one_time_task_json();
         old["status"] = serde_json::json!("in_progress");
         old.as_object_mut().expect("object").remove("completed_at");

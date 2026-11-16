@@ -53,10 +53,11 @@ pub trait TaskRepo: Send + Sync {
 
     /// Tasks the caller has marked for focus on `date` (My Day), with node titles.
     ///
-    /// `viewer` scopes the joined `node_title` (#230): it is `NULL` when the
-    /// node is no longer visible to that subject (a revoked share), so a
-    /// task never shows a node's live title to someone who lost access.
-    /// `None` = admin (sees every node); routes pass `subject_scope`.
+    /// `viewer` scopes the join to the task's node: a task on a node that
+    /// subject can no longer see (a revoked share) is left out
+    /// ([`ON_A_NODE_THEY_SEE`]), so no row shows a node's title to someone
+    /// who lost access. `None` = admin (sees every node); routes pass
+    /// `subject_scope`.
     async fn list_my_day(
         &self,
         owner_id: &str,
@@ -114,12 +115,12 @@ pub trait TaskRepo: Send + Sync {
     /// All tasks across all owners — used for full backup.
     async fn list_all(&self) -> Result<Vec<Task>, EmberTroveError>;
 
-    /// Bulk update sort_order for drag-to-reorder; only touches rows owned by `owner_id`.
+    /// Bulk update sort_order for drag-to-reorder.
     /// Sets `sort_order` on the tasks `subject` may edit, by the rule of
-    /// `PATCH /tasks/:id`: their own, or one on a node they edit (#281,
-    /// 2.5; it was owner-only, so an editor's drag on a shared node's
-    /// task was silently dropped). `None` is an admin. Any other id is
-    /// skipped without an error, as before.
+    /// `PATCH /tasks/:id`: those on a node they edit (#281, 2.5; it was
+    /// owner-only, so an editor's drag on a shared node's task was
+    /// silently dropped). Owning a task is not enough. `None` is an
+    /// admin. Any other id is skipped without an error, as before.
     async fn reorder(
         &self,
         updates: &[(TaskId, i32)],
