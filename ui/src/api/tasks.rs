@@ -1,16 +1,64 @@
 use common::{
     id::{NodeId, TaskId},
     task::{
-        CreateTaskRequest, MyDayTask, ProjectDashboardEntry, ReorderTaskEntry, ReorderTasksRequest,
-        Task, UpdateTaskRequest,
+        CreateTaskRequest, ListedTask, MyDayTask, ProjectDashboardEntry, ReorderTaskEntry,
+        ReorderTasksRequest, Task, UpdateTaskRequest,
     },
+    task_dependency::{AddDependencyRequest, TaskDependencies, TaskLink},
 };
 
-use super::{delete_empty, get_json, patch_json, post_json, put_empty};
+use super::{delete_empty, delete_json, get_json, patch_json, post_json, put_empty};
 use crate::error::UiError;
 
-pub async fn fetch_tasks(node_id: NodeId) -> Result<Vec<Task>, UiError> {
+/// A node's tasks, each with how many tasks it still waits for (S5d).
+pub async fn fetch_tasks(node_id: NodeId) -> Result<Vec<ListedTask>, UiError> {
     get_json(&format!("/nodes/{node_id}/tasks")).await
+}
+
+// ── Dependencies (S5d) ──────────────────────────────────────────────────
+
+/// The tasks `task_id` waits for, the tasks that wait for it, and whether
+/// the reader may change them.
+pub async fn fetch_task_dependencies(task_id: TaskId) -> Result<TaskDependencies, UiError> {
+    get_json(&format!("/tasks/{task_id}/dependencies")).await
+}
+
+/// Make `task_id` wait for `depends_on`. Answers the fresh lists.
+pub async fn add_task_dependency(
+    task_id: TaskId,
+    depends_on: TaskId,
+) -> Result<TaskDependencies, UiError> {
+    post_json(
+        &format!("/tasks/{task_id}/dependencies"),
+        &AddDependencyRequest { depends_on },
+    )
+    .await
+}
+
+/// Stop `task_id` waiting for `other`. Answers the fresh lists.
+pub async fn remove_task_dependency(
+    task_id: TaskId,
+    other: TaskId,
+) -> Result<TaskDependencies, UiError> {
+    delete_json(&format!("/tasks/{task_id}/dependencies/{other}")).await
+}
+
+/// Remove every prerequisite of `task_id` that the reader isn't shown (one
+/// in the trash, or on a node they can't view). Answers the fresh lists.
+pub async fn remove_task_dependencies_not_shown(
+    task_id: TaskId,
+) -> Result<TaskDependencies, UiError> {
+    delete_json(&format!("/tasks/{task_id}/dependencies/not-shown")).await
+}
+
+/// What the dependency picker offers for `q` (nothing typed: the nearest
+/// tasks, the same Project's first).
+pub async fn dependency_candidates(task_id: TaskId, q: &str) -> Result<Vec<TaskLink>, UiError> {
+    let encoded: String = js_sys::encode_uri_component(q.trim()).into();
+    get_json(&format!(
+        "/tasks/{task_id}/dependencies/candidates?q={encoded}"
+    ))
+    .await
 }
 
 /// Backlog feed for the My Day Kanban — every open task across every node,

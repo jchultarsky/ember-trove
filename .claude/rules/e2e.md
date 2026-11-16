@@ -159,6 +159,14 @@ CI job is too slow a feedback loop for selector work.
   (`serveTasksOutsideAProject` in data_health.spec.ts builds it from a
   real Project's tasks on every load), so the fixes still hit the real
   API.
+- **The task editor has a second combobox** (2026-11-16, S5d): the
+  dependency picker. Address it by name,
+  `getByRole('combobox', { name: 'Wait for a task…' })`, and wait for
+  `getByRole('option', { selected: true })` before Enter: with nothing
+  typed no option is highlighted, on purpose. A dependency applies at
+  once, so a test that adds one and presses Cancel still has it.
+  `task_dependencies.spec.ts` wipes both identities' Projects by title
+  prefix before and after each test.
 - **Service workers can't be exercised here** (2026-10-25, #129). The e2e
   origin (`http://host.docker.internal`) isn't a secure context. Mapping
   `localhost` to it (`--host-resolver-rules`) gives a secure context, but

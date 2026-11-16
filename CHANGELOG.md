@@ -13,6 +13,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - A task may depend on any task its person can see, in any Project
     (owner decision, 2026-11-16). A prerequisite holds a task back until
     it is Done; a Cancelled one never lets it go.
+  - **In the app:** a task's editor lists what it waits for ("Blocked
+    by"), with a picker to add a task and a button to remove one, and
+    what waits for it ("Blocks"). A change there applies at once. A task
+    that still waits for another shows "Blocked" on the node page and in
+    My Day. Someone who may only view a task sees what blocks it and no
+    controls.
   - **Nothing is enforced or reordered.** A blocked task keeps its place
     in My Day and every list and can be completed.
   - `GET /api/tasks/{id}/dependencies` answers `blocked_by` (the tasks it

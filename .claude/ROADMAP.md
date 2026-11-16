@@ -15,7 +15,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   isn't shown), five routes on `task_router`, `blocked_by` on the
   node's task list and the three feeds, backup format 13. PR 2: the
   editor's "Blocked by" and "Blocks" lists, the picker, the "Blocked"
-  chip. **Not in this slice:** blockers through a chain and node-level
+  chip (`task_dependencies.rs`; "Task dependencies" in
+  `.claude/rules/leptos.md`). **Not in this slice:** blockers through a chain and node-level
   blockers (S7b); a chip on the dashboard cards; a place for read-only
   readers to open the list; a count of dependencies in a Project's
   delete confirmation (it would have to be worked out per reader); a
