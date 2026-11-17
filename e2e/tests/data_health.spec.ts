@@ -420,7 +420,8 @@ test('edge items convert, convert in bulk, and break a loop one link at a time',
     .getByRole('button', { name: 'Make it a reference link' })
     .click();
   await expect.poll(() => converts.length).toBe(1);
-  expect(converts[0]).toEqual({ id: linkA, body: { edge_type: 'references' } });
+  // A plain convert: the link keeps its direction (S7a added `reverse`).
+  expect(converts[0]).toEqual({ id: linkA, body: { edge_type: 'references', reverse: false } });
 
   // All of them, after one confirmation.
   await refs.getByTestId('convert-all').getByRole('button', { name: 'Convert all 2' }).click();

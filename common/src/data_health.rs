@@ -274,8 +274,12 @@ pub struct Violation {
 pub struct FiledRef {
     /// The kind of the node the link runs from.
     pub kind: crate::node::NodeType,
-    /// Whether it already has a home (any home, seen or not: a second
-    /// one would be refused).
+    /// Whether it already has a home, as far as the reader may be told
+    /// (`GET …/home`'s rule): an editor of the node is told of any home,
+    /// one they can't see included; anyone else only of a home they can
+    /// see. A fix that makes a home is applied with `POST /edges`, which
+    /// refuses a second home and a loop, so a premise that has gone
+    /// stale is refused, never applied over the home the node has.
     pub has_home: bool,
 }
 

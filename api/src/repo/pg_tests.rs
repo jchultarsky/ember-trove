@@ -12388,9 +12388,11 @@ async fn the_sql_for_a_live_node_is_the_shared_rule(pool: PgPool) {
 }
 
 /// `GET /nodes/{id}/edges` (S7a): each end's kind and standing, and
-/// whether this reader may remove the link, which is exactly whether
-/// `DELETE /edges/{id}` would let them (`EdgeType::removable_by`). Links
-/// with an end the reader can't see are still left out.
+/// whether this reader may remove the link: `EdgeType::removable_by`,
+/// the rule `DELETE /edges/{id}` applies, for whether they hold an
+/// editor's grant on each end. (The route's use of that rule is the
+/// route tests'; this holds the SQL to it.) Links with an end the
+/// reader can't see are still left out.
 #[sqlx::test(migrations = "../migrations")]
 async fn a_nodes_links_say_what_each_end_is_and_who_may_remove_them(pool: PgPool) {
     use common::edge::EdgeType;
@@ -12635,8 +12637,8 @@ async fn the_delete_warning_counts_only_live_links_the_caller_can_see(pool: PgPo
 }
 
 /// S7a (§6.5): a `derived_from` link whose origin is an Area is listed
-/// for its node's owner, with what its fixes need; and its fix for a
-/// Reference turns it into "the Area references it" in one step.
+/// for the owner of either end, with what its fixes need; and its fix
+/// for a Reference turns it into "the Area references it" in one step.
 #[sqlx::test(migrations = "../migrations")]
 async fn data_health_lists_nodes_filed_under_an_area_with_derived_from(pool: PgPool) {
     use common::data_health::{FilingFix, RuleId};
@@ -12702,6 +12704,79 @@ async fn data_health_lists_nodes_filed_under_an_area_with_derived_from(pool: PgP
         .find(|c| c.rule == RuleId::DerivedFromArea)
         .expect("counted");
     assert_eq!(derived.count, 5);
+
+    // The Area's owner is listed a node filed under it that is someone
+    // else's. Whether that node has a home is said to them only as
+    // `GET …/home` would say it: a home they can't see reads as none.
+    let carols = insert_raw_node(&pool, "carol", "article", "carol's article", "").await;
+    own(&pool, common::id::NodeId(carols), "carol").await;
+    share(&pool, carols, "alice").await;
+    // Carol can see the Area too: the report holds only links whose two
+    // ends its reader can see.
+    share(&pool, area, "carol").await;
+    raw_edge(&pool, carols, area, "derived_from").await;
+    let has_home = |report: &std::collections::HashMap<RuleId, common::data_health::RuleReport>| {
+        report[&RuleId::DerivedFromArea]
+            .items
+            .iter()
+            .find(|v| v.subject.id == carols)
+            .and_then(|v| v.filed.as_ref())
+            .map(|f| f.has_home)
+    };
+    assert_eq!(has_home(&health(&pool, "alice").await), Some(false));
+    assert_eq!(has_home(&health(&pool, "carol").await), Some(false));
+    let carols_area = insert_raw_node(&pool, "carol", "area", "carol's own area", "").await;
+    raw_edge(&pool, carols_area, carols, "contains").await;
+    assert_eq!(
+        has_home(&health(&pool, "alice").await),
+        Some(false),
+        "a home alice can't see is not hers to be told of"
+    );
+    assert_eq!(
+        has_home(&health(&pool, "carol").await),
+        Some(true),
+        "the node's editor is told: a second home would be refused"
+    );
+    // Once she can see the home, it is no secret.
+    share(&pool, carols_area, "alice").await;
+    assert_eq!(has_home(&health(&pool, "alice").await), Some(true));
+    // The other half of the rule: a node alice edits, homed where she
+    // can't see. She is told it has a home, as `GET …/home` tells her:
+    // making the Area its home would be refused as a second one.
+    let tucked = insert_raw_node(&pool, "alice", "project", "tucked away", "").await;
+    own(&pool, common::id::NodeId(tucked), "alice").await;
+    raw_edge(&pool, tucked, area, "derived_from").await;
+    raw_edge(&pool, bobs_area, tucked, "contains").await;
+    let alice = health(&pool, "alice").await;
+    let rule = &alice[&RuleId::DerivedFromArea];
+    assert_eq!(rule.count, 5, "carol's is listed to the Area's owner too");
+    let of_tucked = rule
+        .items
+        .iter()
+        .find(|v| v.subject.id == tucked)
+        .and_then(|v| v.filed.as_ref())
+        .expect("listed");
+    assert!(of_tucked.has_home, "its editor is told of a hidden home");
+    assert_eq!(of_tucked.fix(), FilingFix::Remove);
+    let hers = rule
+        .items
+        .iter()
+        .find(|v| v.subject.id == carols)
+        .expect("listed");
+    // And no fix is offered her on it: the link is its source's.
+    assert!(!hers.links[0].removable());
+    for fix in [
+        FilingFix::MakeHome,
+        FilingFix::LinkAsSource,
+        FilingFix::Remove,
+    ] {
+        assert!(!hers.links[0].filing_fix_allowed(fix), "{fix:?}");
+    }
+    sqlx::query("DELETE FROM nodes WHERE id = ANY($1)")
+        .bind(vec![carols, carols_area, tucked])
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // "Link as a source": converted and turned round in one step.
     PgEdgeRepo::new(pool.clone())

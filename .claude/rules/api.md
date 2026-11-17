@@ -854,13 +854,17 @@ cargo check && cargo clippy -- -D warnings
   `filed: FiledRef {kind, has_home}`, and `FiledRef::fix()` is the fix
   that fits (`MakeHome`, `LinkAsSource`, `Remove`).
   `LinkRef::filing_fix_allowed` offers one only where its calls pass.
-  `has_home` counts a home the reader can't see too: only a node's own
-  stakeholders are listed it, as `GET …/home` tells a node's editors.
+  `has_home` is said as `GET …/home` would say it: to an editor of the
+  filed node any home counts, a hidden one included; to anyone else
+  (the Area's owner, who is listed the item too) only a home they can
+  see. `MakeHome` is applied with `POST /edges`, never the home route:
+  that one replaces a home, and a stale "no home" must be refused.
 - **`POST /edges/{id}/convert` with `reverse`** turns the link round in
   the transaction it already has (`EdgeRepo::convert(.., swap)`).
   `convert_ends(from, to, reverse, source, target)`: step 3 then needs
   edit rights on the old target and view rights on the old source; a
-  `related_to` has no direction to turn.
+  `related_to` has no direction to turn. It is general: any link the
+  caller could delete and then make the other way round.
 
 ## Security rules from the 2026-11-10 audit
 

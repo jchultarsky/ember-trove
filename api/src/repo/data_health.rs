@@ -83,7 +83,7 @@ impl DataHealthRepo for PgDataHealthRepo {
             contained_reference,
             not_allowed,
             depends_on_areas(&depends_on)?,
-            derived_from_areas(&mut tx, &derived_from).await?,
+            derived_from_areas(&mut tx, owner, &derived_from).await?,
             loops(&contains, EdgeType::Contains, RuleId::ContainsCycle),
             loops(&depends_on, EdgeType::DependsOn, RuleId::DependsOnCycle),
             loops(
@@ -663,12 +663,16 @@ fn depends_on_areas(depends_on: &[EdgeRow]) -> Result<RuleReport, EmberTroveErro
 /// filing made by hand before a node had a home. Each item says what its
 /// fixes need: the filed node's kind, and whether it has a home.
 ///
-/// "Has a home" counts any home, one the reader can't see included: a
-/// second one would be refused, so the fix must not offer it. Only the
-/// node's own stakeholders are told (`has_stake`), as `GET …/home` tells
-/// a node's editors.
+/// "Has a home" is said only to someone `GET …/home` would tell: an
+/// editor of the node (who is told of a home they can't see, because a
+/// second would be refused and the fix must not offer it), or someone
+/// who can see the home itself. The item is also listed to the Area's
+/// owner, who may only view the filed node: to them a home they can't
+/// see reads as none (§14; owner decision on hidden homes, #228). No
+/// fix is theirs to apply, so nothing is offered on a wrong premise.
 async fn derived_from_areas(
     conn: &mut PgConnection,
+    owner: &str,
     derived_from: &[EdgeRow],
 ) -> Result<RuleReport, EmberTroveError> {
     let mut filed = Vec::new();
@@ -681,11 +685,16 @@ async fn derived_from_areas(
     let homed: std::collections::HashSet<Uuid> = if sources.is_empty() {
         std::collections::HashSet::new()
     } else {
-        sqlx::query_scalar(
-            "SELECT DISTINCT target_id FROM edges \
-             WHERE edge_type = 'contains' AND target_id = ANY($1)",
-        )
+        sqlx::query_scalar(&format!(
+            "SELECT DISTINCT e.target_id FROM edges e \
+             JOIN nodes p ON p.id = e.source_id \
+             WHERE e.edge_type = 'contains' AND e.target_id = ANY($1) \
+               AND ({edits_child} OR {sees_home})",
+            edits_child = editable_by("e.target_id", 2),
+            sees_home = visible_to("p", 2),
+        ))
         .bind(&sources)
+        .bind(owner)
         .fetch_all(&mut *conn)
         .await
         .map_err(db)?

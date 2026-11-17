@@ -38,6 +38,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - `may_remove` is read for the caller's own grants (an admin always):
   the page stops offering a remove that would be refused. It adds no
   right.
+- Data health's "Derived from an Area" says whether the filed node has
+  a home only as the node's own page would: an editor of the node is
+  told of any home, anyone else only of one they can see.
 
 ## [3.26.1] - 2026-11-16
 

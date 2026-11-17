@@ -218,8 +218,10 @@ pub struct SetHomeRequest {
 pub struct ConvertEdgeRequest {
     pub edge_type: EdgeType,
     /// Turn the link round as well: the new link runs from the old
-    /// target to the old source (S7a). For a "derived from an Area" link
-    /// on a Reference, which becomes "the Area references it".
+    /// target to the old source (S7a). Made for a "derived from an Area"
+    /// link on a Reference, which becomes "the Area references it"; it
+    /// works for any link the caller could delete and then make the
+    /// other way round, and needs exactly those rights (`convert_ends`).
     #[serde(default)]
     pub reverse: bool,
 }
@@ -593,6 +595,24 @@ mod convert_tests {
         assert_eq!(
             convert_ends(&WikiLink, &References, true, EDIT, EDIT),
             Err(ConvertRefusal::NotConvertible)
+        );
+        // `reverse` is general, not only for a link into an Area. A
+        // child's editor may leave its home (a home never traps a
+        // child), and may write a link on their own node: "the child
+        // references what was its home" is that delete and that create.
+        assert_eq!(
+            convert_ends(&Contains, &References, true, VIEW, EDIT),
+            Ok(true)
+        );
+        // Without `reverse` the new link would be written on the home.
+        assert_eq!(
+            convert_ends(&Contains, &References, false, VIEW, EDIT),
+            Err(ConvertRefusal::Forbidden)
+        );
+        // Someone who can't see the old source can't name it in a link.
+        assert_eq!(
+            convert_ends(&Contains, &References, true, EndRights::default(), EDIT),
+            Err(ConvertRefusal::Forbidden)
         );
         // An older client sends no flag: nothing is turned.
         let req: ConvertEdgeRequest =
