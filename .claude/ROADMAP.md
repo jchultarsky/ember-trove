@@ -5,6 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-17)
 
+- **v3.27.1 shipped: "Add Edge" is offered only to someone who may add
+  a link** (PR #345; owner decision of 2026-11-17, after the review of
+  S7a). Connections showed the add form to every reader, and a viewer
+  got the server's refusal. It is offered to the node's owner, an admin,
+  or a shared editor: the page reads the reader's own grant when the
+  section is opened (`may_add`, `common::permission::holds_editor`);
+  unknown or unreadable means not offered. The role comparison is
+  `PermissionRole::satisfies` in `common`, used by the API's per-node
+  check too. No migration, no route or payload change. Rule: the "Add
+  Edge" bullet under "A node's links are read once for its page" in
+  `.claude/rules/leptos.md`.
+
 - **v3.27.0 shipped: S7a, reverse indexes** (#342, PRs #343 and #344;
   ONTOLOGY §6.3, §6.5, §14). Owner decisions (2026-11-16): the hand-made
   "derived from an Area" links are filing and are fixed in Data health;
