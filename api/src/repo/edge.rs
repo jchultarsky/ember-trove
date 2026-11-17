@@ -51,6 +51,20 @@ pub trait EdgeRepo: Send + Sync {
         node_id: NodeId,
         subject: Option<&str>,
     ) -> Result<Vec<EdgeWithTitles>, EmberTroveError>;
+    /// What `node`'s unmet dependencies wait for in turn (S7b, §6.4):
+    /// the chain beyond its own "Depends on" list.
+    ///
+    /// SECURITY: every link of the walk is one `subject` (`None` =
+    /// admin) would find in that hop's own
+    /// `list_for_node_with_titles`: both ends visible to them. The walk
+    /// stops at a node they can't see and shows nothing beyond it, so
+    /// "stops here" and "nothing further" are one answer (§14). The
+    /// route checks access to `node` alone.
+    async fn blockers(
+        &self,
+        node: NodeId,
+        subject: Option<&str>,
+    ) -> Result<common::blockers::NodeBlockers, EmberTroveError>;
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError>;
     /// Edges visible to `subject`: both endpoints owned by them (`Some(sub)`),
     /// or all edges for an admin (`None`). SECURITY: prevents leaking the node
@@ -604,6 +618,104 @@ impl EdgeRepo for PgEdgeRepo {
         rows.into_iter()
             .map(EdgeWithTitlesRow::into_edge_with_titles)
             .collect()
+    }
+
+    async fn blockers(
+        &self,
+        node: NodeId,
+        subject: Option<&str>,
+    ) -> Result<common::blockers::NodeBlockers, EmberTroveError> {
+        use common::blockers::{CHAIN_LIMIT, NodeHop, node_blockers};
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            /// The link's place in the order the walk found it.
+            n: i64,
+            source_id: Uuid,
+            target_id: Uuid,
+            title: String,
+            node_type: String,
+            status: String,
+            project_state: Option<String>,
+        }
+        // The walk's row is the link alone, `(source, target)`, and the
+        // two halves are joined with UNION: a loop (older data can hold
+        // one) then ends, because there are only so many links. A depth
+        // or a path in the row would make every pass a new row and never
+        // end.
+        //
+        // A link is taken when its target is visible to the reader and
+        // not met. The walk starts only from a node that still waits (a
+        // closed, an archived or a finished one waits for nothing), and
+        // goes on only through a node that can still move (`passes_on`).
+        //
+        // The cut is made on the walk itself, before the titles are
+        // joined: the walk hands out its links in the order it finds
+        // them (`n`), so what is kept hangs together from the start,
+        // where a cut made after the join (which may reorder) could drop
+        // a link from the middle and lose everything behind it. One link
+        // more than the limit is read to know there is more, and then
+        // left out: it is the last one found, so nothing kept hangs on
+        // it.
+        let rows = sqlx::query_as::<_, Row>(&format!(
+            r#"
+            WITH RECURSIVE walk(source_id, target_id) AS (
+                SELECT e.source_id, e.target_id
+                FROM edges e
+                JOIN nodes s ON s.id = e.source_id
+                JOIN nodes t ON t.id = e.target_id
+                WHERE e.source_id = $1
+                  AND e.edge_type::text = 'depends_on'
+                  AND {s_visible} AND {s_waits}
+                  AND {t_visible} AND NOT {t_met}
+              UNION
+                SELECT e.source_id, e.target_id
+                FROM walk w
+                JOIN nodes via ON via.id = w.target_id
+                JOIN edges e ON e.source_id = w.target_id
+                JOIN nodes t ON t.id = e.target_id
+                WHERE e.edge_type::text = 'depends_on'
+                  AND {via_goes_on}
+                  AND {t_visible} AND NOT {t_met}
+            ),
+            cut AS (
+                SELECT row_number() OVER () AS n, source_id, target_id
+                FROM walk
+                LIMIT $3
+            )
+            SELECT c.n, c.source_id, c.target_id, t.title,
+                   t.node_type::text AS node_type, t.status::text AS status,
+                   t.project_state
+            FROM cut c
+            JOIN nodes t ON t.id = c.target_id
+            "#,
+            s_visible = super::visible_to("s", 2),
+            s_waits = super::node::still_waits("s"),
+            t_visible = super::visible_to("t", 2),
+            t_met = super::node::satisfies_dependency("t"),
+            via_goes_on = super::node::passes_on("via"),
+        ))
+        .bind(node.0)
+        .bind(subject)
+        .bind(i64::try_from(CHAIN_LIMIT + 1).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("read blockers failed: {e}")))?;
+
+        let limit = i64::try_from(CHAIN_LIMIT).unwrap_or(i64::MAX);
+        let truncated = rows.iter().any(|r| r.n > limit);
+        let hops = rows
+            .into_iter()
+            .filter(|r| r.n <= limit)
+            .map(|r| {
+                Ok(NodeHop {
+                    from: NodeId(r.source_id),
+                    to: NodeId(r.target_id),
+                    title: r.title,
+                    node: edge_end(&r.node_type, &r.status, r.project_state.as_deref())?,
+                })
+            })
+            .collect::<Result<Vec<_>, EmberTroveError>>()?;
+        Ok(node_blockers(node, hops, truncated))
     }
 
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {

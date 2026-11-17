@@ -363,6 +363,33 @@ are `references` or `related_to`.
   An Area is a standard to maintain and never completes (§3.1), so it is
   not a valid `depends_on` target. Task-to-task dependencies mirror this definition (§9.3).
 
+  The table's Task row is §9.3's: a Task waits for a Task. There is no
+  link from a node to a Task.
+- **How the table is read.** A Project is judged by its state alone:
+  complete and archived is met; active and archived is not. An archived
+  Article is not Published (the lifecycle is one value: draft, published
+  or archived), so it is not met. An old link to an Area is never met,
+  and is listed in Data health.
+- **A node is blocked** while it still waits and one of its own
+  dependencies is not met, among those its reader can see. A node still
+  waits while it is in use (not archived, and not a complete or
+  cancelled Project: the meaning "active" has in §6.3) and is not itself
+  what the table above asks for: an active or parked Project, a draft
+  Article, an Area. A complete Project, a Published Article and a
+  Reference are finished or available, so nothing of theirs waits to
+  proceed, whatever they still link to; a node out of use will not
+  proceed. Because only dependencies the reader can see count, a node
+  can read as blocked for one person and not for another (§14).
+- **The chain.** What a node's unmet dependencies wait for in turn is
+  shown with them ("also waits for …, through …"). The chain goes on
+  only through a dependency that itself still waits: not through one
+  that is met (what a finished thing waited for no longer matters), nor
+  a cancelled or archived one (it will not proceed, so its own
+  prerequisites change nothing), nor an Area (not a valid target at
+  all). Such a dependency
+  never lets its dependents go: its row says what it is, and its link is
+  the person's to remove.
+
 ### 6.5 `derived_from` — provenance
 
 Directional: "A came from B" — adapted, copied, split, or spun off.
@@ -602,6 +629,13 @@ Project (or a sub-Project) — the mirror image of the Project definition.
   - Moving a Task keeps its dependencies. Closing a Project cancels its
     Tasks (§4.1), so what waited for them stays blocked, and says by
     what.
+  - A Task shows what its prerequisites wait for in turn, as a node does
+    (§6.4): through Tasks its reader is shown that are still to do. A
+    Done prerequisite passes nothing on; nor does a Cancelled one, which
+    holds its dependents back for good but will not proceed. The
+    "Blocked" mark and its count stay about the Task's own
+    prerequisites, and the count of ones not shown stays about its own
+    links.
 - **No recurring Tasks.** A Task is a one-time action; recurrence implies
   scheduling beyond the task itself. The repeat behaviour shipped before
   this ontology is removed, and existing repeating Tasks become one-time
@@ -768,6 +802,11 @@ model's semantics never widen what anyone can see or change.
   transitive blockers, and deletion or archive warnings list only nodes the
   viewer may read. They never show a count of hidden items: a warning may
   understate rather than reveal that a hidden node exists.
+- **A chain of blockers stops at a node, or a Task, its reader cannot
+  see**, and shows nothing beyond it, even something they could read:
+  "stops here" and "nothing further" are one answer. Every link in a
+  chain is one its reader could open on that node's own page. Where a
+  chain is cut for length, "more" speaks only of links they can see.
 - **Mentions** (§7.3). The `@` picker lists only the author's own People.
   Anyone other than the Person's owner sees a mention as the name at most —
   never contact details, and never a way into the owner's registry. A
@@ -843,4 +882,7 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-16 | A blocked Task stays where it is in every list and can be completed (unlike Waiting, which leaves Today and Overdue). A prerequisite blocks until it is Done, a Cancelled one for good. One in the trash, or on a Project the reader can't see, neither shows nor counts as blocking. The loop check looks at every link, hidden and trashed ones included, so a refusal can tell someone that a chain exists, never through what. Because such a link still decides those refusals, whoever may edit a Task is told how many of its prerequisites they are not shown, unnamed, and may remove them (the hidden-home rule of 2026-10-31, applied after the security review of this slice; the plan had said such a link could not be removed). Adding takes edit rights on the Task that waits and view rights on the other; removing takes edit rights on the Task that waits. A Task waits for at most 50 Tasks, every link counted. The picker offers Tasks still to do on Projects the person owns or was given, never widened for an admin, without archived Projects. A backup holds the links (format 13); a restore leaves out a link to a Task it doesn't bring back, and any loop | Developer, building S5d (#338); in the plan the owner approved |
 | 2026-11-16 | A Task's webhook events (`task.created`, `task.updated`, `task.deleted`) go to the webhooks of the Task's author only while that person can still see the Task's node: they own it or hold a grant on it. They used to go there whatever their rights now. An admin's webhooks follow the same rule, without the admin role: a webhook is sent for someone who is not making a request. Supersedes, for who hears of it, the line of 2026-11-14 on a cascade's `task.updated` | Owner, in the developer session (after the security review of S5d, #338) |
 | 2026-11-16 | Reverse indexes (S7a). The old hand-made `derived_from` links that point at an Area were filing, not provenance: they are fixed in Data health, one by one or all at once, and nothing changes until a fix is chosen. "Linked Here" folds into the node's Connections as "Mentioned in"; the tool that finds unlinked mentions stays a section of its own | Owner, in the developer session (S7a planning, #342) |
+| 2026-11-17 | Blockers (S7b). A blocked Project says so **on its page and on its dashboard card** (and its Focus card), not in the node list. The card also says **how many of the Project's open Tasks are blocked** by other Tasks. A link whose target the source's owner cannot see (a shared editor's link to a node of their own) is never shown to that owner and still decides loop refusals: it gets **its own release right after this slice** (a count and a remove for the node's editors, as Tasks have); this slice stays display-only | Owner, in the developer session (S7b planning, #346) |
+| 2026-11-17 | Until that release, such a link does one thing more than the owner was told when deciding: whoever **can** see both ends (the editor who made it, an admin, anyone both nodes are shared with) reads the owner's node as blocked, on its page, on its Focus card and in the chain of what depends on it, while the owner sees nothing and has no list to remove it from. Nothing hidden is shown to anyone. No node is shared in production today | Developer, from the independent review of #347; for the owner to weigh with the release that follows |
+| 2026-11-17 | When a node is blocked and what a chain shows (§6.4, §9.3, §14): blocked only while it still waits (in use, and not itself finished or available: a Published Article or a Reference with an unmet dependency does not say "Blocked"), by its own unmet dependencies that the reader can see; the chain goes on only through a dependency that itself still waits, and stops at one the reader cannot see. A Project is judged by its state alone; an archived Article is not Published; an old link to an Area is never met. "Depends on" lists what is not met first and says "Met" or the target's state on every row. A chain is cut at 100 links, the node's own unmet dependencies among them, and says when there is more. Nothing is stored: no migration, nothing new in a backup | Developer, building S7b (#346); in the plan the owner approved. For the owner to confirm: the archived Article, and the cut at 100 |
 | 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |

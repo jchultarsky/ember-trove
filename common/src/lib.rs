@@ -34,6 +34,7 @@ pub mod admin;
 pub mod attachment;
 pub mod auth;
 pub mod backup;
+pub mod blockers;
 pub mod brief;
 pub mod capture;
 pub mod cascade;

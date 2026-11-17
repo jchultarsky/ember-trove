@@ -325,11 +325,19 @@ async fn dependencies_for(
     } else {
         0
     };
+    // What the prerequisites wait for in turn (S7b), read as the same
+    // reader: a viewer of the task sees the chain too, through the tasks
+    // they are shown. It is no part of `not_shown`: those are this
+    // task's own links, and an editor of this task has no say over its
+    // prerequisites' links.
+    let (also, also_truncated) = state.task_dependencies.chain(task.id, viewer).await?;
     Ok(TaskDependencies {
         blocked_by,
         blocks,
         not_shown,
         may_edit,
+        also,
+        also_truncated,
     })
 }
 
@@ -644,6 +652,23 @@ pub(crate) async fn dashboard_entries(
     let mut brief_map: std::collections::HashMap<NodeId, common::brief::ProjectBrief> =
         brief_result?.into_iter().map(|b| (b.node_id, b)).collect();
 
+    // Blockers (S7b): each project's own unmet dependencies, and how
+    // many of its tasks say "Blocked". SECURITY: both counted as the
+    // reader (a Focus card may be someone else's Project): a dependency
+    // or a prerequisite they can't see is not counted. Read after the
+    // five above, not beside them: the pool is small, and the dashboard
+    // and Focus load together.
+    let viewer = subject_scope(claims);
+    let (blocked_result, blocked_tasks_result) = tokio::join!(
+        state.nodes.blocked_by_for_nodes(&node_ids, viewer),
+        state
+            .task_dependencies
+            .blocked_tasks_for_nodes(&node_ids, viewer),
+    );
+    let blocked_map: std::collections::HashMap<NodeId, u32> = blocked_result?.into_iter().collect();
+    let blocked_tasks_map: std::collections::HashMap<NodeId, u32> =
+        blocked_tasks_result?.into_iter().collect();
+
     let empty = TaskCounts {
         open: 0,
         waiting: 0,
@@ -682,6 +707,8 @@ pub(crate) async fn dashboard_entries(
                 area_id,
                 area_title,
                 brief: brief_map.remove(&n.id),
+                blocked_by: blocked_map.get(&n.id).copied().unwrap_or(0),
+                blocked_tasks: blocked_tasks_map.get(&n.id).copied().unwrap_or(0),
             }
         })
         .collect())

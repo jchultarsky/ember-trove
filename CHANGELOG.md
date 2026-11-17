@@ -6,6 +6,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Blockers** (S7b of the ontology programme, #346; ONTOLOGY §6.4,
+  §9.3, §14): what a node or a task waits for, said and never enforced.
+  The API half; the page follows in the same release.
+  - `GET /api/nodes/{id}` answers `blocked_by`: how many of the node's
+    own `depends_on` links lead to a node that is not met, among those
+    the caller can see. A dependency is met by a complete Project, a
+    Published Article or a Reference that is not archived. A node says
+    "Blocked" only while it still waits itself: one that is finished or
+    available (a Published Article, a Reference) does not.
+  - New `GET /api/nodes/{id}/blockers`: what those dependencies wait
+    for in turn (`also`), each with the node's own dependency it comes
+    through, and `truncated` when there are more than 100 links to read
+    (the node's own unmet dependencies count among the 100).
+  - `GET /api/dashboard/projects` and `GET /api/focus` answer, per
+    card, `blocked_by` and `blocked_tasks`: how many of the Project's
+    tasks still to do wait for a task that is not done.
+  - `GET /api/tasks/{id}/dependencies` answers `also`: what the task's
+    prerequisites wait for in turn, and `also_truncated` past 100 links.
+  - No migration, and nothing new in a backup.
+
+### Security
+- **A chain of blockers shows only what its reader could open hop by
+  hop.** It goes only through links whose two ends they can view, stops
+  at a node or a task they can't see and shows nothing beyond it, so it
+  can't tell someone that a hidden node exists. Every count is made for
+  the caller: a dependency on a node they can't see is not counted.
+
 ## [3.27.1] - 2026-11-17
 
 ### Changed

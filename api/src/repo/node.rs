@@ -135,6 +135,22 @@ pub trait NodeRepo: Send + Sync {
         subject: Option<&str>,
     ) -> Result<Vec<(NodeId, NodeId, String)>, EmberTroveError>;
 
+    /// For each of `node_ids` that has any: how many of its own
+    /// `depends_on` links lead to a node that is not met (S7b, §6.4).
+    /// `common::blockers::direct` in SQL, for the node page's chip and
+    /// the dashboard's.
+    ///
+    /// SECURITY: only links whose two ends `subject` may read are
+    /// counted (§14; `None` is the admin scope): the count is the number
+    /// of rows the same reader finds unmet in the node's "Depends on"
+    /// list, never more. A node they can't view gets no count, whoever
+    /// asks: the route checks that too, and this doesn't rely on it.
+    async fn blocked_by_for_nodes(
+        &self,
+        node_ids: &[NodeId],
+        subject: Option<&str>,
+    ) -> Result<Vec<(NodeId, u32)>, EmberTroveError>;
+
     /// Toggle the `pinned` flag on a single node.  Used by the
     /// dashboard pin/unpin button (v2.9.0).
     async fn set_pinned(&self, id: NodeId, pinned: bool) -> Result<Node, EmberTroveError>;
@@ -338,6 +354,44 @@ pub(crate) fn live(alias: &str) -> String {
         quoted(statuses),
         quoted(states),
     )
+}
+
+/// SQL for "the node aliased `alias` is one of `triples`": its kind, its
+/// status and its Project state (`''` for none) as one row value. An
+/// `IN` over whole triples, never `NOT (state IN (…))`: that is NULL for
+/// a node with no state and would silently drop it. The words are the
+/// enums' wire strings, never text from a request.
+fn one_of(alias: &str, triples: Vec<common::blockers::Triple>) -> String {
+    let list = triples
+        .iter()
+        .map(|(kind, status, state)| format!("('{kind}', '{status}', '{state}')"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "(({alias}.node_type::text, {alias}.status::text, COALESCE({alias}.project_state, '')) \
+          IN ({list}))"
+    )
+}
+
+/// SQL for "a dependency on the node aliased `alias` is met"
+/// (`common::blockers::satisfies_dependency`, ONTOLOGY §6.4), built from
+/// that rule's own list; a Postgres test compares the two for every
+/// kind, status and state.
+pub(crate) fn satisfies_dependency(alias: &str) -> String {
+    one_of(alias, common::blockers::satisfying_triples())
+}
+
+/// SQL for "a chain goes on through the node aliased `alias`"
+/// (`common::blockers::passes_on`): not met, in use, and not an Area.
+pub(crate) fn passes_on(alias: &str) -> String {
+    one_of(alias, common::blockers::passing_triples())
+}
+
+/// SQL for "the node aliased `alias` still waits"
+/// (`common::blockers::still_waits`): in use, and not itself finished
+/// or available. Only such a node is blocked or has a chain.
+pub(crate) fn still_waits(alias: &str) -> String {
+    one_of(alias, common::blockers::waiting_triples())
 }
 
 /// SQL for "`alias`'s state is not terminal": the twin of
@@ -1817,6 +1871,43 @@ impl NodeRepo for PgNodeRepo {
                 status: r.status,
                 count: u32::try_from(r.count).unwrap_or(u32::MAX),
             })
+            .collect())
+    }
+
+    async fn blocked_by_for_nodes(
+        &self,
+        node_ids: &[NodeId],
+        subject: Option<&str>,
+    ) -> Result<Vec<(NodeId, u32)>, EmberTroveError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Uuid> = node_ids.iter().map(|n| n.0).collect();
+        let rows: Vec<(Uuid, i32)> = sqlx::query_as(&format!(
+            r#"
+            SELECT e.source_id, count(*)::int4
+            FROM edges e
+            JOIN nodes s ON s.id = e.source_id
+            JOIN nodes t ON t.id = e.target_id
+            WHERE e.source_id = ANY($1)
+              AND e.edge_type::text = 'depends_on'
+              AND {s_visible}
+              AND {t_visible}
+              AND NOT {t_met}
+            GROUP BY e.source_id
+            "#,
+            s_visible = super::visible_to("s", 2),
+            t_visible = super::visible_to("t", 2),
+            t_met = satisfies_dependency("t"),
+        ))
+        .bind(&ids)
+        .bind(subject)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("blocked_by_for_nodes failed: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, n)| (NodeId(id), u32::try_from(n).unwrap_or(0)))
             .collect())
     }
 

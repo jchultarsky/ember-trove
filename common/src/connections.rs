@@ -141,6 +141,42 @@ impl Connection {
         self.other.as_ref().is_none_or(EdgeEnd::is_live)
     }
 
+    /// What the row says in `group`. In "Depends on" (S7b, §6.4) every
+    /// row says whether the dependency is met: "Met", or the standing
+    /// that keeps it from being met (`blockers::standing`). Elsewhere it
+    /// is [`Connection::standing`]. Nothing is said of a node whose
+    /// standing an old cached answer doesn't carry.
+    #[must_use]
+    pub fn standing_in(&self, group: Group) -> Option<&'static str> {
+        match (group, self.other.as_ref()) {
+            (Group::DependsOn, Some(end)) => Some(crate::blockers::standing(end)),
+            _ => self.standing(),
+        }
+    }
+
+    /// Whether the row is a dependency that is not met: this node waits
+    /// for it. Only in "Depends on", and only when the standing is known.
+    #[must_use]
+    pub fn blocks_in(&self, group: Group) -> bool {
+        group == Group::DependsOn
+            && self
+                .other
+                .as_ref()
+                .is_some_and(|end| !crate::blockers::met(end))
+    }
+
+    /// Whether the row sorts after the others of its group. "Depends on"
+    /// puts what is not met first (a cancelled Project never lets its
+    /// dependents go, and must not fold away at the bottom of a long
+    /// list); every other group puts nodes in use first.
+    fn sorts_late(&self, group: Group) -> bool {
+        if group == Group::DependsOn {
+            !self.blocks_in(group)
+        } else {
+            !self.is_live()
+        }
+    }
+
     /// What to say beside a node that is not live: "Archived", or a
     /// closed Project's state. `None` for a live one.
     #[must_use]
@@ -157,9 +193,10 @@ impl Connection {
 }
 
 /// `edges`, as the page of `node` shows them: the non-empty groups in
-/// [`Group::ALL`] order, each with its live rows first, then the rest,
-/// each part by title (ignoring case), then by id so the order is
-/// stable. A link that doesn't touch `node` is left out.
+/// [`Group::ALL`] order, each with its live rows first, then the rest
+/// ("Depends on": what is not met first, then what is met), each part
+/// by title (ignoring case), then by id so the order is stable. A link
+/// that doesn't touch `node` is left out.
 #[must_use]
 pub fn grouped(node: NodeId, edges: Vec<EdgeWithTitles>) -> Vec<(Group, Vec<Connection>)> {
     let mut rows: Vec<(Group, Connection)> = edges
@@ -191,7 +228,7 @@ pub fn grouped(node: NodeId, edges: Vec<EdgeWithTitles>) -> Vec<(Group, Vec<Conn
         .collect();
     rows.sort_by(|(ga, a), (gb, b)| {
         ga.cmp(gb)
-            .then_with(|| b.is_live().cmp(&a.is_live()))
+            .then_with(|| a.sorts_late(*ga).cmp(&b.sorts_late(*gb)))
             .then_with(|| {
                 a.other_title
                     .to_lowercase()
@@ -488,6 +525,96 @@ mod tests {
         assert!(
             archive_notice(4).is_some_and(|n| n.starts_with("4 nodes in use still draw on this"))
         );
+    }
+
+    /// S7b (§6.4): in "Depends on", what the node still waits for comes
+    /// first, and every row says whether it is met.
+    #[test]
+    fn depends_on_lists_what_is_not_met_first_and_says_so_on_every_row() {
+        use ProjectState::{Active, Cancelled, Complete};
+        let me = 1;
+        let draft = NodeStatus::Draft;
+        let article = |status| {
+            Some(EdgeEnd {
+                node_type: NodeType::Article,
+                status,
+                project_state: None,
+            })
+        };
+        let dep = |n: u128, title: &str, target: Option<EdgeEnd>| {
+            edge(n, me, n, EdgeType::DependsOn, "me", title, live(), target)
+        };
+        let edges = vec![
+            dep(2, "a finished project", end(draft.clone(), Some(Complete))),
+            dep(3, "b running project", end(draft.clone(), Some(Active))),
+            // Closed, so not "live", yet it never lets this node go: it
+            // must not sort (and fold away) with the finished ones.
+            dep(
+                4,
+                "z cancelled project",
+                end(draft.clone(), Some(Cancelled)),
+            ),
+            dep(5, "c published article", article(NodeStatus::Published)),
+            dep(6, "d draft article", article(NodeStatus::Draft)),
+            dep(7, "e reference", live()),
+            // An old cached answer: nothing known, nothing said.
+            dep(8, "f unknown", None),
+            // Another group keeps its own order and words.
+            edge(
+                9,
+                me,
+                9,
+                EdgeType::References,
+                "me",
+                "a closed source",
+                live(),
+                end(draft.clone(), Some(Complete)),
+            ),
+            // Someone waiting for this node is "Needed by": no "Met".
+            edge(
+                10,
+                10,
+                me,
+                EdgeType::DependsOn,
+                "a waiter",
+                "me",
+                end(draft, Some(Active)),
+                live(),
+            ),
+        ];
+        let groups = grouped(id(me), edges);
+        let rows = |group: Group| -> Vec<(String, Option<&'static str>, bool)> {
+            groups
+                .iter()
+                .find(|(g, _)| *g == group)
+                .map(|(g, rows)| {
+                    rows.iter()
+                        .map(|r| (r.other_title.clone(), r.standing_in(*g), r.blocks_in(*g)))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let says = |title: &str, word: Option<&'static str>, blocks: bool| {
+            (title.to_string(), word, blocks)
+        };
+        assert_eq!(
+            rows(Group::DependsOn),
+            vec![
+                says("b running project", Some("Active"), true),
+                says("d draft article", Some("Draft"), true),
+                says("z cancelled project", Some("Cancelled"), true),
+                says("a finished project", Some("Met"), false),
+                says("c published article", Some("Met"), false),
+                says("e reference", Some("Met"), false),
+                says("f unknown", None, false),
+            ]
+        );
+        // "Sources" still says a closed Project is closed, not "Met".
+        assert_eq!(
+            rows(Group::Sources),
+            vec![says("a closed source", Some("Complete"), false)]
+        );
+        assert_eq!(rows(Group::NeededBy), vec![says("a waiter", None, false)]);
     }
 
     #[test]

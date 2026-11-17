@@ -65,6 +65,70 @@ pub struct TaskDependencies {
     /// only where the call would pass.
     #[serde(default)]
     pub may_edit: bool,
+    /// What the prerequisites wait for in turn (S7b, §9.3): the chain
+    /// beyond `blocked_by`, through tasks this reader is shown that are
+    /// still to do. Not this task's own links: nothing here is removed
+    /// from this task, and none of it feeds `not_shown`.
+    #[serde(default)]
+    pub also: Vec<ChainedTask>,
+    /// The chain has more links than were read
+    /// (`blockers::CHAIN_LIMIT`).
+    #[serde(default)]
+    pub also_truncated: bool,
+}
+
+/// A task that another waits for through a chain, as its reader sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ChainedTask {
+    pub task: TaskLink,
+    /// The task's own prerequisite that leads here, and its title.
+    pub via: TaskId,
+    pub via_title: String,
+}
+
+/// Whether a chain goes on through a task: what it waits for is shown
+/// as something its dependents wait for too. Only a task that is still
+/// to do. Not a Done one (what a finished task waited for no longer
+/// matters) nor a Cancelled one (it holds its dependents back for good,
+/// but will not proceed, so its own prerequisites change nothing). The
+/// mirror of `blockers::passes_on`.
+#[must_use]
+pub fn passes_on(status: &TaskStatus) -> bool {
+    !status.is_terminal()
+}
+
+/// One row of a task walk, as the repo reads it: `from` waits for the
+/// task `to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskHop {
+    pub from: TaskId,
+    pub to: TaskLink,
+}
+
+/// What a task's prerequisites wait for in turn, from the rows of its
+/// walk (`blockers::chain`: each task once, at its shortest distance,
+/// never one of the task's own prerequisites).
+#[must_use]
+pub fn chained(task: TaskId, rows: Vec<TaskHop>) -> Vec<ChainedTask> {
+    use crate::blockers::{Hop, chain};
+    let titles: std::collections::HashMap<TaskId, String> =
+        rows.iter().map(|r| (r.to.id, r.to.title.clone())).collect();
+    let hops = rows
+        .into_iter()
+        .map(|r| Hop {
+            from: r.from,
+            to: r.to.id,
+            item: r.to,
+        })
+        .collect();
+    chain(task, hops, |t: &TaskLink| t.title.to_lowercase())
+        .into_iter()
+        .map(|c| ChainedTask {
+            via_title: titles.get(&c.via).cloned().unwrap_or_default(),
+            via: c.via,
+            task: c.item,
+        })
+        .collect()
 }
 
 impl TaskDependencies {
@@ -350,6 +414,13 @@ mod tests {
             // Not shown, so not counted as holding the task back.
             not_shown: 4,
             may_edit: true,
+            // Nor is the chain: only the task's own prerequisites count.
+            also: vec![ChainedTask {
+                task: task(TaskStatus::Open),
+                via: id(9),
+                via_title: "t".to_string(),
+            }],
+            also_truncated: false,
         };
         assert_eq!(deps.holding_back(), 2);
         assert_eq!(TaskDependencies::default().holding_back(), 0);
@@ -463,5 +534,63 @@ mod tests {
             serde_json::from_str(r#"{"blocked_by":[],"blocks":[]}"#).expect("parses");
         assert!(!deps.may_edit);
         assert_eq!(deps.not_shown, 0);
+        // Nor does one from before the chain was sent show one.
+        assert!(deps.also.is_empty());
+    }
+
+    #[test]
+    fn a_task_chain_goes_on_only_through_a_task_still_to_do() {
+        for status in TaskStatus::ALL {
+            assert_eq!(passes_on(status), !status.is_terminal(), "{status:?}");
+        }
+        assert!(passes_on(&TaskStatus::Open));
+        assert!(passes_on(&TaskStatus::Waiting));
+        // Done: what it waited for no longer matters.
+        assert!(!passes_on(&TaskStatus::Done));
+        // Cancelled holds its dependents back for good, and goes no
+        // further itself.
+        assert!(holds_back(&TaskStatus::Cancelled));
+        assert!(!passes_on(&TaskStatus::Cancelled));
+        // Whatever passes on also holds back: a chain never runs
+        // through a task that lets its dependents go.
+        for status in TaskStatus::ALL {
+            assert!(!passes_on(status) || holds_back(status), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn what_a_tasks_prerequisites_wait_for_names_the_prerequisite_it_comes_through() {
+        let link = |n: u128, title: &str| TaskLink {
+            id: id(n),
+            title: title.to_string(),
+            status: TaskStatus::Open,
+            node_id: NodeId(Uuid::from_u128(1)),
+            node_title: "p".to_string(),
+        };
+        let row = |from: u128, to: u128, title: &str| TaskHop {
+            from: id(from),
+            to: link(to, title),
+        };
+        // 1 waits for 2 ("write") and 5 ("ask"); both wait for 3
+        // ("decide"), which waits for 4 ("Budget").
+        let also = chained(
+            id(1),
+            vec![
+                row(1, 2, "write"),
+                row(2, 3, "decide"),
+                row(3, 4, "Budget"),
+                row(1, 5, "ask"),
+                row(5, 3, "decide"),
+            ],
+        );
+        let listed: Vec<(&str, &str)> = also
+            .iter()
+            .map(|c| (c.task.title.as_str(), c.via_title.as_str()))
+            .collect();
+        // Each once, under the prerequisite that sorts first; the
+        // task's own prerequisites are not repeated.
+        assert_eq!(listed, vec![("decide", "ask"), ("Budget", "ask")]);
+        assert_eq!(also[0].via, id(5));
+        assert!(chained(id(1), vec![row(1, 2, "write")]).is_empty());
     }
 }
