@@ -19,6 +19,34 @@ wire_enum!(PermissionRole {
     Viewer => "viewer",
 });
 
+impl PermissionRole {
+    /// Whether a holder of this role may do what `required` allows. The
+    /// roles are ordered, weakest first: Viewer, Editor, Owner. The one
+    /// rule for the API's per-node checks and for what the app offers.
+    #[must_use]
+    pub fn satisfies(&self, required: &PermissionRole) -> bool {
+        match required {
+            PermissionRole::Viewer => true,
+            PermissionRole::Editor => {
+                matches!(self, PermissionRole::Editor | PermissionRole::Owner)
+            }
+            PermissionRole::Owner => matches!(self, PermissionRole::Owner),
+        }
+    }
+}
+
+/// Whether `subject` holds an editor's grant on a node, among `grants`:
+/// the rows `GET /nodes/{id}/permissions` listed to them (their own, or
+/// every row for the node's owner). Only their own rows count. The app
+/// uses it to offer a write control only to someone the API would let
+/// write; the API checks again.
+#[must_use]
+pub fn holds_editor(subject: &str, grants: &[Permission]) -> bool {
+    grants
+        .iter()
+        .any(|g| g.subject_id == subject && g.role.satisfies(&PermissionRole::Editor))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Permission {
     pub id: PermissionId,
@@ -76,6 +104,53 @@ mod tests {
         let json = serde_json::to_string(&req).expect("serialize");
         let back: UpdatePermissionRequest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.role, req.role);
+    }
+
+    #[test]
+    fn a_role_allows_what_the_weaker_roles_allow() {
+        use PermissionRole::{Editor, Owner, Viewer};
+        for (role, may) in [
+            (Viewer, [true, false, false]),
+            (Editor, [true, true, false]),
+            (Owner, [true, true, true]),
+        ] {
+            for (required, expect) in [Viewer, Editor, Owner].iter().zip(may) {
+                assert_eq!(
+                    role.satisfies(required),
+                    expect,
+                    "{role:?} for {required:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_ones_own_editor_or_owner_grant_lets_one_write() {
+        let grant = |subject: &str, role: PermissionRole| Permission {
+            id: PermissionId(uuid::Uuid::nil()),
+            node_id: NodeId(uuid::Uuid::nil()),
+            subject_id: subject.to_string(),
+            role,
+            granted_by: "someone".to_string(),
+            created_at: chrono::DateTime::UNIX_EPOCH,
+        };
+        assert!(!holds_editor("me", &[]));
+        assert!(!holds_editor("me", &[grant("me", PermissionRole::Viewer)]));
+        assert!(holds_editor("me", &[grant("me", PermissionRole::Editor)]));
+        assert!(holds_editor("me", &[grant("me", PermissionRole::Owner)]));
+        // Someone else's grant on the node is not mine (an owner is
+        // listed every row).
+        assert!(!holds_editor(
+            "me",
+            &[
+                grant("them", PermissionRole::Owner),
+                grant("me", PermissionRole::Viewer)
+            ]
+        ));
+        // Granting it gives no right.
+        let mut by_me = grant("them", PermissionRole::Editor);
+        by_me.granted_by = "me".to_string();
+        assert!(!holds_editor("me", &[by_me]));
     }
 
     #[test]

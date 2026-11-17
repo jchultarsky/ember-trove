@@ -13,13 +13,8 @@ use crate::repo::permission::PermissionRepo;
 
 /// Returns `true` when `actual` satisfies or exceeds `required`.
 fn role_satisfies(actual: &PermissionRole, required: &PermissionRole) -> bool {
-    match required {
-        PermissionRole::Viewer => true, // every role can view
-        PermissionRole::Editor => {
-            matches!(actual, PermissionRole::Editor | PermissionRole::Owner)
-        }
-        PermissionRole::Owner => matches!(actual, PermissionRole::Owner),
-    }
+    // The shared rule: the app offers a control by it, this checks by it.
+    actual.satisfies(required)
 }
 
 /// Returns `true` when the caller holds the `admin` role in their OIDC groups.

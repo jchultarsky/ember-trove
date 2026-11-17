@@ -300,6 +300,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     (`stopped_short`).
   - A remove control is rendered only when the row's `may_remove` is
     true (the server's answer). Never offer one by `can_edit` alone.
+  - "Add Edge" is offered when the reader may write on the node
+    (`may_add`): `can_edit` (owner or admin), or their own grant is an
+    editor's (`common::permission::holds_editor` over
+    `GET /nodes/{id}/permissions`, which lists a non-owner only their
+    own rows). Unknown or unreadable means not offered. A new write
+    control on a node page that a shared editor may use goes the same
+    way; `PermissionRole::satisfies` is the API's rule too.
   - A row is an `<a href>`, not a `<button>` with a navigate call.
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
