@@ -137,7 +137,7 @@ test('a node shared for viewing can be linked but not given a home', async ({
 
 // ── related_to is stored once (#226, ONTOLOGY §6.2) ──────────────────────────
 
-test('a related link is one link: the reverse is flagged and both ends show ↔', async ({
+test('a related link is one link: the reverse is flagged and both ends list it as Related', async ({
   page,
   request,
 }) => {
@@ -158,9 +158,10 @@ test('a related link is one link: the reverse is flagged and both ends show ↔'
     await form.type.selectOption('related_to');
     await expect(page.getByTestId('edge-already-linked')).toHaveText('Already linked as related to');
     await expect(form.confirm).toBeDisabled();
-    // The list shows it as ↔ with the other end, from b ...
+    // The list has it under "Related" with the other end, from b ...
+    // (one group for both directions: the link has none, S7a).
     const row = (title: string) =>
-      page.getByRole('button', { name: new RegExp(`↔.*related to.*${title}`) });
+      page.getByTestId('connections-related').getByRole('link', { name: new RegExp(title) });
     await expect(row(`e2e rules rel a ${stamp}`)).toBeVisible();
     // ... and from a.
     await page.goto(`/nodes/${a.id}`);
@@ -343,11 +344,21 @@ test('a home is chosen, changed and removed from the child', async ({ page, requ
     const fromA1 = await (await request.get(`/api/nodes/${a1.id}/edges`)).json();
     expect(fromA1).toEqual([]);
 
-    // Removing the home's link from the list below updates the row too
-    // (one refresh for the whole section).
-    await page.getByRole('button', { name: 'Remove link', exact: true }).click();
-    await expect(row).toContainText('None: it stands alone');
+    // The home is this row, never a second "Home" group in the list
+    // below it (S7a).
+    await expect(page.getByTestId('connections-home')).toHaveCount(0);
+    // From the Area's page the child is under "Contains", and removing
+    // that link there takes the child's home away.
+    await page.goto(`/nodes/${a2.id}`);
+    await page.getByRole('button', { name: /Connections/ }).click();
+    const contains = page.getByTestId('connections-contains');
+    await contains
+      .getByRole('button', { name: `Remove the link to e2e rules homed ${stamp}` })
+      .click();
+    await expect(contains).toHaveCount(0);
     expect((await homeOf(request, project.id)).home).toBeNull();
+    await openHome(page, project.id);
+    await expect(row).toContainText('None: it stands alone');
 
     // And the row's own Remove.
     await row.getByRole('button', { name: 'Choose a home' }).click();

@@ -7,10 +7,10 @@
 //! also sees each rule's count across every account (counts only, §14).
 
 use common::data_health::{
-    DataHealthReport, LinkRef, Ref, RefKind, RuleCount, RuleId, RuleReport, Violation,
+    DataHealthReport, FilingFix, LinkRef, Ref, RefKind, RuleCount, RuleId, RuleReport, Violation,
 };
-use common::edge::EdgeType;
-use common::id::{MembershipId, NodeId, TaskId};
+use common::edge::{CreateEdgeRequest, EdgeType};
+use common::id::{EdgeId, MembershipId, NodeId, TaskId};
 use common::node::{NodeType, UpdateNodeRequest};
 use common::project_state::ProjectState;
 use common::task::UpdateTaskRequest;
@@ -65,6 +65,10 @@ enum Fix {
     LinkInstead,
     /// Remove the item's link (#228).
     RemoveLink,
+    /// What a derived-from-an-Area link was meant as (S7a): the Area
+    /// becomes the node's home, or the Area's source. Never `Remove`:
+    /// that is [`Fix::RemoveLink`].
+    File(FilingFix),
     /// Declare the state the project's label reads as (S6a).
     DeclareState(ProjectState),
     /// Declare the state the project already has: the label stays, and
@@ -166,7 +170,152 @@ fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
             }
             fixes
         }
+        // A node filed under an Area with "derived from" (S7a): what the
+        // link was meant as, when the reader may do it, then plain removal
+        // for whoever would rather drop it.
+        RuleId::DerivedFromArea => {
+            let Some(link) = v.links.first() else {
+                return Vec::new();
+            };
+            let mut fixes = Vec::new();
+            if let Some(job) = filing_job(v)
+                && job.fix != FilingFix::Remove
+            {
+                fixes.push(Fix::File(job.fix));
+            }
+            if link.removable() {
+                fixes.push(Fix::RemoveLink);
+            }
+            fixes
+        }
         _ => Vec::new(),
+    }
+}
+
+/// One derived-from-an-Area link and the fix that fits it (S7a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FilingJob {
+    fix: FilingFix,
+    link: uuid::Uuid,
+    /// The node that was filed (the link's source).
+    node: uuid::Uuid,
+    /// The Area it was filed under (the link's target).
+    area: uuid::Uuid,
+}
+
+/// The fix that fits an item (`FiledRef::fix`), when the reader may apply
+/// it (`LinkRef::filing_fix_allowed`: the calls it makes would pass).
+fn filing_job(v: &Violation) -> Option<FilingJob> {
+    let link = v.links.first()?;
+    let fix = v.filed.as_ref()?.fix();
+    link.filing_fix_allowed(fix).then_some(FilingJob {
+        fix,
+        link: link.id,
+        node: link.source,
+        area: link.target,
+    })
+}
+
+/// What "Fix all" does on the derived-from-an-Area card: for every listed
+/// link the reader may fix, the fix that fits it.
+///
+/// A node has one home. One filed under two Areas is offered each as its
+/// home, item by item, and which it should be is the reader's to say:
+/// "Fix all" makes the first listed its home and leaves the others on
+/// the card, where they then read as "has a home" and offer removal. It
+/// never picks a home by the order of a list and removes the rest.
+fn filing_jobs(report: &RuleReport) -> Vec<FilingJob> {
+    if report.rule != RuleId::DerivedFromArea {
+        return Vec::new();
+    }
+    let mut homed = std::collections::HashSet::new();
+    report
+        .items
+        .iter()
+        .filter_map(filing_job)
+        .filter(|job| job.fix != FilingFix::MakeHome || homed.insert(job.node))
+        .collect()
+}
+
+/// "Fix all" asks first, and says how many of each fix it will apply:
+/// making an Area the home of thirty Projects moves thirty cards on the
+/// dashboard.
+fn filing_question(jobs: &[FilingJob], capped: bool) -> String {
+    let count = |fix: FilingFix| jobs.iter().filter(|j| j.fix == fix).count();
+    let parts: Vec<String> = [
+        (
+            count(FilingFix::MakeHome),
+            "make its Area the home of 1 node",
+            "make their Area the home of {n} nodes",
+        ),
+        (
+            count(FilingFix::LinkAsSource),
+            "link 1 Reference as a source of its Area",
+            "link {n} References as sources of their Area",
+        ),
+        (
+            count(FilingFix::Remove),
+            "remove 1 link from a node that has a home already",
+            "remove {n} links from nodes that have a home already",
+        ),
+    ]
+    .into_iter()
+    .filter(|(n, _, _)| *n > 0)
+    .map(|(n, one, many)| {
+        if n == 1 {
+            one.to_string()
+        } else {
+            many.replace("{n}", &n.to_string())
+        }
+    })
+    .collect();
+    let all = match parts.as_slice() {
+        [] => return String::new(),
+        [one] => one.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [first, second, third, ..] => format!("{first}, {second} and {third}"),
+    };
+    let mut question = all;
+    if let Some(first) = question.get(..1) {
+        question.replace_range(..1, &first.to_uppercase());
+    }
+    if capped {
+        format!("{question}, of the ones shown?")
+    } else {
+        format!("{question}?")
+    }
+}
+
+/// Applies one filing fix, through the routes the rest of the app uses.
+///
+/// Making a home is two writes: the copy first, the original second. The
+/// home is added with `POST /edges`, never the home route: that one
+/// replaces a home, and a node that was given one since this report was
+/// read must keep it (the API refuses the second home). A failure in
+/// between leaves the node with both links, never with neither.
+async fn apply_filing(job: FilingJob) -> Result<(), crate::error::UiError> {
+    match job.fix {
+        FilingFix::MakeHome => {
+            api::create_edge(&CreateEdgeRequest {
+                source_id: NodeId(job.area),
+                target_id: NodeId(job.node),
+                edge_type: EdgeType::Contains,
+                label: None,
+            })
+            .await?;
+            api::delete_edge(EdgeId(job.link)).await
+        }
+        FilingFix::LinkAsSource => api::convert_edge(job.link, EdgeType::References, true).await,
+        FilingFix::Remove => api::delete_edge(EdgeId(job.link)).await,
+    }
+}
+
+/// The button's glyph for a filing fix.
+fn filing_fix_icon(fix: FilingFix) -> &'static str {
+    match fix {
+        FilingFix::MakeHome => "home",
+        FilingFix::LinkAsSource => "menu_book",
+        FilingFix::Remove => "link_off",
     }
 }
 
@@ -299,6 +448,7 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
     let shown = shown_of(&report);
     let finished = finished_tasks(&report);
     let convertible = convertible_references(&report);
+    let filing = filing_jobs(&report);
     // Only what this card lists: past the cap, the label says so.
     let capped = report.count > report.items.len() as u64;
     // One in-flight guard for the whole card: a row's Move and Delete, and
@@ -325,6 +475,9 @@ fn rule_card(report: RuleReport, on_fixed: Callback<()>) -> impl IntoView {
                 })}
                 {(convertible.len() > 1).then(|| view! {
                     <ConvertAll links=convertible capped=capped busy=busy on_fixed=on_fixed />
+                })}
+                {(filing.len() > 1).then(|| view! {
+                    <FixAllFiled jobs=filing capped=capped busy=busy on_fixed=on_fixed />
                 })}
                 <p class="mt-1 text-xs text-stone-600 dark:text-stone-400">
                     {rule.explanation()}
@@ -675,7 +828,7 @@ fn FixControl(
                 let to = to.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     finish(
-                        api::convert_edge(link.id, to)
+                        api::convert_edge(link.id, to, false)
                             .await
                             .map(|()| done.to_string())
                             .map_err(|e| format!("Couldn't change the link: {e}")),
@@ -686,6 +839,40 @@ fn FixControl(
                 <button type="button" class=FIX_BUTTON disabled=move || busy.get() on:click=convert>
                     <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">{icon}</span>
                     {label}
+                </button>
+            }
+            .into_any()
+        }
+        Fix::File(fix) => {
+            let Some(job) = filing_job(&item).filter(|j| j.fix == fix) else {
+                return ().into_any();
+            };
+            let done = match fix {
+                FilingFix::MakeHome => "The Area is its home now",
+                FilingFix::LinkAsSource => "Now a source of the Area",
+                FilingFix::Remove => "Link removed",
+            };
+            let apply = move |_| {
+                if busy.get_untracked() {
+                    return;
+                }
+                busy.set(true);
+                wasm_bindgen_futures::spawn_local(async move {
+                    finish(
+                        apply_filing(job)
+                            .await
+                            .map(|()| done.to_string())
+                            .map_err(|e| format!("Couldn\u{2019}t change the link: {e}")),
+                    );
+                });
+            };
+            view! {
+                <button type="button" class=FIX_BUTTON disabled=move || busy.get() on:click=apply
+                    data-testid="fix-filing">
+                    <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">
+                        {filing_fix_icon(fix)}
+                    </span>
+                    {fix.label()}
                 </button>
             }
             .into_any()
@@ -701,6 +888,11 @@ fn FixControl(
             let question = if link.edge_type == EdgeType::Contains {
                 format!(
                     "Take \u{201c}{}\u{201d} out of \u{201c}{}\u{201d}?",
+                    item.subject.label, other.label
+                )
+            } else if link.edge_type == EdgeType::DerivedFrom {
+                format!(
+                    "Remove the link from \u{201c}{}\u{201d} to \u{201c}{}\u{201d}?",
                     item.subject.label, other.label
                 )
             } else {
@@ -911,8 +1103,10 @@ fn ConvertAll(
             let total = links.len();
             // Paced like the bulk task delete, so a long card can't trip
             // the write limiter halfway (429s).
-            let (done, failed) =
-                paced(links, |id| api::convert_edge(id, EdgeType::References)).await;
+            let (done, failed) = paced(links, |id| {
+                api::convert_edge(id, EdgeType::References, false)
+            })
+            .await;
             if failed == 0 {
                 push_toast(
                     ToastLevel::Success,
@@ -942,6 +1136,62 @@ fn ConvertAll(
                         on:click=move |_| confirming.set(true)>
                         <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"link"</span>
                         {format!("Convert all {n}")}
+                    </button>
+                }.into_any()
+            }}
+        </div>
+    }
+}
+
+/// "Fix all" on the derived-from-an-Area card (S7a): every listed link
+/// the reader may fix gets the fix that fits it, after one confirmation
+/// that says how many of each. Nothing changes until it is confirmed.
+#[component]
+fn FixAllFiled(
+    jobs: Vec<FilingJob>,
+    capped: bool,
+    busy: RwSignal<bool>,
+    on_fixed: Callback<()>,
+) -> impl IntoView {
+    let n = jobs.len();
+    let confirming = RwSignal::new(false);
+    let question = filing_question(&jobs, capped);
+    let jobs = StoredValue::new(jobs);
+    let fix_all = Callback::new(move |()| {
+        confirming.set(false);
+        busy.set(true);
+        let jobs = jobs.get_value();
+        wasm_bindgen_futures::spawn_local(async move {
+            let total = jobs.len();
+            // Paced like "Convert all", so a long card can't trip the
+            // write limiter halfway (429s).
+            let (done, failed) = paced(jobs, apply_filing).await;
+            if failed == 0 {
+                push_toast(ToastLevel::Success, format!("Fixed {} links", done.len()));
+            } else {
+                push_toast(
+                    ToastLevel::Error,
+                    format!("Fixed {} of {total}; {failed} failed", done.len()),
+                );
+            }
+            // Reload either way: what was fixed leaves the card.
+            on_fixed.try_run(());
+        });
+    });
+    view! {
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-xs" data-testid="fix-all-filed">
+            {move || if confirming.get() {
+                view! {
+                    <InlineConfirm question=question.clone() commit="Fix all"
+                        on_confirm=fix_all
+                        on_cancel=Callback::new(move |()| confirming.set(false)) />
+                }.into_any()
+            } else {
+                view! {
+                    <button type="button" class=FIX_BUTTON disabled=move || busy.get()
+                        on:click=move |_| confirming.set(true)>
+                        <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"checklist"</span>
+                        {format!("Fix all {n}\u{2026}")}
                     </button>
                 }.into_any()
             }}
@@ -1235,6 +1485,160 @@ mod tests {
             vec![edge_item(link(EdgeType::Contains, true, false))],
         );
         assert!(convertible_references(&other).is_empty(), "only that card");
+    }
+
+    /// A node of `kind` filed under an Area with `derived_from`. The
+    /// link runs from the node (the subject) to the Area.
+    fn filed_item(
+        n: u128,
+        kind: NodeType,
+        has_home: bool,
+        source_owned: bool,
+        target_owned: bool,
+    ) -> Violation {
+        use common::data_health::FiledRef;
+        let mut l = link(EdgeType::DerivedFrom, source_owned, target_owned);
+        l.id = Uuid::from_u128(0x900 + n);
+        l.source = Uuid::from_u128(0x100 + n);
+        Violation::new(
+            Ref::node(l.source, "filed", false),
+            vec![Ref::node(l.target, "area", false)],
+        )
+        .with_links(vec![l])
+        .with_filed(FiledRef { kind, has_home })
+    }
+
+    #[test]
+    fn a_node_filed_under_an_area_offers_the_fix_that_fits_and_removal() {
+        let rule = RuleId::DerivedFromArea;
+        // A Project with no home, both ends the reader's: the Area can be
+        // its home.
+        assert_eq!(
+            fixes_for(rule, &filed_item(1, NodeType::Project, false, true, true)),
+            vec![Fix::File(FilingFix::MakeHome), Fix::RemoveLink]
+        );
+        // A Reference is never contained: the Area lists it as a source.
+        assert_eq!(
+            fixes_for(rule, &filed_item(2, NodeType::Reference, false, true, true)),
+            vec![Fix::File(FilingFix::LinkAsSource), Fix::RemoveLink]
+        );
+        // It has a home already: a second is never offered. Only removal,
+        // once (not as the fitting fix and again as removal).
+        assert_eq!(
+            fixes_for(rule, &filed_item(3, NodeType::Project, true, true, true)),
+            vec![Fix::RemoveLink]
+        );
+        // The Area is someone else's: making it the home would write on
+        // it. The node's owner may still drop their own link.
+        assert_eq!(
+            fixes_for(rule, &filed_item(4, NodeType::Project, false, true, false)),
+            vec![Fix::RemoveLink]
+        );
+        // Only the Area is the reader's: a `derived_from` link is its
+        // source's, so nothing is theirs to do to a Project's.
+        assert!(fixes_for(rule, &filed_item(5, NodeType::Project, false, false, true)).is_empty());
+        // No link named (past the cap): nothing to act on.
+        let bare = Violation::new(Ref::node(Uuid::nil(), "n", false), vec![]);
+        assert!(fixes_for(rule, &bare).is_empty());
+    }
+
+    #[test]
+    fn fix_all_takes_each_listed_link_the_reader_may_fix_with_the_fix_that_fits() {
+        let card = RuleReport::new(
+            RuleId::DerivedFromArea,
+            vec![
+                filed_item(1, NodeType::Project, false, true, true),
+                filed_item(2, NodeType::Reference, false, true, true),
+                filed_item(3, NodeType::Article, true, true, true),
+                // Not the reader's to fix: left out.
+                filed_item(4, NodeType::Project, false, false, true),
+            ],
+        );
+        let jobs = filing_jobs(&card);
+        let fixes: Vec<FilingFix> = jobs.iter().map(|j| j.fix).collect();
+        assert_eq!(
+            fixes,
+            vec![
+                FilingFix::MakeHome,
+                FilingFix::LinkAsSource,
+                FilingFix::Remove
+            ]
+        );
+        // Each job names its own link, the filed node and the Area.
+        let first = jobs.first().copied();
+        assert_eq!(
+            first.map(|j| (j.link, j.node, j.area)),
+            Some((
+                Uuid::from_u128(0x901),
+                Uuid::from_u128(0x101),
+                Uuid::from_u128(2)
+            ))
+        );
+        // Only on that card.
+        let other = RuleReport::new(
+            RuleId::DependsOnArea,
+            vec![filed_item(1, NodeType::Project, false, true, true)],
+        );
+        assert!(filing_jobs(&other).is_empty());
+
+        // One node filed under two Areas: each item offers its Area as
+        // the home, but "Fix all" makes only the first one its home. The
+        // second is left for the reader, never applied by list order.
+        let mut second = filed_item(1, NodeType::Project, false, true, true);
+        let other_area = Uuid::from_u128(0x77);
+        second.related = vec![Ref::node(other_area, "another area", false)];
+        if let Some(l) = second.links.first_mut() {
+            l.id = Uuid::from_u128(0x999);
+            l.target = other_area;
+        }
+        assert_eq!(
+            fixes_for(RuleId::DerivedFromArea, &second),
+            vec![Fix::File(FilingFix::MakeHome), Fix::RemoveLink]
+        );
+        let twice = RuleReport::new(
+            RuleId::DerivedFromArea,
+            vec![
+                filed_item(1, NodeType::Project, false, true, true),
+                second,
+                // Two References under one Area are two source links.
+                filed_item(2, NodeType::Reference, false, true, true),
+            ],
+        );
+        let jobs = filing_jobs(&twice);
+        assert_eq!(
+            jobs.iter().map(|j| (j.fix, j.link)).collect::<Vec<_>>(),
+            vec![
+                (FilingFix::MakeHome, Uuid::from_u128(0x901)),
+                (FilingFix::LinkAsSource, Uuid::from_u128(0x902)),
+            ]
+        );
+    }
+
+    #[test]
+    fn fix_all_says_how_many_of_each_fix_before_it_does_anything() {
+        let job = |fix| FilingJob {
+            fix,
+            link: Uuid::nil(),
+            node: Uuid::nil(),
+            area: Uuid::nil(),
+        };
+        let mut jobs = vec![job(FilingFix::MakeHome); 35];
+        jobs.extend(vec![job(FilingFix::LinkAsSource); 24]);
+        jobs.push(job(FilingFix::Remove));
+        assert_eq!(
+            filing_question(&jobs, false),
+            "Make their Area the home of 35 nodes, link 24 References as sources of their Area \
+             and remove 1 link from a node that has a home already?"
+        );
+        assert_eq!(
+            filing_question(&[job(FilingFix::MakeHome), job(FilingFix::Remove)], true),
+            "Make its Area the home of 1 node and remove 1 link from a node that has a home \
+             already, of the ones shown?"
+        );
+        assert_eq!(
+            filing_question(&vec![job(FilingFix::LinkAsSource); 2], false),
+            "Link 2 References as sources of their Area?"
+        );
     }
 
     #[test]

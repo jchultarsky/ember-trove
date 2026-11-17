@@ -8,8 +8,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - **A node's links say what they mean** (S7a of the ontology programme,
-  #342; ONTOLOGY §6.3, §6.5, §14). The API half; the page follows in the
-  same release.
+  #342; ONTOLOGY §6.3, §6.5, §14).
+  - **Connections is in named groups**, each shown only when it has
+    links: Contains, Sources (an Article's **Bibliography**), **Used
+    in**, Derived from, **Descendants**, Depends on, Needed by, Related,
+    Mentions and Mentioned in. A row shows the other node's kind and
+    title and the link's label. A node that is archived, or a Project
+    that is complete or cancelled, comes last and says so. A long group
+    shows its first twelve rows and a "Show more".
+  - **Deleting a node that nodes in use still draw on as a source warns
+    first**, on a line of its own above what the delete destroys. It
+    never stops the delete.
+  - **Archiving one says so too**, under the editor's state picker: how
+    many nodes in use still draw on it, or that it couldn't be checked.
+    Archiving is never held back.
+  - **Data health can fix the "Derived from an Area" links**: make the
+    Area the node's home, link a Reference as a source of the Area, or
+    remove the link. One by one, or "Fix all", which first says how many
+    of each it will do. A node filed under two Areas gets one home from
+    "Fix all" (the first listed); the other link is left to decide.
   - `GET /api/nodes/{id}/edges` answers, for each end of a link, its
     kind, its status and a Project's state (`source_node`,
     `target_node`), and `may_remove`: whether the caller may remove the
@@ -25,6 +42,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     node had a home. Each item says what it should become.
 
 ### Changed
+- **"Linked Here" is now "Unlinked Mentions".** The nodes that link to a
+  node are in its Connections, each under what its link means. The
+  section keeps the tool that finds nodes naming this one in plain text
+  and turns the mention into a `[[link]]`.
+- **A link's remove button shows only to someone who may remove it.**
+  Every reader used to see it on every row and get a refusal.
+- A node's home is the Home row of Connections and no longer a second
+  row in the list under it. On a Reference with a home from before the
+  rule, the list still shows it, so it can be removed.
+- The node page reads a node's links once for both sections.
+- Linking a mention saves against the text it read: a change made in
+  another tab meanwhile is not written over.
 - **Nothing is derived from an Area** (ONTOLOGY §6.5). `POST /api/edges`
   refuses a `derived_from` link whose target is an Area (**422**): a
   node that belongs to an Area has it as its home. Existing links are
@@ -41,6 +70,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - Data health's "Derived from an Area" says whether the filed node has
   a home only as the node's own page would: an editor of the node is
   told of any home, anyone else only of one they can see.
+- "Make the Area its home" adds the home with the call that refuses a
+  second home, not the one that replaces a home: a node given a home
+  since the report was read keeps it.
 
 ## [3.26.1] - 2026-11-16
 

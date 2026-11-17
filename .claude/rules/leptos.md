@@ -279,6 +279,24 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     `task_dependency::is_blocked` says. Neutral tone: it is information,
     and the task's place in every list is unchanged.
   - A linked task's title is plain text (`markdown_inline_plain_text`).
+- **A node's links are read once for its page** (S7a, #342):
+  `NodeLinks` (`node_connections.rs`), made in `NodeView` on the
+  home-and-links counter, and handed to `ConnectionsPanel` and
+  `UnlinkedMentionsPanel`. A section calls `links.wanted_while(open)`;
+  nothing is read until one opens. A new section that needs the links
+  takes the same `NodeLinks`; it never calls `fetch_edges_for_node`
+  itself. The groups, their order and their headings are
+  `common::connections` (`grouped`, `Group::heading`); don't sort or
+  name them in the UI.
+  - A group's heading is an `h3`: the `h2`s are the page's sections.
+  - The Home group is `HomeRow`; the list leaves it out wherever that
+    row shows (`listed`).
+  - A remove control is rendered only when the row's `may_remove` is
+    true (the server's answer). Never offer one by `can_edit` alone.
+  - A row is an `<a href>`, not a `<button>` with a navigate call.
+- **The archive notice** (`ArchivedNotice`, `status_picker.rs`) is read
+  when Archived is chosen. A failed read says it couldn't check, never
+  nothing: silence there reads as "nothing uses it".
 - **A node's home is shown and edited in two places that share one
   counter** (2026-11-12): `HomeChip` in the page header and `HomeRow` in
   Connections (`node_home.rs`). `NodeView` owns the counter
@@ -387,7 +405,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   the `.await`, use `try_` access.
 - **Deleting a node goes through `DeleteConfirmModal` with `details`**
   (#281): `details=node_delete_details(show, ids)` loads the counts of
-  what goes with the node and keeps Delete off until they are shown. A new
+  what goes with the node and keeps Delete off until they are shown.
+  `DeleteDetails::Counted.warning` (S7a) is the preview's "still used
+  as a source" line: shown apart from the losses, and never a block. A new
   place that deletes nodes must pass it; never call `api::delete_node`
   behind a bare confirm.
 - **Context newtypes** to prevent collisions:

@@ -26,12 +26,13 @@ pub async fn delete_edge(id: EdgeId) -> Result<(), UiError> {
 }
 
 /// `POST /edges/{id}/convert` (#228): the link becomes `to`, in one step.
-pub async fn convert_edge(id: uuid::Uuid, to: EdgeType) -> Result<(), UiError> {
+/// With `reverse` (S7a) the new link runs from the old one's target.
+pub async fn convert_edge(id: uuid::Uuid, to: EdgeType, reverse: bool) -> Result<(), UiError> {
     post_empty(
         &format!("/edges/{id}/convert"),
         &ConvertEdgeRequest {
             edge_type: to,
-            reverse: false,
+            reverse,
         },
     )
     .await

@@ -436,3 +436,124 @@ test('edge items convert, convert in bulk, and break a loop one link at a time',
   await loop.getByRole('group', { name: 'Confirm remove' }).getByRole('button', { name: 'Remove' }).click();
   await expect.poll(() => deletes).toEqual([hopPQ]);
 });
+
+// ── Nodes filed under an Area with "derived from" (S7a, #342) ────────────────
+// The API refuses such a link now, so the report is stubbed here too, and
+// the calls each fix makes are caught: what is sent, and in which order.
+
+test('a node filed under an Area gets the fix that fits it, one by one or all at once', async ({
+  page,
+}) => {
+  const [area, loose, source, homed, theirs, twice, areaB] = [1, 2, 3, 4, 5, 6, 7].map(uuid);
+  const [lLoose, lSource, lHomed, lTheirs, lTwiceA, lTwiceB] = [21, 22, 23, 24, 25, 26].map(uuid);
+  const filed = (
+    id: string,
+    label: string,
+    linkId: string,
+    kind: string,
+    has_home: boolean,
+    source_owned = true,
+    under = area,
+  ) => ({
+    subject: node(id, label),
+    related: [node(under, under === area ? 'the area' : 'area b')],
+    more: 0,
+    links: [link(linkId, 'derived_from', id, under, source_owned)],
+    filed: { kind, has_home },
+  });
+  let items = [
+    filed(loose, 'a loose project', lLoose, 'project', false),
+    filed(source, 'a source', lSource, 'reference', false),
+    filed(homed, 'a homed project', lHomed, 'project', true),
+    // Someone else's node under the reader's Area: listed, nothing offered.
+    filed(theirs, 'their project', lTheirs, 'project', false, false),
+  ];
+  await page.route('**/api/data-health', (route) =>
+    route.fulfill({
+      json: { rules: [{ rule: 'derived_from_area', count: items.length, items }] },
+    }),
+  );
+  // Every write, in the order it was sent.
+  const calls: string[] = [];
+  await page.route('**/api/edges', (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    const body = route.request().postDataJSON();
+    calls.push(`home ${body.source_id} > ${body.target_id} ${body.edge_type}`);
+    return route.fulfill({
+      status: 201,
+      json: { id: uuid(99), ...body, created_at: '2026-11-17T00:00:00Z' },
+    });
+  });
+  await page.route('**/api/edges/*/convert', (route) => {
+    const id = route.request().url().split('/').at(-2)!;
+    calls.push(`convert ${id} ${JSON.stringify(route.request().postDataJSON())}`);
+    return route.fulfill({ status: 204 });
+  });
+  await page.route('**/api/edges/*', (route) => {
+    if (route.request().method() !== 'DELETE') return route.fallback();
+    calls.push(`remove ${route.request().url().split('/').at(-1)!}`);
+    return route.fulfill({ status: 204 });
+  });
+
+  await page.goto('/data-health');
+  const card = page.getByTestId('data-health-derived_from_area');
+  await expect(card.getByRole('heading', { name: 'Derived from an Area' })).toBeVisible();
+  const item = (label: string) => card.getByTestId('data-health-item').filter({ hasText: label });
+
+  // A Project with no home: the Area becomes its home. The home is made
+  // first and the old link removed second, so a failure in between
+  // leaves both and never neither.
+  await item('a loose project').getByRole('button', { name: 'Make the Area its home' }).click();
+  await expect(page.getByText('The Area is its home now')).toBeVisible();
+  expect(calls).toEqual([`home ${area} > ${loose} contains`, `remove ${lLoose}`]);
+
+  // A Reference is never contained: the Area lists it as a source, in
+  // one step, the link turned round.
+  calls.length = 0;
+  await item('a source').getByRole('button', { name: 'Link as a source of the Area' }).click();
+  await expect(page.getByText('Now a source of the Area')).toBeVisible();
+  expect(calls).toEqual([`convert ${lSource} {"edge_type":"references","reverse":true}`]);
+
+  // One that has a home already is never offered a second: only removal,
+  // which asks first.
+  await expect(item('a homed project').getByTestId('fix-filing')).toHaveCount(0);
+  calls.length = 0;
+  await item('a homed project').getByRole('button', { name: 'Remove the link' }).click();
+  expect(calls).toEqual([]);
+  await item('a homed project')
+    .getByRole('group', { name: 'Confirm remove' })
+    .getByRole('button', { name: 'Remove' })
+    .click();
+  await expect.poll(() => calls).toEqual([`remove ${lHomed}`]);
+
+  // Someone else's node: nothing is the reader's to do.
+  await expect(item('their project').getByRole('button')).toHaveCount(0);
+
+  // All at once: it says how many of each first, and does nothing until
+  // confirmed. A node filed under two Areas gets one home, the first
+  // listed; its other link is left for the reader.
+  items = [
+    ...items,
+    filed(twice, 'filed twice', lTwiceA, 'project', false),
+    filed(twice, 'filed twice', lTwiceB, 'project', false, true, areaB),
+  ];
+  await page.reload();
+  calls.length = 0;
+  const all = card.getByTestId('fix-all-filed');
+  await all.getByRole('button', { name: 'Fix all 4…' }).click();
+  await expect(all).toContainText(
+    'Make their Area the home of 2 nodes, link 1 Reference as a source of its Area and ' +
+      'remove 1 link from a node that has a home already?',
+  );
+  expect(calls).toEqual([]);
+  await all.getByRole('group', { name: 'Confirm fix all' }).getByRole('button', { name: 'Fix all' }).click();
+  await expect(page.getByText('Fixed 4 links')).toBeVisible();
+  expect(calls).toEqual([
+    `home ${area} > ${loose} contains`,
+    `remove ${lLoose}`,
+    `convert ${lSource} {"edge_type":"references","reverse":true}`,
+    `remove ${lHomed}`,
+    `home ${area} > ${twice} contains`,
+    `remove ${lTwiceA}`,
+  ]);
+});
