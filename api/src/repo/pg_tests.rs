@@ -12948,6 +12948,10 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
     let z = project("alice", "z behind a hidden one", "active").await;
     dep(a, h).await;
     dep(h, z).await;
+    // ... and `z` waits for another of alice's, so a chain that started
+    // at `h` would have something to list.
+    let z2 = project("alice", "zz behind z", "active").await;
+    dep(z, z2).await;
     // a → p (archived while active): not met, and it goes no further.
     let p = node_in_state(
         &pool,
@@ -13027,8 +13031,14 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
     // for: the same answer as "nothing there".
     assert_eq!(chain(Some("dave"), start).await, Vec::new());
     // A node the reader can't view has no chain and no count, whoever
-    // asks the repo: `h` is bob's, and waits for `z`, which alice reads.
+    // asks the repo: `h` is bob's, and waits for `z` and through it
+    // `zz`, both of which alice reads. An admin, who may view `h`, gets
+    // that chain.
     assert_eq!(chain(Some("alice"), h).await, Vec::new());
+    assert_eq!(
+        chain(None, h).await,
+        vec![says("zz behind z", 2, "z behind a hidden one")]
+    );
     let count_of_h = |reader: Option<&'static str>| {
         let nodes = PgNodeRepo::new(pool.clone());
         async move {
@@ -13059,6 +13069,7 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
             says("an area", 3, "a running"),
             says("c running", 3, "a running"),
             says("z behind a hidden one", 3, "a running"),
+            says("zz behind z", 4, "a running"),
         ]
     );
     // From further down the chain: `b`'s own are direct, nothing beyond.
@@ -13215,7 +13226,7 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
             "{status} {state}"
         );
     }
-    let _ = (e, y, z, w, q, available, behind_m);
+    let _ = (e, y, z, w, q, available, behind_m, z2);
 }
 
 /// A loop of `depends_on` links from before the rule (a restore keeps
@@ -13442,18 +13453,24 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
     raw_dep(&pool, u1, u2).await;
     raw_dep(&pool, u2, h).await;
     raw_dep(&pool, h, u4).await;
+    // ... and `u4` waits for another of alice's, so a chain that started
+    // at `h` would have something to list.
+    let u5 = task("alice", project, "u5").await;
+    raw_dep(&pool, u4, u5).await;
     // SECURITY: the walk stops at the task alice isn't shown; `u4` is
     // hers to read, but not as something `u1` waits for.
     assert_eq!(also(Some("alice"), u1).await, Vec::new());
     assert_eq!(
         also(None, u1).await,
-        vec![via("h hidden", "u2"), via("u4", "u2")],
+        vec![via("h hidden", "u2"), via("u4", "u2"), via("u5", "u2")],
         "an admin reads every node"
     );
 
     // A task the reader isn't shown has no chain, whoever asks the
-    // repo: `h` waits for `u4`, which alice reads.
+    // repo: `h` waits for `u4` and through it `u5`, both of which alice
+    // reads. An admin, who is shown `h`, gets that chain.
     assert_eq!(also(Some("alice"), h).await, Vec::new());
+    assert_eq!(also(None, h).await, vec![via("u5", "u4")]);
     assert_eq!(
         deps.blocked_tasks_for_nodes(&[bobs], Some("alice"))
             .await
@@ -13527,11 +13544,11 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
             .find(|(node, _)| *node == project)
             .map_or(0, |(_, n)| *n);
         assert_eq!(of_project as usize, blocked, "{reader:?}");
-        // t1, t2, t3, u1 and the three of the ring wait for a task
-        // alice sees; u2 waits only for bob's, which she doesn't.
+        // t1, t2, t3, u1, u4 and the three of the ring wait for a
+        // task alice sees; u2 waits only for bob's, which she doesn't.
         assert_eq!(
             of_project,
-            if reader.is_some() { 7 } else { 8 },
+            if reader.is_some() { 8 } else { 9 },
             "{reader:?}"
         );
         assert!(
@@ -13545,5 +13562,5 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
         .blocked_tasks_for_nodes(&[project], Some("alice"))
         .await
         .expect("counts");
-    assert_eq!(counted, vec![(project, 6)]);
+    assert_eq!(counted, vec![(project, 7)]);
 }
