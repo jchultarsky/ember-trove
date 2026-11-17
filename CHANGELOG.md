@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.27.0] - 2026-11-17
+
 ### Added
 - **A node's links say what they mean** (S7a of the ontology programme,
   #342; ONTOLOGY §6.3, §6.5, §14).
