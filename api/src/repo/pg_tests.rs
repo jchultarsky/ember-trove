@@ -2715,6 +2715,27 @@ async fn raw_edge(pool: &PgPool, source: uuid::Uuid, target: uuid::Uuid, edge_ty
     .expect("raw edge");
 }
 
+/// [`raw_edge`], answering the new link's id.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_edge_id(
+    pool: &PgPool,
+    source: uuid::Uuid,
+    target: uuid::Uuid,
+    edge_type: &str,
+) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO edges (source_id, target_id, edge_type) VALUES ($1, $2, $3::edge_type) \
+         RETURNING id",
+    )
+    .bind(source)
+    .bind(target)
+    .bind(edge_type)
+    .fetch_one(pool)
+    .await
+    .expect("raw edge")
+}
+
 // Fixture helper; see `create_node`.
 #[allow(clippy::expect_used)]
 async fn share(pool: &PgPool, node: uuid::Uuid, with: &str) {
@@ -6183,7 +6204,7 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
     }
 
     let preview = repo
-        .deletion_preview(&[doomed], "alice")
+        .deletion_preview(&[doomed], "alice", Some("alice"))
         .await
         .expect("preview");
     assert_eq!(
@@ -6196,17 +6217,23 @@ async fn a_deletion_preview_counts_what_the_delete_destroys(pool: PgPool) {
             others_notes: 2,
             files: 2,
             briefs: 1,
+            // Nothing uses it as a source (see the warning's own test).
+            still_used_by: 0,
         }
     );
     // "Other people" is relative to who asks.
     let as_bob = repo
-        .deletion_preview(&[doomed], "bob")
+        .deletion_preview(&[doomed], "bob", Some("bob"))
         .await
         .expect("as bob");
     assert_eq!((as_bob.others_tasks, as_bob.others_notes), (2, 1));
     // A node that doesn't exist adds nothing, and is not counted as a node.
     let with_missing = repo
-        .deletion_preview(&[doomed, common::id::NodeId(uuid::Uuid::new_v4())], "alice")
+        .deletion_preview(
+            &[doomed, common::id::NodeId(uuid::Uuid::new_v4())],
+            "alice",
+            Some("alice"),
+        )
         .await
         .expect("with a missing node");
     assert_eq!(with_missing, preview);
@@ -12292,4 +12319,488 @@ async fn an_event_reads_only_its_receivers_active_subscribed_webhooks(pool: PgPo
     );
     assert_eq!(read("node.updated", "bob").await, Vec::<String>::new());
     assert_eq!(read("task.updated", "carol").await, Vec::<String>::new());
+}
+
+// ── S7a: reverse indexes (#342) ──────────────────────────────────────────────
+
+/// A node with a kind, a status and (for a Project) a state, straight
+/// into the table.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn node_in_state(
+    pool: &PgPool,
+    owner: &str,
+    kind: &str,
+    title: &str,
+    status: &str,
+    state: Option<&str>,
+) -> uuid::Uuid {
+    let id = insert_raw_node(pool, owner, kind, title, "").await;
+    sqlx::query("UPDATE nodes SET status = $2::node_status, project_state = $3 WHERE id = $1")
+        .bind(id)
+        .bind(status)
+        .bind(state)
+        .execute(pool)
+        .await
+        .expect("set a node's standing");
+    id
+}
+
+/// The SQL for "live" (`repo::node::live`) is `common::node::is_live`:
+/// every status, on a node with no state and on a Project in each state.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_sql_for_a_live_node_is_the_shared_rule(pool: PgPool) {
+    use common::node::{NodeStatus, is_live};
+    use common::project_state::ProjectState;
+    let mut expected = Vec::new();
+    for status in NodeStatus::ALL {
+        let title = format!("reference {}", status.as_str());
+        node_in_state(&pool, "alice", "reference", &title, status.as_str(), None).await;
+        if is_live(status, None) {
+            expected.push(title);
+        }
+        for state in ProjectState::ALL {
+            let title = format!("project {} {}", status.as_str(), state.as_str());
+            node_in_state(
+                &pool,
+                "alice",
+                "project",
+                &title,
+                status.as_str(),
+                Some(state.as_str()),
+            )
+            .await;
+            if is_live(status, Some(*state)) {
+                expected.push(title);
+            }
+        }
+    }
+    expected.sort();
+    let found: Vec<String> = sqlx::query_scalar(&format!(
+        "SELECT n.title FROM nodes n WHERE {} ORDER BY n.title COLLATE \"C\"",
+        super::node::live("n")
+    ))
+    .fetch_all(&pool)
+    .await
+    .expect("live nodes");
+    assert_eq!(found, expected);
+    assert_eq!(found.len(), 2 + 2 * 2, "the fixture is what it says");
+}
+
+/// `GET /nodes/{id}/edges` (S7a): each end's kind and standing, and
+/// whether this reader may remove the link: `EdgeType::removable_by`,
+/// the rule `DELETE /edges/{id}` applies, for whether they hold an
+/// editor's grant on each end. (The route's use of that rule is the
+/// route tests'; this holds the SQL to it.) Links with an end the
+/// reader can't see are still left out.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_nodes_links_say_what_each_end_is_and_who_may_remove_them(pool: PgPool) {
+    use common::edge::EdgeType;
+    use common::node::{NodeStatus, NodeType};
+    use common::project_state::ProjectState;
+    let edges = PgEdgeRepo::new(pool.clone());
+    // The page's node, and one node per link type on each side of it.
+    let hub = a_project(&pool, "alice", "hub", None).await.id;
+    let mut made: Vec<(EdgeType, bool, uuid::Uuid)> = Vec::new();
+    for edge_type in EdgeType::ALL {
+        for outgoing in [true, false] {
+            let title = format!(
+                "{} {}",
+                edge_type.as_str(),
+                if outgoing { "out" } else { "in" }
+            );
+            let other = a_project(&pool, "alice", &title, None).await.id;
+            let (source, target) = if outgoing {
+                (hub.0, other.0)
+            } else {
+                (other.0, hub.0)
+            };
+            raw_edge(&pool, source, target, edge_type.as_str()).await;
+            made.push((edge_type.clone(), outgoing, other.0));
+        }
+    }
+    // Readers: bob edits only the hub, carol edits only the others, dan
+    // views everything, and erin sees the hub alone.
+    grant(&pool, hub, "bob", "editor").await;
+    grant(&pool, hub, "dan", "viewer").await;
+    grant(&pool, hub, "erin", "viewer").await;
+    for (_, _, other) in &made {
+        let other = common::id::NodeId(*other);
+        grant(&pool, other, "bob", "viewer").await;
+        grant(&pool, other, "carol", "editor").await;
+        grant(&pool, other, "dan", "viewer").await;
+    }
+    grant(&pool, hub, "carol", "viewer").await;
+
+    for (who, edits_hub, edits_other) in [
+        (Some("alice"), true, true),
+        (Some("bob"), true, false),
+        (Some("carol"), false, true),
+        (Some("dan"), false, false),
+        (None, true, true), // an admin
+    ] {
+        let listed = edges
+            .list_for_node_with_titles(hub, who)
+            .await
+            .expect("the hub's links");
+        assert_eq!(listed.len(), made.len(), "{who:?} sees every link");
+        for (edge_type, outgoing, other) in &made {
+            let row = listed
+                .iter()
+                .find(|e| {
+                    e.edge_type == *edge_type
+                        && (e.source_id.0 == *other || e.target_id.0 == *other)
+                })
+                .expect("the link");
+            let (edits_source, edits_target) = if *outgoing {
+                (edits_hub, edits_other)
+            } else {
+                (edits_other, edits_hub)
+            };
+            assert_eq!(
+                row.may_remove,
+                edge_type.removable_by(edits_source, edits_target),
+                "{who:?}, {edge_type:?}, outgoing {outgoing}"
+            );
+        }
+    }
+    // Erin sees the hub and nothing at its other ends: no link at all.
+    let hers = edges
+        .list_for_node_with_titles(hub, Some("erin"))
+        .await
+        .expect("erin");
+    assert!(hers.is_empty(), "{hers:?}");
+
+    // What each end is: its kind, its status and a Project's state.
+    let source = node_in_state(
+        &pool,
+        "alice",
+        "reference",
+        "an old source",
+        "archived",
+        None,
+    )
+    .await;
+    let closed = node_in_state(
+        &pool,
+        "alice",
+        "project",
+        "a closed user",
+        "published",
+        Some("complete"),
+    )
+    .await;
+    raw_edge(&pool, closed, source, "references").await;
+    let listed = edges
+        .list_for_node_with_titles(common::id::NodeId(source), Some("alice"))
+        .await
+        .expect("links");
+    let row = &listed[0];
+    let (from, to) = (
+        row.source_node.as_ref().expect("the source's standing"),
+        row.target_node.as_ref().expect("the target's standing"),
+    );
+    assert_eq!(
+        (&from.node_type, &from.status, from.project_state),
+        (
+            &NodeType::Project,
+            &NodeStatus::Published,
+            Some(ProjectState::Complete)
+        )
+    );
+    assert_eq!(
+        (&to.node_type, &to.status, to.project_state),
+        (&NodeType::Reference, &NodeStatus::Archived, None)
+    );
+    assert!(!from.is_live() && !to.is_live());
+}
+
+/// §6.3, §14: the delete warning counts `references` links into the nodes
+/// being deleted, from nodes that are live, stay, and that the caller can
+/// see. It may understate; it never counts a link from a hidden node.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_delete_warning_counts_only_live_links_the_caller_can_see(pool: PgPool) {
+    use common::id::NodeId as Id;
+    let nodes = PgNodeRepo::new(pool.clone());
+    let edges = PgEdgeRepo::new(pool.clone());
+    let source = insert_raw_node(&pool, "alice", "reference", "the source", "").await;
+    let other = insert_raw_node(&pool, "alice", "reference", "another source", "").await;
+    let user = |owner: &'static str,
+                kind: &'static str,
+                title: &'static str,
+                status: &'static str,
+                state: Option<&'static str>| {
+        let pool = &pool;
+        async move {
+            let id = node_in_state(pool, owner, kind, title, status, state).await;
+            raw_edge(pool, id, source, "references").await;
+            id
+        }
+    };
+    // Counted for alice: a live Article, a draft, a parked Project.
+    user("alice", "article", "live article", "published", None).await;
+    user("alice", "article", "draft article", "draft", None).await;
+    user(
+        "alice",
+        "project",
+        "parked project",
+        "published",
+        Some("parked"),
+    )
+    .await;
+    // Not live: archived, complete, cancelled.
+    user("alice", "article", "archived article", "archived", None).await;
+    user(
+        "alice",
+        "project",
+        "complete project",
+        "published",
+        Some("complete"),
+    )
+    .await;
+    user(
+        "alice",
+        "project",
+        "cancelled project",
+        "published",
+        Some("cancelled"),
+    )
+    .await;
+    // Bob's own, which alice can't see; and one of his he shared with her.
+    user(
+        "bob",
+        "project",
+        "bob's hidden project",
+        "published",
+        Some("active"),
+    )
+    .await;
+    let shared = user(
+        "bob",
+        "project",
+        "bob's shared project",
+        "published",
+        Some("active"),
+    )
+    .await;
+    share(&pool, shared, "alice").await;
+    // Other kinds of link are not a use as a source.
+    let kin = insert_raw_node(&pool, "alice", "article", "kin", "").await;
+    raw_edge(&pool, kin, source, "related_to").await;
+    raw_edge(&pool, kin, source, "wiki_link").await;
+    // What the source itself draws on is not a use of it.
+    raw_edge(&pool, source, other, "references").await;
+
+    let count = |ids: Vec<uuid::Uuid>, viewer: Option<&'static str>| {
+        let nodes = &nodes;
+        async move {
+            let ids: Vec<Id> = ids.into_iter().map(Id).collect();
+            nodes
+                .deletion_preview(&ids, "alice", viewer)
+                .await
+                .expect("preview")
+                .still_used_by
+        }
+    };
+    assert_eq!(
+        count(vec![source], Some("alice")).await,
+        4,
+        "three of hers and bob's shared one"
+    );
+    // Bob sees only his own two.
+    assert_eq!(count(vec![source], Some("bob")).await, 2);
+    // An admin reads every node: every live link.
+    assert_eq!(count(vec![source], None).await, 5);
+    // A user that is deleted with it leaves no link behind.
+    let live_article: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM nodes WHERE title = 'live article'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count(vec![source, live_article], Some("alice")).await, 3);
+    // A node nothing draws on, and deleting the user instead of the source.
+    assert_eq!(
+        count(vec![other], Some("alice")).await,
+        1,
+        "the source itself draws on it"
+    );
+    assert_eq!(count(vec![other, source], Some("alice")).await, 4);
+    assert_eq!(count(vec![live_article], Some("alice")).await, 0);
+
+    // The warning is the live rows of the page's "Used in": the same
+    // links, read the same way.
+    let listed = edges
+        .list_for_node_with_titles(Id(source), Some("alice"))
+        .await
+        .expect("links");
+    assert_eq!(common::connections::live_users(Id(source), &listed), 4);
+}
+
+/// S7a (§6.5): a `derived_from` link whose origin is an Area is listed
+/// for the owner of either end, with what its fixes need; and its fix
+/// for a Reference turns it into "the Area references it" in one step.
+#[sqlx::test(migrations = "../migrations")]
+async fn data_health_lists_nodes_filed_under_an_area_with_derived_from(pool: PgPool) {
+    use common::data_health::{FilingFix, RuleId};
+    use common::edge::EdgeType;
+    use common::node::NodeType;
+    let area = insert_raw_node(&pool, "alice", "area", "an area", "").await;
+    let other_area = insert_raw_node(&pool, "alice", "area", "another area", "").await;
+    let loose = insert_raw_node(&pool, "alice", "project", "a loose project", "").await;
+    let homed = insert_raw_node(&pool, "alice", "project", "a homed project", "").await;
+    let reference = insert_raw_node(&pool, "alice", "reference", "a reference", "").await;
+    let real = insert_raw_node(&pool, "alice", "article", "a real descendant", "").await;
+    raw_edge(&pool, loose, area, "derived_from").await;
+    raw_edge(&pool, homed, area, "derived_from").await;
+    raw_edge(&pool, other_area, homed, "contains").await;
+    let filed = raw_edge_id(&pool, reference, area, "derived_from").await;
+    raw_edge(&pool, real, loose, "derived_from").await; // provenance: fine
+    // Bob's node filed under an Area alice can't see is not hers to see.
+    let bobs_area = insert_raw_node(&pool, "bob", "area", "bob's area", "").await;
+    let bobs = insert_raw_node(&pool, "bob", "project", "bob's project", "").await;
+    raw_edge(&pool, bobs, bobs_area, "derived_from").await;
+    // Another of bob's, both ends shared with alice: she can see it, but
+    // neither end is hers, so it is not hers to be told to fix.
+    let shown_area = insert_raw_node(&pool, "bob", "area", "bob's shown area", "").await;
+    let shown = insert_raw_node(&pool, "bob", "project", "bob's shown project", "").await;
+    raw_edge(&pool, shown, shown_area, "derived_from").await;
+    share(&pool, shown_area, "alice").await;
+    share(&pool, shown, "alice").await;
+
+    let alice = health(&pool, "alice").await;
+    let rule = &alice[&RuleId::DerivedFromArea];
+    assert_eq!(rule.count, 3);
+    let fix_of = |node: uuid::Uuid| {
+        let item = rule
+            .items
+            .iter()
+            .find(|v| v.subject.id == node)
+            .expect("listed");
+        let filed = item.filed.as_ref().expect("what its fixes need");
+        assert_eq!(item.links.len(), 1);
+        assert_eq!((item.links[0].source, item.links[0].target), (node, area));
+        assert!(item.links[0].filing_fix_allowed(filed.fix()));
+        (filed.kind.clone(), filed.has_home, filed.fix())
+    };
+    assert_eq!(
+        fix_of(loose),
+        (NodeType::Project, false, FilingFix::MakeHome)
+    );
+    assert_eq!(fix_of(homed), (NodeType::Project, true, FilingFix::Remove));
+    assert_eq!(
+        fix_of(reference),
+        (NodeType::Reference, false, FilingFix::LinkAsSource)
+    );
+    // Bob's two are his; the installation-wide count holds all five.
+    assert_eq!(
+        health(&pool, "bob").await[&RuleId::DerivedFromArea].count,
+        2
+    );
+    let all = super::data_health::PgDataHealthRepo::new(pool.clone());
+    use super::data_health::DataHealthRepo;
+    let counts = all.counts_all().await.expect("counts");
+    let derived = counts
+        .iter()
+        .find(|c| c.rule == RuleId::DerivedFromArea)
+        .expect("counted");
+    assert_eq!(derived.count, 5);
+
+    // The Area's owner is listed a node filed under it that is someone
+    // else's. Whether that node has a home is said to them only as
+    // `GET …/home` would say it: a home they can't see reads as none.
+    let carols = insert_raw_node(&pool, "carol", "article", "carol's article", "").await;
+    own(&pool, common::id::NodeId(carols), "carol").await;
+    share(&pool, carols, "alice").await;
+    // Carol can see the Area too: the report holds only links whose two
+    // ends its reader can see.
+    share(&pool, area, "carol").await;
+    raw_edge(&pool, carols, area, "derived_from").await;
+    let has_home = |report: &std::collections::HashMap<RuleId, common::data_health::RuleReport>| {
+        report[&RuleId::DerivedFromArea]
+            .items
+            .iter()
+            .find(|v| v.subject.id == carols)
+            .and_then(|v| v.filed.as_ref())
+            .map(|f| f.has_home)
+    };
+    assert_eq!(has_home(&health(&pool, "alice").await), Some(false));
+    assert_eq!(has_home(&health(&pool, "carol").await), Some(false));
+    let carols_area = insert_raw_node(&pool, "carol", "area", "carol's own area", "").await;
+    raw_edge(&pool, carols_area, carols, "contains").await;
+    assert_eq!(
+        has_home(&health(&pool, "alice").await),
+        Some(false),
+        "a home alice can't see is not hers to be told of"
+    );
+    assert_eq!(
+        has_home(&health(&pool, "carol").await),
+        Some(true),
+        "the node's editor is told: a second home would be refused"
+    );
+    // Once she can see the home, it is no secret.
+    share(&pool, carols_area, "alice").await;
+    assert_eq!(has_home(&health(&pool, "alice").await), Some(true));
+    // The other half of the rule: a node alice edits, homed where she
+    // can't see. She is told it has a home, as `GET …/home` tells her:
+    // making the Area its home would be refused as a second one.
+    let tucked = insert_raw_node(&pool, "alice", "project", "tucked away", "").await;
+    own(&pool, common::id::NodeId(tucked), "alice").await;
+    raw_edge(&pool, tucked, area, "derived_from").await;
+    raw_edge(&pool, bobs_area, tucked, "contains").await;
+    let alice = health(&pool, "alice").await;
+    let rule = &alice[&RuleId::DerivedFromArea];
+    assert_eq!(rule.count, 5, "carol's is listed to the Area's owner too");
+    let of_tucked = rule
+        .items
+        .iter()
+        .find(|v| v.subject.id == tucked)
+        .and_then(|v| v.filed.as_ref())
+        .expect("listed");
+    assert!(of_tucked.has_home, "its editor is told of a hidden home");
+    assert_eq!(of_tucked.fix(), FilingFix::Remove);
+    let hers = rule
+        .items
+        .iter()
+        .find(|v| v.subject.id == carols)
+        .expect("listed");
+    // And no fix is offered her on it: the link is its source's.
+    assert!(!hers.links[0].removable());
+    for fix in [
+        FilingFix::MakeHome,
+        FilingFix::LinkAsSource,
+        FilingFix::Remove,
+    ] {
+        assert!(!hers.links[0].filing_fix_allowed(fix), "{fix:?}");
+    }
+    sqlx::query("DELETE FROM nodes WHERE id = ANY($1)")
+        .bind(vec![carols, carols_area, tucked])
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // "Link as a source": converted and turned round in one step.
+    PgEdgeRepo::new(pool.clone())
+        .convert(
+            common::id::EdgeId(filed),
+            EdgeType::DerivedFrom,
+            EdgeType::References,
+            true,
+        )
+        .await
+        .expect("reversed in one step");
+    let after: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT source_id, target_id, edge_type::text FROM edges \
+         WHERE source_id IN ($1, $2) AND target_id IN ($1, $2)",
+    )
+    .bind(reference)
+    .bind(area)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(after, vec![(area, reference, "references".to_string())]);
+    assert_eq!(
+        health(&pool, "alice").await[&RuleId::DerivedFromArea].count,
+        2,
+        "it is no longer listed"
+    );
 }

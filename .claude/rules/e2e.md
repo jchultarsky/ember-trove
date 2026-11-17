@@ -115,6 +115,16 @@ CI job is too slow a feedback loop for selector work.
   `seedTrove(request, stamp)` from `seed.ts`. It creates nodes whose bodies
   mention a title, titles that share a prefix, wiki links, a task and a
   note. Empty-body fixtures hid the v2.33.0 picker bug.
+- **Connections rows are links in named groups** (2026-11-17, S7a):
+  a group is `getByTestId('connections-<slug>')` (`used-in`, `sources`,
+  `contains`, `mentioned-in`, …; `Group::slug`), a row
+  `getByTestId('connection-row')` holding a `link`, not a `button`.
+  The remove control is named for its row, "Remove the link to
+  <title>", and is absent for a reader who may not remove the link, so
+  assert `toHaveCount(0)`, never "disabled". A node's home is
+  `getByTestId('node-home')`; there is no `connections-home` group
+  beside it. An archived node is not in `/api/nodes/lookup`, so a
+  spec that archives a node deletes it by id.
 - **A project in Focus has two cards on the dashboard** (2026-11-11,
   #282): one in the Focus section and one in its Area group, so
   `getByTestId('project-card').filter({ hasText: title })` is a

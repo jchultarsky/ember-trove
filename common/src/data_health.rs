@@ -35,6 +35,11 @@ pub enum RuleId {
     ContainedReference,
     ContainmentNotAllowed,
     DependsOnArea,
+    /// A `derived_from` link whose origin is an Area (S7a; §6.5). Links
+    /// of this shape were made by hand to file a node under an Area,
+    /// before a node had a home (owner decision, 2026-11-16). New ones
+    /// are refused; these are listed with fixes.
+    DerivedFromArea,
     ContainsCycle,
     DependsOnCycle,
     DerivedFromCycle,
@@ -49,6 +54,7 @@ wire_enum!(RuleId {
     ContainedReference => "contained_reference",
     ContainmentNotAllowed => "containment_not_allowed",
     DependsOnArea => "depends_on_area",
+    DerivedFromArea => "derived_from_area",
     ContainsCycle => "contains_cycle",
     DependsOnCycle => "depends_on_cycle",
     DerivedFromCycle => "derived_from_cycle",
@@ -65,7 +71,7 @@ impl RuleId {
             Self::ContainmentNotAllowed => "§3.3",
             Self::ContainedReference | Self::ContainsCycle => "§6.1",
             Self::DependsOnArea | Self::DependsOnCycle => "§6.4",
-            Self::DerivedFromCycle => "§6.5",
+            Self::DerivedFromArea | Self::DerivedFromCycle => "§6.5",
         }
     }
 
@@ -81,6 +87,7 @@ impl RuleId {
             Self::ContainedReference => "A Reference inside a home",
             Self::ContainmentNotAllowed => "A home that isn't allowed",
             Self::DependsOnArea => "A dependency on an Area",
+            Self::DerivedFromArea => "Derived from an Area",
             Self::ContainsCycle => "Homes in a loop",
             Self::DependsOnCycle => "Dependencies in a loop",
             Self::DerivedFromCycle => "Derivations in a loop",
@@ -107,6 +114,9 @@ impl RuleId {
                 "An Area holds Areas, Projects and Articles; a Project holds only sub-Projects."
             }
             Self::DependsOnArea => "An Area never completes, so nothing can depend on it.",
+            Self::DerivedFromArea => {
+                "Nothing is derived from an Area: an Area is where a node belongs, not what it came from."
+            }
             Self::ContainsCycle => "Homes can't loop: no node may contain itself, even indirectly.",
             Self::DependsOnCycle => "A dependency loop is a deadlock: nothing in it could finish.",
             Self::DerivedFromCycle => "An origin comes before what was derived from it.",
@@ -132,6 +142,9 @@ impl RuleId {
             Self::ContainedReference => "Turn the contains link into a references link.",
             Self::ContainmentNotAllowed => "Move it to an allowed home, or link it instead.",
             Self::DependsOnArea => "Depend on a Project in the Area instead.",
+            Self::DerivedFromArea => {
+                "Make the Area the node's home, link a Reference as a source of the Area, or remove the link."
+            }
             Self::ContainsCycle | Self::DependsOnCycle | Self::DerivedFromCycle => {
                 "Remove one edge of the loop."
             }
@@ -249,6 +262,66 @@ pub struct Violation {
     /// other rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub still_open: Option<StillOpenRef>,
+    /// What a derived-from-an-Area item's fixes need (S7a): the kind of
+    /// the node that was filed, and whether it has a home. `None` for
+    /// every other rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filed: Option<FiledRef>,
+}
+
+/// A node filed under an Area with a `derived_from` link (S7a).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct FiledRef {
+    /// The kind of the node the link runs from.
+    pub kind: crate::node::NodeType,
+    /// Whether it already has a home, as far as the reader may be told
+    /// (`GET …/home`'s rule): an editor of the node is told of any home,
+    /// one they can't see included; anyone else only of a home they can
+    /// see. A fix that makes a home is applied with `POST /edges`, which
+    /// refuses a second home and a loop, so a premise that has gone
+    /// stale is refused, never applied over the home the node has.
+    pub has_home: bool,
+}
+
+/// What a derived-from-an-Area link should become (S7a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilingFix {
+    /// The Area becomes the node's home (§3.3: an Area holds Areas,
+    /// Projects and Articles), then the link is removed.
+    MakeHome,
+    /// The node is a Reference, which is never contained (§6.1): the
+    /// Area "references" it. The link is converted and turned round.
+    LinkAsSource,
+    /// It already has a home: the link says nothing more, and is removed.
+    Remove,
+}
+
+impl FilingFix {
+    /// The button's words.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::MakeHome => "Make the Area its home",
+            Self::LinkAsSource => "Link as a source of the Area",
+            Self::Remove => "Remove the link",
+        }
+    }
+}
+
+impl FiledRef {
+    /// The fix that fits: the first one "Fix all" applies.
+    #[must_use]
+    pub fn fix(&self) -> FilingFix {
+        use crate::node::NodeType;
+        use crate::ontology::containment_violation;
+        if self.kind == NodeType::Reference {
+            FilingFix::LinkAsSource
+        } else if !self.has_home && containment_violation(&NodeType::Area, &self.kind).is_none() {
+            FilingFix::MakeHome
+        } else {
+            FilingFix::Remove
+        }
+    }
 }
 
 /// A closed project and what is still open on or directly under it (S6b).
@@ -310,8 +383,8 @@ impl LinkRef {
     pub fn removable(&self) -> bool {
         // A machine-owned link is never removed by hand (§6.6): the API
         // answers 422, so no button is offered.
-        !self.edge_type.is_machine_owned()
-            && (self.source_owned || (self.edge_type.deletable_from_target() && self.target_owned))
+        self.edge_type
+            .removable_by(self.source_owned, self.target_owned)
     }
 
     /// The reader may turn the link into `to` (the rule of
@@ -321,10 +394,37 @@ impl LinkRef {
         crate::edge::convert_ends(
             &self.edge_type,
             to,
+            false,
             Self::rights(self.source_owned),
             Self::rights(self.target_owned),
         )
         .is_ok()
+    }
+
+    /// The reader may turn the link into `to` running the other way
+    /// (`reverse` on the same route).
+    #[must_use]
+    pub fn reversible_to(&self, to: &crate::edge::EdgeType) -> bool {
+        crate::edge::convert_ends(
+            &self.edge_type,
+            to,
+            true,
+            Self::rights(self.source_owned),
+            Self::rights(self.target_owned),
+        )
+        .is_ok()
+    }
+
+    /// Whether the reader could apply `fix` to this derived-from-an-Area
+    /// link: the calls it makes would pass. Making a home writes on both
+    /// ends (§6.1); the source link is written on the Area.
+    #[must_use]
+    pub fn filing_fix_allowed(&self, fix: FilingFix) -> bool {
+        match fix {
+            FilingFix::MakeHome => self.source_owned && self.target_owned,
+            FilingFix::LinkAsSource => self.reversible_to(&crate::edge::EdgeType::References),
+            FilingFix::Remove => self.removable(),
+        }
     }
 }
 
@@ -351,7 +451,15 @@ impl Violation {
             links: Vec::new(),
             label_reading: None,
             still_open: None,
+            filed: None,
         }
+    }
+
+    /// Says what a derived-from-an-Area item's fixes need (S7a).
+    #[must_use]
+    pub fn with_filed(mut self, filed: FiledRef) -> Self {
+        self.filed = Some(filed);
+        self
     }
 
     /// Says what a still-open-under-a-closed-project item is about (see
@@ -480,6 +588,13 @@ pub fn graph_rule_counts(
         known
             .iter()
             .filter(|k| *k.2 == EdgeType::DependsOn && *k.4 == NodeType::Area)
+            .count(),
+    );
+    bump(
+        RuleId::DerivedFromArea,
+        known
+            .iter()
+            .filter(|k| *k.2 == EdgeType::DerivedFrom && *k.4 == NodeType::Area)
             .count(),
     );
     for (edge_type, rule) in [
@@ -687,6 +802,8 @@ mod tests {
             (id(3), id(6), RelatedTo),
             (id(6), id(3), RelatedTo), // both ways: merged on restore, not a rule
             (id(5), id(4), DerivedFrom), // fine
+            (id(3), id(1), DerivedFrom), // "from" an Area: filing, not an origin
+            (id(4), id(2), DerivedFrom), // and again
             (id(1), id(9), Contains),  // unknown end: skipped
             (id(4), id(5), WikiLink),  // mentions are never a violation
         ];
@@ -696,9 +813,80 @@ mod tests {
                 (RuleId::ContainedReference, 1),
                 (RuleId::ContainmentNotAllowed, 1),
                 (RuleId::DependsOnArea, 1),
+                (RuleId::DerivedFromArea, 2),
                 (RuleId::DependsOnCycle, 1),
             ]
         );
         assert!(graph_rule_counts(&kinds, &[]).is_empty());
+    }
+
+    /// S7a: a "derived from an Area" link was filing. What it becomes
+    /// depends on the node that was filed, and each fix is offered only
+    /// where its calls would pass.
+    #[test]
+    fn a_node_filed_under_an_area_gets_the_fix_that_fits() {
+        use crate::edge::EdgeType::DerivedFrom;
+        use crate::node::NodeType::*;
+        let filed = |kind, has_home| FiledRef { kind, has_home };
+        // A Reference is never contained: the Area references it.
+        assert_eq!(filed(Reference, false).fix(), FilingFix::LinkAsSource);
+        assert_eq!(filed(Reference, true).fix(), FilingFix::LinkAsSource);
+        // What an Area may hold, with no home yet, goes home.
+        for kind in [Project, Article, Area] {
+            assert_eq!(
+                filed(kind.clone(), false).fix(),
+                FilingFix::MakeHome,
+                "{kind:?}"
+            );
+            // One that has a home keeps it: the link is just removed.
+            assert_eq!(
+                filed(kind.clone(), true).fix(),
+                FilingFix::Remove,
+                "{kind:?}"
+            );
+        }
+
+        let link = |source_owned, target_owned| LinkRef {
+            id: Uuid::nil(),
+            edge_type: DerivedFrom,
+            source: Uuid::from_u128(1),
+            target: Uuid::from_u128(2),
+            source_owned,
+            target_owned,
+        };
+        let both = link(true, true);
+        for fix in [
+            FilingFix::MakeHome,
+            FilingFix::LinkAsSource,
+            FilingFix::Remove,
+        ] {
+            assert!(both.filing_fix_allowed(fix), "{fix:?}");
+        }
+        // The node's owner alone may remove the link, and nothing that
+        // writes on the Area.
+        let mine = link(true, false);
+        assert!(mine.filing_fix_allowed(FilingFix::Remove));
+        assert!(!mine.filing_fix_allowed(FilingFix::MakeHome));
+        assert!(!mine.filing_fix_allowed(FilingFix::LinkAsSource));
+        // The Area's owner alone has no say over the node's link.
+        let theirs = link(false, true);
+        for fix in [
+            FilingFix::MakeHome,
+            FilingFix::LinkAsSource,
+            FilingFix::Remove,
+        ] {
+            assert!(!theirs.filing_fix_allowed(fix), "{fix:?}");
+        }
+        // The rule says what the refusal says.
+        assert!(
+            RuleId::DerivedFromArea
+                .explanation()
+                .starts_with("Nothing is derived from an Area")
+        );
+        assert!(
+            crate::ontology::EdgeRefusal::DerivedFromArea
+                .message()
+                .starts_with("nothing is derived from an Area")
+        );
     }
 }

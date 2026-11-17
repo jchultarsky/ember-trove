@@ -236,9 +236,21 @@ const CONCEPTS: &[Concept] = &[
         body: "A node has one home. An Area holds Areas, Projects and Articles; a \
                Project holds sub-Projects; a Reference is never held: link it \
                with References instead. Contains, Depends on and Derived from \
-               can't loop back, and nothing depends on an Area. Wiki links come \
-               only from [[Title]] in the text. A home needs edit rights on both \
-               nodes.",
+               can't loop back, and nothing depends on an Area or is derived \
+               from one. Wiki links come only from [[Title]] in the text. A home \
+               needs edit rights on both nodes.",
+    },
+    Concept {
+        title: "Reading a node's Connections",
+        body: "Links are listed by what they mean. Sources (an Article's \
+               Bibliography) is what the node draws on; Used in is every node \
+               that draws on it. Derived from is what it came from; Descendants \
+               is what came from it. Mentions and Mentioned in are the [[Title]] \
+               links, each way. Nodes that are archived, or Projects that are \
+               closed, come last and say so. Archiving or deleting a node that \
+               nodes in use still draw on warns you first; it never stops you. \
+               Unlinked Mentions finds nodes that name this one in their text \
+               without linking to it.",
     },
     Concept {
         title: "Captures",

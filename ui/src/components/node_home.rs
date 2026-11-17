@@ -88,7 +88,7 @@ pub fn HomeRow(
             if !is_open {
                 return None;
             }
-            crate::api::fetch_home(node_id).await.ok()
+            Some(crate::api::fetch_home(node_id).await)
         }
     });
     let picking = RwSignal::new(false);
@@ -151,8 +151,26 @@ pub fn HomeRow(
                     }
                     .into_any();
                 }
-                let Some(Some(current)) = home.get() else {
-                    return ().into_any();
+                let current = match home.get().flatten() {
+                    None => return ().into_any(),
+                    // Never nothing (#281, 1.7): a blank row reads as
+                    // "no home", and the list below leaves the home out.
+                    Some(Err(_)) => {
+                        return view! {
+                            <span role="alert" class="text-xs text-red-600 dark:text-red-400"
+                                data-testid="home-load-error">
+                                "Couldn\u{2019}t load the home."
+                            </span>
+                            <button type="button"
+                                class="text-xs text-stone-500 dark:text-stone-400 underline underline-offset-2
+                                       hover:text-amber-700 dark:hover:text-amber-400"
+                                on:click=move |_| refresh.update(|v| *v += 1)>
+                                "Try again"
+                            </button>
+                        }
+                        .into_any();
+                    }
+                    Some(Ok(current)) => current,
                 };
                 let state = shown(&current);
                 let has_home = state != Shown::Alone;

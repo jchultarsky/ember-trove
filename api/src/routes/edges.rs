@@ -115,6 +115,9 @@ async fn delete_edge(
 /// POST /edges/{id}/convert — a Data health fix (#228): turn a link into a
 /// `references` or `related_to` link between the same nodes, in one step.
 ///
+/// `reverse` also turns it round (S7a): the new link runs from the old
+/// target. The repo deletes and inserts in one transaction either way.
+///
 /// The caller must be allowed both to delete the old link and to create
 /// the new one (`common::edge::convert_ends`). Rights come first, so a
 /// stranger learns nothing about the link but that it exists (as with
@@ -133,13 +136,14 @@ async fn convert_edge(
     let source = end_rights(&state, &claims, edge.source_id).await?;
     let target = end_rights(&state, &claims, edge.target_id).await?;
     let may_see = source.view || target.view;
-    let swap =
-        convert_ends(&edge.edge_type, &req.edge_type, source, target).map_err(|r| match r {
+    let swap = convert_ends(&edge.edge_type, &req.edge_type, req.reverse, source, target).map_err(
+        |r| match r {
             // To a stranger to both ends, the link reads as missing.
             ConvertRefusal::Forbidden if !may_see => missing(LINK),
             ConvertRefusal::Forbidden => ApiError::Forbidden(r.message().to_string()),
             ConvertRefusal::NotConvertible => ApiError::Validation(r.message().to_string()),
-        })?;
+        },
+    )?;
     let (from, to) = if swap {
         (edge.target_id, edge.source_id)
     } else {

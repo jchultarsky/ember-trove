@@ -62,7 +62,7 @@ test('every section is in the outline and one shared look (#131)', async ({ page
     const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
     await expect(items).toHaveText([
       /Brief/, /Tasks/, /History/, /People/, /External Links/, /Connections/, /Local Graph/,
-      /Linked Here/, /Attachments/, /Sharing/, /Versions/, /Activity/,
+      /Unlinked Mentions/, /Attachments/, /Sharing/, /Versions/, /Activity/,
     ]);
     // Jumping to a collapsed section opens and focuses it.
     await items.filter({ hasText: 'Versions' }).click();
@@ -115,7 +115,7 @@ test('an Article has no Tasks or People section, and the outline follows (#216)'
     const items = page.getByRole('menu', { name: 'Sections' }).getByRole('menuitem');
     await expect(items).toHaveText([
       /History/, /External Links/, /Connections/, /Local Graph/,
-      /Linked Here/, /Attachments/, /Sharing/, /Versions/, /Activity/,
+      /Unlinked Mentions/, /Attachments/, /Sharing/, /Versions/, /Activity/,
     ]);
   } finally {
     await request.delete(`/api/nodes/${node.id}`);

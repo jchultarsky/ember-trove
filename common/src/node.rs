@@ -84,6 +84,43 @@ impl NodeStatus {
     }
 }
 
+/// Whether a node is **live**: in use, as the delete and archive warnings
+/// mean it (ONTOLOGY §6.3: "a node that active nodes still reference").
+/// Not archived, and not a Project whose state is complete or cancelled.
+/// A parked Project and a draft are live: set aside or unfinished, not
+/// done with. A Project is the only kind with a state.
+///
+/// Not called "active": that word is a Project's state
+/// (`ProjectState::Active`), which is narrower.
+#[must_use]
+pub fn is_live(
+    status: &NodeStatus,
+    project_state: Option<crate::project_state::ProjectState>,
+) -> bool {
+    *status != NodeStatus::Archived && !project_state.is_some_and(|s| s.is_terminal())
+}
+
+/// The node statuses and the Project states of a live node, in the
+/// database's words: the SQL for "live" is built from these
+/// (`repo::node::live`), so it can't name a different set than
+/// [`is_live`].
+#[must_use]
+pub fn live_words() -> (Vec<&'static str>, Vec<&'static str>) {
+    use crate::project_state::ProjectState;
+    (
+        NodeStatus::ALL
+            .iter()
+            .filter(|s| is_live(s, None))
+            .map(NodeStatus::as_str)
+            .collect(),
+        ProjectState::ALL
+            .iter()
+            .filter(|s| is_live(&NodeStatus::Published, Some(**s)))
+            .map(ProjectState::as_str)
+            .collect(),
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Node {
     pub id: NodeId,
@@ -378,6 +415,15 @@ pub struct NodeDeletionPreview {
     /// Absent in an answer from before Briefs.
     #[serde(default)]
     pub briefs: u64,
+    /// `references` links into these nodes from live nodes ([`is_live`])
+    /// that stay and that the caller can see (S7a; ONTOLOGY §6.3, §14).
+    /// Not something the delete destroys beyond the link itself: it is
+    /// the warning's count ([`Self::warning`]), never part of
+    /// [`Self::losses`]. A link from a node the caller can't see is never
+    /// counted: the warning may understate, and never says a hidden node
+    /// exists. Links, not nodes, so batches add up.
+    #[serde(default)]
+    pub still_used_by: u64,
 }
 
 impl NodeDeletionPreview {
@@ -412,6 +458,20 @@ impl NodeDeletionPreview {
         out
     }
 
+    /// The warning for nodes still used as a source (§6.3: "a warning,
+    /// not a block"): a count, never a title. `None` when no live node
+    /// the caller can see draws on them.
+    #[must_use]
+    pub fn warning(&self) -> Option<String> {
+        match self.still_used_by {
+            0 => None,
+            1 => Some("Still used as a source: 1 link from a node in use will go too.".to_string()),
+            n => Some(format!(
+                "Still used as a source: {n} links from nodes in use will go too."
+            )),
+        }
+    }
+
     /// How many of the `asked` nodes would stay: missing, or not the
     /// caller's to delete.
     #[must_use]
@@ -430,6 +490,7 @@ impl NodeDeletionPreview {
             others_notes: self.others_notes + other.others_notes,
             files: self.files + other.files,
             briefs: self.briefs + other.briefs,
+            still_used_by: self.still_used_by + other.still_used_by,
         }
     }
 }
@@ -528,6 +589,44 @@ mod validation_tests {
 }
 
 #[cfg(test)]
+mod live_tests {
+    use super::{NodeStatus, is_live, live_words};
+    use crate::project_state::ProjectState;
+
+    /// §6.3's "active nodes", read as: not archived, and not a closed
+    /// Project. Every status against every state, and none.
+    #[test]
+    fn a_node_is_live_unless_it_is_archived_or_a_closed_project() {
+        for status in NodeStatus::ALL {
+            let archived = *status == NodeStatus::Archived;
+            assert_eq!(is_live(status, None), !archived, "{status:?}, no state");
+            for state in ProjectState::ALL {
+                let closed = matches!(state, ProjectState::Complete | ProjectState::Cancelled);
+                assert_eq!(
+                    is_live(status, Some(*state)),
+                    !archived && !closed,
+                    "{status:?}, {state:?}"
+                );
+            }
+        }
+        // Said outright: a parked Project and a draft are still in use.
+        assert!(is_live(&NodeStatus::Published, Some(ProjectState::Parked)));
+        assert!(is_live(&NodeStatus::Draft, None));
+        assert!(!is_live(
+            &NodeStatus::Published,
+            Some(ProjectState::Complete)
+        ));
+    }
+
+    #[test]
+    fn the_words_for_sql_are_the_rules_own() {
+        let (statuses, states) = live_words();
+        assert_eq!(statuses, ["draft", "published"]);
+        assert_eq!(states, ["active", "parked"]);
+    }
+}
+
+#[cfg(test)]
 mod deletion_preview_tests {
     use super::NodeDeletionPreview;
 
@@ -541,6 +640,9 @@ mod deletion_preview_tests {
             others_notes: 1,
             files: 3,
             briefs: 1,
+            // A link from a node that uses this one is not a loss of
+            // content: it has its own line.
+            still_used_by: 4,
         };
         assert_eq!(
             p.losses(),
@@ -551,6 +653,30 @@ mod deletion_preview_tests {
                 "1 brief"
             ]
         );
+    }
+
+    #[test]
+    fn the_warning_counts_links_and_names_nothing() {
+        let used = |n| NodeDeletionPreview {
+            nodes: 1,
+            still_used_by: n,
+            ..Default::default()
+        };
+        assert_eq!(used(0).warning(), None);
+        assert_eq!(
+            used(1).warning().as_deref(),
+            Some("Still used as a source: 1 link from a node in use will go too.")
+        );
+        assert_eq!(
+            used(3).warning().as_deref(),
+            Some("Still used as a source: 3 links from nodes in use will go too.")
+        );
+        // An answer from before the count: no warning, not a made-up one.
+        let old: NodeDeletionPreview = serde_json::from_str(
+            r#"{"nodes":1,"tasks":0,"others_tasks":0,"notes":0,"others_notes":0,"files":0}"#,
+        )
+        .expect("an older answer");
+        assert_eq!(old.warning(), None);
     }
 
     #[test]
@@ -586,9 +712,11 @@ mod deletion_preview_tests {
             others_notes: 0,
             files: 1,
             briefs: 0,
+            still_used_by: 2,
         };
         let sum = a.plus(a);
         assert_eq!(sum.nodes, 2);
+        assert_eq!(sum.still_used_by, 4, "links add up across batches");
         assert_eq!(
             sum.losses(),
             ["4 tasks (2 from other people)", "6 notes", "2 files"]

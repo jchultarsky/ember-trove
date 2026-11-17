@@ -51,7 +51,10 @@
 //   v20: task dependencies (S5d, #338) — the task lists carry `blocked_by`;
 //        evicts cached task JSON without it, which would show a blocked
 //        task as free.
-const CACHE_NAME = "ember-trove-v20";
+//   v21: reverse indexes (S7a, #342) — a node's links carry each end's
+//        kind and standing and `may_remove`; evicts cached links without
+//        them, which would show no remove control and no "Archived".
+const CACHE_NAME = "ember-trove-v21";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
