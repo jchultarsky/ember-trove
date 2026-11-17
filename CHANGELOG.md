@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.27.1] - 2026-11-17
+
 ### Changed
 - **"Add Edge" is offered only to someone who may add a link**: the
   node's owner, an admin, or someone it is shared with as an editor.
