@@ -364,7 +364,7 @@ All routes are nested under `/api`.
 |--------|------|-------------|
 | GET | `/api/nodes` | List nodes the caller can see. Filters: `node_type`, `status`, `project_status`, `project_state`, `tag_id`, `include_archived`. `sort`: `modified_desc` (default), `modified_asc`, `title_asc`, `title_desc`; pinned nodes first. `page`, `per_page` (default 50, at most 200); the answer has `total` and `has_more` |
 | POST | `/api/nodes` | Create node (auto-grants Owner permission to creator) |
-| GET | `/api/nodes/{id}` | Get node by UUID |
+| GET | `/api/nodes/{id}` | Get node by UUID. Also `blocked_by`: how many of its own `depends_on` links lead to a node that is not met (a Project not complete, an Article not Published, an archived Reference), among those the caller can see |
 | GET | `/api/nodes/slug/{slug}` | Get node by slug |
 | GET | `/api/nodes/titles` | Every title the caller can see (id, title, slug). For full enumerations only; pickers use `lookup` |
 | GET | `/api/nodes/resolve-titles?titles=[…]` | Resolve wiki-link titles (a JSON array, ≤100) to node ids among nodes the caller can see; keys lowercased |
@@ -381,6 +381,7 @@ All routes are nested under `/api`.
 | DELETE | `/api/nodes/{id}/brief?expected_updated_at=` | Remove the Brief (editor); its words stay in History. `expected_updated_at` is required: a missing or older version is a **412** |
 | GET | `/api/nodes/{id}/neighbors` | Linked neighbour nodes |
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |
+| GET | `/api/nodes/{id}/blockers` | What the node's unmet dependencies wait for in turn: `also` (each with its kind and standing, how many links away it is, and the node's own dependency it comes through) and `truncated` when the chain is longer than 100 links. Display only. It goes only through links whose two ends the caller can see and stops at a node they can't |
 | GET | `/api/nodes/{id}/edges` | The node's links whose two ends the caller can see. Each carries both titles, each end's kind, status and Project state (`source_node`, `target_node`), and `may_remove`: whether the caller may remove it |
 | GET | `/api/nodes/{id}/tags` | Tags attached to this node |
 | POST | `/api/nodes/{id}/tags/{tag_id}` | Attach one of the caller's own tags (editor) |
@@ -479,7 +480,7 @@ details.
 | PATCH | `/api/tasks/{id}` | Update task: only the fields sent change (toggle, rename, set focus date). `status` is `open`, `waiting`, `done` or `cancelled`. `completed_at` is set only while a task is done; a task completed before v3.20 is done with none. `node_id` moves the task to another Project; `node_id: null` (taking it off its Project) is **422**. A bad title is **422** |
 | DELETE | `/api/tasks/{id}` | Delete task (soft delete — restorable for 30 days) |
 | POST | `/api/tasks/{id}/restore` | Un-delete a task (backs the UI's undo toast) |
-| GET | `/api/tasks/{id}/dependencies` | The tasks this one waits for (`blocked_by`), the tasks that wait for it (`blocks`), and whether the caller may change them (`may_edit`). Only live tasks on nodes the caller can view are listed. `not_shown` tells someone who may edit the task how many more prerequisites it has that they aren't shown (in the trash, or on a node they can't view); it is 0 for anyone else |
+| GET | `/api/tasks/{id}/dependencies` | The tasks this one waits for (`blocked_by`), the tasks that wait for it (`blocks`), and whether the caller may change them (`may_edit`). Only live tasks on nodes the caller can view are listed. `not_shown` tells someone who may edit the task how many more prerequisites it has that they aren't shown (in the trash, or on a node they can't view); it is 0 for anyone else. `also` lists what the prerequisites wait for in turn, through tasks the caller is shown that are still to do |
 | POST | `/api/tasks/{id}/dependencies` | Make the task wait for another: `{"depends_on": "<task id>"}`. Needs edit rights on the task and view rights on the other; a task the caller can't see answers **404**, like one that doesn't exist. A loop, a task waiting for itself, or a 51st prerequisite (every link counts) is **422**; a repeat, or the lock not had within two seconds, is **409**. Answers with the fresh lists. A prerequisite holds the task back until it is done; nothing is enforced |
 | DELETE | `/api/tasks/{id}/dependencies/{other}` | Stop the task waiting for `other`. Needs edit rights on the task. No such link, or one to a task the caller can't see, is **404**. Answers with the fresh lists |
 | DELETE | `/api/tasks/{id}/dependencies/not-shown` | Remove every prerequisite of the task that the caller isn't shown. Needs edit rights on the task. Answers with the fresh lists |
@@ -489,7 +490,7 @@ details.
 | POST | `/api/tasks` | Create a task on the Project its body names in `node_id`. A body that names none is refused (**422**): a task needs a Project, and loose input is a capture |
 | PUT | `/api/tasks/reorder` | Set `sort_order` on several tasks; tasks the caller may not edit are skipped |
 | GET | `/api/calendar?year=YYYY&month=M` | The caller's tasks due in that month |
-| GET | `/api/dashboard/projects` | The caller's Projects with task counts (open, waiting, done, cancelled), project status, the current Brief and the top tasks still to do (open before waiting) |
+| GET | `/api/dashboard/projects` | The caller's Projects with task counts (open, waiting, done, cancelled), project status, the current Brief and the top tasks still to do (open before waiting). Also `blocked_by` (the Project's own unmet dependencies) and `blocked_tasks` (its tasks still to do that wait for a task not done), both counted from what the caller can see |
 | GET | `/api/dashboard/activity?since=&limit=` | Recent activity on the caller's nodes (the dashboard recap) |
 
 ### Focus

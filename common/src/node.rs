@@ -121,6 +121,32 @@ pub fn live_words() -> (Vec<&'static str>, Vec<&'static str>) {
     )
 }
 
+/// A node as one reader opens it (S7b): the node, and how many of its
+/// own dependencies are not met among those this reader can see
+/// (`blockers::is_blocked` says whether that makes it blocked).
+///
+/// A wrapper, not a field of [`Node`], as `ListedTask` is for a task:
+/// the count is worked out per reader and never stored, and a `Node` is
+/// also what a write answers with and what a backup reads, where there
+/// is no reader. (`Node::edge_count` is the cautionary case: it is only
+/// filled in lists.) Only `GET /nodes/{id}` answers with it.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ViewedNode {
+    #[serde(flatten)]
+    pub node: Node,
+    /// The node's own unmet dependencies that this reader can see:
+    /// `blockers::direct` over its links, counted by the server.
+    #[serde(default)]
+    pub blocked_by: u32,
+}
+
+impl std::ops::Deref for ViewedNode {
+    type Target = Node;
+    fn deref(&self) -> &Node {
+        &self.node
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Node {
     pub id: NodeId,

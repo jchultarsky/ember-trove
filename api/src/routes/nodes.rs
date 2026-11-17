@@ -10,13 +10,14 @@ use common::{
     activity::{ActivityAction, ActivityEntry},
     attachment::Attachment,
     auth::AuthClaims,
+    blockers::NodeBlockers,
     cascade::CascadePlan,
     edge::{EdgeType, EdgeWithTitles, Home, HomeNode, NodeHome, SetHomeRequest},
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
         CreateNodeRequest, DELETION_PREVIEW_MAX_NODES, Node, NodeDeletionPreview, NodeListParams,
         NodeListResponse, NodeLookupHit, NodeLookupParams, NodeTitleEntry, ProjectStatusCount,
-        UpdateNodeRequest,
+        UpdateNodeRequest, ViewedNode,
     },
     node_version::NodeVersion,
     ontology::{Capability, allows, edge_kind_violation},
@@ -57,6 +58,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/neighbors", get(neighbors))
         .route("/{id}/backlinks", get(backlinks))
         .route("/{id}/edges", get(list_edges_for_node))
+        .route("/{id}/blockers", get(list_blockers))
         .route("/{id}/home", get(get_home).put(set_home))
         .route("/{id}/tags", get(list_tags_for_node))
         .route("/{id}/tags/{tag_id}", post(attach_tag).delete(detach_tag))
@@ -532,10 +534,20 @@ async fn get_node(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Node>, ApiError> {
+) -> Result<Json<ViewedNode>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
     let node = state.nodes.get(NodeId(id)).await?;
-    Ok(Json(node))
+    // How many of its own dependencies are not met (S7b), for the page's
+    // "Blocked" chip. SECURITY: counted as the reader, so a dependency
+    // on a node they can't see is not counted (§14).
+    let blocked_by = state
+        .nodes
+        .blocked_by_for_nodes(&[node.id], subject_scope(&claims))
+        .await?
+        .into_iter()
+        .find(|(id, _)| *id == node.id)
+        .map_or(0, |(_, n)| n);
+    Ok(Json(ViewedNode { node, blocked_by }))
 }
 
 async fn get_node_by_slug(
@@ -858,6 +870,26 @@ async fn list_edges_for_node(
         .list_for_node_with_titles(NodeId(id), subject_scope(&claims))
         .await?;
     Ok(Json(edges))
+}
+
+/// GET /nodes/{id}/blockers — what the node's unmet dependencies wait
+/// for in turn (S7b, §6.4): the chain beyond its own "Depends on" list.
+/// Display only: nothing is prevented or changed.
+///
+/// SECURITY: the same rights as the links (`require_viewer`, with its
+/// one answer for a hidden and a missing node), and read as the caller:
+/// the chain holds only links they could open on each node's own page.
+async fn list_blockers(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<NodeBlockers>, ApiError> {
+    require_viewer(state.permissions.as_ref(), &claims, NodeId(id)).await?;
+    let blockers = state
+        .edges
+        .blockers(NodeId(id), subject_scope(&claims))
+        .await?;
+    Ok(Json(blockers))
 }
 
 /// GET /nodes/{id}/home — the node's one home (#228, §6.1).

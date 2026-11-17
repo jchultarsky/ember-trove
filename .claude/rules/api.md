@@ -834,7 +834,9 @@ cargo check && cargo clippy -- -D warnings
   direction has exactly one group, so no link is left off the page),
   `grouped` orders it, `live_users` is the archive notice's count.
   Don't add a list route per group, and don't count in the browser from
-  anything but this answer.
+  anything but this answer. (S7b's `GET /nodes/{id}/blockers` is not a
+  group: it is what lies beyond the answer. Its server-side count is
+  held equal to `blockers::direct` of this answer by a test.)
 - **"Live"** is `common::node::is_live(status, project_state)`: not
   archived, and not a complete or cancelled Project. Not "active": that
   is a Project's state. Its SQL is `repo::node::live(alias)`, built from
@@ -865,6 +867,48 @@ cargo check && cargo clippy -- -D warnings
   edit rights on the old target and view rights on the old source; a
   `related_to` has no direction to turn. It is general: any link the
   caller could delete and then make the other way round.
+
+## Blockers (S7b, #346)
+
+- **Display only.** Nothing here writes, prevents or reorders (§6.4).
+  The rules are `common::blockers`: `satisfies_dependency` (the §6.4
+  table), `is_blocked` (in use and an unmet dependency), `passes_on`
+  (a chain goes on only through a node that is unmet **and** live, never
+  an Area), `chain` (generic; tasks use it through
+  `task_dependency::chained`).
+- **The SQL twins are built from the rule's own triples**
+  (`repo::node::satisfies_dependency`, `passes_on`, from
+  `satisfying_triples()` / `passing_triples()`): an `IN` over whole
+  `(kind, status, state)` rows with `COALESCE(project_state, '')`.
+  Never `NOT (state IN (…))`: it is NULL for a node with no state and
+  drops the row. `the_sql_for_a_met_dependency_and_for_going_on_are_the_shared_rules`
+  holds them to the rule.
+- **A walk's row is the link alone**, `(source_id, target_id)`, and its
+  halves are joined with `UNION` (`EdgeRepo::blockers`,
+  `TaskDependencyRepo::chain`). A depth or a path in the row makes every
+  pass a new row, and a legacy loop (a restore keeps one) never ends.
+  The cut (`LIMIT CHAIN_LIMIT + 1`) comes before the titles are joined.
+- **Every hop checks the reader.** A link is taken when its target is
+  `visible_to` the reader (tasks: `shown_to`) and not met. The walk
+  stops at a hidden node and shows nothing beyond it, even a node the
+  reader could read: "stops here" and "nothing further" must be one
+  answer. `a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see`
+  checks that every node of a chain hangs on a link the reader finds in
+  that hop's own `list_for_node_with_titles`.
+- **A per-reader count never goes into `Node`.** `GET /nodes/{id}`
+  answers `ViewedNode { node, blocked_by }` (the `ListedTask`
+  precedent). `Node::edge_count` is the cautionary case: only `list`
+  fills it, and the dashboard's internal `list` call runs with no
+  subject.
+- **The cards' counts** (`ProjectDashboardEntry::blocked_by`,
+  `blocked_tasks`) are read in `dashboard_entries` with
+  `subject_scope(claims)`, after its five other reads: a Focus card may
+  be someone else's Project. `blocked_tasks_for_nodes` reuses
+  `blocked_by_count`; the caller has checked the nodes.
+- **Known, older, next release:** a `depends_on` link whose target the
+  source's owner can't see is in no list of theirs and still decides
+  loop refusals (owner decision 2026-11-17: a count and a remove for
+  the node's editors, as `not_shown` gives a task's).
 
 ## Security rules from the 2026-11-10 audit
 

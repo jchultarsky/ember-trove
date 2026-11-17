@@ -344,6 +344,16 @@ impl NodeRepo for StubNodeRepo {
             .map(|id| (*id, *id, format!("area for {subject:?}")))
             .collect())
     }
+    async fn blocked_by_for_nodes(
+        &self,
+        ids: &[NodeId],
+        subject: Option<&str>,
+    ) -> Result<Vec<(NodeId, u32)>, EmberTroveError> {
+        // Whose view the count was made for (S7b): the node page's chip
+        // and the cards' come from it.
+        saw_viewer("blocked_by_for_nodes", subject);
+        Ok(ids.iter().map(|id| (*id, 2)).collect())
+    }
     async fn project_status_counts(
         &self,
         owner_id: &str,
@@ -481,6 +491,15 @@ impl EdgeRepo for StubEdgeRepo {
         // and notice the page builds comes from this one answer.
         saw_viewer("list_for_node_with_titles", viewer);
         Ok(Vec::new())
+    }
+    async fn blockers(
+        &self,
+        _: NodeId,
+        viewer: Option<&str>,
+    ) -> Result<common::blockers::NodeBlockers, EmberTroveError> {
+        // Whose view the chain was walked for (S7b).
+        saw_viewer("blockers", viewer);
+        Ok(common::blockers::NodeBlockers::default())
     }
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {
         unimplemented!()
@@ -4564,6 +4583,126 @@ async fn a_nodes_links_are_read_for_their_reader() {
     assert!(viewers_seen().is_empty(), "the repo was not asked");
 }
 
+/// S7b: a node's "Blocked" count (`GET /nodes/{id}`) and its chain
+/// (`GET /nodes/{id}/blockers`) are read for their reader: an ordinary
+/// account as itself, an admin as someone who reads every node. Someone
+/// who can't view the node gets nothing, and the repo is not asked.
+/// SECURITY: read as "everyone", either would count or name a
+/// dependency on a node its reader can't see, with every status
+/// unchanged.
+#[tokio::test]
+async fn a_nodes_blockers_are_read_for_their_reader() {
+    let read = |claims: common::auth::AuthClaims, node: u128, path: &'static str| async move {
+        let resp = Router::new()
+            .nest("/nodes", crate::routes::nodes::router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(
+                Request::get(format!("/nodes/{}{path}", Uuid::from_u128(node)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    };
+    for (path, call) in [("", "blocked_by_for_nodes"), ("/blockers", "blockers")] {
+        viewers_seen();
+        for node in [AZ_OWNED_NODE, AZ_EDIT_NODE, AZ_VIEW_NODE] {
+            let (status, body) = read(fake_claims(), node, path).await;
+            assert_eq!(status, StatusCode::OK, "{path} {node:#x}: {body}");
+        }
+        let seen = viewers_seen();
+        assert_eq!(seen.len(), 3, "{path}: {seen:?}");
+        for (name, viewer) in &seen {
+            assert_eq!(*name, call, "{path}");
+            assert_eq!(viewer.as_deref(), Some("test-sub"), "{path}");
+        }
+        let (status, _) = read(admin_claims(), AZ_FOREIGN_NODE, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_all_seen_as(None);
+        // A node the caller can't view, and one that doesn't exist: the
+        // same refusal, before anything is read.
+        for node in [AZ_FOREIGN_NODE, AZ_MISSING] {
+            let (status, _) = read(fake_claims(), node, path).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{path} {node:#x}");
+        }
+        assert!(viewers_seen().is_empty(), "{path}: the repo was not asked");
+    }
+    // The node's own answer carries the count beside the node's fields.
+    let (_, body) = read(fake_claims(), AZ_OWNED_NODE, "").await;
+    let node: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(node["blocked_by"], 2, "{body}");
+    assert_eq!(
+        node["id"],
+        serde_json::json!(Uuid::from_u128(AZ_OWNED_NODE))
+    );
+    // An older client reads it as a plain node.
+    let plain: Node = serde_json::from_str(&body).expect("still a node");
+    assert_eq!(plain.id.0, Uuid::from_u128(AZ_OWNED_NODE));
+}
+
+/// S7b: a card's "Blocked" chip and its count of blocked tasks, on the
+/// dashboard and in Focus, are counted for the caller. A Focus card may
+/// be someone else's Project.
+#[tokio::test]
+async fn the_cards_blocked_counts_are_read_for_the_caller() {
+    async fn dashboard(claims: common::auth::AuthClaims) -> serde_json::Value {
+        let resp = Router::new()
+            .nest("/dashboard", crate::routes::tasks::dashboard_router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(Request::get("/dashboard").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    let counts = |seen: &[(&'static str, Option<String>)]| -> Vec<(&'static str, Option<String>)> {
+        seen.iter()
+            .filter(|(call, _)| call.starts_with("blocked_"))
+            .cloned()
+            .collect()
+    };
+    let both = |viewer: Option<&str>| {
+        vec![
+            ("blocked_by_for_nodes", viewer.map(str::to_string)),
+            ("blocked_tasks_for_nodes", viewer.map(str::to_string)),
+        ]
+    };
+    viewers_seen();
+    let cards = dashboard(fake_claims()).await;
+    assert_eq!(cards[0]["blocked_by"], 2, "{cards}");
+    assert_eq!(cards[0]["blocked_tasks"], 3, "{cards}");
+    let mut seen = counts(&viewers_seen());
+    seen.sort();
+    assert_eq!(seen, both(Some("test-sub")));
+
+    dashboard(admin_claims()).await;
+    let mut seen = counts(&viewers_seen());
+    seen.sort();
+    assert_eq!(seen, both(None), "an admin reads every node");
+
+    // Focus reuses the dashboard's cards.
+    let (status, body) = focus_call(fake_claims(), "GET", "", serde_json::json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(list[0]["project"]["blocked_by"], 2, "{body}");
+    assert_eq!(list[0]["project"]["blocked_tasks"], 3, "{body}");
+    let mut seen = counts(&viewers_seen());
+    seen.sort();
+    assert_eq!(seen, both(Some("test-sub")));
+}
+
 /// `GET /nodes/{id}/home` (#228): a home is named only to someone who can
 /// see it; the child's editors learn a hidden one exists, nothing more.
 #[tokio::test]
@@ -5911,6 +6050,26 @@ impl crate::repo::task_dependency::TaskDependencyRepo for StubTaskDependencyRepo
             )))
         }
     }
+    async fn chain(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(Vec<common::task_dependency::ChainedTask>, bool), EmberTroveError> {
+        assert!(
+            az_task_is_visible(task),
+            "a chain walked for a task its caller can't see: {task}"
+        );
+        saw_viewer("chain", viewer);
+        Ok((Vec::new(), false))
+    }
+    async fn blocked_tasks_for_nodes(
+        &self,
+        ids: &[NodeId],
+        viewer: Option<&str>,
+    ) -> Result<Vec<(NodeId, u32)>, EmberTroveError> {
+        saw_viewer("blocked_tasks_for_nodes", viewer);
+        Ok(ids.iter().map(|id| (*id, 3)).collect())
+    }
     async fn candidates(
         &self,
         task: TaskId,
@@ -6121,7 +6280,18 @@ async fn dependencies_are_read_by_viewers_and_say_who_may_change_them() {
         // read reaches it).
         assert_eq!(deps.not_shown, if may_edit { 3 } else { 0 }, "{task:#x}");
     }
-    assert_all_seen_as(Some("test-sub"));
+    // The chain (S7b) is walked for each of them, as themself, a viewer
+    // of the task included.
+    let seen = viewers_seen();
+    assert_eq!(
+        seen.iter().filter(|(call, _)| *call == "chain").count(),
+        4,
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter().all(|(_, v)| v.as_deref() == Some("test-sub")),
+        "{seen:?}"
+    );
     // An admin reads and changes every task.
     let (status, body) = dep_request(
         admin_claims(),
