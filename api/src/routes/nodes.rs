@@ -771,6 +771,10 @@ struct DeletionPreviewParams {
 /// before anything is counted. A node the caller may not delete is left
 /// out, exactly like one that doesn't exist, so the answer can't be used to
 /// probe for a node or to size someone else's. Counts only.
+///
+/// It also carries the warning's count (S7a; ONTOLOGY §6.3): how many
+/// links from live nodes still use these as a source. Only links from
+/// nodes the caller can see are counted (§14).
 async fn deletion_preview(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
@@ -805,8 +809,13 @@ async fn deletion_preview(
     if mine.is_empty() {
         return Ok(Json(NodeDeletionPreview::default()));
     }
+    // `mine`, not the ids as sent: a link from a node that will stay
+    // (one the caller may not delete) is still a link left behind.
     Ok(Json(
-        state.nodes.deletion_preview(&mine, &claims.sub).await?,
+        state
+            .nodes
+            .deletion_preview(&mine, &claims.sub, subject_scope(&claims))
+            .await?,
     ))
 }
 

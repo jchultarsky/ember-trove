@@ -372,7 +372,7 @@ All routes are nested under `/api`.
 | GET | `/api/nodes/lookup?q=&limit=&node_type=` | Title lookup for the node pickers: titles containing `q`, exact > prefix > other; own + shared nodes (admins: all); `limit` 1–20, default 8; optional `node_type` keeps one kind (the task pickers ask for `project`) |
 | PUT | `/api/nodes/{id}` | Update node (snapshots version on save). Optional `expected_updated_at`: apply only if the node is still at that version, else **412** and nothing is written (the editor sends it, #161) |
 | DELETE | `/api/nodes/{id}` | Delete node, with its tasks, notes and files (children it contains are kept) |
-| GET | `/api/nodes/deletion-preview?ids=a,b` | What deleting these nodes would destroy: counts of tasks, notes and files, and how many are other accounts'. Only nodes the caller may delete are counted (at most 100 ids) |
+| GET | `/api/nodes/deletion-preview?ids=a,b` | What deleting these nodes would destroy: counts of tasks, notes and files, and how many are other accounts'. Only nodes the caller may delete are counted (at most 100 ids). Also `still_used_by`, a warning: how many `references` links from nodes still in use (not archived, not a closed Project) point at them, counting only nodes the caller can see |
 | PUT | `/api/nodes/{id}/pin` | Toggle pinned state (owner-only) |
 | PUT | `/api/nodes/{id}/project-state` | Declare a Project's state: `{ "state": "active" \| "parked" \| "complete" \| "cancelled" }`. An editor of the node; Projects only (422 otherwise). Writes a History entry; a terminal state removes the caller's own Focus entry. Closing a project that has sub-Projects or open tasks you may close needs `"confirm": "<token>"` from the plan below (412 without it, or when the plan has changed); it then closes them too. Under a closed master, making a sub-Project active, or parking a closed one, is a 422 |
 | GET | `/api/nodes/{id}/project-state/cascade?state=complete\|cancelled` | What declaring that state would close: sub-Projects, tasks by project, the sub-Projects that stay open because you may not edit them, and the `token` that confirms it. An editor of the node; Projects only |
@@ -381,7 +381,7 @@ All routes are nested under `/api`.
 | DELETE | `/api/nodes/{id}/brief?expected_updated_at=` | Remove the Brief (editor); its words stay in History. `expected_updated_at` is required: a missing or older version is a **412** |
 | GET | `/api/nodes/{id}/neighbors` | Linked neighbour nodes |
 | GET | `/api/nodes/{id}/backlinks` | Nodes that link to this node |
-| GET | `/api/nodes/{id}/edges` | All edges involving this node |
+| GET | `/api/nodes/{id}/edges` | The node's links whose two ends the caller can see. Each carries both titles, each end's kind, status and Project state (`source_node`, `target_node`), and `may_remove`: whether the caller may remove it |
 | GET | `/api/nodes/{id}/tags` | Tags attached to this node |
 | POST | `/api/nodes/{id}/tags/{tag_id}` | Attach one of the caller's own tags (editor) |
 | DELETE | `/api/nodes/{id}/tags/{tag_id}` | Detach a tag |
@@ -422,11 +422,11 @@ details.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/edges` | Edges whose two ends the caller owns (admins: all edges) |
-| POST | `/api/edges` | Create edge |
+| POST | `/api/edges` | Create edge. Refused (**422**) when the kinds don't allow it: a `contains` outside the containment table, a `depends_on` or a `derived_from` whose target is an Area, a `wiki_link` |
 | DELETE | `/api/edges/{id}` | Delete edge. A `wiki_link` is refused (422): it follows `[[Title]]` in the text |
 | GET | `/api/nodes/{id}/home` | The node's one home; one the caller can't see is shown unnamed, and only to the node's editors |
 | PUT | `/api/nodes/{id}/home` | Set the home (`parent_id`), or remove it (`null`) |
-| POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix) |
+| POST | `/api/edges/{id}/convert` | Turn a link into a `references` or `related_to` link, keeping its label (Data health fix). `reverse: true` also turns it round: the new `references` link runs from the old target, which the caller must be able to edit |
 
 ### Tags
 

@@ -48,10 +48,16 @@ pub trait NodeRepo: Send + Sync {
     /// live notes and files, and how many of the tasks and notes belong to
     /// an account other than `caller`. Counts only. The route passes only
     /// nodes the caller may delete.
+    ///
+    /// It also counts the warning (S7a, §6.3): `references` links into
+    /// `ids` from live nodes that are not among them and that `viewer`
+    /// can see (`None`: an admin, who reads every node). Never a link
+    /// from a node `viewer` can't see (§14).
     async fn deletion_preview(
         &self,
         ids: &[NodeId],
         caller: &str,
+        viewer: Option<&str>,
     ) -> Result<NodeDeletionPreview, EmberTroveError>;
 
     async fn neighbors(
@@ -310,6 +316,28 @@ pub(super) fn node_cols(alias: &str) -> String {
         .map(|col| format!("{alias}{col}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// SQL for "the node aliased `alias` is live" (`common::node::is_live`):
+/// not archived, and not a closed Project. Built from that rule's own
+/// words (`live_words`), so the SQL can't name a different set; a
+/// Postgres test compares the two for every status and state. The words
+/// are the enums' wire strings, never text from a request.
+pub(crate) fn live(alias: &str) -> String {
+    let quoted = |words: Vec<&'static str>| {
+        words
+            .iter()
+            .map(|w| format!("'{w}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let (statuses, states) = common::node::live_words();
+    format!(
+        "({alias}.status::text IN ({}) \
+          AND ({alias}.project_state IS NULL OR {alias}.project_state IN ({})))",
+        quoted(statuses),
+        quoted(states),
+    )
 }
 
 /// SQL for "`alias`'s state is not terminal": the twin of
@@ -1397,12 +1425,20 @@ impl NodeRepo for PgNodeRepo {
         &self,
         ids: &[NodeId],
         caller: &str,
+        viewer: Option<&str>,
     ) -> Result<NodeDeletionPreview, EmberTroveError> {
         // These are the rows `DELETE FROM nodes` cascades to. The trash
         // (`deleted_at`) goes too, but it is already deleted to its owner,
         // so it is not counted.
+        //
+        // The last count is not a loss but a warning (S7a, §6.3): links
+        // from nodes that stay and still use one of these as a source.
+        // SECURITY (§14): only a link from a node `viewer` can see is
+        // counted, so the number can understate and never says that a
+        // hidden node exists. A link from a node that is itself being
+        // deleted here is not counted: it is not left behind.
         let ids: Vec<Uuid> = ids.iter().map(|id| id.0).collect();
-        let row: (i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(
+        let row: (i64, i64, i64, i64, i64, i64, i64, i64) = sqlx::query_as(&format!(
             "SELECT
                (SELECT COUNT(*) FROM nodes WHERE id = ANY($1)),
                (SELECT COUNT(*) FROM node_tasks
@@ -1414,10 +1450,17 @@ impl NodeRepo for PgNodeRepo {
                (SELECT COUNT(*) FROM node_notes
                  WHERE node_id = ANY($1) AND deleted_at IS NULL AND owner_id <> $2),
                (SELECT COUNT(*) FROM attachments WHERE node_id = ANY($1)),
-               (SELECT COUNT(*) FROM project_briefs WHERE node_id = ANY($1))",
-        )
+               (SELECT COUNT(*) FROM project_briefs WHERE node_id = ANY($1)),
+               (SELECT COUNT(*) FROM edges e JOIN nodes src ON src.id = e.source_id
+                 WHERE e.edge_type = 'references' AND e.target_id = ANY($1)
+                   AND NOT (e.source_id = ANY($1))
+                   AND {live} AND {visible})",
+            live = live("src"),
+            visible = super::visible_to("src", 3),
+        ))
         .bind(&ids)
         .bind(caller)
+        .bind(viewer)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| EmberTroveError::Internal(format!("node deletion preview failed: {e}")))?;
@@ -1430,6 +1473,7 @@ impl NodeRepo for PgNodeRepo {
             others_notes: n(row.4),
             files: n(row.5),
             briefs: n(row.6),
+            still_used_by: n(row.7),
         })
     }
 

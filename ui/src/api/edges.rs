@@ -29,7 +29,10 @@ pub async fn delete_edge(id: EdgeId) -> Result<(), UiError> {
 pub async fn convert_edge(id: uuid::Uuid, to: EdgeType) -> Result<(), UiError> {
     post_empty(
         &format!("/edges/{id}/convert"),
-        &ConvertEdgeRequest { edge_type: to },
+        &ConvertEdgeRequest {
+            edge_type: to,
+            reverse: false,
+        },
     )
     .await
 }

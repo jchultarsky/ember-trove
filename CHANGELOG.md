@@ -6,6 +6,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **A node's links say what they mean** (S7a of the ontology programme,
+  #342; ONTOLOGY §6.3, §6.5, §14). The API half; the page follows in the
+  same release.
+  - `GET /api/nodes/{id}/edges` answers, for each end of a link, its
+    kind, its status and a Project's state (`source_node`,
+    `target_node`), and `may_remove`: whether the caller may remove the
+    link, by the rule `DELETE /api/edges/{id}` applies.
+  - `GET /api/nodes/deletion-preview` answers `still_used_by`: how many
+    `references` links into the nodes come from nodes still in use that
+    will stay. It is a warning, apart from what the delete destroys. "In
+    use" is not archived, and not a complete or cancelled Project.
+  - `POST /api/edges/{id}/convert` takes `reverse: true`: the new link
+    runs from the old target. It needs edit rights on that node.
+  - Data health has a new rule, **"Derived from an Area"**: links of
+    that shape were made by hand to file a node under an Area before a
+    node had a home. Each item says what it should become.
+
+### Changed
+- **Nothing is derived from an Area** (ONTOLOGY §6.5). `POST /api/edges`
+  refuses a `derived_from` link whose target is an Area (**422**): a
+  node that belongs to an Area has it as its home. Existing links are
+  kept and listed in Data health; none is changed by the upgrade.
+
+### Security
+- **A count of what still uses a node counts only what its reader can
+  see.** The delete warning never counts a link from a node the caller
+  can't view, so it can understate and can't be used to learn that a
+  hidden node exists.
+- `may_remove` is read for the caller's own grants (an admin always):
+  the page stops offering a remove that would be refused. It adds no
+  right.
+- Data health's "Derived from an Area" says whether the filed node has
+  a home only as the node's own page would: an editor of the node is
+  told of any home, anyone else only of one they can see.
+
 ## [3.26.1] - 2026-11-16
 
 ### Security
