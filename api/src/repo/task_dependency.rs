@@ -101,8 +101,9 @@ pub trait TaskDependencyRepo: Send + Sync {
     /// whether there was more than was read. Only through tasks
     /// `viewer` is shown that still hold back, going on only through
     /// ones still to do; a hidden or trashed task ends the walk, and
-    /// nothing beyond it is shown. The caller has checked that `viewer`
-    /// may view `task`.
+    /// nothing beyond it is shown. A `task` that `viewer` is not shown
+    /// has no chain, whoever asks: the route checks that too, and this
+    /// doesn't rely on it.
     async fn chain(
         &self,
         task: TaskId,
@@ -112,8 +113,8 @@ pub trait TaskDependencyRepo: Send + Sync {
     /// For each of `node_ids` that has any: how many of its tasks still
     /// to do wait for a task that is not done (S7b): the rows of its
     /// task list that say "Blocked" for `viewer`
-    /// ([`blocked_by_count`], the one spelling). The caller has checked
-    /// that `viewer` may view each node.
+    /// ([`blocked_by_count`], the one spelling). A node `viewer` can't
+    /// view gets no count, whoever asks.
     async fn blocked_tasks_for_nodes(
         &self,
         node_ids: &[NodeId],
@@ -338,6 +339,8 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
         use common::task_dependency::{TaskHop, chained};
         #[derive(sqlx::FromRow)]
         struct Row {
+            /// The link's place in the order the walk found it.
+            n: i64,
             from_id: Uuid,
             #[sqlx(flatten)]
             link: LinkRow,
@@ -353,10 +356,11 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
                 SELECT d.task_id, d.depends_on_id
                 FROM task_dependencies d
                 JOIN node_tasks s ON s.id = d.task_id
+                JOIN nodes sn ON sn.id = s.node_id
                 JOIN node_tasks p ON p.id = d.depends_on_id
                 JOIN nodes pn ON pn.id = p.node_id
                 WHERE d.task_id = $1
-                  AND s.deleted_at IS NULL AND {s_goes_on}
+                  AND {s_shown} AND {s_goes_on}
                   AND {shown} AND {holds}
               UNION
                 SELECT d.task_id, d.depends_on_id
@@ -368,12 +372,17 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
                 WHERE {via_goes_on}
                   AND {shown} AND {holds}
             ),
-            cut AS (SELECT task_id, depends_on_id FROM walk LIMIT $3)
-            SELECT c.task_id AS from_id, {LINK_COLS}
+            cut AS (
+                SELECT row_number() OVER () AS n, task_id, depends_on_id
+                FROM walk
+                LIMIT $3
+            )
+            SELECT c.n, c.task_id AS from_id, {LINK_COLS}
             FROM cut c
             JOIN node_tasks p ON p.id = c.depends_on_id
             JOIN nodes pn ON pn.id = p.node_id
             "#,
+            s_shown = shown_to("s", "sn", 2),
             s_goes_on = passes_on_sql("s"),
             via_goes_on = passes_on_sql("via"),
             shown = shown_to("p", "pn", 2),
@@ -386,11 +395,14 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("read task chain failed: {e}")))?;
 
-        // Every row read is kept: trimming after the join, which may
-        // reorder, could drop a link from the middle of the chain.
-        let truncated = rows.len() > CHAIN_LIMIT;
+        // The link past the limit is the last one found: it says there
+        // is more and is left out. Trimming by the join's order, which
+        // may differ, could drop a link from the middle of the chain.
+        let limit = i64::try_from(CHAIN_LIMIT).unwrap_or(i64::MAX);
+        let truncated = rows.iter().any(|r| r.n > limit);
         let hops = rows
             .into_iter()
+            .filter(|r| r.n <= limit)
             .map(|r| {
                 Ok(TaskHop {
                     from: TaskId(r.from_id),
@@ -414,12 +426,14 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
             r#"
             SELECT t.node_id, count(*)::int4
             FROM node_tasks t
+            JOIN nodes tn ON tn.id = t.node_id
             WHERE t.node_id = ANY($1)
-              AND t.deleted_at IS NULL
+              AND {t_shown}
               AND {goes_on}
               AND {blocked_by} > 0
             GROUP BY t.node_id
             "#,
+            t_shown = shown_to("t", "tn", 2),
             // Still to do: a finished task is never blocked
             // (`task_dependency::is_blocked`).
             goes_on = passes_on_sql("t"),

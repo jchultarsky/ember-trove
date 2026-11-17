@@ -13,15 +13,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - `GET /api/nodes/{id}` answers `blocked_by`: how many of the node's
     own `depends_on` links lead to a node that is not met, among those
     the caller can see. A dependency is met by a complete Project, a
-    Published Article or a Reference that is not archived.
+    Published Article or a Reference that is not archived. A node says
+    "Blocked" only while it still waits itself: one that is finished or
+    available (a Published Article, a Reference) does not.
   - New `GET /api/nodes/{id}/blockers`: what those dependencies wait
     for in turn (`also`), each with the node's own dependency it comes
-    through, and `truncated` when the chain is longer than 100 links.
+    through, and `truncated` when there are more than 100 links to read
+    (the node's own unmet dependencies count among the 100).
   - `GET /api/dashboard/projects` and `GET /api/focus` answer, per
     card, `blocked_by` and `blocked_tasks`: how many of the Project's
     tasks still to do wait for a task that is not done.
   - `GET /api/tasks/{id}/dependencies` answers `also`: what the task's
-    prerequisites wait for in turn.
+    prerequisites wait for in turn, and `also_truncated` past 100 links.
   - No migration, and nothing new in a backup.
 
 ### Security

@@ -140,10 +140,11 @@ pub trait NodeRepo: Send + Sync {
     /// `common::blockers::direct` in SQL, for the node page's chip and
     /// the dashboard's.
     ///
-    /// SECURITY: only targets `subject` may read are counted (§14;
-    /// `None` is the admin scope): the count is the number of rows the
-    /// same reader finds unmet in the node's "Depends on" list, never
-    /// more. The caller has checked that they may view each node.
+    /// SECURITY: only links whose two ends `subject` may read are
+    /// counted (§14; `None` is the admin scope): the count is the number
+    /// of rows the same reader finds unmet in the node's "Depends on"
+    /// list, never more. A node they can't view gets no count, whoever
+    /// asks: the route checks that too, and this doesn't rely on it.
     async fn blocked_by_for_nodes(
         &self,
         node_ids: &[NodeId],
@@ -384,6 +385,13 @@ pub(crate) fn satisfies_dependency(alias: &str) -> String {
 /// (`common::blockers::passes_on`): not met, in use, and not an Area.
 pub(crate) fn passes_on(alias: &str) -> String {
     one_of(alias, common::blockers::passing_triples())
+}
+
+/// SQL for "the node aliased `alias` still waits"
+/// (`common::blockers::still_waits`): in use, and not itself finished
+/// or available. Only such a node is blocked or has a chain.
+pub(crate) fn still_waits(alias: &str) -> String {
+    one_of(alias, common::blockers::waiting_triples())
 }
 
 /// SQL for "`alias`'s state is not terminal": the twin of
@@ -1879,13 +1887,16 @@ impl NodeRepo for PgNodeRepo {
             r#"
             SELECT e.source_id, count(*)::int4
             FROM edges e
+            JOIN nodes s ON s.id = e.source_id
             JOIN nodes t ON t.id = e.target_id
             WHERE e.source_id = ANY($1)
               AND e.edge_type::text = 'depends_on'
+              AND {s_visible}
               AND {t_visible}
               AND NOT {t_met}
             GROUP BY e.source_id
             "#,
+            s_visible = super::visible_to("s", 2),
             t_visible = super::visible_to("t", 2),
             t_met = satisfies_dependency("t"),
         ))

@@ -628,6 +628,8 @@ impl EdgeRepo for PgEdgeRepo {
         use common::blockers::{CHAIN_LIMIT, NodeHop, node_blockers};
         #[derive(sqlx::FromRow)]
         struct Row {
+            /// The link's place in the order the walk found it.
+            n: i64,
             source_id: Uuid,
             target_id: Uuid,
             title: String,
@@ -642,16 +644,18 @@ impl EdgeRepo for PgEdgeRepo {
         // end.
         //
         // A link is taken when its target is visible to the reader and
-        // not met. The walk starts only from a node in use (a closed or
-        // archived one waits for nothing), and goes on only through a
-        // node that can still move (`passes_on`).
+        // not met. The walk starts only from a node that still waits (a
+        // closed, an archived or a finished one waits for nothing), and
+        // goes on only through a node that can still move (`passes_on`).
         //
         // The cut is made on the walk itself, before the titles are
         // joined: the walk hands out its links in the order it finds
-        // them, so what is kept hangs together from the start, where a
-        // cut made after the join (which may reorder) could drop a link
-        // from the middle and lose everything behind it. One row more
-        // than the limit says "more"; every row read is kept.
+        // them (`n`), so what is kept hangs together from the start,
+        // where a cut made after the join (which may reorder) could drop
+        // a link from the middle and lose everything behind it. One link
+        // more than the limit is read to know there is more, and then
+        // left out: it is the last one found, so nothing kept hangs on
+        // it.
         let rows = sqlx::query_as::<_, Row>(&format!(
             r#"
             WITH RECURSIVE walk(source_id, target_id) AS (
@@ -661,7 +665,7 @@ impl EdgeRepo for PgEdgeRepo {
                 JOIN nodes t ON t.id = e.target_id
                 WHERE e.source_id = $1
                   AND e.edge_type::text = 'depends_on'
-                  AND {s_visible} AND {s_live}
+                  AND {s_visible} AND {s_waits}
                   AND {t_visible} AND NOT {t_met}
               UNION
                 SELECT e.source_id, e.target_id
@@ -673,15 +677,19 @@ impl EdgeRepo for PgEdgeRepo {
                   AND {via_goes_on}
                   AND {t_visible} AND NOT {t_met}
             ),
-            cut AS (SELECT source_id, target_id FROM walk LIMIT $3)
-            SELECT c.source_id, c.target_id, t.title,
+            cut AS (
+                SELECT row_number() OVER () AS n, source_id, target_id
+                FROM walk
+                LIMIT $3
+            )
+            SELECT c.n, c.source_id, c.target_id, t.title,
                    t.node_type::text AS node_type, t.status::text AS status,
                    t.project_state
             FROM cut c
             JOIN nodes t ON t.id = c.target_id
             "#,
             s_visible = super::visible_to("s", 2),
-            s_live = super::node::live("s"),
+            s_waits = super::node::still_waits("s"),
             t_visible = super::visible_to("t", 2),
             t_met = super::node::satisfies_dependency("t"),
             via_goes_on = super::node::passes_on("via"),
@@ -693,9 +701,11 @@ impl EdgeRepo for PgEdgeRepo {
         .await
         .map_err(|e| EmberTroveError::Internal(format!("read blockers failed: {e}")))?;
 
-        let truncated = rows.len() > CHAIN_LIMIT;
+        let limit = i64::try_from(CHAIN_LIMIT).unwrap_or(i64::MAX);
+        let truncated = rows.iter().any(|r| r.n > limit);
         let hops = rows
             .into_iter()
+            .filter(|r| r.n <= limit)
             .map(|r| {
                 Ok(NodeHop {
                     from: NodeId(r.source_id),

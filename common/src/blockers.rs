@@ -27,9 +27,11 @@ use crate::id::NodeId;
 use crate::node::{NodeStatus, NodeType, is_live};
 use crate::project_state::ProjectState;
 
-/// A chain is read up to this many links, and one more to know there
-/// are more: a longer one says so ([`NodeBlockers::truncated`]). The
-/// count speaks only of links their reader can see.
+/// A walk reads up to this many links: the node's own unmet
+/// dependencies count among them, then the chain behind them. When
+/// there are more, the answer says so ([`NodeBlockers::truncated`]) and
+/// holds exactly this many. The count speaks only of links their reader
+/// can see.
 pub const CHAIN_LIMIT: usize = 100;
 
 /// Whether a dependency on a node of this kind and standing is met
@@ -60,22 +62,38 @@ pub fn satisfies_dependency(
     }
 }
 
-/// Whether a chain goes on through a node: what it waits for is shown
-/// as something its dependents wait for too. Only a node that is not
-/// met **and can still move**: in use ([`is_live`]) and not an Area.
+/// Whether a node still waits for anything: it is in use ([`is_live`])
+/// and is not itself what a dependency on it asks for
+/// ([`satisfies_dependency`]). An active or parked Project, a draft
+/// Article and an Area do. A complete Project, a Published Article and a
+/// Reference do not: they are finished or available, so nothing of
+/// theirs waits to proceed, whatever they still link to. Nor does a
+/// cancelled or an archived node: it will not proceed.
 ///
-/// Not through a met one (what a finished thing waited for no longer
-/// matters), nor a cancelled or archived one (it will not proceed, so
-/// its own prerequisites change nothing), nor an old link to an Area.
+/// One notion for both ends: a node that does not still wait is not
+/// blocked ([`is_blocked`]), and a chain does not go on through it
+/// ([`passes_on`]).
+#[must_use]
+pub fn still_waits(
+    kind: &NodeType,
+    status: &NodeStatus,
+    project_state: Option<ProjectState>,
+) -> bool {
+    is_live(status, project_state) && !satisfies_dependency(kind, status, project_state)
+}
+
+/// Whether a chain goes on through a node: what it waits for is shown
+/// as something its dependents wait for too. Only a node that
+/// [`still_waits`], and never an Area: an Area is not a valid target at
+/// all (an old link to one is listed in Data health), so nothing is read
+/// through it.
 #[must_use]
 pub fn passes_on(
     kind: &NodeType,
     status: &NodeStatus,
     project_state: Option<ProjectState>,
 ) -> bool {
-    !satisfies_dependency(kind, status, project_state)
-        && is_live(status, project_state)
-        && *kind != NodeType::Area
+    still_waits(kind, status, project_state) && *kind != NodeType::Area
 }
 
 /// A kind, a status and a Project state in the database's words; `""`
@@ -118,23 +136,36 @@ pub fn passing_triples() -> Vec<Triple> {
     triples(passes_on)
 }
 
+/// The triples [`still_waits`] accepts.
+#[must_use]
+pub fn waiting_triples() -> Vec<Triple> {
+    triples(still_waits)
+}
+
 /// [`satisfies_dependency`] for one end of a link.
 #[must_use]
 pub fn met(end: &EdgeEnd) -> bool {
     satisfies_dependency(&end.node_type, &end.status, end.project_state)
 }
 
-/// Whether a node says "Blocked": it is in use, and `unmet` of its
-/// dependencies, among those its reader can see, are not met. A node
-/// that is archived, or a Project that is closed, is never blocked:
-/// nothing is waiting to proceed. The mirror of
-/// `task_dependency::is_blocked`.
+/// Whether a node says "Blocked": it [`still_waits`], and `unmet` of
+/// its dependencies, among those its reader can see, are not met. A
+/// node that is archived or closed is never blocked, and neither is one
+/// that is itself finished or available (a complete Project, a Published
+/// Article, a Reference): nothing of theirs is waiting to proceed. The
+/// mirror of `task_dependency::is_blocked`, where a finished task is
+/// never blocked.
 ///
 /// Only the direct dependencies matter: a chain adds to what a node
 /// waits for, and never changes whether it waits.
 #[must_use]
-pub fn is_blocked(status: &NodeStatus, project_state: Option<ProjectState>, unmet: u32) -> bool {
-    is_live(status, project_state) && unmet > 0
+pub fn is_blocked(
+    kind: &NodeType,
+    status: &NodeStatus,
+    project_state: Option<ProjectState>,
+    unmet: u32,
+) -> bool {
+    still_waits(kind, status, project_state) && unmet > 0
 }
 
 /// The chip's tooltip.
@@ -343,8 +374,10 @@ mod tests {
     }
 
     /// Every kind, status and state, the impossible combinations too (a
-    /// Project with no state, an Article with one): the rule answers
-    /// for all of them, and its SQL is held to it on the same grid.
+    /// Project with no state, an Article with one): the rules answer for
+    /// all 60, and the word lists their SQL is built from are held to
+    /// them here on all 60. The Postgres test holds the SQL itself on
+    /// the 21 a row can store.
     fn grid() -> Vec<(NodeType, NodeStatus, Option<ProjectState>)> {
         let mut out = Vec::new();
         for kind in NodeType::ALL {
@@ -398,7 +431,25 @@ mod tests {
             } else {
                 assert!(goes_on, "{kind:?} {status:?} {state:?}");
             }
+            // It goes on only through a node that still waits, and
+            // through every one of those but an Area.
+            assert_eq!(
+                goes_on,
+                still_waits(&kind, &status, state) && kind != Area,
+                "{kind:?} {status:?} {state:?}"
+            );
         }
+        // What still waits, by name.
+        assert!(still_waits(&Project, &Draft, Some(Active)));
+        assert!(still_waits(&Project, &Published, Some(Parked)));
+        assert!(still_waits(&Article, &Draft, None));
+        assert!(still_waits(&Area, &Draft, None), "an Area never finishes");
+        assert!(!still_waits(&Project, &Draft, Some(Complete)), "finished");
+        assert!(!still_waits(&Article, &Published, None), "finished");
+        assert!(!still_waits(&Reference, &Draft, None), "available");
+        assert!(!still_waits(&Reference, &Archived, None), "out of use");
+        assert!(!still_waits(&Project, &Draft, Some(Cancelled)), "closed");
+        assert!(!still_waits(&Project, &Archived, Some(Active)), "archived");
         // The cases by name.
         assert!(passes_on(&Project, &Draft, Some(Active)));
         assert!(passes_on(&Project, &Draft, Some(Parked)));
@@ -421,7 +472,13 @@ mod tests {
             ))
         };
         let (satisfying, passing) = (satisfying_triples(), passing_triples());
+        let waiting = waiting_triples();
         for (kind, status, state) in grid() {
+            assert_eq!(
+                accepts(&waiting, &kind, &status, state),
+                still_waits(&kind, &status, state),
+                "{kind:?} {status:?} {state:?}"
+            );
             assert_eq!(
                 accepts(&satisfying, &kind, &status, state),
                 satisfies_dependency(&kind, &status, state),
@@ -440,16 +497,35 @@ mod tests {
     }
 
     #[test]
-    fn a_node_is_blocked_only_while_it_is_in_use() {
-        assert!(is_blocked(&Draft, Some(Active), 1));
-        assert!(is_blocked(&Draft, Some(Parked), 2), "parked is in use");
-        assert!(is_blocked(&Published, None, 1));
+    fn a_node_is_blocked_only_while_it_still_waits() {
+        assert!(is_blocked(&Project, &Draft, Some(Active), 1));
+        assert!(
+            is_blocked(&Project, &Draft, Some(Parked), 2),
+            "parked is in use"
+        );
+        assert!(is_blocked(&Article, &Draft, None, 1));
+        assert!(is_blocked(&Area, &Published, None, 1));
         // Nothing unmet: not blocked.
-        assert!(!is_blocked(&Draft, Some(Active), 0));
+        assert!(!is_blocked(&Project, &Draft, Some(Active), 0));
         // Out of use: nothing waits to proceed.
-        assert!(!is_blocked(&Archived, None, 3));
-        assert!(!is_blocked(&Draft, Some(Complete), 3));
-        assert!(!is_blocked(&Draft, Some(Cancelled), 3));
+        assert!(!is_blocked(&Article, &Archived, None, 3));
+        assert!(!is_blocked(&Project, &Draft, Some(Cancelled), 3));
+        assert!(!is_blocked(&Project, &Archived, Some(Active), 3));
+        // Itself finished or available: its dependents read it as met,
+        // so it can't say it is still waiting.
+        assert!(!is_blocked(&Project, &Draft, Some(Complete), 3));
+        assert!(!is_blocked(&Article, &Published, None, 3));
+        assert!(!is_blocked(&Reference, &Draft, None, 3));
+        // On the whole grid: never blocked while a dependency on it
+        // would be met, and never while out of use.
+        for (kind, status, state) in grid() {
+            if satisfies_dependency(&kind, &status, state) || !is_live(&status, state) {
+                assert!(
+                    !is_blocked(&kind, &status, state, 5),
+                    "{kind:?} {status:?} {state:?}"
+                );
+            }
+        }
         assert_eq!(blocked_label(1), "Waits for 1 node that is not finished");
         assert_eq!(blocked_label(3), "Waits for 3 nodes that are not finished");
     }

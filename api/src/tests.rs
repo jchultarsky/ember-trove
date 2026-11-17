@@ -497,9 +497,25 @@ impl EdgeRepo for StubEdgeRepo {
         _: NodeId,
         viewer: Option<&str>,
     ) -> Result<common::blockers::NodeBlockers, EmberTroveError> {
-        // Whose view the chain was walked for (S7b).
+        // Whose view the chain was walked for (S7b). An answer with
+        // something in it, so a route that dropped it would show.
         saw_viewer("blockers", viewer);
-        Ok(common::blockers::NodeBlockers::default())
+        let far = NodeId(Uuid::from_u128(AZ_VIEW_NODE));
+        Ok(common::blockers::NodeBlockers {
+            also: vec![common::blockers::Blocker {
+                id: far,
+                title: "further on".to_string(),
+                node: common::edge::EdgeEnd {
+                    node_type: NodeType::Project,
+                    status: common::node::NodeStatus::Draft,
+                    project_state: Some(common::project_state::ProjectState::Active),
+                },
+                depth: 2,
+                via: far,
+                via_title: "the way".to_string(),
+            }],
+            truncated: true,
+        })
     }
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {
         unimplemented!()
@@ -4633,6 +4649,14 @@ async fn a_nodes_blockers_are_read_for_their_reader() {
         }
         assert!(viewers_seen().is_empty(), "{path}: the repo was not asked");
     }
+    // The chain's answer is the repo's, whole.
+    let (_, body) = read(fake_claims(), AZ_OWNED_NODE, "/blockers").await;
+    let chain: common::blockers::NodeBlockers = serde_json::from_str(&body).expect("the chain");
+    assert!(chain.truncated, "{body}");
+    assert_eq!(chain.also.len(), 1, "{body}");
+    assert_eq!(chain.also[0].title, "further on");
+    assert_eq!(chain.also[0].via_title, "the way");
+    assert_eq!(chain.also[0].depth, 2);
     // The node's own answer carries the count beside the node's fields.
     let (_, body) = read(fake_claims(), AZ_OWNED_NODE, "").await;
     let node: serde_json::Value = serde_json::from_str(&body).expect("json");
@@ -6060,7 +6084,23 @@ impl crate::repo::task_dependency::TaskDependencyRepo for StubTaskDependencyRepo
             "a chain walked for a task its caller can't see: {task}"
         );
         saw_viewer("chain", viewer);
-        Ok((Vec::new(), false))
+        // Something in it, and "more": a route that dropped either
+        // would show.
+        let link = common::task_dependency::TaskLink {
+            id: task,
+            title: "further on".to_string(),
+            status: common::task::TaskStatus::Open,
+            node_id: NodeId(Uuid::from_u128(AZ_OWNED_NODE)),
+            node_title: "a project".to_string(),
+        };
+        Ok((
+            vec![common::task_dependency::ChainedTask {
+                task: link,
+                via: task,
+                via_title: "the way".to_string(),
+            }],
+            true,
+        ))
     }
     async fn blocked_tasks_for_nodes(
         &self,
@@ -6279,6 +6319,11 @@ async fn dependencies_are_read_by_viewers_and_say_who_may_change_them() {
         // edit the task, and nobody else (the stub panics if a viewer's
         // read reaches it).
         assert_eq!(deps.not_shown, if may_edit { 3 } else { 0 }, "{task:#x}");
+        // The chain (S7b) reaches a viewer too, whole, with its "more".
+        assert_eq!(deps.also.len(), 1, "{task:#x}");
+        assert_eq!(deps.also[0].task.title, "further on", "{task:#x}");
+        assert_eq!(deps.also[0].via_title, "the way", "{task:#x}");
+        assert!(deps.also_truncated, "{task:#x}");
     }
     // The chain (S7b) is walked for each of them, as themself, a viewer
     // of the task included.

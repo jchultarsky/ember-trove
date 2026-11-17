@@ -147,6 +147,56 @@ impl std::ops::Deref for ViewedNode {
     }
 }
 
+#[cfg(test)]
+mod viewed_node_tests {
+    use super::*;
+
+    /// The count rides beside the node's own fields: a client that
+    /// reads a plain `Node` still does, and an answer from before the
+    /// count reads as "none".
+    #[test]
+    fn a_viewed_node_is_the_node_with_its_count_beside_it() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "id": "00000000-0000-4000-8000-000000000001",
+            "owner_id": "alice",
+            "node_type": "project",
+            "title": "a project",
+            "slug": "a-project",
+            "body": "words",
+            "metadata": { "nested": { "n": u64::MAX } },
+            "status": "draft",
+            "project_state": "active",
+            "tags": [],
+            "pinned": false,
+            "created_at": "2026-11-17T10:00:00.123456Z",
+            "updated_at": "2026-11-17T10:00:00.654321Z",
+            "edge_count": 0
+        }))
+        .expect("a node");
+        let viewed = ViewedNode {
+            node: node.clone(),
+            blocked_by: 2,
+        };
+        let wire = serde_json::to_value(&viewed).expect("json");
+        assert_eq!(wire["blocked_by"], 2);
+        assert_eq!(wire["title"], "a project", "flattened, not nested");
+        assert!(wire.get("node").is_none());
+        // Back again, whole.
+        let back: ViewedNode = serde_json::from_value(wire.clone()).expect("viewed");
+        assert_eq!(back.blocked_by, 2);
+        assert_eq!(back.metadata, node.metadata);
+        assert_eq!(back.updated_at, node.updated_at);
+        assert_eq!(back.title, node.title, "through Deref");
+        // An older client reads it as a plain node.
+        let plain: Node = serde_json::from_value(wire).expect("still a node");
+        assert_eq!(plain.id, node.id);
+        // An answer cached before the count: no dependency is claimed.
+        let old: ViewedNode =
+            serde_json::from_value(serde_json::to_value(&node).expect("json")).expect("old");
+        assert_eq!(old.blocked_by, 0);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Node {
     pub id: NodeId,

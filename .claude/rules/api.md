@@ -872,9 +872,10 @@ cargo check && cargo clippy -- -D warnings
 
 - **Display only.** Nothing here writes, prevents or reorders (§6.4).
   The rules are `common::blockers`: `satisfies_dependency` (the §6.4
-  table), `is_blocked` (in use and an unmet dependency), `passes_on`
-  (a chain goes on only through a node that is unmet **and** live, never
-  an Area), `chain` (generic; tasks use it through
+  table), `still_waits` (in use and not itself met), `is_blocked` (it
+  still waits and has an unmet dependency: a Published Article is never
+  "Blocked"), `passes_on` (a chain goes on only through a node that
+  still waits, never an Area), `chain` (generic; tasks use it through
   `task_dependency::chained`).
 - **The SQL twins are built from the rule's own triples**
   (`repo::node::satisfies_dependency`, `passes_on`, from
@@ -887,8 +888,17 @@ cargo check && cargo clippy -- -D warnings
   halves are joined with `UNION` (`EdgeRepo::blockers`,
   `TaskDependencyRepo::chain`). A depth or a path in the row makes every
   pass a new row, and a legacy loop (a restore keeps one) never ends.
-  The cut (`LIMIT CHAIN_LIMIT + 1`) comes before the titles are joined.
-- **Every hop checks the reader.** A link is taken when its target is
+  The cut (`LIMIT CHAIN_LIMIT + 1`, numbered with `row_number()`)
+  comes before the titles are joined, and the link past the limit is the
+  one dropped: it is the last found, so nothing kept hangs on it. Never
+  trim by the order of the joined rows: that dropped a link from the
+  middle of a long chain. The limit counts the node's own unmet
+  dependencies too.
+- **Every hop checks the reader, and so does the start.** The start's
+  own visibility is in the SQL of all four reads (`blockers`,
+  `blocked_by_for_nodes`, `chain`, `blocked_tasks_for_nodes`), though
+  every route checks it first: a count of links from a hidden node is a
+  link with a hidden end. A link is taken when its target is
   `visible_to` the reader (tasks: `shown_to`) and not met. The walk
   stops at a hidden node and shows nothing beyond it, even a node the
   reader could read: "stops here" and "nothing further" must be one
@@ -908,7 +918,10 @@ cargo check && cargo clippy -- -D warnings
 - **Known, older, next release:** a `depends_on` link whose target the
   source's owner can't see is in no list of theirs and still decides
   loop refusals (owner decision 2026-11-17: a count and a remove for
-  the node's editors, as `not_shown` gives a task's).
+  the node's editors, as `not_shown` gives a task's). With S7b it does
+  one thing more: whoever can see both ends (its maker, an admin,
+  anyone both nodes are shared with) reads the owner's node as blocked,
+  and the owner doesn't. Nothing hidden is shown to anyone.
 
 ## Security rules from the 2026-11-10 audit
 

@@ -12814,10 +12814,11 @@ async fn data_health_lists_nodes_filed_under_an_area_with_derived_from(pool: PgP
 /// other kind has one: `nodes_project_state_only_on_projects`).
 #[sqlx::test(migrations = "../migrations")]
 async fn the_sql_for_a_met_dependency_and_for_going_on_are_the_shared_rules(pool: PgPool) {
-    use common::blockers::{passes_on, satisfies_dependency};
+    use common::blockers::{passes_on, satisfies_dependency, still_waits};
     use common::node::{NodeStatus, NodeType};
     use common::project_state::ProjectState;
     let (mut met, mut goes_on, mut rows) = (Vec::new(), Vec::new(), 0);
+    let mut waits = Vec::new();
     for kind in NodeType::ALL {
         for status in NodeStatus::ALL {
             let states: Vec<Option<ProjectState>> = if *kind == NodeType::Project {
@@ -12845,6 +12846,9 @@ async fn the_sql_for_a_met_dependency_and_for_going_on_are_the_shared_rules(pool
                 if satisfies_dependency(kind, status, state) {
                     met.push(title.clone());
                 }
+                if still_waits(kind, status, state) {
+                    waits.push(title.clone());
+                }
                 if passes_on(kind, status, state) {
                     goes_on.push(title);
                 }
@@ -12853,6 +12857,7 @@ async fn the_sql_for_a_met_dependency_and_for_going_on_are_the_shared_rules(pool
     }
     met.sort();
     goes_on.sort();
+    waits.sort();
     let titles = |predicate: String| {
         let pool = pool.clone();
         async move {
@@ -12866,6 +12871,14 @@ async fn the_sql_for_a_met_dependency_and_for_going_on_are_the_shared_rules(pool
     };
     assert_eq!(titles(super::node::satisfies_dependency("n")).await, met);
     assert_eq!(titles(super::node::passes_on("n")).await, goes_on);
+    assert_eq!(titles(super::node::still_waits("n")).await, waits);
+    // What still waits and is not an Area is what a chain goes on
+    // through; nothing that is met still waits.
+    assert!(
+        waits.len() > goes_on.len(),
+        "an Area waits and passes nothing on"
+    );
+    assert!(waits.iter().all(|t| !met.contains(t)));
     // `NOT met` keeps every row that is not met: a node with no state
     // (anything but a Project) must not fall out of it as NULL.
     let unmet = titles(format!("NOT {}", super::node::satisfies_dependency("n"))).await;
@@ -12948,6 +12961,12 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
     let w = project("alice", "w behind an archived one", "active").await;
     dep(a, p).await;
     dep(p, w).await;
+    // a → m (complete): a dependency that is met is no blocker at any
+    // depth, and nothing behind it is one either.
+    let m = project("alice", "m finished deeper", "complete").await;
+    let behind_m = project("alice", "n behind a finished one", "active").await;
+    dep(a, m).await;
+    dep(m, behind_m).await;
     // b → an Area (an old link: the API refuses it now): never met, and
     // it goes no further.
     let area = node_in_state(&pool, "alice", "area", "an area", "draft", None).await;
@@ -12962,6 +12981,10 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
     share(&pool, start, "bob").await;
     share(&pool, a, "bob").await;
     share(&pool, start, "carol").await;
+    // dave may edit the start and `a`: an editor reads no more than a
+    // viewer.
+    grant(&pool, NodeId(start), "dave", "editor").await;
+    grant(&pool, NodeId(a), "dave", "editor").await;
 
     let chain = |reader: Option<&'static str>, node: uuid::Uuid| {
         let edges = PgEdgeRepo::new(pool.clone());
@@ -13000,6 +13023,32 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
     );
     // carol sees the start alone: none of its dependencies, so no chain.
     assert_eq!(chain(Some("carol"), start).await, Vec::new());
+    // dave edits the start and `a` and sees nothing of what `a` waits
+    // for: the same answer as "nothing there".
+    assert_eq!(chain(Some("dave"), start).await, Vec::new());
+    // A node the reader can't view has no chain and no count, whoever
+    // asks the repo: `h` is bob's, and waits for `z`, which alice reads.
+    assert_eq!(chain(Some("alice"), h).await, Vec::new());
+    let count_of_h = |reader: Option<&'static str>| {
+        let nodes = PgNodeRepo::new(pool.clone());
+        async move {
+            nodes
+                .blocked_by_for_nodes(&[NodeId(h)], reader)
+                .await
+                .expect("count")
+        }
+    };
+    assert_eq!(
+        count_of_h(Some("alice")).await,
+        Vec::new(),
+        "a link from a node she can't view is not counted"
+    );
+    assert_eq!(
+        count_of_h(Some("bob")).await,
+        Vec::new(),
+        "nor one to a node its owner can't see"
+    );
+    assert_eq!(count_of_h(None).await, vec![(NodeId(h), 1)]);
     // An admin reads every node: also through `h` to `z`.
     assert_eq!(
         chain(None, start).await,
@@ -13022,13 +13071,20 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
         ]
     );
 
-    for reader in [Some("alice"), Some("bob"), Some("carol"), None] {
+    for reader in [
+        Some("alice"),
+        Some("bob"),
+        Some("carol"),
+        Some("dave"),
+        None,
+    ] {
         // The count is `direct()` of that reader's own links answer, for
         // the start and for nodes down the chain.
         let visible: Vec<uuid::Uuid> = match reader {
             Some("alice") => vec![start, a, b, d, x],
             Some("bob") => vec![start, a, h],
             Some("carol") => vec![start],
+            Some("dave") => vec![start, a],
             _ => vec![start, a, b, d, x, h],
         };
         let ids: Vec<NodeId> = visible.iter().map(|n| NodeId(*n)).collect();
@@ -13104,7 +13160,40 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
     );
     assert_eq!(count(Some("bob")).await, 1, "a alone is his to see");
     assert_eq!(count(Some("carol")).await, 0);
+    assert_eq!(count(Some("dave")).await, 1);
     assert_eq!(count(None).await, 3);
+
+    // A node that is itself finished waits for nothing, whatever it
+    // still links to: an Article that waits for `a` has a chain while it
+    // is a draft, and none once it is Published.
+    let waiter = node_in_state(
+        &pool,
+        "alice",
+        "article",
+        "an article that waits",
+        "draft",
+        None,
+    )
+    .await;
+    dep(waiter, a).await;
+    assert_eq!(
+        chain(Some("alice"), waiter)
+            .await
+            .into_iter()
+            .map(|(title, _, _)| title)
+            .collect::<Vec<_>>(),
+        vec!["b draft", "p archived", "an area", "c running"]
+    );
+    sqlx::query("UPDATE nodes SET status = 'published' WHERE id = $1")
+        .bind(waiter)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        chain(Some("alice"), waiter).await,
+        Vec::new(),
+        "a Published Article is finished: nothing of its own waits"
+    );
 
     // A node out of use waits for nothing: no chain from a closed or an
     // archived start (its own rows still say what each dependency is).
@@ -13126,7 +13215,7 @@ async fn a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see(pool
             "{status} {state}"
         );
     }
-    let _ = (e, y, z, w, q, available);
+    let _ = (e, y, z, w, q, available, behind_m);
 }
 
 /// A loop of `depends_on` links from before the rule (a restore keeps
@@ -13187,37 +13276,87 @@ async fn a_chain_of_blockers_ends_on_an_old_loop_and_is_cut_at_its_limit(pool: P
         .await
         .expect("blockers");
     assert!(long.truncated, "it says there is more");
-    // What was read hangs together from the head, with no link dropped
-    // from the middle: the limit's links and the one that says "more".
-    // One is the head's own dependency; the rest are the chain, in
-    // order.
+    // Exactly the limit's links are kept, and they hang together from
+    // the head with none dropped from the middle. One is the head's own
+    // dependency; the rest are the chain, in order.
     let titles: Vec<String> = long.also.iter().map(|b| b.title.clone()).collect();
-    let expected: Vec<String> = (2..=CHAIN_LIMIT + 1)
-        .map(|n| format!("line {n:03}"))
-        .collect();
+    let expected: Vec<String> = (2..=CHAIN_LIMIT).map(|n| format!("line {n:03}")).collect();
     assert_eq!(titles, expected);
     assert!(long.also.iter().all(|b| b.via_title == "line 001"));
-    // A chain of exactly the limit is whole, and doesn't say "more".
-    let whole = edges
-        .blockers(
-            NodeId(
-                sqlx::query_scalar::<_, uuid::Uuid>(
-                    "SELECT id FROM nodes WHERE title = 'line 005'",
-                )
+    let from = |title: &'static str| {
+        let pool = pool.clone();
+        async move {
+            let id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM nodes WHERE title = $1")
+                .bind(title)
                 .fetch_one(&pool)
                 .await
-                .unwrap(),
-            ),
-            Some("alice"),
+                .unwrap();
+            PgEdgeRepo::new(pool)
+                .blockers(NodeId(id), Some("alice"))
+                .await
+                .expect("blockers")
+        }
+    };
+    // A chain of exactly the limit is whole, and doesn't say "more".
+    let whole = from("line 005").await;
+    assert!(!whole.truncated, "from 005: 100 links to 105, all read");
+    assert_eq!(whole.also.len(), CHAIN_LIMIT - 1);
+    assert_eq!(
+        whole.also.last().map(|b| b.title.as_str()),
+        Some("line 105")
+    );
+    // One link more: it says "more", and the link past the limit is the
+    // one left out.
+    let one_over = from("line 004").await;
+    assert!(one_over.truncated, "from 004: 101 links");
+    assert_eq!(one_over.also.len(), CHAIN_LIMIT - 1);
+    assert_eq!(
+        one_over.also.last().map(|b| b.title.as_str()),
+        Some("line 104")
+    );
+
+    // SECURITY: what the reader can't see never feeds "more". A node of
+    // alice's waits for one of hers, which waits for more of bob's
+    // hidden nodes than the limit: her answer is that of "nothing
+    // there", and so are both counts.
+    let top = node_in_state(&pool, "alice", "project", "top", "draft", Some("active")).await;
+    let middle = node_in_state(&pool, "alice", "project", "middle", "draft", Some("active")).await;
+    raw_edge(&pool, top, middle, "depends_on").await;
+    for n in 0..CHAIN_LIMIT + 5 {
+        let hidden = node_in_state(
+            &pool,
+            "bob",
+            "project",
+            &format!("hidden {n:03}"),
+            "draft",
+            Some("active"),
         )
+        .await;
+        raw_edge(&pool, middle, hidden, "depends_on").await;
+    }
+    let seen = edges
+        .blockers(NodeId(top), Some("alice"))
         .await
         .expect("blockers");
-    assert!(!whole.truncated);
+    assert_eq!(seen, common::blockers::NodeBlockers::default());
+    let counts = PgNodeRepo::new(pool.clone())
+        .blocked_by_for_nodes(&[NodeId(top), NodeId(middle)], Some("alice"))
+        .await
+        .expect("counts");
     assert_eq!(
-        whole.also.len(),
-        CHAIN_LIMIT - 1,
-        "from 005: 100 links to 105"
+        counts,
+        vec![(NodeId(top), 1)],
+        "`middle` reads as waiting for nothing"
     );
+    // The limit counts the node's own unmet dependencies too: an admin
+    // reads `middle` with more of them than the limit, so there is
+    // "more" and no room for a chain.
+    let all = edges
+        .blockers(NodeId(middle), None)
+        .await
+        .expect("blockers");
+    assert!(all.truncated);
+    assert_eq!(all.also, Vec::new());
 }
 
 /// What a task's prerequisites wait for in turn
@@ -13312,6 +13451,59 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
         "an admin reads every node"
     );
 
+    // A task the reader isn't shown has no chain, whoever asks the
+    // repo: `h` waits for `u4`, which alice reads.
+    assert_eq!(also(Some("alice"), h).await, Vec::new());
+    assert_eq!(
+        deps.blocked_tasks_for_nodes(&[bobs], Some("alice"))
+            .await
+            .expect("counts"),
+        Vec::new(),
+        "nor is a node she can't view counted"
+    );
+
+    // A loop from before the rule ends the walk.
+    let mut ring = Vec::new();
+    for title in ["r1", "r2", "r3"] {
+        ring.push(task("alice", project, title).await);
+    }
+    raw_dep(&pool, ring[0], ring[1]).await;
+    raw_dep(&pool, ring[1], ring[2]).await;
+    raw_dep(&pool, ring[2], ring[0]).await;
+    let looped = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        deps.chain(TaskId(ring[0]), Some("alice")),
+    )
+    .await
+    .expect("the walk ends")
+    .expect("chain");
+    assert_eq!(
+        looped
+            .0
+            .iter()
+            .map(|c| c.task.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["r3"]
+    );
+    assert!(!looped.1);
+    // A chain longer than the limit is cut there and says so.
+    let line = a_project(&pool, "alice", "a long plan", None).await.id;
+    let mut last = raw_task(&pool, "alice", line.0, "step 000").await;
+    let head = last;
+    for n in 1..=common::blockers::CHAIN_LIMIT + 5 {
+        let next = raw_task(&pool, "alice", line.0, &format!("step {n:03}")).await;
+        raw_dep(&pool, last, next).await;
+        last = next;
+    }
+    let (long, more) = deps
+        .chain(TaskId(head), Some("alice"))
+        .await
+        .expect("chain");
+    assert!(more, "it says there is more");
+    assert_eq!(long.len(), common::blockers::CHAIN_LIMIT - 1);
+    assert_eq!(long[0].task.title, "step 002");
+    assert_eq!(long.last().map(|c| c.task.title.as_str()), Some("step 100"));
+
     // The dashboard's count: the project's tasks that say "Blocked".
     let idle = a_project(&pool, "alice", "nothing waits here", None)
         .await
@@ -13335,11 +13527,11 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
             .find(|(node, _)| *node == project)
             .map_or(0, |(_, n)| *n);
         assert_eq!(of_project as usize, blocked, "{reader:?}");
-        // t1, t2, t3 and u1 wait for a task alice sees; u2 waits only
-        // for bob's, which she doesn't.
+        // t1, t2, t3, u1 and the three of the ring wait for a task
+        // alice sees; u2 waits only for bob's, which she doesn't.
         assert_eq!(
             of_project,
-            if reader.is_some() { 4 } else { 5 },
+            if reader.is_some() { 7 } else { 8 },
             "{reader:?}"
         );
         assert!(
@@ -13353,5 +13545,5 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
         .blocked_tasks_for_nodes(&[project], Some("alice"))
         .await
         .expect("counts");
-    assert_eq!(counted, vec![(project, 3)]);
+    assert_eq!(counted, vec![(project, 6)]);
 }
