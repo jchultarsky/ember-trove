@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **"Add Edge" is offered only to someone who may add a link**: the
+  node's owner, an admin, or someone it is shared with as an editor.
+  A viewer used to be shown the form and got a refusal. The page reads
+  the reader's own grant when Connections is opened; if that can't be
+  read, the form is not offered. The server's check is unchanged.
+
 ## [3.27.0] - 2026-11-17
 
 ### Added

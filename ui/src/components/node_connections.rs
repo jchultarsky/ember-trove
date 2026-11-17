@@ -22,8 +22,10 @@ use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
 use common::node::NodeType;
 use common::ontology::allowed_homes;
+use common::permission::holds_editor;
 use leptos::prelude::*;
 
+use crate::auth::{AuthStatus, use_auth_state};
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::load_error::LoadError;
 use crate::components::node_meta::{type_icon, type_label};
@@ -261,10 +263,41 @@ pub fn ConnectionsPanel(
         });
     };
 
+    // Who may add a link here: someone who may write on this node (the
+    // rule of `POST /edges` for the link's source). The owner and an
+    // admin are known from the page (`can_edit`). Anyone else is asked
+    // for their own grant, once the section is opened: a shared editor
+    // is offered the form, a viewer is not (they used to be, and got a
+    // refusal). While that isn't known, or if it can't be read, nothing
+    // is offered: the API decides in any case.
+    let reader = StoredValue::new(match use_auth_state().get_untracked() {
+        AuthStatus::Authenticated(user) => Some(user.sub),
+        _ => None,
+    });
+    let own_grants = LocalResource::new(move || {
+        let wanted = !can_edit && links.wanted.get();
+        async move {
+            if wanted {
+                Some(crate::api::list_permissions(node_id).await)
+            } else {
+                None
+            }
+        }
+    });
+    let may_add = Signal::derive(move || {
+        if can_edit {
+            return true;
+        }
+        let Some(Ok(grants)) = own_grants.get().flatten() else {
+            return false;
+        };
+        reader.with_value(|sub| sub.as_deref().is_some_and(|sub| holds_editor(sub, &grants)))
+    });
+
     let section_count = Signal::derive(move || links.get()?.ok().map(|edges| edges.len()));
     let section_actions: ChildrenFn = std::sync::Arc::new(move || {
         view! {
-            {move || open.get().then(|| view! {
+            {move || (open.get() && may_add.get()).then(|| view! {
                     <button
                         class="p-1.5 rounded-lg text-stone-400 hover:text-stone-600
                             dark:hover:text-stone-300 hover:bg-stone-100
@@ -292,7 +325,7 @@ pub fn ConnectionsPanel(
             />
 
             // Add edge form
-            {move || show_add.get().then(|| view! {
+            {move || (show_add.get() && may_add.get()).then(|| view! {
                 <div class="mb-4 p-3 bg-stone-50 dark:bg-stone-900 rounded-lg space-y-2">
                     <div class="flex gap-2">
                         <div class="flex-1 min-w-0">

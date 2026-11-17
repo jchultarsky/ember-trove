@@ -186,18 +186,42 @@ test('a remove control is offered only to someone who may remove the link', asyn
     await shareNode(otherRequest, cited.id, E2E_SUBJECT, 'viewer');
 
     // A viewer reads the link whose two ends they can see, and only it.
+    const ownGrants = () =>
+      page.waitForResponse((r) => new URL(r.url()).pathname === `/api/nodes/${theirs.id}/permissions`);
+    let asked = ownGrants();
     const section = await openConnections(page, theirs.id);
     await expect(rows(page, 'sources')).toHaveText([new RegExp(cited.title)]);
     await expect(section).not.toContainText(hidden.title);
     await expect(section.getByRole('button', { name: /Remove the link/ })).toHaveCount(0);
+    // Nor are they offered the form to add one: the page has read their
+    // grant (a viewer's), and the server would refuse.
+    expect((await asked).ok()).toBeTruthy();
+    const add = section.locator('button[title="Add Edge"]');
+    await expect(add).toHaveCount(0);
 
     // An editor of the link's source may remove it, and is offered it.
     await shareNode(otherRequest, theirs.id, E2E_SUBJECT, 'editor');
+    asked = ownGrants();
     await openConnections(page, theirs.id);
     await expect(
       group(page, 'sources').getByRole('button', { name: `Remove the link to ${cited.title}` }),
     ).toBeVisible();
     await expect(section).not.toContainText(hidden.title);
+    // And the form to add one, which works for them.
+    expect((await asked).ok()).toBeTruthy();
+    await add.click();
+    await expect(page.getByRole('combobox', { name: 'Search for a node…' })).toBeVisible();
+
+    // If their grant can't be read, nothing is offered on a guess.
+    await page.route(`**/api/nodes/${theirs.id}/permissions`, (route) =>
+      route.fulfill({ status: 500, body: 'no' }),
+    );
+    asked = ownGrants();
+    await openConnections(page, theirs.id);
+    await expect(rows(page, 'sources')).toHaveText([new RegExp(cited.title)]);
+    await asked;
+    await expect(add).toHaveCount(0);
+    await page.unroute(`**/api/nodes/${theirs.id}/permissions`);
   } finally {
     for (const n of [theirs, cited, hidden]) await otherRequest.delete(`/api/nodes/${n.id}`);
   }
