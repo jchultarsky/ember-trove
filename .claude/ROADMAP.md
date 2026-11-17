@@ -5,20 +5,25 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-17)
 
-- **In progress: S7a, reverse indexes** (#342; ONTOLOGY §6.3, §6.5,
-  §14). Owner decisions (2026-11-16): the hand-made "derived from an
-  Area" links are filing and are fixed in Data health; "Linked Here"
-  folds into Connections. PR 1 (rules and API): `common::connections`
-  (groups), `node::is_live`, `EdgeType::removable_by`, the links answer
-  with each end's kind and standing and `may_remove`, `still_used_by` in
-  the deletion preview, no Area as a `derived_from` origin, Data
-  health's `DerivedFromArea` rule, the reversed convert. PR 2 (the app):
-  grouped Connections, the delete and archive warnings, "Unlinked
-  mentions", the Data health fixes. No migration. **Not in this slice:**
-  blockers (S7b); a "Derived from X" line in the page header (it would
-  be wrong on about 80 pages until the old links are fixed). Rules:
-  "Reverse indexes" and "Node deletion preview" in
-  `.claude/rules/api.md`.
+- **v3.27.0 shipped: S7a, reverse indexes** (#342, PRs #343 and #344;
+  ONTOLOGY §6.3, §6.5, §14). Owner decisions (2026-11-16): the hand-made
+  "derived from an Area" links are filing and are fixed in Data health;
+  "Linked Here" folds into Connections. No migration, no backup change.
+  PR 1 (rules and API): `common::connections` (every link type and
+  direction has one group), `node::is_live`, `EdgeType::removable_by`,
+  the links answer with each end's kind and standing and `may_remove`,
+  `still_used_by` in the deletion preview (read per reader), no Area as
+  a `derived_from` origin, Data health's `DerivedFromArea` rule with
+  `FiledRef` and `FilingFix`, the reversed convert. PR 2 (the app):
+  `node_connections.rs` (`NodeLinks`, one read of a node's links for the
+  page; grouped Connections; "Unlinked Mentions"), the delete warning
+  and the archive notice, the Data health fixes and "Fix all". **Not in
+  this slice:** blockers (S7b); a "Derived from X" line in the page
+  header (wrong on about 80 pages until the old links are fixed); the
+  few `references` links that run backwards, the owner's to turn by
+  hand. Rules: "Reverse indexes" and "Node deletion preview" in
+  `.claude/rules/api.md`; "A node's links are read once for its page" in
+  `.claude/rules/leptos.md`.
 
 - **v3.26.1 shipped: a task's webhook events follow its node's rights**
   (PR #341; owner decision of 2026-11-16, after the security review of
