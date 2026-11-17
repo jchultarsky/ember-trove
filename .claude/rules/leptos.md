@@ -308,6 +308,27 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     control on a node page that a shared editor may use goes the same
     way; `PermissionRole::satisfies` is the API's rule too.
   - A row is an `<a href>`, not a `<button>` with a navigate call.
+- **Never read a `LocalResource` inside a `Memo`** (S7b, 2026-11-17):
+  the memo doesn't run again when the read lands. The node page's
+  "Blocked" chip kept its first count after a dependency was removed,
+  while the list beside it already showed one fewer. Use
+  `Signal::derive` (as a section's `count` does), or read the resource
+  in another resource's source closure.
+- **Blockers on the page** (S7b, #346; rules in `common::blockers`):
+  - The header chip (`NodeBlockedChip`, `node_connections.rs`) counts
+    with `unmet_dependencies`: `ViewedNode::blocked_by` until the links
+    are read, `blockers::direct` of them after. Never count a
+    dependency in the browser any other way: the server holds its count
+    equal to that one.
+  - The chain (`GET /nodes/{id}/blockers`) is read only while
+    Connections is open, the node `still_waits` and a dependency is not
+    met. It renders in its own `<Suspense>` inside the list, so the
+    list doesn't blink.
+  - A "Depends on" row's word is `Connection::standing_in(group)`; its
+    order is `common::connections`' own. A chain row has no remove
+    control: it is not this node's link.
+  - The chip is `task_row_scaffold::blocked_chip` / `BLOCKED_CHIP`: one
+    look for a task, a node and a card. Neutral, never a warm colour.
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before

@@ -9,7 +9,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ### Added
 - **Blockers** (S7b of the ontology programme, #346; ONTOLOGY §6.4,
   §9.3, §14): what a node or a task waits for, said and never enforced.
-  The API half; the page follows in the same release.
+  - **A node that waits for something unfinished says "Blocked"** in
+    its page header. The chip opens Connections.
+  - **"Depends on" says what is met**: each row reads "Met", or what the
+    other node is ("Active", "Draft", "Cancelled", "Archived"), and
+    what is not met comes first.
+  - **"Further down the chain"**, under it, lists what those wait for
+    in turn, each with the dependency of this node it comes through.
+  - **Dashboard and Focus cards say "Blocked"**, and count the
+    Project's tasks still to do that wait for another task. No card
+    moves because of it.
+  - **The task editor** lists what a task's prerequisites wait for in
+    turn, under "Blocked by".
   - `GET /api/nodes/{id}` answers `blocked_by`: how many of the node's
     own `depends_on` links lead to a node that is not met, among those
     the caller can see. A dependency is met by a complete Project, a

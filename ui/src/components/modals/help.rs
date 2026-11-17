@@ -253,6 +253,19 @@ const CONCEPTS: &[Concept] = &[
                without linking to it.",
     },
     Concept {
+        title: "Blocked",
+        body: "A node that Depends on something not finished says Blocked, on \
+               its page and on its dashboard card. A dependency is met by a \
+               complete Project, a Published Article or a Reference that is \
+               not archived; each row of Depends on says Met, or what the \
+               other node is. Further down the chain lists what those wait \
+               for in turn. A task that waits for another task says Blocked \
+               too, and the card counts them. Nothing is enforced: a blocked \
+               node or task stays where it is and can be worked on. You see \
+               only what you can open, so something can read as blocked for \
+               one person and not for another.",
+    },
+    Concept {
         title: "Captures",
         body: "Where input waits to be processed (Tasks \u{2192} Captures). Quick \
                capture (n, the + on that page, the palette, the iOS Share Sheet) \

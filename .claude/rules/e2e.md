@@ -125,6 +125,16 @@ CI job is too slow a feedback loop for selector work.
   `getByTestId('node-home')`; there is no `connections-home` group
   beside it. An archived node is not in `/api/nodes/lookup`, so a
   spec that archives a node deletes it by id.
+- **Blockers** (2026-11-17, S7b): the page's chip is
+  `getByTestId('node-blocked')`, a card's `project-blocked`, a task
+  row's `task-blocked`; a card's blocked-task count is `count-blocked`.
+  The chain is `connections-chain` with `chain-row`s (a task's:
+  `chain-list`). A node's state is set with
+  `PUT /api/nodes/{id}/project-state {state}`; a closed Project is not
+  in `/api/nodes/lookup`, so delete it by id. To prove a read is not
+  made, count it with a `page.route(...)` that falls back
+  (`countChainReads` in blockers.spec.ts), and wait for `networkidle`
+  before asserting zero.
 - **A project in Focus has two cards on the dashboard** (2026-11-11,
   #282): one in the Focus section and one in its Area group, so
   `getByTestId('project-card').filter({ hasText: title })` is a

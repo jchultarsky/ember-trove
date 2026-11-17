@@ -13,6 +13,12 @@ pub async fn fetch_edges_for_node(node_id: NodeId) -> Result<Vec<EdgeWithTitles>
     get_json(&format!("/nodes/{node_id}/edges")).await
 }
 
+/// `GET /nodes/{id}/blockers` (S7b): what the node's unmet dependencies
+/// wait for in turn, as far as the caller can see.
+pub async fn fetch_blockers(node_id: NodeId) -> Result<common::blockers::NodeBlockers, UiError> {
+    get_json(&format!("/nodes/{node_id}/blockers")).await
+}
+
 pub async fn fetch_backlinks(node_id: NodeId) -> Result<Vec<common::node::Node>, UiError> {
     get_json(&format!("/nodes/{node_id}/backlinks")).await
 }

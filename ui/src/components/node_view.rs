@@ -33,7 +33,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
 
     let node = LocalResource::new(move || {
         let id = id;
-        async move { crate::api::fetch_node(id).await }
+        // With the reader's count of unmet dependencies (S7b): the
+        // header's "Blocked" chip needs no request of its own.
+        async move { crate::api::fetch_viewed_node(id).await }
     });
 
     // The node's body changed under this page (a version restore, the
@@ -50,7 +52,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
     let body = Signal::derive(move || {
         node.get()
             .and_then(|r| r.ok())
-            .and_then(|n| n.body)
+            .and_then(|n| n.node.body)
             .unwrap_or_default()
     });
     let title_map = crate::wikilink::use_wikilink_map(body);
@@ -200,6 +202,8 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // header's home chip and Connections both read it.
                             let home_refresh = RwSignal::new(0u32);
                             let links = NodeLinks::new(id, home_refresh);
+                            let served_blocked_by = n.blocked_by;
+                            let lifecycle_status = n.status.clone();
                             let has_brief = allows(&n.node_type, Capability::Brief);
                             let body_class = if has_brief && n.body.as_deref().is_some_and(|b| !b.trim().is_empty()) {
                                 "border-t border-stone-200 dark:border-stone-700 pt-6"
@@ -374,6 +378,16 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 node_type=n.node_type.clone()
                                                 can_edit=is_owner
                                                 refresh=home_refresh
+                                            />
+                                            // "Blocked" (S7b): it waits for something
+                                            // that is not finished. Said, never enforced.
+                                            <crate::components::node_connections::NodeBlockedChip
+                                                node_id=id
+                                                node_type=n.node_type.clone()
+                                                status=lifecycle_status.clone()
+                                                project_state=project_state
+                                                served=served_blocked_by
+                                                links=links
                                             />
                                         </div>
                                         {
@@ -608,6 +622,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         // Connections and Unlinked Mentions share one read
                                         // of the node's links (S7a).
                                         <ConnectionsPanel node_id=id node_type=n.node_type.clone() can_edit=is_owner
+                                            status=lifecycle_status.clone() project_state=project_state
                                             links=links />
                                         <crate::components::local_graph::LocalGraphPanel node_id=id title=n.title.clone() />
                                         <UnlinkedMentionsPanel node_id=id title=n.title.clone() links=links />

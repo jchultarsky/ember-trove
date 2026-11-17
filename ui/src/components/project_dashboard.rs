@@ -646,6 +646,17 @@ fn ProjectCard(
 ) -> impl IntoView {
     let counts = entry.task_counts.clone();
     let total = counts.open + counts.waiting + counts.done + counts.cancelled;
+    // Blockers (S7b): the Project's own unmet dependencies and its
+    // blocked tasks, both counted for this reader by the server.
+    let card_blocked = common::blockers::is_blocked(
+        &common::node::NodeType::Project,
+        &common::node::NodeStatus::parse(&entry.node_status)
+            .unwrap_or(common::node::NodeStatus::Draft),
+        entry.project_state,
+        entry.blocked_by,
+    );
+    let blocked_label = common::blockers::blocked_label(entry.blocked_by);
+    let blocked_tasks = entry.blocked_tasks;
     let done_pct = (counts.done * 100)
         .checked_div(total)
         .map_or(0.0, |v| v as f32);
@@ -902,6 +913,13 @@ fn ProjectCard(
                     {project_state.map(|s| view! {
                         <ProjectStateBadge state=s at=project_state_at />
                     })}
+                    // "Blocked" (S7b): the Project waits for a node that is
+                    // not finished. It never moves the card.
+                    {card_blocked.then(|| crate::components::task_row_scaffold::blocked_chip(
+                        blocked_label.clone(),
+                        format!(". {blocked_label}"),
+                        "project-blocked",
+                    ))}
                     {state_button}
                 </div>
 
@@ -926,6 +944,11 @@ fn ProjectCard(
                             color="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400" />
                         <CountBadge count=counts.cancelled label="cancelled"
                             color="bg-stone-100 dark:bg-stone-800 text-stone-400 dark:text-stone-500" />
+                        // Of the tasks still to do, how many wait for a
+                        // task that is not done (S7b). Only when any does.
+                        {(blocked_tasks > 0).then(|| view! {
+                            <BlockedTasks count=blocked_tasks />
+                        })}
                     </div>
 
                     <div class="flex items-center gap-2 w-28 flex-shrink-0">
@@ -1029,6 +1052,35 @@ fn TaskChip(task: TaskSummary) -> impl IntoView {
     }
 }
 
+/// How many of a card's tasks still to do are blocked (S7b). Not a
+/// fifth state beside the four counts: these tasks are among the open
+/// and waiting ones, so it carries the glyph and says so in its name.
+#[component]
+fn BlockedTasks(count: u32) -> impl IntoView {
+    let name = blocked_tasks_label(count);
+    view! {
+        <span class="inline-flex items-center gap-0.5 h-5 px-1 rounded text-xs font-semibold
+                     bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
+            data-testid="count-blocked"
+            title=name.clone()
+            aria-label=name
+            role="img">
+            <span class="material-symbols-outlined" style="font-size:12px;"
+                aria-hidden="true">"block"</span>
+            {count.to_string()}
+        </span>
+    }
+}
+
+/// "2 of its tasks wait for another task".
+fn blocked_tasks_label(count: u32) -> String {
+    if count == 1 {
+        "1 of its tasks waits for another task".to_string()
+    } else {
+        format!("{count} of its tasks wait for another task")
+    }
+}
+
 // ── Count badge (unchanged from v2.6.x) ─────────────────────────────────────
 
 /// One state's task count. The four sit side by side as bare numbers, so
@@ -1044,5 +1096,22 @@ fn CountBadge(count: u32, label: &'static str, color: &'static str) -> impl Into
             role="img">
             {count.to_string()}
         </span>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cards_blocked_task_count_says_what_it_counts() {
+        assert_eq!(
+            blocked_tasks_label(1),
+            "1 of its tasks waits for another task"
+        );
+        assert_eq!(
+            blocked_tasks_label(3),
+            "3 of its tasks wait for another task"
+        );
     }
 }
