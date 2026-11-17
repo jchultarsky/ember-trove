@@ -345,7 +345,8 @@ test('a home is chosen, changed and removed from the child', async ({ page, requ
     expect(fromA1).toEqual([]);
 
     // The home is this row, never a second "Home" group in the list
-    // below it (S7a).
+    // below it (S7a). The list has loaded: its container is there.
+    await expect(page.getByTestId('connections-groups')).toBeAttached();
     await expect(page.getByTestId('connections-home')).toHaveCount(0);
     // From the Area's page the child is under "Contains", and removing
     // that link there takes the child's home away.

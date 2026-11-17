@@ -49,8 +49,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - **A link's remove button shows only to someone who may remove it.**
   Every reader used to see it on every row and get a refusal.
 - A node's home is the Home row of Connections and no longer a second
-  row in the list under it. On a Reference with a home from before the
-  rule, the list still shows it, so it can be removed.
+  row in the list under it. Two cases keep it in the list: a Reference
+  with a home from before the rule, and a reader who may remove the
+  home's link but has no buttons on the row (a shared editor of the
+  node).
+- The Home row says when it couldn't load, with a retry. It used to
+  show nothing, which read as "no home".
+- Unlinked Mentions reads further search matches when the first ones
+  are all nodes that already link here, and an empty list says when
+  there were more matches than it checked.
+- Data health's bulk fixes keep their pace per request, and a bulk fix
+  does not start while a row's own fix is still on its way.
 - The node page reads a node's links once for both sections.
 - Linking a mention saves against the text it read: a change made in
   another tab meanwhile is not written over.

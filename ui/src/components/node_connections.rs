@@ -100,14 +100,28 @@ fn rows_before_fold(total: usize) -> usize {
 
 /// The groups the list shows on a node of `kind`. The Home group is the
 /// `HomeRow` above the list, which also names a home the reader can't
-/// see; listing it again would show it twice. A kind that can't have a
-/// home (a Reference) has no such row, so a home it was given before the
-/// rule still shows here, where it can be removed.
-fn listed(kind: &NodeType, groups: Vec<(Group, Vec<Connection>)>) -> Vec<(Group, Vec<Connection>)> {
+/// see; listing it again would show it twice. It stays in the list in
+/// two cases:
+/// - a kind that can't have a home (a Reference) has no such row, so a
+///   home it was given before the rule shows here, where it can be
+///   removed;
+/// - the row's buttons are the owner's (`can_edit`). Someone else who
+///   may remove the home's link (a shared editor of the child: a home
+///   never traps a child) is offered that here, as before S7a.
+fn listed(
+    kind: &NodeType,
+    can_edit: bool,
+    groups: Vec<(Group, Vec<Connection>)>,
+) -> Vec<(Group, Vec<Connection>)> {
     let home_row_shows_it = !allowed_homes(kind).is_empty();
     groups
         .into_iter()
-        .filter(|(group, _)| !(home_row_shows_it && *group == Group::Home))
+        .filter(|(group, rows)| {
+            if *group != Group::Home || !home_row_shows_it {
+                return true;
+            }
+            !can_edit && rows.iter().any(|row| row.may_remove)
+        })
         .collect()
 }
 
@@ -331,7 +345,7 @@ pub fn ConnectionsPanel(
                         </button>
                     </div>
                     {move || already_linked.get().map(|label| view! {
-                        <div class="text-xs text-amber-700 dark:text-amber-400" data-testid="edge-already-linked">
+                        <div role="status" class="text-xs text-amber-700 dark:text-amber-400" data-testid="edge-already-linked">
                             {format!("Already linked as {label}")}
                         </div>
                     })}
@@ -362,7 +376,7 @@ pub fn ConnectionsPanel(
                     }.into_any(),
                     Ok(edges) => {
                         let kind = kind.get_value();
-                        let groups = listed(&kind, grouped(node_id, edges));
+                        let groups = listed(&kind, can_edit, grouped(node_id, edges));
                         view! {
                             <div class="space-y-4" data-testid="connections-groups">
                                 {groups.into_iter().map(|(group, rows)| {
@@ -514,10 +528,95 @@ fn row_view(row: Connection, links: NodeLinks) -> impl IntoView {
 }
 
 /// A full-text hit on this node's title in another node's text.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Mention {
     id: NodeId,
     title: String,
+}
+
+/// What the search for mentions found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Mentions {
+    hits: Vec<Mention>,
+    /// The search has more matches than were looked through. An empty
+    /// list then says so: "none" would be a claim nobody checked.
+    more_unchecked: bool,
+}
+
+/// At most this many mentions are listed.
+const MENTIONS_SHOWN: usize = 10;
+/// The search is read a page at a time, up to this many pages. Every
+/// node that links here names the title too, so on a well-linked node
+/// the first page can be all links and no plain mention.
+const SEARCH_PAGE: u32 = 25;
+const SEARCH_PAGES: u32 = 4;
+
+/// The hits of one search page that are unlinked mentions: not this node,
+/// not a node that already links here, and a match in a node's own text
+/// (a note's or a task's can't be rewritten into a wikilink).
+fn unlinked(
+    node: NodeId,
+    linked: &HashSet<NodeId>,
+    results: Vec<common::search::SearchResult>,
+) -> Vec<Mention> {
+    results
+        .into_iter()
+        .filter(|r| {
+            r.node_id != node
+                && !linked.contains(&r.node_id)
+                && r.match_source.as_deref() == Some("node")
+        })
+        .map(|r| Mention {
+            id: r.node_id,
+            title: r.title,
+        })
+        .collect()
+}
+
+/// Whether the search stopped with matches it never looked at, and room
+/// left in the list: only then might a mention be missing from it.
+fn stopped_short(shown: usize, checked: u64, total: u64) -> bool {
+    shown < MENTIONS_SHOWN && checked < total
+}
+
+/// Reads the search until the list is full, the matches run out, or
+/// `SEARCH_PAGES` pages have been read.
+async fn find_mentions(
+    node: NodeId,
+    title: &str,
+    linked: &HashSet<NodeId>,
+) -> Result<Mentions, UiError> {
+    let mut hits: Vec<Mention> = Vec::new();
+    let mut checked = 0u64;
+    let mut total = 0u64;
+    for page in 1..=SEARCH_PAGES {
+        let resp = crate::api::search_nodes(
+            title,
+            false,
+            None,
+            None,
+            &[],
+            "or",
+            Some("relevance"),
+            None,
+            None,
+            page,
+            SEARCH_PAGE,
+        )
+        .await?;
+        total = resp.total;
+        let got = resp.results.len() as u64;
+        checked += got;
+        hits.extend(unlinked(node, linked, resp.results));
+        if hits.len() >= MENTIONS_SHOWN || got == 0 || checked >= total {
+            break;
+        }
+    }
+    hits.truncate(MENTIONS_SHOWN);
+    Ok(Mentions {
+        more_unchecked: stopped_short(hits.len(), checked, total),
+        hits,
+    })
 }
 
 /// Nodes whose text names this node's title without linking to it, each
@@ -529,11 +628,9 @@ pub fn UnlinkedMentionsPanel(node_id: NodeId, title: String, links: NodeLinks) -
     links.wanted_while(open);
     let title_sv = StoredValue::new(title);
 
-    // Full-text hits on this node's title, minus the node itself and
-    // anything that already links here. Only node-body matches: note and
-    // task hits can't be rewritten into wikilinks. `Ok(None)` while the
-    // links are still on their way: which nodes already link here isn't
-    // known yet, so no list is shown that might name one of them.
+    // `Ok(None)` while the links are still on their way: which nodes
+    // already link here isn't known yet, so no list is shown that might
+    // name one of them.
     let mentions = LocalResource::new(move || {
         let is_open = open.get();
         let linked = is_open
@@ -547,39 +644,31 @@ pub fn UnlinkedMentionsPanel(node_id: NodeId, title: String, links: NodeLinks) -
             };
             let linked = linked?;
             if title.trim().is_empty() {
-                return Ok(Some(Vec::new()));
+                return Ok(Some(Mentions {
+                    hits: Vec::new(),
+                    more_unchecked: false,
+                }));
             }
-            let resp = crate::api::search_nodes(
-                &title,
-                false,
-                None,
-                None,
-                &[],
-                "or",
-                Some("relevance"),
-                None,
-                None,
-                1,
-                25,
-            )
-            .await?;
-            Ok(Some(
-                resp.results
-                    .into_iter()
-                    .filter(|r| {
-                        r.node_id != node_id
-                            && !linked.contains(&r.node_id)
-                            && r.match_source.as_deref() == Some("node")
-                    })
-                    .take(10)
-                    .map(|r| Mention {
-                        id: r.node_id,
-                        title: r.title,
-                    })
-                    .collect::<Vec<_>>(),
-            ))
+            find_mentions(node_id, &title, &linked).await.map(Some)
         }
     });
+
+    // The mentions linked from this page since the list was read. The
+    // list is read again only once the links have been (one round trip
+    // later); until then a linked row would still stand there with a live
+    // button, and a second click would link a second mention.
+    let just_linked = RwSignal::new(HashSet::<NodeId>::new());
+    let shown = move |found: Mentions| -> Mentions {
+        let gone = just_linked.get();
+        Mentions {
+            hits: found
+                .hits
+                .into_iter()
+                .filter(|m| !gone.contains(&m.id))
+                .collect(),
+            more_unchecked: found.more_unchecked,
+        }
+    };
 
     // Turn the first plain-text mention in `mention_id`'s body into a
     // wikilink to this node. The save runs the server's wikilink sync, so
@@ -613,9 +702,11 @@ pub fn UnlinkedMentionsPanel(node_id: NodeId, title: String, links: NodeLinks) -
                 }
             }
             .await;
-            let _ = linking.try_set(false);
             match result {
                 Ok(Some(_)) => {
+                    let _ = just_linked.try_update(|done| {
+                        done.insert(mention_id);
+                    });
                     push_toast(ToastLevel::Success, "Mention linked.");
                     links.reload();
                 }
@@ -625,22 +716,24 @@ pub fn UnlinkedMentionsPanel(node_id: NodeId, title: String, links: NodeLinks) -
                 ),
                 Err(e) => push_toast(ToastLevel::Error, format!("Couldn\u{2019}t link: {e}")),
             }
+            let _ = linking.try_set(false);
         });
     };
 
     let section_count = Signal::derive(move || {
-        mentions.with(|r| r.as_ref()?.as_ref().ok()?.as_ref().map(Vec::len))
+        let found = mentions.get()?.ok()??;
+        Some(shown(found).hits.len())
     });
     view! {
         <SectionShell section=NodeSection::UnlinkedMentions open=open count=section_count>
             <Suspense fallback=|| view! {
-                <div class="text-xs text-stone-400">"Looking for mentions\u{2026}"</div>
+                <div class="text-xs text-stone-400" data-testid="mentions-loading">"Looking for mentions\u{2026}"</div>
             }>
-                {move || mentions.get().map(|result| match result {
+                {move || mentions.get().map(|result| match result.map(|found| found.map(shown)) {
                     Ok(None) => view! {
-                        <div class="text-xs text-stone-400">"Looking for mentions\u{2026}"</div>
+                        <div class="text-xs text-stone-400" data-testid="mentions-loading">"Looking for mentions\u{2026}"</div>
                     }.into_any(),
-                    Ok(Some(hits)) if hits.is_empty() => view! {
+                    Ok(Some(found)) if found.hits.is_empty() => view! {
                         <div class="flex flex-col items-center gap-2 py-6" data-testid="mentions-empty">
                             <span
                                 class="material-symbols-outlined text-stone-300 dark:text-stone-700"
@@ -650,13 +743,18 @@ pub fn UnlinkedMentionsPanel(node_id: NodeId, title: String, links: NodeLinks) -
                                 "alternate_email"
                             </span>
                             <p class="text-xs text-stone-400 dark:text-stone-600">
-                                "No other node names this one without linking to it."
+                                {if found.more_unchecked {
+                                    // Not "none": only the best matches were read.
+                                    "None among the closest matches for this title. There are more matches than were checked."
+                                } else {
+                                    "No other node names this one without linking to it."
+                                }}
                             </p>
                         </div>
                     }.into_any(),
-                    Ok(Some(hits)) => view! {
+                    Ok(Some(found)) => view! {
                         <ul class="space-y-0.5">
-                            {hits.into_iter().map(|hit| {
+                            {found.hits.into_iter().map(|hit| {
                                 let hit_id = hit.id;
                                 view! {
                                     <li class="flex items-center gap-1" data-testid="unlinked-mention">
@@ -737,14 +835,20 @@ mod tests {
             edge(1, 9, me, EdgeType::Contains),
             edge(2, 8, me, EdgeType::References),
         ];
-        let groups = |kind: &NodeType| -> Vec<Group> {
-            listed(kind, grouped(id(me), edges.clone()))
+        let groups_of = |kind: &NodeType, can_edit: bool, edges: &[EdgeWithTitles]| -> Vec<Group> {
+            listed(kind, can_edit, grouped(id(me), edges.to_vec()))
                 .into_iter()
                 .map(|(g, _)| g)
                 .collect()
         };
+        let groups = |kind: &NodeType| groups_of(kind, true, &edges);
         // A Project has a home row above the list.
         assert_eq!(groups(&NodeType::Project), vec![Group::UsedIn]);
+        // A viewer has the row too, without buttons, and no remove here.
+        assert_eq!(
+            groups_of(&NodeType::Project, false, &edges),
+            vec![Group::UsedIn]
+        );
         // A Reference has none (it is never contained), so a home from
         // before the rule still shows, where it can be removed.
         assert!(allowed_homes(&NodeType::Reference).is_empty());
@@ -752,6 +856,72 @@ mod tests {
             groups(&NodeType::Reference),
             vec![Group::Home, Group::UsedIn]
         );
+        // Someone who may remove the home's link but gets no buttons on
+        // the row (a shared editor of the child) is offered it here.
+        let mut removable = edges.clone();
+        if let Some(home) = removable.first_mut() {
+            home.may_remove = true;
+        }
+        assert_eq!(
+            groups_of(&NodeType::Project, false, &removable),
+            vec![Group::Home, Group::UsedIn]
+        );
+        // The owner has the row's own "Remove home": not twice.
+        assert_eq!(
+            groups_of(&NodeType::Project, true, &removable),
+            vec![Group::UsedIn]
+        );
+    }
+
+    fn hit(n: u128, source: &str) -> common::search::SearchResult {
+        common::search::SearchResult {
+            node_id: id(n),
+            title: format!("node {n}"),
+            slug: String::new(),
+            snippet: None,
+            rank: 0.0,
+            node_type: "article".to_string(),
+            status: "draft".to_string(),
+            match_source: Some(source.to_string()),
+            highlighted_title: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn an_unlinked_mention_is_another_nodes_own_text_that_does_not_link_here() {
+        let linked: HashSet<NodeId> = [id(2)].into_iter().collect();
+        let found = unlinked(
+            id(1),
+            &linked,
+            vec![
+                hit(1, "node"), // this node itself
+                hit(2, "node"), // links here already
+                hit(3, "node"),
+                hit(4, "note"), // a note's text can't be rewritten
+                hit(5, "task"),
+            ],
+        );
+        assert_eq!(
+            found,
+            vec![Mention {
+                id: id(3),
+                title: "node 3".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_empty_list_is_none_only_when_every_match_was_looked_at() {
+        // Everything was read: "none" is true.
+        assert!(!stopped_short(0, 25, 25));
+        assert!(!stopped_short(0, 0, 0));
+        // More matches than were read, and room in the list: one may be
+        // missing, so the page says so.
+        assert!(stopped_short(0, 100, 240));
+        assert!(stopped_short(3, 100, 240));
+        // A full list is not a claim about the rest.
+        assert!(!stopped_short(MENTIONS_SHOWN, 25, 240));
     }
 
     #[test]

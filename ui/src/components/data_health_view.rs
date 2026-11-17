@@ -23,7 +23,7 @@ use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
 use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
-use crate::components::task_actions::{delete_tasks_with_undo, paced};
+use crate::components::task_actions::{delete_tasks_with_undo, paced, paced_by};
 use crate::components::task_common::task_href;
 use crate::components::task_common::undo_restore_task;
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
@@ -201,6 +201,17 @@ struct FilingJob {
     node: uuid::Uuid,
     /// The Area it was filed under (the link's target).
     area: uuid::Uuid,
+}
+
+impl FilingJob {
+    /// How many requests [`apply_filing`] makes for it: "Fix all" keeps
+    /// its pace per request, and making a home is two.
+    fn requests(self) -> usize {
+        match self.fix {
+            FilingFix::MakeHome => 2,
+            FilingFix::LinkAsSource | FilingFix::Remove => 1,
+        }
+    }
 }
 
 /// The fix that fits an item (`FiledRef::fix`), when the reader may apply
@@ -858,12 +869,20 @@ fn FixControl(
                 }
                 busy.set(true);
                 wasm_bindgen_futures::spawn_local(async move {
-                    finish(
-                        apply_filing(job)
-                            .await
-                            .map(|()| done.to_string())
-                            .map_err(|e| format!("Couldn\u{2019}t change the link: {e}")),
-                    );
+                    match apply_filing(job).await {
+                        Ok(()) => finish(Ok(done.to_string())),
+                        // Making a home is two writes, and the first may
+                        // have gone through: read the report again, so
+                        // the card shows what is true now (the node has a
+                        // home; its old link offers removal).
+                        Err(e) => {
+                            push_toast(
+                                ToastLevel::Error,
+                                format!("Couldn\u{2019}t change the link: {e}"),
+                            );
+                            on_fixed.try_run(());
+                        }
+                    }
                 });
             };
             view! {
@@ -1097,6 +1116,10 @@ fn ConvertAll(
     let links = StoredValue::new(links);
     let convert_all = Callback::new(move |()| {
         confirming.set(false);
+        // A row's fix is on its way: its link must not be converted twice.
+        if busy.get_untracked() {
+            return;
+        }
         busy.set(true);
         let links = links.get_value();
         wasm_bindgen_futures::spawn_local(async move {
@@ -1159,13 +1182,17 @@ fn FixAllFiled(
     let jobs = StoredValue::new(jobs);
     let fix_all = Callback::new(move |()| {
         confirming.set(false);
+        // A row's fix is on its way: its link must not be fixed twice.
+        if busy.get_untracked() {
+            return;
+        }
         busy.set(true);
         let jobs = jobs.get_value();
         wasm_bindgen_futures::spawn_local(async move {
             let total = jobs.len();
-            // Paced like "Convert all", so a long card can't trip the
-            // write limiter halfway (429s).
-            let (done, failed) = paced(jobs, apply_filing).await;
+            // Paced by request (making a home is two), so a long card
+            // can't trip the limiter halfway (429s).
+            let (done, failed) = paced_by(jobs, FilingJob::requests, apply_filing).await;
             if failed == 0 {
                 push_toast(ToastLevel::Success, format!("Fixed {} links", done.len()));
             } else {
@@ -1555,6 +1582,11 @@ mod tests {
             ],
         );
         let jobs = filing_jobs(&card);
+        // Making a home is two requests (the home, then the old link).
+        assert_eq!(
+            jobs.iter().map(|j| j.requests()).collect::<Vec<_>>(),
+            vec![2, 1, 1]
+        );
         let fixes: Vec<FilingFix> = jobs.iter().map(|j| j.fix).collect();
         assert_eq!(
             fixes,

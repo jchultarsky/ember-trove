@@ -2,6 +2,7 @@ import {
   test,
   expect,
   createNode,
+  deleteNodesByPrefix,
   shareNode,
   E2E_SUBJECT,
   type APIRequestContext,
@@ -21,15 +22,16 @@ import {
 
 const PREFIX = 'e2e conn ';
 
-async function wipe(request: APIRequestContext) {
-  for (let round = 0; round < 5; round++) {
-    const hits: { id: string; title: string }[] = await (
-      await request.get(`/api/nodes/lookup?q=${encodeURIComponent(PREFIX.trim())}&limit=20`)
-    ).json();
-    const mine = hits.filter((n) => n.title.startsWith(PREFIX));
-    if (mine.length === 0) break;
-    for (const n of mine) await request.delete(`/api/nodes/${n.id}`);
-  }
+const wipe = (request: APIRequestContext) => deleteNodesByPrefix(request, PREFIX);
+
+/** Counts the reads of a node's links the page makes from here on. */
+async function countLinkReads(page: Page, id: string) {
+  const reads = { count: 0 };
+  await page.route(`**/api/nodes/${id}/edges`, (route) => {
+    if (route.request().method() === 'GET') reads.count += 1;
+    return route.fallback();
+  });
+  return reads;
 }
 
 test.beforeEach(async ({ request, otherRequest }) => {
@@ -201,6 +203,38 @@ test('a remove control is offered only to someone who may remove the link', asyn
   }
 });
 
+test('a shared editor can take a node out of its home, from the list', async ({
+  page,
+  otherRequest,
+}) => {
+  const stamp = Date.now();
+  const area = await createNode(otherRequest, `${PREFIX}their area ${stamp}`, { node_type: 'area' });
+  const project = await createNode(otherRequest, `${PREFIX}their project ${stamp}`, {
+    node_type: 'project',
+  });
+  try {
+    await link(otherRequest, area, project, 'contains');
+    await shareNode(otherRequest, area.id, E2E_SUBJECT, 'viewer');
+    await shareNode(otherRequest, project.id, E2E_SUBJECT, 'editor');
+
+    // The home row's buttons are the owner's. A home never traps a
+    // child, so its editor is offered the link's removal in the list.
+    await openConnections(page, project.id);
+    const home = page.getByTestId('node-home');
+    await expect(home.getByRole('link', { name: area.title })).toBeVisible();
+    await expect(home.getByRole('button')).toHaveCount(0);
+    await group(page, 'home')
+      .getByRole('button', { name: `Remove the link to ${area.title}` })
+      .click();
+    await expect(home).toContainText('None: it stands alone');
+    await expect(group(page, 'home')).toHaveCount(0);
+    const left: unknown[] = await (await otherRequest.get(`/api/nodes/${project.id}/edges`)).json();
+    expect(left).toEqual([]);
+  } finally {
+    for (const n of [area, project]) await otherRequest.delete(`/api/nodes/${n.id}`);
+  }
+});
+
 test('a failed read of the links is an error with a retry, never "no connections"', async ({
   page,
   request,
@@ -217,6 +251,16 @@ test('a failed read of the links is an error with a retry, never "no connections
     await page.unroute(`**/api/nodes/${a.id}/edges`);
     await section.getByRole('button', { name: 'Try again' }).click();
     await expect(rows(page, 'sources')).toHaveText([new RegExp(b.title)]);
+
+    // The home row says so too when its own read fails: a blank row
+    // would read as "no home".
+    await page.route(`**/api/nodes/${a.id}/home`, (route) => route.fulfill({ status: 500, body: 'no' }));
+    await openConnections(page, a.id);
+    const home = page.getByTestId('node-home');
+    await expect(home.getByRole('alert')).toHaveText('Couldn’t load the home.');
+    await page.unroute(`**/api/nodes/${a.id}/home`);
+    await home.getByRole('button', { name: 'Try again' }).click();
+    await expect(home).toContainText('None: it stands alone');
   } finally {
     for (const n of [a, b]) await request.delete(`/api/nodes/${n.id}`);
   }
@@ -241,6 +285,7 @@ test('a node that names this one is found, linked, and then listed under "Mentio
     });
     expect(saved.ok()).toBeTruthy();
 
+    const reads = await countLinkReads(page, target.id);
     const section = await openConnections(page, target.id);
     await expect(rows(page, 'mentioned-in')).toHaveText([new RegExp(linked.title)]);
     // A wiki link mirrors the text: it is never removed by hand.
@@ -253,15 +298,23 @@ test('a node that names this one is found, linked, and then listed under "Mentio
     await expect(found.filter({ hasText: plain.title })).toBeVisible();
     // The node that already links here is not an unlinked mention.
     await expect(found.filter({ hasText: linked.title })).toHaveCount(0);
+    // Both sections are open on one read of the node's links.
+    expect(reads.count).toBe(1);
 
     await mentions.getByRole('button', { name: `Link the mention in ${plain.title}` }).click();
     await expect(page.getByText('Mention linked.')).toBeVisible();
-    // One read feeds both sections: it moves from one to the other.
+    // It leaves the list at once, not a round trip later with a live
+    // button ...
     await expect(found.filter({ hasText: plain.title })).toHaveCount(0);
+    // ... and one more read of the links puts it under "Mentioned in".
     await expect(rows(page, 'mentioned-in')).toHaveText([
       new RegExp(linked.title),
       new RegExp(plain.title),
     ]);
+    expect(reads.count).toBe(2);
+    // The list as it is once the search has run again: still without it.
+    await expect(mentions.getByTestId('mentions-loading')).toHaveCount(0);
+    await expect(found.filter({ hasText: plain.title })).toHaveCount(0);
     const body = (await (await request.get(`/api/nodes/${plain.id}`)).json()).body as string;
     expect(body).toContain(`[[${target.title}]]`);
   } finally {
@@ -311,12 +364,15 @@ test('archiving a source says how many nodes in use still draw on it, or that it
   const essay = await createNode(request, `${PREFIX}still citing ${stamp}`);
   try {
     await link(request, essay, source, 'references');
+    const reads = await countLinkReads(page, source.id);
     await page.goto(`/nodes/${source.id}/edit`);
     const state = page.getByRole('radiogroup', { name: 'Lifecycle state' });
     const notice = page.getByTestId('archive-notice');
     await expect(state).toBeVisible();
     // Nothing is read, and nothing said, until Archived is chosen.
+    await page.waitForLoadState('networkidle');
     await expect(notice).toBeEmpty();
+    expect(reads.count).toBe(0);
 
     // A read that fails never reads as "nothing uses it".
     await page.route(`**/api/nodes/${source.id}/edges`, (route) =>

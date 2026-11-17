@@ -290,10 +290,24 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   name them in the UI.
   - A group's heading is an `h3`: the `h2`s are the page's sections.
   - The Home group is `HomeRow`; the list leaves it out wherever that
-    row shows (`listed`).
+    row shows it with its controls (`listed`). It stays for a Reference
+    (no row) and for a reader who may remove the home's link but is not
+    the row's `can_edit`.
+  - A row removed or linked from the page leaves its list at once
+    (`just_linked`), not when the next read lands: until then its button
+    is live, and a second click repeats the action.
+  - An empty list says "none" only when everything was looked at
+    (`stopped_short`).
   - A remove control is rendered only when the row's `may_remove` is
     true (the server's answer). Never offer one by `can_edit` alone.
   - A row is an `<a href>`, not a `<button>` with a navigate call.
+- **A bulk action is paced by request** (`task_actions::paced`; S7a):
+  a job that is more than one request uses `paced_by` with its cost
+  (`FilingJob::requests`). A bulk button checks the card's `busy` before
+  it starts, as a row's does.
+- **A fix that is two writes saves the copy first and removes the
+  original second**, and on a failure reads the report again: the first
+  write may have gone through (`Fix::File`, `apply_filing`).
 - **The archive notice** (`ArchivedNotice`, `status_picker.rs`) is read
   when Archived is chosen. A failed read says it couldn't check, never
   nothing: silence there reads as "nothing uses it".

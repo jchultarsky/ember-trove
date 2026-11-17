@@ -475,10 +475,20 @@ test('a node filed under an Area gets the fix that fits it, one by one or all at
   );
   // Every write, in the order it was sent.
   const calls: string[] = [];
+  // What the server says to the next writes: a refused home (a second
+  // one, a loop), or a removal that fails after the home was made.
+  const failing = { home: false, remove: false };
+  let reportReads = 0;
+  page.on('request', (r) => {
+    if (r.method() === 'GET' && new URL(r.url()).pathname === '/api/data-health') reportReads += 1;
+  });
   await page.route('**/api/edges', (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
     const body = route.request().postDataJSON();
     calls.push(`home ${body.source_id} > ${body.target_id} ${body.edge_type}`);
+    if (failing.home) {
+      return route.fulfill({ status: 422, json: { error: 'this node already has a home' } });
+    }
     return route.fulfill({
       status: 201,
       json: { id: uuid(99), ...body, created_at: '2026-11-17T00:00:00Z' },
@@ -492,6 +502,7 @@ test('a node filed under an Area gets the fix that fits it, one by one or all at
   await page.route('**/api/edges/*', (route) => {
     if (route.request().method() !== 'DELETE') return route.fallback();
     calls.push(`remove ${route.request().url().split('/').at(-1)!}`);
+    if (failing.remove) return route.fulfill({ status: 500, body: 'no' });
     return route.fulfill({ status: 204 });
   });
 
@@ -506,6 +517,26 @@ test('a node filed under an Area gets the fix that fits it, one by one or all at
   await item('a loose project').getByRole('button', { name: 'Make the Area its home' }).click();
   await expect(page.getByText('The Area is its home now')).toBeVisible();
   expect(calls).toEqual([`home ${area} > ${loose} contains`, `remove ${lLoose}`]);
+
+  // A home the server refuses (the node got one since the report was
+  // read): the old link is NOT removed. Never neither.
+  calls.length = 0;
+  failing.home = true;
+  await item('a loose project').getByRole('button', { name: 'Make the Area its home' }).click();
+  await expect(page.getByText(/Couldn’t change the link/)).toBeVisible();
+  expect(calls).toEqual([`home ${area} > ${loose} contains`]);
+  failing.home = false;
+
+  // The home is made and the removal fails: both links stand, and the
+  // report is read again so the card shows what is true now.
+  calls.length = 0;
+  failing.remove = true;
+  const before = reportReads;
+  await item('a loose project').getByRole('button', { name: 'Make the Area its home' }).click();
+  await expect.poll(() => calls).toEqual([`home ${area} > ${loose} contains`, `remove ${lLoose}`]);
+  await expect.poll(() => reportReads).toBeGreaterThan(before);
+  failing.remove = false;
+  await expect(item('a loose project').getByRole('button', { name: 'Make the Area its home' })).toBeEnabled();
 
   // A Reference is never contained: the Area lists it as a source, in
   // one step, the link turned round.
