@@ -795,10 +795,11 @@ cargo check && cargo clippy -- -D warnings
   account is `Some(sub)`, an admin `None`. A route that passed `None`
   for everyone would show and remove hidden links with every status code
   unchanged. A new dependency read or write joins those assertions.
-- **Not counted in the node deletion preview** (a departure from the rule
-  below, 2026-11-16): a link to a task on another node goes with a
-  deleted node's tasks, uncounted. A count would have to be worked out
-  per reader to stay inside what they can see.
+- **Not counted in the node deletion preview** (2026-11-16): a link to a
+  task on another node goes with a deleted node's tasks, uncounted. A
+  count would have to be worked out per reader to stay inside what they
+  can see. (S7a's `still_used_by` shows how such a count is done; this
+  one is still not built.)
 
 ## Node deletion preview (#281)
 
@@ -810,6 +811,56 @@ cargo check && cargo clippy -- -D warnings
 - `NodeRepo::deletion_preview` counts the rows the `nodes` cascade
   removes. A new table that holds a node's content, and that a person
   would miss, joins that query and `NodeDeletionPreview::losses`.
+- **`still_used_by` is the one count there that is not a loss** (S7a,
+  §6.3): `references` links into the nodes from live nodes that stay.
+  It has its own line (`NodeDeletionPreview::warning`), never
+  `losses()`. It is the one count read **per reader**: the query takes
+  `viewer` (`subject_scope`) beside `caller`, and counts a link only
+  when its source passes `visible_to` (§14: a warning may understate,
+  never reveal). It leaves out links from nodes in `mine`, the ids that
+  passed `require_owner`, not the ids as sent. It counts links, so the
+  UI's batches add up; a link from a node deleted in another batch of a
+  bulk delete is counted (it overstates, and still never counts a
+  hidden node). A new per-reader count there takes `viewer` the same
+  way.
+
+## Reverse indexes (S7a, #342)
+
+- **One answer, grouped in the page.** `GET /nodes/{id}/edges`
+  (`EdgeRepo::list_for_node_with_titles`) holds only links whose two
+  ends the reader can view, so every group, count and notice built from
+  it is cut to what they see. `common::connections` reads it:
+  `group_of(edge_type, outgoing)` is an exhaustive match (every type and
+  direction has exactly one group, so no link is left off the page),
+  `grouped` orders it, `live_users` is the archive notice's count.
+  Don't add a list route per group, and don't count in the browser from
+  anything but this answer.
+- **"Live"** is `common::node::is_live(status, project_state)`: not
+  archived, and not a complete or cancelled Project. Not "active": that
+  is a Project's state. Its SQL is `repo::node::live(alias)`, built from
+  `live_words()`; `the_sql_for_a_live_node_is_the_shared_rule` holds
+  them together.
+- **Who may remove a link is `EdgeType::removable_by(edits_source,
+  edits_target)`**, one rule for `DELETE /edges/{id}`,
+  `LinkRef::removable` and `EdgeWithTitles::may_remove`. The row's flag
+  binds the reader's own subject through `editable_by` (grants only; an
+  admin is the NULL subject), as `require_editor` reads it.
+  `a_nodes_links_say_what_each_end_is_and_who_may_remove_them` checks it
+  for every type from both ends and five readers.
+- **An Area is never a `derived_from` origin** (§6.5):
+  `EdgeRefusal::DerivedFromArea` in `edge_kind_violation`, after the
+  rights checks like every kind rule. Data health's `DerivedFromArea`
+  lists the old ones (`derived_from_areas`); each item carries
+  `filed: FiledRef {kind, has_home}`, and `FiledRef::fix()` is the fix
+  that fits (`MakeHome`, `LinkAsSource`, `Remove`).
+  `LinkRef::filing_fix_allowed` offers one only where its calls pass.
+  `has_home` counts a home the reader can't see too: only a node's own
+  stakeholders are listed it, as `GET …/home` tells a node's editors.
+- **`POST /edges/{id}/convert` with `reverse`** turns the link round in
+  the transaction it already has (`EdgeRepo::convert(.., swap)`).
+  `convert_ends(from, to, reverse, source, target)`: step 3 then needs
+  edit rights on the old target and view rights on the old source; a
+  `related_to` has no direction to turn.
 
 ## Security rules from the 2026-11-10 audit
 

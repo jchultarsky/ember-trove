@@ -40,9 +40,12 @@ pub trait EdgeRepo: Send + Sync {
         child: NodeId,
         parent: Option<NodeId>,
     ) -> Result<Option<Edge>, EmberTroveError>;
-    /// Edges touching `node_id`, with both endpoint titles. SECURITY: only
-    /// edges whose endpoints are both visible to `subject` (`None` = admin) —
-    /// the route checks access to `node_id` alone.
+    /// Edges touching `node_id`, with both endpoint titles, each end's
+    /// kind and standing, and whether `subject` may remove the link (S7a).
+    /// SECURITY: only edges whose endpoints are both visible to `subject`
+    /// (`None` = admin) — the route checks access to `node_id` alone. So
+    /// every list, count and notice the page builds from this answer is
+    /// cut to what its reader can see (§14).
     async fn list_for_node_with_titles(
         &self,
         node_id: NodeId,
@@ -93,19 +96,59 @@ struct EdgeWithTitlesRow {
     edge_type: String,
     label: Option<String>,
     created_at: DateTime<Utc>,
+    source_type: String,
+    source_status: String,
+    source_state: Option<String>,
+    target_type: String,
+    target_status: String,
+    target_state: Option<String>,
+    edits_source: bool,
+    edits_target: bool,
+}
+
+/// One end of a link as its list shows it (S7a): kind and standing.
+fn edge_end(
+    node_type: &str,
+    status: &str,
+    state: Option<&str>,
+) -> Result<common::edge::EdgeEnd, EmberTroveError> {
+    use common::{
+        node::{NodeStatus, NodeType},
+        project_state::ProjectState,
+    };
+    Ok(common::edge::EdgeEnd {
+        node_type: super::parse_wire(node_type, "node type", NodeType::parse)?,
+        status: super::parse_wire(status, "node status", NodeStatus::parse)?,
+        project_state: state
+            .map(|s| super::parse_wire(s, "project state", ProjectState::parse))
+            .transpose()?,
+    })
 }
 
 impl EdgeWithTitlesRow {
     fn into_edge_with_titles(self) -> Result<EdgeWithTitles, EmberTroveError> {
+        let edge_type = parse_edge_type(&self.edge_type)?;
         Ok(EdgeWithTitles {
             id: EdgeId(self.id),
             source_id: NodeId(self.source_id),
             source_title: self.source_title,
             target_id: NodeId(self.target_id),
             target_title: self.target_title,
-            edge_type: parse_edge_type(&self.edge_type)?,
+            // The delete route's own rule, read for this reader.
+            may_remove: edge_type.removable_by(self.edits_source, self.edits_target),
+            edge_type,
             label: self.label,
             created_at: self.created_at,
+            source_node: Some(edge_end(
+                &self.source_type,
+                &self.source_status,
+                self.source_state.as_deref(),
+            )?),
+            target_node: Some(edge_end(
+                &self.target_type,
+                &self.target_status,
+                self.target_state.as_deref(),
+            )?),
         })
     }
 }
@@ -527,7 +570,15 @@ impl EdgeRepo for PgEdgeRepo {
                 tn.title AS target_title,
                 e.edge_type::text,
                 e.label,
-                e.created_at
+                e.created_at,
+                sn.node_type::text AS source_type,
+                sn.status::text AS source_status,
+                sn.project_state AS source_state,
+                tn.node_type::text AS target_type,
+                tn.status::text AS target_status,
+                tn.project_state AS target_state,
+                ($2::text IS NULL OR {edits_source}) AS edits_source,
+                ($2::text IS NULL OR {edits_target}) AS edits_target
             FROM edges e
             JOIN nodes sn ON sn.id = e.source_id
             JOIN nodes tn ON tn.id = e.target_id
@@ -538,6 +589,11 @@ impl EdgeRepo for PgEdgeRepo {
             "#,
             sn_visible = super::visible_to("sn", 2),
             tn_visible = super::visible_to("tn", 2),
+            // Who may remove a link is who may edit an end of it: a grant
+            // of their own, as `require_editor` reads it, or an admin
+            // (the NULL subject), as that check lets through.
+            edits_source = super::editable_by("e.source_id", 2),
+            edits_target = super::editable_by("e.target_id", 2),
         ))
         .bind(node_id.0)
         .bind(subject)

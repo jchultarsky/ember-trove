@@ -83,6 +83,7 @@ impl DataHealthRepo for PgDataHealthRepo {
             contained_reference,
             not_allowed,
             depends_on_areas(&depends_on)?,
+            derived_from_areas(&mut tx, &derived_from).await?,
             loops(&contains, EdgeType::Contains, RuleId::ContainsCycle),
             loops(&depends_on, EdgeType::DependsOn, RuleId::DependsOnCycle),
             loops(
@@ -658,6 +659,53 @@ fn depends_on_areas(depends_on: &[EdgeRow]) -> Result<RuleReport, EmberTroveErro
     Ok(RuleReport::new(RuleId::DependsOnArea, items))
 }
 
+/// `derived_from` edges of mine whose origin is an Area (S7a; §6.5):
+/// filing made by hand before a node had a home. Each item says what its
+/// fixes need: the filed node's kind, and whether it has a home.
+///
+/// "Has a home" counts any home, one the reader can't see included: a
+/// second one would be refused, so the fix must not offer it. Only the
+/// node's own stakeholders are told (`has_stake`), as `GET …/home` tells
+/// a node's editors.
+async fn derived_from_areas(
+    conn: &mut PgConnection,
+    derived_from: &[EdgeRow],
+) -> Result<RuleReport, EmberTroveError> {
+    let mut filed = Vec::new();
+    for r in derived_from.iter().filter(|r| r.has_stake()) {
+        if node_type(&r.target_type)? == NodeType::Area {
+            filed.push(r);
+        }
+    }
+    let sources: Vec<Uuid> = filed.iter().map(|r| r.source_id).collect();
+    let homed: std::collections::HashSet<Uuid> = if sources.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        sqlx::query_scalar(
+            "SELECT DISTINCT target_id FROM edges \
+             WHERE edge_type = 'contains' AND target_id = ANY($1)",
+        )
+        .bind(&sources)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(db)?
+        .into_iter()
+        .collect()
+    };
+    let mut items = Vec::new();
+    for r in filed {
+        items.push(
+            Violation::new(r.source(), vec![r.target()])
+                .with_links(vec![r.link(EdgeType::DerivedFrom)])
+                .with_filed(common::data_health::FiledRef {
+                    kind: node_type(&r.source_type)?,
+                    has_home: homed.contains(&r.source_id),
+                }),
+        );
+    }
+    Ok(RuleReport::new(RuleId::DerivedFromArea, items))
+}
+
 // ── Loops (§6.1, §6.4, §6.5) ──────────────────────────────────────────────────
 
 /// Groups of nodes that loop back on themselves through `edges` and include
@@ -712,6 +760,7 @@ struct SqlCounts {
     membership_on_non_project: i64,
     status_on_non_project: i64,
     depends_on_area: i64,
+    derived_from_area: i64,
 }
 
 /// Every rule over all data, no subject filter. Only numbers are read
@@ -732,7 +781,9 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
           (SELECT count(*) FROM nodes
             WHERE node_type <> 'project' AND project_status IS NOT NULL) AS status_on_non_project,
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
-            WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area
+            WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area,
+          (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
+            WHERE e.edge_type = 'derived_from' AND t.node_type = 'area') AS derived_from_area
         "#,
     )
     .fetch_one(&mut *conn)
@@ -797,6 +848,10 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::DependsOnArea,
             count: n(sql.depends_on_area),
+        },
+        RuleCount {
+            rule: RuleId::DerivedFromArea,
+            count: n(sql.derived_from_area),
         },
         RuleCount {
             rule: RuleId::ContainsCycle,

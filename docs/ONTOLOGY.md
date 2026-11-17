@@ -333,6 +333,11 @@ was written from. Direction runs from the consumer to the thing consumed.
   (distinct from incidental `[[title]]` links in its prose); and a
   **warning, not a block**, when deleting or archiving a node that active
   nodes still reference.
+- An **active** node, for that warning, is one still in use: not
+  archived, and not a Project whose state is complete or cancelled. A
+  parked Project and a draft count: set aside or unfinished is not done
+  with. The warning is a count of links, never a title, and it counts
+  only links from nodes its reader can see (§14).
 
 ### 6.4 `depends_on` — hard prerequisite
 
@@ -373,6 +378,10 @@ Direction runs descendant → origin.
 - Multiple origins are allowed (merges), and one origin may spawn many
   descendants — no single-parent rule. **Cycles are rejected** (an origin
   must precede its descendant).
+- **An Area is never an origin.** An Area is a standing domain, not a
+  piece of work or a text that something is adapted, copied or split
+  from; a node that belongs to an Area has it as its home (§6.1). An
+  Area may itself be derived from something.
 - Behavior: **lineage display only** ("Derived from X"; a "Descendants"
   list on the origin).
 
@@ -833,3 +842,5 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-16 | Task dependencies are built now, and lean (S5d): stored, listed and changed in the task editor ("Blocked by", "Blocks"), with a "Blocked" mark on task rows. Blockers shown through a chain, and node-level blockers, wait for the blockers slice. A Task may depend on **any Task its person can see**, in any Project | Owner, in the developer session (S5d planning, #338) |
 | 2026-11-16 | A blocked Task stays where it is in every list and can be completed (unlike Waiting, which leaves Today and Overdue). A prerequisite blocks until it is Done, a Cancelled one for good. One in the trash, or on a Project the reader can't see, neither shows nor counts as blocking. The loop check looks at every link, hidden and trashed ones included, so a refusal can tell someone that a chain exists, never through what. Because such a link still decides those refusals, whoever may edit a Task is told how many of its prerequisites they are not shown, unnamed, and may remove them (the hidden-home rule of 2026-10-31, applied after the security review of this slice; the plan had said such a link could not be removed). Adding takes edit rights on the Task that waits and view rights on the other; removing takes edit rights on the Task that waits. A Task waits for at most 50 Tasks, every link counted. The picker offers Tasks still to do on Projects the person owns or was given, never widened for an admin, without archived Projects. A backup holds the links (format 13); a restore leaves out a link to a Task it doesn't bring back, and any loop | Developer, building S5d (#338); in the plan the owner approved |
 | 2026-11-16 | A Task's webhook events (`task.created`, `task.updated`, `task.deleted`) go to the webhooks of the Task's author only while that person can still see the Task's node: they own it or hold a grant on it. They used to go there whatever their rights now. An admin's webhooks follow the same rule, without the admin role: a webhook is sent for someone who is not making a request. Supersedes, for who hears of it, the line of 2026-11-14 on a cascade's `task.updated` | Owner, in the developer session (after the security review of S5d, #338) |
+| 2026-11-16 | Reverse indexes (S7a). The old hand-made `derived_from` links that point at an Area were filing, not provenance: they are fixed in Data health, one by one or all at once, and nothing changes until a fix is chosen. "Linked Here" folds into the node's Connections as "Mentioned in"; the tool that finds unlinked mentions stays a section of its own | Owner, in the developer session (S7a planning, #342) |
+| 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |

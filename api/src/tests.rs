@@ -102,6 +102,7 @@ impl NodeRepo for StubNodeRepo {
             | AZ_TASKS_PROJECT => ("test-sub", NodeType::Project),
             AZ_VIEW_PROJECT => ("someone-else", NodeType::Project),
             AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
+            AZ_MY_AREA => ("test-sub", NodeType::Area),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
         };
         let status = if id.0.as_u128() == AZ_ARCHIVED_PROJECT {
@@ -263,7 +264,10 @@ impl NodeRepo for StubNodeRepo {
         &self,
         ids: &[NodeId],
         caller: &str,
+        viewer: Option<&str>,
     ) -> Result<common::node::NodeDeletionPreview, EmberTroveError> {
+        // Whose view the warning's count was asked for (S7a).
+        saw_viewer("deletion_preview", viewer);
         // As for `delete`: only nodes the caller may delete may get here.
         // The answer echoes what arrived, so a test can read it back.
         for id in ids {
@@ -279,6 +283,7 @@ impl NodeRepo for StubNodeRepo {
             nodes: ids.len() as u64,
             tasks: 7,
             others_tasks: 2,
+            still_used_by: 3,
             ..Default::default()
         })
     }
@@ -390,16 +395,17 @@ impl EdgeRepo for StubEdgeRepo {
             AZ_FOREIGN_RELATED_EDGE | AZ_STRANGERS_RELATED_EDGE => {
                 common::edge::EdgeType::RelatedTo
             }
+            AZ_MY_FILED_EDGE | AZ_FILED_ON_VIEWED_EDGE => common::edge::EdgeType::DerivedFrom,
             _ => return Err(EmberTroveError::NotFound(format!("edge {id}"))),
         };
         let target = match id.0.as_u128() {
-            AZ_STRANGERS_RELATED_EDGE => AZ_VIEW_NODE,
+            AZ_STRANGERS_RELATED_EDGE | AZ_FILED_ON_VIEWED_EDGE => AZ_VIEW_NODE,
             AZ_HIDDEN_EDGE => AZ_FOREIGN_NODE,
             _ => AZ_MY_PROJECT,
         };
         let source = match id.0.as_u128() {
             AZ_VISIBLE_HOME_EDGE => AZ_VIEW_NODE,
-            AZ_MY_WIKI_EDGE => AZ_MY_ARTICLE,
+            AZ_MY_WIKI_EDGE | AZ_MY_FILED_EDGE | AZ_FILED_ON_VIEWED_EDGE => AZ_MY_ARTICLE,
             _ => AZ_FOREIGN_NODE,
         };
         Ok(Edge {
@@ -469,9 +475,12 @@ impl EdgeRepo for StubEdgeRepo {
     async fn list_for_node_with_titles(
         &self,
         _: NodeId,
-        _: Option<&str>,
+        viewer: Option<&str>,
     ) -> Result<Vec<EdgeWithTitles>, EmberTroveError> {
-        unimplemented!()
+        // Whose view the links were read for (S7a): every group, count
+        // and notice the page builds comes from this one answer.
+        saw_viewer("list_for_node_with_titles", viewer);
+        Ok(Vec::new())
     }
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {
         unimplemented!()
@@ -591,6 +600,12 @@ const AZ_HIDDEN_HOME_EDGE: u128 = 0xa2_0e35;
 const AZ_MY_WIKI_EDGE: u128 = 0xa2_0e37;
 const AZ_FOREIGN_WIKI_EDGE: u128 = 0xa2_0e38;
 const AZ_SEEN_HOME_EDGE: u128 = 0xa2_0e36;
+/// "Derived from" links out of the caller's own Article (S7a): into their
+/// own Project, and into a node they may only view.
+const AZ_MY_FILED_EDGE: u128 = 0xa2_0e39;
+const AZ_FILED_ON_VIEWED_EDGE: u128 = 0xa2_0e3a;
+/// The caller's own Area.
+const AZ_MY_AREA: u128 = 0xa2_000c;
 
 /// Someone else's task on a node the caller can't see.
 const AZ_FOREIGN_TASK: u128 = 0xa2_0101;
@@ -677,6 +692,7 @@ fn authz_permissions() -> Vec<Permission> {
             PermissionRole::Owner,
         ),
         row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
+        row(0xa2_020e, AZ_MY_AREA, "test-sub", PermissionRole::Owner),
         row(
             AZ_PERM_FOREIGN,
             AZ_FOREIGN_NODE,
@@ -4464,6 +4480,88 @@ async fn a_link_converts_only_for_someone_who_could_delete_and_recreate_it() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(convert(0xdead, "related_to").await, StatusCode::NOT_FOUND);
+
+    // S7a: a link can be turned round as it is converted. The new link
+    // runs from the old target, so that end must be the caller's to edit.
+    let turn = |edge: u128, to: &'static str| async move {
+        claims_app("/edges", crate::routes::edges::router())
+            .oneshot(
+                Request::post(format!("/edges/{}/convert", Uuid::from_u128(edge)))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "edge_type": to, "reverse": true }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    // Their Article "derived from" their Project becomes "the Project
+    // references the Article" (the stub asserts the swap).
+    assert_eq!(
+        turn(AZ_MY_FILED_EDGE, "references").await,
+        StatusCode::NO_CONTENT
+    );
+    // Onto a node they may only view: they could delete the old link, but
+    // may not write the new one there.
+    assert_eq!(
+        turn(AZ_FILED_ON_VIEWED_EDGE, "references").await,
+        StatusCode::FORBIDDEN
+    );
+    // A related link has no direction to turn; nothing else opens up.
+    assert_eq!(
+        turn(AZ_MY_FILED_EDGE, "related_to").await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        turn(AZ_MY_FILED_EDGE, "contains").await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // A link the caller has no say over is refused before it is judged.
+    assert_eq!(
+        turn(AZ_FOREIGN_LINK_EDGE, "references").await,
+        StatusCode::FORBIDDEN
+    );
+}
+
+/// `GET /nodes/{id}/edges` (S7a): the page builds every group, count and
+/// notice from this one answer, so it must be read for its reader: an
+/// ordinary account as itself, an admin as someone who reads every node.
+/// Someone who can't view the node gets nothing, and the repo is not
+/// asked.
+#[tokio::test]
+async fn a_nodes_links_are_read_for_their_reader() {
+    let links = |claims: common::auth::AuthClaims, node: u128| async move {
+        Router::new()
+            .nest("/nodes", crate::routes::nodes::router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(
+                Request::get(format!("/nodes/{}/edges", Uuid::from_u128(node)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    };
+    viewers_seen();
+    for node in [AZ_OWNED_NODE, AZ_EDIT_NODE, AZ_VIEW_NODE] {
+        assert_eq!(
+            links(fake_claims(), node).await,
+            StatusCode::OK,
+            "{node:#x}"
+        );
+    }
+    assert_all_seen_as(Some("test-sub"));
+    assert_eq!(links(admin_claims(), AZ_FOREIGN_NODE).await, StatusCode::OK);
+    assert_all_seen_as(None);
+    assert_eq!(
+        links(fake_claims(), AZ_FOREIGN_NODE).await,
+        StatusCode::FORBIDDEN
+    );
+    assert!(viewers_seen().is_empty(), "the repo was not asked");
 }
 
 /// `GET /nodes/{id}/home` (#228): a home is named only to someone who can
@@ -4572,6 +4670,24 @@ async fn edge_kind_rules_refuse_with_the_reason() {
     // Allowed kinds reach the repo.
     let (status, _) = post_typed_edge(AZ_MY_ARTICLE, AZ_MY_PROJECT, "references").await;
     assert_eq!(status, StatusCode::CREATED);
+
+    // S7a (§6.5): nothing is derived from an Area.
+    let (status, body) = post_typed_edge(AZ_MY_ARTICLE, AZ_MY_AREA, "derived_from").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("nothing is derived from an Area"),
+        "{body}"
+    );
+    // An Area may itself come from something.
+    let (status, _) = post_typed_edge(AZ_MY_AREA, AZ_MY_PROJECT, "derived_from").await;
+    assert_eq!(status, StatusCode::CREATED);
+    // The kind is judged only after the rights: someone who may not write
+    // on the source is told that, not what kind the target is.
+    let (status, _) = post_typed_edge(AZ_VIEW_NODE, AZ_MY_AREA, "derived_from").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 // ── e2e test-identity header is inert outside e2e builds (#135) ──────────────
@@ -5425,6 +5541,14 @@ async fn the_deletion_preview_counts_only_nodes_the_caller_may_delete() {
     assert_eq!(body["nodes"], 1, "only the node the caller owns");
     assert_eq!(body["tasks"], 7);
     assert_eq!(body["others_tasks"], 2);
+    // S7a: the warning's count comes with it, read for the caller.
+    assert_eq!(body["still_used_by"], 3);
+    assert_all_seen_as(Some("test-sub"));
+    // An admin reads every node, so their count is of every link.
+    let (status, _) =
+        deletion_preview_call(admin_claims(), &Uuid::from_u128(AZ_OWNED_NODE).to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_all_seen_as(None);
 }
 
 #[tokio::test]

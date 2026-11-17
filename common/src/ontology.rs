@@ -148,6 +148,9 @@ pub enum EdgeRefusal {
     ContainmentNotAllowed { parent: NodeType, child: NodeType },
     /// An Area never completes, so it isn't a prerequisite (§6.4).
     DependsOnArea,
+    /// Nothing is derived from an Area (§6.5): an Area is where a node
+    /// belongs, which is its home, not its origin.
+    DerivedFromArea,
     /// The child already has its one home (§6.1).
     SecondHome,
     /// The edge would close a loop of its type (§6.1, §6.4, §6.5).
@@ -176,6 +179,10 @@ impl EdgeRefusal {
             ),
             Self::DependsOnArea => {
                 "an Area is never finished, so nothing can depend on it".to_string()
+            }
+            Self::DerivedFromArea => {
+                "nothing is derived from an Area; if the node belongs to it, make the Area its home"
+                    .to_string()
             }
             Self::SecondHome => "this node already has a home; remove that link first".to_string(),
             Self::Loop(t) => format!(
@@ -214,6 +221,7 @@ pub fn edge_kind_violation(
             },
         }),
         EdgeType::DependsOn if *target == NodeType::Area => Some(EdgeRefusal::DependsOnArea),
+        EdgeType::DerivedFrom if *target == NodeType::Area => Some(EdgeRefusal::DerivedFromArea),
         EdgeType::DependsOn
         | EdgeType::References
         | EdgeType::RelatedTo
@@ -506,6 +514,10 @@ mod tests {
                         EdgeType::DependsOn if *target == NodeType::Area => {
                             Some(EdgeRefusal::DependsOnArea)
                         }
+                        // S7a (§6.5): an Area is never an origin.
+                        EdgeType::DerivedFrom if *target == NodeType::Area => {
+                            Some(EdgeRefusal::DerivedFromArea)
+                        }
                         _ => None,
                     };
                     assert_eq!(got, expected, "{source:?} {edge_type:?} {target:?}");
@@ -529,6 +541,15 @@ mod tests {
         assert_eq!(
             edge_kind_violation(&EdgeType::DependsOn, &Area, &Project),
             None
+        );
+        // §6.5: an Area may be derived from something; nothing from it.
+        assert_eq!(
+            edge_kind_violation(&EdgeType::DerivedFrom, &Area, &Project),
+            None
+        );
+        assert_eq!(
+            edge_kind_violation(&EdgeType::DerivedFrom, &Reference, &Area),
+            Some(EdgeRefusal::DerivedFromArea)
         );
     }
 
@@ -555,6 +576,7 @@ mod tests {
             EdgeRefusal::ContainedReference,
             not_allowed,
             EdgeRefusal::DependsOnArea,
+            EdgeRefusal::DerivedFromArea,
             EdgeRefusal::SecondHome,
             EdgeRefusal::Loop(EdgeType::Contains),
         ] {
