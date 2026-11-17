@@ -121,25 +121,56 @@ fn undo_toggle(
     })
 }
 
-/// Calls `call` for each id, one at a time. Past the first `PACE_AFTER`
-/// calls it waits `PACE_MS` between them: the API's write limiter allows a
-/// burst of 100, then one call per 100 ms, so a long bulk action (a delete,
-/// its Undo, Data health's "Convert all") slows down instead of failing
-/// halfway with 429s. Returns the ids it succeeded on and how many failed.
+/// The first requests of a bulk action go out unpaced, within the API's
+/// burst; past them, each waits this long. The limiter allows a burst of
+/// 100, then one request per 100 ms.
+const PACE_AFTER: usize = 80;
+const PACE_MS: u32 = 110;
+
+/// How long to wait before a job that makes `cost` requests, when `sent`
+/// requests have gone out so far. A job whose last request would fall
+/// past the unpaced burst waits for every request it makes.
+fn pace_wait_ms(sent: usize, cost: usize) -> u32 {
+    if sent + cost > PACE_AFTER {
+        PACE_MS.saturating_mul(u32::try_from(cost).unwrap_or(u32::MAX))
+    } else {
+        0
+    }
+}
+
+/// Calls `call` for each id, one at a time, paced so a long bulk action
+/// (a delete, its Undo, Data health's "Convert all") slows down instead
+/// of failing halfway with 429s. Returns the ids it succeeded on and how
+/// many failed.
 pub(crate) async fn paced<I, F, Fut, T, E>(ids: Vec<I>, call: F) -> (Vec<I>, usize)
 where
     I: Copy,
     F: Fn(I) -> Fut,
     Fut: std::future::Future<Output = Result<T, E>>,
 {
-    const PACE_AFTER: usize = 80;
-    const PACE_MS: u32 = 110;
+    paced_by(ids, |_| 1, call).await
+}
+
+/// [`paced`], for jobs that are not one request each: `cost` says how
+/// many requests a job makes, and the pace is kept per request (Data
+/// health's "Fix all": making a home is two).
+pub(crate) async fn paced_by<I, C, F, Fut, T, E>(ids: Vec<I>, cost: C, call: F) -> (Vec<I>, usize)
+where
+    I: Copy,
+    C: Fn(I) -> usize,
+    F: Fn(I) -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
     let mut ok = Vec::with_capacity(ids.len());
     let mut failed = 0usize;
-    for (i, id) in ids.into_iter().enumerate() {
-        if i >= PACE_AFTER {
-            gloo_timers::future::TimeoutFuture::new(PACE_MS).await;
+    let mut sent = 0usize;
+    for id in ids {
+        let requests = cost(id).max(1);
+        let wait = pace_wait_ms(sent, requests);
+        if wait > 0 {
+            gloo_timers::future::TimeoutFuture::new(wait).await;
         }
+        sent = sent.saturating_add(requests);
         match call(id).await {
             Ok(_) => ok.push(id),
             Err(_) => failed += 1,
@@ -506,5 +537,27 @@ impl TaskEditDraft {
             .set_value(req.status.as_ref().map(|s| s.as_str().to_string()));
         self.pending.set_value(true);
         Some(req)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bulk_action_is_paced_by_request_not_by_job() {
+        // Within the burst: no wait.
+        assert_eq!(pace_wait_ms(0, 1), 0);
+        assert_eq!(pace_wait_ms(PACE_AFTER - 1, 1), 0);
+        // Past it: one request's wait for a one-request job, as before.
+        assert_eq!(pace_wait_ms(PACE_AFTER, 1), PACE_MS);
+        assert_eq!(pace_wait_ms(500, 1), PACE_MS);
+        // A two-request job waits for both, and from the job whose second
+        // request would be the first past the burst.
+        assert_eq!(pace_wait_ms(PACE_AFTER - 2, 2), 0);
+        assert_eq!(pace_wait_ms(PACE_AFTER - 1, 2), 2 * PACE_MS);
+        assert_eq!(pace_wait_ms(PACE_AFTER, 2), 2 * PACE_MS);
+        // The pace is slower than the limiter's refill (one per 100 ms).
+        const { assert!(PACE_MS > 100 && PACE_AFTER < 100) };
     }
 }

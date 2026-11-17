@@ -1500,7 +1500,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         })
                     }}
                     // Lifecycle state, explained at the point of choice (#196).
-                    <crate::components::status_picker::StatusPicker value=status />
+                    <crate::components::status_picker::StatusPicker value=status node=node />
                     // Save-state indicator (autosave / local draft).
                     <span
                         class=move || {

@@ -15,8 +15,14 @@ pub enum DeleteDetails {
     /// Still counting. Delete stays off.
     Counting,
     /// Counted: `losses` in words (`NodeDeletionPreview::losses`), and how
-    /// many of the chosen nodes are not the caller's to delete.
-    Counted { losses: Vec<String>, kept: u64 },
+    /// many of the chosen nodes are not the caller's to delete. `warning`
+    /// (S7a, ONTOLOGY §6.3) is not a loss of content: nodes in use still
+    /// draw on these as a source. It is shown apart, and never blocks.
+    Counted {
+        losses: Vec<String>,
+        kept: u64,
+        warning: Option<String>,
+    },
     /// The count failed. Delete stays off: the numbers come first.
     Failed,
 }
@@ -26,6 +32,7 @@ impl DeleteDetails {
         Self::Counted {
             losses: preview.losses(),
             kept: preview.kept(asked),
+            warning: preview.warning(),
         }
     }
 
@@ -148,9 +155,19 @@ pub fn DeleteConfirmModal(
                             "Couldn\u{2019}t count what this deletes. Close this and try again."
                         </p>
                     }.into_any(),
-                    DeleteDetails::Counted { losses, .. } => view! {
+                    DeleteDetails::Counted { losses, warning, .. } => view! {
                         <div class="text-sm text-stone-600 dark:text-stone-400 flex flex-col gap-1"
                              data-testid="delete-details">
+                            // A warning, not a block (§6.3): its own line,
+                            // above the losses and never among them.
+                            {warning.map(|line| view! {
+                                <p class="flex items-start gap-1.5 text-amber-700 dark:text-amber-400"
+                                   data-testid="delete-warning">
+                                    <span class="material-symbols-outlined shrink-0" style="font-size: 16px;"
+                                          aria-hidden="true">"warning"</span>
+                                    <span>{line}</span>
+                                </p>
+                            })}
                             {(!losses.is_empty()).then(|| view! {
                                 <p>"This also deletes:"</p>
                                 <ul class="list-disc pl-5">
@@ -223,6 +240,7 @@ mod tests {
             DeleteDetails::Counted {
                 losses: vec!["4 tasks (1 from other people)".to_string()],
                 kept: 1,
+                warning: None,
             }
         );
         assert_eq!(
@@ -236,5 +254,31 @@ mod tests {
             many.kept_line().as_deref(),
             Some("3 of the selected nodes are not yours to delete and will be kept.")
         );
+    }
+
+    #[test]
+    fn a_node_still_used_as_a_source_warns_apart_from_the_losses() {
+        let preview = NodeDeletionPreview {
+            nodes: 1,
+            still_used_by: 2,
+            ..Default::default()
+        };
+        let details = DeleteDetails::from_preview(&preview, 1);
+        let DeleteDetails::Counted {
+            losses, warning, ..
+        } = &details
+        else {
+            panic!("counted");
+        };
+        assert!(losses.is_empty(), "a link from a node in use is not a loss");
+        assert_eq!(warning.as_deref(), preview.warning().as_deref());
+        assert!(warning.is_some());
+        // A warning, not a block.
+        assert!(details.allows_delete());
+        let unused = DeleteDetails::from_preview(&NodeDeletionPreview::default(), 1);
+        assert!(matches!(
+            unused,
+            DeleteDetails::Counted { warning: None, .. }
+        ));
     }
 }
