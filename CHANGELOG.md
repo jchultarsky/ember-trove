@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.29.1] - 2026-11-18
+
 ### Security
 - **Only a Project's owner moves a task to another person's Project**
   (#351; ONTOLOGY §14, §9.3; owner decision of 2026-11-18). Edit rights
