@@ -226,6 +226,14 @@ CI job is too slow a feedback loop for selector work.
   a page as the second identity, set the header and then `goto`: the
   page learns who it is on load. Reset the header in `afterEach` too, or
   the next test's page runs as the wrong person.
+- **People and the email rule** (S8a, people.spec.ts): the refusal is
+  `email-taken` (it was `duplicate-warning`); a marked row is the email
+  textbox with `aria-invalid="true"`. With more than one address,
+  `getByRole('textbox', { name: 'email', exact: true })` matches every
+  row: scope it with `getByTestId('email-row').nth(i)`. Two people can't
+  be given one address through the API any more; a spec that needs a
+  pair has no way to make one (the Postgres tests use the restore's
+  setting).
 - **Timestamps in Postgres tests** (2026-11-14): `Utc::now()` has
   nanoseconds on Linux and the database keeps microseconds, so an
   equality against a value read back passes on macOS and fails in CI.

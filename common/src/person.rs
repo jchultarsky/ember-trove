@@ -426,12 +426,16 @@ pub fn shared_email_people(people: &[Person]) -> usize {
 /// A deliberately loose shape check: one `@`, something on both sides, a
 /// dot in the domain, no whitespace. Real validation is the mail server's.
 ///
-/// Since email is identity (S8a, §7.1) it also refuses what would let one
-/// mailbox be saved as two addresses without anyone seeing a difference:
-/// a wrapper pasted along with it (`mailto:ada@x.com`, `<ada@x.com>`,
-/// `"Ada" <ada@x.com>`) and invisible characters (a zero-width space from
-/// a web page, a byte-order mark). Letters outside ASCII stay allowed and
-/// are compared as typed ([`email_key`]).
+/// Since email is identity (S8a, §7.1) it also refuses the usual ways one
+/// mailbox ends up saved as two addresses that look the same: a wrapper
+/// pasted along with it (`mailto:ada@x.com`, `<ada@x.com>`,
+/// `"Ada" <ada@x.com>`) and characters that take no space on screen (a
+/// zero-width space from a web page, a byte-order mark, a direction mark).
+///
+/// It does not make look-alikes impossible. Letters outside ASCII stay
+/// allowed and are compared as typed ([`email_key`]): a Cyrillic "а" is
+/// not a Latin "a", and an accent typed as its own character is not the
+/// accented letter. Those are different addresses to a mail server too.
 fn valid_email(v: &str) -> bool {
     let mut parts = v.split('@');
     match (parts.next(), parts.next(), parts.next()) {
@@ -454,11 +458,24 @@ fn not_in_an_address(c: char) -> bool {
         '<' | '>' | '(' | ')' | '[' | ']' | ':' | ';' | ',' | '\\' | '"'
     ) || matches!(
         c,
-        '\u{00ad}'
+        // Soft hyphen; combining grapheme joiner; Arabic letter mark.
+        '\u{00ad}' | '\u{034f}' | '\u{061c}'
+            // Hangul fillers; Mongolian separators and vowel separator.
+            | '\u{115f}'..='\u{1160}'
+            | '\u{180b}'..='\u{180f}'
+            // Zero-width spaces and joiners, direction marks.
             | '\u{200b}'..='\u{200f}'
+            // Direction embeddings and overrides.
             | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2064}'
+            // Word joiner, invisible operators, direction isolates.
+            | '\u{2060}'..='\u{206f}'
+            // Hangul filler; variation selectors; byte-order mark.
+            | '\u{3164}'
+            | '\u{fe00}'..='\u{fe0f}'
             | '\u{feff}'
+            | '\u{ffa0}'
+            // Tags and the variation selectors supplement.
+            | '\u{e0000}'..='\u{e0fff}'
     )
 }
 
@@ -1092,6 +1109,14 @@ mod tests {
             "\u{feff}ada@example.com",
             "ada@exam\u{00ad}ple.com",
             "ada@example.com\u{200e}",
+            "ada\u{2066}@example.com",
+            "ada\u{2069}@example.com",
+            "ada\u{fe0f}@example.com",
+            "ada\u{034f}@example.com",
+            "ada\u{061c}@example.com",
+            "ada\u{180e}@example.com",
+            "ada\u{3164}@example.com",
+            "ada\u{e0001}@example.com",
         ] {
             assert_eq!(with(bad), Err(PersonError::InvalidEmail), "{bad:?}");
         }
@@ -1105,6 +1130,18 @@ mod tests {
         ] {
             assert!(with(good).is_ok(), "{good:?}");
         }
+        // Not prevented, and not the same address to a mail server
+        // either: a letter of another script that looks the same, and an
+        // accent typed as its own character.
+        assert!(with("\u{0430}da@example.com").is_ok(), "Cyrillic a");
+        assert!(
+            with("ade\u{0301}@example.com").is_ok(),
+            "e + combining acute"
+        );
+        assert_ne!(
+            email_key("\u{0430}da@example.com"),
+            email_key("ada@example.com")
+        );
     }
 
     #[test]

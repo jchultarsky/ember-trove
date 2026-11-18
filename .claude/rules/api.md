@@ -119,6 +119,80 @@ cargo check && cargo clippy -- -D warnings
   `common::data_health::graph_rule_counts` and warns; it never refuses
   (owner decision).
 
+## Email is identity (S8a, #353; ONTOLOGY §7.1)
+
+- **The rule is the database's** (migration 056): the trigger
+  `people_email_identity` refuses a write that gives a person an address
+  another person of the same account lists. It is a trigger and not a
+  unique index because people who shared an address before it stay as
+  they are (owner decision, 2026-11-18): only an address **new to that
+  person** is checked (`person_email_collisions(owner, self, old, new)`).
+  A unique key can't replace it as the data is (`emails` is a JSONB
+  list, and a key can't span list elements across rows): that takes a
+  `person_emails` table, once the **admin** count of `shared_email` is
+  zero and no person lists an address twice (Data health does not list
+  those).
+- **The key is `person_email_key`**: `lower(btrim(v) COLLATE "C")`, with
+  the twin `common::person::email_key`
+  (`the_database_and_the_app_agree_on_what_the_same_address_is`). ASCII
+  only, so every installation's collation gives one answer. Never
+  compare addresses any other way (`lower()`, `to_lowercase()`).
+  `valid_email` keeps out wrappers and the usual invisible characters
+  (`not_in_an_address`), because the key compares text exactly. It does
+  not make look-alikes impossible: a letter of another script, or an
+  accent typed on its own, is a different address.
+- **Key what is stored, or trim first.** `normalize` trims a value with
+  `str::trim` (every kind of white space) before it is stored;
+  `email_key` takes off spaces only, like the database. So anything that
+  keys text a person has just typed trims it first (the editor's
+  `typed_key`). A 409's `matches[].email` is the other person's stored
+  spelling, not what was typed.
+- **"One address, once" is the API's rule**, in `normalize`
+  (`PersonError::DuplicateEmail`), not the trigger's. A restore brings
+  back a person who has one twice, and anything that joins two people's
+  lists (the merge tool) removes repeats by key itself.
+- **Routes**: `save_unless_it_collides` reads who has the address
+  (`PersonRepo::email_collisions`), writes nothing if anyone does, and
+  answers the database's own refusal (`AlreadyExists`, a raced save) by
+  reading again. Always a 409 with `DuplicateWarning`, even with no
+  match left: the app reads every 409 on a person save as that body.
+  `?confirm=true` is read by no route.
+- **SECURITY: per account, no admin bypass.** The collision function,
+  its lock, the 409, the Data health rule, the admin count (`PARTITION
+  BY owner_id, k`) and the restore preview all keep to one account. An
+  id that isn't the caller's finds nothing, so the save answers 404.
+  The trigger's error has a fixed message and no detail; never format a
+  person write's error with `{e:?}`.
+- **Anything new that writes `people`** is covered by the trigger, and
+  must follow its order: the row first, then the account's advisory
+  lock (`ember.person_emails.<owner>`). A transaction that writes
+  **several** people (the merge tool) locks every row it will write
+  first (`FOR UPDATE`, in id order) and sets a `lock_timeout`: any other
+  order can deadlock with an ordinary save, which answers a 500.
+- **A new address is written under READ COMMITTED only**: the check
+  needs a fresh look after the lock. Under any other isolation the
+  trigger refuses (`0A000`). Never write people on a snapshot
+  transaction.
+- **Restore**: `restore_into` locks `people` against writers
+  (`SHARE ROW EXCLUSIVE`) and sets `SET LOCAL ember.restoring_people =
+  'on'` around its people inserts only, so an archive's pairs come back.
+  `SET LOCAL`, never `SET`: a plain one leaves the rule off on a pooled
+  connection (`people_who_share_an_address_come_back_from_a_restore_and_are_listed`
+  reads the setting back). A `COPY`, or a data-only `pg_restore` into a
+  schema that already has the trigger, fails on old pairs without it
+  (`PGOPTIONS='-c ember.restoring_people=on'`); a full `pg_restore`
+  loads the rows before it creates the trigger.
+- **Old data**: a person with one address twice from before 056 gets a
+  422 on every edit until one is taken off, and Data health does not
+  list them (production had none). A 409's `matches` can name one
+  person twice when they list the address twice.
+- **An older image does not start on a database that has 056**: sqlx
+  refuses an applied migration the binary doesn't know
+  (`VersionMissing`). Rolling back is the VM snapshot, which takes the
+  trigger with it.
+- Tests that need a pair call `people_who_share` (it uses the restore's
+  setting); the migration test follows the 053 pattern.
+
 ## Captures (#234)
 
 - A capture is unclassified Inbox input (`captures`, migration 043). Notes
