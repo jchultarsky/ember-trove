@@ -92,6 +92,22 @@ impl NodeRepo for StubNodeRepo {
     async fn create(&self, _: &str, _: CreateNodeRequest) -> Result<Node, EmberTroveError> {
         unimplemented!()
     }
+    async fn duplicate(
+        &self,
+        _: &str,
+        _: CreateNodeRequest,
+        _: NodeId,
+    ) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn restore_body(
+        &self,
+        _: NodeId,
+        _: String,
+        _: &crate::repo::activity::ActivityActor,
+    ) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
         // Canonical owners for the authz world: the creator of AZ_OWNED_NODE is
         // "creator" (test-sub holds a *granted* Owner row there).
@@ -1188,7 +1204,10 @@ impl NoteRepo for StubNoteRepo {
         Ok(Note {
             id,
             node_id: NodeId(Uuid::nil()),
-            owner_id: actor.subject.to_string(),
+            // Someone else's note, restored by `actor` (a node's owner
+            // may): what a route reads for its caller must not be read
+            // for this author.
+            owner_id: format!("author-not-{}", actor.subject),
             body: "restored".to_string(),
             color: "yellow".to_string(),
             created_at: chrono::Utc::now(),
@@ -2848,9 +2867,10 @@ async fn note_restore_returns_restored_note_for_owner() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["id"], id.to_string());
-    // Restore is owner-scoped: the stub echoes the owner the handler passed,
-    // which must be the caller's sub.
-    assert_eq!(json["owner_id"], "test-sub");
+    // Restore is scoped to its caller: the stub's note names the actor the
+    // handler passed (as someone else's note, restored by them), which
+    // must be the caller's sub.
+    assert_eq!(json["owner_id"], "author-not-test-sub");
 }
 
 // ── Dashboard recent activity recap (Phase 7 / v2.9.0) ───────────────────────
@@ -5989,6 +6009,33 @@ async fn mention_names_come_with_the_text_and_only_to_its_reader() {
             ("for_notes", "test-sub".to_string())
         ]
     );
+}
+
+/// S9: a note write answers with the people the note mentions **as the
+/// caller may know them**, not as its author does. A note can be restored
+/// by its node's owner or an admin, who is not its author: read for the
+/// author, they would be told "mine" and names the author alone may know.
+#[tokio::test]
+async fn a_written_notes_mentions_are_named_for_the_caller() {
+    mention_reads();
+    let resp = Router::new()
+        .nest("/notes", crate::routes::notes::note_router())
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state())
+        .oneshot(
+            Request::post(format!("/notes/{}/restore", Uuid::from_u128(1)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let note: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    // The stub's note is someone else's; the names are the caller's view.
+    assert_ne!(note["owner_id"], "test-sub");
+    assert_eq!(note["mentions"][0]["display_name"], "Ada");
+    assert_eq!(mention_reads(), [("for_notes", "test-sub".to_string())]);
 }
 
 #[tokio::test]

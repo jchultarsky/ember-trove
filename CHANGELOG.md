@@ -37,14 +37,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ### Security
 - **A mention never tells a reader more than a name, and nobody can
   look a name up.**
-  - Only the account that saves a text can make a mention in it, and
-    only of its own People. A token pasted or typed with someone else's
-    id is never named.
+  - A save makes a mention only for a token that save adds, of the
+    saver's own People. A token typed or pasted with someone else's id
+    names nobody: not for the one who typed it, and not when that
+    person's owner later saves, restores or copies the text.
   - A person is named to another reader only while the person's owner
     can still open the node.
   - There is no lookup of a name by id: names come only with text the
     reader may already read.
   - Mentions are saved in the transaction that saves the text.
+- **The text scanners are linear.** The wiki-link and code-span
+  scanners, which run on every save, were quadratic on text made to be
+  slow (a megabyte of `[[` took most of a minute of the server's time).
 
 ## [3.31.0] - 2026-11-18
 

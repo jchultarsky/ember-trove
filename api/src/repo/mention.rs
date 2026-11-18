@@ -4,12 +4,13 @@
 //! that make a mention safe, each in one place:
 //!
 //! 1. **Who may make one** ([`sync_body_on`], [`sync_note_on`]). A row
-//!    is written only for a person who belongs to the account saving the
-//!    text. A token typed or pasted with someone else's id gets no row,
-//!    ever, and without a row nobody is named. A person's id is not a
-//!    secret (a sharee sees it in a shared Project's People list, and in
-//!    the raw text), so this is what keeps an id from being a way to ask
-//!    for a name.
+//!    is written only for a mention **the save itself adds**, of a person
+//!    who belongs to the account saving. Without a row nobody is named.
+//!    A person's id is not a secret (a sharee sees it in a shared
+//!    Project's People list, and in the raw text), so both halves are
+//!    needed: a token typed with someone else's id gets no row from its
+//!    typist, and none from that person's owner saving the text later,
+//!    because the owner did not put it there.
 //! 2. **To whom a person is named** ([`named_to`]). To their owner; and
 //!    to another reader of the text only while the person's owner can
 //!    still open the node. Without the second half a co-editor could
@@ -27,7 +28,7 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use common::EmberTroveError;
 use common::id::{NodeId, NoteId, PersonId};
-use common::mention::{BackupMention, MentionName, PersonMention, mentioned_ids};
+use common::mention::{BackupMention, MentionName, PersonMention};
 use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
@@ -50,36 +51,24 @@ fn named_to(reader: u8) -> String {
     )
 }
 
-/// Bring a node's mention rows in line with its `body`, as saved by
-/// `saver`. Runs on the connection of the transaction that wrote the
-/// body, so the text and its rows can't part (a row left behind by a
-/// failed sync would name a person their owner had taken out).
+/// The one statement that makes rows for a node's body: for the people
+/// in `make` who belong to `saver`, and nobody else.
 ///
-/// - A row whose token left the text is deleted.
-/// - A row whose token is still there stays, whoever made it: a
-///   co-editor's save keeps the owner's mentions.
-/// - A row is **made** only for a person of `saver`'s own.
-pub(crate) async fn sync_body_on(
+/// One statement, so an id of another account's person and an id of
+/// nobody leave the same trace: none. `FOR KEY SHARE` holds the people
+/// read until this transaction ends; without it a person deleted between
+/// the read and the insert would fail the foreign key and take the
+/// body's save down with it.
+async fn make_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
-    body: &str,
+    make: &[PersonId],
     saver: &str,
 ) -> Result<(), EmberTroveError> {
-    let ids: Vec<Uuid> = mentioned_ids(body).into_iter().map(|p| p.0).collect();
-    sqlx::query("DELETE FROM node_mentions WHERE node_id = $1 AND NOT (person_id = ANY($2))")
-        .bind(node.0)
-        .bind(&ids)
-        .execute(&mut *conn)
-        .await
-        .map_err(db("sync mentions"))?;
-    if ids.is_empty() {
+    if make.is_empty() {
         return Ok(());
     }
-    // One statement, so an id of another account's person and an id of
-    // nobody leave the same trace: none. `FOR KEY SHARE` holds the
-    // people read until this transaction ends; without it a person
-    // deleted between the read and the insert would fail the foreign
-    // key and take the body's save down with it.
+    let ids: Vec<Uuid> = make.iter().map(|p| p.0).collect();
     sqlx::query(
         "INSERT INTO node_mentions (node_id, person_id) \
          SELECT $1, p.id FROM people p \
@@ -96,36 +85,120 @@ pub(crate) async fn sync_body_on(
     Ok(())
 }
 
-/// The same for a note, whose only writer is its `author`.
+/// Delete a node's rows for people its body no longer mentions.
+async fn drop_body_rows(
+    conn: &mut PgConnection,
+    node: NodeId,
+    mentioned: &[PersonId],
+) -> Result<(), EmberTroveError> {
+    let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
+    sqlx::query("DELETE FROM node_mentions WHERE node_id = $1 AND NOT (person_id = ANY($2))")
+        .bind(node.0)
+        .bind(&ids)
+        .execute(&mut *conn)
+        .await
+        .map_err(db("sync mentions"))?;
+    Ok(())
+}
+
+/// Bring a node's mention rows in line with its body, as saved by
+/// `saver`. Runs on the connection of the transaction that wrote the
+/// body, so the text and its rows can't part (a row left behind by a
+/// failed sync would name a person their owner had taken out).
+///
+/// - `mentioned`: everyone the saved body mentions
+///   (`common::mention::mentioned_ids`). A row for anyone else is
+///   deleted. A row for someone still mentioned stays, whoever made it:
+///   a co-editor's save keeps the owner's mentions.
+/// - `make`: the people this save **added** a mention of
+///   (`common::mention::added_mentions`). A row is made for those of
+///   them who are `saver`'s own, and for no one else.
+///
+/// SECURITY: `make` must be what this save added, never "everyone the
+/// body mentions". A token already in the text was put there by an
+/// earlier save, perhaps a co-editor's with the id of this saver's
+/// person: saving around it must not make it real.
+///
+/// The insert comes first: it locks the people it reads, and the delete
+/// then locks rows of this table. The other order could deadlock with
+/// an account purge, which deletes people and then, by cascade, rows
+/// here.
+pub(crate) async fn sync_body_on(
+    conn: &mut PgConnection,
+    node: NodeId,
+    mentioned: &[PersonId],
+    make: &[PersonId],
+    saver: &str,
+) -> Result<(), EmberTroveError> {
+    make_body_rows(conn, node, make, saver).await?;
+    drop_body_rows(conn, node, mentioned).await
+}
+
+/// The rows of a copy (`to`) of the node `from`: for the people the body
+/// mentions who have a row on `from` **and** belong to the one copying.
+/// So the copier's own real mentions are real in the copy; a co-editor's
+/// people, and tokens that were never real, are not.
+pub(crate) async fn copy_body_rows_on(
+    conn: &mut PgConnection,
+    from: NodeId,
+    to: NodeId,
+    mentioned: &[PersonId],
+    copier: &str,
+) -> Result<(), EmberTroveError> {
+    if mentioned.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
+    sqlx::query(
+        "INSERT INTO node_mentions (node_id, person_id) \
+         SELECT $2, p.id FROM node_mentions m \
+         JOIN people p ON p.id = m.person_id \
+         WHERE m.node_id = $1 AND m.person_id = ANY($3) AND p.owner_id = $4 \
+         FOR KEY SHARE OF p \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(from.0)
+    .bind(to.0)
+    .bind(&ids)
+    .bind(copier)
+    .execute(&mut *conn)
+    .await
+    .map_err(db("copy mentions"))?;
+    Ok(())
+}
+
+/// The same for a note, whose only writer is its `author`: every person
+/// of theirs the note mentions has a row, and no one else. (Nobody can
+/// plant a token in someone else's note, so there is nothing to tell
+/// "added" from "there already".)
 pub(crate) async fn sync_note_on(
     conn: &mut PgConnection,
     note: NoteId,
-    body: &str,
+    mentioned: &[PersonId],
     author: &str,
 ) -> Result<(), EmberTroveError> {
-    let ids: Vec<Uuid> = mentioned_ids(body).into_iter().map(|p| p.0).collect();
+    let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
+    if !ids.is_empty() {
+        sqlx::query(
+            "INSERT INTO note_mentions (note_id, person_id) \
+             SELECT $1, p.id FROM people p \
+             WHERE p.id = ANY($2) AND p.owner_id = $3 \
+             FOR KEY SHARE OF p \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(note.0)
+        .bind(&ids)
+        .bind(author)
+        .execute(&mut *conn)
+        .await
+        .map_err(db("sync mentions"))?;
+    }
     sqlx::query("DELETE FROM note_mentions WHERE note_id = $1 AND NOT (person_id = ANY($2))")
         .bind(note.0)
         .bind(&ids)
         .execute(&mut *conn)
         .await
         .map_err(db("sync mentions"))?;
-    if ids.is_empty() {
-        return Ok(());
-    }
-    sqlx::query(
-        "INSERT INTO note_mentions (note_id, person_id) \
-         SELECT $1, p.id FROM people p \
-         WHERE p.id = ANY($2) AND p.owner_id = $3 \
-         FOR KEY SHARE OF p \
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(note.0)
-    .bind(&ids)
-    .bind(author)
-    .execute(&mut *conn)
-    .await
-    .map_err(db("sync mentions"))?;
     Ok(())
 }
 

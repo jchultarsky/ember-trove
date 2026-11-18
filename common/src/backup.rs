@@ -566,6 +566,7 @@ impl BackupData {
             .map(|n| (n.id, (n.owner_id.as_str(), mentioned_ids(&n.body))))
             .collect();
         let mut kept: Vec<crate::mention::BackupMention> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         for m in &self.mentions {
             let Some(owner) = owners.get(&m.person_id) else {
                 continue;
@@ -579,7 +580,7 @@ impl BackupData {
                     .is_some_and(|(author, ids)| author == owner && ids.contains(&m.person_id)),
                 _ => false,
             };
-            if backed && !kept.contains(m) {
+            if backed && seen.insert((m.node_id, m.note_id, m.person_id)) {
                 kept.push(m.clone());
             }
         }
