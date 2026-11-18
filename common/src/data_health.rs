@@ -43,6 +43,12 @@ pub enum RuleId {
     ContainsCycle,
     DependsOnCycle,
     DerivedFromCycle,
+    /// Two or more People of one account who list the same email address
+    /// (S8a; §7.1: the same address is the same person). A save can't
+    /// make such a pair any more; this lists the ones that exist already
+    /// (from before the rule, or brought back by a restore). They stay
+    /// editable (owner decision, 2026-11-18).
+    SharedEmail,
 }
 
 wire_enum!(RuleId {
@@ -58,6 +64,7 @@ wire_enum!(RuleId {
     ContainsCycle => "contains_cycle",
     DependsOnCycle => "depends_on_cycle",
     DerivedFromCycle => "derived_from_cycle",
+    SharedEmail => "shared_email",
 });
 
 impl RuleId {
@@ -72,6 +79,7 @@ impl RuleId {
             Self::ContainedReference | Self::ContainsCycle => "§6.1",
             Self::DependsOnArea | Self::DependsOnCycle => "§6.4",
             Self::DerivedFromArea | Self::DerivedFromCycle => "§6.5",
+            Self::SharedEmail => "§7.1",
         }
     }
 
@@ -91,6 +99,7 @@ impl RuleId {
             Self::ContainsCycle => "Homes in a loop",
             Self::DependsOnCycle => "Dependencies in a loop",
             Self::DerivedFromCycle => "Derivations in a loop",
+            Self::SharedEmail => "People who share an email address",
         }
     }
 
@@ -120,6 +129,7 @@ impl RuleId {
             Self::ContainsCycle => "Homes can't loop: no node may contain itself, even indirectly.",
             Self::DependsOnCycle => "A dependency loop is a deadlock: nothing in it could finish.",
             Self::DerivedFromCycle => "An origin comes before what was derived from it.",
+            Self::SharedEmail => "The same email address means the same person.",
         }
     }
 
@@ -147,6 +157,9 @@ impl RuleId {
             }
             Self::ContainsCycle | Self::DependsOnCycle | Self::DerivedFromCycle => {
                 "Remove one edge of the loop."
+            }
+            Self::SharedEmail => {
+                "Open them and take the address off all but one. If they are one person, keep one record."
             }
         }
     }

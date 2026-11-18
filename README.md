@@ -411,8 +411,8 @@ details.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/people?q=` | The caller's people; `q` searches name, company, email and phone |
-| POST | `/api/people[?confirm=true]` | Create; `409` with matches if an email is already in the registry (`confirm` creates anyway) |
-| GET / PUT / DELETE | `/api/people/{id}` | Read, replace or delete one of the caller's people (deleting removes their memberships) |
+| POST | `/api/people` | Create. An email address that another of the caller's people already lists refuses it: **409** with `matches` (those people: id, name, their spelling of the address). The same address twice on one person is **422**. "The same address" ignores the spaces around it and ASCII case. `?confirm=true` no longer saves anyway |
+| GET / PUT / DELETE | `/api/people/{id}` | Read, replace or delete one of the caller's people (deleting removes their memberships). PUT answers the same **409** for an address *added* that another of the caller's people lists; one the person already had never refuses it |
 | GET | `/api/people/{id}/usages` | "Used in": the nodes a person appears on, with their role |
 | GET | `/api/people/roles` | The caller's roles with counts (suggestions) |
 | GET | `/api/nodes/{id}/people` | A node's people, redacted per viewer |
