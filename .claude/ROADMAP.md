@@ -5,8 +5,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-18)
 
-- **S8a: email is identity** (#353; ONTOLOGY §7.1; owner decisions of
-  2026-11-18). A save that adds an address another of the account's
+- **v3.30.0 shipped: S8a, email is identity** (#353, PRs #355 and
+  #356; ONTOLOGY §7.1; owner decisions of 2026-11-18). A save that adds an address another of the account's
   People lists is refused (409 with those People; no "Save anyway").
   The rule is a database trigger under a lock per account (migration
   056), not a unique index or a `person_emails` table: People who

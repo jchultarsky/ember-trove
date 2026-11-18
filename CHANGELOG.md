@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.30.0] - 2026-11-18
+
 ### Changed
 - **Email is identity: the same address is one person** (S8a of the
   ontology programme, #353; ONTOLOGY §7.1). A save that would give a
