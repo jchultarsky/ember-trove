@@ -12,7 +12,7 @@ use common::{
     auth::AuthClaims,
     blockers::NodeBlockers,
     cascade::CascadePlan,
-    edge::{EdgeType, EdgeWithTitles, Home, HomeNode, NodeHome, SetHomeRequest},
+    edge::{EdgeType, EdgeWithTitles, Home, HomeNode, LinksCleared, NodeHome, SetHomeRequest},
     id::{NodeId, NodeVersionId, PermissionId, TagId},
     node::{
         CreateNodeRequest, DELETION_PREVIEW_MAX_NODES, Node, NodeDeletionPreview, NodeListParams,
@@ -59,6 +59,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/backlinks", get(backlinks))
         .route("/{id}/edges", get(list_edges_for_node))
         .route("/{id}/blockers", get(list_blockers))
+        .route("/{id}/edges/not-shown", delete(clear_links_not_shown))
         .route("/{id}/home", get(get_home).put(set_home))
         .route("/{id}/tags", get(list_tags_for_node))
         .route("/{id}/tags/{tag_id}", post(attach_tag).delete(detach_tag))
@@ -547,7 +548,25 @@ async fn get_node(
         .into_iter()
         .find(|(id, _)| *id == node.id)
         .map_or(0, |(_, n)| n);
-    Ok(Json(ViewedNode { node, blocked_by }))
+    // Links of its own that neither the caller nor the node's owner can
+    // see the other end of (#349). SECURITY: told only to someone who may
+    // edit the node (they may clear them); a viewer is told nothing, and
+    // the repo isn't asked.
+    let links_not_shown = match require_editor(state.permissions.as_ref(), &claims, node.id).await {
+        Ok(()) => {
+            state
+                .edges
+                .not_shown(node.id, subject_scope(&claims))
+                .await?
+        }
+        Err(ApiError::Forbidden(_)) => 0,
+        Err(e) => return Err(e),
+    };
+    Ok(Json(ViewedNode {
+        node,
+        blocked_by,
+        links_not_shown,
+    }))
 }
 
 async fn get_node_by_slug(
@@ -890,6 +909,34 @@ async fn list_blockers(
         .blockers(NodeId(id), subject_scope(&claims))
         .await?;
     Ok(Json(blockers))
+}
+
+/// DELETE /nodes/{id}/edges/not-shown — remove the node's links that
+/// neither the caller nor the node's owner can see the other end of
+/// (#349, §14). The node's editors are told how many there are
+/// (`ViewedNode::links_not_shown`) and take them all out here: the rule
+/// a task's prerequisites not shown have.
+///
+/// SECURITY: edit rights first, before anything is read, so a node the
+/// caller can't edit and one that doesn't exist answer alike. The remove
+/// is made as the caller and applies the rule itself. Nothing is written
+/// to History (it would tell the node's viewers the count) and no
+/// webhook is sent; the server's log gets the node and the count.
+async fn clear_links_not_shown(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<LinksCleared>, ApiError> {
+    let node = NodeId(id);
+    require_editor(state.permissions.as_ref(), &claims, node).await?;
+    let viewer = subject_scope(&claims);
+    let removed = state.edges.remove_not_shown(node, viewer).await?;
+    let links_not_shown = state.edges.not_shown(node, viewer).await?;
+    tracing::info!(node = %id, removed, "links not shown to their node's editors were removed");
+    Ok(Json(LinksCleared {
+        removed,
+        links_not_shown,
+    }))
 }
 
 /// GET /nodes/{id}/home — the node's one home (#228, §6.1).

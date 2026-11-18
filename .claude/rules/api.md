@@ -752,9 +752,13 @@ cargo check && cargo clippy -- -D warnings
   an editor of a shared Project could tie two of its tasks together
   through a task of their own, for good. So `TaskDependencies.not_shown`
   tells someone who **may edit** the task how many of its prerequisites
-  they aren't shown (`NOT shown_to`: in the trash, or on a node they
-  can't view), never which, and `DELETE /tasks/{id}/dependencies/not-shown`
-  removes them. A viewer gets 0 and the count is never read for them
+  they aren't shown, never which, and `DELETE /tasks/{id}/dependencies/not-shown`
+  removes them. "Not shown" is `not_shown_sql`: `NOT shown_to` the
+  reader **and** its node is hidden from the owner of the task's node
+  too. One in the trash also counts where its node is visible to the
+  reader (only the trash hides it). One on a node the owner sees and
+  the reader doesn't never counts, trashed or live. The owner half came
+  with #349: see "Links not shown". A viewer gets 0 and the count is never read for them
   (the stub panics). It is the hidden-home rule (#228).
   `a_chain_planted_through_a_hidden_task_can_be_found_and_removed` holds
   it. They never count as blocking.
@@ -915,13 +919,73 @@ cargo check && cargo clippy -- -D warnings
   `subject_scope(claims)`, after its five other reads: a Focus card may
   be someone else's Project. `blocked_tasks_for_nodes` reuses
   `blocked_by_count`; the caller has checked the nodes.
-- **Known, older, next release:** a `depends_on` link whose target the
-  source's owner can't see is in no list of theirs and still decides
-  loop refusals (owner decision 2026-11-17: a count and a remove for
-  the node's editors, as `not_shown` gives a task's). With S7b it does
-  one thing more: whoever can see both ends (its maker, an admin,
-  anyone both nodes are shared with) reads the owner's node as blocked,
-  and the owner doesn't. Nothing hidden is shown to anyone.
+
+## Links not shown (#349, ONTOLOGY §14)
+
+- A link's source needs an editor and its target only a viewer, so an
+  editor of a shared node can link it to a node its owner can't see; a
+  share ending hides a link too. Nobody lists such a link for the owner,
+  and it still decides loop refusals and reads as a blocker to whoever
+  sees both ends (owner decision 2026-11-17: it stays a real link until
+  removed).
+- **`EdgeRepo::not_shown(node, viewer)` and `remove_not_shown`** share
+  one predicate (`not_shown_predicate`): the link is one
+  `EdgeType::is_its_nodes_to_clear(outgoing)` accepts, the reader holds a
+  grant to edit the node (`editable_by`), and the other end is visible
+  **neither to the reader** (`visible_to`) **nor to the node's owner**
+  (`owned_or_granted("o", "n.owner_id")`).
+- **The owner half is the security of it.** "Hidden from the reader"
+  alone tells an editor of a shared node how many private nodes its
+  owner links it to, and gives them one statement that deletes those
+  links. `an_editor_is_not_told_of_and_cannot_clear_the_owners_private_links`
+  holds it. The task rule shipped without it in 3.26.0; `not_shown_sql`
+  in `repo/task_dependency.rs` has it now
+  (`an_editor_is_not_told_of_the_owners_private_prerequisites`).
+- **The owner is a column in the SQL**, never a bound value: bound as
+  an `Option`, a NULL reads as "sees everything" in `visible_to`. Use
+  `owned_or_granted(alias, "n.owner_id")`.
+- **Which links** is `EdgeType::is_its_nodes_to_clear`, derived from
+  `removable_by`: what the node's editor could remove if shown it. Not
+  an incoming `contains` (the Home row), not another node's link into
+  this one, never a `wiki_link` (counting it would let `[[a guess]]`
+  probe titles). The SQL's type lists come from
+  `EdgeType::a_nodes_to_clear`; don't write the names in a query.
+- **The remove is one statement that applies the predicate itself.**
+  Never delete ids taken from an earlier count: a link that became
+  visible meanwhile must stay. No lock: taking a link away can't make a
+  loop or a second home.
+- **Routes.** `GET /nodes/{id}` fills `ViewedNode.links_not_shown` only
+  when `require_editor` passes (else 0, and the repo isn't asked).
+  `DELETE /nodes/{id}/edges/not-shown` calls `require_editor` before
+  anything is read, so a foreign and a missing id answer alike (403, as
+  node routes do). Both pass `subject_scope(&claims)`: an admin is shown
+  every link, so their count is 0 and their remove takes nothing.
+- **Never write it into History, a webhook or the activity log**: each
+  would tell the node's viewers the count. The route logs the node id
+  and the number on the server.
+- **"The node's owner" is `nodes.owner_id`**, seeing by ownership or a
+  grant. Not a second Owner by grant (their private link is told to the
+  canonical owner), and not what an admin opens by role: SQL can't read
+  a token. `the_owner_of_the_rule_is_the_account_the_node_belongs_to`
+  pins all three, with the one thing two editors learn together (whether
+  the owner sees a third person's node one of them linked to). Changing
+  any of it is a decision, not a fix.
+- **An editor's unexplained loop refusal is left to the owner.** A link
+  the owner sees and a shared editor doesn't still decides loops for
+  that editor, and they are told nothing: it is the owner's link.
+- **The hidden home is a different, older rule** (`home_for`, #228): it
+  has no owner half, so an editor of a shared child is told of a home
+  that is the owner's own private node, and may free the child. Owner
+  decision of #228; raised again with the owner in the review of #349.
+- **Open (review of #349): the task rule follows the task.**
+  `not_shown_sql` reads the owner of the task's *current* node, and an
+  editor may move a task to a Project of their own
+  (`update_task`: editor on both). They are then that node's owner, are
+  told the count and may clear it. They could already delete the task;
+  the count is what is new to them. It closes with the owner's decision
+  on who may move a task out of a shared Project. Don't "fix" it by
+  refusing the move when hidden prerequisites exist: the refusal is the
+  same answer.
 
 ## Security rules from the 2026-11-10 audit
 

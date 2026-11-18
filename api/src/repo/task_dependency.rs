@@ -159,6 +159,40 @@ pub(crate) fn holds_back_sql(task: &str) -> String {
     format!("{task}.status::text IN ({states})")
 }
 
+/// SQL predicate: the prerequisite `p` (on node `pn`) of a task on node
+/// `tn` is one its editors are told of by count and may clear: it is
+/// shown **neither to the reader** (bound at `$param`) **nor to the
+/// owner of the task's node** (in the trash, or on a node they can't
+/// see).
+///
+/// SECURITY: the owner half (#349) keeps this off the owner's own
+/// prerequisites. Without it, someone a Project is shared with as an
+/// editor was told how many of a task's prerequisites sit on the
+/// owner's private Projects, and could remove them all. The owner is a
+/// column, in SQL: bound as an optional value, a NULL would read as
+/// "sees everything".
+///
+/// A prerequisite in the trash counts only where the reader would see
+/// it but for the trash (its node is visible to them), or where the
+/// owner can't see its node either. One on a node the owner sees and
+/// the reader doesn't stays the owner's business, in the trash or out
+/// of it: an editor who cleared it would undo the owner's dependency
+/// for the day the task is restored.
+///
+/// "The owner" is the account the task's node belongs to
+/// (`nodes.owner_id`), seeing by ownership or by a grant. Someone else
+/// who holds an Owner grant is not meant, and nor is what an admin sees
+/// by role: SQL can't read a token's roles.
+fn not_shown_sql(param: u8) -> String {
+    format!(
+        "(NOT {reader_shown} AND (NOT {owner_sees} \
+          OR (p.deleted_at IS NOT NULL AND {reader_sees_node})))",
+        reader_shown = shown_to("p", "pn", param),
+        reader_sees_node = visible_to("pn", param),
+        owner_sees = super::owned_or_granted("pn", "tn.owner_id"),
+    )
+}
+
 /// SQL predicate: a chain goes on through the task aliased `task`
 /// (`common::task_dependency::passes_on`): it is still to do. From the
 /// enum, like [`holds_back_sql`].
@@ -561,11 +595,13 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
             r#"
             SELECT count(*)::int4
             FROM task_dependencies d
+            JOIN node_tasks t ON t.id = d.task_id
+            JOIN nodes tn ON tn.id = t.node_id
             JOIN node_tasks p ON p.id = d.depends_on_id
             JOIN nodes pn ON pn.id = p.node_id
-            WHERE d.task_id = $1 AND NOT {shown}
+            WHERE d.task_id = $1 AND {hidden}
             "#,
-            shown = shown_to("p", "pn", 2),
+            hidden = not_shown_sql(2),
         ))
         .bind(task.0)
         .bind(viewer)
@@ -583,12 +619,13 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
         let result = sqlx::query(&format!(
             r#"
             DELETE FROM task_dependencies d
-            USING node_tasks p, nodes pn
+            USING node_tasks t, nodes tn, node_tasks p, nodes pn
             WHERE d.task_id = $1
+              AND t.id = d.task_id AND tn.id = t.node_id
               AND p.id = d.depends_on_id AND pn.id = p.node_id
-              AND NOT {shown}
+              AND {hidden}
             "#,
-            shown = shown_to("p", "pn", 2),
+            hidden = not_shown_sql(2),
         ))
         .bind(task.0)
         .bind(viewer)

@@ -220,6 +220,12 @@ CI job is too slow a feedback loop for selector work.
   The "edited" mark is `note-edited`. Status, state, cascade and Brief
   lines are **not** in `node-activity` any more: that is the audit trail.
   Body versions are `node-versions`, titled "Versions".
+- **Links not shown** (#349, hidden_links.spec.ts): the header marker is
+  `node-links-not-shown`, the line in Connections `links-not-shown`, its
+  confirmation `getByRole('group', { name: 'Confirm remove' })`. To see
+  a page as the second identity, set the header and then `goto`: the
+  page learns who it is on load. Reset the header in `afterEach` too, or
+  the next test's page runs as the wrong person.
 - **Timestamps in Postgres tests** (2026-11-14): `Utc::now()` has
   nanoseconds on Linux and the database keeps microseconds, so an
   equality against a value read back passes on macOS and fails in CI.

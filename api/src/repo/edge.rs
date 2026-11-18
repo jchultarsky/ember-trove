@@ -65,6 +65,27 @@ pub trait EdgeRepo: Send + Sync {
         node: NodeId,
         subject: Option<&str>,
     ) -> Result<common::blockers::NodeBlockers, EmberTroveError>;
+    /// How many links of `node` are its editors' to clear and are not
+    /// shown (#349, ONTOLOGY §14): of a type and direction
+    /// `EdgeType::is_its_nodes_to_clear` accepts, with the other end
+    /// visible **neither to `viewer` nor to the node's owner**.
+    ///
+    /// SECURITY: the owner half is what keeps this off the owner's own
+    /// private links: someone the node is shared with as an editor is not
+    /// told of them and cannot clear them. `None` (an admin) is shown
+    /// every link, so the count is 0. The caller has checked that
+    /// `viewer` may **edit** `node`, and the statement holds to it: a
+    /// viewer is told nothing (0).
+    async fn not_shown(&self, node: NodeId, viewer: Option<&str>) -> Result<u32, EmberTroveError>;
+    /// Remove those links, and say how many went. One statement that
+    /// applies the rule itself: never ids taken from a count, so what
+    /// became visible meanwhile stays. The caller has checked that
+    /// `viewer` may edit `node`.
+    async fn remove_not_shown(
+        &self,
+        node: NodeId,
+        viewer: Option<&str>,
+    ) -> Result<u64, EmberTroveError>;
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError>;
     /// Edges visible to `subject`: both endpoints owned by them (`Some(sub)`),
     /// or all edges for an admin (`None`). SECURITY: prevents leaking the node
@@ -243,6 +264,48 @@ pub(crate) async fn insert_home<'e, E: sqlx::PgExecutor<'e>>(
     })?;
     Ok(())
 }
+
+/// SQL for "the link `e` is one of node `n`'s (bound at `$1`) that its
+/// editors clear, and its other end `o` is hidden from the reader (bound
+/// at `$2`) and from the node's owner" (#349): the one predicate behind
+/// the count and the remove, so the two can't disagree.
+///
+/// The types come from `EdgeType::a_nodes_to_clear`, per direction, in
+/// the enum's own wire words (never text from a request). `o` must be
+/// joined as the other end: [`OTHER_END`].
+///
+/// SECURITY: it also holds only for a reader with a grant to **edit**
+/// the node (`editable_by`). The route checks that first; the statement
+/// holds to it too, so a caller that forgets tells a viewer nothing and
+/// removes nothing. An admin (no subject) is shown every link, so
+/// nothing is hidden from them either way.
+fn not_shown_predicate() -> String {
+    let types = |outgoing: bool| {
+        let words: Vec<String> = EdgeType::a_nodes_to_clear(outgoing)
+            .iter()
+            .map(|w| format!("'{w}'"))
+            .collect();
+        if words.is_empty() {
+            "FALSE".to_string()
+        } else {
+            format!("e.edge_type::text IN ({})", words.join(", "))
+        }
+    };
+    format!(
+        "((e.source_id = $1 AND {outgoing}) OR (e.target_id = $1 AND {incoming})) \
+         AND {reader_edits} AND NOT {reader_sees} AND NOT {owner_sees}",
+        outgoing = types(true),
+        incoming = types(false),
+        reader_edits = super::editable_by("n.id", 2),
+        reader_sees = super::visible_to("o", 2),
+        // The owner as a column, in SQL: bound as an optional value, a
+        // NULL would read as "sees everything".
+        owner_sees = super::owned_or_granted("o", "n.owner_id"),
+    )
+}
+
+/// The node at the other end of `e` from the node bound at `$1`.
+const OTHER_END: &str = "CASE WHEN e.source_id = $1 THEN e.target_id ELSE e.source_id END";
 
 /// Would the edge close a loop: is its source reachable from its target
 /// through edges of its type? The caller holds the type's lock.
@@ -716,6 +779,51 @@ impl EdgeRepo for PgEdgeRepo {
             })
             .collect::<Result<Vec<_>, EmberTroveError>>()?;
         Ok(node_blockers(node, hops, truncated))
+    }
+
+    async fn not_shown(&self, node: NodeId, viewer: Option<&str>) -> Result<u32, EmberTroveError> {
+        let n: i32 = sqlx::query_scalar(&format!(
+            r#"
+            SELECT count(*)::int4
+            FROM edges e
+            JOIN nodes n ON n.id = $1
+            JOIN nodes o ON o.id = {OTHER_END}
+            WHERE {hidden}
+            "#,
+            hidden = not_shown_predicate(),
+        ))
+        .bind(node.0)
+        .bind(viewer)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("count links not shown failed: {e}")))?;
+        Ok(u32::try_from(n).unwrap_or(0))
+    }
+
+    async fn remove_not_shown(
+        &self,
+        node: NodeId,
+        viewer: Option<&str>,
+    ) -> Result<u64, EmberTroveError> {
+        // No lock and no transaction: taking a link away can't make a
+        // loop or a second home, and the statement judges each link as
+        // it stands when it runs.
+        let result = sqlx::query(&format!(
+            r#"
+            DELETE FROM edges e
+            USING nodes n, nodes o
+            WHERE n.id = $1
+              AND o.id = {OTHER_END}
+              AND {hidden}
+            "#,
+            hidden = not_shown_predicate(),
+        ))
+        .bind(node.0)
+        .bind(viewer)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("remove links not shown failed: {e}")))?;
+        Ok(result.rows_affected())
     }
 
     async fn list_all(&self) -> Result<Vec<Edge>, EmberTroveError> {
