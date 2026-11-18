@@ -5,8 +5,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-18)
 
-- **S8b: what a collision offers** (#357; ONTOLOGY §7.1; owner
-  decisions of 2026-11-18). A new person who collides can be added to
+- **v3.31.0 shipped: S8b, what a collision offers** (#357, PRs #358
+  and #359; ONTOLOGY §7.1; owner decisions of 2026-11-18). A new person who collides can be added to
   the person who has the address, for review in their editor
   (`common::person_carry`, in the browser, no new route). On a node the
   notice puts that person there with the Role and Note typed. Editing a
