@@ -4654,11 +4654,18 @@ async fn a_nodes_blockers_are_read_for_their_reader() {
             let (status, body) = read(fake_claims(), node, path).await;
             assert_eq!(status, StatusCode::OK, "{path} {node:#x}: {body}");
         }
-        // (The node's own read also counts its links not shown, for
-        // the two nodes the caller may edit: #349, tested below.)
+        // Every call the three reads made, and nothing else. The node's
+        // own read also counts its links not shown, for the two nodes
+        // the caller may edit and not for the one they only view (#349).
         let seen = viewers_seen();
-        let of_call: Vec<_> = seen.iter().filter(|(name, _)| *name == call).collect();
-        assert_eq!(of_call.len(), 3, "{path}: {seen:?}");
+        let mut names: Vec<&str> = seen.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        let mut expected = vec![call; 3];
+        if path.is_empty() {
+            expected.extend(["not_shown"; 2]);
+        }
+        expected.sort_unstable();
+        assert_eq!(names, expected, "{path}");
         for (name, viewer) in &seen {
             assert_eq!(viewer.as_deref(), Some("test-sub"), "{path} {name}");
         }

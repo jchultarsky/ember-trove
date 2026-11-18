@@ -122,7 +122,16 @@ test('the owner is told of a link an editor made to a node she can’t see, and 
     await remove.click();
     const confirm = page.getByRole('group', { name: 'Confirm remove' });
     await expect(confirm).toContainText('Remove the link you aren’t shown?');
+    // It took the control's place, so it takes the keyboard: on Cancel,
+    // the harmless one. Escape cancels, and the control has the keyboard
+    // again.
+    await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(confirm).toHaveCount(0);
+    await expect(remove).toBeFocused();
+    await remove.click();
     await confirm.getByRole('button', { name: 'Cancel' }).click();
+    await expect(remove).toBeFocused();
     await expect(line(page)).toContainText('1 link of this node isn’t shown here');
     expect((await told(request, mine)).links_not_shown).toBe(1);
 

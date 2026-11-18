@@ -30,13 +30,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     (editor) answers `removed` and `links_not_shown`.
   - No migration, and nothing new in a backup.
 - **An editor of a shared Project is no longer told of the owner's
-  private prerequisites** (#349; ONTOLOGY §9.3). Since 3.26.0 a task's
-  "prerequisites not shown" counted every prerequisite hidden from the
-  reader. For an editor of a shared Project that included tasks on the
-  owner's own private Projects: they were told how many there were and
-  could remove those links. A prerequisite now counts only when the
-  Project's owner isn't shown it either (in the trash, or on a node they
-  can't see).
+  private prerequisites while the task is on that Project** (#349;
+  ONTOLOGY §9.3). Since 3.26.0 a task's "prerequisites not shown"
+  counted every prerequisite hidden from the reader. For an editor of a
+  shared Project that included tasks on the owner's own private
+  Projects: they were told how many there were and could remove those
+  links. A prerequisite now counts only when the Project's owner isn't
+  shown it either, and one in the trash on the owner's private Project
+  is the owner's like a live one.
+  - Still open: someone who may edit a task can move it to a Project of
+    their own, and is then told that count as the Project's owner. It
+    waits on the owner's decision about who may move a task out of a
+    shared Project.
+- "The node's owner" in both rules is the account the node belongs to.
+  A second owner by grant counts as an editor here, and what an admin
+  can open only by role doesn't count as seen.
 
 ## [3.28.0] - 2026-11-17
 

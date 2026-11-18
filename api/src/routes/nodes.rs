@@ -915,7 +915,7 @@ async fn list_blockers(
 /// neither the caller nor the node's owner can see the other end of
 /// (#349, §14). The node's editors are told how many there are
 /// (`ViewedNode::links_not_shown`) and take them all out here: the rule
-/// a task's prerequisites not shown have, and a hidden home.
+/// a task's prerequisites not shown have.
 ///
 /// SECURITY: edit rights first, before anything is read, so a node the
 /// caller can't edit and one that doesn't exist answer alike. The remove

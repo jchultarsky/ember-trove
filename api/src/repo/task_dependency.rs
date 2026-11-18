@@ -171,10 +171,24 @@ pub(crate) fn holds_back_sql(task: &str) -> String {
 /// owner's private Projects, and could remove them all. The owner is a
 /// column, in SQL: bound as an optional value, a NULL would read as
 /// "sees everything".
+///
+/// A prerequisite in the trash counts only where the reader would see
+/// it but for the trash (its node is visible to them), or where the
+/// owner can't see its node either. One on a node the owner sees and
+/// the reader doesn't stays the owner's business, in the trash or out
+/// of it: an editor who cleared it would undo the owner's dependency
+/// for the day the task is restored.
+///
+/// "The owner" is the account the task's node belongs to
+/// (`nodes.owner_id`), seeing by ownership or by a grant. Someone else
+/// who holds an Owner grant is not meant, and nor is what an admin sees
+/// by role: SQL can't read a token's roles.
 fn not_shown_sql(param: u8) -> String {
     format!(
-        "(NOT {reader_shown} AND NOT (p.deleted_at IS NULL AND {owner_sees}))",
+        "(NOT {reader_shown} AND (NOT {owner_sees} \
+          OR (p.deleted_at IS NOT NULL AND {reader_sees_node})))",
         reader_shown = shown_to("p", "pn", param),
+        reader_sees_node = visible_to("pn", param),
         owner_sees = super::owned_or_granted("pn", "tn.owner_id"),
     )
 }

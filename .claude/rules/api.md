@@ -754,8 +754,10 @@ cargo check && cargo clippy -- -D warnings
   tells someone who **may edit** the task how many of its prerequisites
   they aren't shown, never which, and `DELETE /tasks/{id}/dependencies/not-shown`
   removes them. "Not shown" is `not_shown_sql`: `NOT shown_to` the
-  reader **and** not shown to the owner of the task's node either (in
-  the trash, or on a node that owner can't view). The owner half came
+  reader **and** its node is hidden from the owner of the task's node
+  too. One in the trash also counts where its node is visible to the
+  reader (only the trash hides it). One on a node the owner sees and
+  the reader doesn't never counts, trashed or live. The owner half came
   with #349: see "Links not shown". A viewer gets 0 and the count is never read for them
   (the stub panics). It is the hidden-home rule (#228).
   `a_chain_planted_through_a_hidden_task_can_be_found_and_removed` holds
@@ -961,6 +963,29 @@ cargo check && cargo clippy -- -D warnings
 - **Never write it into History, a webhook or the activity log**: each
   would tell the node's viewers the count. The route logs the node id
   and the number on the server.
+- **"The node's owner" is `nodes.owner_id`**, seeing by ownership or a
+  grant. Not a second Owner by grant (their private link is told to the
+  canonical owner), and not what an admin opens by role: SQL can't read
+  a token. `the_owner_of_the_rule_is_the_account_the_node_belongs_to`
+  pins all three, with the one thing two editors learn together (whether
+  the owner sees a third person's node one of them linked to). Changing
+  any of it is a decision, not a fix.
+- **An editor's unexplained loop refusal is left to the owner.** A link
+  the owner sees and a shared editor doesn't still decides loops for
+  that editor, and they are told nothing: it is the owner's link.
+- **The hidden home is a different, older rule** (`home_for`, #228): it
+  has no owner half, so an editor of a shared child is told of a home
+  that is the owner's own private node, and may free the child. Owner
+  decision of #228; raised again with the owner in the review of #349.
+- **Open (review of #349): the task rule follows the task.**
+  `not_shown_sql` reads the owner of the task's *current* node, and an
+  editor may move a task to a Project of their own
+  (`update_task`: editor on both). They are then that node's owner, are
+  told the count and may clear it. They could already delete the task;
+  the count is what is new to them. It closes with the owner's decision
+  on who may move a task out of a shared Project. Don't "fix" it by
+  refusing the move when hidden prerequisites exist: the refusal is the
+  same answer.
 
 ## Security rules from the 2026-11-10 audit
 

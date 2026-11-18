@@ -19,6 +19,7 @@ import type { APIRequestContext, Locator, Page } from '@playwright/test';
 // Every Project of this spec starts with this, so a retry can wipe what a
 // failed attempt left (.claude/rules/e2e.md).
 const PREFIX = 'e2e deps ';
+const OTHER_SUBJECT = 'e2e-other-user';
 
 test.beforeEach(async ({ request, otherRequest }) => {
   await deleteNodesByPrefix(request, PREFIX);
@@ -368,28 +369,30 @@ test('someone who may only view a task sees what blocks it and no controls', asy
   expect(((await read.json()) as Deps).not_shown).toBe(0);
 });
 
-test('an editor is told a task waits for something they are not shown, and removes it', async ({
+test('whoever edits a task is told it waits for something they are not shown, and removes it', async ({
   page,
   request,
   otherRequest,
 }) => {
   const stamp = Date.now();
-  const theirs = await createProject(otherRequest, `${PREFIX}edited ${stamp}`);
+  // My Project, shared with an editor, who makes one of its tasks wait
+  // for a task on a private Project of their own.
+  const mine = await createProject(request, `${PREFIX}edited ${stamp}`);
   const hidden = await createProject(otherRequest, `${PREFIX}private ${stamp}`);
-  const task = await addTask(otherRequest, theirs.id, { title: `publish ${stamp}` });
+  const task = await addTask(request, mine.id, { title: `publish ${stamp}` });
   const unseen = await addTask(otherRequest, hidden.id, { title: `secret review ${stamp}` });
+  await shareNode(request, mine.id, OTHER_SUBJECT, 'editor');
   expect((await waitFor(otherRequest, task.id, unseen.id)).status()).toBe(201);
-  await shareNode(otherRequest, theirs.id, E2E_SUBJECT, 'editor');
 
   // Told how many, never which; and it is not counted as blocking.
   const before: Deps = await (await request.get(deps(task.id))).json();
   expect(before.blocked_by).toEqual([]);
   expect(before.not_shown).toBe(1);
-  expect(await blockedBy(request, theirs.id, task.id)).toBe(0);
+  expect(await blockedBy(request, mine.id, task.id)).toBe(0);
   // It can't be removed by guessing: its id answers like no link at all.
   expect((await request.delete(`${deps(task.id)}/${unseen.id}`)).status()).toBe(404);
 
-  await page.goto(`/nodes/${theirs.id}`);
+  await page.goto(`/nodes/${mine.id}`);
   const row = page.locator(`[data-task-id="${task.id}"]`);
   await expect(row.getByTestId('task-blocked')).toHaveCount(0);
   const section = await openDependencies(page, task.id);
@@ -401,9 +404,39 @@ test('an editor is told a task waits for something they are not shown, and remov
 
   const after: Deps = await (await request.get(deps(task.id))).json();
   expect(after.not_shown).toBe(0);
-  // Its owner sees the link is gone.
+  // Whoever made the link sees it is gone.
   const theirView: Deps = await (await otherRequest.get(deps(task.id))).json();
   expect(theirView.blocked_by).toEqual([]);
+});
+
+test('an editor is told nothing of the owner’s private prerequisites, and cannot clear them', async ({
+  page,
+  request,
+  otherRequest,
+}) => {
+  // #349. Until 3.29.0 "not shown" meant hidden from the reader alone,
+  // so an editor of a shared Project was told how many prerequisites sit
+  // on its owner's private Projects, and could remove them.
+  const stamp = Date.now();
+  const theirs = await createProject(otherRequest, `${PREFIX}edited ${stamp}`);
+  const hidden = await createProject(otherRequest, `${PREFIX}private ${stamp}`);
+  const task = await addTask(otherRequest, theirs.id, { title: `publish ${stamp}` });
+  const unseen = await addTask(otherRequest, hidden.id, { title: `secret review ${stamp}` });
+  expect((await waitFor(otherRequest, task.id, unseen.id)).status()).toBe(201);
+  await shareNode(otherRequest, theirs.id, E2E_SUBJECT, 'editor');
+
+  const mineView: Deps = await (await request.get(deps(task.id))).json();
+  expect(mineView.blocked_by).toEqual([]);
+  expect(mineView.not_shown).toBe(0);
+  // My remove takes nothing: the owner's link is still there.
+  expect((await request.delete(`${deps(task.id)}/not-shown`)).ok()).toBeTruthy();
+  const theirView: Deps = await (await otherRequest.get(deps(task.id))).json();
+  expect(theirView.blocked_by).toHaveLength(1);
+
+  await page.goto(`/nodes/${theirs.id}`);
+  const section = await openDependencies(page, task.id);
+  await expect(section.getByTestId('dependencies-not-shown')).toHaveCount(0);
+  await expect(section).not.toContainText('secret review');
 });
 
 test.describe('at phone width', () => {

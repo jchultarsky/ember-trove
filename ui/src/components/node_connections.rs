@@ -341,6 +341,33 @@ pub fn LinksNotShownChip(
 fn not_shown_line(node_id: NodeId, not_shown: RwSignal<u32>, links: NodeLinks) -> impl IntoView {
     let confirming = RwSignal::new(false);
     let busy = RwSignal::new(false);
+    // The confirmation takes the keyboard from the remove control. After
+    // a Cancel the control is drawn again, and gets it back: otherwise a
+    // keyboard user is left at the top of the page.
+    let line_ref = NodeRef::<leptos::html::Div>::new();
+    let refocus = RwSignal::new(false);
+    Effect::new(move |_| {
+        if refocus.get() && !confirming.get() {
+            refocus.set(false);
+            if let Some(line) = line_ref.get_untracked() {
+                // Deferred: the control is rendered in this same tick.
+                set_timeout(
+                    move || {
+                        use wasm_bindgen::JsCast;
+                        let control = line
+                            .query_selector("button")
+                            .ok()
+                            .flatten()
+                            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+                        if let Some(control) = control {
+                            let _ = control.focus();
+                        }
+                    },
+                    std::time::Duration::ZERO,
+                );
+            }
+        }
+    });
     let remove = Callback::new(move |()| {
         if busy.get_untracked() {
             return;
@@ -371,6 +398,7 @@ fn not_shown_line(node_id: NodeId, not_shown: RwSignal<u32>, links: NodeLinks) -
             view! {
                 <div class="mt-3 flex flex-wrap items-center gap-1.5 text-xs
                         text-stone-500 dark:text-stone-400"
+                    node_ref=line_ref
                     data-testid="links-not-shown">
                     {move || if confirming.get() {
                         view! {
@@ -378,7 +406,10 @@ fn not_shown_line(node_id: NodeId, not_shown: RwSignal<u32>, links: NodeLinks) -
                                 question=links_not_shown_question(n)
                                 commit="Remove"
                                 on_confirm=remove
-                                on_cancel=Callback::new(move |()| confirming.set(false)) />
+                                on_cancel=Callback::new(move |()| {
+                                    refocus.set(true);
+                                    confirming.set(false);
+                                }) />
                         }.into_any()
                     } else {
                         view! {

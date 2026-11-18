@@ -11769,23 +11769,27 @@ async fn an_editor_is_not_told_of_the_owners_private_prerequisites(pool: PgPool)
     let his = raw_task(&pool, "bob", bobs, "on bob's project").await;
     let zeds = raw_task(&pool, "zed", lent, "on the lent project").await;
     let gone = raw_task(&pool, "alice", shared.0, "in the trash").await;
-    for p in [hers, his, zeds, gone] {
+    // In the trash too, but on her private Project: still hers alone.
+    let hers_gone = raw_task(&pool, "alice", private, "private, in the trash").await;
+    for p in [hers, his, zeds, gone, hers_gone] {
         raw_dep(&pool, t, p).await;
     }
     trash_task(&pool, gone).await;
+    trash_task(&pool, hers_gone).await;
 
     let not_shown = |who: Option<&'static str>| {
         let deps = &deps;
         async move { deps.not_shown(Tid(t), who).await.expect("count") }
     };
-    // Bob sees his own; alice's private one and the lent one are shown
-    // to the owner, so they are not his to hear of. Only the trash.
+    // Bob sees his own; alice's private ones (the one in the trash too)
+    // and the lent one are shown to the owner, so they are not his to
+    // hear of. Only the trashed task on the Project he does see.
     assert_eq!(not_shown(Some("bob")).await, 1);
-    // Alice: bob's, and the trash.
-    assert_eq!(not_shown(Some("alice")).await, 2);
-    assert_eq!(not_shown(None).await, 1, "an admin: the trash");
+    // Alice: bob's, and both of hers in the trash.
+    assert_eq!(not_shown(Some("alice")).await, 3);
+    assert_eq!(not_shown(None).await, 2, "an admin: the trash");
 
-    // Bob's remove takes the trashed one and leaves the owner's.
+    // Bob's remove takes that one trashed link and leaves the owner's.
     assert_eq!(deps.remove_not_shown(Tid(t), Some("bob")).await.unwrap(), 1);
     assert_eq!(
         dep_pairs(&pool).await,
@@ -11793,6 +11797,7 @@ async fn an_editor_is_not_told_of_the_owners_private_prerequisites(pool: PgPool)
             ("the task".to_string(), "on bob's project".to_string()),
             ("the task".to_string(), "on her private project".to_string()),
             ("the task".to_string(), "on the lent project".to_string()),
+            ("the task".to_string(), "private, in the trash".to_string()),
         ]
     );
     assert_eq!(not_shown(Some("bob")).await, 0);
@@ -11804,15 +11809,67 @@ async fn an_editor_is_not_told_of_the_owners_private_prerequisites(pool: PgPool)
     )
     .await;
     assert_eq!(not_shown(Some("bob")).await, 1);
-    assert_eq!(not_shown(Some("alice")).await, 2);
+    assert_eq!(not_shown(Some("alice")).await, 3);
     assert_eq!(
         deps.remove_not_shown(Tid(t), Some("alice")).await.unwrap(),
-        2
+        3
     );
     assert_eq!(
         dep_pairs(&pool).await,
         [("the task".to_string(), "on her private project".to_string())]
     );
+}
+
+/// What "the node's owner" means in the rule (#349), pinned so a change
+/// to it is a decision: the account the node belongs to
+/// (`nodes.owner_id`), seeing by ownership or by a grant.
+/// - Someone else who holds an Owner grant is an editor here: a link
+///   they make to a private node of theirs is hidden from the node's
+///   owner, who is told of it and may clear it.
+/// - What an admin sees by role is not in the database, so it is not
+///   "the owner sees it": an admin's link from a node of theirs to a
+///   node they can open only as admin counts for that node's editors.
+/// - Two editors learn one thing together: one links the node to a third
+///   person's node, and the other's count says whether the owner can see
+///   it. Refusing the link when it is made would tell the first the same.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_owner_of_the_rule_is_the_account_the_node_belongs_to(pool: PgPool) {
+    let edges = PgEdgeRepo::new(pool.clone());
+    let node = |owner: &'static str, title: &'static str| {
+        insert_raw_node(&pool, owner, "project", title, "")
+    };
+    let n = node("alice", "the node").await;
+    own(&pool, Nid(n), "alice").await;
+    grant(&pool, Nid(n), "cora", "owner").await;
+    grant(&pool, Nid(n), "bob", "editor").await;
+    let not_shown = |who: Option<&'static str>| {
+        let edges = &edges;
+        async move { edges.not_shown(Nid(n), who).await.expect("count") }
+    };
+
+    // A second owner by grant links it to a private node of hers.
+    let coras = node("cora", "cora's private").await;
+    raw_edge(&pool, n, coras, "references").await;
+    assert_eq!(not_shown(Some("alice")).await, 1);
+    assert_eq!(not_shown(Some("bob")).await, 1);
+    assert_eq!(not_shown(Some("cora")).await, 0, "she sees it");
+
+    // A third person's node, shared with bob alone. Bob links to it: what
+    // alice and cora are told turns on whether alice can see it.
+    let zeds = node("zed", "zed's").await;
+    share(&pool, zeds, "bob").await;
+    raw_edge(&pool, n, zeds, "depends_on").await;
+    assert_eq!(not_shown(Some("bob")).await, 1, "only cora's");
+    assert_eq!(not_shown(Some("cora")).await, 1, "only zed's");
+    assert_eq!(not_shown(Some("alice")).await, 2);
+    share(&pool, zeds, "alice").await;
+    assert_eq!(not_shown(Some("cora")).await, 0, "the owner sees zed's now");
+    assert_eq!(not_shown(Some("alice")).await, 1);
+
+    // Sight by the admin role is not sight by ownership or grant: the
+    // rule reads the database, and an admin reader is asked for as
+    // nobody in particular.
+    assert_eq!(not_shown(None).await, 0);
 }
 
 /// The links touching `node`, as (type, whether it runs from the node).

@@ -635,9 +635,11 @@ Project (or a sub-Project) — the mirror image of the Project definition.
     cannot see has (§6.1). Someone who may only view the Task is told
     nothing of them. "Not shown" here means shown **neither to the
     reader nor to the owner of the Task's Project**: a prerequisite on
-    one of the owner's own private Projects is the owner's business, and
-    an editor of the shared Project is not told of it and cannot remove
-    it this way (§14).
+    one of the owner's own private Projects is the owner's business, in
+    the trash or out of it, and an editor of the shared Project is not
+    told of it and cannot remove it this way (§14). The rule follows the
+    Task: once it is moved to another person's Project, that person is
+    its Project's owner. (Open, with who may move a Task: §15.)
   - Moving a Task keeps its dependencies. Closing a Project cancels its
     Tasks (§4.1), so what waited for them stays blocked, and says by
     what.
@@ -826,12 +828,29 @@ model's semantics never widen what anyone can see or change.
   are refused as cycles, and whoever can see both ends reads the node as
   blocked by it (§6.4). So whoever may **edit** the node is told **how
   many** such links it has, never which, to what, or who made them, and
-  may remove them together: the rule a hidden home has (§6.1) and a
-  Task's prerequisites not shown have (§9.3).
+  may remove them together: the rule a Task's prerequisites not shown
+  have (§9.3).
   - A link counts only when its other end is hidden from the reader
     **and from the node's owner**. A link to one of the owner's own
     private nodes is the owner's business: an editor of the node is not
     told of it and cannot remove it this way.
+  - **The node's owner** is the account the node belongs to, seeing the
+    other end because they own it or because it is shared with them.
+    Someone else who holds an owner's rights on the node by a grant is,
+    for this rule, an editor: their link to a private node of their own
+    is told to the node's owner. What an admin can open only by the
+    admin role does not count as seen either.
+  - An editor who is not the owner may still be refused a link as a
+    cycle because of a link the owner can see and they cannot. They are
+    told nothing of it: it is the owner's link, and the owner's to
+    remove.
+  - A hidden home (§6.1) is an older and wider rule: the child's editors
+    are told it exists and may free the child, whether or not the
+    child's owner can see that home.
+  - With two editors there is one thing the number can say: when one of
+    them links the node to a third person's node, what the other is told
+    turns on whether the node's owner can see it. Refusing the link when
+    it is made would tell the first of them the same.
   - The links concerned are the ones an editor of the node could remove
     if they were shown them: every link made by hand **from** the node,
     and a `related_to` link either way (§6.2). Not a home the node sits
@@ -927,5 +946,6 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-17 | Until that release, such a link does one thing more than the owner was told when deciding: whoever **can** see both ends (the editor who made it, an admin, anyone both nodes are shared with) reads the owner's node as blocked, on its page, on its Focus card and in the chain of what depends on it, while the owner sees nothing and has no list to remove it from. Nothing hidden is shown to anyone. No node is shared in production today | Developer, from the independent review of #347; for the owner to weigh with the release that follows |
 | 2026-11-17 | When a node is blocked and what a chain shows (§6.4, §9.3, §14): blocked only while it still waits (in use, and not itself finished or available: a Published Article or a Reference with an unmet dependency does not say "Blocked"), by its own unmet dependencies that the reader can see; the chain goes on only through a dependency that itself still waits, and stops at one the reader cannot see. A Project is judged by its state alone; an archived Article is not Published; an old link to an Area is never met. "Depends on" lists what is not met first and says "Met" or the target's state on every row. A chain is cut at 100 links, the node's own unmet dependencies among them, and says when there is more. Nothing is stored: no migration, nothing new in a backup | Developer, building S7b (#346); in the plan the owner approved. For the owner to confirm: the archived Article, and the cut at 100 |
 | 2026-11-17 | A node's editors are told how many of its links they are not shown, and may remove them together, as Tasks have (§14). Until it is removed, such a link stays a real link: it still decides loop refusals, and those who see both ends read the node as blocked (§6.4) | Owner, in the developer session (planning #349) |
-| 2026-11-17 | What "not shown" means, for a node's links and for a Task's prerequisites (§14, §9.3): hidden from the reader **and from the owner** of the node (the Task's Project). Hidden from the reader alone would tell an editor of a shared node how many private nodes its owner links it to, and let them delete those links; the Task rule shipped in 3.26.0 had that fault and is narrowed. Which links: those the node's editor could remove if shown (made by hand from the node, and `related_to` either way); not a hidden home, not another node's link into this one, never a wiki link. One number, never which; nothing in History. **Considered and left out:** refusing such a link when it is made. A share ending hides a link after the fact; the refusal would tell an editor whether a third person's node is shared with the owner; and a shared Project depending on an editor's private one is a fair use | Developer, building #349; in the plan the owner approved |
+| 2026-11-17 | What "not shown" means, for a node's links and for a Task's prerequisites (§14, §9.3): hidden from the reader **and from the owner** of the node (the Task's Project). Hidden from the reader alone would tell an editor of a shared node how many private nodes its owner links it to, and let them delete those links; the Task rule shipped in 3.26.0 had that fault and is narrowed. Which links: those the node's editor could remove if shown (made by hand from the node, and `related_to` either way); not a hidden home, not another node's link into this one, never a wiki link. One number, never which; nothing in History. **Considered and left out:** refusing such a link when it is made. A share ending hides a link after the fact, and a shared Project depending on an editor's private one is a fair use. (The plan also said a refusal would tell an editor whether a third person's node is shared with the owner. The count does not avoid that either: see the next row) | Developer, building #349; in the plan the owner approved |
+| 2026-11-17 | From the independent review of #349, decided or left open. **"The node's owner"** in the rule is the account the node belongs to, seeing by ownership or by a share: not someone else holding an owner's grant, and not what an admin opens by role (the database does not record roles). **A prerequisite in the trash** on the owner's private Project is the owner's business like a live one. **Accepted:** two editors of one node can learn together whether the owner sees a third person's node that one of them linked it to. **Open, for the owner:** (1) someone who may edit a Task can move it to a Project of their own, and as that Project's owner is then told how many of its prerequisites they are not shown, and may remove them (they could already delete the Task); it belongs with the open question of whether an editor may move a Task out of a shared Project at all. (2) The hidden-home rule (§6.1) has no owner half: an editor of a shared child is told of, and may free it from, a home that is the owner's own private node | Developer, from the independent review of #349 |
 | 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |
