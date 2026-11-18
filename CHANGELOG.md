@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.31.0] - 2026-11-18
+
 ### Added
 - **At an email collision, what you typed can be added to the person
   who has the address** (S8b of the ontology programme, #357; ONTOLOGY
