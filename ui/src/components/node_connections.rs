@@ -198,9 +198,13 @@ pub fn NodeBlockedChip(
     links: NodeLinks,
 ) -> impl IntoView {
     let sections = use_context::<crate::components::node_section::NodeSections>();
-    // Derived signals, not memos: a `Memo` that reads a `LocalResource`
-    // doesn't run again when the read lands (the chip kept saying "2"
-    // after a dependency was removed and the list already showed one).
+    // Derived signals, not memos. The closure below reads `shown` and
+    // then `unmet`, and `shown` is worked out from `unmet`. As memos,
+    // checking `shown` recomputed `unmet` (2 to 1) without marking this
+    // closure, `shown` itself stayed `true`, and nothing ran again: the
+    // chip kept saying "2" after a dependency was removed and the list
+    // already showed one (reactive_graph: a memo that changes marks its
+    // subscribers dirty, all but the one reading it at that moment).
     let unmet = Signal::derive(move || unmet_dependencies(node_id, served, links.get().as_ref()));
     let shown = Signal::derive(move || {
         blockers::is_blocked(&node_type, &status, project_state.get(), unmet.get())
@@ -212,7 +216,7 @@ pub fn NodeBlockedChip(
                 <button
                     type="button"
                     class=format!(
-                        "{} text-xs py-0.5 hover:text-stone-900 dark:hover:text-stone-100",
+                        "{} py-0.5 hover:text-stone-900 dark:hover:text-stone-100",
                         crate::components::task_row_scaffold::BLOCKED_CHIP
                     )
                     title=label.clone()
@@ -251,6 +255,12 @@ pub fn ConnectionsPanel(
     // What the unmet dependencies wait for in turn (S7b). Read only while
     // the section is open, the node still waits, and its links say one
     // of its dependencies is not met; read again when the links are.
+    //
+    // It reads the state signal as it is, not through a memo, though the
+    // state control sets it twice (at the choice, and when the save
+    // answers): on a re-open the first read goes out before the save has
+    // landed, and the server, which checks the same rule, answers an
+    // empty chain. The second set is what brings the chain back.
     let chain_kind = node_type.clone();
     let chain = LocalResource::new(move || {
         let waits = blockers::still_waits(&chain_kind, &status, project_state.get());
@@ -532,6 +542,14 @@ fn chain_view(chain: LocalResource<Option<Result<NodeBlockers, UiError>>>) -> im
         <Suspense fallback=|| ()>
             {move || chain.get().flatten().map(|read| match read {
                 Ok(found) if found.also.is_empty() && !found.truncated => ().into_any(),
+                // The node's own unmet dependencies alone are more than
+                // was read: there was no room for what lies behind them.
+                Ok(found) if found.also.is_empty() => view! {
+                    <p class="px-2 text-xs text-stone-400 dark:text-stone-500"
+                       data-testid="chain-more">
+                        "It waits for so many nodes that what they wait for in turn was not read."
+                    </p>
+                }.into_any(),
                 Ok(found) => view! {
                     <div role="group" aria-labelledby="connections-chain-heading"
                          data-testid="connections-chain">

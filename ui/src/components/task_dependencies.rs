@@ -712,7 +712,9 @@ pub fn TaskDependenciesSection(
                                         link=c.task
                                         own_node=node_id
                                         on_remove=None
-                                        through=Some(c.via_title)
+                                        // Plain text, as every linked task's
+                                        // title is: it may be someone else's.
+                                        through=Some(crate::markdown::markdown_inline_plain_text(&c.via_title))
                                         busy=busy
                                     />
                                 }).collect_view()}

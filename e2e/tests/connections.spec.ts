@@ -15,9 +15,9 @@ import {
  * Area contains, "Mentioned in"; the warning when a node that nodes in use
  * still draw on is deleted or archived; and the Unlinked Mentions tool.
  *
- * Every title starts with PREFIX. Nodes are deleted by id (an archived one
- * isn't in the lookup the prefix wipe uses), and the prefix wipe runs
- * before AND after each test for whatever a crashed attempt left behind.
+ * Every title starts with PREFIX. Nodes are deleted by id, and the prefix
+ * wipe runs before AND after each test for whatever a crashed attempt
+ * left behind (`/api/nodes/lookup` finds archived and closed nodes too).
  */
 
 const PREFIX = 'e2e conn ';

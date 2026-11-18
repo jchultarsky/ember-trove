@@ -123,15 +123,13 @@ CI job is too slow a feedback loop for selector work.
   <title>", and is absent for a reader who may not remove the link, so
   assert `toHaveCount(0)`, never "disabled". A node's home is
   `getByTestId('node-home')`; there is no `connections-home` group
-  beside it. An archived node is not in `/api/nodes/lookup`, so a
-  spec that archives a node deletes it by id.
+  beside it.
 - **Blockers** (2026-11-17, S7b): the page's chip is
   `getByTestId('node-blocked')`, a card's `project-blocked`, a task
   row's `task-blocked`; a card's blocked-task count is `count-blocked`.
   The chain is `connections-chain` with `chain-row`s (a task's:
   `chain-list`). A node's state is set with
-  `PUT /api/nodes/{id}/project-state {state}`; a closed Project is not
-  in `/api/nodes/lookup`, so delete it by id. To prove a read is not
+  `PUT /api/nodes/{id}/project-state {state}`. To prove a read is not
   made, count it with a `page.route(...)` that falls back
   (`countChainReads` in blockers.spec.ts), and wait for `networkidle`
   before asserting zero.

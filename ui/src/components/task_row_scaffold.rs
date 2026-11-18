@@ -383,7 +383,7 @@ pub fn blocked_chip(label: String, rest: String, testid: &'static str) -> AnyVie
 
 /// The chip's classes: neutral, never a warm colour (it is information,
 /// not urgency).
-pub const BLOCKED_CHIP: &str = "flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 rounded \
+pub const BLOCKED_CHIP: &str = "flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 rounded text-xs \
      bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300";
 
 /// "Project parked" on a My Day row whose project is parked or closed

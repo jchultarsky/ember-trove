@@ -18,8 +18,9 @@ import {
  * nothing is prevented or moved. A reader is shown only what they can
  * open.
  *
- * Every title starts with PREFIX; nodes are deleted by id as well (a
- * closed or archived one is not in the lookup the prefix wipe uses).
+ * Every title starts with PREFIX; nodes are deleted by id, and the
+ * prefix wipe runs before and after each test for what a failed attempt
+ * left (the lookup it uses finds closed and archived nodes too).
  */
 
 const PREFIX = 'e2e blk ';
@@ -103,6 +104,7 @@ test('a node that waits for something unfinished says Blocked, and says what', a
     await expect(chip(page)).toBeVisible();
     await expect(chip(page)).toHaveAttribute('title', 'Waits for 2 nodes that are not finished');
     await expect(page.getByTestId('connections-groups')).toHaveCount(0);
+    await page.waitForLoadState('networkidle');
     expect(reads.count).toBe(0);
 
     // The chip opens Connections. "Depends on" lists what is not met
@@ -128,6 +130,9 @@ test('a node that waits for something unfinished says Blocked, and says what', a
       .click();
     await expect(rows(page, 'depends-on')).toHaveCount(2);
     await expect(chip(page)).toHaveAttribute('title', 'Waits for 1 node that is not finished');
+    // The list was rebuilt and the chain read again: it is still there.
+    await expect.poll(() => reads.count).toBe(2);
+    await expect(further).toHaveText([new RegExp(`${draft.title}.*Draft.*through ${running.title}`)]);
 
     // Once what it waited for is complete, nothing says "Blocked", the
     // row says "Met", and there is no chain (what a finished thing
@@ -247,6 +252,10 @@ test('the dashboard card says Blocked and counts its blocked tasks', async ({
       });
       expect(added.status()).toBe(201);
     }
+    // The free Project is the one most recently worked on, so the
+    // dashboard's own order (latest activity first) puts it above the
+    // blocked one.
+    await addTask(request, free.id, { title: `a later task ${stamp}` });
 
     await page.goto('/dashboard');
     const cards = page.getByTestId('project-groups').getByTestId('project-card');
@@ -264,13 +273,18 @@ test('the dashboard card says Blocked and counts its blocked tasks', async ({
     await expect(card(free).getByTestId('count-blocked')).toHaveCount(0);
     await expect(card(needed).getByTestId('project-blocked')).toHaveCount(0);
 
-    // Surfaced, never enforced: being blocked, or freed, moves no card.
-    const order = async () =>
-      (await cards.allTextContents())
-        .map((text) => [blocked, free, needed].find((p) => text.includes(p.title))?.title)
-        .filter(Boolean);
-    const before = await order();
-    expect(before).toHaveLength(3);
+    // Surfaced, never enforced: being blocked moves no card, up or
+    // down. The three stand in the order the dashboard's own answer has
+    // them (latest activity first), with the blocked one in the middle.
+    const shown = (await cards.allTextContents())
+      .map((text) => [blocked, free, needed].find((p) => text.includes(p.title))?.title)
+      .filter(Boolean);
+    const served: { title: string }[] = await (await request.get('/api/dashboard/projects')).json();
+    const mine = served
+      .map((entry) => entry.title)
+      .filter((title) => [blocked, free, needed].some((p) => p.title === title));
+    expect(shown).toEqual(mine);
+    expect(shown).toEqual([free.title, blocked.title, needed.title]);
     // Finished, the prerequisite frees the tasks and the Project.
     await request.patch(`/api/tasks/${buy.id}`, { data: { status: 'done' } });
     await declare(request, needed, 'complete');
@@ -278,8 +292,6 @@ test('the dashboard card says Blocked and counts its blocked tasks', async ({
     await expect(card(blocked)).toBeVisible();
     await expect(card(blocked).getByTestId('project-blocked')).toHaveCount(0);
     await expect(card(blocked).getByTestId('count-blocked')).toHaveCount(0);
-    // The two that are still listed stand in the order they had.
-    expect(await order()).toEqual(before.filter((title) => title !== needed.title));
   } finally {
     for (const n of [blocked, free, needed]) await request.delete(`/api/nodes/${n.id}`);
   }
@@ -344,21 +356,58 @@ test.describe('at phone width', () => {
     const needed = await createNode(request, `${PREFIX}the electrician ${stamp}`, {
       node_type: 'project',
     });
+    const behind = await createNode(
+      request,
+      `${PREFIX}the under-cabinet lighting quote from the second supplier ${stamp}`,
+    );
     try {
       await dependsOn(request, waiting, needed);
+      await dependsOn(request, needed, behind);
+      // Two of its tasks, one waiting for the other, through a third.
+      const tasks = [];
+      for (const name of ['fit the long-delayed lighting', 'order the fittings', 'agree the quote']) {
+        tasks.push(await addTask(request, waiting.id, { title: `${name} ${stamp}` }));
+      }
+      for (const [waits, on] of [
+        [tasks[0], tasks[1]],
+        [tasks[1], tasks[2]],
+      ]) {
+        const added = await request.post(`/api/tasks/${waits.id}/dependencies`, {
+          data: { depends_on: on.id },
+        });
+        expect(added.status()).toBe(201);
+      }
+      const main = page.locator('main');
+      const overflow = () => main.evaluate((el) => el.scrollWidth - el.clientWidth);
+
       await openNode(page, waiting.id);
       await expect(chip(page)).toBeVisible();
       await page.waitForLoadState('networkidle');
-      const main = page.locator('main');
-      const over = await main.evaluate((el) => el.scrollWidth - el.clientWidth);
-      expect(over, `the page is ${over}px wider than the screen`).toBeLessThanOrEqual(1);
-      // Open, with the chain's row.
+      expect(await overflow(), 'the page is wider than the screen').toBeLessThanOrEqual(1);
+      // Open, with the chain's row and what it comes through.
       await chip(page).click();
       await expect(rows(page, 'depends-on')).toHaveCount(1);
-      const wide = await main.evaluate((el) => el.scrollWidth - el.clientWidth);
-      expect(wide, `Connections is ${wide}px wider than the screen`).toBeLessThanOrEqual(1);
+      await expect(chain(page).getByTestId('chain-row')).toHaveCount(1);
+      expect(await overflow(), 'Connections is wider than the screen').toBeLessThanOrEqual(1);
+
+      // The task editor's chain row.
+      const row = page.locator(`[data-task-id="${tasks[0].id}"]`);
+      await row.getByRole('button', { name: 'Edit task' }).click();
+      await expect(row.getByTestId('chain-list').getByTestId('dependency')).toHaveCount(1);
+      expect(await overflow(), 'the task editor is wider than the screen').toBeLessThanOrEqual(1);
+
+      // The dashboard card with its chip and its blocked-task count.
+      await page.goto('/dashboard');
+      const card = page
+        .getByTestId('project-groups')
+        .getByTestId('project-card')
+        .filter({ hasText: waiting.title });
+      await expect(card.getByTestId('project-blocked')).toBeVisible();
+      await expect(card.getByTestId('count-blocked')).toBeVisible();
+      await page.waitForLoadState('networkidle');
+      expect(await overflow(), 'the dashboard is wider than the screen').toBeLessThanOrEqual(1);
     } finally {
-      for (const n of [waiting, needed]) await request.delete(`/api/nodes/${n.id}`);
+      for (const n of [waiting, needed, behind]) await request.delete(`/api/nodes/${n.id}`);
     }
   });
 });

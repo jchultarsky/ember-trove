@@ -308,12 +308,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     control on a node page that a shared editor may use goes the same
     way; `PermissionRole::satisfies` is the API's rule too.
   - A row is an `<a href>`, not a `<button>` with a navigate call.
-- **Never read a `LocalResource` inside a `Memo`** (S7b, 2026-11-17):
-  the memo doesn't run again when the read lands. The node page's
-  "Blocked" chip kept its first count after a dependency was removed,
-  while the list beside it already showed one fewer. Use
-  `Signal::derive` (as a section's `count` does), or read the resource
-  in another resource's source closure.
+- **Don't read a memo and a memo derived from it in one render closure
+  or effect** (S7b, 2026-11-17). With `unmet = Memo(…)`, `shown =
+  Memo(unmet > 0)` and a closure that reads `shown`, then `unmet`:
+  checking `shown` recomputes `unmet` without marking the closure (a
+  memo that changes marks its subscribers dirty, all but the one
+  reading it at that moment), `shown` doesn't change, and the closure
+  never runs again. The node page's "Blocked" chip kept saying "2"
+  after a dependency was removed. Make the derived one a
+  `Signal::derive`. A resource has nothing to do with it: a `Memo` over
+  a `LocalResource` does run again when the read lands (the first
+  version of this rule said otherwise, and was wrong).
 - **Blockers on the page** (S7b, #346; rules in `common::blockers`):
   - The header chip (`NodeBlockedChip`, `node_connections.rs`) counts
     with `unmet_dependencies`: `ViewedNode::blocked_by` until the links
