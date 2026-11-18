@@ -255,6 +255,7 @@ pub(crate) async fn insert_note(
     owner_id: &str,
     req: &CreateNoteRequest,
 ) -> Result<Note, EmberTroveError> {
+    let mentioned = common::mention::mentioned_ids(&req.body);
     let row = sqlx::query_as::<_, NoteRow>(&format!(
         r#"
         INSERT INTO node_notes (node_id, owner_id, body, color)
@@ -272,7 +273,7 @@ pub(crate) async fn insert_note(
     .map_err(|e| EmberTroveError::Internal(format!("create note failed: {e}")))?;
 
     let note = row.into_note();
-    super::mention::sync_note_on(conn, note.id, &note.body, owner_id).await?;
+    super::mention::sync_note_on(conn, note.id, &mentioned, owner_id).await?;
     Ok(note)
 }
 
@@ -319,6 +320,9 @@ impl NoteRepo for PgNoteRepo {
         req: UpdateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
         let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("update note failed: {e}"));
+        // Read before the transaction opens (a note is at most 10,000
+        // characters, but the rule is the same as for a body).
+        let mentioned = common::mention::mentioned_ids(&req.body);
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let row = sqlx::query_as::<_, NoteRow>(&format!(
             r#"
@@ -350,7 +354,7 @@ impl NoteRepo for PgNoteRepo {
         // (`author_may_write`), and the rows are for the author's own
         // people.
         let note = row.into_note();
-        super::mention::sync_note_on(&mut tx, note.id, &note.body, &note.owner_id).await?;
+        super::mention::sync_note_on(&mut tx, note.id, &mentioned, &note.owner_id).await?;
         tx.commit().await.map_err(db_err)?;
         Ok(note)
     }

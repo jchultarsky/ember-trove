@@ -14882,11 +14882,12 @@ mod mentions {
         assert_eq!(body_names(&pool, node, "alice").await, []);
         let note = a_note(&pool, node, "bob", &token(&ada)).await;
         assert_eq!(note_rows(&pool, note).await, []);
-        // The owner saving the same text makes it real.
-        save_body(&pool, node, "alice", &token(&ada))
+        // Nor does the owner's next save of that text: she did not put
+        // the token there (`a_planted_token_is_never_made_real_by_its_owner`).
+        save_body(&pool, node, "alice", &format!("{} and a word", token(&ada)))
             .await
             .expect("save");
-        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+        assert_eq!(body_rows(&pool, node).await, []);
     }
 
     /// A co-editor's save keeps the mentions already there and adds their
@@ -14945,6 +14946,11 @@ mod mentions {
             .await
             .expect("save");
         assert_eq!(body_rows(&pool, node).await, [], "put back by an editor");
+        // The owner makes it real by mentioning them again herself: the
+        // token out, then in, in saves of her own.
+        save_body(&pool, node, "alice", "taken out by its owner")
+            .await
+            .expect("save");
         save_body(&pool, node, "alice", &token(&ada))
             .await
             .expect("save");
@@ -14953,6 +14959,159 @@ mod mentions {
         let coded = format!("`{}`", token(&ada));
         save_body(&pool, node, "alice", &coded).await.expect("save");
         assert_eq!(body_rows(&pool, node).await, []);
+    }
+
+    /// SECURITY (found by the review of #361): a co-editor plants a token
+    /// with the id of the owner's person, hidden in a comment. The owner's
+    /// own saves of that body must not make it real: she did not put it
+    /// there, and a row would give the planter her person's current name,
+    /// through every rename, on any node the two of them can edit.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_planted_token_is_never_made_real_by_its_owner(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada Secret").await;
+        let planted = format!("Plan.\n<!-- {} -->", token(&ada));
+        let nodes = PgNodeRepo::new(pool.clone());
+        // On the owner's node, and on the planter's own node where the
+        // owner is an editor: the same answer.
+        for (owner, title) in [("alice", "Alice's plan"), ("bob", "Bob's bait")] {
+            let node = a_node(&pool, owner, title).await;
+            let other = if owner == "alice" { "bob" } else { "alice" };
+            share(&pool, node, owner, other).await;
+            share(&pool, node, owner, "carol").await;
+            save_body(&pool, node, "bob", &planted)
+                .await
+                .expect("plant");
+
+            // Every kind of save she makes around it.
+            let edited = format!("{planted}\nA word of hers.");
+            save_body(&pool, node, "alice", &edited)
+                .await
+                .expect("edit");
+            let linked =
+                common::markdown::link_first_mention(&edited, "word").expect("a word to link");
+            save_body(&pool, node, "alice", &linked)
+                .await
+                .expect("link this mention");
+            save_body(&pool, node, "alice", &linked)
+                .await
+                .expect("the same again");
+            assert_eq!(body_rows(&pool, node).await, [], "{title}");
+            for reader in ["alice", "bob", "carol"] {
+                assert_eq!(
+                    body_names(&pool, node, reader).await,
+                    [],
+                    "{title}, {reader}"
+                );
+            }
+
+            // A version of the planter's put back by her.
+            save_body(&pool, node, "bob", "vandalised")
+                .await
+                .expect("vandalise");
+            nodes
+                .restore_body(node, planted.clone(), &actor("alice"))
+                .await
+                .expect("restore");
+            assert_eq!(body_rows(&pool, node).await, [], "{title}: a restore");
+
+            // A copy of it made by her.
+            let copy = nodes
+                .duplicate(
+                    "alice",
+                    CreateNodeRequest {
+                        body: Some(planted.clone()),
+                        ..node_req(&format!("{title} (copy)"))
+                    },
+                    node,
+                )
+                .await
+                .expect("duplicate");
+            assert_eq!(body_rows(&pool, copy.id).await, [], "{title}: a copy");
+
+            // She mentions them herself, beside the planted token: that
+            // is a mention she made.
+            let hers = format!("{planted}\nAsk {}.", token(&ada));
+            save_body(&pool, node, "alice", &hers)
+                .await
+                .expect("her own mention");
+            assert_eq!(body_rows(&pool, node).await, [ada.id], "{title}");
+        }
+    }
+
+    /// A version put back keeps the rows whose tokens it still holds and
+    /// makes none; a copy carries the copier's own real mentions and no
+    /// one else's.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_restore_makes_no_mention_and_a_copy_carries_only_real_ones_of_the_copiers(
+        pool: PgPool,
+    ) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let bea = someone(&pool, "alice", "Bea").await;
+        let bo = someone(&pool, "bob", "Bo").await;
+        let nodes = PgNodeRepo::new(pool.clone());
+        let node = a_node(&pool, "alice", "Plan").await;
+        share(&pool, node, "alice", "bob").await;
+        let first = format!("{} and {}", token(&ada), token(&bea));
+        save_body(&pool, node, "alice", &first).await.expect("save");
+        save_body(&pool, node, "bob", &format!("{first} with {}", token(&bo)))
+            .await
+            .expect("save");
+        let all = format!("{first} with {}", token(&bo));
+        assert_eq!(body_rows(&pool, node).await.len(), 3);
+
+        // Bea is taken out, then the old version is put back: Ada's and
+        // Bo's rows were there all along and stay; Bea's is not made
+        // again. It understates; her owner mentions her again to fix it.
+        save_body(
+            &pool,
+            node,
+            "alice",
+            &format!("{} with {}", token(&ada), token(&bo)),
+        )
+        .await
+        .expect("save");
+        nodes
+            .restore_body(node, all.clone(), &actor("alice"))
+            .await
+            .expect("restore");
+        assert_eq!(body_rows(&pool, node).await, sorted(vec![ada.id, bo.id]));
+        // A restore that drops a token drops its row.
+        nodes
+            .restore_body(node, token(&ada), &actor("alice"))
+            .await
+            .expect("restore");
+        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+
+        // A copy by Alice of a body that holds all three tokens: her own
+        // person who is really mentioned on the source, and nobody else.
+        nodes
+            .restore_body(node, all.clone(), &actor("alice"))
+            .await
+            .expect("restore");
+        let copy = |by: &'static str, title: &'static str| {
+            let (nodes, all) = (&nodes, all.clone());
+            async move {
+                nodes
+                    .duplicate(
+                        by,
+                        CreateNodeRequest {
+                            body: Some(all),
+                            ..node_req(title)
+                        },
+                        node,
+                    )
+                    .await
+                    .expect("duplicate")
+                    .id
+            }
+        };
+        assert_eq!(
+            body_rows(&pool, copy("alice", "Alice's copy").await).await,
+            [ada.id]
+        );
+        // And by Bob: nobody (his Bo has no row on the source any more,
+        // and Alice's people are not his).
+        assert_eq!(body_rows(&pool, copy("bob", "Bob's copy").await).await, []);
     }
 
     /// SECURITY: a body's rows and a note's never stand in for each other.
@@ -15205,6 +15364,23 @@ mod mentions {
             .await;
         assert!(made.is_err());
         let n: i64 = scalar(&pool, "SELECT count(*) FROM nodes WHERE title = 'Not made'").await;
+        assert_eq!(n, 0);
+        let noted = PgNoteRepo::new(pool.clone())
+            .create(
+                node,
+                "alice",
+                CreateNoteRequest {
+                    body: "not made either".to_string(),
+                    color: "default".to_string(),
+                },
+            )
+            .await;
+        assert!(noted.is_err());
+        let n: i64 = scalar(
+            &pool,
+            "SELECT count(*) FROM node_notes WHERE body = 'not made either'",
+        )
+        .await;
         assert_eq!(n, 0);
     }
 

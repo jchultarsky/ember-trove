@@ -34,9 +34,15 @@ pub struct WikiLink<'a> {
 #[must_use]
 pub fn wikilinks(text: &str) -> Vec<WikiLink<'_>> {
     let code = code_ranges(text);
-    let in_code = |at: usize| code.iter().any(|r| r.contains(&at));
+    let in_code = covered(&code);
     let mut links = Vec::new();
     let mut from = 0;
+    // Linear in the text, whatever it holds (a body is up to 1 MiB, and
+    // this runs on every save): the end of the line being read is found
+    // once per line, and a line with no `]]` left is not searched again
+    // for each `[[` on it.
+    let mut line_end: Option<usize> = None;
+    let mut no_close_until: Option<usize> = None;
     while let Some(rel) = text.get(from..).and_then(|rest| rest.find("[[")) {
         let open = from + rel;
         let inner_start = open + 2;
@@ -44,9 +50,22 @@ pub fn wikilinks(text: &str) -> Vec<WikiLink<'_>> {
             from = inner_start;
             continue;
         }
-        let rest = text.get(inner_start..).unwrap_or_default();
-        let line = rest.split('\n').next().unwrap_or_default();
+        let end_of_line = match line_end {
+            Some(end) if inner_start <= end => end,
+            _ => {
+                let rest = text.get(inner_start..).unwrap_or_default();
+                let end = inner_start + rest.find('\n').unwrap_or(rest.len());
+                line_end = Some(end);
+                end
+            }
+        };
+        if no_close_until.is_some_and(|until| inner_start <= until) {
+            from = inner_start;
+            continue;
+        }
+        let line = text.get(inner_start..end_of_line).unwrap_or_default();
         let Some(close_rel) = line.find("]]") else {
+            no_close_until = Some(end_of_line);
             from = inner_start;
             continue;
         };
@@ -71,6 +90,29 @@ pub fn wikilinks(text: &str) -> Vec<WikiLink<'_>> {
         from = end;
     }
     links
+}
+
+/// "Is this byte offset inside one of `ranges`?", answered by a binary
+/// search. `ranges` may overlap and come in any order (a code span can
+/// run into a fence); they are merged once here. A linear look through
+/// them for every `[[`, backtick or `@[` made the scanners quadratic.
+pub(crate) fn covered(ranges: &[Range<usize>]) -> impl Fn(usize) -> bool + use<> {
+    let mut sorted: Vec<Range<usize>> = ranges.to_vec();
+    sorted.sort_by_key(|r| r.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(sorted.len());
+    for r in sorted {
+        match merged.last_mut() {
+            Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+            _ => merged.push(r),
+        }
+    }
+    move |at: usize| {
+        let after = merged.partition_point(|r| r.start <= at);
+        after
+            .checked_sub(1)
+            .and_then(|i| merged.get(i))
+            .is_some_and(|r| at < r.end)
+    }
 }
 
 /// `text` with each wiki link replaced by what `shown` returns for it.
@@ -119,44 +161,67 @@ pub fn code_ranges(text: &str) -> Vec<Range<usize>> {
     if let Some((_, _, start)) = fence {
         ranges.push(start..text.len());
     }
-    // Inline spans, outside the fences.
-    let fenced = ranges.clone();
-    let in_fence = |at: usize| fenced.iter().any(|r| r.contains(&at));
+    // Inline spans, outside the fences. Linear in the text: the runs of
+    // backticks are listed once, each knows the next run of its own
+    // length, and a paragraph's end is found once per paragraph.
+    let in_fence = covered(&ranges);
     let bytes = text.as_bytes();
+    // Every run of backticks: (start, length, starts inside a fence).
+    let mut runs: Vec<(usize, usize, bool)> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] != b'`' || in_fence(i) {
+        if bytes.get(i) != Some(&b'`') {
             i += 1;
             continue;
         }
-        let run = bytes[i..].iter().take_while(|b| **b == b'`').count();
-        let after = i + run;
-        // The closing run: the same length, before the paragraph ends.
-        let paragraph_end = text
-            .get(after..)
-            .and_then(|rest| rest.find("\n\n"))
-            .map_or(text.len(), |p| after + p);
-        let mut j = after;
-        let mut close = None;
-        while j < paragraph_end {
-            if bytes[j] == b'`' {
-                let len = bytes[j..].iter().take_while(|b| **b == b'`').count();
-                if len == run {
-                    close = Some(j + len);
-                    break;
-                }
-                j += len;
-            } else {
-                j += 1;
-            }
+        let len = bytes
+            .get(i..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(|b| **b == b'`')
+            .count();
+        runs.push((i, len, in_fence(i)));
+        i += len;
+    }
+    // For each run, the next run of the same length, if any.
+    let mut next_same: Vec<Option<usize>> = vec![None; runs.len()];
+    let mut last_of_len: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (k, (_, len, _)) in runs.iter().enumerate().rev() {
+        next_same[k] = last_of_len.get(len).copied();
+        last_of_len.insert(*len, k);
+    }
+    // The first blank line at or after an offset, cached while offsets
+    // stay inside the paragraph it ends.
+    let mut paragraph: Option<usize> = None;
+    let mut paragraph_end = |after: usize| match paragraph {
+        Some(end) if after <= end => end,
+        _ => {
+            let end = text
+                .get(after..)
+                .and_then(|rest| rest.find("\n\n"))
+                .map_or(text.len(), |p| after + p);
+            paragraph = Some(end);
+            end
         }
-        match close {
-            Some(end) => {
-                ranges.push(i..end);
-                i = end;
+    };
+    let mut k = 0;
+    while let Some(&(start, len, fenced)) = runs.get(k) {
+        // Backticks inside a fence open nothing (they may still close a
+        // span opened before the fence, as before).
+        if fenced {
+            k += 1;
+            continue;
+        }
+        let end = paragraph_end(start + len);
+        // The closing run: the same length, before the paragraph ends.
+        match next_same.get(k).copied().flatten() {
+            Some(c) if runs.get(c).is_some_and(|(at, _, _)| *at < end) => {
+                let close = runs.get(c).map_or(start + len, |(at, _, _)| at + len);
+                ranges.push(start..close);
+                k = c + 1;
             }
             // No closing run: the backticks are plain text.
-            None => i = after,
+            _ => k += 1,
         }
     }
     ranges.sort_by_key(|r| r.start);
@@ -171,6 +236,221 @@ pub fn parse_wikilink_titles(content: &str) -> Vec<String> {
         .into_iter()
         .map(|link| link.target.to_string())
         .collect()
+}
+
+/// The scanners as they were before they were made linear (S9), kept to
+/// hold the new ones to the same answers.
+#[cfg(test)]
+mod linear_tests {
+    use super::*;
+
+    fn wikilinks_reference(text: &str) -> Vec<WikiLink<'_>> {
+        let code = code_ranges_reference(text);
+        let in_code = |at: usize| code.iter().any(|r| r.contains(&at));
+        let mut links = Vec::new();
+        let mut from = 0;
+        while let Some(rel) = text.get(from..).and_then(|rest| rest.find("[[")) {
+            let open = from + rel;
+            let inner_start = open + 2;
+            if in_code(open) {
+                from = inner_start;
+                continue;
+            }
+            let rest = text.get(inner_start..).unwrap_or_default();
+            let line = rest.split('\n').next().unwrap_or_default();
+            let Some(close_rel) = line.find("]]") else {
+                from = inner_start;
+                continue;
+            };
+            let inner = line.get(..close_rel).unwrap_or_default();
+            // `[[a [[b]]`: the inner opener starts the link.
+            if let Some(nested) = inner.rfind("[[") {
+                from = inner_start + nested;
+                continue;
+            }
+            let end = inner_start + close_rel + 2;
+            let (target, display) = match inner.split_once('|') {
+                Some((target, display)) => (target.trim(), display.trim()),
+                None => (inner.trim(), ""),
+            };
+            if !target.is_empty() {
+                links.push(WikiLink {
+                    range: open..end,
+                    target,
+                    display: if display.is_empty() { target } else { display },
+                });
+            }
+            from = end;
+        }
+        links
+    }
+
+    fn code_ranges_reference(text: &str) -> Vec<Range<usize>> {
+        let mut ranges: Vec<Range<usize>> = Vec::new();
+        // Fenced blocks, line by line.
+        let mut fence: Option<(char, usize, usize)> = None; // (char, length, start)
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            let trimmed = line.trim_start_matches(' ');
+            let indent = line.len() - trimmed.len();
+            let marker = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'));
+            let run = marker.map_or(0, |m| trimmed.chars().take_while(|c| *c == m).count());
+            match (fence, marker) {
+                (None, Some(m)) if indent <= 3 && run >= 3 => fence = Some((m, run, offset)),
+                (Some((m, len, start)), Some(found))
+                    if found == m
+                        && indent <= 3
+                        && run >= len
+                        && trimmed[run..].trim().is_empty() =>
+                {
+                    ranges.push(start..offset + line.len());
+                    fence = None;
+                }
+                _ => {}
+            }
+            offset += line.len();
+        }
+        if let Some((_, _, start)) = fence {
+            ranges.push(start..text.len());
+        }
+        // Inline spans, outside the fences.
+        let fenced = ranges.clone();
+        let in_fence = |at: usize| fenced.iter().any(|r| r.contains(&at));
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] != b'`' || in_fence(i) {
+                i += 1;
+                continue;
+            }
+            let run = bytes[i..].iter().take_while(|b| **b == b'`').count();
+            let after = i + run;
+            // The closing run: the same length, before the paragraph ends.
+            let paragraph_end = text
+                .get(after..)
+                .and_then(|rest| rest.find("\n\n"))
+                .map_or(text.len(), |p| after + p);
+            let mut j = after;
+            let mut close = None;
+            while j < paragraph_end {
+                if bytes[j] == b'`' {
+                    let len = bytes[j..].iter().take_while(|b| **b == b'`').count();
+                    if len == run {
+                        close = Some(j + len);
+                        break;
+                    }
+                    j += len;
+                } else {
+                    j += 1;
+                }
+            }
+            match close {
+                Some(end) => {
+                    ranges.push(i..end);
+                    i = end;
+                }
+                // No closing run: the backticks are plain text.
+                None => i = after,
+            }
+        }
+        ranges.sort_by_key(|r| r.start);
+        ranges
+    }
+
+    /// Texts made of the characters the scanners care about, from a
+    /// fixed seed: the same texts on every run.
+    fn texts() -> Vec<String> {
+        const ALPHABET: &[&str] = &[
+            "`",
+            "`",
+            "``",
+            "```",
+            "~~~",
+            "\n",
+            "\n",
+            "\n\n",
+            " ",
+            "   ",
+            "a",
+            "b c",
+            "[[",
+            "]]",
+            "[[x]]",
+            "|",
+            "@[",
+            "](person:",
+            ")",
+            "é",
+            "👉",
+        ];
+        let mut seed: u64 = 0x5eed_1234_abcd_ef01;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) as usize
+        };
+        let mut out = vec![
+            String::new(),
+            "`a` [[b]] `c".to_string(),
+            "[[a `x` b]] ```\ncode [[c]]\n```\n[[d]]".to_string(),
+            "`open\n```\nfenced ` closes it\n```\n".to_string(),
+            "`` a ` b `` c ` d `".to_string(),
+        ];
+        for _ in 0..4000 {
+            let len = next() % 40;
+            out.push(
+                (0..len)
+                    .map(|_| ALPHABET[next() % ALPHABET.len()])
+                    .collect(),
+            );
+        }
+        out
+    }
+
+    #[test]
+    fn the_linear_scanners_answer_as_the_old_ones_did() {
+        for text in texts() {
+            assert_eq!(code_ranges(&text), code_ranges_reference(&text), "{text:?}");
+            assert_eq!(wikilinks(&text), wikilinks_reference(&text), "{text:?}");
+            // `covered` is the old linear look, by another route.
+            let code = code_ranges(&text);
+            let inside = covered(&code);
+            for at in 0..=text.len() {
+                assert_eq!(
+                    inside(at),
+                    code.iter().any(|r| r.contains(&at)),
+                    "{text:?} at {at}"
+                );
+            }
+        }
+    }
+
+    /// Each of these took between half a minute and most of a minute on a
+    /// megabyte before (measured in the review of #361, in a release
+    /// build). The bound is loose on purpose: it tells linear from
+    /// quadratic, not fast from slow.
+    #[test]
+    fn a_megabyte_of_the_worst_input_is_scanned_at_once() {
+        const MIB: usize = 1 << 20;
+        let worst = [
+            "[[".repeat(MIB / 2),
+            "[[x]]".repeat(MIB / 5),
+            "`a` @[".repeat(MIB / 6),
+            "`a` [[".repeat(MIB / 6),
+            "@[".repeat(MIB / 2),
+            "@[x".repeat(MIB / 3) + "]",
+            "` `` ``` ".repeat(MIB / 9),
+        ];
+        let started = std::time::Instant::now();
+        for text in &worst {
+            let _ = code_ranges(text);
+            let _ = wikilinks(text);
+            let _ = crate::mention::mentions(text);
+        }
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(20), "took {took:?}");
+    }
 }
 
 #[cfg(test)]

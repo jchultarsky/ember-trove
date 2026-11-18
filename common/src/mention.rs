@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::id::{NodeId, NoteId, PersonId};
 use crate::node::NodeType;
-use crate::wikilink::{code_ranges, wikilinks};
+use crate::wikilink::{code_ranges, covered, wikilinks};
 
 /// What opens a mention, and what sits between its label and its id.
 const OPEN: &str = "@[";
@@ -52,7 +52,9 @@ pub struct Mention<'a> {
 pub fn mentions(text: &str) -> Vec<Mention<'_>> {
     let mut off_limits = code_ranges(text);
     off_limits.extend(wikilinks(text).into_iter().map(|link| link.range));
-    let skipped = |at: usize| off_limits.iter().any(|r| r.contains(&at));
+    // A binary search, not a look through every range for every `@[`:
+    // this runs on every save, on up to a megabyte.
+    let skipped = covered(&off_limits);
     let mut found = Vec::new();
     let mut from = 0;
     while let Some(rel) = text.get(from..).and_then(|rest| rest.find(OPEN)) {
@@ -75,14 +77,19 @@ pub fn mentions(text: &str) -> Vec<Mention<'_>> {
 fn token_at(text: &str, open: usize) -> Option<Mention<'_>> {
     let label_start = open + OPEN.len();
     let rest = text.get(label_start..)?;
-    let line = rest.split('\n').next().unwrap_or_default();
-    let label_len = line.find(']')?;
-    let raw_label = line.get(..label_len)?;
-    let label = raw_label.trim();
-    if label.is_empty() || raw_label.contains(['[', '`']) {
+    // The label ends at the first `]`. A `[`, a backtick or a line break
+    // before it means this is not a mention, and the look stops there:
+    // never to the end of a long line for each `@[` on it.
+    let label_len = rest.find([']', '[', '`', '\n'])?;
+    if !rest.get(label_len..)?.starts_with(']') {
         return None;
     }
-    let after_label = line.get(label_len..)?;
+    let raw_label = rest.get(..label_len)?;
+    let label = raw_label.trim();
+    if label.is_empty() {
+        return None;
+    }
+    let after_label = rest.get(label_len..)?;
     let id_and_more = after_label.strip_prefix(MIDDLE)?;
     let id = id_and_more.get(..ID_LEN)?;
     if !id_and_more.get(ID_LEN..)?.starts_with(')') {
@@ -127,6 +134,40 @@ pub fn mentioned_ids(text: &str) -> Vec<PersonId> {
         }
     }
     ids
+}
+
+/// The people `after` mentions **more often** than `before` did: the
+/// mentions a save added, when `before` is the text as it was and
+/// `after` the text being saved.
+///
+/// SECURITY: this is what "the saver made the mention" means. A token
+/// that was in the text already was put there by an earlier save,
+/// perhaps someone else's: a co-editor can plant a token with the id of
+/// another account's person (hidden in a comment, say), and that
+/// person's owner saving the body afterwards must not make it real.
+/// Counted, not just "new": the owner mentioning that person themself,
+/// with a second token, adds one and is counted.
+#[must_use]
+pub fn added_mentions(before: &str, after: &str) -> Vec<PersonId> {
+    use std::collections::HashMap;
+    let now = mentions(after);
+    if now.is_empty() {
+        return Vec::new();
+    }
+    let mut had: HashMap<PersonId, usize> = HashMap::new();
+    for m in mentions(before) {
+        *had.entry(m.person_id).or_default() += 1;
+    }
+    let mut has: HashMap<PersonId, usize> = HashMap::new();
+    let mut added = Vec::new();
+    for m in now {
+        let count = has.entry(m.person_id).or_default();
+        *count += 1;
+        if *count > had.get(&m.person_id).copied().unwrap_or(0) && !added.contains(&m.person_id) {
+            added.push(m.person_id);
+        }
+    }
+    added
 }
 
 /// `name` as a label: the characters the token's syntax needs are
@@ -405,6 +446,46 @@ mod tests {
             format!("@[Ada Lovelace](person:{ADA})")
         );
         assert_eq!(mentioned_ids(&format!("{text} {text}")), [id(ADA), id(BEA)]);
+    }
+
+    #[test]
+    fn a_save_adds_a_mention_only_when_it_has_one_more() {
+        let ada = format!("@[Ada](person:{ADA})");
+        let bea = format!("@[Bea](person:{BEA})");
+        // New in the text.
+        assert_eq!(added_mentions("", &ada), [id(ADA)]);
+        assert_eq!(
+            added_mentions("plain", &format!("{ada} {bea}")),
+            [id(ADA), id(BEA)]
+        );
+        // There already (planted, perhaps): an edit around it adds nothing,
+        // nor does moving it, relabelling it or taking one of two out.
+        let planted = format!("<!-- {ada} -->");
+        assert_eq!(
+            added_mentions(&planted, &format!("{planted} and a word")),
+            []
+        );
+        assert_eq!(
+            added_mentions(&format!("a {ada} b"), &format!("b {ada} a")),
+            []
+        );
+        assert_eq!(
+            added_mentions(&ada, &format!("@[Ada King](person:{ADA})")),
+            []
+        );
+        assert_eq!(added_mentions(&format!("{ada} {ada}"), &ada), []);
+        // One more of the same person is the saver mentioning them.
+        assert_eq!(
+            added_mentions(&planted, &format!("{planted} {ada}")),
+            [id(ADA)]
+        );
+        // Only the person who gained one.
+        assert_eq!(
+            added_mentions(&format!("{ada} {bea}"), &format!("{ada} {bea} {bea}")),
+            [id(BEA)]
+        );
+        // Nothing mentioned now: nothing added, whatever was there.
+        assert_eq!(added_mentions(&ada, "gone"), []);
     }
 
     #[test]

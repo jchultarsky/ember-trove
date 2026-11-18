@@ -42,6 +42,26 @@ pub trait NodeRepo: Send + Sync {
         actor: &ActivityActor,
     ) -> Result<Node, EmberTroveError>;
 
+    /// [`Self::create`] for a copy of the node `source` (its body is in
+    /// `req`). The copy's mentions are the copier's own that were real on
+    /// the source; nothing else in the copied text names anyone (S9).
+    async fn duplicate(
+        &self,
+        owner_id: &str,
+        req: CreateNodeRequest,
+        source: NodeId,
+    ) -> Result<Node, EmberTroveError>;
+
+    /// [`Self::update`] of the body alone, for a version put back: the
+    /// text is an old one, so no mention is made for it; the rows whose
+    /// tokens it still holds are kept (S9).
+    async fn restore_body(
+        &self,
+        id: NodeId,
+        body: String,
+        actor: &ActivityActor,
+    ) -> Result<Node, EmberTroveError>;
+
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError>;
 
     /// What deleting `ids` would destroy with them (#281): live tasks,
@@ -1061,13 +1081,20 @@ fn parse_project_state(s: &str) -> Result<ProjectState, EmberTroveError> {
 ///
 /// The body's mentions are recorded here, by the same connection (S9):
 /// one of the four statements that write text. Call it inside a
-/// transaction, so the node and its mention rows land together. The
-/// creator is the one saving, so only their own people are recorded.
+/// transaction, so the node and its mention rows land together.
+///
+/// `copy_of` says where the body came from. `None`: the creator wrote it
+/// (a new node, a capture made into one), so every mention in it is one
+/// they made, of their own people. `Some(source)`: it is a copy of that
+/// node's body, and only the copier's own mentions that were real there
+/// are real here; a token that was never real stays plain text.
 pub(crate) async fn insert_node(
     conn: &mut sqlx::PgConnection,
     owner_id: &str,
     req: &CreateNodeRequest,
+    copy_of: Option<NodeId>,
 ) -> Result<Node, EmberTroveError> {
+    let mentioned = common::mention::mentioned_ids(req.body.as_deref().unwrap_or_default());
     let slug = slugify(&req.title);
     let node_type_str = req.node_type.as_str();
     let status_str = req.status.as_ref().unwrap_or(&NodeStatus::Draft).as_str();
@@ -1109,13 +1136,14 @@ pub(crate) async fn insert_node(
     })?;
 
     let node = row.into_node()?;
-    super::mention::sync_body_on(
-        conn,
-        node.id,
-        node.body.as_deref().unwrap_or_default(),
-        owner_id,
-    )
-    .await?;
+    match copy_of {
+        None => {
+            super::mention::sync_body_on(conn, node.id, &mentioned, &mentioned, owner_id).await?
+        }
+        Some(source) => {
+            super::mention::copy_body_rows_on(conn, source, node.id, &mentioned, owner_id).await?;
+        }
+    }
     Ok(node)
 }
 
@@ -1156,6 +1184,175 @@ fn order_by(sort: NodeSort) -> &'static str {
     }
 }
 
+/// What a save of a body does about mentions it holds no row for (S9).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mentions {
+    /// An edit: a row is made for each mention this save adds, of the
+    /// saver's own people.
+    Added,
+    /// A version put back: rows are kept or dropped with their tokens,
+    /// and none is made. The text is an old one, perhaps a co-editor's.
+    KeepOnly,
+}
+
+impl PgNodeRepo {
+    /// [`NodeRepo::create`] and [`NodeRepo::duplicate`]: the node and its
+    /// mention rows, in one transaction.
+    async fn create_from(
+        &self,
+        owner_id: &str,
+        req: &CreateNodeRequest,
+        copy_of: Option<NodeId>,
+    ) -> Result<Node, EmberTroveError> {
+        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("create node failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let node = insert_node(&mut tx, owner_id, req, copy_of).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(node)
+    }
+
+    /// [`NodeRepo::update`] and [`NodeRepo::restore_body`].
+    async fn save(
+        &self,
+        id: NodeId,
+        req: UpdateNodeRequest,
+        actor: &ActivityActor,
+        mentions: Mentions,
+    ) -> Result<Node, EmberTroveError> {
+        let status_str = req.status.as_ref().map(|v| v.as_str());
+        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("update node failed: {e}"));
+        // Read before the transaction opens: the scan is the save's own
+        // CPU, and must not be spent holding a connection and the row.
+        let mentioned = req.body.as_deref().map(common::mention::mentioned_ids);
+
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // Lock the row and read the status label and the lifecycle it had:
+        // the History entries need the old values, and the lock makes "no
+        // row" mean 404 and a failed precondition below mean 412, with no
+        // second lookup. NO KEY UPDATE is the lock an UPDATE that leaves
+        // the key alone takes anyway, so it doesn't block FK inserts
+        // (tags, attachments, activity) meanwhile.
+        // The body as it was, too (S9): what this save adds to it is what
+        // its saver may make a mention of.
+        let Some((old_status, old_lifecycle, old_body)) =
+            sqlx::query_as::<_, (Option<String>, String, Option<String>)>(
+                "SELECT project_status, status::text, body FROM nodes WHERE id = $1 \
+                 FOR NO KEY UPDATE",
+            )
+            .bind(id.0)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?
+        else {
+            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
+        };
+
+        let row = sqlx::query_as::<_, NodeRow>(&format!(
+            r#"
+            UPDATE nodes SET
+                title    = COALESCE($2, title),
+                body     = COALESCE($3, body),
+                metadata = COALESCE($4, metadata),
+                status   = COALESCE($5::node_status, status),
+                -- Three states (#143): $6 false = leave it; true = set to $7,
+                -- where NULL clears.
+                project_status = CASE WHEN $6 THEN $7 ELSE project_status END
+            -- #161: with a precondition, apply only to the version the
+            -- client saw. The row is locked above, so a concurrent save
+            -- waits for this one and then sees the new version: of two
+            -- saves sent on one version only the first applies.
+            WHERE id = $1 AND ($8::timestamptz IS NULL OR updated_at = $8)
+            RETURNING {cols}
+            "#,
+            cols = node_cols(""),
+        ))
+        .bind(id.0)
+        .bind(&req.title)
+        .bind(&req.body)
+        .bind(&req.metadata)
+        .bind(status_str)
+        .bind(req.project_status.is_some())
+        .bind(req.project_status.clone().flatten())
+        .bind(req.expected_updated_at)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db_err)
+                if db_err.constraint() == Some("nodes_owner_title_unique") =>
+            {
+                EmberTroveError::AlreadyExists(format!(
+                    "a node named \"{}\" already exists",
+                    req.title.as_deref().unwrap_or("")
+                ))
+            }
+            _ => EmberTroveError::Internal(format!("update node failed: {e}")),
+        })?;
+        // The row exists and is locked, so no row here can only be a failed
+        // precondition. Only a caller that passed authorization reaches the
+        // repo, so telling 412 from 404 leaks nothing.
+        let Some(row) = row else {
+            return Err(EmberTroveError::PreconditionFailed(
+                "the node changed since it was loaded".to_string(),
+            ));
+        };
+
+        if row.project_status != old_status {
+            let meta = actor.metadata_with(serde_json::json!({
+                "from": old_status,
+                "to": row.project_status,
+            }));
+            record_in(
+                &mut tx,
+                id,
+                &actor.subject_id,
+                ActivityAction::StatusChanged,
+                meta,
+            )
+            .await?;
+        }
+        // S6d (owner decision, 2026-11-14): a move between draft,
+        // published and archived is History too, on every kind. This is
+        // the only statement that writes `nodes.status`; a restore puts
+        // the log back with the nodes.
+        if row.status != old_lifecycle {
+            let meta = actor.metadata_with(serde_json::json!({
+                "from": old_lifecycle,
+                "to": row.status,
+            }));
+            record_in(
+                &mut tx,
+                id,
+                &actor.subject_id,
+                ActivityAction::LifecycleChanged,
+                meta,
+            )
+            .await?;
+        }
+
+        // S9: the body's mentions, in this transaction. One of the four
+        // statements that write text. A save that leaves the body alone
+        // leaves the rows alone.
+        if let Some(mentioned) = &mentioned {
+            // SECURITY: rows are made only for mentions this save adds
+            // (`added_mentions`), of the saver's own people. A token that
+            // was in the body already may be a co-editor's plant with
+            // the id of this saver's person. A restored version adds
+            // none: its text is not something the restorer typed.
+            let made = match mentions {
+                Mentions::Added if !mentioned.is_empty() => common::mention::added_mentions(
+                    old_body.as_deref().unwrap_or_default(),
+                    row.body.as_deref().unwrap_or_default(),
+                ),
+                Mentions::Added | Mentions::KeepOnly => Vec::new(),
+            };
+            super::mention::sync_body_on(&mut tx, id, mentioned, &made, &actor.subject_id).await?;
+        }
+
+        tx.commit().await.map_err(db_err)?;
+        row.into_node()
+    }
+}
+
 #[async_trait]
 impl NodeRepo for PgNodeRepo {
     async fn create(
@@ -1163,11 +1360,33 @@ impl NodeRepo for PgNodeRepo {
         owner_id: &str,
         req: CreateNodeRequest,
     ) -> Result<Node, EmberTroveError> {
-        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("create node failed: {e}"));
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
-        let node = insert_node(&mut tx, owner_id, &req).await?;
-        tx.commit().await.map_err(db_err)?;
-        Ok(node)
+        self.create_from(owner_id, &req, None).await
+    }
+
+    async fn duplicate(
+        &self,
+        owner_id: &str,
+        req: CreateNodeRequest,
+        source: NodeId,
+    ) -> Result<Node, EmberTroveError> {
+        self.create_from(owner_id, &req, Some(source)).await
+    }
+
+    async fn restore_body(
+        &self,
+        id: NodeId,
+        body: String,
+        actor: &ActivityActor,
+    ) -> Result<Node, EmberTroveError> {
+        let req = UpdateNodeRequest {
+            title: None,
+            body: Some(body),
+            metadata: None,
+            status: None,
+            project_status: None,
+            expected_updated_at: None,
+        };
+        self.save(id, req, actor, Mentions::KeepOnly).await
     }
 
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
@@ -1369,126 +1588,7 @@ impl NodeRepo for PgNodeRepo {
         req: UpdateNodeRequest,
         actor: &ActivityActor,
     ) -> Result<Node, EmberTroveError> {
-        let status_str = req.status.as_ref().map(|v| v.as_str());
-        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("update node failed: {e}"));
-
-        let mut tx = self.pool.begin().await.map_err(db_err)?;
-        // Lock the row and read the status label and the lifecycle it had:
-        // the History entries need the old values, and the lock makes "no
-        // row" mean 404 and a failed precondition below mean 412, with no
-        // second lookup. NO KEY UPDATE is the lock an UPDATE that leaves
-        // the key alone takes anyway, so it doesn't block FK inserts
-        // (tags, attachments, activity) meanwhile.
-        let Some((old_status, old_lifecycle)) = sqlx::query_as::<_, (Option<String>, String)>(
-            "SELECT project_status, status::text FROM nodes WHERE id = $1 FOR NO KEY UPDATE",
-        )
-        .bind(id.0)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db_err)?
-        else {
-            return Err(EmberTroveError::NotFound(format!("node {id} not found")));
-        };
-
-        let row = sqlx::query_as::<_, NodeRow>(&format!(
-            r#"
-            UPDATE nodes SET
-                title    = COALESCE($2, title),
-                body     = COALESCE($3, body),
-                metadata = COALESCE($4, metadata),
-                status   = COALESCE($5::node_status, status),
-                -- Three states (#143): $6 false = leave it; true = set to $7,
-                -- where NULL clears.
-                project_status = CASE WHEN $6 THEN $7 ELSE project_status END
-            -- #161: with a precondition, apply only to the version the
-            -- client saw. The row is locked above, so a concurrent save
-            -- waits for this one and then sees the new version: of two
-            -- saves sent on one version only the first applies.
-            WHERE id = $1 AND ($8::timestamptz IS NULL OR updated_at = $8)
-            RETURNING {cols}
-            "#,
-            cols = node_cols(""),
-        ))
-        .bind(id.0)
-        .bind(&req.title)
-        .bind(&req.body)
-        .bind(&req.metadata)
-        .bind(status_str)
-        .bind(req.project_status.is_some())
-        .bind(req.project_status.clone().flatten())
-        .bind(req.expected_updated_at)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db_err)
-                if db_err.constraint() == Some("nodes_owner_title_unique") =>
-            {
-                EmberTroveError::AlreadyExists(format!(
-                    "a node named \"{}\" already exists",
-                    req.title.as_deref().unwrap_or("")
-                ))
-            }
-            _ => EmberTroveError::Internal(format!("update node failed: {e}")),
-        })?;
-        // The row exists and is locked, so no row here can only be a failed
-        // precondition. Only a caller that passed authorization reaches the
-        // repo, so telling 412 from 404 leaks nothing.
-        let Some(row) = row else {
-            return Err(EmberTroveError::PreconditionFailed(
-                "the node changed since it was loaded".to_string(),
-            ));
-        };
-
-        if row.project_status != old_status {
-            let meta = actor.metadata_with(serde_json::json!({
-                "from": old_status,
-                "to": row.project_status,
-            }));
-            record_in(
-                &mut tx,
-                id,
-                &actor.subject_id,
-                ActivityAction::StatusChanged,
-                meta,
-            )
-            .await?;
-        }
-        // S6d (owner decision, 2026-11-14): a move between draft,
-        // published and archived is History too, on every kind. This is
-        // the only statement that writes `nodes.status`; a restore puts
-        // the log back with the nodes.
-        if row.status != old_lifecycle {
-            let meta = actor.metadata_with(serde_json::json!({
-                "from": old_lifecycle,
-                "to": row.status,
-            }));
-            record_in(
-                &mut tx,
-                id,
-                &actor.subject_id,
-                ActivityAction::LifecycleChanged,
-                meta,
-            )
-            .await?;
-        }
-
-        // S9: the body's mentions, in this transaction. One of the four
-        // statements that write text. The saver is the account making
-        // this save: a co-editor's save keeps the mentions already
-        // there and can add only their own people. A save that leaves
-        // the body alone leaves the rows alone.
-        if req.body.is_some() {
-            super::mention::sync_body_on(
-                &mut tx,
-                id,
-                row.body.as_deref().unwrap_or_default(),
-                &actor.subject_id,
-            )
-            .await?;
-        }
-
-        tx.commit().await.map_err(db_err)?;
-        row.into_node()
+        self.save(id, req, actor, Mentions::Added).await
     }
 
     async fn delete(&self, id: NodeId) -> Result<(), EmberTroveError> {

@@ -1614,17 +1614,15 @@ async fn restore_version(
             "version does not belong to this node".to_string(),
         ));
     }
-    let req = UpdateNodeRequest {
-        title: None,
-        body: Some(version.body.clone()),
-        metadata: None,
-        status: None,
-        project_status: None,
-        expected_updated_at: None,
-    };
+    // `restore_body`, not `update`: an old version's text is not
+    // something the caller typed, so it makes no mention real (S9).
     let node = state
         .nodes
-        .update(NodeId(id), req, &ActivityActor::from_claims(&claims))
+        .restore_body(
+            NodeId(id),
+            version.body.clone(),
+            &ActivityActor::from_claims(&claims),
+        )
         .await?;
     sync_wikilinks(&state, node.id, &node.owner_id, &version.body).await?;
     // Snapshot the restored body, awaited like a save's (#281, 1.12): the
@@ -1697,7 +1695,10 @@ async fn duplicate_node(
         project_status: copied_status(&src),
         template_id: None,
     };
-    let dup = state.nodes.create(&claims.sub, req).await?;
+    // `duplicate`, not `create`: the copied text's mentions are real
+    // in the copy only where they were real, and the caller's own, on
+    // the source (S9).
+    let dup = state.nodes.duplicate(&claims.sub, req, NodeId(id)).await?;
 
     // Auto-grant Owner permission for the duplicating user.
     let owner_req = GrantPermissionRequest {
