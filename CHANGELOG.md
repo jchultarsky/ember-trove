@@ -31,13 +31,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     blocked), nothing is carried over, and the app says so.
   - The same phone number in another format is not added twice. An
     address that belongs to a third person is left out, and said.
-  - **On a Project (or any node that carries people)** the notice has
-    "Add {name} here" instead: the person who has the address is put on
-    the node with the role and note you typed, and no second person is
-    made. The other details you typed are not added to them, and the
-    notice says so. Someone already there is said, not offered. The
-    dialog closes only once the add has gone through, so a failure
-    loses nothing.
+  - **On a Project** the notice has "Add {name} here" instead: the
+    person who has the address is put on the Project with the role and
+    note you typed, and no second person is made. The other details you
+    typed are not added to them and are not kept, and the notice says
+    so. Someone already there is said, not offered. The dialog closes
+    only once the add has gone through, so a failure loses nothing; an
+    answer that comes after you cancelled and opened the dialog again
+    leaves the new one alone.
   - Editing a saved person and adding another saved person's address
     is still refused; the notice now says that merging two saved people
     isn't available yet.
@@ -49,6 +50,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   keyboard goes to the marked address, and in a short window that
   scrolled the notice away. When the marked row doesn't fit under the
   notice, the keyboard now goes to the notice, and Tab leads on from it.
+- The person picker on a node is no longer rebuilt, taking the keyboard
+  with it, each time the node's people are read again.
 - A person save the API refuses for a reason it explains (a list over
   its limit) reads as that sentence, not "server error 422".
 

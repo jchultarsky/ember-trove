@@ -505,6 +505,30 @@ pub fn PersonEditor(
             std::time::Duration::ZERO,
         );
     };
+    // The keyboard was on a control that is gone (a notice's button whose
+    // notice was replaced): put it on the form's alert, which says what
+    // happened, instead of leaving it on the page behind the dialog.
+    let focus_alert_if_lost = move || {
+        set_timeout(
+            move || {
+                use wasm_bindgen::JsCast;
+                let lost = document()
+                    .active_element()
+                    .is_none_or(|el| el.tag_name() == "BODY");
+                if !lost {
+                    return;
+                }
+                let alert = document()
+                    .get_element_by_id(form_id)
+                    .and_then(|form| form.query_selector("[role=\"alert\"]").ok().flatten())
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+                if let Some(alert) = alert {
+                    let _ = alert.focus();
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+    };
     let position_hint_id = StoredValue::new(format!("{form_id}-position-hint"));
     let review_id = StoredValue::new(format!("{form_id}-carry-review"));
     // "Added" under a field the carry-over filled, while the field still
@@ -702,7 +726,11 @@ pub fn PersonEditor(
             error.set(None);
             flagged.set(Flagged::default());
             if let Some(a) = add_here {
+                // A new opening owes nothing to an add pressed in an
+                // earlier one, still on its way or failed.
                 a.failed.set(None);
+                a.busy.set(false);
+                a.opening.update(|n| *n += 1);
             }
             if restoring.get_value() {
                 restoring.set_value(false);
@@ -801,6 +829,8 @@ pub fn PersonEditor(
         error.set(Some(
             "That address is no longer in this form. Save again.".to_string(),
         ));
+        // The notice went, and the pressed button with it.
+        focus_alert_if_lost();
     };
     // S8b, on a node: "add them here". The panel does the add, with the
     // Role and Note typed below; here only a stale notice is refused.
@@ -814,6 +844,17 @@ pub fn PersonEditor(
         }),
         ..a
     });
+    // An answer can replace the pressed button ("Already here."): the
+    // keyboard then goes to the notice.
+    if let Some(a) = add_here {
+        Effect::new(move |seen: Option<(Option<String>, Vec<PersonId>)>| {
+            let now = (a.failed.get(), a.already.get());
+            if seen.is_some_and(|was| was != now) && open.get_untracked() {
+                focus_alert_if_lost();
+            }
+            now
+        });
+    }
 
     // S8b: "add what I typed to them". Synchronous: the typed input goes
     // into the hand-over and the page goes to that person, whose dialog
@@ -1163,12 +1204,16 @@ pub struct AddHere {
     pub busy: RwSignal<bool>,
     /// Why the last add failed, in words.
     pub failed: RwSignal<Option<String>>,
+    /// Counts the dialog's openings; the editor bumps it. An answer that
+    /// comes late acts on the dialog only if it is still the opening its
+    /// button was pressed in.
+    pub opening: RwSignal<u32>,
 }
 
 /// The look of a button the notice offers beside a person.
 const OFFER_BUTTON: &str = "rounded-md px-2 py-0.5 text-xs text-stone-700 dark:text-stone-200 \
      border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 \
-     cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed";
+     cursor-pointer aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
 
 /// What the refusal's notice offers for each person it names, besides
 /// opening them (S8b).
@@ -1239,7 +1284,11 @@ pub fn EmailTakenNotice(matches: Vec<DuplicateMatch>, offer: TakenOffer) -> impl
                                 let person = person.clone();
                                 view! {
                                     <button type="button" class=OFFER_BUTTON data-testid="add-here"
-                                        disabled=move || a.busy.get()
+                                        // Not `disabled`: that would drop the
+                                        // keyboard from the pressed button. The
+                                        // panel ignores a press while one is on
+                                        // its way.
+                                        aria-disabled=move || if a.busy.get() { "true" } else { "false" }
                                         on:click=move |_| a.on_add.run(person.clone())>
                                         {label.clone()}
                                     </button>
@@ -1275,9 +1324,9 @@ pub fn EmailTakenNotice(matches: Vec<DuplicateMatch>, offer: TakenOffer) -> impl
                 <p class="text-xs text-stone-600 dark:text-stone-300">
                     {match offer {
                         TakenOffer::AddHere(_) => {
-                            "Add them here: the role and note below go with them, the other \
-                             details you typed do not. Or open them (what you typed is kept), \
-                             or take the address off."
+                            "Add them here: the role and note below go with them. The other \
+                             details you typed are not added to them and are not kept. Or \
+                             open them (what you typed is kept), or take the address off."
                         }
                         TakenOffer::CarryOver(_) => {
                             "Add what you typed to them (you review it before anything is \
@@ -1285,8 +1334,8 @@ pub fn EmailTakenNotice(matches: Vec<DuplicateMatch>, offer: TakenOffer) -> impl
                              is kept."
                         }
                         TakenOffer::OnNode => {
-                            "Cancel and pick them from the list to add them here, or take the \
-                             address off. What you typed is kept if you open them."
+                            "Open them (what you typed is kept), or take the address off. \
+                             People can\u{2019}t be added to this node from here."
                         }
                         TakenOffer::OpenOnly => {
                             "Open them, or take the address off here. Merging two saved \

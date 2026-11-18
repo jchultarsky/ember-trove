@@ -357,7 +357,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   new alert in that form needs `tabindex="-1"`.
 - **What the notice offers is a `TakenOffer`** (S8b, #357), chosen by
   the dialog's `PersonForm`: `CarryOver` for a new person, `AddHere` on
-  a node, `OpenOnly` for an edit (merging two saved people is S8c).
+  a node (`OnNode`, which offers opening only, when the reader may not
+  add people there), `OpenOnly` for an edit (merging two saved people
+  is S8c).
   - **Carry-over** is `common::person_carry::carry_into`, pure. The
     typed input travels in memory (`draft::PersonHandOff`, taken once
     when the other person's dialog mounts) and is merged in the restore
@@ -379,6 +381,14 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     (`NodePeoplePanel::add_existing`) and closes the dialog only once it
     has succeeded. Offered only when the reader may add people there
     (`can_add`); a person already there is said, not offered.
+  - One set of signals serves every opening of that dialog, so an
+    answer acts on it only if it is still the opening the button was
+    pressed in (`AddHere.opening`, bumped by the editor). Anything else
+    that awaits and then touches a dialog checks the same way.
+  - A button that starts a request is `aria-disabled`, not `disabled`,
+    while it runs (a disabled button drops the keyboard), with a guard
+    in the handler. When an answer removes the focused control, the
+    keyboard goes to the form's alert (`focus_alert_if_lost`).
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before
