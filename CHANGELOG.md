@@ -6,6 +6,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Only a Project's owner moves a task to another person's Project**
+  (#351; ONTOLOGY §14, §9.3; owner decision of 2026-11-18). Edit rights
+  on both Projects used to be enough, so someone a Project was shared
+  with could move its tasks to a Project of their own. They kept the
+  task after the share ended, and as the owner of its new Project they
+  were told how many of its prerequisites they can't see (the gap
+  3.29.0 left open). Such a move is now refused with a 403 and nothing
+  is written. Moving a task between Projects of the same owner is
+  unchanged. "The owner" is the account the Project belongs to; an
+  admin may still move any task.
+- **The production proxy's access log no longer keeps what was typed
+  into a search.** It wrote each request's whole first line, query
+  string included (`/api/people?q=…`, `/api/search?q=…`, and the sign-in
+  callback's `code`), and the Referer. It now writes the path alone.
+  nginx's error log still names the request line of a request it
+  refuses or fails. The proxies of a local or Kubernetes setup keep
+  their image's default format.
+- **Postgres logs an error's message and not its detail**
+  (`log_error_verbosity=terse`). A CHECK or a unique index that refused
+  a row wrote the row, or its key, to the database's log: a Person's
+  contact details on a restore of a bad archive, a node's title on a
+  duplicate. A value quoted in the message itself, and the text of a
+  statement written with literals, are still logged; the app sends its
+  values as parameters. Also gone from that log: which rows deadlocked,
+  and which trigger raised.
+  - **Deploying this restarts the database** for a few seconds: its
+    command line changed, so Compose recreates its container. The data
+    is on its volume.
+
+### Changed
+- Data health's "Move to a Project" says a refusal in the API's own
+  words, not "server error 403".
+
 ## [3.29.0] - 2026-11-17
 
 ### Security

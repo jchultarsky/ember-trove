@@ -652,9 +652,19 @@ cargo check && cargo clippy -- -D warnings
     health lists it (`task_on_non_project`). A test may still put a task
     on a non-Project through the repo or raw SQL; it can't make one with
     no node.
-  - Moving a task needs editor rights on both Projects. An editor of a
-    shared Project can therefore move a task to a Project only they see
-    (noted for the owner on #204, 2026-11-16; not changed).
+  - Moving a task needs editor rights on both Projects, and **to a
+    Project of another account, the owner of the Project it leaves**
+    (#351, owner decision 2026-11-18): `require_owner_to_move_out` in
+    routes/tasks.rs, after the rights on both nodes and the kind gate.
+    "The owner" is `nodes.owner_id` (`require_resource_owner`: that
+    account, or an admin), not anyone with an Owner grant. Until then
+    an editor of a shared Project could take its tasks to a Project of
+    their own: they kept the task after the share ended, and as its new
+    node's owner were told how many of its prerequisites they can't see.
+    `update_task` is the only write that changes a task's node; anything
+    new that does (a bulk move, an import) calls the same check.
+    `only_its_projects_owner_moves_a_task_to_another_accounts_project`
+    holds it: the stub panics if such a write reaches the repo.
 - Who may change a task is `require_task_editor` (routes/tasks.rs): an
   editor of its node; an admin always. `TaskRepo::reorder` applies the
   same rule in SQL and skips the rest. There is no other case: until S5c
@@ -977,15 +987,12 @@ cargo check && cargo clippy -- -D warnings
   has no owner half, so an editor of a shared child is told of a home
   that is the owner's own private node, and may free the child. Owner
   decision of #228; raised again with the owner in the review of #349.
-- **Open (review of #349): the task rule follows the task.**
-  `not_shown_sql` reads the owner of the task's *current* node, and an
-  editor may move a task to a Project of their own
-  (`update_task`: editor on both). They are then that node's owner, are
-  told the count and may clear it. They could already delete the task;
-  the count is what is new to them. It closes with the owner's decision
-  on who may move a task out of a shared Project. Don't "fix" it by
-  refusing the move when hidden prerequisites exist: the refusal is the
-  same answer.
+- **The task rule follows the task**, and only its Project's owner
+  moves it to another account (#351; "Task rules"). `not_shown_sql`
+  reads the owner of the task's *current* node. An editor could once
+  move a task to a Project of their own and so become that owner; the
+  move is refused now. Never gate a move on whether hidden
+  prerequisites exist: that refusal would be the count's answer.
 
 ## Security rules from the 2026-11-10 audit
 
@@ -993,8 +1000,8 @@ cargo check && cargo clippy -- -D warnings
   decision). `require_task_editor`: an editor of the task's node, never
   its owner as such. Since S5c a task can't be taken off its node either
   (422): that was one way to keep a task after a share ended. A move to
-  another Project the editor may edit is the other, and is still allowed
-  (the owner's to decide; see "Task rules"). Notes:
+  a Project of the editor's own was the other, refused since #351 (see
+  "Task rules"). Notes:
   `repo::note::author_may_write` (author **and** still an editor) for
   update, `may_remove` (that, or the node's owner, or an admin) for
   delete and restore; the routes pass a `NoteActor`. The owner's feeds
@@ -1065,6 +1072,30 @@ cargo check && cargo clippy -- -D warnings
   Tests in `routes/mod.rs` read `deploy/nginx.prod.conf` and hold this
   and the limits.
 - **`release.yml` prints no API log lines**: its log is public.
+- **The production logs don't keep what a person typed** (2026-11-18).
+  - The proxy's access log (`deploy/nginx.prod.conf`) is the `noquery`
+    format: the path, never the query string (`/api/people?q=…`, the
+    sign-in callback's `code`) nor the Referer. Each `server` block
+    names it, because that replaces the image's default.
+    `the_proxys_access_log_keeps_no_query_string` holds it. Only this
+    proxy: `deploy/nginx.conf` (local and e2e) and the Kubernetes
+    ingress keep their defaults.
+  - Still true: nginx's error log names the request line of a request
+    it refuses or fails, and `/api/nodes/slug/{slug}` has a slug in its
+    path. A new route that takes personal text takes it in the body
+    where it can, not in the query string.
+  - Postgres runs with `log_error_verbosity=terse`
+    (`the_production_database_logs_errors_tersely`): no DETAIL ("Failing
+    row contains", "Key (…)=(…)"), HINT or CONTEXT. What it still logs:
+    a value quoted in an error's own message (a bad cast), and the text
+    of a failed statement, literals included: so never build SQL with a
+    value in its text, in a migration or a backfill either. What it
+    costs: the log no longer says which rows deadlocked or which
+    trigger raised, and the API logs only sqlx's message, so a
+    constraint's detail is recorded nowhere.
+  - A change to the database's command line in the compose file makes
+    the deploy recreate its container (`api` depends on it): a restart
+    of a few seconds. Take the VM snapshot first, as for a migration.
 
 ## Admin permission model
 

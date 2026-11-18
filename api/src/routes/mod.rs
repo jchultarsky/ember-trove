@@ -371,6 +371,78 @@ mod tests {
         }
     }
 
+    /// SECURITY (2026-11-18): the production proxy's access log holds a
+    /// request's path and never its query string, which carries what a
+    /// person typed into a search (`/api/people?q=…`) and the sign-in
+    /// callback's `code`. The Referer is left out too: it is one more
+    /// URL. Every `server` names the format, because an `access_log`
+    /// there replaces the image's default, which writes the whole request
+    /// line.
+    #[test]
+    fn the_proxys_access_log_keeps_no_query_string() {
+        let conf = include_str!("../../../deploy/nginx.prod.conf");
+        let code: Vec<&str> = conf
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .collect();
+        let servers = code.iter().filter(|l| **l == "server {").count();
+        let logs: Vec<&&str> = code
+            .iter()
+            .filter(|l| l.starts_with("access_log"))
+            .collect();
+        assert_eq!(servers, 2, "the http and the https server");
+        assert_eq!(logs.len(), servers, "one access_log per server: {logs:?}");
+        for line in logs {
+            assert_eq!(line.trim(), "access_log /var/log/nginx/access.log noquery;");
+        }
+        // The format itself, up to the `;` that ends it.
+        let all = code.join("\n");
+        let start = all.find("log_format noquery").expect("the format");
+        let format = &all[start..start + all[start..].find(';').expect("its end")];
+        for kept_out in [
+            "$args",
+            "$query_string",
+            "$is_args",
+            "$http_referer",
+            "$arg_",
+        ] {
+            assert!(!format.contains(kept_out), "{kept_out} in {format}");
+        }
+        // `$request` is the whole first line and `$request_uri` the path
+        // with its query: of that family only the method and the time.
+        for (at, _) in format.match_indices("$request") {
+            let rest = &format[at + "$request".len()..];
+            assert!(
+                ["_method", "_time"].iter().any(|ok| rest.starts_with(ok)),
+                "$request{} in {format}",
+                rest.chars().take(12).collect::<String>()
+            );
+        }
+        assert!(format.contains("$request_method $uri "), "{format}");
+        assert_eq!(all.matches("log_format").count(), 1, "no other format");
+    }
+
+    /// SECURITY (2026-11-18): Postgres logs an error's message and never
+    /// its DETAIL. A CHECK that refuses a row writes "Failing row contains
+    /// (…)" there otherwise: a Person's contact details, on a restore of a
+    /// bad archive. The flag is on the production database's command line.
+    #[test]
+    fn the_production_database_logs_errors_tersely() {
+        let compose = include_str!("../../../deploy/docker-compose.prod.yml");
+        let args: Vec<&str> = compose
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("- "))
+            .map(|l| l.trim_start_matches("- ").trim())
+            .collect();
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-c" && w[1] == "log_error_verbosity=terse"),
+            "{args:?}"
+        );
+    }
+
     /// SECURITY: the sign-in routes keep their own, tighter nginx limits.
     #[test]
     fn nginx_auth_limits_stay_tighter_than_the_api_limit() {
