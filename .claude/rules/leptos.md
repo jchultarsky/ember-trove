@@ -395,7 +395,7 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
      at the moment of decision.
   3. **Word only** for a dialog's secondary Cancel, segmented tabs and filter
      pills, menu items, and links inside sentences or notices ("Show 3
-     more…", "Save anyway", Undo).
+     more…", Undo).
 
   A new glyph renders as its raw name until it's in the font subset: run
   `scripts/refresh-icon-font.sh` after adding one, and commit the font,

@@ -98,7 +98,11 @@ BEGIN
 END;
 $$;
 
+-- On every update, not only `UPDATE OF emails`: a column list looks at the
+-- statement's SET clause, so a BEFORE trigger that changed `emails` in an
+-- update of something else would pass unseen. An update that adds no
+-- address returns at the first check, before any lock.
 DROP TRIGGER IF EXISTS people_email_identity ON people;
 CREATE TRIGGER people_email_identity
-    AFTER INSERT OR UPDATE OF emails, owner_id ON people
+    AFTER INSERT OR UPDATE ON people
     FOR EACH ROW EXECUTE FUNCTION people_email_identity();

@@ -125,6 +125,21 @@ fn shared_emails_warning(people: &[common::person::Person]) -> Option<String> {
     })
 }
 
+/// Everything the restore preview says about an archive's data, in the
+/// order it is shown. Each line is a count and names nothing. One
+/// function, so a test can hold that a line is really asked for: a
+/// warning that exists and is never called says nothing to anyone.
+fn warnings_about(data: &BackupData) -> Vec<String> {
+    let mut warnings = Vec::new();
+    warnings.extend(loose_tasks_warning(&data.tasks));
+    warnings.extend(shared_emails_warning(&data.people));
+    warnings.extend(restorable_dependencies(data).warning());
+    warnings.extend(edge_rules_warning(data));
+    warnings.extend(folded_links_warnings(data));
+    warnings.extend(webhooks_warning(data.webhooks_switched_off()));
+    warnings
+}
+
 /// The restore preview's line about them: a count, never a title.
 fn loose_tasks_warning(tasks: &[common::backup::BackupTask]) -> Option<String> {
     let n = loose_tasks(tasks);
@@ -550,12 +565,7 @@ pub async fn preview_restore(
     match extract_data(&archive_bytes) {
         Ok(data) => {
             entity_counts = counts_as_restored(entity_counts, &data.notes, &data.tasks);
-            warnings.extend(loose_tasks_warning(&data.tasks));
-            warnings.extend(shared_emails_warning(&data.people));
-            warnings.extend(restorable_dependencies(&data).warning());
-            warnings.extend(edge_rules_warning(&data));
-            warnings.extend(folded_links_warnings(&data));
-            warnings.extend(webhooks_warning(data.webhooks_switched_off()));
+            warnings.extend(warnings_about(&data));
         }
         Err(e) => {
             tracing::warn!("restore preview couldn't read data.json: {e:?}");
@@ -756,6 +766,17 @@ pub(crate) async fn restore_into(
     // the nodes, the people themselves did not). A restore used to leave
     // them, so the live database's own survived next to the archive's.
     // (Every task has a node since S5c, so the cascade took them all.)
+    //
+    // S8a: no one writes a person while the registry is being replaced.
+    // A save that landed between this delete and the inserts below saw
+    // none of the archive's people, so the email rule (migration 056)
+    // had nothing to refuse it by, and it made a pair with one of them.
+    // Writers wait for the restore and are judged against what it
+    // restored; readers are not held up.
+    sqlx::query("LOCK TABLE people IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("lock people failed: {e}")))?;
     for (what, sql) in [
         ("captures", "DELETE FROM captures"),
         ("people", "DELETE FROM people"),
@@ -1823,6 +1844,57 @@ mod tests {
                  each node keeps its oldest home."
                     .to_string(),
             ]
+        );
+    }
+
+    /// S8a (§7.1): an archive may hold people who share an address, from
+    /// before the rule. The preview says how many, and nothing else:
+    /// SECURITY: no name and no address.
+    #[test]
+    fn the_preview_counts_people_who_share_an_address_and_names_none() {
+        let person = |n: u128, owner: &str, name: &str, emails: &[&str]| {
+            serde_json::json!({
+                "id": Uuid::from_u128(n), "owner_id": owner, "display_name": name,
+                "company": null, "position": null, "phones": [], "addresses": [], "notes": null,
+                "emails": emails.iter().map(|e| serde_json::json!({ "value": e })).collect::<Vec<_>>(),
+                "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+            })
+        };
+        let data = |people: Vec<serde_json::Value>| -> BackupData {
+            serde_json::from_value(serde_json::json!({
+                "nodes": [], "edges": [], "tags": [], "notes": [],
+                "tasks": [], "attachments": [], "people": people,
+            }))
+            .expect("backup data")
+        };
+        // Nobody shares: nothing is said.
+        let apart = data(vec![
+            person(1, "a", "Ada", &["ada@example.com"]),
+            person(2, "b", "Bea", &["ada@example.com"]),
+        ]);
+        assert!(
+            warnings_about(&apart).is_empty(),
+            "{:?}",
+            warnings_about(&apart)
+        );
+        // Two of one account do: the preview, as a whole, says so.
+        let pair = data(vec![
+            person(1, "a", "Ada Lovelace", &["ada@example.com"]),
+            person(2, "a", "A. L.", &[" ADA@example.com"]),
+            person(3, "a", "Charles", &["cb@example.com"]),
+        ]);
+        let said = warnings_about(&pair);
+        assert_eq!(
+            said,
+            vec![
+                "2 people in this backup share an email address with another person. They \
+                 will come back as they are, and Data health will list them."
+                    .to_string()
+            ]
+        );
+        assert!(
+            !said[0].contains('@') && !said[0].contains("Ada"),
+            "{said:?}"
         );
     }
 

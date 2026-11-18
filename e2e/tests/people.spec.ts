@@ -129,6 +129,15 @@ test('the registry: one editor for new and edit, and an address is one person’
     await expect(page.getByTestId('person-card').getByRole('heading', { name: originalName })).toBeVisible();
     const mine: Person[] = await (await request.get(`/api/people?q=${encodeURIComponent(own)}`)).json();
     expect(mine[0].emails.map((e) => e.value)).toEqual([own]);
+    // What was typed was not lost by opening them: back on the first
+    // person the dialog reopens with it (#170), and Discard ends it.
+    await page.goBack();
+    await expect(editor(page).getByTestId('form-draft-recovery')).toBeVisible();
+    await expect(
+      editor(page).getByTestId('email-row').nth(1).getByRole('textbox', { name: 'email', exact: true }),
+    ).toHaveValue(email);
+    await editor(page).getByRole('button', { name: 'Discard' }).click();
+    await expect(editor(page)).toHaveCount(0);
 
     // Re-saving a person whose email no one else has is never refused.
     const resave = await request.put(`/api/people/${original.id}`, {

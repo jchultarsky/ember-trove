@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use common::{
     EmberTroveError,
     data_health::{
-        ITEM_CAP, LabelReadingRef, LinkRef, Ref, RuleCount, RuleId, RuleReport, StillOpenRef,
-        Violation,
+        ITEM_CAP, LabelReadingRef, LinkRef, RELATED_CAP, Ref, RuleCount, RuleId, RuleReport,
+        StillOpenRef, Violation,
     },
     edge::EdgeType,
     node::NodeType,
@@ -178,6 +178,8 @@ struct SharedEmailRow {
     display_name: String,
     other_id: Uuid,
     other_name: String,
+    /// How many others this person shares with, beyond the rows fetched.
+    others: i64,
     total: i64,
 }
 
@@ -203,37 +205,61 @@ async fn shared_emails(
             WHERE p.owner_id = $1
               AND person_email_key(e.value ->> 'value') <> ''
         ),
+        shared AS (
+            SELECT k FROM keys GROUP BY k HAVING count(*) > 1
+        ),
         pairs AS (
             SELECT DISTINCT a.id, a.display_name,
                    b.id AS other_id, b.display_name AS other_name
             FROM keys a
+            JOIN shared s ON s.k = a.k
             JOIN keys b ON b.k = a.k AND b.id <> a.id
+        ),
+        -- Cut by people and, for each, by the others shown: a cut of the
+        -- pair rows would leave the last person with some of theirs
+        -- missing and nothing saying so.
+        ranked AS (
+            SELECT pairs.*,
+                   dense_rank() OVER (ORDER BY lower(display_name), id) AS person_no,
+                   row_number() OVER (PARTITION BY id ORDER BY lower(other_name), other_id) AS nth,
+                   count(*) OVER (PARTITION BY id) AS others
+            FROM pairs
         )
-        SELECT id, display_name, other_id, other_name,
+        SELECT id, display_name, other_id, other_name, others,
                (SELECT count(DISTINCT id) FROM pairs) AS total
-        FROM pairs
-        ORDER BY lower(display_name), id, lower(other_name), other_id
-        LIMIT $2
+        FROM ranked
+        WHERE person_no <= $2 AND nth <= $3
+        ORDER BY person_no, nth
         "#,
     )
     .bind(owner)
     .bind(LIMIT)
+    .bind(RELATED_CAP as i64)
     .fetch_all(&mut *conn)
     .await
     .map_err(db)?;
     let count = count_of(rows.first().map(|r| r.total));
     // Rows arrive grouped by person.
-    let mut items: Vec<(Ref, Vec<Ref>)> = Vec::new();
+    let mut items: Vec<(Ref, Vec<Ref>, u64)> = Vec::new();
     for r in rows {
         let other = Ref::person(r.other_id, r.other_name);
         match items.last_mut() {
-            Some((subject, others)) if subject.id == r.id => others.push(other),
-            _ => items.push((Ref::person(r.id, r.display_name), vec![other])),
+            Some((subject, others, _)) if subject.id == r.id => others.push(other),
+            _ => items.push((
+                Ref::person(r.id, r.display_name),
+                vec![other],
+                count_of(Some(r.others)),
+            )),
         }
     }
     let items = items
         .into_iter()
-        .map(|(subject, others)| Violation::new(subject, others))
+        .map(|(subject, others, all)| {
+            let mut item = Violation::new(subject, others);
+            // The exact number left out, not only those fetched.
+            item.more = all.saturating_sub(item.related.len() as u64);
+            item
+        })
         .collect();
     Ok(RuleReport::with_count(RuleId::SharedEmail, count, items))
 }
@@ -861,18 +887,25 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
             WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area,
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
             WHERE e.edge_type = 'derived_from' AND t.node_type = 'area') AS derived_from_area,
-          -- SECURITY: a pair is two people of ONE account (`b.owner_id =
-          -- a.owner_id`). Counted across accounts, the number would say
-          -- that two accounts know the same person.
+          -- SECURITY: a pair is two people of ONE account. Counted across
+          -- accounts, the number would say that two accounts know the
+          -- same person.
+          -- Each key is worked out once and its holders counted within
+          -- the account (`PARTITION BY owner_id, k`). A join of people to
+          -- people took 36 s on an account of 4,000 (review of #353).
           (SELECT count(*) FROM (
-              SELECT DISTINCT a.owner_id, a.id
-              FROM people a
-              CROSS JOIN LATERAL jsonb_array_elements(a.emails) AS ae(value)
-              JOIN people b ON b.owner_id = a.owner_id AND b.id <> a.id
-              CROSS JOIN LATERAL jsonb_array_elements(b.emails) AS be(value)
-              WHERE person_email_key(ae.value ->> 'value') <> ''
-                AND person_email_key(be.value ->> 'value')
-                    = person_email_key(ae.value ->> 'value')
+              SELECT DISTINCT owner_id, id FROM (
+                  SELECT owner_id, id,
+                         count(*) OVER (PARTITION BY owner_id, k) AS holders
+                  FROM (
+                      SELECT DISTINCT p.owner_id, p.id,
+                             person_email_key(e.value ->> 'value') AS k
+                      FROM people p
+                      CROSS JOIN LATERAL jsonb_array_elements(p.emails) AS e(value)
+                      WHERE person_email_key(e.value ->> 'value') <> ''
+                  ) keys
+              ) held
+              WHERE holders > 1
            ) shared) AS shared_email
         "#,
     )

@@ -2524,6 +2524,225 @@ async fn two_saves_at_once_never_both_take_an_address(pool: PgPool) {
     assert!(email_refused(&late), "{late:?}");
 }
 
+/// The pre-check that names who has an address must judge a save as the
+/// database will. For people who already share one that means: each keeps
+/// it, with anything else they change, and a third person is told of both.
+/// (Read against an empty "before", it would answer 409 to every save of
+/// such a person, with no way round left: the owner's decision of
+/// 2026-11-18 undone.)
+#[sqlx::test(migrations = "../migrations")]
+async fn people_who_already_share_an_address_are_not_told_they_collide(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    use common::id::PersonId;
+    let repo = PgPersonRepo::new(pool.clone());
+    let pair = people_who_share(&pool, "a", &["Ada", "A. Lovelace"], "ada@example.com").await;
+    let third = raw_person(&pool, "a", "Third", &[]).await;
+    let keeps = with_emails("x", &["ADA@example.com", "new@example.com"]).emails;
+    for member in &pair {
+        let found = repo
+            .email_collisions("a", Some(PersonId(*member)), &keeps)
+            .await
+            .expect("read");
+        assert!(found.is_empty(), "a member keeps it: {found:?}");
+        repo.update(
+            "a",
+            PersonId(*member),
+            &with_emails("renamed", &["ada@example.com"]),
+        )
+        .await
+        .expect("and saves");
+    }
+    for who in [Some(PersonId(third)), None] {
+        let mut found: Vec<uuid::Uuid> = repo
+            .email_collisions("a", who, &keeps)
+            .await
+            .expect("read")
+            .into_iter()
+            .map(|m| m.id.0)
+            .collect();
+        found.sort_unstable();
+        let mut both = pair.clone();
+        both.sort_unstable();
+        assert_eq!(found, both, "{who:?} is told of both");
+    }
+}
+
+/// The lock is per account, and it is taken by an update as well as an
+/// insert. Each half is a way the rule could be wrong with every other
+/// test green: a lock taken only for new people, and one lock for all
+/// accounts.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_update_waits_for_its_own_accounts_saves_and_no_one_elses(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    use common::id::PersonId;
+    let first = raw_person(&pool, "a", "first", &[]).await;
+    let second = raw_person(&pool, "a", "second", &[]).await;
+
+    // An update that gives one person the address, not yet committed.
+    let mut held = pool.begin().await.expect("tx");
+    sqlx::query("UPDATE people SET emails = $1 WHERE id = $2")
+        .bind(email_list(&["x@example.com"]))
+        .bind(first)
+        .execute(&mut *held)
+        .await
+        .expect("the first update");
+    // The same address for the other person: it waits.
+    let waiting = tokio::spawn({
+        let repo = PgPersonRepo::new(pool.clone());
+        async move {
+            repo.update(
+                "a",
+                PersonId(second),
+                &with_emails("second", &["X@example.com"]),
+            )
+            .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "an update waits as a create does");
+    // Another account is not held up by it.
+    let other = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        PgPersonRepo::new(pool.clone()).create("b", &with_emails("b's", &["x@example.com"])),
+    )
+    .await
+    .expect("another account's save does not wait");
+    assert!(other.is_ok(), "{other:?}");
+
+    held.commit().await.expect("commit");
+    let late = waiting.await.expect("join");
+    assert!(email_refused(&late), "{late:?}");
+}
+
+/// Two ways round the rule that are not a save of `emails`: a person
+/// moved to another account, and an update of something else in which a
+/// BEFORE trigger changes the list. Nothing in the app does either today.
+#[sqlx::test(migrations = "../migrations")]
+async fn the_rule_holds_for_writes_that_are_not_a_save_of_the_list(pool: PgPool) {
+    let moved = raw_person(&pool, "a", "to be moved", &["x@example.com"]).await;
+    raw_person(&pool, "b", "b's own", &["x@example.com"]).await;
+    let third = raw_person(&pool, "b", "b's third", &[]).await;
+    let refused = |r: Result<sqlx::postgres::PgQueryResult, sqlx::Error>| match r {
+        Err(sqlx::Error::Database(db)) => db.constraint() == Some("people_email_identity"),
+        _ => false,
+    };
+
+    // Into an account that has the address: every address is new there.
+    let into_b = sqlx::query("UPDATE people SET owner_id = 'b' WHERE id = $1")
+        .bind(moved)
+        .execute(&pool)
+        .await;
+    assert!(refused(into_b));
+    // Into one that doesn't: fine.
+    sqlx::query("UPDATE people SET owner_id = 'c' WHERE id = $1")
+        .bind(moved)
+        .execute(&pool)
+        .await
+        .expect("an account without the address");
+
+    sql(
+        &pool,
+        r#"CREATE FUNCTION sneak() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN
+               IF NEW.display_name = 'sneak' THEN
+                   NEW.emails := '[{"label": "", "value": "X@example.com", "preferred": false}]'::jsonb;
+               END IF;
+               RETURN NEW;
+           END $$"#,
+    )
+    .await;
+    sql(
+        &pool,
+        "CREATE TRIGGER a_sneak BEFORE UPDATE ON people FOR EACH ROW EXECUTE FUNCTION sneak()",
+    )
+    .await;
+    let sneaked = sqlx::query("UPDATE people SET display_name = 'sneak' WHERE id = $1")
+        .bind(third)
+        .execute(&pool)
+        .await;
+    assert!(refused(sneaked), "an update that never names the list");
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT count(*) FROM people WHERE display_name = 'sneak'"
+        )
+        .await,
+        0
+    );
+}
+
+/// No one writes a person while a restore replaces the registry. A save
+/// that landed between the restore's delete and its inserts saw none of
+/// the archive's people, so the rule had nothing to refuse it by. It
+/// waits, and is judged against what was restored.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_save_waits_for_a_restore_and_is_judged_against_what_it_restored(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    let people = PgPersonRepo::new(pool.clone());
+    people
+        .create("a", &with_emails("In The Backup", &["kept@example.com"]))
+        .await
+        .expect("kept");
+    create_node(&pool, "a", "restore host").await;
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+
+    let mut tx = pool.begin().await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("restore");
+    let save = |name: &'static str, address: &'static str| {
+        tokio::spawn({
+            let repo = PgPersonRepo::new(pool.clone());
+            async move { repo.create("a", &with_emails(name, &[address])).await }
+        })
+    };
+    let same = save("meanwhile, the same address", "KEPT@example.com");
+    let another = save("meanwhile, another address", "other@example.com");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !same.is_finished() && !another.is_finished(),
+        "saves wait for the restore"
+    );
+    // Reading is not held up.
+    let seen = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        people.list("a", None, 10),
+    )
+    .await
+    .expect("a read does not wait");
+    assert!(seen.is_ok());
+
+    tx.commit().await.expect("commit");
+    let same = same.await.expect("join");
+    assert!(email_refused(&same), "{same:?}");
+    another.await.expect("join").expect("a free address saves");
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM people").await, 2);
+}
+
+/// A large group that shares one address: the report counts every one of
+/// them, lists each with the first others and says exactly how many more.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_large_group_that_shares_an_address_is_cut_with_exact_counts(pool: PgPool) {
+    use common::data_health::{RELATED_CAP, RuleId};
+    let names: Vec<String> = (0..25).map(|i| format!("Person {i:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    people_who_share(&pool, "a", &names, "all@example.com").await;
+    let report = health(&pool, "a").await;
+    let rule = &report[&RuleId::SharedEmail];
+    assert_eq!(rule.count, 25);
+    assert_eq!(rule.items.len(), 25);
+    for item in &rule.items {
+        assert_eq!(item.related.len(), RELATED_CAP, "{}", item.subject.label);
+        assert_eq!(item.more, 24 - RELATED_CAP as u64, "{}", item.subject.label);
+    }
+    // In name order, and each person's others too.
+    assert_eq!(rule.items[0].subject.label, "Person 00");
+    assert_eq!(rule.items[0].related[0].label, "Person 01");
+    assert_eq!(rule.items[24].subject.label, "Person 24");
+}
+
 /// The rule needs to see what the save before it committed. Only READ
 /// COMMITTED gives its check a fresh look after the lock; under a snapshot
 /// taken earlier two saves could both pass. So a person with a new

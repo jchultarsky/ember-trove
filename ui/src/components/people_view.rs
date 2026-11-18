@@ -329,8 +329,8 @@ fn recovery_message(changed: bool) -> &'static str {
 /// - Escape or a backdrop click with changes closes with "Changes
 ///   discarded · Undo", the task and note editors' pattern (#123).
 /// - Ctrl/⌘+Enter saves.
-/// - The duplicate-email warning and the server's validation messages show
-///   inside the dialog.
+/// - A refused save (an address that is someone else's, S8a) and the
+///   server's validation messages show inside the dialog.
 /// - What's typed is kept on this device while the dialog is open (#170):
 ///   a reload, a closed tab or a navigation away doesn't lose it. The next
 ///   time this dialog's page loads, it reopens with the input and a notice
@@ -615,10 +615,12 @@ pub fn PersonEditor(
                     <p class="text-sm text-red-600 dark:text-red-400" role="alert">{e}</p>
                 })}
                 {move || duplicate.get().map(|matches| view! {
-                    // Opening the other person leaves this dialog: what
-                    // was typed stays as a draft on this device (#170).
+                    // Opening the other person navigates away with the
+                    // dialog still open, so the page's unmount keeps what
+                    // was typed as a draft (#170). Closing it first would
+                    // drop the draft: every closing does.
                     <EmailTakenNotice matches=matches
-                        on_open=Callback::new(move |()| open.set(false)) />
+                        on_node=matches!(form, PersonForm::NewOnNode(_)) />
                 })}
                 <label class="block">
                     <span class=LABEL_CLASS>"Name"</span>
@@ -700,9 +702,10 @@ pub fn PersonEditor(
 #[component]
 pub fn EmailTakenNotice(
     matches: Vec<DuplicateMatch>,
-    /// Runs before the page goes to the other person.
-    #[prop(into)]
-    on_open: Callback<()>,
+    /// The dialog is adding a new person to a node: what its reader came
+    /// for is to put that person on the node, which the list behind the
+    /// dialog does.
+    on_node: bool,
 ) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
     let nobody = matches.is_empty();
@@ -725,7 +728,6 @@ pub fn EmailTakenNotice(
                         <li>
                             <button type="button" class="text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
                                 on:click=move |_| {
-                                    on_open.run(());
                                     navigate.get_value()(&format!("/people/{id}"), Default::default());
                                 }>
                                 {m.display_name}
@@ -737,7 +739,13 @@ pub fn EmailTakenNotice(
             </ul>
             {(!nobody).then(|| view! {
                 <p class="text-xs text-stone-600 dark:text-stone-300">
-                    "Open them to use that record, or take the address off here."
+                    {if on_node {
+                        "Cancel and pick them from the list to add them here, or take the \
+                         address off. What you typed is kept if you open them."
+                    } else {
+                        "Open them to use that record, or take the address off here. What \
+                         you typed is kept."
+                    }}
                 </p>
             })}
         </div>

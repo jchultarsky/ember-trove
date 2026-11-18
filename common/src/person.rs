@@ -425,6 +425,13 @@ pub fn shared_email_people(people: &[Person]) -> usize {
 
 /// A deliberately loose shape check: one `@`, something on both sides, a
 /// dot in the domain, no whitespace. Real validation is the mail server's.
+///
+/// Since email is identity (S8a, §7.1) it also refuses what would let one
+/// mailbox be saved as two addresses without anyone seeing a difference:
+/// a wrapper pasted along with it (`mailto:ada@x.com`, `<ada@x.com>`,
+/// `"Ada" <ada@x.com>`) and invisible characters (a zero-width space from
+/// a web page, a byte-order mark). Letters outside ASCII stay allowed and
+/// are compared as typed ([`email_key`]).
 fn valid_email(v: &str) -> bool {
     let mut parts = v.split('@');
     match (parts.next(), parts.next(), parts.next()) {
@@ -433,10 +440,26 @@ fn valid_email(v: &str) -> bool {
                 && domain.contains('.')
                 && !domain.starts_with('.')
                 && !domain.ends_with('.')
-                && !v.chars().any(char::is_whitespace)
+                && !v.chars().any(|c| c.is_whitespace() || not_in_an_address(c))
         }
         _ => false,
     }
+}
+
+/// Characters an address typed by a person does not hold: the punctuation
+/// of a wrapper or a list, and characters that take no space on screen.
+fn not_in_an_address(c: char) -> bool {
+    matches!(
+        c,
+        '<' | '>' | '(' | ')' | '[' | ']' | ':' | ';' | ',' | '\\' | '"'
+    ) || matches!(
+        c,
+        '\u{00ad}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{feff}'
+    )
 }
 
 /// Digits plus the punctuation phone numbers use, and an extension marker
@@ -1046,6 +1069,42 @@ mod tests {
         assert_ne!(email_key("a.da@example.com"), email_key("ada@example.com"));
         assert_ne!(email_key("ada+x@example.com"), email_key("ada@example.com"));
         assert_eq!(email_key("   "), "");
+    }
+
+    /// §7.1: one mailbox must not be saved as two addresses that look the
+    /// same. The key compares text exactly, so the shape check keeps out
+    /// what is not part of an address.
+    #[test]
+    fn an_address_pasted_with_a_wrapper_or_an_invisible_character_is_refused() {
+        let with = |value: &str| {
+            normalize(PersonInput {
+                emails: vec![cp("", value, false)],
+                ..named("Ada")
+            })
+        };
+        for bad in [
+            "mailto:ada@example.com",
+            "<ada@example.com>",
+            "\"Ada\" <ada@example.com>",
+            "ada@example.com,",
+            "ada@example.com;bea@example.com",
+            "ada\u{200b}@example.com",
+            "\u{feff}ada@example.com",
+            "ada@exam\u{00ad}ple.com",
+            "ada@example.com\u{200e}",
+        ] {
+            assert_eq!(with(bad), Err(PersonError::InvalidEmail), "{bad:?}");
+        }
+        // Still an address: a tag, dots, a hyphen, letters outside ASCII.
+        for good in [
+            "ada+tag@example.com",
+            "a.d.a@sub.example.co.uk",
+            "ada_l-1@ex-ample.com",
+            "ädä@exämple.com",
+            "o'brien@example.com",
+        ] {
+            assert!(with(good).is_ok(), "{good:?}");
+        }
     }
 
     #[test]
