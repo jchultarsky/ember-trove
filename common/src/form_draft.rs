@@ -54,6 +54,11 @@ pub struct Carried {
     /// `person_carry::person_fingerprint` of the new-person dialog's input.
     pub source_fp: u64,
     pub report: CarryReport,
+    /// The additions went on top of an unsaved edit of this person that
+    /// the device had kept, not on the person as saved. The review says
+    /// so: Save writes that edit too, and Discard drops it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_kept_edit: bool,
 }
 
 /// What a person dialog held when the page went away.
@@ -263,6 +268,7 @@ mod tests {
             carried: Some(Carried {
                 source_fp: 42,
                 report,
+                on_kept_edit: true,
             }),
             ..Default::default()
         };

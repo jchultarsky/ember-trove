@@ -181,18 +181,20 @@ pub fn read_person_draft(key: &str) -> Option<PersonFormDraft> {
     Some(d)
 }
 
-/// Keep what a person dialog holds. Silently no-ops on any storage error,
-/// and after logout.
-pub fn write_person_draft(key: &str, draft: &PersonFormDraft) {
+/// Keep what a person dialog holds, and say whether it was stored: a full
+/// or blocked localStorage is a normal case (as `write_edit_draft`), and
+/// nothing is stored after logout.
+pub fn write_person_draft(key: &str, draft: &PersonFormDraft) -> bool {
     if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
+        return false;
     }
     let draft = PersonFormDraft {
         saved_at: Some(now_ms()),
         ..draft.clone()
     };
-    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(&draft)) {
-        let _ = s.set_item(key, &json);
+    match (storage(), serde_json::to_string(&draft)) {
+        (Some(s), Ok(json)) => s.set_item(key, &json).is_ok(),
+        _ => false,
     }
 }
 

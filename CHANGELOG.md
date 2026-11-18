@@ -14,23 +14,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   for each person it names: "Add what I typed to them".
   - It opens that person's editor with what you typed added, **for
     review**. Their own values are kept, a blank company or position is
-    filled, new emails, phones and addresses are added, notes are
-    appended. Nothing is saved until you press Save.
+    filled, new emails, phones and addresses are added, and the lines of
+    your notes that they don't have follow theirs. Nothing is saved
+    until you press Save.
   - The review says what was added, and what you typed that differs
     from theirs (a name, a company): that is not used, and it is how a
-    wrong match shows. Added rows and fields are marked.
-  - Backing out loses nothing: Discard leaves the person as they were,
-    and the new-person dialog comes back with what you typed. It is
-    dropped only once the other person is saved.
+    wrong match shows. Added rows and fields are marked, for as long as
+    they hold what was added.
+  - If this device had kept an unsaved edit of that person, the
+    additions go on top of it, and the review says so.
+  - Backing out loses nothing you typed: Discard leaves the person as
+    they were, and the new-person dialog comes back with what you
+    typed. It is dropped once the other person is saved, or when they
+    already had everything you typed (the app says so and opens them).
+    If this device can't keep what you typed (its storage is full or
+    blocked), nothing is carried over, and the app says so.
   - The same phone number in another format is not added twice. An
     address that belongs to a third person is left out, and said.
+  - Editing a saved person and adding another saved person's address
+    is still refused; the notice now says that merging two saved people
+    isn't available yet.
   - It is done in the browser, as an ordinary edit of the existing
     person: no new API, and the database's email rule still decides.
 
 ### Fixed
 - **The notice of a refused save stays in view.** Since 3.30.0 the
   keyboard goes to the marked address, and in a short window that
-  scrolled the notice away.
+  scrolled the notice away. When the marked row doesn't fit under the
+  notice, the keyboard now goes to the notice, and Tab leads on from it.
 - A person save the API refuses for a reason it explains (a list over
   its limit) reads as that sentence, not "server error 422".
 

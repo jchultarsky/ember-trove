@@ -10,6 +10,12 @@
 //!
 //! The rule in one line: **theirs is kept, blanks are filled, lists grow.**
 //! It never removes or replaces a value the existing person has.
+//!
+//! Known limits, on purpose:
+//! - An entry they already have is theirs as it is. A label or a
+//!   "preferred" typed on it is not carried and not reported.
+//! - A phone is compared by its digits, so an extension typed after a
+//!   number ("555 0100 x12") is part of the number.
 
 use std::collections::HashSet;
 
@@ -136,6 +142,14 @@ pub struct NotUsed {
     pub typed: String,
 }
 
+/// A field a carry-over filled, with what it put there: the field is
+/// marked "added" only while it still holds that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Filled {
+    pub field: CarriedField,
+    pub value: String,
+}
+
 /// What a carry-over did, for the review: what to mark, and what to say.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CarryReport {
@@ -149,9 +163,9 @@ pub struct CarryReport {
     pub phones: Vec<String>,
     #[serde(default)]
     pub addresses: Vec<String>,
-    /// Blank fields that were filled, and notes that were added.
+    /// Blank fields that were filled, and notes that were added to.
     #[serde(default)]
-    pub filled: Vec<CarriedField>,
+    pub filled: Vec<Filled>,
     /// Typed values that differ from theirs: theirs is kept.
     #[serde(default)]
     pub not_used: Vec<NotUsed>,
@@ -174,6 +188,51 @@ impl CarryReport {
             && self.phones.is_empty()
             && self.addresses.is_empty()
             && self.filled.is_empty()
+    }
+
+    /// Whether the carry-over filled `field` (for notes: added to them).
+    #[must_use]
+    pub fn has_filled(&self, field: CarriedField) -> bool {
+        self.filled.iter().any(|f| f.field == field)
+    }
+
+    /// Whether `field` still holds what the carry-over put there, judged
+    /// by what it holds `now`: change it and it is no longer "added".
+    #[must_use]
+    pub fn fills(&self, field: CarriedField, now: &str) -> bool {
+        self.filled
+            .iter()
+            .any(|f| f.field == field && f.value.trim() == now.trim())
+    }
+
+    /// This report with a `later` carry-over onto the same unsaved review:
+    /// one account of everything in the dialog that came from what was
+    /// typed. Without it a second carry-over would report only its own
+    /// additions, over a form that holds the first one's too.
+    #[must_use]
+    pub fn joined(mut self, later: CarryReport) -> CarryReport {
+        fn grow<T: PartialEq>(into: &mut Vec<T>, more: Vec<T>) {
+            for m in more {
+                if !into.contains(&m) {
+                    into.push(m);
+                }
+            }
+        }
+        if !later.typed_name.is_empty() {
+            self.typed_name = later.typed_name;
+        }
+        grow(&mut self.emails, later.emails);
+        grow(&mut self.phones, later.phones);
+        grow(&mut self.addresses, later.addresses);
+        for f in later.filled {
+            // Notes added to twice: the later text is what the field holds.
+            self.filled.retain(|have| have.field != f.field);
+            self.filled.push(f);
+        }
+        grow(&mut self.not_used, later.not_used);
+        grow(&mut self.someone_elses, later.someone_elses);
+        grow(&mut self.over, later.over);
+        self
     }
 
     /// The values added to the list of `kind`.
@@ -235,7 +294,10 @@ fn carry_text(
         }
         _ => {
             *theirs = Some(typed.to_string());
-            report.filled.push(field);
+            report.filled.push(Filled {
+                field,
+                value: typed.to_string(),
+            });
         }
     }
 }
@@ -290,33 +352,46 @@ fn lines_of(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Notes: typed notes they already have, line for line, add nothing; if
-/// the typed notes hold all of theirs, the typed notes are the result;
-/// otherwise the typed notes follow theirs after a blank line. Compared by
-/// whole lines: "ok" is not already there because the notes say "book".
+/// Notes: theirs stay as they are, to the letter (their order, their
+/// indentation, their blank lines). The typed lines they don't have follow
+/// after a blank line, with the blank lines between them; a typed line
+/// they have already adds nothing. Compared by whole lines: "ok" is not
+/// already there because the notes say "book".
 fn carry_notes(theirs: &mut Option<String>, typed: Option<&str>, report: &mut CarryReport) {
     let Some(typed) = typed.map(str::trim).filter(|t| !t.is_empty()) else {
         return;
     };
-    let result = match theirs.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+    let result = match theirs.as_deref().filter(|t| !t.trim().is_empty()) {
         None => typed.to_string(),
         Some(have) => {
-            let (have_lines, typed_lines) = (lines_of(have), lines_of(typed));
-            if typed_lines.iter().all(|l| have_lines.contains(l)) {
+            let have_lines = lines_of(have);
+            let mut new: Vec<&str> = Vec::new();
+            for line in typed.lines() {
+                if line.trim().is_empty() {
+                    if new.last().is_some_and(|l| !l.is_empty()) {
+                        new.push("");
+                    }
+                } else if !have_lines.contains(&line.trim()) {
+                    new.push(line.trim_end());
+                }
+            }
+            while new.last().is_some_and(|l| l.is_empty()) {
+                new.pop();
+            }
+            if new.is_empty() {
                 return;
             }
-            if have_lines.iter().all(|l| typed_lines.contains(l)) {
-                typed.to_string()
-            } else {
-                format!("{have}\n\n{typed}")
-            }
+            format!("{}\n\n{}", have.trim_end(), new.join("\n"))
         }
     };
     if result.chars().count() > MAX_NOTES {
         report.over.push(CarriedField::Notes);
     }
+    report.filled.push(Filled {
+        field: CarriedField::Notes,
+        value: result.clone(),
+    });
     *theirs = Some(result);
-    report.filled.push(CarriedField::Notes);
 }
 
 /// `theirs` with what was `typed` for a new person added, for review.
@@ -411,7 +486,7 @@ fn counted(n: usize, one: &str, many: &str) -> Option<String> {
 /// over a limit. The typed values quoted are the reader's own.
 #[must_use]
 pub fn review_lines(report: &CarryReport) -> Vec<String> {
-    let filled = |f: CarriedField| report.filled.contains(&f);
+    let filled = |f: CarriedField| report.has_filled(f);
     let added: Vec<String> = [
         filled(CarriedField::Company).then(|| "company".to_string()),
         filled(CarriedField::Position).then(|| "position".to_string()),
@@ -496,6 +571,10 @@ mod tests {
         }
     }
 
+    fn fields(report: &CarryReport) -> Vec<CarriedField> {
+        report.filled.iter().map(|f| f.field).collect()
+    }
+
     fn typed() -> PersonInput {
         PersonInput {
             display_name: "A. Lovelace".into(),
@@ -534,17 +613,20 @@ mod tests {
         assert_eq!(person.emails[1..], [cp("home", "ada@home.example", false)]);
         assert_eq!(person.phones[1..], [cp("office", "+1 555 010 9999", false)]);
         assert_eq!(person.addresses[1..], [cp("office", "2 High St", false)]);
-        // Notes: theirs, then the typed ones, since neither holds the other.
+        // Notes: theirs, then the typed line they don't have.
         assert_eq!(
             person.notes.as_deref(),
-            Some("Met at the fair.\nLikes tea.\n\nLikes tea.\nPrefers email.")
+            Some("Met at the fair.\nLikes tea.\n\nPrefers email.")
         );
 
         assert_eq!(report.typed_name, "A. Lovelace");
         assert_eq!(report.emails, ["ada@home.example"]);
         assert_eq!(report.phones, ["+1 555 010 9999"]);
         assert_eq!(report.addresses, ["2 High St"]);
-        assert_eq!(report.filled, [CarriedField::Position, CarriedField::Notes]);
+        assert_eq!(
+            fields(&report),
+            [CarriedField::Position, CarriedField::Notes]
+        );
         // What was typed and differs is said, never used.
         assert_eq!(
             report.not_used,
@@ -646,14 +728,173 @@ mod tests {
         let got = carry_into(&theirs, &with_notes("  Call back. \n\nRead the book."), &[]);
         assert_eq!(got.person.notes, theirs.notes);
         assert!(got.report.added_nothing());
-        // The typed notes hold all of theirs: the typed notes it is.
-        let longer = "Read the book.\nCall back.\nAsk about the garden.";
+        // The typed notes hold all of theirs and one line more: that
+        // line is added. Theirs is not replaced by the typed text.
+        let longer = "Call back.\nRead the book.\nAsk about the garden.";
         let got = carry_into(&theirs, &with_notes(longer), &[]);
-        assert_eq!(got.person.notes.as_deref(), Some(longer));
-        assert_eq!(got.report.filled, [CarriedField::Notes]);
+        assert_eq!(
+            got.person.notes.as_deref(),
+            Some("Read the book.\nCall back.\n\nAsk about the garden.")
+        );
+        assert_eq!(fields(&got.report), [CarriedField::Notes]);
         // They had none.
         let got = carry_into(&with_notes("  "), &with_notes("First note."), &[]);
         assert_eq!(got.person.notes.as_deref(), Some("First note."));
+    }
+
+    /// Their notes are never rewritten: not their order, their
+    /// indentation, their blank lines or a line they wrote twice.
+    #[test]
+    fn their_notes_stay_to_the_letter() {
+        let with_notes = |notes: &str| PersonInput {
+            display_name: "x".into(),
+            notes: Some(notes.into()),
+            ..Default::default()
+        };
+        let have = "Shopping:\n  - milk\n  - eggs\n\nCalls:\n  - mum\n  - mum";
+        let typed = "- mum\nCalls:\n- eggs\n- milk\nShopping:\nnew line";
+        let got = carry_into(&with_notes(have), &with_notes(typed), &[]);
+        assert_eq!(
+            got.person.notes,
+            Some(format!("{have}\n\nnew line")),
+            "theirs, then only the line they lack"
+        );
+        // The typed paragraphs keep one blank line between them; a line
+        // they have leaves no gap behind.
+        let typed = "A.\n\n\nB.\n\n\n\nC.\n  indented\n\n";
+        let got = carry_into(&with_notes("A."), &with_notes(typed), &[]);
+        assert_eq!(
+            got.person.notes.as_deref(),
+            Some("A.\n\nB.\n\nC.\n  indented")
+        );
+    }
+
+    #[test]
+    fn anything_added_is_something_to_review() {
+        let ada_bare = PersonInput {
+            display_name: "Ada Lovelace".into(),
+            emails: vec![cp("", "ada@example.com", false)],
+            ..Default::default()
+        };
+        let same = PersonInput {
+            display_name: "Ada Lovelace".into(),
+            emails: vec![cp("", "ada@example.com", false)],
+            ..Default::default()
+        };
+        assert!(carry_into(&ada_bare, &same, &[]).report.added_nothing());
+        let with = |change: fn(&mut PersonInput)| {
+            let mut typed = same.clone();
+            change(&mut typed);
+            carry_into(&ada_bare, &typed, &[]).report
+        };
+        assert!(!with(|p| p.company = Some("Engines Ltd".into())).added_nothing());
+        assert!(!with(|p| p.position = Some("Analyst".into())).added_nothing());
+        assert!(!with(|p| p.notes = Some("Prefers email.".into())).added_nothing());
+        assert!(!with(|p| p.phones = vec![cp("", "555 0100", false)]).added_nothing());
+        assert!(!with(|p| p.addresses = vec![cp("", "2 High St", false)]).added_nothing());
+        assert!(!with(|p| p.emails.push(cp("", "ada@home.example", false))).added_nothing());
+    }
+
+    #[test]
+    fn typed_values_are_tidied_and_compared_without_case() {
+        let theirs = PersonInput {
+            company: Some("Acme".into()),
+            position: Some("   ".into()),
+            ..ada()
+        };
+        let typed = PersonInput {
+            display_name: "  ada LOVELACE ".into(),
+            company: Some(" ACME ".into()),
+            position: None,
+            emails: vec![cp(" home ", "  ada@home.example ", false)],
+            // One new number, typed twice in two formats: added once.
+            phones: vec![
+                cp("", "+1 555 010 9999", false),
+                cp("", "+1 (555) 010-9999", false),
+            ],
+            // An address line that reads like someone else's email is
+            // still an address: only emails are someone else's.
+            addresses: vec![cp("", "Bea@Example.com", false)],
+            notes: None,
+        };
+        let CarryOver { person, report } = carry_into(&theirs, &typed, &["bea@example.com".into()]);
+        assert_eq!(report.typed_name, "ada LOVELACE");
+        assert!(report.not_used.is_empty(), "{:?}", report.not_used);
+        assert_eq!(person.company.as_deref(), Some("Acme"));
+        // A blank they had stored as spaces is a blank, not a value.
+        assert_eq!(person.position, None);
+        assert_eq!(person.emails[1], cp("home", "ada@home.example", false));
+        assert_eq!(report.phones, ["+1 555 010 9999"]);
+        assert_eq!(report.addresses, ["Bea@Example.com"]);
+        assert!(report.someone_elses.is_empty());
+    }
+
+    #[test]
+    fn a_field_is_marked_added_only_while_it_holds_what_was_added() {
+        let CarryOver { person, report } = carry_into(&ada(), &typed(), &[]);
+        assert!(report.fills(CarriedField::Position, "Analyst"));
+        assert!(report.fills(CarriedField::Position, " Analyst "));
+        assert!(!report.fills(CarriedField::Position, "Chief Analyst"));
+        assert!(
+            !report.fills(CarriedField::Company, "Analytical Engines"),
+            "theirs"
+        );
+        let notes = person.notes.unwrap_or_default();
+        assert!(report.fills(CarriedField::Notes, &notes));
+        assert!(!report.fills(CarriedField::Notes, "Met at the fair."));
+        assert!(report.has_filled(CarriedField::Notes));
+        assert!(!report.has_filled(CarriedField::Company));
+    }
+
+    /// A second carry-over onto a review that is not saved yet: the report
+    /// still accounts for everything the first one added.
+    #[test]
+    fn a_later_carry_over_joins_the_report_of_the_first() {
+        let first = carry_into(&ada(), &typed(), &[]);
+        let more = PersonInput {
+            display_name: "Ada L.".into(),
+            phones: vec![cp("", "+1 555 010 8888", false)],
+            notes: Some("Call after six.".into()),
+            ..typed()
+        };
+        let second = carry_into(&first.person, &more, &["bea@example.com".into()]);
+        assert_eq!(second.report.phones, ["+1 555 010 8888"], "only its own");
+        let report = first.report.clone().joined(second.report);
+        assert_eq!(report.typed_name, "Ada L.");
+        assert_eq!(report.emails, ["ada@home.example"]);
+        assert_eq!(report.phones, ["+1 555 010 9999", "+1 555 010 8888"]);
+        assert_eq!(
+            fields(&report),
+            [CarriedField::Position, CarriedField::Notes]
+        );
+        // The notes mark follows the text as it is now.
+        let notes = second.person.notes.clone().unwrap_or_default();
+        assert!(
+            notes.ends_with("Prefers email.\n\nCall after six."),
+            "{notes}"
+        );
+        assert!(report.fills(CarriedField::Notes, &notes));
+        // Both typed names are said; nothing is said twice.
+        let names: Vec<&str> = report
+            .not_used
+            .iter()
+            .filter(|n| n.field == CarriedField::Name)
+            .map(|n| n.typed.as_str())
+            .collect();
+        assert_eq!(names, ["A. Lovelace", "Ada L."]);
+        assert_eq!(
+            report
+                .not_used
+                .iter()
+                .filter(|n| n.field == CarriedField::Company)
+                .count(),
+            1
+        );
+        // Joining a report to itself changes nothing.
+        assert_eq!(
+            first.report.clone().joined(first.report.clone()),
+            first.report
+        );
     }
 
     #[test]
@@ -702,6 +943,29 @@ mod tests {
         assert_eq!(report.over, [CarriedField::Emails, CarriedField::Notes]);
         // The API refuses it, in words, until something is removed.
         assert!(normalize(person).is_err());
+
+        // Exactly at a limit is not over it. Notes are counted in
+        // characters, as the API counts them.
+        let at = PersonInput {
+            emails: (0..MAX_CONTACT_POINTS - 1)
+                .map(|i| cp("", &format!("a{i}@example.com"), i == 0))
+                .collect(),
+            notes: Some("\u{e9}".repeat(MAX_NOTES - 5)),
+            ..ada()
+        };
+        let more = PersonInput {
+            emails: vec![cp("", "tenth@example.com", false)],
+            notes: Some("abc".into()),
+            ..PersonInput::default()
+        };
+        let CarryOver { person, report } = carry_into(&at, &more, &[]);
+        assert_eq!(person.emails.len(), MAX_CONTACT_POINTS);
+        assert_eq!(
+            person.notes.as_deref().map(|n| n.chars().count()),
+            Some(MAX_NOTES)
+        );
+        assert!(report.over.is_empty(), "{:?}", report.over);
+        assert!(normalize(person).is_ok());
     }
 
     #[test]
