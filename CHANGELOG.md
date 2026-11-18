@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.28.0] - 2026-11-17
+
 ### Added
 - **Blockers** (S7b of the ontology programme, #346; ONTOLOGY §6.4,
   §9.3, §14): what a node or a task waits for, said and never enforced.
