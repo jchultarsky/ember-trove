@@ -17,12 +17,14 @@
 
 use std::collections::HashSet;
 
+use common::blockers::{self, NodeBlockers};
 use common::connections::{Connection, Group, grouped};
 use common::edge::{CreateEdgeRequest, EdgeType, EdgeWithTitles};
 use common::id::NodeId;
-use common::node::NodeType;
+use common::node::{NodeStatus, NodeType};
 use common::ontology::allowed_homes;
 use common::permission::holds_editor;
+use common::project_state::ProjectState;
 use leptos::prelude::*;
 
 use crate::auth::{AuthStatus, use_auth_state};
@@ -166,6 +168,75 @@ fn already_linked_as(
         .map(|e| e.edge_type.label())
 }
 
+/// How many of the node's own dependencies are not met (S7b): from the
+/// links once the page has read them (so it is right after one is added
+/// or removed here), and until then the count the node's own answer
+/// carried. The two are one rule (`blockers::direct`; the server's count
+/// is held equal to it), so the chip can't say more than the list.
+fn unmet_dependencies(node: NodeId, served: u32, links: Option<&LinksResult>) -> u32 {
+    match links {
+        Some(Ok(edges)) => blockers::direct(node, edges),
+        // Not read yet, or the read failed: what the node's answer said.
+        _ => served,
+    }
+}
+
+/// "Blocked" in the page header (S7b, ONTOLOGY §6.4): the node still
+/// waits itself and one of its own dependencies is not met, among those
+/// this reader can see. It opens Connections, where "Depends on" says
+/// what. Surfaced, never enforced: nothing else about the node changes.
+#[component]
+pub fn NodeBlockedChip(
+    node_id: NodeId,
+    node_type: NodeType,
+    status: NodeStatus,
+    /// The page's own state signal: the chip follows a state declared
+    /// here (a Project made complete no longer says "Blocked").
+    project_state: RwSignal<Option<ProjectState>>,
+    /// `ViewedNode::blocked_by`: the count the node's answer carried.
+    served: u32,
+    links: NodeLinks,
+) -> impl IntoView {
+    let sections = use_context::<crate::components::node_section::NodeSections>();
+    // Derived signals, not memos. The closure below reads `shown` and
+    // then `unmet`, and `shown` is worked out from `unmet`. As memos,
+    // checking `shown` recomputed `unmet` (2 to 1) without marking this
+    // closure, `shown` itself stayed `true`, and nothing ran again: the
+    // chip kept saying "2" after a dependency was removed and the list
+    // already showed one (reactive_graph: a memo that changes marks its
+    // subscribers dirty, all but the one reading it at that moment).
+    let unmet = Signal::derive(move || unmet_dependencies(node_id, served, links.get().as_ref()));
+    let shown = Signal::derive(move || {
+        blockers::is_blocked(&node_type, &status, project_state.get(), unmet.get())
+    });
+    move || {
+        shown.get().then(|| {
+            let label = blockers::blocked_label(unmet.get());
+            view! {
+                <button
+                    type="button"
+                    class=format!(
+                        "{} py-0.5 hover:text-stone-900 dark:hover:text-stone-100",
+                        crate::components::task_row_scaffold::BLOCKED_CHIP
+                    )
+                    title=label.clone()
+                    aria-label=format!("Blocked. {label}. Show what it waits for")
+                    data-testid="node-blocked"
+                    on:click=move |_| {
+                        if let Some(sections) = sections {
+                            sections.jump.set(Some(NodeSection::Connections));
+                        }
+                    }
+                >
+                    <span class="material-symbols-outlined" style="font-size:12px;"
+                        aria-hidden="true">"block"</span>
+                    "Blocked"
+                </button>
+            }
+        })
+    }
+}
+
 /// A node's links in their groups, with its home first (#228) and a form
 /// to add one.
 #[component]
@@ -173,10 +244,40 @@ pub fn ConnectionsPanel(
     node_id: NodeId,
     node_type: NodeType,
     can_edit: bool,
+    /// The node's own standing (S7b): only a node that still waits has a
+    /// chain behind its dependencies.
+    status: NodeStatus,
+    project_state: RwSignal<Option<ProjectState>>,
     links: NodeLinks,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     links.wanted_while(open);
+    // What the unmet dependencies wait for in turn (S7b). Read only while
+    // the section is open, the node still waits, and its links say one
+    // of its dependencies is not met; read again when the links are.
+    //
+    // It reads the state signal as it is, not through a memo, though the
+    // state control sets it twice (at the choice, and when the save
+    // answers): on a re-open the first read goes out before the save has
+    // landed, and the server, which checks the same rule, answers an
+    // empty chain. The second set is what brings the chain back.
+    let chain_kind = node_type.clone();
+    let chain = LocalResource::new(move || {
+        let waits = blockers::still_waits(&chain_kind, &status, project_state.get());
+        let wanted = open.get()
+            && waits
+            && links
+                .get()
+                .and_then(Result::ok)
+                .is_some_and(|edges| blockers::direct(node_id, &edges) > 0);
+        async move {
+            if wanted {
+                Some(crate::api::fetch_blockers(node_id).await)
+            } else {
+                None
+            }
+        }
+    });
     let show_add = RwSignal::new(false);
     // Which long groups are shown whole. Kept here, not in the list: the
     // list is rebuilt after every change, and a group opened to remove a
@@ -412,8 +513,10 @@ pub fn ConnectionsPanel(
                         let groups = listed(&kind, can_edit, grouped(node_id, edges));
                         view! {
                             <div class="space-y-4" data-testid="connections-groups">
-                                {groups.into_iter().map(|(group, rows)| {
-                                    group_view(group, group.heading(&kind), rows, unfolded, links)
+                                {groups.into_iter().map(|(group, rows)| view! {
+                                    {group_view(group, group.heading(&kind), rows, unfolded, links)}
+                                    // Under "Depends on": what those wait for in turn.
+                                    {(group == Group::DependsOn).then(|| chain_view(chain))}
                                 }).collect_view()}
                             </div>
                         }.into_any()
@@ -427,6 +530,85 @@ pub fn ConnectionsPanel(
                 })}
             </Suspense>
         </SectionShell>
+    }
+}
+
+/// "Further down the chain" (S7b, §6.4): what the node's unmet
+/// dependencies wait for in turn, each with the dependency of this node
+/// it comes through. Not this node's links: no remove control. Its own
+/// boundary, so the list above doesn't blink while the chain loads.
+fn chain_view(chain: LocalResource<Option<Result<NodeBlockers, UiError>>>) -> impl IntoView {
+    view! {
+        <Suspense fallback=|| ()>
+            {move || chain.get().flatten().map(|read| match read {
+                Ok(found) if found.also.is_empty() && !found.truncated => ().into_any(),
+                // The node's own unmet dependencies alone are more than
+                // was read: there was no room for what lies behind them.
+                Ok(found) if found.also.is_empty() => view! {
+                    <p class="px-2 text-xs text-stone-400 dark:text-stone-500"
+                       data-testid="chain-more">
+                        "It waits for so many nodes that what they wait for in turn was not read."
+                    </p>
+                }.into_any(),
+                Ok(found) => view! {
+                    <div role="group" aria-labelledby="connections-chain-heading"
+                         data-testid="connections-chain">
+                        <h3 id="connections-chain-heading"
+                            class="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide
+                                   text-stone-500 dark:text-stone-400">
+                            "Further down the chain"
+                            <span class="font-normal text-stone-400 dark:text-stone-500">
+                                {found.also.len()}
+                            </span>
+                        </h3>
+                        <ul class="space-y-0.5">
+                            {found.also.into_iter().map(|b| {
+                                let kind = b.node.node_type.as_str();
+                                view! {
+                                    <li class="rounded px-2 hover:bg-stone-50 dark:hover:bg-stone-800/50"
+                                        data-testid="chain-row">
+                                        <a href=format!("/nodes/{}", b.id)
+                                            class="flex min-w-0 items-center gap-2 py-1.5 text-xs
+                                                   text-stone-600 dark:text-stone-400
+                                                   hover:text-amber-700 dark:hover:text-amber-400">
+                                            <span class="material-symbols-outlined shrink-0 text-stone-400 dark:text-stone-500"
+                                                  style="font-size: 14px;" aria-hidden="true"
+                                                  title=type_label(kind)>
+                                                {type_icon(kind)}
+                                            </span>
+                                            <span class="sr-only">{format!("{}: ", type_label(kind))}</span>
+                                            <span class="font-medium truncate">{b.title.clone()}</span>
+                                            <span class="shrink-0 rounded bg-stone-100 px-1.5 py-0.5 text-[10px] font-medium
+                                                         text-stone-500 dark:bg-stone-800 dark:text-stone-400"
+                                                  data-testid="connection-standing">
+                                                {blockers::standing(&b.node)}
+                                            </span>
+                                            <span class="min-w-0 truncate text-stone-400 dark:text-stone-500"
+                                                  data-testid="chain-through">
+                                                {format!("through {}", b.via_title)}
+                                            </span>
+                                        </a>
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ul>
+                        {found.truncated.then(|| view! {
+                            <p class="mt-1 px-2 text-xs text-stone-400 dark:text-stone-500"
+                               data-testid="chain-more">
+                                "The chain goes on: only its first links are shown."
+                            </p>
+                        })}
+                    </div>
+                }.into_any(),
+                // The list above is whole without it: say so, quietly.
+                Err(_) => view! {
+                    <p class="px-2 text-xs text-stone-400 dark:text-stone-500" role="alert"
+                       data-testid="chain-error">
+                        "Couldn\u{2019}t load what these wait for in turn."
+                    </p>
+                }.into_any(),
+            })}
+        </Suspense>
     }
 }
 
@@ -458,9 +640,9 @@ fn group_view(
                 <span class="font-normal text-stone-400 dark:text-stone-500">{total}</span>
             </h3>
             <ul class="space-y-0.5">
-                {head.into_iter().map(|row| row_view(row, links)).collect_view()}
+                {head.into_iter().map(|row| row_view(row, group, links)).collect_view()}
                 {move || whole().then(|| {
-                    tail.get_value().into_iter().map(|row| row_view(row, links)).collect_view()
+                    tail.get_value().into_iter().map(|row| row_view(row, group, links)).collect_view()
                 })}
             </ul>
             {(more > 0).then(|| view! {
@@ -487,10 +669,16 @@ fn group_view(
 
 /// One link: the node at its other end (kind, title, standing, the
 /// link's label), and a remove control when this reader may remove it.
-fn row_view(row: Connection, links: NodeLinks) -> impl IntoView {
+fn row_view(row: Connection, group: Group, links: NodeLinks) -> impl IntoView {
     let edge_id = row.edge_id;
-    let standing = row.standing();
-    let live = row.is_live();
+    // In "Depends on" every row says whether it is met (S7b).
+    let standing = row.standing_in(group);
+    // There, a row is quiet once it is met; elsewhere, once out of use.
+    let live = if group == Group::DependsOn {
+        row.blocks_in(group) || row.other.is_none()
+    } else {
+        row.is_live()
+    };
     let kind = row.other.as_ref().map(|o| o.node_type.as_str().to_string());
     // An answer cached before S7a has no kind: a plain link glyph.
     let (icon, kind_label) = match kind.as_deref() {
@@ -849,6 +1037,34 @@ mod tests {
             target_node: None,
             may_remove: false,
         }
+    }
+
+    #[test]
+    fn the_chip_counts_from_the_links_once_they_are_read_and_from_the_node_until_then() {
+        let me = 1;
+        let unmet = |title: u128| {
+            let mut e = edge(title, me, title, EdgeType::DependsOn);
+            e.target_node = Some(common::edge::EdgeEnd {
+                node_type: NodeType::Project,
+                status: NodeStatus::Draft,
+                project_state: Some(ProjectState::Active),
+            });
+            e
+        };
+        // Not read yet: what the node's own answer carried.
+        assert_eq!(unmet_dependencies(id(me), 2, None), 2);
+        // Read: the links decide, so a link added or removed on the page
+        // shows at once, whatever the node's answer said when it loaded.
+        let one: LinksResult = Ok(vec![unmet(2)]);
+        assert_eq!(unmet_dependencies(id(me), 2, Some(&one)), 1);
+        let none: LinksResult = Ok(Vec::new());
+        assert_eq!(unmet_dependencies(id(me), 2, Some(&none)), 0);
+        let three: LinksResult = Ok(vec![unmet(2), unmet(3), unmet(4)]);
+        assert_eq!(unmet_dependencies(id(me), 0, Some(&three)), 3);
+        // A failed read of the links says nothing new: the node's count
+        // stands (the section shows the error itself).
+        let failed: LinksResult = Err(UiError::Network("offline".to_string()));
+        assert_eq!(unmet_dependencies(id(me), 2, Some(&failed)), 2);
     }
 
     #[test]

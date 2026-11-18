@@ -361,11 +361,17 @@ pub fn state_badge_view(status: &TaskStatus) -> Option<AnyView> {
 pub fn blocked_badge_view(blocked_by: u32) -> AnyView {
     let label = common::task_dependency::blocked_label(blocked_by);
     let rest = label.trim_start_matches("Blocked").to_string();
+    blocked_chip(label, rest, "task-blocked")
+}
+
+/// The "Blocked" chip itself, one look for a task and for a node (S7b):
+/// `label` is its tooltip, `rest` what a screen reader hears after the
+/// word, `testid` says which it is.
+pub fn blocked_chip(label: String, rest: String, testid: &'static str) -> AnyView {
     view! {
-        <span class="flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 rounded \
-                     bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300"
+        <span class=BLOCKED_CHIP
             title=label
-            data-testid="task-blocked">
+            data-testid=testid>
             <span class="material-symbols-outlined" style="font-size:12px;"
                 aria-hidden="true">"block"</span>
             "Blocked"
@@ -374,6 +380,11 @@ pub fn blocked_badge_view(blocked_by: u32) -> AnyView {
     }
     .into_any()
 }
+
+/// The chip's classes: neutral, never a warm colour (it is information,
+/// not urgency).
+pub const BLOCKED_CHIP: &str = "flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 rounded text-xs \
+     bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300";
 
 /// "Project parked" on a My Day row whose project is parked or closed
 /// (S6a): why an open task is in the Backlog and not carried into Today
