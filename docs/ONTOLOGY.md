@@ -452,7 +452,23 @@ reach (a person with no email, or an email that changed).
 - **A collision blocks the save.** Saving a Person with an email that
   already belongs to another Person is refused, with a way to open the
   existing record or merge into it. Records are never merged
-  automatically.
+  automatically. (Opening the existing record is there; merging comes
+  with the merge tool.)
+- **The same address** means the same text once the spaces around it are
+  off and ASCII letters are compared without case. Nothing more: no mail
+  provider's own rules (dots, `+tags`), and letters outside ASCII are
+  compared as typed. An address is not accepted with a wrapper around it
+  (`mailto:`, `<…>`) or with characters that take no space on screen,
+  so that one mailbox cannot be written two ways that look alike.
+- **One address, once.** A Person does not list the same address twice.
+- **People who shared an address before the rule stay as they are**, and
+  stay editable: each keeps the address it has. What is refused is
+  *adding* an address another Person lists. So one of a pair who lets
+  the address go cannot take it back while the other lists it. Such
+  pairs are listed in the data-health report until they are edited or
+  merged; a restore brings back the ones its archive holds.
+- **Per account.** The rule is about one person's registry. Two accounts
+  may hold the same address, and neither is told (§14).
 - **A Person's email belongs to that individual.** Shared and role
   mailboxes (support@, a team or family inbox) are not People: they are
   contact points on a Company (§8.1). This keeps the identity rule strict.
@@ -956,4 +972,6 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-17 | What "not shown" means, for a node's links and for a Task's prerequisites (§14, §9.3): hidden from the reader **and from the owner** of the node (the Task's Project). Hidden from the reader alone would tell an editor of a shared node how many private nodes its owner links it to, and let them delete those links; the Task rule shipped in 3.26.0 had that fault and is narrowed. Which links: those the node's editor could remove if shown (made by hand from the node, and `related_to` either way); not a hidden home, not another node's link into this one, never a wiki link. One number, never which; nothing in History. **Considered and left out:** refusing such a link when it is made. A share ending hides a link after the fact, and a shared Project depending on an editor's private one is a fair use. (The plan also said a refusal would tell an editor whether a third person's node is shared with the owner. The count does not avoid that either: see the next row) | Developer, building #349; in the plan the owner approved |
 | 2026-11-17 | From the independent review of #349, decided or left open. **"The node's owner"** in the rule is the account the node belongs to, seeing by ownership or by a share: not someone else holding an owner's grant, and not what an admin opens by role (the database does not record roles). **A prerequisite in the trash** on the owner's private Project is the owner's business like a live one. **Accepted:** two editors of one node can learn together whether the owner sees a third person's node that one of them linked it to. **Open, for the owner:** (1) someone who may edit a Task can move it to a Project of their own, and as that Project's owner is then told how many of its prerequisites they are not shown, and may remove them (they could already delete the Task); it belongs with the open question of whether an editor may move a Task out of a shared Project at all. (2) The hidden-home rule (§6.1) has no owner half: an editor of a shared child is told of, and may free it from, a home that is the owner's own private node | Developer, from the independent review of #349 |
 | 2026-11-18 | **Only a Project's owner moves a Task to another person's Project** (§14, §9.3); an editor may still move it between Projects of one account. It closes the two gaps of the row below: keeping a Task after a share ends, and being told as its new Project's owner how many of its prerequisites one cannot see. "The owner" is the account the Project belongs to, as in the rule about links not shown: someone else holding an owner's grant does not pass; an admin does. **The hidden-home rule stays as it is** (#228) | Owner, in the developer session (#351) |
+| 2026-11-18 | **People who already share an email address stay editable**, each keeping the address it has; nobody can add an address another Person has; Data health lists them until they are edited or merged (§7.1) | Owner, in the developer session (planning S8a, #353) |
+| 2026-11-18 | How §7.1 is built (S8a). The rule is in the database for every writer, as a trigger under a lock per account, **not a unique index and not a `person_emails` table** as the programme had it: an index can't say "old pairs may stay, new ones may not". An index can replace it once no address is shared. "The same address": spaces off, ASCII case folded, nothing else, the same on every installation. The same address twice on one Person is refused, and so is an address with a wrapper or an invisible character. `?confirm=true` no longer saves anyway. A restore brings back its archive's pairs and its preview counts them. No backup format change. Shared mailboxes are refused from now on; Companies, where §7.1 puts them, come in S10a | Developer, building S8a; in the plan the owner approved |
 | 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |

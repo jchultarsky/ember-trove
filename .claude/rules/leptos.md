@@ -342,6 +342,14 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   not edit the node, so neither asks about rights. The line sits
   outside the list's `<Suspense>`: it must show beside "No connections
   yet". The confirmation is `data_health_view::InlineConfirm`.
+- **A refused person save** (S8a): `EmailTakenNotice` names who has the
+  address and never offers to save anyway. It navigates with the dialog
+  **still open**, so the unmount keeps what was typed as a draft (#170);
+  closing first drops it, as every closing does. The rows the refusal is
+  about are marked through `ContactListEditor`'s `flagged` (keys from
+  `common::person::email_key`); a row's input calls `flagged.notify()`
+  so the mark follows what is typed. The same address twice is caught by
+  `listed_twice` before anything is sent.
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before

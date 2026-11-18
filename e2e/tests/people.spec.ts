@@ -58,6 +58,13 @@ test('the registry: one editor for new and edit, and an address is one person’
     await expect(taken).toContainText(email);
     await expect(dlg.getByRole('button', { name: /anyway/i })).toHaveCount(0);
     await expect(dlg).toBeVisible();
+    // The row that holds the address is marked, until it is changed.
+    const address = dlg.getByRole('textbox', { name: 'email', exact: true });
+    await expect(address).toHaveAttribute('aria-invalid', 'true');
+    await address.fill(`${email}.x`);
+    await expect(address).toHaveAttribute('aria-invalid', 'false');
+    await address.fill(email);
+    await expect(address).toHaveAttribute('aria-invalid', 'true');
     const made: Person[] = await (await request.get(`/api/people?q=${stamp}`)).json();
     expect(made.map((p) => p.display_name)).toEqual([originalName]);
     // The old override is ignored, whatever the address's case.
@@ -73,10 +80,32 @@ test('the registry: one editor for new and edit, and an address is one person’
     expect(twice.status()).toBe(422);
     expect((await twice.json()).error).toBe('an email address is listed twice');
 
+    // The same address twice in the dialog: said at once, on both rows,
+    // and nothing is sent.
+    await address.fill(own);
+    await dlg.getByRole('button', { name: 'Add email' }).click();
+    const rows = dlg.getByTestId('email-row');
+    await rows.nth(1).getByRole('textbox', { name: 'email', exact: true }).fill(` ${own.toUpperCase()}`);
+    let sent = 0;
+    await page.route('**/api/people', (route) => {
+      if (route.request().method() === 'POST') sent += 1;
+      return route.fallback();
+    });
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(dlg.getByRole('alert')).toContainText('An email address is listed twice.');
+    for (const i of [0, 1]) {
+      await expect(rows.nth(i).getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      );
+    }
+    expect(sent).toBe(0);
+    await rows.nth(1).getByRole('button', { name: 'Remove email' }).click();
+
     // With an address of their own, the same dialog saves.
-    await dlg.getByRole('textbox', { name: 'email', exact: true }).fill(own);
     await dlg.getByRole('button', { name: 'Save' }).click();
     await expect(dlg).toHaveCount(0);
+    await page.unroute('**/api/people');
     // Saving returns to the registry (#154): the new row is there,
     // highlighted, with a toast. Its card is a row click away.
     await expect(page).toHaveURL(/\/people$/);

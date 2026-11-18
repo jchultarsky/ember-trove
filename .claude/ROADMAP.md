@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-18)
 
+- **S8a: email is identity** (#353; ONTOLOGY §7.1; owner decisions of
+  2026-11-18). A save that adds an address another of the account's
+  People lists is refused (409 with those People; no "Save anyway").
+  The rule is a database trigger under a lock per account (migration
+  056), not a unique index or a `person_emails` table: People who
+  already share an address stay editable, and Data health lists them
+  (`shared_email`). `email_key` / `person_email_key` is what "the same
+  address" means. No backup format change. **Next:** S8b (the "open or
+  merge" choices at a collision), S8c (the merge tool), then an index
+  once no address is shared. Rules: "Email is identity" in
+  `.claude/rules/api.md`; "A refused person save" in
+  `.claude/rules/leptos.md`.
+
 - **v3.29.1 shipped: task moves between accounts** (#351, PR #352;
   owner decision 2026-11-18):
   only the owner of the Project a task is on moves it to another

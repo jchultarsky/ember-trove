@@ -12,8 +12,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   second person an email address is refused. Until now the app warned,
   and "Save anyway" saved.
   - **The editor says whose address it is**, with a way to open that
-    person, and offers no way round. The same address twice on one
-    person is refused too.
+    person, and offers no way round. The row that holds the address is
+    marked. The same address twice on one person is refused too, in the
+    dialog before anything is sent. What was typed is kept when you
+    open the other person.
+  - An address pasted with a wrapper (`mailto:…`, `<…>`) or with a
+    character that takes no space on screen is refused: one mailbox
+    can't be saved two ways that look alike.
   - **People who already share an address stay as they are** and can
     still be edited (owner decision, 2026-11-18); nobody can *add* an
     address another person has. Data health lists them under "People

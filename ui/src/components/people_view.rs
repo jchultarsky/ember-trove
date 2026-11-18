@@ -114,9 +114,29 @@ pub fn ContactAction(kind: ContactKind, point: ContactPoint) -> impl IntoView {
 /// The editable contact list (emails, phones or addresses). Typing writes through
 /// untracked, so inputs never re-render (and lose focus) mid-word. Only
 /// adding or removing a row redraws the list.
+///
+/// `flagged` marks rows (S8a): the keys (`common::person::email_key`) of
+/// addresses a save was refused for. A row whose value has one of them is
+/// `aria-invalid` until it is changed.
 #[component]
-fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> impl IntoView {
+fn ContactListEditor(
+    kind: ContactKind,
+    points: RwSignal<Vec<ContactPoint>>,
+    #[prop(optional)] flagged: Option<RwSignal<Vec<String>>>,
+) -> impl IntoView {
     let redraw = RwSignal::new(0u32);
+    // Whether row `i` holds a flagged address, read when the flags change
+    // and when the row is typed in (its input notifies the flags).
+    let is_flagged = move |i: usize| {
+        flagged.is_some_and(|flagged| {
+            let keys = flagged.get();
+            !keys.is_empty()
+                && points.with_untracked(|ps| {
+                    ps.get(i)
+                        .is_some_and(|p| keys.contains(&common::person::email_key(&p.value)))
+                })
+        })
+    };
     // A text input with `inputmode`, not `type="email"`/`type="tel"`: those
     // types tell the browser this is the user's own address, and it offers
     // their details for someone else's card (#184).
@@ -206,13 +226,20 @@ fn ContactListEditor(kind: ContactKind, points: RwSignal<Vec<ContactPoint>>) -> 
                                     autocomplete=value_autocomplete
                                     autocapitalize="off"
                                     spellcheck="false"
-                                    class=INPUT_CLASS
+                                    class=format!(
+                                        "{INPUT_CLASS} aria-invalid:ring-1 aria-invalid:ring-red-500"
+                                    )
                                     placeholder=placeholder
                                     aria-label=noun
+                                    aria-invalid=move || if is_flagged(i) { "true" } else { "false" }
                                     prop:value=p.value.clone()
                                     on:input=move |ev| {
                                         let v = event_target_value(&ev);
                                         points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
+                                        // The mark is about the value: read it again.
+                                        if let Some(flagged) = flagged {
+                                            flagged.notify();
+                                        }
                                     }
                                 />
                             }.into_any()
@@ -382,6 +409,9 @@ pub fn PersonEditor(
     let open_forms = use_context::<crate::draft::OpenForms>();
     let duplicate = RwSignal::new(None::<Vec<DuplicateMatch>>);
     let error = RwSignal::new(None::<String>);
+    // The addresses the last save was refused for, as keys: their rows
+    // are marked (S8a).
+    let flagged = RwSignal::new(Vec::<String>::new());
     let form_id = match target {
         EditorTarget::New => "person-editor-form-new",
         EditorTarget::Existing(_) => "person-editor-form-edit",
@@ -494,6 +524,7 @@ pub fn PersonEditor(
         if is_open && was_open != Some(true) {
             duplicate.set(None);
             error.set(None);
+            flagged.set(Vec::new());
             if restoring.get_value() {
                 restoring.set_value(false);
             } else {
@@ -512,9 +543,17 @@ pub fn PersonEditor(
             return;
         }
         let input = draft.read();
-        saving.set(true);
         error.set(None);
         duplicate.set(None);
+        flagged.set(Vec::new());
+        // The same address twice is refused by the API (422): say so
+        // here, on the rows, without the round trip.
+        if let Some(twice) = listed_twice(&input.emails) {
+            error.set(Some("An email address is listed twice.".to_string()));
+            flagged.set(vec![twice]);
+            return;
+        }
+        saving.set(true);
         wasm_bindgen_futures::spawn_local(async move {
             let result = match target {
                 EditorTarget::New => crate::api::create_person(&input).await,
@@ -528,6 +567,12 @@ pub fn PersonEditor(
                 }
                 // Refused: an address here is someone else's (§7.1).
                 Ok(SavePerson::Collides(w)) => {
+                    flagged.try_set(
+                        w.matches
+                            .iter()
+                            .map(|m| common::person::email_key(&m.email))
+                            .collect(),
+                    );
                     duplicate.try_set(Some(w.matches));
                 }
                 Err(e) => {
@@ -650,7 +695,7 @@ pub fn PersonEditor(
                         </span>
                     </label>
                 </div>
-                <ContactListEditor kind=ContactKind::Email points=draft.emails />
+                <ContactListEditor kind=ContactKind::Email points=draft.emails flagged=flagged />
                 <ContactListEditor kind=ContactKind::Phone points=draft.phones />
                 <ContactListEditor kind=ContactKind::Address points=draft.addresses />
                 <label class="block">
@@ -692,6 +737,18 @@ pub fn PersonEditor(
             </div>
         </ModalShell>
     }
+}
+
+/// The key of an address that `emails` holds more than once, if any
+/// (`common::person::email_key`; blank rows aside). The API refuses such a
+/// list; the editor says so first.
+fn listed_twice(emails: &[ContactPoint]) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    emails
+        .iter()
+        .map(|e| common::person::email_key(&e.value))
+        .filter(|key| !key.is_empty())
+        .find(|key| !seen.insert(key.clone()))
 }
 
 /// Why a save was refused: an email address here already belongs to
@@ -1059,5 +1116,35 @@ fn UsageRow(usage: PersonUsage) -> impl IntoView {
                 {usage.role.map(|r| view! { <span class="text-xs text-stone-500">{format!("\u{b7} {r}")}</span> })}
             </button>
         </li>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn email(value: &str) -> ContactPoint {
+        ContactPoint {
+            label: String::new(),
+            value: value.into(),
+            preferred: false,
+        }
+    }
+
+    /// S8a: the editor finds an address listed twice by the API's own
+    /// key, so what it flags is what the API would refuse.
+    #[test]
+    fn an_address_listed_twice_is_found_by_its_key() {
+        assert_eq!(listed_twice(&[]), None);
+        assert_eq!(
+            listed_twice(&[email("ada@example.com"), email("bea@example.com")]),
+            None
+        );
+        assert_eq!(
+            listed_twice(&[email("ada@example.com"), email(" ADA@example.com")]),
+            Some("ada@example.com".to_string())
+        );
+        // Rows nobody typed in are not "the same address".
+        assert_eq!(listed_twice(&[email(""), email("  "), email("")]), None);
     }
 }
