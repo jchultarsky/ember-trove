@@ -6,6 +6,35 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Email is identity: the same address is one person** (S8a of the
+  ontology programme, #353; ONTOLOGY §7.1). A save that would give a
+  second person an email address is refused. Until now the app warned,
+  and "Save anyway" saved.
+  - **The editor says whose address it is**, with a way to open that
+    person, and offers no way round. The same address twice on one
+    person is refused too.
+  - **People who already share an address stay as they are** and can
+    still be edited (owner decision, 2026-11-18); nobody can *add* an
+    address another person has. Data health lists them under "People
+    who share an email address".
+  - "The same address" ignores the spaces around it and the case of
+    ASCII letters. Nothing else: no mail provider's own rules.
+  - `POST /api/people` and `PUT /api/people/{id}` answer **409** with
+    `matches` (the caller's own people who have the address), as the
+    warning did; `?confirm=true` is ignored. An address twice on one
+    person is **422**.
+  - A restore brings back the pairs its archive holds, and its preview
+    says how many people share an address.
+  - Migration 056 adds the rule to the database, for every writer, and
+    changes no row. No backup format change.
+
+### Security
+- The email rule is per account, like the People registry itself: two
+  accounts may hold the same address and neither is told. The admin's
+  Data health count is the accounts' own counts added up. The
+  database's refusal names no address and no person.
+
 ## [3.29.1] - 2026-11-18
 
 ### Security

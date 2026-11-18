@@ -2189,13 +2189,488 @@ async fn people_are_owner_scoped_searchable_and_duplicate_checked(pool: PgPool) 
     );
     assert!(repo.list("a", Some("%"), 100).await.unwrap().is_empty());
 
-    // The duplicate check is per owner and case-insensitive.
-    let dup = repo
-        .find_by_emails("a", &["ada@example.com".into()])
-        .await
-        .unwrap();
+    // Who has an address is read per owner, without case: a new person
+    // of a's would collide with a's Ada, and never with b's.
+    let wanted = person("x", Some(" ADA@example.com")).emails;
+    let dup = repo.email_collisions("a", None, &wanted).await.unwrap();
     assert_eq!(dup.len(), 1);
     assert_eq!(dup[0].id, ada.id);
+    assert_eq!(dup[0].email, "ada@example.com", "her spelling of it");
+    let dup = repo.email_collisions("b", None, &wanted).await.unwrap();
+    assert_eq!(dup.len(), 1);
+    assert_eq!(dup[0].id, theirs.id);
+    assert!(
+        repo.email_collisions("c", None, &wanted)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // SECURITY: asked about a person who is not the caller's, it finds
+    // nothing: the save that follows answers 404, and never a 409 that
+    // would say "one of your people has this address" about an id the
+    // caller only guessed. Asked about one of their own, it does.
+    let cb = repo.list("a", Some("babbage"), 1).await.unwrap().remove(0);
+    assert_eq!(
+        repo.email_collisions("a", Some(cb.id), &wanted)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    for not_theirs in [theirs.id, common::id::PersonId::new()] {
+        assert!(
+            repo.email_collisions("a", Some(not_theirs), &wanted)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    // Ada keeps her own address: it is not a collision with herself.
+    assert!(
+        repo.email_collisions("a", Some(ada.id), &wanted)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+// ── Email is identity (S8a, #353; ONTOLOGY §7.1) ─────────────────────────────
+
+/// An email list as the `people.emails` column holds it.
+fn email_list(values: &[&str]) -> serde_json::Value {
+    serde_json::Value::Array(
+        values
+            .iter()
+            .map(|v| serde_json::json!({ "label": "work", "value": v, "preferred": false }))
+            .collect(),
+    )
+}
+
+/// A person by raw SQL, with exactly these stored addresses.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn raw_person(pool: &PgPool, owner: &str, name: &str, emails: &[&str]) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO people (owner_id, display_name, emails) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(owner)
+    .bind(name)
+    .bind(email_list(emails))
+    .fetch_one(pool)
+    .await
+    .expect("raw person")
+}
+
+/// People of one account who share an address. Since migration 056 the
+/// database refuses to make one, so they are made as a restore brings
+/// them back: under its setting, in one transaction.
+// Fixture helper; see `create_node`.
+#[allow(clippy::expect_used)]
+async fn people_who_share(
+    pool: &PgPool,
+    owner: &str,
+    names: &[&str],
+    address: &str,
+) -> Vec<uuid::Uuid> {
+    let mut tx = pool.begin().await.expect("tx");
+    sqlx::query("SET LOCAL ember.restoring_people = 'on'")
+        .execute(&mut *tx)
+        .await
+        .expect("setting");
+    let mut ids = Vec::new();
+    for name in names {
+        let id = sqlx::query_scalar(
+            "INSERT INTO people (owner_id, display_name, emails) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(owner)
+        .bind(name)
+        .bind(email_list(&[address]))
+        .fetch_one(&mut *tx)
+        .await
+        .expect("a person who shares");
+        ids.push(id);
+    }
+    tx.commit().await.expect("commit");
+    ids
+}
+
+fn with_emails(name: &str, values: &[&str]) -> common::person::PersonInput {
+    common::person::PersonInput {
+        display_name: name.into(),
+        emails: values
+            .iter()
+            .map(|v| common::person::ContactPoint {
+                label: "work".into(),
+                value: (*v).into(),
+                preferred: false,
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+fn email_refused<T: std::fmt::Debug>(r: &Result<T, EmberTroveError>) -> bool {
+    matches!(r, Err(EmberTroveError::AlreadyExists(_)))
+}
+
+/// Migration 056: the email rule arrives and no row changes. People who
+/// already share an address stay as they are and stay editable (owner
+/// decision, 2026-11-18); nobody can ADD an address another person of the
+/// account lists.
+#[sqlx::test(migrations = false)]
+async fn migration_056_adds_the_email_rule_and_changes_no_row(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    use common::id::PersonId;
+    // A database that has never seen 056: an old pair can still be made.
+    apply_migrations(&pool, |version| version < 56).await;
+    let one = raw_person(&pool, "a", "pair one", &["x@example.com"]).await;
+    let two = raw_person(&pool, "a", "pair two", &[" X@Example.com"]).await;
+    let alone = raw_person(&pool, "a", "alone", &["solo@example.com"]).await;
+    let twice = raw_person(&pool, "a", "twice", &["t@example.com", "T@example.com"]).await;
+    raw_person(&pool, "a", "blank", &["", "   "]).await;
+    raw_person(&pool, "a", "none", &[]).await;
+    raw_person(&pool, "b", "b's own", &["x@example.com"]).await;
+
+    let rows = || async {
+        sqlx::query_scalar::<_, serde_json::Value>("SELECT to_jsonb(p) FROM people p ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("rows")
+    };
+    let before = rows().await;
+    apply_migrations(&pool, |version| version == 56).await;
+    assert_eq!(rows().await, before, "056 writes no data");
+    // It can be run again.
+    apply_migrations(&pool, |version| version == 56).await;
+    assert_eq!(rows().await, before);
+    apply_migrations(&pool, |version| version > 56).await;
+
+    let repo = PgPersonRepo::new(pool.clone());
+    // The old pair: each still saves with the address it has, whatever
+    // else changes, a change of case and a new address of its own included.
+    repo.update(
+        "a",
+        PersonId(one),
+        &with_emails("pair one, renamed", &["X@example.com"]),
+    )
+    .await
+    .expect("the first of the pair");
+    repo.update(
+        "a",
+        PersonId(two),
+        &with_emails("pair two, renamed", &["x@example.com", "new@example.com"]),
+    )
+    .await
+    .expect("the second of the pair");
+    // Nobody else takes it: not a third person, not a new one.
+    let third = repo
+        .update(
+            "a",
+            PersonId(alone),
+            &with_emails("alone", &["solo@example.com", "x@example.com"]),
+        )
+        .await;
+    assert!(email_refused(&third), "{third:?}");
+    let new = repo
+        .create("a", &with_emails("new", &[" X@EXAMPLE.com "]))
+        .await;
+    assert!(email_refused(&new), "{new:?}");
+    // A refused save wrote nothing.
+    let kept: serde_json::Value = sqlx::query_scalar("SELECT emails FROM people WHERE id = $1")
+        .bind(alone)
+        .fetch_one(&pool)
+        .await
+        .expect("alone");
+    assert_eq!(kept, email_list(&["solo@example.com"]));
+
+    // SECURITY: accounts are apart. b takes an address a has, and is held
+    // to its own.
+    repo.create("b", &with_emails("b two", &["solo@example.com"]))
+        .await
+        .expect("another account's address is no collision");
+    let own = repo
+        .create("b", &with_emails("b three", &["x@example.com"]))
+        .await;
+    assert!(email_refused(&own), "{own:?}");
+
+    // One of the pair lets the address go, and can't have it back while
+    // the other still lists it.
+    repo.update("a", PersonId(one), &with_emails("pair one", &[]))
+        .await
+        .expect("let go");
+    let back = repo
+        .update(
+            "a",
+            PersonId(one),
+            &with_emails("pair one", &["x@example.com"]),
+        )
+        .await;
+    assert!(email_refused(&back), "{back:?}");
+    // A person with one address twice, from before: the database lets
+    // the rest of it change. (The API refuses that list, in `normalize`.)
+    sql(
+        &pool,
+        &format!("UPDATE people SET display_name = 'twice, renamed' WHERE id = '{twice}'"),
+    )
+    .await;
+
+    // SECURITY: the database's own words name no address and no person,
+    // and carry no detail: nothing of a contact reaches a log through
+    // this error.
+    let err = sqlx::query("UPDATE people SET emails = $1 WHERE id = $2")
+        .bind(email_list(&["x@example.com"]))
+        .bind(alone)
+        .execute(&pool)
+        .await
+        .expect_err("refused");
+    let sqlx::Error::Database(db) = err else {
+        panic!("a database error: {err:?}");
+    };
+    assert_eq!(db.constraint(), Some("people_email_identity"));
+    assert_eq!(
+        db.message(),
+        "an email address already belongs to another person"
+    );
+    assert!(db.is_unique_violation());
+    let pg = db.downcast_ref::<sqlx::postgres::PgDatabaseError>();
+    assert_eq!(pg.detail(), None);
+    assert!(!format!("{db}").contains('@'), "{db}");
+}
+
+/// What "the same address" is has two spellings: `person_email_key` in the
+/// database, which decides a save, and `common::person::email_key`, which
+/// the restore preview and the editor use. They must give one answer on
+/// every installation, so both fold ASCII only (`COLLATE "C"`).
+#[sqlx::test(migrations = "../migrations")]
+async fn the_database_and_the_app_agree_on_what_the_same_address_is(pool: PgPool) {
+    for value in [
+        "ada@example.com",
+        " Ada@Example.COM ",
+        "\tada@example.com",
+        "ada@example.com\n",
+        "\u{a0}ada@example.com",
+        "ÄDA@example.com",
+        "İstanbul@example.com",
+        "STRASSE@example.com",
+        "straße@example.com",
+        "Ǆ@example.com",
+        "a b@example.com",
+        "",
+        "   ",
+    ] {
+        let in_sql: String = sqlx::query_scalar("SELECT person_email_key($1)")
+            .bind(value)
+            .fetch_one(&pool)
+            .await
+            .expect("key");
+        assert_eq!(in_sql, common::person::email_key(value), "{value:?}");
+    }
+}
+
+/// Two saves at once, each of which alone is fine: only one may land. The
+/// check and the write are two steps, so the database holds a lock per
+/// account between them (the trigger of 056). Without it both pass.
+#[sqlx::test(migrations = "../migrations")]
+async fn two_saves_at_once_never_both_take_an_address(pool: PgPool) {
+    use super::person::{PersonRepo, PgPersonRepo};
+    let (one, two) = (
+        PgPersonRepo::new(pool.clone()),
+        PgPersonRepo::new(pool.clone()),
+    );
+    for round in 0..10 {
+        let address = format!("round{round}@example.com");
+        let (first, second) = (
+            with_emails("first", &[&address]),
+            with_emails("second", &[&address]),
+        );
+        let (r1, r2) = tokio::join!(one.create("a", &first), two.create("a", &second));
+        assert_eq!(
+            usize::from(r1.is_ok()) + usize::from(r2.is_ok()),
+            1,
+            "exactly one of the two: {r1:?} / {r2:?}"
+        );
+        assert!(email_refused(&r1) || email_refused(&r2), "{r1:?} / {r2:?}");
+        // Two accounts at once never wait for, or refuse, each other.
+        let (r1, r2) = tokio::join!(one.create("b", &first), two.create("c", &second));
+        assert!(r1.is_ok() && r2.is_ok(), "{r1:?} / {r2:?}");
+    }
+    assert_eq!(
+        scalar(&pool, "SELECT count(*) FROM people WHERE owner_id = 'a'").await,
+        10
+    );
+
+    // A save that has written its person and not yet committed: a second
+    // save of the same address waits for it, and is refused once it lands.
+    let mut held = pool.begin().await.expect("tx");
+    sqlx::query("INSERT INTO people (owner_id, display_name, emails) VALUES ('a', 'holder', $1)")
+        .bind(email_list(&["held@example.com"]))
+        .execute(&mut *held)
+        .await
+        .expect("the first save");
+    let waiting = tokio::spawn({
+        let repo = PgPersonRepo::new(pool.clone());
+        async move {
+            repo.create("a", &with_emails("waits", &["HELD@example.com"]))
+                .await
+        }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished(),
+        "it waits for the save that holds the account's lock"
+    );
+    held.commit().await.expect("commit");
+    let late = waiting.await.expect("join");
+    assert!(email_refused(&late), "{late:?}");
+}
+
+/// The rule needs to see what the save before it committed. Only READ
+/// COMMITTED gives its check a fresh look after the lock; under a snapshot
+/// taken earlier two saves could both pass. So a person with a new
+/// address is not written under any other isolation: refused, in words.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_new_address_is_not_written_under_a_stale_snapshot(pool: PgPool) {
+    for level in ["REPEATABLE READ", "SERIALIZABLE"] {
+        let mut tx = pool.begin().await.expect("tx");
+        sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {level}"))
+            .execute(&mut *tx)
+            .await
+            .expect("level");
+        let err = sqlx::query(
+            "INSERT INTO people (owner_id, display_name, emails) VALUES ('a', 'x', $1)",
+        )
+        .bind(email_list(&["stale@example.com"]))
+        .execute(&mut *tx)
+        .await
+        .expect_err("refused");
+        assert!(
+            err.to_string()
+                .contains("people are written under read committed"),
+            "{level}: {err}"
+        );
+        drop(tx);
+        // A person with no address at all has nothing to check.
+        let mut tx = pool.begin().await.expect("tx");
+        sqlx::query(&format!("SET TRANSACTION ISOLATION LEVEL {level}"))
+            .execute(&mut *tx)
+            .await
+            .expect("level");
+        sqlx::query("INSERT INTO people (owner_id, display_name) VALUES ('a', 'no address')")
+            .execute(&mut *tx)
+            .await
+            .expect("nothing new, nothing refused");
+        tx.rollback().await.expect("rollback");
+    }
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM people").await, 0);
+}
+
+/// People who share an address are brought back by a restore as they are
+/// (never merged, never trimmed), listed in Data health to their owner
+/// alone, and counted for the admin as a number. The rule is off only for
+/// the restore's own inserts.
+#[sqlx::test(migrations = "../migrations")]
+async fn people_who_share_an_address_come_back_from_a_restore_and_are_listed(pool: PgPool) {
+    use super::data_health::{DataHealthRepo, PgDataHealthRepo};
+    use super::person::{PersonRepo, PgPersonRepo};
+    use common::data_health::RuleId;
+    let people = PgPersonRepo::new(pool.clone());
+    let mut a = people_who_share(
+        &pool,
+        "a",
+        &["Ada", "Ada L.", "A. Lovelace"],
+        "ada@example.com",
+    )
+    .await;
+    let b = people_who_share(&pool, "b", &["Bob", "Robert"], "bob@example.com").await;
+    // SECURITY: one address, once in each of two accounts: a pair to
+    // nobody. Counted across accounts it would say they know one person.
+    people
+        .create("a", &with_emails("Alone", &["both@example.com"]))
+        .await
+        .expect("a's");
+    people
+        .create("b", &with_emails("Also alone", &["both@example.com"]))
+        .await
+        .expect("b's");
+    create_node(&pool, "a", "restore host").await;
+
+    let check = || async {
+        let report = health(&pool, "a").await;
+        let rule = &report[&RuleId::SharedEmail];
+        let mut listed = subjects(&report, RuleId::SharedEmail);
+        listed.sort_unstable();
+        assert_eq!(rule.count, 3);
+        // Each of the three, with the two others; and no address in it.
+        for item in &rule.items {
+            assert_eq!(item.related.len(), 2, "{item:?}");
+            assert!(item.related.iter().all(|r| r.id != item.subject.id));
+        }
+        let told = serde_json::to_string(rule).expect("json");
+        assert!(!told.contains('@'), "{told}");
+        assert!(!told.contains("Bob"), "another account's person: {told}");
+        assert_eq!(health(&pool, "b").await[&RuleId::SharedEmail].count, 2);
+        assert_eq!(health(&pool, "c").await[&RuleId::SharedEmail].count, 0);
+        // The admin's number is the accounts' own, added up.
+        let counts = PgDataHealthRepo::new(pool.clone())
+            .counts_all()
+            .await
+            .expect("counts");
+        let admin = counts
+            .iter()
+            .find(|c| c.rule == RuleId::SharedEmail)
+            .map(|c| c.count);
+        assert_eq!(admin, Some(5));
+        listed
+    };
+    a.sort_unstable();
+    assert_eq!(check().await, a);
+    assert_eq!(b.len(), 2);
+
+    let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+    let data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+    drop(tx);
+    assert_eq!(common::person::shared_email_people(&data.people), 5);
+
+    // On one connection, so what is left on it afterwards can be read.
+    let mut conn = pool.acquire().await.expect("connection");
+    let mut tx = sqlx::Connection::begin(&mut *conn).await.expect("tx");
+    crate::backup::restore_into(&mut tx, &data)
+        .await
+        .expect("a restore brings the pairs back");
+    // Inside the restore's own transaction the rule is on again once the
+    // people are in. (A savepoint: a refused statement would otherwise
+    // end the transaction.)
+    {
+        let mut point = sqlx::Acquire::begin(&mut *tx).await.expect("savepoint");
+        let late = sqlx::query(
+            "INSERT INTO people (owner_id, display_name, emails) VALUES ('a', 'late', $1)",
+        )
+        .bind(email_list(&["ada@example.com"]))
+        .execute(&mut *point)
+        .await;
+        assert!(
+            late.is_err(),
+            "the rule is back for the rest of the restore"
+        );
+        point.rollback().await.expect("rollback");
+    }
+    tx.commit().await.expect("commit");
+    // SECURITY: the setting ended with the transaction. A plain SET would
+    // leave the rule off for whoever gets this connection from the pool.
+    let left: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('ember.restoring_people', true)")
+            .fetch_one(&mut *conn)
+            .await
+            .expect("setting");
+    assert_ne!(left.as_deref(), Some("on"));
+    drop(conn);
+
+    assert_eq!(scalar(&pool, "SELECT count(*) FROM people").await, 7);
+    assert_eq!(check().await, a, "the same people, as they were");
+    let new = people
+        .create("a", &with_emails("new", &["ADA@example.com"]))
+        .await;
+    assert!(email_refused(&new), "{new:?}");
 }
 
 #[sqlx::test(migrations = "../migrations")]

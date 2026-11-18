@@ -507,17 +507,18 @@ pub fn PersonEditor(
         is_open
     });
 
-    let save = move |confirm: bool| {
+    let save = move || {
         if saving.get_untracked() {
             return;
         }
         let input = draft.read();
         saving.set(true);
         error.set(None);
+        duplicate.set(None);
         wasm_bindgen_futures::spawn_local(async move {
             let result = match target {
-                EditorTarget::New => crate::api::create_person(&input, confirm).await,
-                EditorTarget::Existing(id) => crate::api::update_person(id, &input, confirm).await,
+                EditorTarget::New => crate::api::create_person(&input).await,
+                EditorTarget::Existing(id) => crate::api::update_person(id, &input).await,
             };
             saving.try_set(false);
             match result {
@@ -525,7 +526,8 @@ pub fn PersonEditor(
                     open.try_set(false);
                     on_saved.run(p);
                 }
-                Ok(SavePerson::Duplicate(w)) => {
+                // Refused: an address here is someone else's (§7.1).
+                Ok(SavePerson::Collides(w)) => {
                     duplicate.try_set(Some(w.matches));
                 }
                 Err(e) => {
@@ -556,7 +558,7 @@ pub fn PersonEditor(
     let on_key = Callback::new(move |ev: web_sys::KeyboardEvent| {
         if ev.key() == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
             ev.prevent_default();
-            save(false);
+            save();
         }
     });
     let name_ref: NodeRef<leptos::html::Input> = NodeRef::new();
@@ -591,7 +593,7 @@ pub fn PersonEditor(
                 autocomplete="off"
                 class="flex-1 overflow-y-auto px-4 py-4 space-y-4"
                 data-testid="person-form"
-                on:submit=move |ev| { ev.prevent_default(); save(false); }
+                on:submit=move |ev| { ev.prevent_default(); save(); }
                 // Every field's `input` and the radios' `change` bubble here.
                 on:input=move |_| keep()
                 on:change=move |_| keep()
@@ -613,8 +615,10 @@ pub fn PersonEditor(
                     <p class="text-sm text-red-600 dark:text-red-400" role="alert">{e}</p>
                 })}
                 {move || duplicate.get().map(|matches| view! {
-                    <DuplicateNotice matches=matches proceed_label="Save anyway"
-                        on_proceed=Callback::new(move |()| save(true)) />
+                    // Opening the other person leaves this dialog: what
+                    // was typed stays as a draft on this device (#170).
+                    <EmailTakenNotice matches=matches
+                        on_open=Callback::new(move |()| open.set(false)) />
                 })}
                 <label class="block">
                     <span class=LABEL_CLASS>"Name"</span>
@@ -688,21 +692,31 @@ pub fn PersonEditor(
     }
 }
 
-/// The "already in your registry" warning: links to the matches, and a way
-/// to create anyway.
+/// Why a save was refused: an email address here already belongs to
+/// someone else in the registry (S8a; ONTOLOGY §7.1: the same address is
+/// the same person). It names them, each a way to open that record, and
+/// offers nothing that saves anyway. With no one left to name (they were
+/// removed a moment later) it says to try again.
 #[component]
-pub fn DuplicateNotice(
+pub fn EmailTakenNotice(
     matches: Vec<DuplicateMatch>,
-    /// "Create a new person anyway" / "Save anyway".
-    proceed_label: &'static str,
-    #[prop(into)] on_proceed: Callback<()>,
+    /// Runs before the page goes to the other person.
+    #[prop(into)]
+    on_open: Callback<()>,
 ) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
+    let nobody = matches.is_empty();
     view! {
         <div class="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm space-y-2"
-            role="alert" data-testid="duplicate-warning">
+            role="alert" data-testid="email-taken">
             <p class="text-stone-700 dark:text-stone-200">
-                "Someone in your registry already has this email:"
+                {if nobody {
+                    "An email address here was just given to someone else in your registry. \
+                     Save again."
+                } else {
+                    "Not saved. An email address here already belongs to someone in your \
+                     registry, and the same address means the same person:"
+                }}
             </p>
             <ul class="space-y-1">
                 {matches.into_iter().map(|m| {
@@ -710,18 +724,22 @@ pub fn DuplicateNotice(
                     view! {
                         <li>
                             <button type="button" class="text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
-                                on:click=move |_| navigate.get_value()(&format!("/people/{id}"), Default::default())>
+                                on:click=move |_| {
+                                    on_open.run(());
+                                    navigate.get_value()(&format!("/people/{id}"), Default::default());
+                                }>
                                 {m.display_name}
                             </button>
-                            <span class="text-stone-400">{format!(" · {}", m.email)}</span>
+                            <span class="text-stone-500 dark:text-stone-400">{format!(" · {}", m.email)}</span>
                         </li>
                     }
                 }).collect_view()}
             </ul>
-            <button type="button" class="text-xs text-stone-600 dark:text-stone-300 underline cursor-pointer"
-                on:click=move |_| on_proceed.run(())>
-                {proceed_label}
-            </button>
+            {(!nobody).then(|| view! {
+                <p class="text-xs text-stone-600 dark:text-stone-300">
+                    "Open them to use that record, or take the address off here."
+                </p>
+            })}
         </div>
     }
 }

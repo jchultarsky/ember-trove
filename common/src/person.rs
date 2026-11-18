@@ -238,6 +238,8 @@ pub enum PersonError {
     InvalidPhone,
     /// A one-line field contains a line break or control character.
     ControlChar { field: &'static str },
+    /// The same email address twice on one person ([`email_key`]).
+    DuplicateEmail,
 }
 
 impl std::fmt::Display for PersonError {
@@ -257,6 +259,8 @@ impl std::fmt::Display for PersonError {
             PersonError::InvalidEmail => write!(f, "that doesn't look like an email address"),
             PersonError::InvalidPhone => write!(f, "that doesn't look like a phone number"),
             PersonError::ControlChar { field } => write!(f, "{field} must be a single line"),
+            // Names no address: the message reaches a log.
+            PersonError::DuplicateEmail => write!(f, "an email address is listed twice"),
         }
     }
 }
@@ -367,7 +371,56 @@ fn contact_points(
     if out.iter().filter(|p| p.preferred).count() > 1 {
         return Err(PersonError::MultiplePreferred { field });
     }
+    if field == "emails" {
+        // Refused, not collapsed: the two rows may carry different labels,
+        // and which to keep is the person's to say.
+        let mut seen = std::collections::HashSet::new();
+        if !out.iter().all(|p| seen.insert(email_key(&p.value))) {
+            return Err(PersonError::DuplicateEmail);
+        }
+    }
     Ok(out)
+}
+
+/// What makes two email addresses **the same address** (ONTOLOGY §7.1:
+/// email is identity): the spaces around it off, and ASCII letters
+/// compared without case. Nothing else: no folding of accented letters,
+/// and none of a mail provider's own rules (dots, `+tags`).
+///
+/// It is the twin of the database's `person_email_key` (migration 056,
+/// `lower(btrim(v) COLLATE "C")`), which is the one that decides a save.
+/// ASCII only on purpose: how a database lower-cases other letters turns
+/// on its collation, and the two must agree on every installation. A
+/// Postgres test holds them equal.
+#[must_use]
+pub fn email_key(value: &str) -> String {
+    value.trim_matches(' ').to_ascii_lowercase()
+}
+
+/// How many of `people` list an address that another person **of the same
+/// account** lists too. For the restore preview: a restore brings such
+/// pairs back as they are, and Data health lists them. A number only.
+#[must_use]
+pub fn shared_email_people(people: &[Person]) -> usize {
+    use std::collections::{HashMap, HashSet};
+    let mut holders: HashMap<(&str, String), HashSet<PersonId>> = HashMap::new();
+    for p in people {
+        for e in &p.emails {
+            let key = email_key(&e.value);
+            if !key.is_empty() {
+                holders
+                    .entry((p.owner_id.as_str(), key))
+                    .or_default()
+                    .insert(p.id);
+            }
+        }
+    }
+    holders
+        .values()
+        .filter(|ids| ids.len() > 1)
+        .flatten()
+        .collect::<HashSet<_>>()
+        .len()
 }
 
 /// A deliberately loose shape check: one `@`, something on both sides, a
@@ -531,9 +584,15 @@ pub struct RoleCount {
     pub count: u32,
 }
 
-/// `409` body when a new person's email matches someone already in the
-/// registry: a duplicate warning, never an identity rule. Retry with
-/// `?confirm=true` to create anyway.
+/// `409` body when a save would give a person an email address that
+/// another person in the same registry already lists (ONTOLOGY §7.1: the
+/// same address is the same person). The save is refused; `matches` are
+/// the caller's own people who have it, so the page can open them. It may
+/// be empty when the other person was removed a moment later: try again.
+///
+/// Until 3.30.0 this was a warning, and `?confirm=true` saved anyway. The
+/// name and the shape are kept, so a page loaded before the release still
+/// reads the answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct DuplicateWarning {
     pub matches: Vec<DuplicateMatch>,
@@ -544,15 +603,6 @@ pub struct DuplicateMatch {
     pub id: PersonId,
     pub display_name: String,
     pub email: String,
-}
-
-/// The lowercased email values of `input`, for the duplicate check.
-pub fn email_keys(input: &PersonInput) -> Vec<String> {
-    input
-        .emails
-        .iter()
-        .map(|e| e.value.to_lowercase())
-        .collect()
 }
 
 /// The contact point to show first: the preferred one, else the first.
@@ -981,13 +1031,78 @@ mod tests {
         );
     }
 
+    /// §7.1: what "the same address" means. The database's
+    /// `person_email_key` is held equal to this by a Postgres test.
     #[test]
-    fn email_keys_are_lowercased_for_the_duplicate_check() {
-        let p = PersonInput {
-            emails: vec![cp("", "Ada@Example.COM", false)],
+    fn the_same_address_ignores_ascii_case_and_the_spaces_around_it() {
+        assert_eq!(email_key("Ada@Example.COM"), "ada@example.com");
+        assert_eq!(email_key("  ada@example.com "), "ada@example.com");
+        // Only spaces are taken off, and only ASCII letters are folded:
+        // the database must give the same answer under any collation.
+        assert_eq!(email_key("\tada@example.com"), "\tada@example.com");
+        assert_eq!(email_key("ÄDA@example.com"), "Äda@example.com");
+        assert_ne!(email_key("Äda@example.com"), email_key("äda@example.com"));
+        // No mail provider's own rules.
+        assert_ne!(email_key("a.da@example.com"), email_key("ada@example.com"));
+        assert_ne!(email_key("ada+x@example.com"), email_key("ada@example.com"));
+        assert_eq!(email_key("   "), "");
+    }
+
+    #[test]
+    fn the_same_address_twice_on_one_person_is_refused() {
+        let twice = PersonInput {
+            emails: vec![
+                cp("work", "ada@example.com", true),
+                cp("home", " ADA@example.com", false),
+            ],
             ..named("Ada")
         };
-        assert_eq!(email_keys(&p), vec!["ada@example.com".to_string()]);
+        assert_eq!(normalize(twice), Err(PersonError::DuplicateEmail));
+        // The message names no address.
+        assert!(!PersonError::DuplicateEmail.to_string().contains('@'));
+        // Two different addresses are fine, and so is the same phone twice
+        // (a phone is no identity).
+        let fine = PersonInput {
+            emails: vec![
+                cp("work", "ada@example.com", true),
+                cp("home", "ada@home.example", false),
+            ],
+            phones: vec![cp("a", "555 0100", false), cp("b", "555 0100", false)],
+            ..named("Ada")
+        };
+        assert!(normalize(fine).is_ok());
+    }
+
+    #[test]
+    fn people_who_share_an_address_are_counted_within_one_account() {
+        let now = Utc::now();
+        let person = |owner: &str, emails: &[&str]| Person {
+            id: PersonId::new(),
+            owner_id: owner.into(),
+            display_name: "x".into(),
+            company: None,
+            position: None,
+            emails: emails.iter().map(|e| cp("", e, false)).collect(),
+            phones: Vec::new(),
+            addresses: Vec::new(),
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let people = vec![
+            person("a", &["ada@example.com", "one@example.com"]),
+            person("a", &["ADA@example.com "]),
+            person("a", &["ada@example.com", "ada@example.com"]),
+            person("a", &["alone@example.com"]),
+            person("a", &[]),
+            // Another account with the same address: never a pair with a's.
+            person("b", &["ada@example.com"]),
+            person("b", &["one@example.com"]),
+        ];
+        assert_eq!(shared_email_people(&people), 3);
+        assert_eq!(shared_email_people(&people[3..]), 0);
+        // The same address twice on one person is not a pair.
+        assert_eq!(shared_email_people(&people[2..3]), 0);
     }
 
     fn membership(owner: &str) -> Membership {

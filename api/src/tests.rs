@@ -1464,6 +1464,8 @@ fn fake_node(slug: &str, owner: &str) -> Node {
 /// person, `AZ_PERSON`, owned by `test-sub`; any other id is a 404, the way
 /// another owner's person is.
 const AZ_PERSON: u128 = 0xa2_0e01;
+/// A second person of the caller's (S8a): one to give Ada's address to.
+const AZ_SECOND_PERSON: u128 = 0xa2_0e02;
 /// The membership `add_membership` writes on AZ_MY_PROJECT (#216).
 const AZ_NEW_MEMBERSHIP: u128 = 0xa2_0e10;
 
@@ -1653,6 +1655,58 @@ impl crate::repo::project_focus::FocusRepo for StubFocusRepo {
     }
 }
 
+/// The one address someone in the stub's registry has (Ada).
+const STUB_TAKEN: &str = "taken@example.com";
+/// An address that is free when the route looks and taken when it writes:
+/// another save landed in between. The stub's write refuses it as the
+/// database would, and from then on the collision read finds Ada.
+const STUB_RACED: &str = "raced@example.com";
+/// As `STUB_RACED`, but whoever took it is gone again by the second look.
+const STUB_VANISHED: &str = "vanished@example.com";
+
+thread_local! {
+    static PERSON_WRITE_REFUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A person write as the database would answer it (migration 056).
+/// A write of `taken@` by anyone but Ada means the route skipped the
+/// check: it fails the test loudly.
+fn stub_person_write(
+    owner: &str,
+    id: common::id::PersonId,
+    input: &common::person::PersonInput,
+) -> Result<common::person::Person, EmberTroveError> {
+    let keys: Vec<String> = input
+        .emails
+        .iter()
+        .map(|e| common::person::email_key(&e.value))
+        .collect();
+    let is_ada = id.0.as_u128() == AZ_PERSON;
+    if !is_ada && keys.iter().any(|k| k == STUB_TAKEN) {
+        panic!("a save that collides reached the repo");
+    }
+    if keys.iter().any(|k| k == STUB_RACED || k == STUB_VANISHED) {
+        PERSON_WRITE_REFUSED.with(|r| r.set(true));
+        return Err(EmberTroveError::AlreadyExists(
+            crate::repo::person::EMAIL_TAKEN.to_string(),
+        ));
+    }
+    let now = chrono::Utc::now();
+    Ok(common::person::Person {
+        id,
+        owner_id: owner.into(),
+        display_name: input.display_name.clone(),
+        company: input.company.clone(),
+        position: input.position.clone(),
+        emails: input.emails.clone(),
+        phones: input.phones.clone(),
+        addresses: input.addresses.clone(),
+        notes: input.notes.clone(),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 struct StubPersonRepo;
 #[async_trait]
 impl crate::repo::person::PersonRepo for StubPersonRepo {
@@ -1669,12 +1723,17 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
         owner: &str,
         id: common::id::PersonId,
     ) -> Result<common::person::Person, EmberTroveError> {
-        if owner == "test-sub" && id.0 == Uuid::from_u128(AZ_PERSON) {
+        if owner == "test-sub" && matches!(id.0.as_u128(), AZ_PERSON | AZ_SECOND_PERSON) {
             let now = chrono::Utc::now();
             Ok(common::person::Person {
                 id,
                 owner_id: owner.into(),
-                display_name: "Ada".into(),
+                display_name: if id.0.as_u128() == AZ_PERSON {
+                    "Ada"
+                } else {
+                    "Bea"
+                }
+                .into(),
                 company: None,
                 position: None,
                 emails: vec![],
@@ -1690,35 +1749,51 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
     }
     async fn create(
         &self,
-        _: &str,
-        _: &common::person::PersonInput,
+        owner: &str,
+        input: &common::person::PersonInput,
     ) -> Result<common::person::Person, EmberTroveError> {
-        unimplemented!()
+        stub_person_write(owner, common::id::PersonId(Uuid::new_v4()), input)
     }
     async fn update(
         &self,
-        _: &str,
-        _: common::id::PersonId,
-        _: &common::person::PersonInput,
+        owner: &str,
+        id: common::id::PersonId,
+        input: &common::person::PersonInput,
     ) -> Result<common::person::Person, EmberTroveError> {
-        unimplemented!()
+        // Only the caller's own two people exist.
+        self.get(owner, id).await?;
+        stub_person_write(owner, id, input)
     }
     async fn delete(&self, _: &str, _: common::id::PersonId) -> Result<(), EmberTroveError> {
         unimplemented!()
     }
-    async fn find_by_emails(
+    async fn email_collisions(
         &self,
-        _: &str,
-        lowered: &[String],
+        owner: &str,
+        id: Option<common::id::PersonId>,
+        emails: &[common::person::ContactPoint],
     ) -> Result<Vec<common::person::DuplicateMatch>, EmberTroveError> {
-        // Exactly one known address, so the duplicate warning can be tested.
-        Ok(lowered
+        // The real read's rule: the owner's own people only, and an id
+        // that isn't theirs finds nothing.
+        let known = id.is_none_or(|id| matches!(id.0.as_u128(), AZ_PERSON | AZ_SECOND_PERSON));
+        if owner != "test-sub" || !known {
+            return Ok(Vec::new());
+        }
+        let ada = common::id::PersonId(Uuid::from_u128(AZ_PERSON));
+        Ok(emails
             .iter()
-            .filter(|e| e.as_str() == "taken@example.com")
-            .map(|e| common::person::DuplicateMatch {
-                id: common::id::PersonId(Uuid::from_u128(AZ_PERSON)),
+            .map(|e| common::person::email_key(&e.value))
+            // Ada has `taken@`, and it is not a collision with herself.
+            // `raced@` is hers too, from the moment a write was refused.
+            .filter(|key| {
+                id != Some(ada)
+                    && (key == STUB_TAKEN
+                        || (key == STUB_RACED && PERSON_WRITE_REFUSED.with(std::cell::Cell::get)))
+            })
+            .map(|_| common::person::DuplicateMatch {
+                id: ada,
                 display_name: "Ada".into(),
-                email: e.clone(),
+                email: "Taken@Example.com".into(),
             })
             .collect())
     }
@@ -5729,21 +5804,53 @@ async fn an_invalid_person_is_rejected_before_any_write() {
     }
 }
 
+/// S8a (#353; ONTOLOGY §7.1): email is identity. A save that would give a
+/// second person an address is refused with the people who have it, and
+/// nothing is written: the stub's write panics on such a save. It was a
+/// warning with "Save anyway" (`?confirm=true`), which is ignored now.
 #[tokio::test]
-async fn a_matching_email_is_a_duplicate_warning_not_a_silent_create() {
+async fn a_save_that_would_share_an_address_is_refused_and_nothing_is_written() {
+    let ada = serde_json::json!(Uuid::from_u128(AZ_PERSON));
+    let taken = || {
+        serde_json::json!({
+            "display_name": "Ada L.",
+            "emails": [{ "value": " Taken@Example.com" }],
+            "addresses": [],
+        })
+    };
+    let second = format!("/people/{}", Uuid::from_u128(AZ_SECOND_PERSON));
+    for (method, uri) in [
+        ("POST", "/people".to_string()),
+        ("POST", "/people?confirm=true".to_string()),
+        ("PUT", second.clone()),
+        ("PUT", format!("{second}?confirm=true")),
+    ] {
+        let (status, body) = people_call(method, &uri, taken()).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{method} {uri}: {body}");
+        assert_eq!(body["matches"][0]["id"], ada, "{method} {uri}");
+        assert_eq!(body["matches"][0]["display_name"], "Ada", "{method} {uri}");
+        assert_eq!(body["matches"].as_array().map(Vec::len), Some(1));
+    }
+    // The person who has the address keeps it: not a collision with
+    // herself.
     let (status, body) = people_call(
-        "POST",
-        "/people",
-        serde_json::json!({ "display_name": "Ada L.", "emails": [{ "value": "Taken@Example.com" }] }),
+        "PUT",
+        &format!("/people/{}", Uuid::from_u128(AZ_PERSON)),
+        taken(),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["matches"][0]["display_name"], "Ada");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // An address nobody has saves.
+    let free =
+        serde_json::json!({ "display_name": "Cy", "emails": [{ "value": "cy@example.com" }] });
+    let (status, body) = people_call("POST", "/people", free).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
 }
 
+/// SECURITY: an id that is not the caller's says nothing, whatever it is
+/// sent: 404, never the 409 that would mean "one of your people has this".
 #[tokio::test]
-async fn adding_a_taken_email_on_edit_warns_before_any_write() {
-    // Someone else in the registry has it: a warning before any write.
+async fn a_taken_address_sent_to_someone_elses_person_is_a_404() {
     let (status, body) = people_call(
         "PUT",
         &format!("/people/{}", Uuid::new_v4()),
@@ -5754,8 +5861,56 @@ async fn adding_a_taken_email_on_edit_warns_before_any_write() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["matches"][0]["display_name"], "Ada");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert!(body.get("matches").is_none(), "{body}");
+}
+
+/// The same address twice on one person is refused in words that name no
+/// address (the message reaches a log), before anything is read.
+#[tokio::test]
+async fn the_same_address_twice_on_one_person_is_a_422() {
+    let (status, body) = people_call(
+        "POST",
+        "/people",
+        serde_json::json!({
+            "display_name": "Ada",
+            "emails": [{ "value": "twice@example.com" }, { "value": "TWICE@example.com " }],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let said = body["error"].as_str().unwrap_or_default();
+    assert!(said.contains("listed twice"), "{body}");
+    assert!(!said.contains('@'), "{body}");
+}
+
+/// The check and the write are two steps; the database's own refusal is
+/// what closes the gap between them (migration 056). A save it refuses is
+/// answered like any collision, with whoever has the address now. If they
+/// are gone again the answer is still a 409 with `matches`, empty: the app
+/// reads every 409 on a person save as that body.
+#[tokio::test]
+async fn a_save_the_database_refuses_is_answered_as_a_collision() {
+    for (address, named) in [(STUB_RACED, 1), (STUB_VANISHED, 0)] {
+        PERSON_WRITE_REFUSED.with(|r| r.set(false));
+        let (status, body) = people_call(
+            "POST",
+            "/people",
+            serde_json::json!({ "display_name": "Bea", "emails": [{ "value": address }] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{address}: {body}");
+        assert_eq!(
+            body["matches"].as_array().map(Vec::len),
+            Some(named),
+            "{address}: {body}"
+        );
+        assert!(
+            PERSON_WRITE_REFUSED.with(std::cell::Cell::get),
+            "the write was tried"
+        );
+    }
+    PERSON_WRITE_REFUSED.with(|r| r.set(false));
 }
 
 #[tokio::test]

@@ -39,20 +39,19 @@ pub async fn fetch_person(id: PersonId) -> Result<Person, UiError> {
     get_json(&format!("/people/{id}")).await
 }
 
-/// What saving a person (create or update) did: saved it, or found that an
-/// email is already in the registry (a warning; retry with `confirm`).
+/// What saving a person (create or update) did: saved it, or was refused
+/// because an email address already belongs to someone else in the
+/// registry (S8a; ONTOLOGY §7.1: the same address is the same person).
+/// There is no saving anyway.
 pub enum SavePerson {
     Saved(Person),
-    Duplicate(DuplicateWarning),
+    /// The API's 409: the caller's own people who have the address. It
+    /// can be empty, when whoever took it was removed a moment later.
+    Collides(DuplicateWarning),
 }
 
-pub async fn create_person(input: &PersonInput, confirm: bool) -> Result<SavePerson, UiError> {
-    let path = if confirm {
-        "/people?confirm=true"
-    } else {
-        "/people"
-    };
-    let url = api_url(path);
+pub async fn create_person(input: &PersonInput) -> Result<SavePerson, UiError> {
+    let url = api_url("/people");
     let resp = send_authed(|| {
         Request::post(&url)
             .json(input)
@@ -64,24 +63,15 @@ pub async fn create_person(input: &PersonInput, confirm: bool) -> Result<SavePer
             .json::<DuplicateWarning>()
             .await
             .map_err(|e| UiError::Parse(e.to_string()))?;
-        return Ok(SavePerson::Duplicate(warning));
+        return Ok(SavePerson::Collides(warning));
     }
     parse_json(resp).await.map(SavePerson::Saved)
 }
 
-/// Save a person. Like create, an email someone else in the registry has
-/// is a warning first; `confirm` saves anyway.
-pub async fn update_person(
-    id: PersonId,
-    input: &PersonInput,
-    confirm: bool,
-) -> Result<SavePerson, UiError> {
-    let path = if confirm {
-        format!("/people/{id}?confirm=true")
-    } else {
-        format!("/people/{id}")
-    };
-    let url = api_url(&path);
+/// Save a person. Like create, an address **added** here that someone
+/// else in the registry has refuses the save.
+pub async fn update_person(id: PersonId, input: &PersonInput) -> Result<SavePerson, UiError> {
+    let url = api_url(&format!("/people/{id}"));
     let resp = send_authed(|| {
         Request::put(&url)
             .json(input)
@@ -93,7 +83,7 @@ pub async fn update_person(
             .json::<DuplicateWarning>()
             .await
             .map_err(|e| UiError::Parse(e.to_string()))?;
-        return Ok(SavePerson::Duplicate(warning));
+        return Ok(SavePerson::Collides(warning));
     }
     parse_json(resp).await.map(SavePerson::Saved)
 }

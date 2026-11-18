@@ -91,6 +91,7 @@ impl DataHealthRepo for PgDataHealthRepo {
                 EdgeType::DerivedFrom,
                 RuleId::DerivedFromCycle,
             ),
+            shared_emails(&mut tx, owner).await?,
         ];
         tx.commit().await.map_err(db)?;
 
@@ -169,6 +170,72 @@ fn task_violation(r: TaskRow) -> Violation {
         Ref::task(r.id, r.title, r.node_id, r.node_archived).with_closed(r.closed),
         vec![Ref::node(r.node_id, r.node_title, r.node_archived)],
     )
+}
+
+#[derive(FromRow)]
+struct SharedEmailRow {
+    id: Uuid,
+    display_name: String,
+    other_id: Uuid,
+    other_name: String,
+    total: i64,
+}
+
+/// People of mine who list an email address that another of my people
+/// lists too (S8a, §7.1). One item per person, with the others they share
+/// with. The count is of people.
+///
+/// SECURITY: `p.owner_id = $1` on every row read, and no other filter: a
+/// person is only ever named to their owner, and two accounts that hold
+/// the same address never appear in each other's report. No address is
+/// in the answer: the people are named, and their pages show it.
+async fn shared_emails(
+    conn: &mut PgConnection,
+    owner: &str,
+) -> Result<RuleReport, EmberTroveError> {
+    let rows: Vec<SharedEmailRow> = sqlx::query_as(
+        r#"
+        WITH keys AS (
+            SELECT DISTINCT p.id, p.display_name,
+                   person_email_key(e.value ->> 'value') AS k
+            FROM people p
+            CROSS JOIN LATERAL jsonb_array_elements(p.emails) AS e(value)
+            WHERE p.owner_id = $1
+              AND person_email_key(e.value ->> 'value') <> ''
+        ),
+        pairs AS (
+            SELECT DISTINCT a.id, a.display_name,
+                   b.id AS other_id, b.display_name AS other_name
+            FROM keys a
+            JOIN keys b ON b.k = a.k AND b.id <> a.id
+        )
+        SELECT id, display_name, other_id, other_name,
+               (SELECT count(DISTINCT id) FROM pairs) AS total
+        FROM pairs
+        ORDER BY lower(display_name), id, lower(other_name), other_id
+        LIMIT $2
+        "#,
+    )
+    .bind(owner)
+    .bind(LIMIT)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db)?;
+    let count = count_of(rows.first().map(|r| r.total));
+    // Rows arrive grouped by person.
+    let mut items: Vec<(Ref, Vec<Ref>)> = Vec::new();
+    for r in rows {
+        let other = Ref::person(r.other_id, r.other_name);
+        match items.last_mut() {
+            Some((subject, others)) if subject.id == r.id => others.push(other),
+            _ => items.push((Ref::person(r.id, r.display_name), vec![other])),
+        }
+    }
+    let items = items
+        .into_iter()
+        .map(|(subject, others)| Violation::new(subject, others))
+        .collect();
+    Ok(RuleReport::with_count(RuleId::SharedEmail, count, items))
 }
 
 #[derive(FromRow)]
@@ -770,6 +837,7 @@ struct SqlCounts {
     status_on_non_project: i64,
     depends_on_area: i64,
     derived_from_area: i64,
+    shared_email: i64,
 }
 
 /// Every rule over all data, no subject filter. Only numbers are read
@@ -792,7 +860,20 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
             WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area,
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
-            WHERE e.edge_type = 'derived_from' AND t.node_type = 'area') AS derived_from_area
+            WHERE e.edge_type = 'derived_from' AND t.node_type = 'area') AS derived_from_area,
+          -- SECURITY: a pair is two people of ONE account (`b.owner_id =
+          -- a.owner_id`). Counted across accounts, the number would say
+          -- that two accounts know the same person.
+          (SELECT count(*) FROM (
+              SELECT DISTINCT a.owner_id, a.id
+              FROM people a
+              CROSS JOIN LATERAL jsonb_array_elements(a.emails) AS ae(value)
+              JOIN people b ON b.owner_id = a.owner_id AND b.id <> a.id
+              CROSS JOIN LATERAL jsonb_array_elements(b.emails) AS be(value)
+              WHERE person_email_key(ae.value ->> 'value') <> ''
+                AND person_email_key(be.value ->> 'value')
+                    = person_email_key(ae.value ->> 'value')
+           ) shared) AS shared_email
         "#,
     )
     .fetch_one(&mut *conn)
@@ -873,6 +954,10 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::DerivedFromCycle,
             count: loop_count(conn, "derived_from").await?,
+        },
+        RuleCount {
+            rule: RuleId::SharedEmail,
+            count: n(sql.shared_email),
         },
     ];
     debug_assert!(counts.iter().zip(RuleId::ALL).all(|(c, id)| c.rule == *id));

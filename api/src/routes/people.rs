@@ -20,12 +20,13 @@ use axum::{
     routing::get,
 };
 use common::{
+    EmberTroveError,
     auth::AuthClaims,
     id::{MembershipId, NodeId, PersonId},
     ontology::Capability,
     person::{
-        DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView, Person, PersonBody,
-        PersonUsage, RoleCount, email_keys, normalize, normalize_membership,
+        DuplicateMatch, DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView,
+        Person, PersonBody, PersonUsage, RoleCount, normalize, normalize_membership,
     },
 };
 use uuid::Uuid;
@@ -69,13 +70,6 @@ struct ListParams {
     limit: Option<i64>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct CreateParams {
-    /// Save even though an email matches someone already in the registry.
-    #[serde(default)]
-    confirm: bool,
-}
-
 fn invalid(e: common::person::PersonError) -> ApiError {
     ApiError::Validation(e.to_string())
 }
@@ -100,27 +94,73 @@ async fn list_people(
     Ok(Json(people))
 }
 
-/// Create a person. If an email matches someone already in the caller's
-/// registry, answer `409` with the matches (a duplicate warning, since email
-/// is a signal and never an identity key) unless `?confirm=true`.
+/// The refusal of a save that would give two of the caller's people one
+/// email address (S8a; ONTOLOGY §7.1: the same address is the same
+/// person): `409` with the caller's own people who have it. Always this
+/// body, even with no match left to name: the app reads every 409 on a
+/// person save as a `DuplicateWarning`.
+fn collides(matches: Vec<DuplicateMatch>) -> Response {
+    (StatusCode::CONFLICT, Json(DuplicateWarning { matches })).into_response()
+}
+
+/// A person write, or the 409 for the email rule.
+///
+/// The collisions are read first, to say who has the address, and nothing
+/// is written when there is one. The database refuses a collision itself
+/// (migration 056), so a save that slipped between that read and the write
+/// comes back `AlreadyExists`: the collisions are read again and answered
+/// the same way.
+///
+/// `?confirm=true` used to save anyway. It is ignored now: no route reads
+/// it, so an old page's "Save anyway" gets the same 409 again.
+async fn save_unless_it_collides<F>(
+    state: &AppState,
+    owner: &str,
+    id: Option<PersonId>,
+    input: &common::person::PersonInput,
+    write: F,
+    saved: StatusCode,
+) -> Result<Response, ApiError>
+where
+    F: std::future::Future<Output = Result<Person, EmberTroveError>>,
+{
+    let matches = state
+        .people
+        .email_collisions(owner, id, &input.emails)
+        .await?;
+    if !matches.is_empty() {
+        return Ok(collides(matches));
+    }
+    match write.await {
+        Ok(person) => Ok((saved, Json(person)).into_response()),
+        Err(EmberTroveError::AlreadyExists(_)) => Ok(collides(
+            state
+                .people
+                .email_collisions(owner, id, &input.emails)
+                .await?,
+        )),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Create a person. An email address that another of the caller's people
+/// already lists refuses it: `409` with those people (see [`collides`]).
 async fn create_person(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
-    Query(params): Query<CreateParams>,
     Json(body): Json<PersonBody>,
 ) -> Result<Response, ApiError> {
     let input = normalize(body.resolve(&[])).map_err(invalid)?;
-    if !params.confirm {
-        let matches = state
-            .people
-            .find_by_emails(&claims.sub, &email_keys(&input))
-            .await?;
-        if !matches.is_empty() {
-            return Ok((StatusCode::CONFLICT, Json(DuplicateWarning { matches })).into_response());
-        }
-    }
-    let person = state.people.create(&claims.sub, &input).await?;
-    Ok((StatusCode::CREATED, Json(person)).into_response())
+    let write = state.people.create(&claims.sub, &input);
+    save_unless_it_collides(
+        &state,
+        &claims.sub,
+        None,
+        &input,
+        write,
+        StatusCode::CREATED,
+    )
+    .await
 }
 
 async fn get_person(
@@ -131,14 +171,14 @@ async fn get_person(
     Ok(Json(state.people.get(&claims.sub, PersonId(id)).await?))
 }
 
-/// Replace a person's fields. Emails get the same duplicate warning as on
-/// create, ignoring the person being edited: that's where the UI adds them,
-/// since the create form only asks for a name.
+/// Replace a person's fields. An address **added** here that another of
+/// the caller's people lists refuses the save, as on create. One the
+/// person already had never does: people who shared an address before the
+/// rule stay editable (owner decision, 2026-11-18).
 async fn update_person(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(id): Path<Uuid>,
-    Query(params): Query<CreateParams>,
     Json(body): Json<PersonBody>,
 ) -> Result<Response, ApiError> {
     let id = PersonId(id);
@@ -150,20 +190,8 @@ async fn update_person(
         Vec::new()
     };
     let input = normalize(body.resolve(&stored)).map_err(invalid)?;
-    if !params.confirm {
-        let matches: Vec<_> = state
-            .people
-            .find_by_emails(&claims.sub, &email_keys(&input))
-            .await?
-            .into_iter()
-            .filter(|m| m.id != id)
-            .collect();
-        if !matches.is_empty() {
-            return Ok((StatusCode::CONFLICT, Json(DuplicateWarning { matches })).into_response());
-        }
-    }
-    let person = state.people.update(&claims.sub, id, &input).await?;
-    Ok(Json(person).into_response())
+    let write = state.people.update(&claims.sub, id, &input);
+    save_unless_it_collides(&state, &claims.sub, Some(id), &input, write, StatusCode::OK).await
 }
 
 /// Deletes the person and, by cascade, their memberships.

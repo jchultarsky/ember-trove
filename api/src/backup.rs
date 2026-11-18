@@ -111,6 +111,20 @@ fn restorable_dependencies(data: &BackupData) -> common::task_dependency::Restor
     common::task_dependency::restorable(data.task_dependencies.clone(), &tasks)
 }
 
+/// The restore preview's line about people who share an email address
+/// (S8a, §7.1). A save can't make such a pair any more, and a restore
+/// brings back whatever its archive holds: as they are, never merged or
+/// trimmed. A count, never a name or an address.
+fn shared_emails_warning(people: &[common::person::Person]) -> Option<String> {
+    let n = common::person::shared_email_people(people);
+    (n > 0).then(|| {
+        format!(
+            "{n} people in this backup share an email address with another person. They \
+             will come back as they are, and Data health will list them."
+        )
+    })
+}
+
 /// The restore preview's line about them: a count, never a title.
 fn loose_tasks_warning(tasks: &[common::backup::BackupTask]) -> Option<String> {
     let n = loose_tasks(tasks);
@@ -537,6 +551,7 @@ pub async fn preview_restore(
         Ok(data) => {
             entity_counts = counts_as_restored(entity_counts, &data.notes, &data.tasks);
             warnings.extend(loose_tasks_warning(&data.tasks));
+            warnings.extend(shared_emails_warning(&data.people));
             warnings.extend(restorable_dependencies(&data).warning());
             warnings.extend(edge_rules_warning(&data));
             warnings.extend(folded_links_warnings(&data));
@@ -678,6 +693,23 @@ async fn upload_restored_files(
         );
     }
     uploaded
+}
+
+/// Switches the email rule's trigger off or on for the rest of the
+/// restore's transaction (`people_email_identity`, migration 056).
+/// `SET LOCAL`, never `SET`: the connection goes back to the pool, and a
+/// plain `SET` would leave the rule off for whoever gets it next.
+async fn set_restoring_people(conn: &mut sqlx::PgConnection, on: bool) -> Result<(), ApiError> {
+    let sql = if on {
+        "SET LOCAL ember.restoring_people = 'on'"
+    } else {
+        "SET LOCAL ember.restoring_people = 'off'"
+    };
+    sqlx::query(sql)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(|e| ApiError::Internal(format!("set restoring_people failed: {e}")))
 }
 
 /// Replaces every user's data with an archive's, on the caller's
@@ -1125,6 +1157,14 @@ pub(crate) async fn restore_into(
 
     // Insert people (#147), then their memberships (they need both the
     // node and the person rows). Owners are kept as stored, like nodes.
+    //
+    // S8a: the database refuses a person whose address another of the
+    // account's people lists (migration 056). An archive may hold such
+    // pairs, from before the rule, and a restore brings back what it
+    // holds: so the rule is off for these inserts and no others. SET
+    // LOCAL ends with this transaction; it is switched back right after
+    // the loop so nothing later in the restore runs without the rule.
+    set_restoring_people(&mut *conn, true).await?;
     for p in &data.people {
         sqlx::query(
             r#"
@@ -1155,6 +1195,7 @@ pub(crate) async fn restore_into(
         // Never include the row: it's someone's contact details.
         .map_err(|e| ApiError::Internal(format!("insert person failed: {e}")))?;
     }
+    set_restoring_people(&mut *conn, false).await?;
     for m in &data.node_people {
         sqlx::query(
             r#"
