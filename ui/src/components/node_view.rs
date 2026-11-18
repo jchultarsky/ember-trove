@@ -203,6 +203,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             let home_refresh = RwSignal::new(0u32);
                             let links = NodeLinks::new(id, home_refresh);
                             let served_blocked_by = n.blocked_by;
+                            // Links this reader isn't shown (#349): the
+                            // header's marker and Connections share it.
+                            let links_not_shown = RwSignal::new(n.links_not_shown);
                             let lifecycle_status = n.status.clone();
                             let has_brief = allows(&n.node_type, Capability::Brief);
                             let body_class = if has_brief && n.body.as_deref().is_some_and(|b| !b.trim().is_empty()) {
@@ -388,6 +391,9 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                                 project_state=project_state
                                                 served=served_blocked_by
                                                 links=links
+                                            />
+                                            <crate::components::node_connections::LinksNotShownChip
+                                                not_shown=links_not_shown
                                             />
                                         </div>
                                         {
@@ -623,7 +629,7 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                                         // of the node's links (S7a).
                                         <ConnectionsPanel node_id=id node_type=n.node_type.clone() can_edit=is_owner
                                             status=lifecycle_status.clone() project_state=project_state
-                                            links=links />
+                                            links=links not_shown=links_not_shown />
                                         <crate::components::local_graph::LocalGraphPanel node_id=id title=n.title.clone() />
                                         <UnlinkedMentionsPanel node_id=id title=n.title.clone() links=links />
                                         <AttachmentPanel node_id=id />

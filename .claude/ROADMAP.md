@@ -5,6 +5,19 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-17)
 
+- **Links not shown** (#349; ONTOLOGY §14; owner decisions of
+  2026-11-17). Whoever may edit a node is told how many of its links
+  lead to a node that neither they nor its owner can see, and may remove
+  them together: `ViewedNode.links_not_shown`,
+  `DELETE /nodes/{id}/edges/not-shown`, a marker in the page header and
+  a line in Connections. Until removed such a link stays a real link.
+  The task rule of 3.26.0 gets the same owner half: an editor of a
+  shared Project is no longer told of the owner's private
+  prerequisites. No migration, no backup change. **Not in it:** a Data
+  health entry for nodes with links not shown; any change to who may
+  add a link. Rules: "Links not shown" in `.claude/rules/api.md` and
+  `.claude/rules/leptos.md`.
+
 - **v3.28.0 shipped: S7b, blockers** (#346, PRs #347 and #348;
   ONTOLOGY §6.4, §9.3, §14). Display only: what a node or a task waits
   for, never enforced. Owner decisions (2026-11-17): a blocked Project

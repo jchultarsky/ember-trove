@@ -6,6 +6,38 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **A node's links that its owner isn't shown can be found and removed**
+  (#349; ONTOLOGY §14, §6.2, §6.4). Someone a node is shared with can
+  link it to a node of their own that its owner can't see, and a link
+  becomes hidden when a share on its other end ends. Such a link was in
+  no list of the owner's, still decided which new links were refused as
+  loops, and since 3.28.0 made the node read as "Blocked" to whoever
+  could see both ends.
+  - **Whoever may edit a node is told how many of its links they aren't
+    shown**: a marker in the page header and a line in Connections.
+    Never which links, to what, or who made them. A viewer is told
+    nothing.
+  - **They can remove them together**, after a confirmation. The answer
+    says how many went.
+  - A link counts only when **neither the reader nor the node's owner**
+    can see its other end, so this never reaches the owner's own private
+    links. It covers links made by hand from the node and a "related to"
+    link either way; not a hidden home (the Home row frees it), not
+    another node's link into this one, and never a wiki link.
+  - `GET /api/nodes/{id}` answers `links_not_shown` (0 for anyone who
+    may not edit the node). New `DELETE /api/nodes/{id}/edges/not-shown`
+    (editor) answers `removed` and `links_not_shown`.
+  - No migration, and nothing new in a backup.
+- **An editor of a shared Project is no longer told of the owner's
+  private prerequisites** (#349; ONTOLOGY §9.3). Since 3.26.0 a task's
+  "prerequisites not shown" counted every prerequisite hidden from the
+  reader. For an editor of a shared Project that included tasks on the
+  owner's own private Projects: they were told how many there were and
+  could remove those links. A prerequisite now counts only when the
+  Project's owner isn't shown it either (in the trash, or on a node they
+  can't see).
+
 ## [3.28.0] - 2026-11-17
 
 ### Added

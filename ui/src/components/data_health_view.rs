@@ -574,7 +574,7 @@ fn aria_busy(busy: RwSignal<bool>) -> impl Fn() -> &'static str {
 /// An inline "are you sure?" for a fix: the question, the commit button,
 /// and Cancel. Worded for what the action does, not a generic delete.
 #[component]
-fn InlineConfirm(
+pub(crate) fn InlineConfirm(
     question: String,
     commit: &'static str,
     on_confirm: Callback<()>,

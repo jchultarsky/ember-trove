@@ -250,7 +250,9 @@ const CONCEPTS: &[Concept] = &[
                closed, come last and say so. Archiving or deleting a node that \
                nodes in use still draw on warns you first; it never stops you. \
                Unlinked Mentions finds nodes that name this one in their text \
-               without linking to it.",
+               without linking to it. If a node you may edit has links to \
+               nodes that neither you nor its owner can see, its page says \
+               how many (never which) and lets you remove them together.",
     },
     Concept {
         title: "Blocked",

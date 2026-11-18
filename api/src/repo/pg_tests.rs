@@ -11816,6 +11816,7 @@ async fn an_editor_is_not_told_of_the_owners_private_prerequisites(pool: PgPool)
 }
 
 /// The links touching `node`, as (type, whether it runs from the node).
+#[allow(clippy::expect_used)]
 async fn links_of(pool: &PgPool, node: uuid::Uuid) -> Vec<(String, bool)> {
     sqlx::query_as(
         "SELECT edge_type::text, source_id = $1 FROM edges \
