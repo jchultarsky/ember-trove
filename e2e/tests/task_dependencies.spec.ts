@@ -439,6 +439,54 @@ test('an editor is told nothing of the owner’s private prerequisites, and cann
   await expect(section).not.toContainText('secret review');
 });
 
+test('an editor cannot take a task to a Project of their own', async ({ request, otherRequest }) => {
+  // #351. Edit rights on both Projects used to be enough. The editor then
+  // kept the task after the share ended, and as its new Project's owner
+  // was told how many of its prerequisites they can't see.
+  const stamp = Date.now();
+  const shared = await createProject(request, `${PREFIX}shared ${stamp}`);
+  const second = await createProject(request, `${PREFIX}second ${stamp}`);
+  const hidden = await createProject(request, `${PREFIX}private ${stamp}`);
+  const theirs = await createProject(otherRequest, `${PREFIX}their own ${stamp}`);
+  const task = await addTask(request, shared.id, { title: `publish ${stamp}` });
+  const unseen = await addTask(request, hidden.id, { title: `secret review ${stamp}` });
+  expect((await waitFor(request, task.id, unseen.id)).status()).toBe(201);
+  await shareNode(request, shared.id, OTHER_SUBJECT, 'editor');
+  await shareNode(request, second.id, OTHER_SUBJECT, 'editor');
+  const move = (r: APIRequestContext, node: string) =>
+    r.patch(`/api/tasks/${task.id}`, { data: { node_id: node } });
+  const toldTheEditor = async () =>
+    ((await (await otherRequest.get(deps(task.id))).json()) as Deps).not_shown;
+
+  expect(await toldTheEditor()).toBe(0);
+  // Out to their own Project: refused in words, and the task stays.
+  const out = await move(otherRequest, theirs.id);
+  expect(out.status()).toBe(403);
+  expect((await out.json()).error).toContain("only the owner of a task's Project");
+  expect((await tasksOf(request, shared.id)).map((t) => t.id)).toContain(task.id);
+  expect(await toldTheEditor()).toBe(0);
+
+  // Nor a task they wrote themself on my Project: having written it is
+  // not owning the Project it is on.
+  const written = await addTask(otherRequest, shared.id, { title: `their note ${stamp}` });
+  const taken = await otherRequest.patch(`/api/tasks/${written.id}`, {
+    data: { node_id: theirs.id },
+  });
+  expect(taken.status()).toBe(403);
+  expect((await tasksOf(request, shared.id)).map((t) => t.id)).toContain(written.id);
+
+  // Between two of my Projects that they edit: allowed, as before.
+  expect((await move(otherRequest, second.id)).status()).toBe(200);
+  expect((await tasksOf(request, second.id)).map((t) => t.id)).toContain(task.id);
+  expect(await toldTheEditor()).toBe(0);
+
+  // I own the Project it is on, so I may take it to theirs once I edit
+  // that. The rule then follows the task: they own its Project now.
+  await shareNode(otherRequest, theirs.id, E2E_SUBJECT, 'editor');
+  expect((await move(request, theirs.id)).status()).toBe(200);
+  expect(await toldTheEditor()).toBe(1);
+});
+
 test.describe('at phone width', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 

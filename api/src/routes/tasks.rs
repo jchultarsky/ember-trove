@@ -23,8 +23,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::permissions::{
-        can_view, missing, or_missing, or_missing_row, require_editor, require_viewer,
-        subject_scope,
+        can_view, missing, or_missing, or_missing_row, require_editor, require_resource_owner,
+        require_viewer, subject_scope,
     },
     error::ApiError,
     routes::capability::require_capability,
@@ -105,6 +105,41 @@ async fn require_task_editor(
 
 /// What a task that isn't there, or isn't the caller's to know of, is called.
 const TASK: &str = "task";
+
+/// What someone is told who may edit a task and may not take it to another
+/// person's Project.
+const MOVE_OUT: &str = "only the owner of a task's Project can move it to another person's Project";
+
+/// A task moves between Projects of **one account** on edit rights alone.
+/// To a Project that belongs to another account, only the owner of the
+/// Project it leaves may move it (or an admin).
+///
+/// SECURITY (owner decision, 2026-11-18; review of #349). Edit rights on
+/// both Projects used to be enough, so someone a Project was shared with
+/// could move its tasks to a Project of their own. Two things followed:
+/// they kept the task after the share ended (the ruling that a task
+/// follows its node's rights, 2026-11-10), and as the owner of the task's
+/// new Project they were told how many of its prerequisites they can't
+/// see (`TaskDependencyRepo::not_shown`).
+///
+/// "The owner" is the account the node belongs to (`nodes.owner_id`), as
+/// in the rule about links not shown: someone else holding an Owner grant
+/// does not pass. The caller has already been checked as an editor of
+/// both nodes, so the refusal tells them nothing they can't see.
+async fn require_owner_to_move_out(
+    state: &AppState,
+    claims: &AuthClaims,
+    from: NodeId,
+    to: NodeId,
+) -> Result<(), ApiError> {
+    let source = state.nodes.get(from).await?;
+    let dest = state.nodes.get(to).await?;
+    if source.owner_id == dest.owner_id {
+        return Ok(());
+    }
+    require_resource_owner(claims, &source.owner_id)
+        .map_err(|_| ApiError::Forbidden(MOVE_OUT.to_string()))
+}
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
@@ -223,6 +258,7 @@ async fn update_task(
         // not a move, so a task already on a non-Project stays editable.
         if existing.node_id != dest {
             require_capability(&state, dest, Capability::Tasks).await?;
+            require_owner_to_move_out(&state, &claims, existing.node_id, dest).await?;
         }
     }
 
