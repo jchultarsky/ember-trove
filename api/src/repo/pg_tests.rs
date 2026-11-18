@@ -11743,6 +11743,360 @@ async fn a_chain_planted_through_a_hidden_task_can_be_found_and_removed(pool: Pg
     deps.add(Tid(z), Tid(x)).await.expect("z → x, now");
 }
 
+/// SECURITY (#349): "not shown" means shown neither to the reader nor to
+/// the owner of the task's Project. Before it, an editor of a shared
+/// Project was told how many of a task's prerequisites sit on the owner's
+/// private Projects, and could remove them all.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_editor_is_not_told_of_the_owners_private_prerequisites(pool: PgPool) {
+    let deps = PgTaskDependencyRepo::new(pool.clone());
+    let shared = a_project(&pool, "alice", "shared", None).await.id;
+    grant(&pool, shared, "bob", "editor").await;
+    let private = a_project(&pool, "alice", "alice's private", None)
+        .await
+        .id
+        .0;
+    let bobs = a_project(&pool, "bob", "bob's own", None).await.id.0;
+    // A third person's Project, shared with alice alone.
+    let lent = a_project(&pool, "zed", "zed's, lent to alice", None)
+        .await
+        .id
+        .0;
+    share(&pool, lent, "alice").await;
+
+    let t = raw_task(&pool, "alice", shared.0, "the task").await;
+    let hers = raw_task(&pool, "alice", private, "on her private project").await;
+    let his = raw_task(&pool, "bob", bobs, "on bob's project").await;
+    let zeds = raw_task(&pool, "zed", lent, "on the lent project").await;
+    let gone = raw_task(&pool, "alice", shared.0, "in the trash").await;
+    for p in [hers, his, zeds, gone] {
+        raw_dep(&pool, t, p).await;
+    }
+    trash_task(&pool, gone).await;
+
+    let not_shown = |who: Option<&'static str>| {
+        let deps = &deps;
+        async move { deps.not_shown(Tid(t), who).await.expect("count") }
+    };
+    // Bob sees his own; alice's private one and the lent one are shown
+    // to the owner, so they are not his to hear of. Only the trash.
+    assert_eq!(not_shown(Some("bob")).await, 1);
+    // Alice: bob's, and the trash.
+    assert_eq!(not_shown(Some("alice")).await, 2);
+    assert_eq!(not_shown(None).await, 1, "an admin: the trash");
+
+    // Bob's remove takes the trashed one and leaves the owner's.
+    assert_eq!(deps.remove_not_shown(Tid(t), Some("bob")).await.unwrap(), 1);
+    assert_eq!(
+        dep_pairs(&pool).await,
+        [
+            ("the task".to_string(), "on bob's project".to_string()),
+            ("the task".to_string(), "on her private project".to_string()),
+            ("the task".to_string(), "on the lent project".to_string()),
+        ]
+    );
+    assert_eq!(not_shown(Some("bob")).await, 0);
+    // Zed stops lending: now the owner isn't shown it either, and whoever
+    // edits the task may hear of it and clear it.
+    sql(
+        &pool,
+        "DELETE FROM permissions WHERE subject_id = 'alice' AND role = 'viewer'",
+    )
+    .await;
+    assert_eq!(not_shown(Some("bob")).await, 1);
+    assert_eq!(not_shown(Some("alice")).await, 2);
+    assert_eq!(
+        deps.remove_not_shown(Tid(t), Some("alice")).await.unwrap(),
+        2
+    );
+    assert_eq!(
+        dep_pairs(&pool).await,
+        [("the task".to_string(), "on her private project".to_string())]
+    );
+}
+
+/// The links touching `node`, as (type, whether it runs from the node).
+async fn links_of(pool: &PgPool, node: uuid::Uuid) -> Vec<(String, bool)> {
+    sqlx::query_as(
+        "SELECT edge_type::text, source_id = $1 FROM edges \
+         WHERE source_id = $1 OR target_id = $1 ORDER BY 1, 2",
+    )
+    .bind(node)
+    .fetch_all(pool)
+    .await
+    .expect("links of a node")
+}
+
+/// Hidden links (#349, ONTOLOGY §14). Someone a node is shared with as an
+/// editor can link it to a node of theirs that its owner can't see. The
+/// owner is shown no such link, and it still decides loops and "Blocked".
+/// Whoever may edit the node is told how many there are, never which, and
+/// removes them together.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_nodes_editors_are_told_how_many_links_they_are_not_shown_and_clear_them(pool: PgPool) {
+    use common::edge::EdgeType;
+    let edges = PgEdgeRepo::new(pool.clone());
+    let n = insert_raw_node(&pool, "alice", "project", "the node", "").await;
+    own(&pool, Nid(n), "alice").await;
+    grant(&pool, Nid(n), "bob", "editor").await;
+    grant(&pool, Nid(n), "carol", "editor").await;
+    share(&pool, n, "dave").await;
+
+    // Every type, both ways, each to a private node of bob's.
+    let mut theirs_to_clear = 0;
+    for t in EdgeType::ALL {
+        for outgoing in [true, false] {
+            let way = if outgoing { "from" } else { "into" };
+            let title = format!("bob's, {} {way}", t.as_str());
+            let other = insert_raw_node(&pool, "bob", "project", &title, "").await;
+            let (source, target) = if outgoing { (n, other) } else { (other, n) };
+            raw_edge(&pool, source, target, t.as_str()).await;
+            theirs_to_clear += u32::from(t.is_its_nodes_to_clear(outgoing));
+        }
+    }
+    // Five made by hand from the node, and "related to" into it.
+    assert_eq!(theirs_to_clear, 6);
+    // Two links the owner does see: to a private node of her own, and to
+    // one of bob's that he shares with her.
+    let mine = insert_raw_node(&pool, "alice", "project", "alice's private", "").await;
+    let lent = insert_raw_node(&pool, "bob", "project", "bob's, lent to alice", "").await;
+    share(&pool, lent, "alice").await;
+    raw_edge(&pool, n, mine, "references").await;
+    raw_edge(&pool, n, lent, "references").await;
+    let all = links_of(&pool, n).await.len();
+    assert_eq!(all, 14);
+
+    let not_shown = |who: Option<&'static str>| {
+        let edges = &edges;
+        async move { edges.not_shown(Nid(n), who).await.expect("count") }
+    };
+    let listed = |who: Option<&'static str>| {
+        let edges = &edges;
+        async move {
+            edges
+                .list_for_node_with_titles(Nid(n), who)
+                .await
+                .expect("list")
+                .len()
+        }
+    };
+    // The owner and the other editor: the six. The link's maker and an
+    // admin see every one of them: none. A viewer and a stranger are told
+    // nothing, by the statement itself.
+    assert_eq!(not_shown(Some("alice")).await, 6);
+    assert_eq!(not_shown(Some("carol")).await, 6);
+    assert_eq!(not_shown(Some("bob")).await, 0);
+    assert_eq!(not_shown(None).await, 0);
+    assert_eq!(not_shown(Some("dave")).await, 0, "a viewer");
+    assert_eq!(not_shown(Some("mallory")).await, 0, "a stranger");
+    // SECURITY: carol can't see the owner's two either, and is not told
+    // of them: the owner sees them.
+    assert_eq!(listed(Some("carol")).await, 0);
+    // For the owner every link is in exactly one place: listed, counted,
+    // or left to someone else (the hidden home, bob's links into the
+    // node, the wiki links).
+    assert_eq!(listed(Some("alice")).await, 2);
+    assert_eq!(2 + 6 + (12 - 6), all);
+    assert_eq!(listed(Some("bob")).await, 13, "all but alice's private one");
+
+    // No one who is told of none removes any.
+    for who in [Some("bob"), None, Some("dave"), Some("mallory")] {
+        let removed = edges.remove_not_shown(Nid(n), who).await.expect("remove");
+        assert_eq!(removed, 0, "{who:?}");
+    }
+    assert_eq!(links_of(&pool, n).await.len(), all);
+
+    // Bob stops lending: the link is still there, and no longer shown to
+    // the owner. Nothing was written to the links.
+    sql(
+        &pool,
+        "DELETE FROM permissions WHERE subject_id = 'alice' AND role = 'viewer'",
+    )
+    .await;
+    assert_eq!(not_shown(Some("alice")).await, 7);
+    assert_eq!(not_shown(Some("carol")).await, 7);
+    assert_eq!(not_shown(Some("bob")).await, 0);
+    assert_eq!(links_of(&pool, n).await.len(), all);
+
+    // SECURITY: a wiki link never counts, so writing `[[a guess]]` and
+    // watching the count says nothing about whether that title exists.
+    let guess = insert_raw_node(&pool, "bob", "project", "a guess", "").await;
+    let other_guess = insert_raw_node(&pool, "bob", "project", "another guess", "").await;
+    edges
+        .sync_wikilinks(Nid(n), &[Nid(guess), Nid(other_guess)])
+        .await
+        .expect("sync");
+    assert_eq!(not_shown(Some("alice")).await, 7);
+
+    // Carol clears them (any editor may): those seven and nothing else.
+    assert_eq!(
+        edges.remove_not_shown(Nid(n), Some("carol")).await.unwrap(),
+        7
+    );
+    assert_eq!(not_shown(Some("alice")).await, 0);
+    assert_eq!(not_shown(Some("carol")).await, 0);
+    let left: Vec<(String, bool)> = [
+        ("contains", false),     // the hidden home: the Home row's
+        ("depends_on", false),   // bob's node's own links
+        ("derived_from", false), //
+        ("references", false),   //
+        ("references", true),    // to alice's private node
+        ("wiki_link", false),
+        ("wiki_link", true), // the two guesses
+        ("wiki_link", true),
+    ]
+    .into_iter()
+    .map(|(t, from)| (t.to_string(), from))
+    .collect();
+    assert_eq!(links_of(&pool, n).await, left);
+    assert_eq!(
+        edges.remove_not_shown(Nid(n), Some("alice")).await.unwrap(),
+        0
+    );
+}
+
+/// SECURITY (#349): the count and the remove never reach the owner's own
+/// private links. "Hidden from the reader" alone would tell an editor of
+/// a shared node how many private nodes its owner links it to, and give
+/// them one button that deletes every one of those links.
+#[sqlx::test(migrations = "../migrations")]
+async fn an_editor_is_not_told_of_and_cannot_clear_the_owners_private_links(pool: PgPool) {
+    let edges = PgEdgeRepo::new(pool.clone());
+    let node = |owner: &'static str, title: &'static str| {
+        insert_raw_node(&pool, owner, "project", title, "")
+    };
+    let n = node("alice", "the node").await;
+    own(&pool, Nid(n), "alice").await;
+    grant(&pool, Nid(n), "bob", "editor").await;
+    let (p1, p2, p3, p4) = (
+        node("alice", "private 1").await,
+        node("alice", "private 2").await,
+        node("alice", "private 3").await,
+        node("alice", "private 4").await,
+    );
+    // A third person's node, shared with alice alone.
+    let lent = node("zed", "zed's, lent to alice").await;
+    share(&pool, lent, "alice").await;
+    raw_edge(&pool, n, p1, "depends_on").await;
+    raw_edge(&pool, n, p2, "references").await;
+    raw_edge(&pool, p3, n, "related_to").await;
+    raw_edge(&pool, n, p4, "contains").await;
+    raw_edge(&pool, n, lent, "derived_from").await;
+
+    // Bob sees none of the five other ends, and is told of none.
+    let shown = edges
+        .list_for_node_with_titles(Nid(n), Some("bob"))
+        .await
+        .expect("list");
+    assert!(shown.is_empty());
+    for who in ["bob", "alice"] {
+        assert_eq!(
+            edges.not_shown(Nid(n), Some(who)).await.unwrap(),
+            0,
+            "{who}"
+        );
+        assert_eq!(
+            edges.remove_not_shown(Nid(n), Some(who)).await.unwrap(),
+            0,
+            "{who}"
+        );
+    }
+    assert_eq!(links_of(&pool, n).await.len(), 5);
+
+    // Zed stops lending. That one link is now hidden from the owner too:
+    // either of them may hear of it, and bob may clear it. Her own four
+    // stay.
+    sql(
+        &pool,
+        "DELETE FROM permissions WHERE subject_id = 'alice' AND role = 'viewer'",
+    )
+    .await;
+    assert_eq!(edges.not_shown(Nid(n), Some("alice")).await.unwrap(), 1);
+    assert_eq!(edges.not_shown(Nid(n), Some("bob")).await.unwrap(), 1);
+    assert_eq!(
+        edges.remove_not_shown(Nid(n), Some("bob")).await.unwrap(),
+        1
+    );
+    let left: Vec<(String, bool)> = [
+        ("contains", true),
+        ("depends_on", true),
+        ("references", true),
+        ("related_to", false),
+    ]
+    .into_iter()
+    .map(|(t, from)| (t.to_string(), from))
+    .collect();
+    assert_eq!(links_of(&pool, n).await, left);
+}
+
+/// SECURITY (#349): a link the owner isn't shown still decides which new
+/// links are refused as loops. An editor ties two of the owner's nodes
+/// together through a node of their own; after the share ends the owner
+/// sees nothing between them and can't link them the other way. She is
+/// told the node has a link she isn't shown, and removes it.
+#[sqlx::test(migrations = "../migrations")]
+async fn a_loop_planted_through_a_hidden_node_can_be_found_and_removed(pool: PgPool) {
+    use common::edge::EdgeType::DependsOn;
+    let edges = PgEdgeRepo::new(pool.clone());
+    let node = |owner: &'static str, title: &'static str| {
+        insert_raw_node(&pool, owner, "project", title, "")
+    };
+    let (a, c) = (node("alice", "a").await, node("alice", "c").await);
+    let b = node("bob", "b").await;
+    for (id, owner) in [(a, "alice"), (c, "alice"), (b, "bob")] {
+        own(&pool, Nid(id), owner).await;
+    }
+    grant(&pool, Nid(a), "bob", "editor").await;
+    share(&pool, c, "bob").await;
+    // Bob: a depends on his b, and his b depends on c.
+    edges.create(edge(a, b, DependsOn)).await.expect("a → b");
+    edges.create(edge(b, c, DependsOn)).await.expect("b → c");
+    // The share ends.
+    sql(
+        &pool,
+        "DELETE FROM permissions WHERE subject_id = 'bob' AND role <> 'owner'",
+    )
+    .await;
+
+    // Alice sees nothing on a, and c can't depend on a.
+    let shown = edges
+        .list_for_node_with_titles(Nid(a), Some("alice"))
+        .await
+        .expect("list");
+    assert!(shown.is_empty());
+    let m = refusal(edges.create(edge(c, a, DependsOn)).await);
+    assert!(m.contains("loop"), "{m}");
+
+    // She is told a has a link she isn't shown. c has none of its own:
+    // the link into it is b's.
+    assert_eq!(edges.not_shown(Nid(a), Some("alice")).await.unwrap(), 1);
+    assert_eq!(edges.not_shown(Nid(c), Some("alice")).await.unwrap(), 0);
+    assert_eq!(
+        edges.remove_not_shown(Nid(c), Some("alice")).await.unwrap(),
+        0
+    );
+    // Bob, who made it, no longer edits a: nothing for him to clear.
+    assert_eq!(edges.not_shown(Nid(a), Some("bob")).await.unwrap(), 0);
+    assert_eq!(
+        edges.remove_not_shown(Nid(a), Some("bob")).await.unwrap(),
+        0
+    );
+    assert_eq!(
+        edges.remove_not_shown(Nid(a), Some("alice")).await.unwrap(),
+        1
+    );
+    edges
+        .create(edge(c, a, DependsOn))
+        .await
+        .expect("c → a, now");
+    // Bob's own link, from his node, stays.
+    assert_eq!(links_of(&pool, b).await, [("depends_on".to_string(), true)]);
+    assert_eq!(
+        links_of(&pool, a).await,
+        [("depends_on".to_string(), false)]
+    );
+}
+
 /// `add` holds one lock for every account's dependencies. If it can't
 /// have it in time it gives up with "try again" (409): it must not sit
 /// on a connection waiting behind a stuck one.

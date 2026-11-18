@@ -90,6 +90,43 @@ impl EdgeType {
         !self.is_machine_owned() && (edits_source || (self.deletable_from_target() && edits_target))
     }
 
+    /// Whether a link of this type, touching a node and with its other end
+    /// out of sight, is **that node's editors' to clear**: told to them as
+    /// a count, never named, and removed together (ONTOLOGY §14; the rule
+    /// a task's prerequisites not shown have, §9.3). `outgoing` is whether
+    /// the node is the link's source.
+    ///
+    /// It is the links an editor of the node alone could remove if they
+    /// knew of them ([`Self::removable_by`]): every link made by hand
+    /// from the node, and a `related_to` either way (it has no
+    /// direction: which end it is stored from is an accident). Left out:
+    /// - a home the node sits in (an incoming `contains`): the Home row
+    ///   already tells the node's editors it exists and frees it (§6.1);
+    /// - any other link *into* the node: it is its source's;
+    /// - a `wiki_link`, either way: it mirrors `[[Title]]` in the text and
+    ///   is never removed by hand. Counting it would also let someone
+    ///   write `[[a guess]]` and watch the count: a way to probe titles.
+    #[must_use]
+    pub fn is_its_nodes_to_clear(&self, outgoing: bool) -> bool {
+        if outgoing {
+            self.removable_by(true, false)
+        } else {
+            self.removable_by(false, true) && *self != EdgeType::Contains
+        }
+    }
+
+    /// The types [`Self::is_its_nodes_to_clear`] accepts for a direction,
+    /// in the database's words: the SQL is built from this list
+    /// (`repo::edge`), so it can't name a different set than the rule.
+    #[must_use]
+    pub fn a_nodes_to_clear(outgoing: bool) -> Vec<&'static str> {
+        EdgeType::ALL
+            .iter()
+            .filter(|t| t.is_its_nodes_to_clear(outgoing))
+            .map(EdgeType::as_str)
+            .collect()
+    }
+
     /// The label as an option shows it: "Related to".
     pub fn option_label(&self) -> String {
         let label = self.label();
@@ -122,6 +159,15 @@ pub struct Edge {
     pub edge_type: EdgeType,
     pub label: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+/// `DELETE /nodes/{id}/edges/not-shown`: how many links went, and how many
+/// are still not shown (0, unless one appeared meanwhile). Nothing about
+/// which, to what, or by whom.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct LinksCleared {
+    pub removed: u64,
+    pub links_not_shown: u32,
 }
 
 /// What a link's list shows of one of its ends beside the title (S7a):
@@ -520,6 +566,66 @@ mod convert_tests {
         edit: true,
         view: true,
     };
+
+    /// Hidden links (#349): what a node's editors are told of by count
+    /// and may clear is what they could remove if they knew of it, less
+    /// the hidden home, and never a wiki link.
+    #[test]
+    fn a_nodes_editors_clear_only_links_they_could_remove_themselves() {
+        for t in EdgeType::ALL {
+            // From the node: exactly what its editor may remove.
+            assert_eq!(
+                t.is_its_nodes_to_clear(true),
+                t.removable_by(true, false),
+                "{t:?} outgoing"
+            );
+            // Into the node: what its editor may remove, but for the
+            // home, which the Home row tells and frees.
+            assert_eq!(
+                t.is_its_nodes_to_clear(false),
+                t.removable_by(false, true) && *t != Contains,
+                "{t:?} incoming"
+            );
+            // Never something its editor could not remove anyway.
+            for outgoing in [true, false] {
+                if t.is_its_nodes_to_clear(outgoing) {
+                    assert!(t.removable_by(outgoing, !outgoing), "{t:?}");
+                }
+            }
+        }
+        // By name.
+        let sorted = |outgoing| {
+            let mut words = EdgeType::a_nodes_to_clear(outgoing);
+            words.sort_unstable();
+            words
+        };
+        assert_eq!(
+            sorted(true),
+            [
+                "contains",
+                "depends_on",
+                "derived_from",
+                "references",
+                "related_to"
+            ]
+        );
+        assert_eq!(sorted(false), ["related_to"]);
+        // A wiki link, either way: never (it would be a way to probe
+        // titles). A dependency or an origin pointing *at* the node is
+        // the other node's.
+        assert!(!WikiLink.is_its_nodes_to_clear(true));
+        assert!(!WikiLink.is_its_nodes_to_clear(false));
+        assert!(!Contains.is_its_nodes_to_clear(false), "the hidden home");
+        assert!(!DependsOn.is_its_nodes_to_clear(false));
+        assert!(!DerivedFrom.is_its_nodes_to_clear(false));
+        assert!(!References.is_its_nodes_to_clear(false));
+        // `related_to` reads the same from both ends: its direction is
+        // how it happens to be stored.
+        assert_eq!(
+            RelatedTo.is_its_nodes_to_clear(true),
+            RelatedTo.is_its_nodes_to_clear(false)
+        );
+    }
 
     #[test]
     fn only_a_home_and_a_related_link_may_be_deleted_from_the_target() {
