@@ -466,6 +466,15 @@ test('an editor cannot take a task to a Project of their own', async ({ request,
   expect((await tasksOf(request, shared.id)).map((t) => t.id)).toContain(task.id);
   expect(await toldTheEditor()).toBe(0);
 
+  // Nor a task they wrote themself on my Project: having written it is
+  // not owning the Project it is on.
+  const written = await addTask(otherRequest, shared.id, { title: `their note ${stamp}` });
+  const taken = await otherRequest.patch(`/api/tasks/${written.id}`, {
+    data: { node_id: theirs.id },
+  });
+  expect(taken.status()).toBe(403);
+  expect((await tasksOf(request, shared.id)).map((t) => t.id)).toContain(written.id);
+
   // Between two of my Projects that they edit: allowed, as before.
   expect((await move(otherRequest, second.id)).status()).toBe(200);
   expect((await tasksOf(request, second.id)).map((t) => t.id)).toContain(task.id);

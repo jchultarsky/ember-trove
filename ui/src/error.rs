@@ -21,19 +21,24 @@ impl UiError {
         }
     }
 
-    /// The error in words for the person: the API's own message for a
-    /// refusal it explained (a 4xx), as a sentence, and not "server error
-    /// 403: …". Anything else reads as it always did.
-    pub fn said(&self) -> String {
+    /// A refusal the API explained, as a sentence for the person: its own
+    /// message for a 4xx, and not "server error 403: …". `None` for
+    /// anything else, which the caller words itself: a network failure, a
+    /// 5xx, or a 4xx whose body is not the API's (the proxy's own error
+    /// page is HTML).
+    pub fn explained(&self) -> Option<String> {
         match self {
-            Self::Api { status, message } if (400..500).contains(status) && !message.is_empty() => {
+            Self::Api { status, message }
+                if (400..500).contains(status)
+                    && !message.trim().is_empty()
+                    && message.len() <= 300
+                    && !message.contains('<') =>
+            {
                 let mut chars = message.chars();
-                match chars.next() {
-                    Some(first) => first.to_uppercase().chain(chars).collect(),
-                    None => String::new(),
-                }
+                let first = chars.next()?;
+                Some(first.to_uppercase().chain(chars).collect())
             }
-            other => other.to_string(),
+            _ => None,
         }
     }
 }
@@ -46,15 +51,16 @@ mod tests {
     fn a_refusal_the_api_explained_is_said_in_its_own_words() {
         let refused = UiError::api(403, "only the owner of a task's Project can move it");
         assert_eq!(
-            refused.said(),
-            "Only the owner of a task's Project can move it"
+            refused.explained().as_deref(),
+            Some("Only the owner of a task's Project can move it")
         );
-        // Not a refusal, or nothing to say: as before.
-        assert_eq!(UiError::api(500, "boom").said(), "server error 500: boom");
-        assert_eq!(UiError::api(403, "").said(), "server error 403: ");
-        assert_eq!(
-            UiError::Network("down".into()).said(),
-            "network error: down"
-        );
+        // Not a refusal, nothing to say, or not the API's own words: the
+        // caller keeps its own wording.
+        assert_eq!(UiError::api(500, "boom").explained(), None);
+        assert_eq!(UiError::api(403, " ").explained(), None);
+        assert_eq!(UiError::Network("down".into()).explained(), None);
+        let page = "<html><head><title>429 Too Many Requests</title></head></html>";
+        assert_eq!(UiError::api(429, page).explained(), None);
+        assert_eq!(UiError::api(422, "x".repeat(301)).explained(), None);
     }
 }

@@ -371,12 +371,13 @@ mod tests {
         }
     }
 
-    /// SECURITY (2026-11-18): the proxy's access log holds a request's
-    /// path and never its query string, which carries what a person typed
-    /// into a search (`/api/people?q=…`), nor the Referer, which carries
-    /// the page's own `?q=`. Every `server` names the format, because an
-    /// `access_log` there replaces the image's default, which writes the
-    /// whole request line.
+    /// SECURITY (2026-11-18): the production proxy's access log holds a
+    /// request's path and never its query string, which carries what a
+    /// person typed into a search (`/api/people?q=…`) and the sign-in
+    /// callback's `code`. The Referer is left out too: it is one more
+    /// URL. Every `server` names the format, because an `access_log`
+    /// there replaces the image's default, which writes the whole request
+    /// line.
     #[test]
     fn the_proxys_access_log_keeps_no_query_string() {
         let conf = include_str!("../../../deploy/nginx.prod.conf");
@@ -400,9 +401,6 @@ mod tests {
         let start = all.find("log_format noquery").expect("the format");
         let format = &all[start..start + all[start..].find(';').expect("its end")];
         for kept_out in [
-            "$request ",
-            "$request\"",
-            "$request_uri",
             "$args",
             "$query_string",
             "$is_args",
@@ -410,6 +408,16 @@ mod tests {
             "$arg_",
         ] {
             assert!(!format.contains(kept_out), "{kept_out} in {format}");
+        }
+        // `$request` is the whole first line and `$request_uri` the path
+        // with its query: of that family only the method and the time.
+        for (at, _) in format.match_indices("$request") {
+            let rest = &format[at + "$request".len()..];
+            assert!(
+                ["_method", "_time"].iter().any(|ok| rest.starts_with(ok)),
+                "$request{} in {format}",
+                rest.chars().take(12).collect::<String>()
+            );
         }
         assert!(format.contains("$request_method $uri "), "{format}");
         assert_eq!(all.matches("log_format").count(), 1, "no other format");

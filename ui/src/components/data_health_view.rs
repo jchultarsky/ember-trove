@@ -664,7 +664,10 @@ fn FixControl(
                             // A refusal reads as the API's own sentence
                             // (#351: a task only its Project's owner moves
                             // to another person's Project).
-                            .map_err(|e| e.said()),
+                            .map_err(|e| {
+                                e.explained()
+                                    .unwrap_or_else(|| format!("Couldn't move: {e}"))
+                            }),
                     );
                 });
             };

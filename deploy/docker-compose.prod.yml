@@ -16,10 +16,11 @@ services:
       # SECURITY (2026-11-18): an error's message, never its DETAIL. A CHECK
       # that refuses a row otherwise writes "Failing row contains (…)" to
       # this log: a Person's contact details, on a restore of a bad archive.
-      # The deploy does not recreate this container (release.yml restarts
-      # api, ui and proxy), so on a running host the same setting is made
-      # once with ALTER SYSTEM and a reload; this line is for the next time
-      # the container is made.
+      # A change to this command line makes Compose recreate the container
+      # on the next deploy (release.yml brings up `api`, which depends on
+      # it): the database restarts, for a few seconds. Its data is on the
+      # `pgdata` volume. What stays off: an error's DETAIL, HINT and
+      # CONTEXT (which rows deadlocked, which trigger raised).
       - -c
       - log_error_verbosity=terse
     environment:

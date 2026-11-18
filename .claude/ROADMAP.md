@@ -12,7 +12,9 @@ Keep it current as part of each change (see `POLICY.md` §10).
   #349 left: a task kept after a share ends, and the count of hidden
   prerequisites told to its new Project's owner. With it: the proxy's
   access log keeps the path alone, and Postgres logs errors tersely.
-  The hidden-home rule stays as it is (same decision). No migration.
+  The hidden-home rule stays as it is (same decision). No migration;
+  the deploy restarts the database for a few seconds (its command line
+  changed), so the VM snapshot is taken first.
 
 - **v3.29.0 shipped: links not shown** (#349, PR #350; ONTOLOGY §14;
   owner decisions of 2026-11-17). Whoever may edit a node is told how many of its links

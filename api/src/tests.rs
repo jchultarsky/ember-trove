@@ -103,6 +103,7 @@ impl NodeRepo for StubNodeRepo {
             AZ_VIEW_PROJECT | AZ_SHARED_PROJECT | AZ_OTHER_SHARED_PROJECT => {
                 ("someone-else", NodeType::Project)
             }
+            AZ_THIRD_PARTY_PROJECT => ("a-third-party", NodeType::Project),
             AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
             AZ_MY_AREA => ("test-sub", NodeType::Area),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
@@ -628,6 +629,10 @@ const AZ_TASKS_PROJECT: u128 = 0xa2_000b;
 /// and out to another account's Project only by its Project's owner.
 const AZ_SHARED_PROJECT: u128 = 0xa2_000d;
 const AZ_OTHER_SHARED_PROJECT: u128 = 0xa2_000e;
+/// A third account's Project that the caller edits too: a move there
+/// from "someone-else"'s Project is between two accounts, neither of
+/// them the caller's.
+const AZ_THIRD_PARTY_PROJECT: u128 = 0xa2_000f;
 /// The token of the stub's cascade plan for AZ_PARKED_PROJECT, the one
 /// project in this world with something to close under it (S6b).
 const AZ_CASCADE_TOKEN: &str = "the-plan-i-was-shown";
@@ -681,6 +686,8 @@ const AZ_DEPARTED_TASK: u128 = 0xa2_0106;
 const AZ_GUEST_TASK: u128 = 0xa2_0107;
 /// Someone else's task on their Project, which the caller edits (#351).
 const AZ_SHARED_TASK: u128 = 0xa2_0108;
+/// A task the caller wrote themself, on someone else's Project.
+const AZ_MINE_ON_SHARED_TASK: u128 = 0xa2_0109;
 
 /// The caller's own tag, and someone else's.
 const AZ_MY_TAG: u128 = 0xa2_0301;
@@ -765,6 +772,12 @@ fn authz_permissions() -> Vec<Permission> {
             PermissionRole::Editor,
         ),
         row(
+            0xa2_0211,
+            AZ_THIRD_PARTY_PROJECT,
+            "test-sub",
+            PermissionRole::Editor,
+        ),
+        row(
             AZ_PERM_FOREIGN,
             AZ_FOREIGN_NODE,
             "guest",
@@ -783,6 +796,7 @@ fn authz_task(id: TaskId) -> Task {
         AZ_DEPARTED_TASK => ("departed", AZ_TASKS_PROJECT),
         AZ_GUEST_TASK => ("guest", AZ_OWNED_NODE),
         AZ_SHARED_TASK => ("someone-else", AZ_SHARED_PROJECT),
+        AZ_MINE_ON_SHARED_TASK => ("test-sub", AZ_SHARED_PROJECT),
         // Any other id: the caller's own task on their own Project.
         _ => ("test-sub", AZ_TASKS_PROJECT),
     };
@@ -867,9 +881,13 @@ impl TaskRepo for StubTaskRepo {
         // Project only by an admin's hand. (No ordinary caller in this
         // world owns such a node; an admin's request names no Project of
         // theirs, so the tests below tell the two apart by the status.)
-        if matches!(id.0.as_u128(), AZ_SHARED_TASK | AZ_GUEST_TASK)
-            && matches!(dest, Some(AZ_MY_PROJECT | AZ_TASKS_PROJECT))
-            && !MOVED_OUT_BY_AN_ADMIN.with(std::cell::Cell::get)
+        if matches!(
+            id.0.as_u128(),
+            AZ_SHARED_TASK | AZ_GUEST_TASK | AZ_MINE_ON_SHARED_TASK
+        ) && matches!(
+            dest,
+            Some(AZ_MY_PROJECT | AZ_TASKS_PROJECT | AZ_THIRD_PARTY_PROJECT)
+        ) && !MOVED_OUT_BY_AN_ADMIN.with(std::cell::Cell::get)
         {
             panic!("authorization bypass: task {id} was moved to another account's Project");
         }
@@ -3470,6 +3488,19 @@ async fn only_its_projects_owner_moves_a_task_to_another_accounts_project() {
     // node belongs to: the same refusal.
     let (status, body) = patch(AZ_GUEST_TASK, to(AZ_MY_PROJECT)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // To a third account's Project the caller edits: refused as well. It
+    // is the two accounts that count, not whether the Project it goes to
+    // is the caller's own (a second account of theirs would do as well).
+    let (status, body) = patch(AZ_SHARED_TASK, to(AZ_THIRD_PARTY_PROJECT)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // Having written the task is not owning its Project (the ruling of
+    // 2026-11-10: owning a task on a node is not a way in).
+    let (status, body) = patch(AZ_MINE_ON_SHARED_TASK, to(AZ_MY_PROJECT)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // And the other way round: on the caller's own Project, a task that
+    // someone else wrote is the caller's to take elsewhere.
+    let (status, body) = patch(AZ_DEPARTED_TASK, to(AZ_SHARED_PROJECT)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     // Between two Projects of the same account: edit rights are enough.
     let (status, body) = patch(AZ_SHARED_TASK, to(AZ_OTHER_SHARED_PROJECT)).await;

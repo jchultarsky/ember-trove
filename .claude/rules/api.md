@@ -1072,18 +1072,30 @@ cargo check && cargo clippy -- -D warnings
   Tests in `routes/mod.rs` read `deploy/nginx.prod.conf` and hold this
   and the limits.
 - **`release.yml` prints no API log lines**: its log is public.
-- **No log keeps what a person typed** (2026-11-18). The proxy's access
-  log is the `noquery` format: the path, never the query string
-  (`/api/people?q=…`) nor the Referer; each `server` block names it,
-  because that replaces the image's default.
-  `the_proxys_access_log_keeps_no_query_string` holds it. Postgres runs
-  with `log_error_verbosity=terse`, so a refused row is not written to
-  its log (`the_production_database_logs_errors_tersely`). The deploy
-  does not recreate the database's container: on a running host the
-  setting is made once with `ALTER SYSTEM` and a reload. Still true:
-  nginx's error log names the request line of a request it refuses or
-  fails. A new route that takes personal text takes it in the body
-  where it can, not in the query string.
+- **The production logs don't keep what a person typed** (2026-11-18).
+  - The proxy's access log (`deploy/nginx.prod.conf`) is the `noquery`
+    format: the path, never the query string (`/api/people?q=…`, the
+    sign-in callback's `code`) nor the Referer. Each `server` block
+    names it, because that replaces the image's default.
+    `the_proxys_access_log_keeps_no_query_string` holds it. Only this
+    proxy: `deploy/nginx.conf` (local and e2e) and the Kubernetes
+    ingress keep their defaults.
+  - Still true: nginx's error log names the request line of a request
+    it refuses or fails, and `/api/nodes/slug/{slug}` has a slug in its
+    path. A new route that takes personal text takes it in the body
+    where it can, not in the query string.
+  - Postgres runs with `log_error_verbosity=terse`
+    (`the_production_database_logs_errors_tersely`): no DETAIL ("Failing
+    row contains", "Key (…)=(…)"), HINT or CONTEXT. What it still logs:
+    a value quoted in an error's own message (a bad cast), and the text
+    of a failed statement, literals included: so never build SQL with a
+    value in its text, in a migration or a backfill either. What it
+    costs: the log no longer says which rows deadlocked or which
+    trigger raised, and the API logs only sqlx's message, so a
+    constraint's detail is recorded nowhere.
+  - A change to the database's command line in the compose file makes
+    the deploy recreate its container (`api` depends on it): a restart
+    of a few seconds. Take the VM snapshot first, as for a migration.
 
 ## Admin permission model
 
