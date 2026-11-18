@@ -6,12 +6,13 @@
 //! caller's own people, so nothing here has to filter. Contact values render
 //! as text (never HTML) and as mailto:/tel: links; addresses as plain text.
 
-use common::form_draft::{FormRecovery, PersonForm, PersonFormDraft};
+use common::form_draft::{Carried, FormRecovery, PersonForm, PersonFormDraft};
 use common::id::PersonId;
 use common::person::{
     ContactPoint, DuplicateMatch, Person, PersonField, PersonInput, PersonUsage, autofill_token,
     primary,
 };
+use common::person_carry::{CarriedField, CarryReport, TakenPerson, people_named};
 use leptos::prelude::*;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
@@ -123,8 +124,29 @@ fn ContactListEditor(
     kind: ContactKind,
     points: RwSignal<Vec<ContactPoint>>,
     #[prop(optional)] flagged: Option<RwSignal<Flagged>>,
+    /// A carry-over under review (S8b): the rows it added say "Added".
+    /// Not an error, so not `flagged`: `aria-invalid` would say something
+    /// is wrong, and the keyboard would be sent there.
+    #[prop(optional)]
+    carried: Option<RwSignal<Option<Carried>>>,
 ) -> impl IntoView {
     let redraw = RwSignal::new(0u32);
+    // Whether row `i` is one the carry-over added, by what it holds now.
+    let is_added = move |i: usize| {
+        carried.is_some_and(|carried| {
+            carried
+                .get()
+                .is_some_and(|c| points.with_untracked(|ps| c.report.marks(kind, ps, i)))
+        })
+    };
+    let typed_in = move || {
+        if let Some(flagged) = flagged {
+            flagged.notify();
+        }
+        if let Some(carried) = carried {
+            carried.notify();
+        }
+    };
     // Whether row `i` is marked, read when the flags change and when a
     // row is typed in (its input notifies the flags).
     let is_flagged = move |i: usize| {
@@ -207,10 +229,12 @@ fn ContactListEditor(
                                     class=INPUT_CLASS
                                     placeholder=placeholder
                                     aria-label=noun
+                                    aria-describedby=move || is_added(i).then(|| format!("{noun}-added-{i}"))
                                     prop:value=p.value.clone()
                                     on:input=move |ev| {
                                         let v = event_target_value(&ev);
                                         points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
+                                        typed_in();
                                     }
                                 />
                             }.into_any()
@@ -228,14 +252,13 @@ fn ContactListEditor(
                                     placeholder=placeholder
                                     aria-label=noun
                                     aria-invalid=move || if is_flagged(i) { "true" } else { "false" }
+                                    aria-describedby=move || is_added(i).then(|| format!("{noun}-added-{i}"))
                                     prop:value=p.value.clone()
                                     on:input=move |ev| {
                                         let v = event_target_value(&ev);
                                         points.update_untracked(|ps| if let Some(x) = ps.get_mut(i) { x.value = v; });
-                                        // The mark is about the value: read it again.
-                                        if let Some(flagged) = flagged {
-                                            flagged.notify();
-                                        }
+                                        // A mark is about the value: read it again.
+                                        typed_in();
                                     }
                                 />
                             }.into_any()
@@ -257,6 +280,12 @@ fn ContactListEditor(
                                 points.update_untracked(|ps| { if i < ps.len() { ps.remove(i); } });
                                 redraw.update(|n| *n += 1);
                             }) />
+                        {move || is_added(i).then(|| view! {
+                            <span class="col-span-3 sm:col-span-4 text-xs text-stone-500 dark:text-stone-400"
+                                id=format!("{noun}-added-{i}") data-testid="carried-mark">
+                                {ADDED}
+                            </span>
+                        })}
                     </div>
                 }).collect_view()
             }}
@@ -396,13 +425,35 @@ pub fn PersonEditor(
     // The draft's storage key: per user, so another account in this browser
     // is never offered someone else's contacts. None (never expected inside
     // AuthGate) turns drafts off rather than sharing them.
-    let draft_key = StoredValue::new(use_context::<crate::auth::AuthState>().and_then(|a| {
-        match a.get_untracked() {
-            crate::auth::AuthStatus::Authenticated(u) => Some(form.key(&u.sub)),
+    let key_for = |f: PersonForm| {
+        use_context::<crate::auth::AuthState>().and_then(|a| match a.get_untracked() {
+            crate::auth::AuthStatus::Authenticated(u) => Some(f.key(&u.sub)),
             _ => None,
-        }
-    }));
+        })
+    };
+    let draft_key = StoredValue::new(key_for(form));
     let open_forms = use_context::<crate::draft::OpenForms>();
+    // S8b: details typed for a new person, handed to this dialog when it
+    // edits the person who already has the address. Taken here, at mount:
+    // a page that never loads its person can't leave one waiting for a
+    // later visit, and one meant for someone else is dropped.
+    let hand_off = use_context::<crate::draft::PersonHandOff>();
+    let incoming = StoredValue::new(match (form, hand_off) {
+        (PersonForm::Edit(id), Some(h)) => {
+            let waiting = h.0.get_untracked();
+            if waiting.is_some() {
+                h.0.set(None);
+            }
+            waiting.filter(|w| w.to == id)
+        }
+        _ => None,
+    });
+    // What this dialog is reviewing from such a hand-over, if anything.
+    let carried = RwSignal::new(None::<Carried>);
+    // The new-person dialog's own draft: dropped once a carry-over from
+    // it is saved here.
+    let source_key = StoredValue::new(key_for(PersonForm::New));
+    let navigate = StoredValue::new(use_navigate());
     let duplicate = RwSignal::new(None::<Vec<DuplicateMatch>>);
     let error = RwSignal::new(None::<String>);
     // What the last save was refused for: its rows are marked (S8a).
@@ -411,28 +462,54 @@ pub fn PersonEditor(
         EditorTarget::New => "person-editor-form-new",
         EditorTarget::Existing(_) => "person-editor-form-edit",
     };
-    // After a refusal the keyboard goes to the first marked address: the
-    // alert says what is wrong, and every row is named "email".
+    // After a refusal the keyboard goes to the first marked address (the
+    // alert says what is wrong, and every row is named "email"), as long
+    // as that row is in view with the notice above it. In a short window,
+    // or with the marked row far down, focusing the row scrolled the
+    // notice away (seen in 3.30.0), and scrolling back would hide the
+    // focused row instead. Then the keyboard goes to the notice itself: it
+    // says why and what can be done, and Tab leads on from it.
     let focus_flagged = move || {
         set_timeout(
             move || {
                 use wasm_bindgen::JsCast;
-                let marked = document()
-                    .get_element_by_id(form_id)
-                    .and_then(|form| {
-                        form.query_selector("input[aria-invalid=\"true\"]")
-                            .ok()
-                            .flatten()
-                    })
-                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
-                if let Some(marked) = marked {
-                    let _ = marked.focus();
+                let Some(form) = document().get_element_by_id(form_id) else {
+                    return;
+                };
+                let find = |selector: &str| {
+                    form.query_selector(selector)
+                        .ok()
+                        .flatten()
+                        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                };
+                form.set_scroll_top(0);
+                let marked = find("input[aria-invalid=\"true\"]");
+                let in_view = marked.as_ref().is_some_and(|m| {
+                    m.get_bounding_client_rect().bottom()
+                        <= form.get_bounding_client_rect().bottom()
+                });
+                let target = if in_view {
+                    marked
+                } else {
+                    find("[role=\"alert\"]").or(marked)
+                };
+                if let Some(target) = target {
+                    let _ = target.focus();
                 }
             },
             std::time::Duration::ZERO,
         );
     };
     let position_hint_id = StoredValue::new(format!("{form_id}-position-hint"));
+    let review_id = StoredValue::new(format!("{form_id}-carry-review"));
+    // "Added" under a field the carry-over filled, while the field still
+    // holds that (`now`): like a row's mark, it is about the value.
+    let filled = move |field: CarriedField, now: String| {
+        carried
+            .get()
+            .is_some_and(|c| c.report.fills(field, &now))
+            .then(|| view! { <span class=HINT_CLASS data-testid="carried-mark">{ADDED}</span> })
+    };
     let title = match target {
         EditorTarget::New => "New person",
         EditorTarget::Existing(_) => "Edit person",
@@ -440,16 +517,17 @@ pub fn PersonEditor(
 
     // Keep the open dialog's input on this device, or drop the draft once
     // it holds nothing beyond what the dialog opened with. `try_` access:
-    // this also runs while the page unmounts the editor.
-    let keep = move || {
+    // this also runs while the page unmounts the editor. True when what
+    // the dialog holds is safe here: stored, or nothing worth storing.
+    let try_keep = move || -> bool {
         if open.try_get_untracked() != Some(true) {
-            return;
+            return false;
         }
         let Some(Some(key)) = draft_key.try_get_value() else {
-            return;
+            return false;
         };
         let (Some(person), Some(base)) = (draft.try_read(), baseline.try_get_value()) else {
-            return;
+            return false;
         };
         let typed = |f: fn(&MembershipDraft) -> RwSignal<String>| {
             membership
@@ -462,12 +540,19 @@ pub fn PersonEditor(
             note: typed(|m| m.note),
             base,
             saved_at: None,
+            // Kept with the draft: a reload during the review brings the
+            // notice and the marks back, and never merges again.
+            carried: carried.try_get_untracked().flatten(),
         };
         if d.is_dirty() {
-            crate::draft::write_person_draft(&key, &d);
+            crate::draft::write_person_draft(&key, &d)
         } else {
             crate::draft::clear_form_draft(&key);
+            true
         }
+    };
+    let keep = move || {
+        try_keep();
     };
     // The page going away: reload (the update banner's), tab close, or a
     // phone backgrounding it for good. Typing already wrote the draft; this
@@ -494,13 +579,81 @@ pub fn PersonEditor(
             return;
         }
         checked.set_value(true);
-        let Some(key) = draft_key.get_value() else {
+        let key = draft_key.get_value();
+        let stored = key.as_deref().and_then(crate::draft::read_person_draft);
+        let current = initial.get_untracked();
+        let offered = stored.as_ref().map(|d| d.recovery(&current));
+        // S8b: a hand-over is merged here, once, against the person as
+        // just loaded, or against their own unsaved edit if this device
+        // kept one. Never at the click: that copy could be stale by the
+        // time the dialog shows.
+        if let Some(h) = incoming.get_value() {
+            incoming.set_value(None);
+            let source_fp = common::person_carry::person_fingerprint(&h.typed);
+            // An unsaved edit of them that this device kept, if any.
+            let kept = match (&stored, offered) {
+                (Some(d), Some(FormRecovery::Offer { changed })) => Some((d, changed)),
+                _ => None,
+            };
+            // This very input is under review here already (Back, then the
+            // same button again). The review is shown as it was left, by
+            // the ordinary restore below: merging again would find nothing
+            // to add and say so, over additions that are not saved yet.
+            let reviewed_already = kept
+                .is_some_and(|(d, _)| d.carried.as_ref().is_some_and(|c| c.source_fp == source_fp));
+            if !reviewed_already {
+                let (start, base, changed) = match kept {
+                    Some((d, changed)) => (d.person.clone(), d.base.clone(), changed),
+                    // `base` is the person as loaded, never the merged
+                    // values: the dialog must count as changed, or closing
+                    // it would discard what was added without an Undo.
+                    None => (current.clone(), current.clone(), false),
+                };
+                let over = common::person_carry::carry_into(&start, &h.typed, &h.someone_elses);
+                let nothing_to_say = over.report.added_nothing()
+                    && over.report.not_used.is_empty()
+                    && over.report.someone_elses.is_empty();
+                if nothing_to_say && kept.is_none() {
+                    // They have all of it already: nothing to review, and
+                    // the new-person dialog has nothing left worth keeping.
+                    if let (Some(key), Some(FormRecovery::Discard)) = (&key, offered) {
+                        crate::draft::clear_form_draft(key);
+                    }
+                    if let Some(source) = source_key.get_value() {
+                        crate::draft::clear_person_draft_if(&source, source_fp);
+                    }
+                    push_toast(ToastLevel::Info, "They already have everything you typed.");
+                    return;
+                }
+                // On top of a kept edit, the review says so: Save writes
+                // that edit too. On top of an earlier review, one report
+                // accounts for both.
+                let earlier = kept.and_then(|(d, _)| d.carried.clone());
+                let on_kept_edit = earlier.as_ref().map_or(kept.is_some(), |c| c.on_kept_edit);
+                let report = match earlier {
+                    Some(c) => c.report.joined(over.report),
+                    None => over.report,
+                };
+                draft.load(over.person);
+                baseline.set_value(base);
+                carried.set(Some(Carried {
+                    source_fp,
+                    report,
+                    on_kept_edit,
+                }));
+                restoring.set_value(true);
+                recovered.set(Some(changed));
+                open.set(true);
+                // On disk at once: a reload from here on restores this
+                // review.
+                keep();
+                return;
+            }
+        }
+        let (Some(key), Some(d), Some(offered)) = (key, stored, offered) else {
             return;
         };
-        let Some(d) = crate::draft::read_person_draft(&key) else {
-            return;
-        };
-        match d.recovery(&initial.get_untracked()) {
+        match offered {
             FormRecovery::Discard => crate::draft::clear_form_draft(&key),
             FormRecovery::Offer { changed } => {
                 draft.load(d.person);
@@ -509,6 +662,7 @@ pub fn PersonEditor(
                     m.role.set(d.role);
                     m.note.set(d.note);
                 }
+                carried.set(d.carried);
                 restoring.set_value(true);
                 recovered.set(Some(changed));
                 open.set(true);
@@ -533,6 +687,7 @@ pub fn PersonEditor(
         }
         if !is_open && was_open == Some(true) {
             recovered.set(None);
+            carried.set(None);
             if let Some(key) = draft_key.get_value() {
                 crate::draft::clear_form_draft(&key);
             }
@@ -574,6 +729,7 @@ pub fn PersonEditor(
             return;
         }
         saving.set(true);
+        let was_carried = carried.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
             let result = match target {
                 EditorTarget::New => crate::api::create_person(&input).await,
@@ -582,6 +738,14 @@ pub fn PersonEditor(
             saving.try_set(false);
             match result {
                 Ok(SavePerson::Saved(p)) => {
+                    // S8b: what was typed for a new person is on this one
+                    // now, so that dialog's draft goes: only now, and only
+                    // if it still holds what was carried.
+                    if let (Some(c), Some(Some(source))) =
+                        (&was_carried, source_key.try_get_value())
+                    {
+                        crate::draft::clear_person_draft_if(&source, c.source_fp);
+                    }
                     open.try_set(false);
                     on_saved.run(p);
                 }
@@ -603,16 +767,70 @@ pub fn PersonEditor(
                     }
                     duplicate.try_set(Some(w.matches));
                 }
+                // A refusal the API explained (a list over its limit, a
+                // value it won't take) reads as its own sentence.
                 Err(e) => {
-                    error.try_set(Some(e.to_string()));
+                    error.try_set(Some(e.explained().unwrap_or_else(|| e.to_string())));
                 }
             }
         });
     };
 
+    // S8b: "add what I typed to them". Synchronous: the typed input goes
+    // into the hand-over and the page goes to that person, whose dialog
+    // merges it against a fresh copy. Nothing is fetched or written here.
+    let carry_to = Callback::new(move |person: TakenPerson| {
+        let typed = draft.read();
+        // The notice may be older than what the rows hold now.
+        let still_here = typed.emails.iter().any(|e| {
+            let key = typed_key(&e.value);
+            person
+                .emails
+                .iter()
+                .any(|theirs| common::person::email_key(theirs) == key)
+        });
+        if !still_here {
+            duplicate.set(None);
+            flagged.set(Flagged::default());
+            error.set(Some(
+                "That address is no longer in this form. Save again.".to_string(),
+            ));
+            return;
+        }
+        // Only what the API would take as a person is carried.
+        if let Err(e) = common::person::normalize(typed.clone()) {
+            let said = crate::error::UiError::api(422, e.to_string());
+            error.set(Some(said.explained().unwrap_or_else(|| e.to_string())));
+            return;
+        }
+        let someone_elses = people_named(&duplicate.get_untracked().unwrap_or_default())
+            .into_iter()
+            .filter(|p| p.id != person.id)
+            .flat_map(|p| p.emails)
+            .collect();
+        // The draft on disk is exactly what is handed over: its
+        // fingerprint is how it is recognised once they are saved. If
+        // this device can't keep it (storage full or blocked), nothing is
+        // carried: backing out of the review must have this to go back to.
+        if !try_keep() {
+            error.set(Some(NOT_KEPT.to_string()));
+            return;
+        }
+        if let Some(h) = hand_off {
+            h.0.set(Some(crate::draft::HandOff {
+                to: person.id,
+                typed,
+                someone_elses,
+            }));
+        }
+        navigate.get_value()(&format!("/people/{}", person.id), Default::default());
+    });
+
     // Escape and the backdrop: discard, with Undo when something changed.
     let dismiss = Callback::new(move |()| {
         let typed = draft.read();
+        let was_carried = carried.get_untracked();
+        let was_recovered = recovered.get_untracked();
         open.set(false);
         // Undo keeps the membership fields too: they aren't cleared until
         // the next fresh opening.
@@ -623,6 +841,12 @@ pub fn PersonEditor(
                 std::sync::Arc::new(move || {
                     draft.load(typed.clone());
                     restoring.set_value(true);
+                    // Closing dropped the review's notice and marks, and
+                    // whether they were changed since, which Save replaces.
+                    if was_carried.is_some() {
+                        recovered.try_set(was_recovered);
+                    }
+                    carried.try_set(was_carried.clone());
                     open.try_set(true);
                 }),
             );
@@ -671,21 +895,33 @@ pub fn PersonEditor(
                 on:input=move |_| keep()
                 on:change=move |_| keep()
             >
-                {move || recovered.get().map(|changed| view! {
-                    <div data-testid="form-draft-recovery" role="status"
-                        class="flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 text-sm
-                            bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200">
-                        <span>{recovery_message(changed)}</span>
-                        // Discard ends the dialog, like Cancel: the app opened
-                        // it only to give the input back.
-                        <button type="button" class="text-xs underline cursor-pointer"
-                            on:click=move |_| open.set(false)>
-                            "Discard"
-                        </button>
-                    </div>
-                })}
+                {move || match (carried.get(), recovered.get()) {
+                    // S8b: a carry-over under review says what it did.
+                    (Some(c), changed) => view! {
+                        <CarryReview report=c.report changed=changed.unwrap_or(false)
+                            kept_edit=c.on_kept_edit
+                            id=review_id.get_value()
+                            on_discard=Callback::new(move |()| open.set(false)) />
+                    }.into_any(),
+                    (None, Some(changed)) => view! {
+                        <div data-testid="form-draft-recovery" role="status"
+                            class="flex flex-wrap items-center gap-3 rounded-lg px-3 py-2 text-sm
+                                bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200">
+                            <span>{recovery_message(changed)}</span>
+                            // Discard ends the dialog, like Cancel: the app opened
+                            // it only to give the input back.
+                            <button type="button" class="text-xs underline cursor-pointer"
+                                on:click=move |_| open.set(false)>
+                                "Discard"
+                            </button>
+                        </div>
+                    }.into_any(),
+                    (None, None) => ().into_any(),
+                }}
                 {move || error.get().map(|e| view! {
-                    <p class="text-sm text-red-600 dark:text-red-400" role="alert">{e}</p>
+                    // Focusable: a refusal whose marked row is out of view
+                    // puts the keyboard here (`focus_flagged`).
+                    <p class="text-sm text-red-600 dark:text-red-400" role="alert" tabindex="-1">{e}</p>
                 })}
                 {move || duplicate.get().map(|matches| view! {
                     // Opening the other person navigates away with the
@@ -693,12 +929,20 @@ pub fn PersonEditor(
                     // was typed as a draft (#170). Closing it first would
                     // drop the draft: every closing does.
                     <EmailTakenNotice matches=matches
-                        on_node=matches!(form, PersonForm::NewOnNode(_)) />
+                        offer=match form {
+                            PersonForm::New => TakenOffer::CarryOver(carry_to),
+                            PersonForm::NewOnNode(_) => TakenOffer::OnNode,
+                            PersonForm::Edit(_) => TakenOffer::OpenOnly,
+                        } />
                 })}
                 <label class="block">
                     <span class=LABEL_CLASS>"Name"</span>
+                    // The review is tied to the field that takes the
+                    // keyboard on open: a status mounted with its text is
+                    // often not announced on its own.
                     <input type="text" node_ref=name_ref class=INPUT_CLASS required=true
                         autocomplete=autofill_token(PersonField::Name)
+                        aria-describedby=move || carried.get().is_some().then(|| review_id.get_value())
                         prop:value=move || draft.name.get()
                         on:input=move |ev| draft.name.set(event_target_value(&ev)) />
                 </label>
@@ -709,6 +953,7 @@ pub fn PersonEditor(
                             autocomplete=autofill_token(PersonField::Company)
                             prop:value=move || draft.company.get()
                             on:input=move |ev| draft.company.set(event_target_value(&ev)) />
+                        {move || filled(CarriedField::Company, draft.company.get())}
                     </label>
                     // Position is the person's, Role the membership's (#147); the
                     // hint says so while typing, which a placeholder can't (#182).
@@ -721,15 +966,18 @@ pub fn PersonEditor(
                         <span id=position_hint_id.get_value() class=HINT_CLASS>
                             "Their job title \u{2014} stays with the person on every node."
                         </span>
+                        {move || filled(CarriedField::Position, draft.position.get())}
                     </label>
                 </div>
-                <ContactListEditor kind=ContactKind::Email points=draft.emails flagged=flagged />
-                <ContactListEditor kind=ContactKind::Phone points=draft.phones />
-                <ContactListEditor kind=ContactKind::Address points=draft.addresses />
+                <ContactListEditor kind=ContactKind::Email points=draft.emails flagged=flagged
+                    carried=carried />
+                <ContactListEditor kind=ContactKind::Phone points=draft.phones carried=carried />
+                <ContactListEditor kind=ContactKind::Address points=draft.addresses carried=carried />
                 <label class="block">
                     <span class=LABEL_CLASS>"Notes"</span>
                     <textarea rows="4" class=INPUT_CLASS autocomplete="off" prop:value=move || draft.notes.get()
                         on:input=move |ev| draft.notes.set(event_target_value(&ev)) />
+                    {move || filled(CarriedField::Notes, draft.notes.get())}
                 </label>
                 // The membership's fields, set apart from the person's: the
                 // heading says they belong to this node, not to the card.
@@ -813,24 +1061,93 @@ impl Flagged {
     }
 }
 
+/// The mark on a row or field a carry-over added (S8b).
+const ADDED: &str = "Added from what you typed";
+
+/// Said when a carry-over is refused because the typed input could not
+/// be stored on this device.
+const NOT_KEPT: &str = "This device can\u{2019}t keep what you typed right now, so it was not \
+     carried over. It is still in this form.";
+
+/// What a dialog reviewing a carry-over says (S8b): where the additions
+/// came from, what they are, what was typed and not used, and that
+/// nothing is saved yet. Discard closes the dialog and changes nothing.
+#[component]
+fn CarryReview(
+    report: CarryReport,
+    /// The person was saved with other values since this device kept an
+    /// edit of them.
+    changed: bool,
+    /// The additions are on top of an unsaved edit of them that this
+    /// device had kept.
+    kept_edit: bool,
+    id: String,
+    #[prop(into)] on_discard: Callback<()>,
+) -> impl IntoView {
+    let from = if report.typed_name.is_empty() {
+        "the person you were typing".to_string()
+    } else {
+        format!(
+            "\u{201c}{}\u{201d}, the person you were typing",
+            report.typed_name
+        )
+    };
+    let lines = common::person_carry::review_lines(&report);
+    view! {
+        <div data-testid="carry-review" role="status" id=id
+            class="rounded-lg px-3 py-2 text-sm space-y-1.5
+                bg-amber-50 dark:bg-amber-900/20 text-amber-900 dark:text-amber-200">
+            <p class="font-medium">
+                {format!("From {from}. Nothing is saved until you press Save.")}
+            </p>
+            <ul class="list-disc pl-5 space-y-0.5">
+                {lines.into_iter().map(|line| view! { <li>{line}</li> }).collect_view()}
+            </ul>
+            {kept_edit.then(|| view! {
+                <p data-testid="carry-kept-edit">
+                    "This is on top of an unsaved edit of them that this device had kept. \
+                     Save writes that edit too; Discard drops it."
+                </p>
+            })}
+            {changed.then(|| view! {
+                <p>"The person has been changed since; saving replaces that change."</p>
+            })}
+            <button type="button" class="text-xs underline cursor-pointer"
+                on:click=move |_| on_discard.run(())>
+                "Discard"
+            </button>
+        </div>
+    }
+}
+
+/// What the refusal's notice offers for each person it names, besides
+/// opening them (S8b).
+#[derive(Clone, Copy)]
+pub enum TakenOffer {
+    /// Editing a saved person: merging two saved people is the merge
+    /// tool's (S8c).
+    OpenOnly,
+    /// A new person being added on a node.
+    OnNode,
+    /// A new person from the registry: add what was typed to them, for
+    /// review.
+    CarryOver(Callback<TakenPerson>),
+}
+
 /// Why a save was refused: an email address here already belongs to
 /// someone else in the registry (S8a; ONTOLOGY §7.1: the same address is
-/// the same person). It names them, each a way to open that record, and
+/// the same person). It names them, once each, with a way to open that
+/// record and what else the dialog can do for them ([`TakenOffer`]). It
 /// offers nothing that saves anyway. With no one left to name (they were
 /// removed a moment later) it says to try again.
 #[component]
-pub fn EmailTakenNotice(
-    matches: Vec<DuplicateMatch>,
-    /// The dialog is adding a new person to a node: what its reader came
-    /// for is to put that person on the node, which the list behind the
-    /// dialog does.
-    on_node: bool,
-) -> impl IntoView {
+pub fn EmailTakenNotice(matches: Vec<DuplicateMatch>, offer: TakenOffer) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
-    let nobody = matches.is_empty();
+    let people = people_named(&matches);
+    let nobody = people.is_empty();
     view! {
         <div class="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-sm space-y-2"
-            role="alert" data-testid="email-taken">
+            role="alert" tabindex="-1" data-testid="email-taken">
             <p class="text-stone-700 dark:text-stone-200">
                 {if nobody {
                     "An email address here was just given to someone else in your registry. \
@@ -840,30 +1157,58 @@ pub fn EmailTakenNotice(
                      registry, and the same address means the same person:"
                 }}
             </p>
-            <ul class="space-y-1">
-                {matches.into_iter().map(|m| {
-                    let id = m.id;
+            <ul class="space-y-1.5">
+                {people.into_iter().map(|person| {
+                    let id = person.id;
+                    let name = person.display_name.clone();
+                    let addresses = person.emails.join(", ");
+                    let carry = match offer {
+                        TakenOffer::CarryOver(carry_to) => Some((carry_to, person)),
+                        TakenOffer::OpenOnly | TakenOffer::OnNode => None,
+                    };
                     view! {
-                        <li>
-                            <button type="button" class="text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
-                                on:click=move |_| {
-                                    navigate.get_value()(&format!("/people/{id}"), Default::default());
-                                }>
-                                {m.display_name}
-                            </button>
-                            <span class="text-stone-500 dark:text-stone-400">{format!(" · {}", m.email)}</span>
+                        <li class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <span class="min-w-0">
+                                <button type="button" class="text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
+                                    on:click=move |_| {
+                                        navigate.get_value()(&format!("/people/{id}"), Default::default());
+                                    }>
+                                    {name.clone()}
+                                </button>
+                                <span class="text-stone-500 dark:text-stone-400">{format!(" · {addresses}")}</span>
+                            </span>
+                            {carry.map(|(carry_to, person)| view! {
+                                <button type="button"
+                                    class="rounded-md px-2 py-0.5 text-xs text-stone-700 dark:text-stone-200
+                                        border border-stone-300 dark:border-stone-600
+                                        hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
+                                    // The name starts with the words on the button.
+                                    aria-label=format!("Add what I typed to them: {name}")
+                                    data-testid="carry-over"
+                                    on:click=move |_| carry_to.run(person.clone())>
+                                    "Add what I typed to them"
+                                </button>
+                            })}
                         </li>
                     }
                 }).collect_view()}
             </ul>
             {(!nobody).then(|| view! {
                 <p class="text-xs text-stone-600 dark:text-stone-300">
-                    {if on_node {
-                        "Cancel and pick them from the list to add them here, or take the \
-                         address off. What you typed is kept if you open them."
-                    } else {
-                        "Open them to use that record, or take the address off here. What \
-                         you typed is kept."
+                    {match offer {
+                        TakenOffer::CarryOver(_) => {
+                            "Add what you typed to them (you review it before anything is \
+                             saved), open them, or take the address off here. What you typed \
+                             is kept."
+                        }
+                        TakenOffer::OnNode => {
+                            "Cancel and pick them from the list to add them here, or take the \
+                             address off. What you typed is kept if you open them."
+                        }
+                        TakenOffer::OpenOnly => {
+                            "Open them, or take the address off here. Merging two saved \
+                             people isn\u{2019}t available yet. What you typed is kept."
+                        }
                     }}
                 </p>
             })}

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{NodeId, PersonId};
 use crate::person::PersonInput;
+use crate::person_carry::CarryReport;
 
 /// `localStorage` key prefix for modal-form drafts. Logout removes every
 /// key with this prefix.
@@ -44,6 +45,22 @@ impl PersonForm {
     }
 }
 
+/// Details typed for a new person and added to this dialog for review
+/// (S8b, `person_carry`): what was added, and which new-person input it
+/// came from, so that input's own draft can be dropped once this one is
+/// saved, and only if it is still that input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Carried {
+    /// `person_carry::person_fingerprint` of the new-person dialog's input.
+    pub source_fp: u64,
+    pub report: CarryReport,
+    /// The additions went on top of an unsaved edit of this person that
+    /// the device had kept, not on the person as saved. The review says
+    /// so: Save writes that edit too, and Discard drops it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub on_kept_edit: bool,
+}
+
 /// What a person dialog held when the page went away.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PersonFormDraft {
@@ -61,6 +78,10 @@ pub struct PersonFormDraft {
     /// layer stamps it.
     #[serde(default)]
     pub saved_at: Option<i64>,
+    /// Set while the dialog reviews a carry-over (S8b). A draft written
+    /// before 3.31.0 has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carried: Option<Carried>,
 }
 
 /// What the dialog does with a stored draft when it mounts.
@@ -222,10 +243,41 @@ mod tests {
             note: "met at the fair".into(),
             base: PersonInput::default(),
             saved_at: Some(1_800_000_000_000),
+            carried: None,
         };
         let json = serde_json::to_string(&d).expect("serialize");
+        // An ordinary draft is stored as it always was.
+        assert!(!json.contains("carried"), "{json}");
         assert_eq!(PersonFormDraft::parse(&json), Some(d));
         assert_eq!(PersonFormDraft::parse("{not json"), None);
+    }
+
+    /// S8b: a dialog reviewing a carry-over keeps its report across a
+    /// reload, and the startup sweep, which rewrites drafts, keeps it too.
+    #[test]
+    fn a_carry_over_under_review_survives_storage() {
+        let report = CarryReport {
+            typed_name: "A. Lovelace".into(),
+            emails: vec!["ada@home.example".into()],
+            ..CarryReport::default()
+        };
+        let d = PersonFormDraft {
+            person: named("Ada Lovelace"),
+            base: named("Ada"),
+            saved_at: Some(1_800_000_000_000),
+            carried: Some(Carried {
+                source_fp: 42,
+                report,
+                on_kept_edit: true,
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&d).expect("serialize");
+        assert_eq!(PersonFormDraft::parse(&json), Some(d.clone()));
+        assert_eq!(sweep(&json, 1_800_000_000_001), Sweep::Keep);
+        // A draft from before the field reads, with none.
+        let old = r#"{"person":{"display_name":"Ada"},"saved_at":1800000000000}"#;
+        assert_eq!(PersonFormDraft::parse(old).and_then(|d| d.carried), None);
     }
 
     #[test]

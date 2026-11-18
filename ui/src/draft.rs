@@ -181,18 +181,20 @@ pub fn read_person_draft(key: &str) -> Option<PersonFormDraft> {
     Some(d)
 }
 
-/// Keep what a person dialog holds. Silently no-ops on any storage error,
-/// and after logout.
-pub fn write_person_draft(key: &str, draft: &PersonFormDraft) {
+/// Keep what a person dialog holds, and say whether it was stored: a full
+/// or blocked localStorage is a normal case (as `write_edit_draft`), and
+/// nothing is stored after logout.
+pub fn write_person_draft(key: &str, draft: &PersonFormDraft) -> bool {
     if LOGGED_OUT.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
+        return false;
     }
     let draft = PersonFormDraft {
         saved_at: Some(now_ms()),
         ..draft.clone()
     };
-    if let (Some(s), Ok(json)) = (storage(), serde_json::to_string(&draft)) {
-        let _ = s.set_item(key, &json);
+    match (storage(), serde_json::to_string(&draft)) {
+        (Some(s), Ok(json)) => s.set_item(key, &json).is_ok(),
+        _ => false,
     }
 }
 
@@ -200,6 +202,37 @@ pub fn write_person_draft(key: &str, draft: &PersonFormDraft) {
 pub fn clear_form_draft(key: &str) {
     if let Some(s) = storage() {
         let _ = s.remove_item(key);
+    }
+}
+
+/// What was typed for a new person, on its way to the dialog of the person
+/// who already has the address (S8b, `common::person_carry`).
+///
+/// In memory only, and taken once: the edit dialog of `to` takes it when
+/// it mounts and merges it into what it shows, for review. Nothing here is
+/// stored or logged. If that page is never reached, the new-person
+/// dialog's own draft still holds everything.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandOff {
+    pub to: common::id::PersonId,
+    pub typed: common::person::PersonInput,
+    /// Addresses the refusal named another person for.
+    pub someone_elses: Vec<String>,
+}
+
+/// The pending [`HandOff`], if any. Provided at the app root.
+#[derive(Clone, Copy)]
+pub struct PersonHandOff(pub leptos::prelude::RwSignal<Option<HandOff>>);
+
+/// Drop the draft under `key` if it still holds exactly the input with
+/// this fingerprint (`person_carry::person_fingerprint`). For the
+/// new-person dialog's draft once what it held was saved onto someone
+/// else: by then that dialog may hold a different person, typed since.
+pub fn clear_person_draft_if(key: &str, fingerprint: u64) {
+    let same = read_person_draft(key)
+        .is_some_and(|d| common::person_carry::person_fingerprint(&d.person) == fingerprint);
+    if same {
+        clear_form_draft(key);
     }
 }
 

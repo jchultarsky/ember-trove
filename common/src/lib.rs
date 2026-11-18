@@ -61,6 +61,7 @@ pub mod note;
 pub mod ontology;
 pub mod permission;
 pub mod person;
+pub mod person_carry;
 pub mod picker;
 pub mod project_focus;
 pub mod project_state;
