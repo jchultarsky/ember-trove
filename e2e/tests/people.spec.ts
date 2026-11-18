@@ -54,7 +54,7 @@ test('the registry: one editor for new and edit, and an address is one person’
     // Refused, inside the editor: whose address it is, and no way round.
     const taken = dlg.getByTestId('email-taken');
     await expect(taken).toContainText('Not saved.');
-    await expect(taken.getByRole('button', { name: originalName })).toBeVisible();
+    await expect(taken.getByRole('button', { name: originalName, exact: true })).toBeVisible();
     await expect(taken).toContainText(email);
     await expect(dlg.getByRole('button', { name: /anyway/i })).toHaveCount(0);
     await expect(dlg).toBeVisible();
@@ -161,7 +161,12 @@ test('the registry: one editor for new and edit, and an address is one person’
       .getByRole('textbox', { name: 'email', exact: true })
       .fill(email);
     await editor(page).getByRole('button', { name: 'Save' }).click();
-    await editor(page).getByTestId('email-taken').getByRole('button', { name: originalName }).click();
+    // Two saved people: the notice opens the other one, and says that
+    // merging them comes later (S8b; the merge tool is S8c).
+    const refused = editor(page).getByTestId('email-taken');
+    await expect(refused).toContainText('Merging two saved people isn’t available yet.');
+    await expect(refused.getByTestId('carry-over')).toHaveCount(0);
+    await refused.getByRole('button', { name: originalName, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/people/${original.id}$`));
     await expect(editor(page)).toHaveCount(0);
     await expect(page.getByTestId('person-card').getByRole('heading', { name: originalName })).toBeVisible();

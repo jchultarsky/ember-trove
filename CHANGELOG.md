@@ -6,6 +6,63 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.31.0] - 2026-11-18
+
+### Added
+- **At an email collision, what you typed can be added to the person
+  who has the address** (S8b of the ontology programme, #357; ONTOLOGY
+  §7.1: "open the existing record or merge into it"). When a new person
+  is refused because their address is someone's, the notice has a button
+  for each person it names: "Add what I typed to them".
+  - It opens that person's editor with what you typed added, **for
+    review**. Their own values are kept, a blank company or position is
+    filled, new emails, phones and addresses are added, and the lines of
+    your notes that they don't have follow theirs. Nothing is saved
+    until you press Save.
+  - The review says what was added, and what you typed that differs
+    from theirs (a name, a company): that is not used, and it is how a
+    wrong match shows. Added rows and fields are marked, for as long as
+    they hold what was added.
+  - If this device had kept an unsaved edit of that person, the
+    additions go on top of it, and the review says so.
+  - Backing out loses nothing you typed: Discard leaves the person as
+    they were, and the new-person dialog comes back with what you
+    typed. It is dropped once the other person is saved, or when they
+    already had everything you typed (the app says so and opens them).
+    If this device can't keep what you typed (its storage is full or
+    blocked), nothing is carried over, and the app says so.
+  - The same phone number in another format is not added twice. An
+    address that belongs to a third person is left out, and said.
+  - **On a Project** the notice has "Add {name} here" instead: the
+    person who has the address is put on the Project with the role and
+    note you typed, and no second person is made. The other details you
+    typed are not added to them and are not kept, and the notice says
+    so. Someone already there is said, not offered. The dialog closes
+    only once the add has gone through, so a failure loses nothing; an
+    answer that comes after you cancelled and opened the dialog again
+    leaves the new one alone.
+  - Editing a saved person and adding another saved person's address
+    is still refused; the notice now says that merging two saved people
+    isn't available yet.
+  - It is done in the browser, as an ordinary edit of the existing
+    person: no new API, and the database's email rule still decides.
+
+### Fixed
+- **The notice of a refused save stays in view.** Since 3.30.0 the
+  keyboard goes to the marked address, and in a short window that
+  scrolled the notice away. When the marked row doesn't fit under the
+  notice, the keyboard now goes to the notice, and Tab leads on from it.
+- The person picker on a node is no longer rebuilt, taking the keyboard
+  with it, each time the node's people are read again.
+- A person save the API refuses for a reason it explains (a list over
+  its limit) reads as that sentence, not "server error 422".
+
+### Documentation
+- ONTOLOGY §7.1 and its decision log say what a collision offers; the
+  rules for the notice, the carry-over and its tests are in
+  `.claude/rules/` (`leptos.md`, `e2e.md`), with a note for the merge
+  tool in `api.md`. The in-app help's People entry says it too.
+
 ## [3.30.0] - 2026-11-18
 
 ### Changed

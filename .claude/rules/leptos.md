@@ -352,7 +352,43 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   put right. The same address twice is caught by `listed_twice` before
   anything is sent. Both key a typed value with `typed_key`, which trims
   first, as the API does. After a refusal the keyboard goes to the first
-  marked address.
+  marked address when it fits under the notice, and to the notice when
+  it doesn't (`focus_flagged`): neither may be scrolled out of view. A
+  new alert in that form needs `tabindex="-1"`.
+- **What the notice offers is a `TakenOffer`** (S8b, #357), chosen by
+  the dialog's `PersonForm`: `CarryOver` for a new person, `AddHere` on
+  a node (`OnNode`, which offers opening only, when the reader may not
+  add people there), `OpenOnly` for an edit (merging two saved people
+  is S8c).
+  - **Carry-over** is `common::person_carry::carry_into`, pure. The
+    typed input travels in memory (`draft::PersonHandOff`, taken once
+    when the other person's dialog mounts) and is merged in the restore
+    effect, against the person as fetched or an unsaved edit of them
+    the device kept (`Carried.on_kept_edit`, which the review says).
+    Never merge at the click, and never write the typed input to a URL
+    or a new storage key.
+  - The report rides the dialog's own draft (`PersonFormDraft.carried`).
+    A reload restores it. The same source again (`source_fp`) is shown
+    as it was left, not merged again; another source joins the report
+    (`CarryReport::joined`).
+  - The new-person draft is dropped only when the other person is saved,
+    and only if it still holds what was carried
+    (`clear_person_draft_if`). `carry_to` refuses when the draft can't
+    be stored (`try_keep`): backing out must have it to go back to.
+  - "Added" marks are `carried`, not `flagged`: neutral, never
+    `aria-invalid`, and about the value (`CarryReport::marks`, `fills`).
+  - **`AddHere`**: the panel that owns the dialog does the add
+    (`NodePeoplePanel::add_existing`) and closes the dialog only once it
+    has succeeded. Offered only when the reader may add people there
+    (`can_add`); a person already there is said, not offered.
+  - One set of signals serves every opening of that dialog, so an
+    answer acts on it only if it is still the opening the button was
+    pressed in (`AddHere.opening`, bumped by the editor). Anything else
+    that awaits and then touches a dialog checks the same way.
+  - A button that starts a request is `aria-disabled`, not `disabled`,
+    while it runs (a disabled button drops the keyboard), with a guard
+    in the handler. When an answer removes the focused control, the
+    keyboard goes to the form's alert (`focus_alert_if_lost`).
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before
