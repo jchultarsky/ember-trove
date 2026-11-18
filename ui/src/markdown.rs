@@ -22,8 +22,9 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
-use crate::wikilink::preprocess_wikilinks;
+use crate::mention::preprocess_links;
 use common::id::NodeId;
+use common::mention::MentionName;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html as cmark_html};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -123,8 +124,13 @@ fn sanitizer() -> ammonia::Builder<'static> {
     let mut b = ammonia::Builder::new();
     b.add_tags(&["span", "div", "input"]);
     b.add_tag_attributes("a", &["data-node-id"]);
-    b.add_allowed_classes("a", &["wikilink"]);
-    b.add_allowed_classes("span", &["wikilink-unresolved"]);
+    // By name, and no others: the WikiLink renderer's two, and the three
+    // a mention is written with (S9, `crate::mention`).
+    b.add_allowed_classes("a", &["wikilink", "mention"]);
+    b.add_allowed_classes(
+        "span",
+        &["wikilink-unresolved", "mention", "mention-unresolved"],
+    );
     b.add_tag_attributes("input", &["type", "checked", "disabled"]);
     b.add_tag_attributes("img", &["src", "alt", "width", "height", "style"]);
     for &tag in STYLED_ELEMENTS {
@@ -147,10 +153,17 @@ fn sanitizer() -> ammonia::Builder<'static> {
 /// Render Markdown with WikiLink resolution.
 ///
 /// `[[title]]` and `[[title|display]]` are first expanded by
-/// [`preprocess_wikilinks`], then rendered with pulldown-cmark, and finally
+/// [`preprocess_links`], then rendered with pulldown-cmark, and finally
 /// sanitised by ammonia.
-pub fn render_markdown(source: &str, title_map: &HashMap<String, NodeId>) -> String {
-    let preprocessed = preprocess_wikilinks(source, title_map);
+///
+/// Mentions of people (S9) are expanded in the same pass, for the people
+/// in `people`: those the reader may be told the name of.
+pub fn render_markdown(
+    source: &str,
+    title_map: &HashMap<String, NodeId>,
+    people: &[MentionName],
+) -> String {
+    let preprocessed = preprocess_links(source, Some(title_map), people);
     let parser = Parser::new_ext(&preprocessed, MD_OPTIONS);
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, parser);
@@ -201,8 +214,12 @@ impl RenderedBody {
 /// [`render_markdown`] for the node page (#185): the same HTML, except that
 /// every h2/h3 carries an `ember-h-N` id, plus the outline of those headings.
 /// Headings with no text get an id but no outline entry.
-pub fn render_body(source: &str, title_map: &HashMap<String, NodeId>) -> RenderedBody {
-    let preprocessed = preprocess_wikilinks(source, title_map);
+pub fn render_body(
+    source: &str,
+    title_map: &HashMap<String, NodeId>,
+    people: &[MentionName],
+) -> RenderedBody {
+    let preprocessed = preprocess_links(source, Some(title_map), people);
     let mut outline = Vec::new();
     let mut next_id = 0usize;
     // The open h2/h3: (level, id, text so far).
@@ -256,7 +273,18 @@ pub fn render_body(source: &str, title_map: &HashMap<String, NodeId>) -> Rendere
     }
 }
 
-/// Render Markdown without WikiLink resolution (notes, public share view).
+/// Render a note: Markdown with its mentions of people (S9), for the
+/// people in `people`. Notes have no wiki links (`[[x]]` is text there).
+pub fn render_note(source: &str, people: &[MentionName]) -> String {
+    let preprocessed = preprocess_links(source, None, people);
+    let parser = Parser::new_ext(&preprocessed, MD_OPTIONS);
+    let mut html_out = String::new();
+    cmark_html::push_html(&mut html_out, parser);
+    sanitizer().clean(&html_out).to_string()
+}
+
+/// Render Markdown with nothing resolved (a Brief, a template preview).
+/// A mention of a person reads "@name" there, linked to nothing.
 pub fn render_markdown_plain(source: &str) -> String {
     let parser = Parser::new_ext(source, MD_OPTIONS);
     let mut html_out = String::new();
@@ -580,7 +608,7 @@ mod tests {
             r#"<span class="wikilink-unresolved fixed">u</span>"#,
         );
         let outputs = [
-            render_markdown(hostile, &HashMap::new()),
+            render_markdown(hostile, &HashMap::new(), &[]),
             render_markdown_plain(hostile),
             render_capture(hostile),
             render_markdown_inline(hostile),
@@ -603,7 +631,7 @@ mod tests {
         let id = NodeId(uuid::Uuid::new_v4());
         // Keys are lower case: links match without regard to case.
         let map = HashMap::from([("rust".to_string(), id)]);
-        let html = render_markdown("[[Rust]] and [[Nowhere]]", &map);
+        let html = render_markdown("[[Rust]] and [[Nowhere]]", &map, &[]);
         assert!(html.contains(r#"class="wikilink""#), "{html}");
         assert!(
             html.contains(&format!(r#"data-node-id="{}""#, id.0)),
@@ -759,7 +787,7 @@ mod tests {
     // ── Body outline (#185) ──
 
     fn body(src: &str) -> RenderedBody {
-        render_body(src, &HashMap::new())
+        render_body(src, &HashMap::new(), &[])
     }
 
     #[test]
@@ -806,6 +834,7 @@ mod tests {
         let r = render_body(
             "## Ask **[[Alice|her]]** about `code` & [docs](https://x)\n",
             &map,
+            &[],
         );
         assert_eq!(r.outline[0].text, "Ask her about code & docs");
     }
@@ -841,8 +870,8 @@ mod tests {
     fn body_html_matches_render_markdown_apart_from_heading_ids() {
         let src = "## A\n\nSome *text* with [[x]].\n\n- [ ] t\n";
         let map = HashMap::new();
-        let plain = render_markdown(src, &map);
-        let with_ids = render_body(src, &map)
+        let plain = render_markdown(src, &map, &[]);
+        let with_ids = render_body(src, &map, &[])
             .html
             .replace(r#" id="ember-h-0""#, "");
         assert_eq!(plain, with_ids);
@@ -859,7 +888,7 @@ mod tests {
         assert!(!r.html.contains("node-tasks-heading"), "{}", r.html);
         assert!(!r.html.contains("id="), "{}", r.html);
         // The plain renderers keep no ids at all.
-        assert!(!render_markdown("## A\n", &HashMap::new()).contains("id="));
+        assert!(!render_markdown("## A\n", &HashMap::new(), &[]).contains("id="));
         assert!(!render_markdown_plain("## A\n").contains("id="));
     }
 }

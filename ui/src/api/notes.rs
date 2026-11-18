@@ -1,7 +1,7 @@
 use common::{
     id::{NodeId, NoteId},
     note::{
-        CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteSort, ReaderNote,
+        CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteSort, ReaderNote, SavedNote,
         UpdateNoteRequest,
     },
 };
@@ -25,7 +25,9 @@ pub async fn create_note_global(req: &CreateFeedNoteRequest) -> Result<Note, UiE
     post_json("/notes", req).await
 }
 
-pub async fn update_note(note_id: NoteId, req: &UpdateNoteRequest) -> Result<Note, UiError> {
+/// The saved note, with the people it mentions as the writer may know
+/// them (S9), so the card can be drawn from the answer.
+pub async fn update_note(note_id: NoteId, req: &UpdateNoteRequest) -> Result<SavedNote, UiError> {
     patch_json(&format!("/notes/{note_id}"), req).await
 }
 

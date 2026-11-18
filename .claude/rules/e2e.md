@@ -234,6 +234,19 @@ CI job is too slow a feedback loop for selector work.
   be given one address through the API any more; a spec that needs a
   pair has no way to make one (the Postgres tests use the restore's
   setting).
+- **Mentions** (S9, mentions.spec.ts):
+  - The list is `mention-picker`, its rows `getByRole('option')`. Type
+    with `pressSequentially` (a `fill` puts the cursor nowhere useful
+    and fires one input). The person's name holds the stamp, so type
+    `@Ada <stamp>` minus a few characters to get exactly one option.
+  - On the page: `a.mention` (the reader's own person),
+    `span.mention` (someone else's, name only), `.mention-unresolved`.
+    Other test ids: `stale-mentions`, `mentioned-in`,
+    `mentioned-in-row`.
+  - What a reader is told is `GET /api/nodes/{id}` → `mentions`; assert
+    it with `toEqual` on the whole list, so an extra field fails.
+  - A row is made only when the person's owner saves: to set up a real
+    mention through the API, save the body **as that identity**.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,

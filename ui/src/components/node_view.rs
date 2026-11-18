@@ -138,10 +138,13 @@ pub fn NodeView(id: NodeId) -> impl IntoView {
                             // the body re-renders when they do: reading the map here, in
                             // the page closure, would rebuild every section (#134).
                             let body_src = n.body.clone().unwrap_or_default();
+                            // The people the body mentions, as this reader may
+                            // know them (S9): they came with the node.
+                            let people = n.mentions.clone();
                             // Body HTML and its heading outline come from one parse
                             // (#185), so the outline can't point at a missing heading.
                             let rendered =
-                                Memo::new(move |_| render_body(&body_src, &title_map.get()));
+                                Memo::new(move |_| render_body(&body_src, &title_map.get(), &people));
                             let body_html = move || rendered.with(|r| r.html.clone());
                             let outline = Signal::derive(move || {
                                 rendered.with(|r| r.visible_outline().map(<[_]>::to_vec))

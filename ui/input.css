@@ -300,6 +300,29 @@ input[type="checkbox"]:checked::after {
   cursor: default;
 }
 
+/* ── Mentions of people (S9) ──────────────────────────────────────────────────
+   A link for the reader's own person; plain, a touch stronger than the text
+   around it, for a person of someone else's (a name and no more); muted for
+   one that names nobody. Not struck through like an unresolved wiki link: the
+   name as typed is still what the author wrote. */
+.mention {
+  font-weight: 500;
+  white-space: nowrap;
+}
+a.mention {
+  color: #fb923c; /* orange-400, as a wiki link */
+  text-decoration: none;
+  cursor: pointer;
+}
+a.mention:hover {
+  color: #fdba74; /* orange-300 */
+  text-decoration: underline;
+}
+.mention-unresolved {
+  color: #a8a29e; /* stone-400 */
+  white-space: nowrap;
+}
+
 /* ── Spark on task completion (design phase 3) ────────────────────────────────
    The signature micro-interaction: completing a task strikes a brief burst of
    ember particles off the checkbox. Particles are spawned by

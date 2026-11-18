@@ -514,6 +514,20 @@ ID, not their name**.
 - The addressing symmetry: nodes are addressed by title (`[[Title]]` — a
   title acts as an address); people are addressed by identity (@ picker →
   Person ID — a name is not an address).
+- **In the text a mention is written `@[name](person:ID)`.** The ID is the
+  identity. The name beside it is what the author saw when they picked
+  the Person: it keeps the raw text readable, and it is what shows when
+  the mention cannot be resolved. It is never used to find anyone, and it
+  can be older than the Person's current name; the editor offers to bring
+  it up to date and never does so unasked.
+- **A mention is real only when its author made it.** Only the account
+  saving a text can make a mention in it, and only of its own People. A
+  token typed or pasted with another account's Person's ID is plain text
+  that looks like a mention: it shows the name as typed, unresolved. If a
+  co-editor cuts someone's mention out of a shared body and puts it back,
+  it is unresolved until that Person's owner next saves the node.
+- Plain words in task titles, Briefs, captures and templates are not
+  places for mentions: a token there reads "@name" and links to nothing.
 
 ## 8. Companies
 
@@ -905,6 +919,19 @@ model's semantics never widen what anyone can see or change.
   Anyone other than the Person's owner sees a mention as the name at most —
   never contact details, and never a way into the owner's registry. A
   mention of a deleted Person renders as unresolved.
+  - Another reader is given the Person's **current name, as plain text**,
+    and only **while the Person's owner can still open the node**. When
+    that ends (a share is revoked), the mention shows the name as typed,
+    unresolved: otherwise the node's owner would go on reading the name
+    of someone else's contact through every rename.
+  - A name is given only together with text the reader may read. There is
+    no way to ask whose an ID is: a Person's ID is not a secret (it is in
+    the raw text, and in a shared Project's People list), so nothing may
+    answer to it.
+  - "Mentioned in" is the Person's owner's alone, and lists only nodes
+    they can open.
+  - Deleting a Person leaves the name as typed in the text, in old
+    versions and in exports: it is the author's text. Only the link goes.
 - **Memberships** (§7.2). Accounts a Project is shared with see a member's
   name and Role only, never contact details. Only the Project's owner
   writes memberships: not its editors, and not the admin.
@@ -985,6 +1012,8 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-18 | **Only a Project's owner moves a Task to another person's Project** (§14, §9.3); an editor may still move it between Projects of one account. It closes the two gaps of the row below: keeping a Task after a share ends, and being told as its new Project's owner how many of its prerequisites one cannot see. "The owner" is the account the Project belongs to, as in the rule about links not shown: someone else holding an owner's grant does not pass; an admin does. **The hidden-home rule stays as it is** (#228) | Owner, in the developer session (#351) |
 | 2026-11-18 | **People who already share an email address stay editable**, each keeping the address it has; nobody can add an address another Person has; Data health lists them until they are edited or merged (§7.1) | Owner, in the developer session (planning S8a, #353) |
 | 2026-11-18 | How §7.1 is built (S8a). The rule is in the database for every writer, as a trigger under a lock per account, **not a unique index and not a `person_emails` table** as the programme had it: a unique key can't say "old pairs may stay, new ones may not". A `person_emails` table with a unique key can replace it once no address is shared and no Person lists one twice. "The same address": spaces off, ASCII case folded, nothing else, the same on every installation. The same address twice on one Person is refused by the API (the database's rule is about two People; a restore brings back a Person who has one twice), and so is an address with a wrapper or one of the usual invisible characters. `?confirm=true` no longer saves anyway. A restore brings back its archive's pairs and its preview counts them. No backup format change. Shared mailboxes are refused from now on; Companies, where §7.1 puts them, come in S10a | Developer, building S8a; in the plan the owner approved |
+| 2026-11-18 | **How a mention is written and shown** (§7.3, §14; S9). The raw text holds the name and the ID, `@[name](person:ID)`: the ID is the identity, the page shows the current name, and the name in the text may go stale after a rename. Another reader (a sharee, the admin) sees the current name as plain text, with no link. No report of leftover mentions yet: it comes with the merge tool (S8c) | Owner, in the developer session (planning S9, #360) |
+| 2026-11-18 | How S9 is built. A mention is real only if it has a row, made in the transaction that saves the text, by the account saving it, for one of its own People; a token with no row names nobody. A Person is named to another reader only while the Person's owner can still open the node. Names travel only with the text that holds the mention; there is no lookup by ID. The picker is docked at the editor and driven by the keyboard, and `@` followed by Enter is a new line, never a pick. A stale name in the text is offered for update in the body editor and refreshed with a note's next edit, never rewritten silently. Search finds a mention by the name as typed. Backup format 14 carries the rows. Not in S9: wiki links in notes; mentions in task titles, Briefs, captures and templates; People in the graph; creating a Person from the picker | Developer, building S9; in the plan the owner approved |
 | 2026-11-18 | **What a collision offers** (§7.1, S8b). A new Person who collides: one button adds what was typed to the Person who has the address, for review in that Person's editor; nothing is saved until Save. On a node: one button puts that Person on the node with the Role and Note typed; the other details typed are not added to them, and the notice says so. Editing a saved Person and adding another saved Person's address: opening them is all that is offered, and merging two saved People is the merge tool's (S8c) | Owner, in the developer session (planning S8b, #357) |
 | 2026-11-18 | How S8b is built. In the browser, as an ordinary edit of the existing Person: no new route, and the database's rule still decides on Save. The merge is made when their editor opens, against the Person as just read (or an unsaved edit of them the device had kept, which the review then says), never at the click. A typed name, company or position that differs is said and not used. Over a limit the entry is added and the save is refused in words until something is removed. A phone is the same number by its digits; notes are compared by whole lines and theirs stay to the letter; an address that belongs to a third Person is left out and said. Nothing is carried over that the device cannot keep, so backing out always has the typed input to go back to. **For S8c:** a Person save should carry the version it was based on, as a node save does | Developer, building S8b; in the plan the owner approved |
 | 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |

@@ -5,6 +5,18 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-18)
 
+- **S9: mentions of people in text** (#360; ONTOLOGY §7.3, §14; owner
+  decisions of 2026-11-18). `@` in a body or a note picks one of your
+  People; the text holds `@[name](person:id)`. A mention is real only
+  if it has a row (`node_mentions`, `note_mentions`, migration 057),
+  made by the account saving the text for its own person. Another
+  reader gets the current name and nothing else, while the person's
+  owner can still open the node. No lookup by id. Backup format 14.
+  **Next:** S8c (the merge tool: rewrite tokens and move rows; a
+  report of leftover tokens; a version on `PUT /people/{id}`). Rules:
+  "Mentions of people in text" in `.claude/rules/api.md`, "Mentions of
+  people" in `.claude/rules/leptos.md`.
+
 - **v3.31.0 shipped: S8b, what a collision offers** (#357, PRs #358
   and #359; ONTOLOGY §7.1; owner decisions of 2026-11-18). A new person who collides can be added to
   the person who has the address, for review in their editor

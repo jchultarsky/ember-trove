@@ -7,11 +7,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- **Mentions of people in text: the rules and the API** (S9 of the
-  ontology programme, #360; ONTOLOGY §7.3). A body or a note can hold a
-  mention of one of your People, written `@[name](person:id)`. The
-  picker and the rendering follow in the next change; until then a
-  token typed by hand reads as "@name".
+- **Mention a person by typing `@`** (S9, #360; ONTOLOGY §7.3), in a
+  node's body or in a note.
+  - A list of your People opens at the editor, with name and email.
+    Up and Down choose, Enter or Tab picks, Escape closes it. `@`
+    followed straight by Enter is a new line, and an email address
+    typed in text opens nothing.
+  - The page shows the person's current name as a link to their card.
+    Their card lists where they are mentioned ("Mentioned in").
+  - Someone you share the node with sees the name as plain text and
+    nothing else of the person.
+  - After a rename the page shows the new name at once. The name in the
+    raw text stays as typed until you choose "Update" in the editor (a
+    note's is brought up to date with its next edit).
+  - Deleting a person leaves the name as typed in the text, no longer a
+    link; the confirmation says so.
+  - Search finds a mention by the name as typed. Task titles, Briefs,
+    captures and templates are not places for mentions: a token there
+    reads "@name".
+- **Mentions in the API** (S9, #360):
   - `GET /api/nodes/{id}`, the note lists and the note writes answer
     with the people their text mentions, as the reader may know them
     (`mentions`: id, name, and whether the person is the reader's own).

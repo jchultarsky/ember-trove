@@ -12,25 +12,34 @@ use common::id::NodeId;
 /// The returned string is passed to `pulldown_cmark` before HTML rendering.
 /// Inline HTML is preserved by pulldown-cmark and then sanitized by ammonia
 /// (which allows exactly these two classes, and `data-node-id` on `<a>`).
+#[cfg(test)]
 pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) -> String {
     // The one scanner (`common::wikilink::wikilinks`; #281, 3.1). It skips
     // code, so no `<a>` is put inside a code span or a fenced block.
-    common::wikilink::replace_wikilinks(content, |link| {
-        // Keys are lowercased: wiki links match case-insensitively, as
-        // the server's edge sync does (#134 — `[[rust]]` used to render
-        // unresolved while still creating a Linked Here edge).
-        match title_map.get(&link.target.to_lowercase()) {
-            Some(node_id) => format!(
-                r#"<a class="wikilink" data-node-id="{}">{}</a>"#,
-                node_id.0,
-                html_escape(link.display),
-            ),
-            None => format!(
-                r#"<span class="wikilink-unresolved">{}</span>"#,
-                html_escape(link.display),
-            ),
-        }
-    })
+    common::wikilink::replace_wikilinks(content, |link| wikilink_html(link, title_map))
+}
+
+/// One wiki link as HTML: what [`preprocess_wikilinks`] writes for it.
+/// Shared with `mention::preprocess_links`, which splices wiki links and
+/// mentions in one pass.
+pub fn wikilink_html(
+    link: &common::wikilink::WikiLink<'_>,
+    title_map: &HashMap<String, NodeId>,
+) -> String {
+    // Keys are lowercased: wiki links match case-insensitively, as
+    // the server's edge sync does (#134 — `[[rust]]` used to render
+    // unresolved while still creating a Linked Here edge).
+    match title_map.get(&link.target.to_lowercase()) {
+        Some(node_id) => format!(
+            r#"<a class="wikilink" data-node-id="{}">{}</a>"#,
+            node_id.0,
+            html_escape(link.display),
+        ),
+        None => format!(
+            r#"<span class="wikilink-unresolved">{}</span>"#,
+            html_escape(link.display),
+        ),
+    }
 }
 
 fn html_escape(s: &str) -> String {

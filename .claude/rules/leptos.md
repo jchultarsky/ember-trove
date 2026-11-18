@@ -389,6 +389,39 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     while it runs (a disabled button drops the keyboard), with a guard
     in the handler. When an answer removes the focused control, the
     keyboard goes to the form's alert (`focus_alert_if_lost`).
+- **Mentions of people** (S9, #360). `common::mention` reads
+  `@[label](person:id)`; never scan for `@[` anywhere else.
+  - **Rendering is `mention::preprocess_links`**: wiki links and
+    mentions spliced into the Markdown in one pass (two passes would
+    scan each other's HTML). `render_markdown` and `render_body` take
+    the people to name (`MentionName`, which came with the node);
+    `render_note` is for notes (no wiki links there). Anything else
+    (`render_markdown_plain`: a Brief, a template) shows "@name" with
+    no link, because the sanitizer drops the `person:` scheme.
+  - **A name goes into Markdown through `html_inert`**, every character
+    that is not a letter or digit as an entity. A name is user text
+    from another record; it must never be parsed.
+  - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
+    `<span class="mention">` with no id in the markup; nobody to name →
+    `<span class="mention-unresolved">` with the label. The three
+    classes are in the sanitizer by name.
+  - **The names come from the API with the text** (`ViewedNode.mentions`,
+    `ReaderNote.mentions`, `SavedNote`). Don't add a "resolve these ids"
+    call: there is deliberately no such endpoint. The editor's preview
+    also names the author's own people (`MentionPicker::own_names`).
+  - **The picker is `MentionPicker`** (`mention_picker.rs`), one hook
+    for the body textarea and `ResizableEditor` (`mentions=` is opt-in:
+    notes only). The textarea calls `on_keydown` first and returns if
+    it was used. Escape closes the list only (it must not reach the
+    editor's Escape); Enter and Tab pick only a highlighted option, and
+    a bare `@` highlights none, so `@` then Enter is a new line.
+    Ctrl/⌘+Enter stays the editor's. A pick goes through the editor's
+    own signal, so drafts and autosave see an ordinary edit.
+  - **A stale label is never rewritten on open.** The editor's
+    baseline, Revert, the 412 fingerprints and draft recovery all hold
+    "the text as loaded". The body editor shows a notice with Update
+    (`stale_labels`); a note's labels are refreshed in `do_save`, only
+    when its words changed anyway (`refreshed`).
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before
