@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.29.0] - 2026-11-17
+
 ### Security
 - **A node's links that its owner isn't shown can be found and removed**
   (#349; ONTOLOGY §14, §6.2, §6.4). Someone a node is shared with can
