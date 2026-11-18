@@ -13,13 +13,16 @@ use common::person::{
     CARD_CONTACTS, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
     card_contacts, matches,
 };
+use common::person_carry::TakenPerson;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::free_text_combo::FreeTextCombo;
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::node_section::{NodeSection, NotOnThisKind, SectionShell, section_shown};
-use crate::components::people_view::{ContactAction, ContactKind, HINT_CLASS, PersonEditor};
+use crate::components::people_view::{
+    AddHere, ContactAction, ContactKind, HINT_CLASS, PersonEditor,
+};
 use crate::components::toast::{ToastLevel, push_toast};
 use common::ontology::Capability;
 
@@ -192,6 +195,76 @@ pub fn NodePeoplePanel(
             }
         });
     });
+    // S8b: the new person's address is someone's already. That person is
+    // put on the node instead, with the Role and Note typed in the dialog.
+    let member_ids = Signal::derive(move || {
+        members
+            .get()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.person_id)
+            .collect::<Vec<_>>()
+    });
+    let adding_existing = RwSignal::new(false);
+    let add_failed = RwSignal::new(None::<String>);
+    // The dialog's draft, in case this page is gone before the add lands.
+    let new_draft_key =
+        use_context::<crate::auth::AuthState>().and_then(|a| match a.get_untracked() {
+            crate::auth::AuthStatus::Authenticated(u) => {
+                Some(PersonForm::NewOnNode(node_id).key(&u.sub))
+            }
+            _ => None,
+        });
+    let add_existing = Callback::new(move |person: TakenPerson| {
+        if adding_existing.get_untracked() {
+            return;
+        }
+        adding_existing.set(true);
+        add_failed.set(None);
+        let input = new_membership.input(person.id);
+        let draft_key = new_draft_key.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::api::add_node_person(node_id, &input).await;
+            adding_existing.try_set(false);
+            match result {
+                Ok(_) => {
+                    // The dialog closes only now: a failed add leaves the
+                    // Role and Note where they were typed. If the page
+                    // went away meanwhile it kept the dialog as a draft,
+                    // which is done with.
+                    if editor_open.try_set(false).is_some()
+                        && let Some(key) = draft_key
+                    {
+                        crate::draft::clear_form_draft(&key);
+                    }
+                    adding.try_set(false);
+                    refresh.try_update(|n| *n += 1);
+                    push_toast(
+                        ToastLevel::Success,
+                        format!("{} added here.", person.display_name),
+                    );
+                }
+                // Put here by someone meanwhile (another tab): the list is
+                // read again, and the notice then says "Already here".
+                Err(crate::error::UiError::Api { status: 409, .. }) => {
+                    refresh.try_update(|n| *n += 1);
+                }
+                Err(e) => {
+                    add_failed.try_set(Some(e.explained().unwrap_or_else(|| {
+                        "Couldn\u{2019}t add them here. Nothing you typed is lost: try again."
+                            .to_string()
+                    })));
+                }
+            }
+        });
+    });
+    let add_here = can_add.then_some(AddHere {
+        on_add: add_existing,
+        already: member_ids,
+        busy: adding_existing,
+        failed: add_failed,
+    });
 
     view! {
         {move || shown.get().then(|| view! {
@@ -199,7 +272,7 @@ pub fn NodePeoplePanel(
             {(!allowed).then(|| view! { <NotOnThisKind capability=Capability::People can_fix=can_edit /> })}
             <PersonEditor open=editor_open form=PersonForm::NewOnNode(node_id)
                 initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
-                membership=new_membership on_saved=on_created />
+                membership=new_membership on_saved=on_created add_here=add_here />
             {move || adding.get().then(|| {
                 let taken: Vec<_> = members
                     .get()

@@ -5,6 +5,15 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-18)
 
+- **S8b: what a collision offers** (#357; ONTOLOGY §7.1; owner
+  decisions of 2026-11-18). A new person who collides can be added to
+  the person who has the address, for review in their editor
+  (`common::person_carry`, in the browser, no new route). On a node the
+  notice puts that person there with the Role and Note typed. Editing a
+  saved person offers opening only. **Next:** S9 (@-mentions), then S8c
+  (the merge tool: give `PUT /people/{id}` a version first). Rules:
+  "What the notice offers" in `.claude/rules/leptos.md`.
+
 - **v3.30.0 shipped: S8a, email is identity** (#353, PRs #355 and
   #356; ONTOLOGY §7.1; owner decisions of 2026-11-18). A save that adds an address another of the account's
   People lists is refused (409 with those People; no "Save anyway").
@@ -12,9 +21,8 @@ Keep it current as part of each change (see `POLICY.md` §10).
   056), not a unique index or a `person_emails` table: People who
   already share an address stay editable, and Data health lists them
   (`shared_email`). `email_key` / `person_email_key` is what "the same
-  address" means. No backup format change. **Next:** S8b (the "open or
-  merge" choices at a collision), S8c (the merge tool), then an index
-  once no address is shared. Rules: "Email is identity" in
+  address" means. No backup format change. Later: an index once no
+  address is shared. Rules: "Email is identity" in
   `.claude/rules/api.md`; "A refused person save" in
   `.claude/rules/leptos.md`.
 
