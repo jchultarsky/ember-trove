@@ -100,7 +100,9 @@ impl NodeRepo for StubNodeRepo {
             AZ_EDIT_NODE | AZ_VIEW_NODE | AZ_FOREIGN_NODE => ("someone-else", NodeType::Article),
             AZ_MY_PROJECT | AZ_ARCHIVED_PROJECT | AZ_PARKED_PROJECT | AZ_CLOSED_PROJECT
             | AZ_TASKS_PROJECT => ("test-sub", NodeType::Project),
-            AZ_VIEW_PROJECT => ("someone-else", NodeType::Project),
+            AZ_VIEW_PROJECT | AZ_SHARED_PROJECT | AZ_OTHER_SHARED_PROJECT => {
+                ("someone-else", NodeType::Project)
+            }
             AZ_MY_ARTICLE => ("test-sub", NodeType::Article),
             AZ_MY_AREA => ("test-sub", NodeType::Area),
             _ => return Err(EmberTroveError::NotFound(format!("node {id}"))),
@@ -621,6 +623,11 @@ const AZ_CLOSED_PROJECT: u128 = 0xa2_000a;
 /// world (S5c: every task has a node). It is not `AZ_MY_PROJECT`, so
 /// moving such a task onto `AZ_MY_PROJECT` is a real move.
 const AZ_TASKS_PROJECT: u128 = 0xa2_000b;
+/// Two Projects of "someone-else" that the caller edits by a grant, for
+/// the task-move rule (#351): a task moves between them on edit rights,
+/// and out to another account's Project only by its Project's owner.
+const AZ_SHARED_PROJECT: u128 = 0xa2_000d;
+const AZ_OTHER_SHARED_PROJECT: u128 = 0xa2_000e;
 /// The token of the stub's cascade plan for AZ_PARKED_PROJECT, the one
 /// project in this world with something to close under it (S6b).
 const AZ_CASCADE_TOKEN: &str = "the-plan-i-was-shown";
@@ -672,6 +679,8 @@ const AZ_DEMOTED_TASK: u128 = 0xa2_0105;
 const AZ_DEPARTED_TASK: u128 = 0xa2_0106;
 /// A task written by "guest" on a node guest may view and the caller owns.
 const AZ_GUEST_TASK: u128 = 0xa2_0107;
+/// Someone else's task on their Project, which the caller edits (#351).
+const AZ_SHARED_TASK: u128 = 0xa2_0108;
 
 /// The caller's own tag, and someone else's.
 const AZ_MY_TAG: u128 = 0xa2_0301;
@@ -744,6 +753,18 @@ fn authz_permissions() -> Vec<Permission> {
         row(0xa2_0206, AZ_VIEW_NODE, "test-sub", PermissionRole::Viewer),
         row(0xa2_020e, AZ_MY_AREA, "test-sub", PermissionRole::Owner),
         row(
+            0xa2_020f,
+            AZ_SHARED_PROJECT,
+            "test-sub",
+            PermissionRole::Editor,
+        ),
+        row(
+            0xa2_0210,
+            AZ_OTHER_SHARED_PROJECT,
+            "test-sub",
+            PermissionRole::Editor,
+        ),
+        row(
             AZ_PERM_FOREIGN,
             AZ_FOREIGN_NODE,
             "guest",
@@ -761,6 +782,7 @@ fn authz_task(id: TaskId) -> Task {
         AZ_DEMOTED_TASK => ("test-sub", AZ_VIEW_NODE),
         AZ_DEPARTED_TASK => ("departed", AZ_TASKS_PROJECT),
         AZ_GUEST_TASK => ("guest", AZ_OWNED_NODE),
+        AZ_SHARED_TASK => ("someone-else", AZ_SHARED_PROJECT),
         // Any other id: the caller's own task on their own Project.
         _ => ("test-sub", AZ_TASKS_PROJECT),
     };
@@ -840,6 +862,16 @@ impl TaskRepo for StubTaskRepo {
         }
         if matches!(dest, Some(AZ_MY_ARTICLE | AZ_OWNED_NODE)) {
             panic!("capability bypass: task {id} moved onto an Article");
+        }
+        // #351: a task on someone else's node leaves for another account's
+        // Project only by an admin's hand. (No ordinary caller in this
+        // world owns such a node; an admin's request names no Project of
+        // theirs, so the tests below tell the two apart by the status.)
+        if matches!(id.0.as_u128(), AZ_SHARED_TASK | AZ_GUEST_TASK)
+            && matches!(dest, Some(AZ_MY_PROJECT | AZ_TASKS_PROJECT))
+            && !MOVED_OUT_BY_AN_ADMIN.with(std::cell::Cell::get)
+        {
+            panic!("authorization bypass: task {id} was moved to another account's Project");
         }
         let mut task = authz_task(id);
         if let Some(Some(node)) = req.node_id {
@@ -3392,6 +3424,81 @@ async fn update_task_can_move_a_task_onto_an_editable_project() {
     let dest = Uuid::from_u128(AZ_MY_PROJECT);
     let status = task_patch(0xa2_0199, serde_json::json!({ "node_id": dest })).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+thread_local! {
+    /// Set by the one test that moves a task out as an admin, so the stub
+    /// lets that write through and still panics on anyone else's.
+    static MOVED_OUT_BY_AN_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// SECURITY (#351, owner decision 2026-11-18): edit rights on both
+/// Projects move a task between Projects of one account. Out to another
+/// account's Project, only the owner of the Project it leaves moves it.
+/// An editor who could do that kept the task after the share ended, and
+/// as its new Project's owner was told how many of its prerequisites they
+/// can't see. The stub panics if such a write reaches it.
+#[tokio::test]
+async fn only_its_projects_owner_moves_a_task_to_another_accounts_project() {
+    let to = |node: u128| serde_json::json!({ "node_id": Uuid::from_u128(node) });
+    let patch = |task: u128, body: serde_json::Value| async move {
+        let resp = claims_app("/tasks", crate::routes::tasks::task_router())
+            .oneshot(patch_json(
+                &format!("/tasks/{}", Uuid::from_u128(task)),
+                body,
+            ))
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    };
+
+    // An editor of someone's Project takes its task to their own Project:
+    // refused, in words, and nothing is written.
+    for dest in [AZ_MY_PROJECT, AZ_TASKS_PROJECT] {
+        let (status, body) = patch(AZ_SHARED_TASK, to(dest)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{dest:#x}: {body}");
+        assert!(
+            body.contains("only the owner of a task's Project"),
+            "{body}"
+        );
+    }
+    // Someone holding an owner's rights by a grant is not the account the
+    // node belongs to: the same refusal.
+    let (status, body) = patch(AZ_GUEST_TASK, to(AZ_MY_PROJECT)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Between two Projects of the same account: edit rights are enough.
+    let (status, body) = patch(AZ_SHARED_TASK, to(AZ_OTHER_SHARED_PROJECT)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Everything else about the task is still an editor's to change, and
+    // naming the Project it is already on is not a move.
+    let (status, body) = patch(AZ_SHARED_TASK, serde_json::json!({ "title": "x" })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = patch(AZ_SHARED_TASK, to(AZ_SHARED_PROJECT)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The owner of the Project it leaves takes their own task anywhere
+    // they may edit, someone else's Project included.
+    let (status, body) = patch(0xa2_0199, to(AZ_SHARED_PROJECT)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // An admin moves any task.
+    MOVED_OUT_BY_AN_ADMIN.with(|m| m.set(true));
+    let resp = Router::new()
+        .nest("/tasks", crate::routes::tasks::task_router())
+        .layer(axum::Extension(admin_claims()))
+        .with_state(test_state())
+        .oneshot(patch_json(
+            &format!("/tasks/{}", Uuid::from_u128(AZ_SHARED_TASK)),
+            to(AZ_MY_PROJECT),
+        ))
+        .await
+        .unwrap();
+    MOVED_OUT_BY_AN_ADMIN.with(|m| m.set(false));
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

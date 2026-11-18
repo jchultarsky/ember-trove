@@ -5,6 +5,15 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-17)
 
+- **Task moves between accounts** (#351; owner decision 2026-11-18):
+  only the owner of the Project a task is on moves it to another
+  person's Project (`require_owner_to_move_out`); an editor still moves
+  it between Projects of one account. Closes the two gaps the review of
+  #349 left: a task kept after a share ends, and the count of hidden
+  prerequisites told to its new Project's owner. With it: the proxy's
+  access log keeps the path alone, and Postgres logs errors tersely.
+  The hidden-home rule stays as it is (same decision). No migration.
+
 - **v3.29.0 shipped: links not shown** (#349, PR #350; ONTOLOGY §14;
   owner decisions of 2026-11-17). Whoever may edit a node is told how many of its links
   lead to a node that neither they nor its owner can see, and may remove

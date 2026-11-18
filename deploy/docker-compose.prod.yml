@@ -13,6 +13,15 @@ services:
       - pg_stat_statements.track=top
       - -c
       - track_io_timing=on
+      # SECURITY (2026-11-18): an error's message, never its DETAIL. A CHECK
+      # that refuses a row otherwise writes "Failing row contains (…)" to
+      # this log: a Person's contact details, on a restore of a bad archive.
+      # The deploy does not recreate this container (release.yml restarts
+      # api, ui and proxy), so on a running host the same setting is made
+      # once with ALTER SYSTEM and a reload; this line is for the next time
+      # the container is made.
+      - -c
+      - log_error_verbosity=terse
     environment:
       POSTGRES_DB: ember_trove
       POSTGRES_USER: ember_trove

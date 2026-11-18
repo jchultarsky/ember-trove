@@ -6,6 +6,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+- **Only a Project's owner moves a task to another person's Project**
+  (#351; ONTOLOGY §14, §9.3; owner decision of 2026-11-18). Edit rights
+  on both Projects used to be enough, so someone a Project was shared
+  with could move its tasks to a Project of their own. They kept the
+  task after the share ended, and as the owner of its new Project they
+  were told how many of its prerequisites they can't see (the gap
+  3.29.0 left open). Such a move is now refused with a 403 and nothing
+  is written. Moving a task between Projects of the same owner is
+  unchanged. "The owner" is the account the Project belongs to; an
+  admin may still move any task.
+- **The proxy's access log no longer keeps what was typed into a
+  search.** It wrote each request's whole first line, query string
+  included (`/api/people?q=…`, `/api/search?q=…`), and the Referer. It
+  now writes the path alone. nginx's error log still names the request
+  line of a request it refuses or fails.
+- **Postgres logs an error's message and not its detail**
+  (`log_error_verbosity=terse`). A CHECK that refused a row wrote the
+  whole row to the database's log: a Person's contact details, on a
+  restore of a bad archive. On a host that is already running, set it
+  once (the deploy does not recreate the database's container):
+  `ALTER SYSTEM SET log_error_verbosity = 'terse'; SELECT pg_reload_conf();`
+
+### Changed
+- Data health's "Move to a Project" says a refusal in the API's own
+  words, not "server error 403".
+
 ## [3.29.0] - 2026-11-17
 
 ### Security

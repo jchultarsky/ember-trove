@@ -638,8 +638,11 @@ Project (or a sub-Project) — the mirror image of the Project definition.
     one of the owner's own private Projects is the owner's business, in
     the trash or out of it, and an editor of the shared Project is not
     told of it and cannot remove it this way (§14). The rule follows the
-    Task: once it is moved to another person's Project, that person is
-    its Project's owner. (Open, with who may move a Task: §15.)
+    Task: once its Project's owner has moved it to another person's
+    Project, that person is its Project's owner. Only the owner can make
+    that move (§14).
+  - Moving a Task takes edit rights on both Projects, and between two
+    accounts the owner of the Project it leaves (§14).
   - Moving a Task keeps its dependencies. Closing a Project cancels its
     Tasks (§4.1), so what waited for them stays blocked, and says by
     what.
@@ -804,6 +807,10 @@ model's semantics never widen what anyone can see or change.
   only while they may still edit the node. When a share is revoked, what
   that person wrote stays on the node, leaves their own lists, and is no
   longer theirs to change. A node's owner may delete any note on it.
+  **A Task leaves for another person's Project only by the hand of the
+  owner of the Project it is on.** Edit rights on both Projects move it
+  between Projects of one account, and no further: otherwise someone a
+  Project is shared with could take its Tasks with them.
 - **Edges need rights on both ends.** Creating an edge requires edit rights
   on the source and at least view rights on the target. `contains` requires
   edit rights on **both** ends, because it claims the child's one home
@@ -948,4 +955,5 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-17 | A node's editors are told how many of its links they are not shown, and may remove them together, as Tasks have (§14). Until it is removed, such a link stays a real link: it still decides loop refusals, and those who see both ends read the node as blocked (§6.4) | Owner, in the developer session (planning #349) |
 | 2026-11-17 | What "not shown" means, for a node's links and for a Task's prerequisites (§14, §9.3): hidden from the reader **and from the owner** of the node (the Task's Project). Hidden from the reader alone would tell an editor of a shared node how many private nodes its owner links it to, and let them delete those links; the Task rule shipped in 3.26.0 had that fault and is narrowed. Which links: those the node's editor could remove if shown (made by hand from the node, and `related_to` either way); not a hidden home, not another node's link into this one, never a wiki link. One number, never which; nothing in History. **Considered and left out:** refusing such a link when it is made. A share ending hides a link after the fact, and a shared Project depending on an editor's private one is a fair use. (The plan also said a refusal would tell an editor whether a third person's node is shared with the owner. The count does not avoid that either: see the next row) | Developer, building #349; in the plan the owner approved |
 | 2026-11-17 | From the independent review of #349, decided or left open. **"The node's owner"** in the rule is the account the node belongs to, seeing by ownership or by a share: not someone else holding an owner's grant, and not what an admin opens by role (the database does not record roles). **A prerequisite in the trash** on the owner's private Project is the owner's business like a live one. **Accepted:** two editors of one node can learn together whether the owner sees a third person's node that one of them linked it to. **Open, for the owner:** (1) someone who may edit a Task can move it to a Project of their own, and as that Project's owner is then told how many of its prerequisites they are not shown, and may remove them (they could already delete the Task); it belongs with the open question of whether an editor may move a Task out of a shared Project at all. (2) The hidden-home rule (§6.1) has no owner half: an editor of a shared child is told of, and may free it from, a home that is the owner's own private node | Developer, from the independent review of #349 |
+| 2026-11-18 | **Only a Project's owner moves a Task to another person's Project** (§14, §9.3); an editor may still move it between Projects of one account. It closes the two gaps of the row below: keeping a Task after a share ends, and being told as its new Project's owner how many of its prerequisites one cannot see. "The owner" is the account the Project belongs to, as in the rule about links not shown: someone else holding an owner's grant does not pass; an admin does. **The hidden-home rule stays as it is** (#228) | Owner, in the developer session (#351) |
 | 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |
