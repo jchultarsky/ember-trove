@@ -151,6 +151,12 @@ cargo check && cargo clippy -- -D warnings
   (`PersonError::DuplicateEmail`), not the trigger's. A restore brings
   back a person who has one twice, and anything that joins two people's
   lists (the merge tool) removes repeats by key itself.
+- **For S8c (the merge tool), not built:** `PUT /people/{id}` replaces
+  the whole person and carries no version, so a tab that is out of date
+  can undo a merge. Give it `expected_updated_at`, as node saves have
+  (412). The merge locks both person rows first, in id order, with a
+  `lock_timeout`. S8b's carry-over is an ordinary edit made in the
+  browser (`common::person_carry`); it added no route.
 - **Routes**: `save_unless_it_collides` reads who has the address
   (`PersonRepo::email_collisions`), writes nothing if anyone does, and
   answers the database's own refusal (`AlreadyExists`, a raced save) by

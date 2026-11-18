@@ -234,6 +234,21 @@ CI job is too slow a feedback loop for selector work.
   be given one address through the API any more; a spec that needs a
   pair has no way to make one (the Postgres tests use the restore's
   setting).
+- **People at a collision** (S8b, people_collision.spec.ts):
+  - Test ids: `carry-over`, `carry-review`, `carried-mark`,
+    `carry-kept-edit`; on a node `add-here`, `already-here`,
+    `add-here-failed`.
+  - The notice's buttons hold the person's name ("Add what I typed to
+    them: {name}", "Add {name} here"), so the name button itself needs
+    `exact: true`.
+  - After a refusal the keyboard is on the marked row, or on the notice
+    in a short window: assert
+    `input[aria-invalid="true"]:focus, [role="alert"]:focus`, not the
+    row alone.
+  - Every person there has `MARK` in the name and `wipePeople` removes
+    them all, so a crashed attempt leaves nothing for its retry.
+  - To make a draft fail to store, replace `Storage.prototype.setItem`
+    in `page.evaluate` with a function that throws.
 - **Timestamps in Postgres tests** (2026-11-14): `Utc::now()` has
   nanoseconds on Linux and the database keeps microseconds, so an
   equality against a value read back passes on macOS and fails in CI.

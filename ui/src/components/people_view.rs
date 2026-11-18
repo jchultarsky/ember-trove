@@ -410,6 +410,11 @@ pub fn PersonEditor(
     /// draft is only weighed against the loaded values.
     #[prop(optional, into)]
     ready: Option<Signal<bool>>,
+    /// On a node whose owner may add people there: the refusal's notice
+    /// can put the person who has the address on the node (S8b). `None`
+    /// offers nothing of the kind.
+    #[prop(optional_no_strip)]
+    add_here: Option<AddHere>,
 ) -> impl IntoView {
     let target = match form {
         PersonForm::Edit(id) => EditorTarget::Existing(id),
@@ -495,6 +500,30 @@ pub fn PersonEditor(
                 };
                 if let Some(target) = target {
                     let _ = target.focus();
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+    };
+    // The keyboard was on a control that is gone (a notice's button whose
+    // notice was replaced): put it on the form's alert, which says what
+    // happened, instead of leaving it on the page behind the dialog.
+    let focus_alert_if_lost = move || {
+        set_timeout(
+            move || {
+                use wasm_bindgen::JsCast;
+                let lost = document()
+                    .active_element()
+                    .is_none_or(|el| el.tag_name() == "BODY");
+                if !lost {
+                    return;
+                }
+                let alert = document()
+                    .get_element_by_id(form_id)
+                    .and_then(|form| form.query_selector("[role=\"alert\"]").ok().flatten())
+                    .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+                if let Some(alert) = alert {
+                    let _ = alert.focus();
                 }
             },
             std::time::Duration::ZERO,
@@ -696,6 +725,13 @@ pub fn PersonEditor(
             duplicate.set(None);
             error.set(None);
             flagged.set(Flagged::default());
+            if let Some(a) = add_here {
+                // A new opening owes nothing to an add pressed in an
+                // earlier one, still on its way or failed.
+                a.failed.set(None);
+                a.busy.set(false);
+                a.opening.update(|n| *n += 1);
+            }
             if restoring.get_value() {
                 restoring.set_value(false);
             } else {
@@ -776,25 +812,57 @@ pub fn PersonEditor(
         });
     };
 
-    // S8b: "add what I typed to them". Synchronous: the typed input goes
-    // into the hand-over and the page goes to that person, whose dialog
-    // merges it against a fresh copy. Nothing is fetched or written here.
-    let carry_to = Callback::new(move |person: TakenPerson| {
-        let typed = draft.read();
-        // The notice may be older than what the rows hold now.
-        let still_here = typed.emails.iter().any(|e| {
+    // The notice may be older than what the rows hold now: whether a row
+    // still holds an address it named `person` for.
+    let names_a_row = move |person: &TakenPerson| {
+        draft.read().emails.iter().any(|e| {
             let key = typed_key(&e.value);
             person
                 .emails
                 .iter()
                 .any(|theirs| common::person::email_key(theirs) == key)
+        })
+    };
+    let stale_notice = move || {
+        duplicate.set(None);
+        flagged.set(Flagged::default());
+        error.set(Some(
+            "That address is no longer in this form. Save again.".to_string(),
+        ));
+        // The notice went, and the pressed button with it.
+        focus_alert_if_lost();
+    };
+    // S8b, on a node: "add them here". The panel does the add, with the
+    // Role and Note typed below; here only a stale notice is refused.
+    let add_here = add_here.map(|a| AddHere {
+        on_add: Callback::new(move |person: TakenPerson| {
+            if names_a_row(&person) {
+                a.on_add.run(person);
+            } else {
+                stale_notice();
+            }
+        }),
+        ..a
+    });
+    // An answer can replace the pressed button ("Already here."): the
+    // keyboard then goes to the notice.
+    if let Some(a) = add_here {
+        Effect::new(move |seen: Option<(Option<String>, Vec<PersonId>)>| {
+            let now = (a.failed.get(), a.already.get());
+            if seen.is_some_and(|was| was != now) && open.get_untracked() {
+                focus_alert_if_lost();
+            }
+            now
         });
-        if !still_here {
-            duplicate.set(None);
-            flagged.set(Flagged::default());
-            error.set(Some(
-                "That address is no longer in this form. Save again.".to_string(),
-            ));
+    }
+
+    // S8b: "add what I typed to them". Synchronous: the typed input goes
+    // into the hand-over and the page goes to that person, whose dialog
+    // merges it against a fresh copy. Nothing is fetched or written here.
+    let carry_to = Callback::new(move |person: TakenPerson| {
+        let typed = draft.read();
+        if !names_a_row(&person) {
+            stale_notice();
             return;
         }
         // Only what the API would take as a person is carried.
@@ -931,7 +999,9 @@ pub fn PersonEditor(
                     <EmailTakenNotice matches=matches
                         offer=match form {
                             PersonForm::New => TakenOffer::CarryOver(carry_to),
-                            PersonForm::NewOnNode(_) => TakenOffer::OnNode,
+                            PersonForm::NewOnNode(_) => {
+                                add_here.map_or(TakenOffer::OnNode, TakenOffer::AddHere)
+                            }
                             PersonForm::Edit(_) => TakenOffer::OpenOnly,
                         } />
                 })}
@@ -1120,6 +1190,31 @@ fn CarryReview(
     }
 }
 
+/// On a node: what the refusal's notice does with a person it names
+/// (S8b). The panel that owns the dialog does the add, so the Role and
+/// Note typed under "On this node" go with it.
+#[derive(Clone, Copy)]
+pub struct AddHere {
+    /// Put this person on the node. The caller closes the dialog once the
+    /// add has succeeded and not before: a failed add loses nothing typed.
+    pub on_add: Callback<TakenPerson>,
+    /// Who is on the node already: they are not offered again.
+    pub already: Signal<Vec<PersonId>>,
+    /// An add is on its way.
+    pub busy: RwSignal<bool>,
+    /// Why the last add failed, in words.
+    pub failed: RwSignal<Option<String>>,
+    /// Counts the dialog's openings; the editor bumps it. An answer that
+    /// comes late acts on the dialog only if it is still the opening its
+    /// button was pressed in.
+    pub opening: RwSignal<u32>,
+}
+
+/// The look of a button the notice offers beside a person.
+const OFFER_BUTTON: &str = "rounded-md px-2 py-0.5 text-xs text-stone-700 dark:text-stone-200 \
+     border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 \
+     cursor-pointer aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+
 /// What the refusal's notice offers for each person it names, besides
 /// opening them (S8b).
 #[derive(Clone, Copy)]
@@ -1127,8 +1222,12 @@ pub enum TakenOffer {
     /// Editing a saved person: merging two saved people is the merge
     /// tool's (S8c).
     OpenOnly,
-    /// A new person being added on a node.
+    /// A new person being added on a node where nothing can be added by
+    /// this reader now.
     OnNode,
+    /// A new person being added on a node: put the person who has the
+    /// address there instead, with the Role and Note typed.
+    AddHere(AddHere),
     /// A new person from the registry: add what was typed to them, for
     /// review.
     CarryOver(Callback<TakenPerson>),
@@ -1162,9 +1261,41 @@ pub fn EmailTakenNotice(matches: Vec<DuplicateMatch>, offer: TakenOffer) -> impl
                     let id = person.id;
                     let name = person.display_name.clone();
                     let addresses = person.emails.join(", ");
-                    let carry = match offer {
-                        TakenOffer::CarryOver(carry_to) => Some((carry_to, person)),
-                        TakenOffer::OpenOnly | TakenOffer::OnNode => None,
+                    let offered = match offer {
+                        TakenOffer::CarryOver(carry_to) => view! {
+                            <button type="button" class=OFFER_BUTTON
+                                // The name starts with the words on the button.
+                                aria-label=format!("Add what I typed to them: {name}")
+                                data-testid="carry-over"
+                                on:click=move |_| carry_to.run(person.clone())>
+                                "Add what I typed to them"
+                            </button>
+                        }.into_any(),
+                        TakenOffer::AddHere(a) => {
+                            let label = format!("Add {name} here");
+                            (move || if a.already.get().contains(&id) {
+                                view! {
+                                    <span class="text-xs text-stone-600 dark:text-stone-300"
+                                        data-testid="already-here">
+                                        "Already here."
+                                    </span>
+                                }.into_any()
+                            } else {
+                                let person = person.clone();
+                                view! {
+                                    <button type="button" class=OFFER_BUTTON data-testid="add-here"
+                                        // Not `disabled`: that would drop the
+                                        // keyboard from the pressed button. The
+                                        // panel ignores a press while one is on
+                                        // its way.
+                                        aria-disabled=move || if a.busy.get() { "true" } else { "false" }
+                                        on:click=move |_| a.on_add.run(person.clone())>
+                                        {label.clone()}
+                                    </button>
+                                }.into_any()
+                            }).into_any()
+                        }
+                        TakenOffer::OpenOnly | TakenOffer::OnNode => ().into_any(),
                     };
                     view! {
                         <li class="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -1177,33 +1308,34 @@ pub fn EmailTakenNotice(matches: Vec<DuplicateMatch>, offer: TakenOffer) -> impl
                                 </button>
                                 <span class="text-stone-500 dark:text-stone-400">{format!(" · {addresses}")}</span>
                             </span>
-                            {carry.map(|(carry_to, person)| view! {
-                                <button type="button"
-                                    class="rounded-md px-2 py-0.5 text-xs text-stone-700 dark:text-stone-200
-                                        border border-stone-300 dark:border-stone-600
-                                        hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer"
-                                    // The name starts with the words on the button.
-                                    aria-label=format!("Add what I typed to them: {name}")
-                                    data-testid="carry-over"
-                                    on:click=move |_| carry_to.run(person.clone())>
-                                    "Add what I typed to them"
-                                </button>
-                            })}
+                            {offered}
                         </li>
                     }
                 }).collect_view()}
             </ul>
+            // Inside the alert, so it is read out when it appears.
+            {match offer {
+                TakenOffer::AddHere(a) => Some(move || a.failed.get().map(|why| view! {
+                    <p class="text-sm text-red-600 dark:text-red-400" data-testid="add-here-failed">{why}</p>
+                })),
+                _ => None,
+            }}
             {(!nobody).then(|| view! {
                 <p class="text-xs text-stone-600 dark:text-stone-300">
                     {match offer {
+                        TakenOffer::AddHere(_) => {
+                            "Add them here: the role and note below go with them. The other \
+                             details you typed are not added to them and are not kept. Or \
+                             open them (what you typed is kept), or take the address off."
+                        }
                         TakenOffer::CarryOver(_) => {
                             "Add what you typed to them (you review it before anything is \
                              saved), open them, or take the address off here. What you typed \
                              is kept."
                         }
                         TakenOffer::OnNode => {
-                            "Cancel and pick them from the list to add them here, or take the \
-                             address off. What you typed is kept if you open them."
+                            "Open them (what you typed is kept), or take the address off. \
+                             People can\u{2019}t be added to this node from here."
                         }
                         TakenOffer::OpenOnly => {
                             "Open them, or take the address off here. Merging two saved \

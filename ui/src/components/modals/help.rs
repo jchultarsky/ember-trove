@@ -273,9 +273,13 @@ const CONCEPTS: &[Concept] = &[
                their details; on a Project you share, others see a person's name \
                and role only. An email address belongs to one person. Saving a \
                second person with an address someone already has is refused, and \
-               the notice names who has it, with a way to open them. People who \
-               shared an address before this rule stay as they are; Data health \
-               lists them.",
+               the notice names who has it, with a way to open them. For a new \
+               person it can also add what you typed to the one who has the \
+               address: their editor opens with it for you to review, and \
+               nothing is saved until you save there. On a Project it can put \
+               that person on the Project instead, with the role and note you \
+               typed. People who shared an address before this rule stay as \
+               they are; Data health lists them.",
     },
     Concept {
         title: "Captures",

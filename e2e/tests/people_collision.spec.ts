@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from './fixtures';
+import { test, expect, createNode, deleteNodesByPrefix, type APIRequestContext, type Page } from './fixtures';
 
 /**
  * What the app offers when an email address already belongs to someone
@@ -6,6 +6,9 @@ import { test, expect, type APIRequestContext, type Page } from './fixtures';
  * it"). A new person who collides can be added to the existing one for
  * review: their own values are kept, blanks are filled, lists grow, and
  * nothing is saved until Save. Backing out loses nothing.
+ *
+ * On a node the notice puts the person who has the address there instead,
+ * with the Role and Note typed in the dialog.
  *
  * People are per account, so one identity is enough. Every person's name
  * holds `MARK`; `wipePeople` removes them all before and after, so an
@@ -589,6 +592,293 @@ test('nothing is carried over that this device cannot keep', async ({ page, requ
   }
 });
 
+// ── On a node ──────────────────────────────────────────────────────────
+
+const PROJECT = 'e2e collide project';
+
+/** On a node's page, "Create “…”" in its People section: the dialog, with `name`. */
+async function createOnNode(page: Page, nodeId: string, name: string) {
+  await page.goto(`/nodes/${nodeId}`);
+  const section = page.getByTestId('node-people');
+  await section.getByRole('button', { name: /People/ }).first().click();
+  await section.getByRole('button', { name: 'Add person' }).click();
+  await createFromPicker(page, name);
+  return section;
+}
+
+const picker = (page: Page) =>
+  page.getByTestId('node-people').getByRole('combobox', { name: 'Find or create a person' });
+
+/** With the picker open: types `name` and takes "Create “…”". */
+async function createFromPicker(page: Page, name: string) {
+  await picker(page).fill(name);
+  await expect(page.getByTestId('node-people').getByRole('option', { selected: true })).toContainText('Create');
+  await picker(page).press('Enter');
+  await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue(name);
+}
+
+const onNode = (page: Page) => editor(page).getByRole('group', { name: 'On this node' });
+
+async function typeMembership(page: Page, role: string, note: string) {
+  await onNode(page).getByRole('combobox', { name: 'Role' }).fill(role);
+  await onNode(page).getByRole('textbox', { name: 'Note' }).fill(note);
+}
+
+const formDrafts = (page: Page) =>
+  page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('ember_trove_form_draft:')));
+
+test('on a node, the person who has the address is added there with the role and note typed', async ({
+  page,
+  request,
+}) => {
+  const stamp = newStamp();
+  await wipePeople(request);
+  await deleteNodesByPrefix(request, PROJECT);
+  const node = await createNode(request, `${PROJECT} ${stamp}`, { node_type: 'project' });
+  try {
+    const email = `ada.${stamp}@example.com`;
+    const theirs = await person(request, {
+      display_name: `e2e Ada ${stamp}`,
+      company: 'Analytical Engines',
+      emails: [{ value: email }],
+    });
+    const section = await createOnNode(page, node.id, `e2e A. L. ${stamp}`);
+    await editor(page).getByRole('textbox', { name: 'Company' }).fill('Engines Ltd');
+    await addEmail(page, email);
+    await typeMembership(page, 'Sponsor', 'signs off');
+    const taken = await saveRefused(page);
+    // What it offers here is the node, not a carry-over; and it says
+    // what does not go with them.
+    await expect(taken.getByTestId('carry-over')).toHaveCount(0);
+    await expect(taken).toContainText('The other details you typed are not added to them and are not kept.');
+    await taken.getByRole('button', { name: `Add ${theirs.display_name} here`, exact: true }).click();
+
+    await expect(editor(page)).toHaveCount(0);
+    await expect(page.getByText(`${theirs.display_name} added here.`)).toBeVisible();
+    await expect(picker(page)).toHaveCount(0);
+    const rows = section.getByTestId('node-person');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText(theirs.display_name);
+    await expect(rows.first().getByTestId('member-role')).toHaveText('Sponsor');
+    await expect(rows.first()).toContainText('signs off');
+    // No second person, and the other details typed were not put on them.
+    const all: Person[] = await (await request.get(`/api/people?q=${stamp}`)).json();
+    expect(all.map((p) => p.id)).toEqual([theirs.id]);
+    expect(await fetched(request, theirs.id)).toEqual(theirs);
+    // The dialog is done with: nothing is left to reopen.
+    expect(await formDrafts(page)).toEqual([]);
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request);
+  }
+});
+
+test('on a node, someone already there is said, and a stale notice adds nobody', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipePeople(request);
+  await deleteNodesByPrefix(request, PROJECT);
+  const node = await createNode(request, `${PROJECT} ${stamp}`, { node_type: 'project' });
+  try {
+    const adaMail = `ada.${stamp}@example.com`;
+    const beaMail = `bea.${stamp}@example.com`;
+    const ada = await person(request, { display_name: `e2e Ada ${stamp}`, emails: [{ value: adaMail }] });
+    const bea = await person(request, { display_name: `e2e Bea ${stamp}`, emails: [{ value: beaMail }] });
+    const there = await request.post(`/api/nodes/${node.id}/people`, { data: { person_id: ada.id } });
+    expect(there.status(), await there.text()).toBe(201);
+
+    const section = await createOnNode(page, node.id, `e2e Both ${stamp}`);
+    await addEmail(page, adaMail);
+    await addEmail(page, beaMail);
+    await typeMembership(page, 'Reviewer', 'second pair of eyes');
+    const taken = await saveRefused(page);
+    // Ada is on the node: said, with nothing to press. Bea can be added.
+    const rows = taken.getByRole('listitem');
+    await expect(rows.filter({ hasText: ada.display_name }).getByTestId('already-here')).toHaveText('Already here.');
+    await expect(rows.filter({ hasText: ada.display_name }).getByTestId('add-here')).toHaveCount(0);
+    const addBea = taken.getByRole('button', { name: `Add ${bea.display_name} here`, exact: true });
+    await expect(addBea).toBeVisible();
+
+    // Bea's address is taken off the form, and the old notice is still up.
+    await emailBox(page, 1).fill(`someone.else.${stamp}@example.com`);
+    await addBea.click();
+    const stale = editor(page).getByRole('alert');
+    await expect(stale).toContainText('That address is no longer in this form. Save again.');
+    await expect(editor(page).getByTestId('email-taken')).toHaveCount(0);
+    // The pressed button went with the notice: the keyboard is on what
+    // says why, not on the page behind the dialog.
+    await expect(stale).toBeFocused();
+    // Nobody was added, and what was typed is all still there.
+    await expect(onNode(page).getByRole('combobox', { name: 'Role' })).toHaveValue('Reviewer');
+    const members: unknown[] = await (await request.get(`/api/nodes/${node.id}/people`)).json();
+    expect(members).toHaveLength(1);
+    await editor(page).getByRole('button', { name: 'Cancel' }).click();
+    await expect(section.getByTestId('node-person')).toHaveCount(1);
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request);
+  }
+});
+
+test('on a node, an add that fails loses nothing, and a second press works', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipePeople(request);
+  await deleteNodesByPrefix(request, PROJECT);
+  const node = await createNode(request, `${PROJECT} ${stamp}`, { node_type: 'project' });
+  try {
+    const email = `ada.${stamp}@example.com`;
+    const theirs = await person(request, { display_name: `e2e Ada ${stamp}`, emails: [{ value: email }] });
+    const section = await createOnNode(page, node.id, `e2e A. L. ${stamp}`);
+    await addEmail(page, email);
+    await typeMembership(page, 'Sponsor', 'signs off');
+    const taken = await saveRefused(page);
+
+    // The first add is held, then fails; later ones go through.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let posts = 0;
+    await page.route(`**/api/nodes/${node.id}/people`, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      posts += 1;
+      if (posts > 1) return route.fallback();
+      await held;
+      return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' });
+    });
+    const add = taken.getByRole('button', { name: `Add ${theirs.display_name} here`, exact: true });
+    await add.click();
+    // While it is on its way the button can't be pressed again, and the
+    // dialog stays: it closes only once the add has succeeded.
+    await expect(add).toBeDisabled();
+    await expect(editor(page)).toBeVisible();
+    // A press that gets through anyway (the button keeps the keyboard, so
+    // it is not `disabled`) sends nothing.
+    await add.dispatchEvent('click');
+    release();
+    await expect(taken.getByTestId('add-here-failed')).toContainText('Nothing you typed is lost');
+    expect(posts).toBe(1);
+    await expect(add).toBeFocused();
+    await expect(onNode(page).getByRole('combobox', { name: 'Role' })).toHaveValue('Sponsor');
+    await expect(onNode(page).getByRole('textbox', { name: 'Note' })).toHaveValue('signs off');
+    await expect(section.getByTestId('node-person')).toHaveCount(0);
+
+    await expect(add).toBeEnabled();
+    await add.click();
+    await expect(editor(page)).toHaveCount(0);
+    const rows = section.getByTestId('node-person');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first().getByTestId('member-role')).toHaveText('Sponsor');
+    expect(posts).toBe(2);
+  } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request);
+  }
+});
+
+test('on a node, someone put there a moment ago is said, not added twice', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipePeople(request);
+  await deleteNodesByPrefix(request, PROJECT);
+  const node = await createNode(request, `${PROJECT} ${stamp}`, { node_type: 'project' });
+  try {
+    const email = `ada.${stamp}@example.com`;
+    const theirs = await person(request, { display_name: `e2e Ada ${stamp}`, emails: [{ value: email }] });
+    await createOnNode(page, node.id, `e2e A. L. ${stamp}`);
+    await addEmail(page, email);
+    await typeMembership(page, 'Sponsor', 'signs off');
+    const taken = await saveRefused(page);
+    const add = taken.getByRole('button', { name: `Add ${theirs.display_name} here`, exact: true });
+    await expect(add).toBeVisible();
+    // Another tab puts them on the node after the notice was drawn.
+    const there = await request.post(`/api/nodes/${node.id}/people`, {
+      data: { person_id: theirs.id, role: 'Approver' },
+    });
+    expect(there.status()).toBe(201);
+    await add.click();
+    await expect(taken.getByTestId('already-here')).toHaveText('Already here.');
+    await expect(taken.getByTestId('add-here')).toHaveCount(0);
+    await expect(taken.getByTestId('add-here-failed')).toHaveCount(0);
+    // The button is gone; the keyboard is on the notice.
+    await expect(taken).toBeFocused();
+    // The dialog is kept, with what was typed; their role there is the
+    // one they were given, not overwritten.
+    await expect(onNode(page).getByRole('combobox', { name: 'Role' })).toHaveValue('Sponsor');
+    const members: { role: string | null }[] = await (await request.get(`/api/nodes/${node.id}/people`)).json();
+    expect(members.map((m) => m.role)).toEqual(['Approver']);
+    await editor(page).getByRole('button', { name: 'Cancel' }).click();
+  } finally {
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request);
+  }
+});
+
+test('on a node, an answer that comes late leaves a later dialog alone', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipePeople(request);
+  await deleteNodesByPrefix(request, PROJECT);
+  const node = await createNode(request, `${PROJECT} ${stamp}`, { node_type: 'project' });
+  try {
+    const email = `ada.${stamp}@example.com`;
+    const theirs = await person(request, { display_name: `e2e Ada ${stamp}`, emails: [{ value: email }] });
+    // The first add fails at once; the second is held, then goes through.
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let posts = 0;
+    await page.route(`**/api/nodes/${node.id}/people`, async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      posts += 1;
+      if (posts === 1) {
+        return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' });
+      }
+      if (posts === 2) await held;
+      return route.fallback();
+    });
+    const addButton = () =>
+      editor(page).getByRole('button', { name: `Add ${theirs.display_name} here`, exact: true });
+    const cancel = async () => {
+      await editor(page).getByRole('button', { name: 'Cancel' }).click();
+      await expect(editor(page)).toHaveCount(0);
+    };
+
+    const section = await createOnNode(page, node.id, `e2e A. L. ${stamp}`);
+    await addEmail(page, email);
+    let taken = await saveRefused(page);
+    await addButton().click();
+    await expect(taken.getByTestId('add-here-failed')).toBeVisible();
+
+    // Cancel and the same again: a new opening does not show the old failure.
+    await cancel();
+    await createFromPicker(page, `e2e A. L. ${stamp}`);
+    await addEmail(page, email);
+    taken = await saveRefused(page);
+    await expect(taken.getByTestId('add-here-failed')).toHaveCount(0);
+
+    // Pressed, and while it is on its way the dialog is cancelled and
+    // another person is being typed.
+    await addButton().click();
+    await expect(addButton()).toBeDisabled();
+    await cancel();
+    const later = `e2e Someone Later ${stamp}`;
+    await createFromPicker(page, later);
+    await editor(page).getByRole('textbox', { name: 'Company' }).fill('Typed meanwhile');
+    release();
+
+    // The add went through and is said; the dialog now open is not the
+    // one it was pressed in, and keeps what it holds.
+    await expect(page.getByText(`${theirs.display_name} added here.`)).toBeVisible();
+    await expect(section.getByTestId('node-person')).toHaveCount(1);
+    await expect(editor(page).getByRole('textbox', { name: 'Name' })).toHaveValue(later);
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Typed meanwhile');
+    // The keyboard too: the list read again behind it does not take it.
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toBeFocused();
+    expect(posts).toBe(2);
+    await cancel();
+  } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await request.delete(`/api/nodes/${node.id}`);
+    await wipePeople(request);
+  }
+});
+
 test.describe('at phone width', () => {
   test.use({ viewport: { width: 375, height: 812 } });
 
@@ -610,6 +900,30 @@ test.describe('at phone width', () => {
       expect(box && box.x + box.width).toBeLessThanOrEqual(375);
       await editor(page).getByRole('button', { name: 'Cancel' }).click();
     } finally {
+      await wipePeople(request);
+    }
+  });
+
+  test('the notice on a node fits', async ({ page, request }) => {
+    const stamp = newStamp();
+    await wipePeople(request);
+    await deleteNodesByPrefix(request, PROJECT);
+    const node = await createNode(request, `${PROJECT} ${stamp}`, { node_type: 'project' });
+    try {
+      const email = `ada.${stamp}@example.com`;
+      const theirs = await person(request, { display_name: `e2e Ada ${stamp}`, emails: [{ value: email }] });
+      await createOnNode(page, node.id, `e2e A. L. ${stamp}`);
+      await addEmail(page, email);
+      const taken = await saveRefused(page);
+      const form = editor(page).getByTestId('person-form');
+      expect(await form.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      const box = await taken
+        .getByRole('button', { name: `Add ${theirs.display_name} here`, exact: true })
+        .boundingBox();
+      expect(box && box.x + box.width).toBeLessThanOrEqual(375);
+      await editor(page).getByRole('button', { name: 'Cancel' }).click();
+    } finally {
+      await request.delete(`/api/nodes/${node.id}`);
       await wipePeople(request);
     }
   });

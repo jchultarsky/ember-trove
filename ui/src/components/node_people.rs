@@ -13,13 +13,16 @@ use common::person::{
     CARD_CONTACTS, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
     card_contacts, matches,
 };
+use common::person_carry::TakenPerson;
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 
 use crate::components::free_text_combo::FreeTextCombo;
 use crate::components::icon_button::{IconButton, IconButtonVariant, icon_button_class};
 use crate::components::node_section::{NodeSection, NotOnThisKind, SectionShell, section_shown};
-use crate::components::people_view::{ContactAction, ContactKind, HINT_CLASS, PersonEditor};
+use crate::components::people_view::{
+    AddHere, ContactAction, ContactKind, HINT_CLASS, PersonEditor,
+};
 use crate::components::toast::{ToastLevel, push_toast};
 use common::ontology::Capability;
 
@@ -192,6 +195,93 @@ pub fn NodePeoplePanel(
             }
         });
     });
+    // S8b: the new person's address is someone's already. That person is
+    // put on the node instead, with the Role and Note typed in the dialog.
+    // People an answer said are here already, whatever the list says.
+    let known_here = RwSignal::new(Vec::<PersonId>::new());
+    let member_ids = Signal::derive(move || {
+        let mut ids: Vec<PersonId> = members
+            .get()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| m.person_id)
+            .collect();
+        ids.extend(known_here.get());
+        ids
+    });
+    let adding_existing = RwSignal::new(false);
+    let add_failed = RwSignal::new(None::<String>);
+    // Which opening of the dialog is up (the editor counts them).
+    let opening = RwSignal::new(0u32);
+    let add_existing = Callback::new(move |person: TakenPerson| {
+        if adding_existing.get_untracked() {
+            return;
+        }
+        adding_existing.set(true);
+        add_failed.set(None);
+        let input = new_membership.input(person.id);
+        let pressed_in = opening.get_untracked();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::api::add_node_person(node_id, &input).await;
+            // The answer acts on the dialog only if it is still open and
+            // still the opening the button was pressed in: a dialog
+            // cancelled and opened again meanwhile holds other input.
+            // `None` once the page is gone.
+            let same = opening.try_get_untracked().map(|now| now == pressed_in);
+            let here = same == Some(true) && editor_open.try_get_untracked() == Some(true);
+            if here {
+                adding_existing.try_set(false);
+            }
+            let name = person.display_name;
+            match result {
+                Ok(_) => {
+                    // The dialog closes only now: a failed add leaves the
+                    // Role and Note where they were typed.
+                    if here {
+                        editor_open.try_set(false);
+                        adding.try_set(false);
+                    }
+                    refresh.try_update(|n| *n += 1);
+                    // A page that went away kept its dialog as a draft.
+                    // It is left alone: nothing typed is thrown away
+                    // unseen.
+                    push_toast(
+                        ToastLevel::Success,
+                        if same.is_some() {
+                            format!("{name} added here.")
+                        } else {
+                            format!("{name} was added to the node you were on.")
+                        },
+                    );
+                }
+                // Put here by someone meanwhile (another tab): the notice
+                // says "Already here", whether or not the list loads.
+                Err(crate::error::UiError::Api { status: 409, .. }) => {
+                    known_here.try_update(|ids| ids.push(person.id));
+                    refresh.try_update(|n| *n += 1);
+                }
+                Err(e) if here => {
+                    add_failed.try_set(Some(e.explained().unwrap_or_else(|| {
+                        "Couldn\u{2019}t add them here. Nothing you typed is lost: try again."
+                            .to_string()
+                    })));
+                }
+                // The dialog it was pressed in is closed.
+                Err(_) => push_toast(
+                    ToastLevel::Error,
+                    format!("Couldn\u{2019}t add {name} to the node."),
+                ),
+            }
+        });
+    });
+    let add_here = can_add.then_some(AddHere {
+        on_add: add_existing,
+        already: member_ids,
+        busy: adding_existing,
+        failed: add_failed,
+        opening,
+    });
 
     view! {
         {move || shown.get().then(|| view! {
@@ -199,17 +289,10 @@ pub fn NodePeoplePanel(
             {(!allowed).then(|| view! { <NotOnThisKind capability=Capability::People can_fix=can_edit /> })}
             <PersonEditor open=editor_open form=PersonForm::NewOnNode(node_id)
                 initial=Signal::derive(move || PersonInput { display_name: prefill.get(), ..Default::default() })
-                membership=new_membership on_saved=on_created />
-            {move || adding.get().then(|| {
-                let taken: Vec<_> = members
-                    .get()
-                    .and_then(Result::ok)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|m| m.person_id)
-                    .collect();
-                view! { <PersonPicker node_id=node_id taken=taken roles=role_names
-                    on_added=on_added on_create=on_create /> }
+                membership=new_membership on_saved=on_created add_here=add_here />
+            {move || adding.get().then(|| view! {
+                <PersonPicker node_id=node_id taken=member_ids roles=role_names
+                    on_added=on_added on_create=on_create />
             })}
             <Suspense fallback=|| view! { <p class="text-xs text-stone-400">"Loading\u{2026}"</p> }>
                 {move || {
@@ -384,8 +467,13 @@ enum Pick {
 #[component]
 fn PersonPicker(
     node_id: NodeId,
-    /// People already on the node (not offered again).
-    taken: Vec<PersonId>,
+    /// People already on the node (not offered again). A signal, read
+    /// where the options are worked out: a list captured at mount made
+    /// the panel rebuild the picker whenever the members were read
+    /// again, and a rebuilt picker takes the keyboard, from a dialog
+    /// open over it too (S8b).
+    #[prop(into)]
+    taken: Signal<Vec<PersonId>>,
     roles: Signal<Vec<String>>,
     #[prop(into)] on_added: Callback<()>,
     /// "Create “…”": open the person editor with this name.
@@ -400,13 +488,13 @@ fn PersonPicker(
     let opt_id = StoredValue::new(move |i: usize| format!("{base}-opt-{i}"));
     let query = RwSignal::new(String::new());
     let registry = LocalResource::new(|| crate::api::fetch_people(None));
-    let taken = StoredValue::new(taken);
     let options = Memo::new(move |_| {
         let q = query.get();
         let people = registry.get().and_then(Result::ok).unwrap_or_default();
+        let taken = taken.get();
         let mut out: Vec<Pick> = people
             .into_iter()
-            .filter(|p| !taken.with_value(|t| t.contains(&p.id)) && matches(p, &q))
+            .filter(|p| !taken.contains(&p.id) && matches(p, &q))
             .take(8)
             .map(Pick::Existing)
             .collect();
