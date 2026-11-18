@@ -6,6 +6,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **At an email collision, what you typed can be added to the person
+  who has the address** (S8b of the ontology programme, #357; ONTOLOGY
+  §7.1: "open the existing record or merge into it"). When a new person
+  is refused because their address is someone's, the notice has a button
+  for each person it names: "Add what I typed to them".
+  - It opens that person's editor with what you typed added, **for
+    review**. Their own values are kept, a blank company or position is
+    filled, new emails, phones and addresses are added, notes are
+    appended. Nothing is saved until you press Save.
+  - The review says what was added, and what you typed that differs
+    from theirs (a name, a company): that is not used, and it is how a
+    wrong match shows. Added rows and fields are marked.
+  - Backing out loses nothing: Discard leaves the person as they were,
+    and the new-person dialog comes back with what you typed. It is
+    dropped only once the other person is saved.
+  - The same phone number in another format is not added twice. An
+    address that belongs to a third person is left out, and said.
+  - It is done in the browser, as an ordinary edit of the existing
+    person: no new API, and the database's email rule still decides.
+
+### Fixed
+- **The notice of a refused save stays in view.** Since 3.30.0 the
+  keyboard goes to the marked address, and in a short window that
+  scrolled the notice away.
+- A person save the API refuses for a reason it explains (a list over
+  its limit) reads as that sentence, not "server error 422".
+
 ## [3.30.0] - 2026-11-18
 
 ### Changed

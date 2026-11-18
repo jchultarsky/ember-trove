@@ -203,6 +203,37 @@ pub fn clear_form_draft(key: &str) {
     }
 }
 
+/// What was typed for a new person, on its way to the dialog of the person
+/// who already has the address (S8b, `common::person_carry`).
+///
+/// In memory only, and taken once: the edit dialog of `to` takes it when
+/// it mounts and merges it into what it shows, for review. Nothing here is
+/// stored or logged. If that page is never reached, the new-person
+/// dialog's own draft still holds everything.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HandOff {
+    pub to: common::id::PersonId,
+    pub typed: common::person::PersonInput,
+    /// Addresses the refusal named another person for.
+    pub someone_elses: Vec<String>,
+}
+
+/// The pending [`HandOff`], if any. Provided at the app root.
+#[derive(Clone, Copy)]
+pub struct PersonHandOff(pub leptos::prelude::RwSignal<Option<HandOff>>);
+
+/// Drop the draft under `key` if it still holds exactly the input with
+/// this fingerprint (`person_carry::person_fingerprint`). For the
+/// new-person dialog's draft once what it held was saved onto someone
+/// else: by then that dialog may hold a different person, typed since.
+pub fn clear_person_draft_if(key: &str, fingerprint: u64) {
+    let same = read_person_draft(key)
+        .is_some_and(|d| common::person_carry::person_fingerprint(&d.person) == fingerprint);
+    if same {
+        clear_form_draft(key);
+    }
+}
+
 /// How many dialogs that keep a draft are open, so the update banner can
 /// say that reloading keeps their input (#170). Provided at the app root.
 #[derive(Clone, Copy)]

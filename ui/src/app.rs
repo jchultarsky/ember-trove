@@ -78,6 +78,9 @@ pub fn App() -> impl IntoView {
     crate::draft::purge_legacy_create_draft();
     crate::draft::sweep_expired_drafts();
     provide_context(crate::draft::OpenForms(RwSignal::new(0)));
+    // S8b: details typed for a new person, on their way to the dialog of
+    // the person who already has the address.
+    provide_context(crate::draft::PersonHandOff(RwSignal::new(None)));
 
     // Persist theme in localStorage; with no stored preference, follow the
     // OS (`prefers-color-scheme`) — matches the static loading screen, which
