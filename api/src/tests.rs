@@ -492,6 +492,21 @@ impl EdgeRepo for StubEdgeRepo {
         saw_viewer("list_for_node_with_titles", viewer);
         Ok(Vec::new())
     }
+    async fn not_shown(&self, _: NodeId, viewer: Option<&str>) -> Result<u32, EmberTroveError> {
+        // Whose view the count was made for (#349). The route asks only
+        // for someone who may edit the node: a test checks no call is
+        // recorded for anyone else.
+        saw_viewer("not_shown", viewer);
+        Ok(2)
+    }
+    async fn remove_not_shown(
+        &self,
+        _: NodeId,
+        viewer: Option<&str>,
+    ) -> Result<u64, EmberTroveError> {
+        saw_viewer("remove_not_shown", viewer);
+        Ok(5)
+    }
     async fn blockers(
         &self,
         _: NodeId,
@@ -4223,6 +4238,13 @@ async fn a_viewer_is_still_told_no_rather_than_not_found() {
             none(),
         ),
         (
+            "/nodes",
+            nodes::router,
+            "DELETE",
+            format!("/nodes/{}/edges/not-shown", id(AZ_VIEW_NODE)),
+            none(),
+        ),
+        (
             "/tasks",
             tasks::task_router,
             "DELETE",
@@ -4632,11 +4654,20 @@ async fn a_nodes_blockers_are_read_for_their_reader() {
             let (status, body) = read(fake_claims(), node, path).await;
             assert_eq!(status, StatusCode::OK, "{path} {node:#x}: {body}");
         }
+        // Every call the three reads made, and nothing else. The node's
+        // own read also counts its links not shown, for the two nodes
+        // the caller may edit and not for the one they only view (#349).
         let seen = viewers_seen();
-        assert_eq!(seen.len(), 3, "{path}: {seen:?}");
+        let mut names: Vec<&str> = seen.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        let mut expected = vec![call; 3];
+        if path.is_empty() {
+            expected.extend(["not_shown"; 2]);
+        }
+        expected.sort_unstable();
+        assert_eq!(names, expected, "{path}");
         for (name, viewer) in &seen {
-            assert_eq!(*name, call, "{path}");
-            assert_eq!(viewer.as_deref(), Some("test-sub"), "{path}");
+            assert_eq!(viewer.as_deref(), Some("test-sub"), "{path} {name}");
         }
         let (status, _) = read(admin_claims(), AZ_FOREIGN_NODE, path).await;
         assert_eq!(status, StatusCode::OK, "{path}");
@@ -4668,6 +4699,110 @@ async fn a_nodes_blockers_are_read_for_their_reader() {
     // An older client reads it as a plain node.
     let plain: Node = serde_json::from_str(&body).expect("still a node");
     assert_eq!(plain.id.0, Uuid::from_u128(AZ_OWNED_NODE));
+}
+
+/// Hidden links (#349, §14): how many of a node's links are not shown is
+/// told only to someone who may edit it, and only they may clear them;
+/// both are read as the caller. SECURITY: a viewer told the count, or a
+/// count made as "everyone", would say more than the rule allows with
+/// every status unchanged, so the stub records each call.
+#[tokio::test]
+async fn links_not_shown_are_told_to_and_cleared_by_an_editor_alone() {
+    let call = |claims: common::auth::AuthClaims,
+                method: &'static str,
+                node: u128,
+                path: &'static str| async move {
+        let resp = Router::new()
+            .nest("/nodes", crate::routes::nodes::router())
+            .layer(axum::Extension(claims))
+            .with_state(test_state())
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/nodes/{}{path}", Uuid::from_u128(node)))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default(),
+        )
+    };
+    let asked = |seen: &[(&'static str, Option<String>)], name: &str| -> Vec<Option<String>> {
+        seen.iter()
+            .filter(|(call, _)| *call == name)
+            .map(|(_, viewer)| viewer.clone())
+            .collect()
+    };
+    let me = || Some("test-sub".to_string());
+
+    // The node's own answer: the count for an owner and an editor ...
+    for node in [AZ_OWNED_NODE, AZ_EDIT_NODE] {
+        viewers_seen();
+        let (status, body) = call(fake_claims(), "GET", node, "").await;
+        assert_eq!(status, StatusCode::OK, "{node:#x}");
+        assert_eq!(body["links_not_shown"], 2, "{node:#x}: {body}");
+        assert_eq!(asked(&viewers_seen(), "not_shown"), vec![me()], "{node:#x}");
+    }
+    // ... and nothing for a viewer: 0, and the repo is not asked.
+    viewers_seen();
+    let (status, body) = call(fake_claims(), "GET", AZ_VIEW_NODE, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["links_not_shown"], 0, "{body}");
+    assert!(asked(&viewers_seen(), "not_shown").is_empty());
+    // An admin reads every node: asked as nobody in particular (the real
+    // repo then finds nothing hidden).
+    let (status, _) = call(admin_claims(), "GET", AZ_FOREIGN_NODE, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(asked(&viewers_seen(), "not_shown"), vec![None]);
+
+    // The remove: an editor's, as themself, and the fresh count after it.
+    for node in [AZ_OWNED_NODE, AZ_EDIT_NODE] {
+        viewers_seen();
+        let (status, body) = call(fake_claims(), "DELETE", node, "/edges/not-shown").await;
+        assert_eq!(status, StatusCode::OK, "{node:#x}: {body}");
+        assert_eq!(
+            body,
+            serde_json::json!({ "removed": 5, "links_not_shown": 2 }),
+            "{node:#x}"
+        );
+        let seen = viewers_seen();
+        let order: Vec<&str> = seen.iter().map(|(name, _)| *name).collect();
+        assert_eq!(order, ["remove_not_shown", "not_shown"], "{node:#x}");
+        assert!(seen.iter().all(|(_, v)| *v == me()), "{seen:?}");
+    }
+    // A viewer, a stranger, and a node that doesn't exist: refused, and
+    // the two the caller can't see answer alike, before anything is read
+    // or removed.
+    let mut refusals = Vec::new();
+    for node in [AZ_VIEW_NODE, AZ_FOREIGN_NODE, AZ_MISSING] {
+        viewers_seen();
+        let (status, body) = call(fake_claims(), "DELETE", node, "/edges/not-shown").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{node:#x}");
+        assert!(
+            viewers_seen().is_empty(),
+            "{node:#x}: the repo was not asked"
+        );
+        refusals.push(body);
+    }
+    assert_eq!(refusals[1], refusals[2], "foreign and missing read alike");
+    // An admin's remove is made as someone who is shown every link.
+    viewers_seen();
+    let (status, _) = call(
+        admin_claims(),
+        "DELETE",
+        AZ_FOREIGN_NODE,
+        "/edges/not-shown",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(viewers_seen().iter().all(|(_, v)| v.is_none()));
 }
 
 /// S7b: a card's "Blocked" chip and its count of blocked tasks, on the

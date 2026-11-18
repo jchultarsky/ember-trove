@@ -57,7 +57,9 @@
 //   v22: blockers (S7b, #346) — a node's own answer, the dashboard and
 //        Focus cards and a task's dependencies gain fields; evicts
 //        cached answers without them, which would show nothing blocked.
-const CACHE_NAME = "ember-trove-v22";
+//   v23: links not shown (#349) — a node's own answer carries
+//        `links_not_shown`; an older cached answer would hide the marker.
+const CACHE_NAME = "ember-trove-v23";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

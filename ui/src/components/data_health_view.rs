@@ -573,19 +573,41 @@ fn aria_busy(busy: RwSignal<bool>) -> impl Fn() -> &'static str {
 
 /// An inline "are you sure?" for a fix: the question, the commit button,
 /// and Cancel. Worded for what the action does, not a generic delete.
+///
+/// It replaces the button that opened it, which had the keyboard. So it
+/// takes the keyboard itself, on Cancel (the harmless one of the two),
+/// and Escape cancels. Giving the keyboard back afterwards is its
+/// caller's: only the caller knows what comes back in its place.
 #[component]
-fn InlineConfirm(
+pub(crate) fn InlineConfirm(
     question: String,
     commit: &'static str,
     on_confirm: Callback<()>,
     on_cancel: Callback<()>,
 ) -> impl IntoView {
+    let cancel_ref = NodeRef::<leptos::html::Button>::new();
+    // Tracked in an effect, not a frame callback (`.claude/rules/leptos.md`).
+    Effect::new(move |_| {
+        if let Some(el) = cancel_ref.get() {
+            let _ = el.focus();
+        }
+    });
     view! {
         <span class="inline-flex flex-wrap items-center gap-2 text-xs" role="group"
-            aria-label=format!("Confirm {}", commit.to_lowercase())>
+            aria-label=format!("Confirm {}", commit.to_lowercase())
+            on:keydown=move |ev| {
+                if ev.key() == "Escape" {
+                    // Its own Escape: the window's dispatcher must not
+                    // act on it too.
+                    ev.stop_propagation();
+                    ev.prevent_default();
+                    on_cancel.run(());
+                }
+            }>
             <span class="text-stone-600 dark:text-stone-300">{question}</span>
             <button type="button" class=FIX_BUTTON on:click=move |_| on_confirm.run(())>{commit}</button>
-            <button type="button" class="text-stone-500 hover:text-stone-700 dark:hover:text-stone-300"
+            <button type="button" node_ref=cancel_ref
+                class="text-stone-500 hover:text-stone-700 dark:hover:text-stone-300"
                 on:click=move |_| on_cancel.run(())>
                 "Cancel"
             </button>

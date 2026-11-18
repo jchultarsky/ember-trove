@@ -237,6 +237,199 @@ pub fn NodeBlockedChip(
     }
 }
 
+/// The header's marker (#349): "2 links not shown".
+fn links_not_shown_chip(n: u32) -> String {
+    if n == 1 {
+        "1 link not shown".to_string()
+    } else {
+        format!("{n} links not shown")
+    }
+}
+
+/// The line in Connections (#349). It counts and names nothing: not the
+/// nodes, the kinds of link, or who made them.
+fn links_not_shown_text(n: u32) -> String {
+    if n == 1 {
+        "1 link of this node isn\u{2019}t shown here: it is to a node you can\u{2019}t see."
+            .to_string()
+    } else {
+        format!(
+            "{n} links of this node aren\u{2019}t shown here: they are to nodes you can\u{2019}t see."
+        )
+    }
+}
+
+fn links_not_shown_remove_label(n: u32) -> String {
+    if n == 1 {
+        "Remove the link not shown".to_string()
+    } else {
+        format!("Remove the {n} links not shown")
+    }
+}
+
+/// What the confirmation asks. The links can't be listed, so they can't
+/// be put back from this page: it says so.
+fn links_not_shown_question(n: u32) -> String {
+    if n == 1 {
+        "Remove the link you aren\u{2019}t shown? You can\u{2019}t put it back from here."
+            .to_string()
+    } else {
+        format!(
+            "Remove the {n} links you aren\u{2019}t shown? You can\u{2019}t put them back from here."
+        )
+    }
+}
+
+/// What the remove says afterwards: how many went, by the server's count
+/// (a link that became visible meanwhile stays, so it may be fewer).
+fn links_cleared_text(removed: u64) -> String {
+    match removed {
+        0 => "No link was removed: none is hidden any more".to_string(),
+        1 => "Removed 1 link".to_string(),
+        n => format!("Removed {n} links"),
+    }
+}
+
+/// "N links not shown" in the page header (#349, ONTOLOGY §14): the node
+/// has links to nodes that neither this reader nor its owner can see.
+/// The server tells only someone who may edit the node (0 for anyone
+/// else), so the marker needs no rights check of its own. It opens
+/// Connections, where they can be removed. In the header because
+/// Connections is read only when opened: its reader would never find a
+/// line that is only in there.
+#[component]
+pub fn LinksNotShownChip(
+    /// The page's count: `ViewedNode::links_not_shown`, then what a
+    /// remove answered.
+    not_shown: RwSignal<u32>,
+) -> impl IntoView {
+    let sections = use_context::<crate::components::node_section::NodeSections>();
+    move || {
+        let n = not_shown.get();
+        (n > 0).then(|| {
+            let label = links_not_shown_chip(n);
+            let spoken = format!("{label}. Show in Connections");
+            view! {
+                <button
+                    type="button"
+                    class=format!(
+                        "{} py-0.5 hover:text-stone-900 dark:hover:text-stone-100",
+                        crate::components::task_row_scaffold::BLOCKED_CHIP
+                    )
+                    title=links_not_shown_text(n)
+                    aria-label=spoken
+                    data-testid="node-links-not-shown"
+                    on:click=move |_| {
+                        if let Some(sections) = sections {
+                            sections.jump.set(Some(NodeSection::Connections));
+                        }
+                    }
+                >
+                    <span class="material-symbols-outlined" style="font-size:12px;"
+                        aria-hidden="true">"visibility_off"</span>
+                    {label}
+                </button>
+            }
+        })
+    }
+}
+
+/// The line under a node's links about those not shown (#349), with the
+/// control that removes them together, after a confirmation. Shown
+/// whatever the list holds: a node whose only links are hidden ones has
+/// an empty list, and that is where the line matters most.
+fn not_shown_line(node_id: NodeId, not_shown: RwSignal<u32>, links: NodeLinks) -> impl IntoView {
+    let confirming = RwSignal::new(false);
+    let busy = RwSignal::new(false);
+    // The confirmation takes the keyboard from the remove control. After
+    // a Cancel the control is drawn again, and gets it back: otherwise a
+    // keyboard user is left at the top of the page.
+    let line_ref = NodeRef::<leptos::html::Div>::new();
+    let refocus = RwSignal::new(false);
+    Effect::new(move |_| {
+        if refocus.get() && !confirming.get() {
+            refocus.set(false);
+            if let Some(line) = line_ref.get_untracked() {
+                // Deferred: the control is rendered in this same tick.
+                set_timeout(
+                    move || {
+                        use wasm_bindgen::JsCast;
+                        let control = line
+                            .query_selector("button")
+                            .ok()
+                            .flatten()
+                            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok());
+                        if let Some(control) = control {
+                            let _ = control.focus();
+                        }
+                    },
+                    std::time::Duration::ZERO,
+                );
+            }
+        }
+    });
+    let remove = Callback::new(move |()| {
+        if busy.get_untracked() {
+            return;
+        }
+        confirming.set(false);
+        busy.set(true);
+        wasm_bindgen_futures::spawn_local(async move {
+            // After the `.await` the page may be gone: `try_` access.
+            match crate::api::remove_links_not_shown(node_id).await {
+                Ok(cleared) => {
+                    push_toast(ToastLevel::Success, links_cleared_text(cleared.removed));
+                    let _ = not_shown.try_set(cleared.links_not_shown);
+                    // "Blocked" and the chain are worked out from the
+                    // links; a removed dependency changes both.
+                    links.reload();
+                }
+                Err(e) => push_toast(
+                    ToastLevel::Error,
+                    format!("Couldn\u{2019}t remove the links: {e}"),
+                ),
+            }
+            let _ = busy.try_set(false);
+        });
+    });
+    move || {
+        let n = not_shown.get();
+        (n > 0).then(|| {
+            view! {
+                <div class="mt-3 flex flex-wrap items-center gap-1.5 text-xs
+                        text-stone-500 dark:text-stone-400"
+                    node_ref=line_ref
+                    data-testid="links-not-shown">
+                    {move || if confirming.get() {
+                        view! {
+                            <crate::components::data_health_view::InlineConfirm
+                                question=links_not_shown_question(n)
+                                commit="Remove"
+                                on_confirm=remove
+                                on_cancel=Callback::new(move |()| {
+                                    refocus.set(true);
+                                    confirming.set(false);
+                                }) />
+                        }.into_any()
+                    } else {
+                        view! {
+                            <span class="min-w-0">{links_not_shown_text(n)}</span>
+                            <span class="flex-1" />
+                            <IconButton
+                                icon="link_off"
+                                label=links_not_shown_remove_label(n)
+                                variant=IconButtonVariant::Danger
+                                disabled=Signal::derive(move || busy.get())
+                                on_click=Callback::new(move |()| confirming.set(true))
+                            />
+                        }.into_any()
+                    }}
+                </div>
+            }
+        })
+    }
+}
+
 /// A node's links in their groups, with its home first (#228) and a form
 /// to add one.
 #[component]
@@ -249,6 +442,9 @@ pub fn ConnectionsPanel(
     status: NodeStatus,
     project_state: RwSignal<Option<ProjectState>>,
     links: NodeLinks,
+    /// How many of the node's links this reader isn't shown (#349): the
+    /// page's count, shared with the header's marker.
+    not_shown: RwSignal<u32>,
 ) -> impl IntoView {
     let open = RwSignal::new(false);
     links.wanted_while(open);
@@ -529,6 +725,9 @@ pub fn ConnectionsPanel(
                     }.into_any(),
                 })}
             </Suspense>
+            // Outside the list's own read: it shows beside "No connections
+            // yet" too, and while the list loads or has failed.
+            {not_shown_line(node_id, not_shown, links)}
         </SectionShell>
     }
 }
@@ -1037,6 +1236,36 @@ mod tests {
             target_node: None,
             may_remove: false,
         }
+    }
+
+    /// #349: the words count and name nothing else.
+    #[test]
+    fn the_words_about_links_not_shown_count_and_name_none() {
+        assert_eq!(links_not_shown_chip(1), "1 link not shown");
+        assert_eq!(links_not_shown_chip(4), "4 links not shown");
+        assert_eq!(
+            links_not_shown_text(1),
+            "1 link of this node isn\u{2019}t shown here: it is to a node you can\u{2019}t see."
+        );
+        assert_eq!(
+            links_not_shown_text(3),
+            "3 links of this node aren\u{2019}t shown here: they are to nodes you can\u{2019}t see."
+        );
+        assert_eq!(links_not_shown_remove_label(1), "Remove the link not shown");
+        assert_eq!(
+            links_not_shown_remove_label(2),
+            "Remove the 2 links not shown"
+        );
+        assert!(
+            links_not_shown_question(1).starts_with("Remove the link you aren\u{2019}t shown?")
+        );
+        assert!(
+            links_not_shown_question(5).starts_with("Remove the 5 links you aren\u{2019}t shown?")
+        );
+        // The toast says what the server did, which may be fewer.
+        assert_eq!(links_cleared_text(1), "Removed 1 link");
+        assert_eq!(links_cleared_text(7), "Removed 7 links");
+        assert!(links_cleared_text(0).starts_with("No link was removed"));
     }
 
     #[test]

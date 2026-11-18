@@ -39,8 +39,27 @@ pub mod webhook;
 /// constants); the subject itself is always a bind parameter.
 pub(crate) fn visible_to(alias: &str, param: u8) -> String {
     format!(
-        "(${param}::text IS NULL OR {alias}.owner_id = ${param}::text OR EXISTS ( \
-         SELECT 1 FROM permissions vp WHERE vp.node_id = {alias}.id AND vp.subject_id = ${param}::text))"
+        "(${param}::text IS NULL OR {})",
+        owned_or_granted(alias, &format!("${param}::text"))
+    )
+}
+
+/// The inside of [`visible_to`], for a subject given as a SQL expression:
+/// the node aliased `alias` is owned by `subject`, or shared with them
+/// through `permissions`. No admin branch: a subject is always someone.
+///
+/// It exists so "the node's **owner** can see that other node" is the
+/// same rule read for a column (`n.owner_id`), in SQL. Never bind the
+/// owner as an optional value into [`visible_to`] for that: a NULL there
+/// means "sees everything".
+///
+/// SECURITY: `alias` and `subject` are written in the code (a bind
+/// placeholder such as `$2::text`, or a column), never text from a
+/// request.
+pub(crate) fn owned_or_granted(alias: &str, subject: &str) -> String {
+    format!(
+        "({alias}.owner_id = {subject} OR EXISTS ( \
+         SELECT 1 FROM permissions vp WHERE vp.node_id = {alias}.id AND vp.subject_id = {subject}))"
     )
 }
 

@@ -138,6 +138,13 @@ pub struct ViewedNode {
     /// `blockers::direct` over its links, counted by the server.
     #[serde(default)]
     pub blocked_by: u32,
+    /// How many links of this node neither this reader nor the node's
+    /// owner can see the other end of (#349, ONTOLOGY §14): in no list of
+    /// theirs, and still part of what a loop is. Told **only to someone
+    /// who may edit the node** (0 for anyone else), never named, and
+    /// theirs to remove together (`EdgeType::is_its_nodes_to_clear`).
+    #[serde(default)]
+    pub links_not_shown: u32,
 }
 
 impl std::ops::Deref for ViewedNode {
@@ -176,6 +183,7 @@ mod viewed_node_tests {
         let viewed = ViewedNode {
             node: node.clone(),
             blocked_by: 2,
+            links_not_shown: 3,
         };
         let wire = serde_json::to_value(&viewed).expect("json");
         assert_eq!(wire["blocked_by"], 2);
@@ -194,6 +202,9 @@ mod viewed_node_tests {
         let old: ViewedNode =
             serde_json::from_value(serde_json::to_value(&node).expect("json")).expect("old");
         assert_eq!(old.blocked_by, 0);
+        // Nor does it claim a link not shown.
+        assert_eq!(old.links_not_shown, 0);
+        assert_eq!(back.links_not_shown, 3);
     }
 }
 

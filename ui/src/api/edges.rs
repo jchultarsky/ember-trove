@@ -1,12 +1,12 @@
 use common::{
     edge::{
-        ConvertEdgeRequest, CreateEdgeRequest, Edge, EdgeType, EdgeWithTitles, NodeHome,
-        SetHomeRequest,
+        ConvertEdgeRequest, CreateEdgeRequest, Edge, EdgeType, EdgeWithTitles, LinksCleared,
+        NodeHome, SetHomeRequest,
     },
     id::{EdgeId, NodeId},
 };
 
-use super::{delete_empty, get_json, post_empty, post_json, put_json};
+use super::{delete_empty, delete_json, get_json, post_empty, post_json, put_json};
 use crate::error::UiError;
 
 pub async fn fetch_edges_for_node(node_id: NodeId) -> Result<Vec<EdgeWithTitles>, UiError> {
@@ -17,6 +17,13 @@ pub async fn fetch_edges_for_node(node_id: NodeId) -> Result<Vec<EdgeWithTitles>
 /// wait for in turn, as far as the caller can see.
 pub async fn fetch_blockers(node_id: NodeId) -> Result<common::blockers::NodeBlockers, UiError> {
     get_json(&format!("/nodes/{node_id}/blockers")).await
+}
+
+/// `DELETE /nodes/{id}/edges/not-shown` (#349): remove the node's links
+/// that neither the caller nor its owner is shown. The answer says how
+/// many went and how many are still not shown.
+pub async fn remove_links_not_shown(node_id: NodeId) -> Result<LinksCleared, UiError> {
+    delete_json(&format!("/nodes/{node_id}/edges/not-shown")).await
 }
 
 pub async fn fetch_backlinks(node_id: NodeId) -> Result<Vec<common::node::Node>, UiError> {

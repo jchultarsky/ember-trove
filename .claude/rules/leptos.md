@@ -334,6 +334,14 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     control: it is not this node's link.
   - The chip is `task_row_scaffold::blocked_chip` / `BLOCKED_CHIP`: one
     look for a task, a node and a card. Neutral, never a warm colour.
+- **Links not shown** (#349): the page keeps one
+  `RwSignal<u32>` (`links_not_shown` in `NodeView`), set from
+  `ViewedNode::links_not_shown` and then from what the remove answers.
+  The header's `LinksNotShownChip` and the line in `ConnectionsPanel`
+  (`not_shown_line`) both read it. The server sends 0 to anyone who may
+  not edit the node, so neither asks about rights. The line sits
+  outside the list's `<Suspense>`: it must show beside "No connections
+  yet". The confirmation is `data_health_view::InlineConfirm`.
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before
