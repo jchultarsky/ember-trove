@@ -3,9 +3,10 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-17)
+## Current state (2026-11-18)
 
-- **Task moves between accounts** (#351; owner decision 2026-11-18):
+- **v3.29.1 shipped: task moves between accounts** (#351, PR #352;
+  owner decision 2026-11-18):
   only the owner of the Project a task is on moves it to another
   person's Project (`require_owner_to_move_out`); an editor still moves
   it between Projects of one account. Closes the two gaps the review of
