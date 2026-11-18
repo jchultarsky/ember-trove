@@ -414,6 +414,7 @@ details.
 | POST | `/api/people` | Create. An email address that another of the caller's people already lists refuses it: **409** with `matches` (those people: id, name, their spelling of the address). The same address twice on one person is **422**. "The same address" ignores the spaces around it and ASCII case. `?confirm=true` no longer saves anyway |
 | GET / PUT / DELETE | `/api/people/{id}` | Read, replace or delete one of the caller's people (deleting removes their memberships). PUT answers the same **409** for an address *added* that another of the caller's people lists; one the person already had never refuses it |
 | GET | `/api/people/{id}/usages` | "Used in": the nodes a person appears on, with their role |
+| GET | `/api/people/{id}/mentions` | "Mentioned in": the nodes whose body or notes mention one of the caller's people (`@[name](person:id)` in the text), among those the caller can open. Another account's person is a 404 |
 | GET | `/api/people/roles` | The caller's roles with counts (suggestions) |
 | GET | `/api/nodes/{id}/people` | A node's people, redacted per viewer |
 | POST | `/api/nodes/{id}/people` | Add one of the caller's people to a node (the node's owner only; the node must be a Project, else **422**) |

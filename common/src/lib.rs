@@ -53,6 +53,7 @@ pub mod id;
 pub mod inbox;
 pub mod keyboard;
 pub mod markdown;
+pub mod mention;
 pub mod metrics;
 pub mod node;
 pub mod node_link;

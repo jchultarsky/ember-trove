@@ -5607,6 +5607,13 @@ async fn seed_two_accounts(pool: &PgPool) -> (uuid::Uuid, uuid::Uuid, uuid::Uuid
             ('{b_node}', '{b}', 'b on b', NULL, NULL)"),
         format!("INSERT INTO captures (owner_id, body) VALUES ('{a}', 'a'), ('{b}', 'b')"),
         format!("INSERT INTO people (owner_id, display_name) VALUES ('{a}', 'pa'), ('{b}', 'pb')"),
+        // Mentions (S9): each account's person on the shared node of each,
+        // and in each note its author's person.
+        format!("INSERT INTO node_mentions (node_id, person_id)
+            SELECT v.n, p.id FROM (VALUES ('{b_node}'::uuid), ('{a_shared}'::uuid)) v(n), people p"),
+        "INSERT INTO note_mentions (note_id, person_id)
+            SELECT nn.id, p.id FROM node_notes nn JOIN people p ON p.owner_id = nn.owner_id"
+            .to_string(),
         format!("INSERT INTO activity_log (node_id, subject_id, action, metadata) VALUES
             ('{b_node}', '{a}', 'edited', '{{\"actor_name\": \"Ann\", \"actor_email\": \"ann@example.com\"}}'),
             ('{b_node}', '{b}', 'shared', '{{\"actor_name\": \"Bo\", \"subject_id\": \"{a}\", \"role\": \"editor\"}}'),
@@ -5749,6 +5756,8 @@ async fn purging_an_account_removes_only_its_data(pool: PgPool) {
         ("SELECT count(*) FROM node_tasks", 2), // b on b, handed over
         ("SELECT count(*) FROM captures", 1),
         ("SELECT count(*) FROM people", 1),
+        ("SELECT count(*) FROM node_mentions", 1), // B's person on B's node
+        ("SELECT count(*) FROM note_mentions", 1), // in B's note on B's node
         ("SELECT count(*) FROM tags", 1),
         ("SELECT count(*) FROM node_templates", 1),
         ("SELECT count(*) FROM search_presets", 1),
@@ -14669,4 +14678,754 @@ async fn a_task_chain_is_walked_only_through_tasks_its_reader_is_shown(pool: PgP
         .await
         .expect("counts");
     assert_eq!(counted, vec![(project, 7)]);
+}
+
+// ── Mentions of people in text (S9, #360; ONTOLOGY §7.3, §14) ──────────────
+
+mod mentions {
+    use super::super::mention::{MentionRepo, PgMentionRepo};
+    use super::super::person::{PersonRepo, PgPersonRepo};
+    use super::*;
+    use common::id::{NodeId, NoteId, PersonId};
+    use common::mention::{MentionName, mention_token};
+    use common::note::{CreateNoteRequest, UpdateNoteRequest};
+    use common::permission::{GrantPermissionRequest, Permission, PermissionRole};
+    use common::person::Person;
+    use uuid::Uuid;
+
+    // Fixture helpers; see `create_node`.
+    #[allow(clippy::expect_used)]
+    async fn someone(pool: &PgPool, owner: &str, name: &str) -> Person {
+        PgPersonRepo::new(pool.clone())
+            .create(owner, &person(name, None))
+            .await
+            .expect("person")
+    }
+
+    fn token(p: &Person) -> String {
+        mention_token(&p.display_name, p.id)
+    }
+
+    /// An owned node with no mention in it.
+    async fn a_node(pool: &PgPool, owner: &str, title: &str) -> NodeId {
+        let node = create_node(pool, owner, title).await;
+        own(pool, node.id, owner).await;
+        node.id
+    }
+
+    #[allow(clippy::expect_used)]
+    async fn share(pool: &PgPool, node: NodeId, owner: &str, with: &str) -> Permission {
+        PgPermissionRepo::new(pool.clone())
+            .grant(
+                node,
+                owner,
+                GrantPermissionRequest {
+                    subject_id: with.to_string(),
+                    role: PermissionRole::Editor,
+                },
+            )
+            .await
+            .expect("share")
+    }
+
+    async fn save_body(
+        pool: &PgPool,
+        node: NodeId,
+        by: &str,
+        body: &str,
+    ) -> Result<Node, EmberTroveError> {
+        PgNodeRepo::new(pool.clone())
+            .update(
+                node,
+                common::node::UpdateNodeRequest {
+                    title: None,
+                    body: Some(body.to_string()),
+                    metadata: None,
+                    status: None,
+                    project_status: None,
+                    expected_updated_at: None,
+                },
+                &actor(by),
+            )
+            .await
+    }
+
+    #[allow(clippy::expect_used)]
+    async fn a_note(pool: &PgPool, node: NodeId, by: &str, body: &str) -> NoteId {
+        PgNoteRepo::new(pool.clone())
+            .create(
+                node,
+                by,
+                CreateNoteRequest {
+                    body: body.to_string(),
+                    color: "default".to_string(),
+                },
+            )
+            .await
+            .expect("note")
+            .id
+    }
+
+    #[allow(clippy::expect_used)]
+    async fn body_rows(pool: &PgPool, node: NodeId) -> Vec<PersonId> {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT person_id FROM node_mentions WHERE node_id = $1 ORDER BY person_id",
+        )
+        .bind(node.0)
+        .fetch_all(pool)
+        .await
+        .expect("rows")
+        .into_iter()
+        .map(PersonId)
+        .collect()
+    }
+
+    #[allow(clippy::expect_used)]
+    async fn note_rows(pool: &PgPool, note: NoteId) -> Vec<PersonId> {
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT person_id FROM note_mentions WHERE note_id = $1 ORDER BY person_id",
+        )
+        .bind(note.0)
+        .fetch_all(pool)
+        .await
+        .expect("rows")
+        .into_iter()
+        .map(PersonId)
+        .collect()
+    }
+
+    fn sorted(mut ids: Vec<PersonId>) -> Vec<PersonId> {
+        ids.sort();
+        ids
+    }
+
+    /// (name, mine), as a reader is told.
+    fn told(names: Vec<MentionName>) -> Vec<(String, bool)> {
+        names
+            .into_iter()
+            .map(|n| (n.display_name, n.mine))
+            .collect()
+    }
+
+    #[allow(clippy::expect_used)]
+    async fn body_names(pool: &PgPool, node: NodeId, reader: &str) -> Vec<(String, bool)> {
+        told(
+            PgMentionRepo::new(pool.clone())
+                .for_node(node, reader)
+                .await
+                .expect("names"),
+        )
+    }
+
+    #[allow(clippy::expect_used)]
+    async fn note_names(pool: &PgPool, note: NoteId, reader: &str) -> Vec<(String, bool)> {
+        told(
+            PgMentionRepo::new(pool.clone())
+                .for_notes(&[note], reader)
+                .await
+                .expect("names")
+                .remove(&note)
+                .unwrap_or_default(),
+        )
+    }
+
+    /// SECURITY, rule 1: a row is made only for a person of the account
+    /// saving the text. A person's id is no secret, so a token with
+    /// someone else's id, or nobody's, must leave no trace: without a row
+    /// nobody is named.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_mention_row_is_made_only_for_the_savers_own_person(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let bo = someone(&pool, "bob", "Bo").await;
+        let nobody = mention_token("Nobody", PersonId(Uuid::new_v4()));
+        let text = format!("{} {} {nobody}", token(&ada), token(&bo));
+
+        // On a save.
+        let node = a_node(&pool, "alice", "Minutes").await;
+        save_body(&pool, node, "alice", &text).await.expect("save");
+        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+        // On a create (also a duplicate, and a capture made into a node).
+        let made = PgNodeRepo::new(pool.clone())
+            .create(
+                "bob",
+                CreateNodeRequest {
+                    body: Some(text.clone()),
+                    ..node_req("Bob's copy")
+                },
+            )
+            .await
+            .expect("create");
+        assert_eq!(body_rows(&pool, made.id).await, [bo.id]);
+        // In a note.
+        let note = a_note(&pool, node, "alice", &text).await;
+        assert_eq!(note_rows(&pool, note).await, [ada.id]);
+        // The same person twice in a text is one row.
+        let twice = format!("{0} and again {0}", token(&ada));
+        save_body(&pool, node, "alice", &twice).await.expect("save");
+        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+    }
+
+    /// SECURITY: the saver, not the node's owner, is whose people count.
+    /// An editor who types the owner's person's token (they can read the
+    /// id in a shared Project's People list) makes nothing.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn an_editor_cannot_make_a_mention_of_the_owners_person(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Shared plan").await;
+        share(&pool, node, "alice", "bob").await;
+
+        save_body(&pool, node, "bob", &token(&ada))
+            .await
+            .expect("save");
+        assert_eq!(body_rows(&pool, node).await, []);
+        assert_eq!(body_names(&pool, node, "bob").await, []);
+        assert_eq!(body_names(&pool, node, "alice").await, []);
+        let note = a_note(&pool, node, "bob", &token(&ada)).await;
+        assert_eq!(note_rows(&pool, note).await, []);
+        // The owner saving the same text makes it real.
+        save_body(&pool, node, "alice", &token(&ada))
+            .await
+            .expect("save");
+        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+    }
+
+    /// A co-editor's save keeps the mentions already there and adds their
+    /// own. Each reader is told the names; only a person's owner is told
+    /// "mine" (the page then links to their card).
+    #[sqlx::test(migrations = "../migrations")]
+    async fn an_editors_save_keeps_the_owners_mention(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let bo = someone(&pool, "bob", "Bo").await;
+        let node = a_node(&pool, "alice", "Shared plan").await;
+        share(&pool, node, "alice", "bob").await;
+
+        save_body(&pool, node, "alice", &token(&ada))
+            .await
+            .expect("save");
+        let both = format!("{} with {}", token(&ada), token(&bo));
+        save_body(&pool, node, "bob", &both).await.expect("save");
+        assert_eq!(
+            body_rows(&pool, node).await,
+            sorted(vec![ada.id, bo.id]),
+            "the owner's row was kept and the editor's added"
+        );
+        assert_eq!(
+            body_names(&pool, node, "alice").await,
+            [("Ada".to_string(), true), ("Bo".to_string(), false)]
+        );
+        assert_eq!(
+            body_names(&pool, node, "bob").await,
+            [("Ada".to_string(), false), ("Bo".to_string(), true)]
+        );
+        // A save that leaves the body alone leaves the rows alone.
+        PgNodeRepo::new(pool.clone())
+            .update(node, status_upd(None, None), &actor("bob"))
+            .await
+            .expect("title-less save");
+        assert_eq!(body_rows(&pool, node).await.len(), 2);
+    }
+
+    /// A token taken out takes its row. Put back by someone who is not
+    /// the person's owner, it is plain text until the owner saves: it can
+    /// understate, never reveal.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_token_taken_out_takes_its_row(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Shared plan").await;
+        share(&pool, node, "alice", "bob").await;
+        save_body(&pool, node, "alice", &token(&ada))
+            .await
+            .expect("save");
+
+        save_body(&pool, node, "bob", "no mention now")
+            .await
+            .expect("save");
+        assert_eq!(body_rows(&pool, node).await, []);
+        save_body(&pool, node, "bob", &token(&ada))
+            .await
+            .expect("save");
+        assert_eq!(body_rows(&pool, node).await, [], "put back by an editor");
+        save_body(&pool, node, "alice", &token(&ada))
+            .await
+            .expect("save");
+        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+        // Inside code it is not a mention at all.
+        let coded = format!("`{}`", token(&ada));
+        save_body(&pool, node, "alice", &coded).await.expect("save");
+        assert_eq!(body_rows(&pool, node).await, []);
+    }
+
+    /// SECURITY: a body's rows and a note's never stand in for each other.
+    /// Otherwise an editor could copy the owner's mention out of a note
+    /// into the body and have it "kept".
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_body_mention_is_never_made_from_a_notes(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Shared plan").await;
+        share(&pool, node, "alice", "bob").await;
+        let note = a_note(&pool, node, "alice", &token(&ada)).await;
+        assert_eq!(note_rows(&pool, note).await, [ada.id]);
+
+        save_body(&pool, node, "bob", &token(&ada))
+            .await
+            .expect("save");
+        assert_eq!(body_rows(&pool, node).await, []);
+        // And the other way: the owner's body mention is not a note's.
+        save_body(&pool, node, "alice", &token(&ada))
+            .await
+            .expect("save");
+        let bobs = a_note(&pool, node, "bob", &token(&ada)).await;
+        assert_eq!(note_rows(&pool, bobs).await, []);
+        // The body's sync left the note's row alone.
+        assert_eq!(note_rows(&pool, note).await, [ada.id]);
+    }
+
+    /// A note has one writer, its author: its rows are the author's
+    /// people, on whoever's node it sits, and follow its edits.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_note_mention_is_its_authors_person_only(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let bo = someone(&pool, "bob", "Bo").await;
+        let cy = someone(&pool, "bob", "Cy").await;
+        let node = a_node(&pool, "alice", "Shared plan").await;
+        share(&pool, node, "alice", "bob").await;
+
+        let note = a_note(
+            &pool,
+            node,
+            "bob",
+            &format!("{} {}", token(&bo), token(&ada)),
+        )
+        .await;
+        assert_eq!(note_rows(&pool, note).await, [bo.id]);
+        let edited = PgNoteRepo::new(pool.clone())
+            .update(
+                note,
+                note_actor("bob"),
+                UpdateNoteRequest {
+                    body: format!("now {}", token(&cy)),
+                    color: "default".to_string(),
+                },
+            )
+            .await
+            .expect("edit");
+        assert_eq!(edited.id, note);
+        assert_eq!(note_rows(&pool, note).await, [cy.id]);
+        assert_eq!(
+            note_names(&pool, note, "alice").await,
+            [("Cy".to_string(), false)]
+        );
+    }
+
+    /// SECURITY, rule 2: a person is named to another reader only while
+    /// the person's owner can still open the node. Bob mentions his own
+    /// contact in Alice's node and then loses access: Alice must not go on
+    /// reading that contact's current name, through every rename.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_person_is_named_only_while_their_owner_sees_the_node(pool: PgPool) {
+        let bo = someone(&pool, "bob", "Bo").await;
+        let node = a_node(&pool, "alice", "Shared plan").await;
+        let grant = share(&pool, node, "alice", "bob").await;
+        share(&pool, node, "alice", "carol").await;
+        save_body(&pool, node, "bob", &token(&bo))
+            .await
+            .expect("save");
+        let note = a_note(&pool, node, "bob", &token(&bo)).await;
+
+        for reader in ["alice", "carol"] {
+            assert_eq!(
+                body_names(&pool, node, reader).await,
+                [("Bo".to_string(), false)],
+                "{reader}"
+            );
+            assert_eq!(
+                note_names(&pool, note, reader).await,
+                [("Bo".to_string(), false)],
+                "{reader}"
+            );
+        }
+        // A rename shows, while he is there.
+        PgPersonRepo::new(pool.clone())
+            .update("bob", bo.id, &person("Bo Renamed", None))
+            .await
+            .expect("rename");
+        assert_eq!(
+            body_names(&pool, node, "alice").await,
+            [("Bo Renamed".to_string(), false)]
+        );
+
+        PgPermissionRepo::new(pool.clone())
+            .revoke(grant.id, node)
+            .await
+            .expect("revoke");
+        for reader in ["alice", "carol"] {
+            assert_eq!(body_names(&pool, node, reader).await, [], "{reader}");
+            assert_eq!(note_names(&pool, note, reader).await, [], "{reader}");
+        }
+        // The rows are still there: shared again, he is named again.
+        share(&pool, node, "alice", "bob").await;
+        assert_eq!(body_names(&pool, node, "alice").await.len(), 1);
+    }
+
+    /// A note in the trash names nobody and is in no "Mentioned in";
+    /// restored, it is back.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_note_in_the_trash_names_nobody(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Minutes").await;
+        let note = a_note(&pool, node, "alice", &token(&ada)).await;
+        let mentions = PgMentionRepo::new(pool.clone());
+        let notes = PgNoteRepo::new(pool.clone());
+        assert_eq!(note_names(&pool, note, "alice").await.len(), 1);
+        assert_eq!(
+            mentions
+                .mentioned_in(ada.id, Some("alice"))
+                .await
+                .expect("list")
+                .len(),
+            1
+        );
+
+        notes
+            .delete(note, note_actor("alice"))
+            .await
+            .expect("trash");
+        assert_eq!(note_names(&pool, note, "alice").await, []);
+        assert_eq!(
+            mentions
+                .mentioned_in(ada.id, Some("alice"))
+                .await
+                .expect("list"),
+            []
+        );
+        notes
+            .restore(note, note_actor("alice"))
+            .await
+            .expect("restore");
+        assert_eq!(note_names(&pool, note, "alice").await.len(), 1);
+    }
+
+    /// "Mentioned in" lists only nodes its reader can open, and says
+    /// nothing of the rest: no count, no gap. An admin may open every
+    /// node.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn mentioned_in_lists_only_what_its_reader_sees(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let mine = a_node(&pool, "alice", "Alpha minutes").await;
+        save_body(&pool, mine, "alice", &token(&ada))
+            .await
+            .expect("save");
+        a_note(&pool, mine, "alice", &token(&ada)).await;
+        a_note(&pool, mine, "alice", &token(&ada)).await;
+        let binned = a_note(&pool, mine, "alice", &token(&ada)).await;
+        PgNoteRepo::new(pool.clone())
+            .delete(binned, note_actor("alice"))
+            .await
+            .expect("trash");
+        // Bob's node, where Alice wrote while it was shared with her.
+        let bobs = a_node(&pool, "bob", "Bob's plan").await;
+        let grant = share(&pool, bobs, "bob", "alice").await;
+        a_note(&pool, bobs, "alice", &token(&ada)).await;
+
+        let mentions = PgMentionRepo::new(pool.clone());
+        let list = |reader: Option<&'static str>| {
+            let mentions = &mentions;
+            async move {
+                mentions
+                    .mentioned_in(ada.id, reader)
+                    .await
+                    .expect("list")
+                    .into_iter()
+                    .map(|m| (m.node_title, m.in_body, m.notes))
+                    .collect::<Vec<_>>()
+            }
+        };
+        let alpha = ("Alpha minutes".to_string(), true, 2);
+        let plan = ("Bob's plan".to_string(), false, 1);
+        assert_eq!(list(Some("alice")).await, [alpha.clone(), plan.clone()]);
+
+        PgPermissionRepo::new(pool.clone())
+            .revoke(grant.id, bobs)
+            .await
+            .expect("revoke");
+        assert_eq!(
+            list(Some("alice")).await,
+            std::slice::from_ref(&alpha),
+            "exactly what she can open, and nothing about the rest"
+        );
+        assert_eq!(list(None).await, [alpha, plan], "an admin");
+        // Someone else's view of her person finds nothing she didn't share.
+        assert_eq!(list(Some("carol")).await, []);
+    }
+
+    /// The rows are written in the transaction that writes the text: a
+    /// sync that fails fails the save, and the body is as it was. (A row
+    /// left behind by a save whose sync was lost would name a person their
+    /// owner had taken out.)
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_failed_sync_fails_the_save(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Minutes").await;
+        let note = a_note(&pool, node, "alice", "first words").await;
+        for table in ["node_mentions", "note_mentions"] {
+            sqlx::query(&format!("ALTER TABLE {table} RENAME TO {table}_gone"))
+                .execute(&pool)
+                .await
+                .expect("break the sync");
+        }
+
+        assert!(save_body(&pool, node, "alice", &token(&ada)).await.is_err());
+        let body: Option<String> = sqlx::query_scalar("SELECT body FROM nodes WHERE id = $1")
+            .bind(node.0)
+            .fetch_one(&pool)
+            .await
+            .expect("body");
+        assert_eq!(body.as_deref(), Some("pg test body"));
+
+        let edit = PgNoteRepo::new(pool.clone())
+            .update(
+                note,
+                note_actor("alice"),
+                UpdateNoteRequest {
+                    body: token(&ada),
+                    color: "default".to_string(),
+                },
+            )
+            .await;
+        assert!(edit.is_err());
+        let words: String = sqlx::query_scalar("SELECT body FROM node_notes WHERE id = $1")
+            .bind(note.0)
+            .fetch_one(&pool)
+            .await
+            .expect("note");
+        assert_eq!(words, "first words");
+        // And no new node or note is made without its rows.
+        let made = PgNodeRepo::new(pool.clone())
+            .create("alice", node_req("Not made"))
+            .await;
+        assert!(made.is_err());
+        let n: i64 = scalar(&pool, "SELECT count(*) FROM nodes WHERE title = 'Not made'").await;
+        assert_eq!(n, 0);
+    }
+
+    /// A person deleted while a text that mentions them is being saved
+    /// costs the save nothing: the mention is simply not recorded. Without
+    /// the lock on the people read, the insert's foreign key would fail
+    /// and take the body's save down with it.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_person_deleted_during_a_save_loses_no_save(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Minutes").await;
+        // The delete is under way and not yet committed.
+        let mut deleting = pool.begin().await.unwrap();
+        sqlx::query("DELETE FROM people WHERE id = $1")
+            .bind(ada.id.0)
+            .execute(&mut *deleting)
+            .await
+            .unwrap();
+        let saving = {
+            let (pool, text) = (pool.clone(), format!("met {}", token(&ada)));
+            tokio::spawn(async move { save_body(&pool, node, "alice", &text).await })
+        };
+        let mut waiting = 0;
+        for _ in 0..400 {
+            waiting = scalar(
+                &pool,
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            )
+            .await;
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(waiting, 1, "the save never met the delete");
+        deleting.commit().await.unwrap();
+
+        let saved = saving.await.expect("join").expect("the save lands");
+        assert!(saved.body.unwrap_or_default().starts_with("met "));
+        assert_eq!(body_rows(&pool, node).await, []);
+    }
+
+    /// The cascades: a deleted person, node or note takes its rows.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_deleted_person_node_or_note_takes_its_rows(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let bea = someone(&pool, "alice", "Bea").await;
+        let both = format!("{} {}", token(&ada), token(&bea));
+        let node = a_node(&pool, "alice", "Minutes").await;
+        save_body(&pool, node, "alice", &both).await.expect("save");
+        let note = a_note(&pool, node, "alice", &both).await;
+        let other = a_node(&pool, "alice", "Other").await;
+        save_body(&pool, other, "alice", &both).await.expect("save");
+
+        PgPersonRepo::new(pool.clone())
+            .delete("alice", ada.id)
+            .await
+            .expect("delete person");
+        assert_eq!(body_rows(&pool, node).await, [bea.id]);
+        assert_eq!(note_rows(&pool, note).await, [bea.id]);
+        // The token is still in the text; nobody is named for it.
+        assert_eq!(
+            body_names(&pool, node, "alice").await,
+            [("Bea".to_string(), true)]
+        );
+
+        sqlx::query("DELETE FROM node_notes WHERE id = $1")
+            .bind(note.0)
+            .execute(&pool)
+            .await
+            .expect("purge note");
+        assert_eq!(note_rows(&pool, note).await, []);
+        PgNodeRepo::new(pool.clone())
+            .delete(node)
+            .await
+            .expect("delete node");
+        let left: i64 = scalar(&pool, "SELECT count(*) FROM node_mentions").await;
+        assert_eq!(left, 1, "the other node's row for Bea");
+    }
+
+    /// A capture made into a note or a node is text being written: its
+    /// mentions are recorded with it, in the conversion's transaction.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_capture_made_into_a_note_or_a_node_has_its_mentions(pool: PgPool) {
+        use super::super::capture::{CaptureRepo, Destination, Made, PgCaptureRepo};
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Minutes").await;
+        let captures = PgCaptureRepo::new(pool.clone());
+        let text = format!("call {}", token(&ada));
+
+        let c = captures
+            .create("alice", &text, common::capture::CaptureColor::Default)
+            .await
+            .expect("capture");
+        let Made::Note(note) = captures
+            .convert(
+                c.id,
+                "alice",
+                Destination::Note {
+                    node_id: node,
+                    req: CreateNoteRequest {
+                        body: text.clone(),
+                        color: "default".to_string(),
+                    },
+                },
+            )
+            .await
+            .expect("convert")
+        else {
+            panic!("a note was asked for");
+        };
+        assert_eq!(note_rows(&pool, note.id).await, [ada.id]);
+
+        let c = captures
+            .create("alice", &text, common::capture::CaptureColor::Default)
+            .await
+            .expect("capture");
+        let Made::Node(made) = captures
+            .convert(
+                c.id,
+                "alice",
+                Destination::Node {
+                    req: CreateNodeRequest {
+                        body: Some(text),
+                        ..node_req("From a capture")
+                    },
+                    home: None,
+                },
+            )
+            .await
+            .expect("convert")
+        else {
+            panic!("a node was asked for");
+        };
+        assert_eq!(body_rows(&pool, made.id).await, [ada.id]);
+    }
+
+    /// A backup holds the mentions, read on its one snapshot, and a
+    /// restore brings back those its own text and people back up: not a
+    /// row slipped into the archive for a text that has no such token.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_restore_brings_back_only_mentions_its_text_holds(pool: PgPool) {
+        use common::mention::BackupMention;
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "alice", "Minutes").await;
+        save_body(&pool, node, "alice", &token(&ada))
+            .await
+            .expect("save");
+        let note = a_note(&pool, node, "alice", &token(&ada)).await;
+        let binned = a_note(&pool, node, "alice", &token(&ada)).await;
+        PgNoteRepo::new(pool.clone())
+            .delete(binned, note_actor("alice"))
+            .await
+            .expect("trash");
+        let plain = a_node(&pool, "alice", "No mention here").await;
+
+        let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+        let mut data = crate::backup::read_snapshot(&mut tx).await.expect("read");
+        drop(tx);
+        // What is in the trash is not backed up, and neither are its rows.
+        assert_eq!(
+            data.mentions,
+            [
+                BackupMention {
+                    node_id: Some(node),
+                    note_id: None,
+                    person_id: ada.id
+                },
+                BackupMention {
+                    node_id: None,
+                    note_id: Some(note),
+                    person_id: ada.id
+                },
+            ]
+        );
+        data.mentions.push(BackupMention {
+            node_id: Some(plain),
+            note_id: None,
+            person_id: ada.id,
+        });
+
+        let mut tx = pool.begin().await.expect("tx");
+        crate::backup::restore_into(&mut tx, &data)
+            .await
+            .expect("restore");
+        tx.commit().await.expect("commit");
+        assert_eq!(body_rows(&pool, node).await, [ada.id]);
+        assert_eq!(note_rows(&pool, note).await, [ada.id]);
+        assert_eq!(body_rows(&pool, plain).await, [], "no text backs it");
+        assert_eq!(
+            body_names(&pool, node, "alice").await,
+            [("Ada".to_string(), true)]
+        );
+    }
+
+    /// Migration 057 on a database at 056: two empty tables, and nothing
+    /// else changed.
+    #[sqlx::test(migrations = false)]
+    async fn migration_057_adds_two_empty_tables(pool: PgPool) {
+        apply_migrations(&pool, |version| version < 57).await;
+        let ada = sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO people (owner_id, display_name) VALUES ('alice', 'Ada') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("a person from before");
+        apply_migrations(&pool, |version| version == 57).await;
+        for table in ["node_mentions", "note_mentions"] {
+            let rows: i64 = scalar(&pool, &format!("SELECT count(*) FROM {table}")).await;
+            assert_eq!(rows, 0, "{table}");
+        }
+        let people: i64 = scalar(&pool, "SELECT count(*) FROM people").await;
+        assert_eq!(people, 1);
+        // A row must name a real person and a real node.
+        let orphan = sqlx::query("INSERT INTO node_mentions (node_id, person_id) VALUES ($1, $2)")
+            .bind(Uuid::new_v4())
+            .bind(ada)
+            .execute(&pool)
+            .await;
+        assert!(orphan.is_err());
+        apply_migrations(&pool, |version| version > 57).await;
+    }
 }

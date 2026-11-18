@@ -316,6 +316,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
     // Project Briefs (#282), all owners, in the same snapshot as their nodes.
     // Which task waits for which (S5d), between the live tasks above.
     let task_dependencies = repo::task_dependency::list_all_on(&mut *conn).await?;
+    let mentions = repo::mention::list_all_on(&mut *conn).await?;
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
     let focus = repo::project_focus::list_all_on(&mut *conn).await?;
@@ -360,6 +361,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         briefs,
         focus: Some(focus),
         task_dependencies,
+        mentions,
     })
 }
 
@@ -1234,6 +1236,25 @@ pub(crate) async fn restore_into(
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert membership failed: {e}")))?;
+    }
+    // Mentions of people in text (S9), after the people, the nodes and
+    // the notes they hang on. Only rows the archive's own text and people
+    // back up (`BackupData::restorable_mentions`).
+    for m in data.restorable_mentions() {
+        let (table, column, id) = match (m.node_id, m.note_id) {
+            (Some(node), None) => ("node_mentions", "node_id", node.0),
+            (None, Some(note)) => ("note_mentions", "note_id", note.0),
+            _ => continue,
+        };
+        // SECURITY: `table` and `column` are the two literals above.
+        sqlx::query(&format!(
+            "INSERT INTO {table} ({column}, person_id) VALUES ($1, $2) ON CONFLICT DO NOTHING"
+        ))
+        .bind(id)
+        .bind(m.person_id.0)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("insert mention failed: {e}")))?;
     }
 
     restore_account_settings(conn, data).await?;

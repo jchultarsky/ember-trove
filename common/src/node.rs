@@ -145,6 +145,12 @@ pub struct ViewedNode {
     /// theirs to remove together (`EdgeType::is_its_nodes_to_clear`).
     #[serde(default)]
     pub links_not_shown: u32,
+    /// The people the body mentions, as this reader may know them (S9,
+    /// `mention::MentionName`): the name, and whether the person is the
+    /// reader's own. A mention whose person is not here shows as
+    /// unresolved.
+    #[serde(default)]
+    pub mentions: Vec<crate::mention::MentionName>,
 }
 
 impl std::ops::Deref for ViewedNode {
@@ -181,6 +187,7 @@ mod viewed_node_tests {
         }))
         .expect("a node");
         let viewed = ViewedNode {
+            mentions: Vec::new(),
             node: node.clone(),
             blocked_by: 2,
             links_not_shown: 3,

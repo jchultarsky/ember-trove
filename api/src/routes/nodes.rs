@@ -562,10 +562,16 @@ async fn get_node(
         Err(ApiError::Forbidden(_)) => 0,
         Err(e) => return Err(e),
     };
+    // The people the body mentions (S9). SECURITY: read after the check
+    // above, and for the caller in person, an admin included: a name is
+    // given only with text its reader may read, and only while the
+    // person's owner can still open this node.
+    let mentions = state.mentions.for_node(node.id, &claims.sub).await?;
     Ok(Json(ViewedNode {
         node,
         blocked_by,
         links_not_shown,
+        mentions,
     }))
 }
 

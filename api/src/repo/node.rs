@@ -1055,11 +1055,16 @@ fn parse_project_state(s: &str) -> Result<ProjectState, EmberTroveError> {
     super::parse_wire(s, "project_state", ProjectState::parse)
 }
 
-/// Insert a node (`NodeRepo::create`), on any executor, so capture
+/// Insert a node (`NodeRepo::create`), on a connection, so capture
 /// conversion (#234) can do it inside its transaction. A taken slug or
 /// title is `AlreadyExists` (409).
-pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
-    ex: E,
+///
+/// The body's mentions are recorded here, by the same connection (S9):
+/// one of the four statements that write text. Call it inside a
+/// transaction, so the node and its mention rows land together. The
+/// creator is the one saving, so only their own people are recorded.
+pub(crate) async fn insert_node(
+    conn: &mut sqlx::PgConnection,
     owner_id: &str,
     req: &CreateNodeRequest,
 ) -> Result<Node, EmberTroveError> {
@@ -1089,7 +1094,7 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
     .bind(status_str)
     .bind(&req.project_status)
     .bind(state)
-    .fetch_one(ex)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|e| match &e {
         sqlx::Error::Database(db_err) if db_err.constraint() == Some("nodes_slug_key") => {
@@ -1103,7 +1108,15 @@ pub(crate) async fn insert_node<'e, E: sqlx::PgExecutor<'e>>(
         _ => EmberTroveError::Internal(format!("create node failed: {e}")),
     })?;
 
-    row.into_node()
+    let node = row.into_node()?;
+    super::mention::sync_body_on(
+        conn,
+        node.id,
+        node.body.as_deref().unwrap_or_default(),
+        owner_id,
+    )
+    .await?;
+    Ok(node)
 }
 
 /// Every node with its tags, all owners. A free function so the backup can run it on its one
@@ -1150,7 +1163,11 @@ impl NodeRepo for PgNodeRepo {
         owner_id: &str,
         req: CreateNodeRequest,
     ) -> Result<Node, EmberTroveError> {
-        insert_node(&self.pool, owner_id, &req).await
+        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("create node failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let node = insert_node(&mut tx, owner_id, &req).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(node)
     }
 
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
@@ -1451,6 +1468,21 @@ impl NodeRepo for PgNodeRepo {
                 &actor.subject_id,
                 ActivityAction::LifecycleChanged,
                 meta,
+            )
+            .await?;
+        }
+
+        // S9: the body's mentions, in this transaction. One of the four
+        // statements that write text. The saver is the account making
+        // this save: a co-editor's save keeps the mentions already
+        // there and can add only their own people. A save that leaves
+        // the body alone leaves the rows alone.
+        if req.body.is_some() {
+            super::mention::sync_body_on(
+                &mut tx,
+                id,
+                row.body.as_deref().unwrap_or_default(),
+                &actor.subject_id,
             )
             .await?;
         }
