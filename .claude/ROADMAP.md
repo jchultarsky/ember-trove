@@ -5,6 +5,27 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-17)
 
+- **v3.28.0 shipped: S7b, blockers** (#346, PRs #347 and #348;
+  ONTOLOGY §6.4, §9.3, §14). Display only: what a node or a task waits
+  for, never enforced. Owner decisions (2026-11-17): a blocked Project
+  says so on its page and its dashboard and Focus card; the card also
+  counts its blocked tasks; a link the source's owner isn't shown gets
+  its own release right after. No migration, no backup change, no new
+  write path. PR 1 (rules and API): `common::blockers`
+  (`satisfies_dependency`, `still_waits`, `is_blocked`, `passes_on`,
+  `chain`), `ViewedNode.blocked_by`, `GET /nodes/{id}/blockers`, the
+  cards' `blocked_by` and `blocked_tasks`, `TaskDependencies.also`. PR 2
+  (the app): the "Blocked" chip on the page and the cards, "Met" or the
+  state on "Depends on" rows, "Further down the chain" under them and
+  in the task editor. **Next, by the owner's decision:** a node's
+  editors are told how many of its links they aren't shown and may
+  remove them (the gap described under "Blockers" in
+  `.claude/rules/api.md`). **Not in this slice:** a "Blocked" chip in
+  the node list or the graph; the calendar's task rows. Rules:
+  "Blockers" in `.claude/rules/api.md`; "Blockers on the page" and
+  "Never read a `LocalResource` inside a `Memo`" in
+  `.claude/rules/leptos.md`.
+
 - **v3.27.1 shipped: "Add Edge" is offered only to someone who may add
   a link** (PR #345; owner decision of 2026-11-17, after the review of
   S7a). Connections showed the add form to every reader, and a viewer

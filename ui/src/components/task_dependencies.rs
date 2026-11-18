@@ -62,6 +62,10 @@ fn LinkRow(
     /// Remove the link; `None` where the reader may not, and for "Blocks".
     #[prop(optional_no_strip)]
     on_remove: Option<Callback<TaskId>>,
+    /// For a task further down the chain (S7b): the edited task's own
+    /// prerequisite it comes through.
+    #[prop(optional_no_strip)]
+    through: Option<String>,
     #[prop(into)] busy: Signal<bool>,
 ) -> impl IntoView {
     let navigate = StoredValue::new(use_navigate());
@@ -118,6 +122,12 @@ fn LinkRow(
                 <span class="flex-shrink-0 max-w-[10rem] truncate text-stone-400 dark:text-stone-500"
                     data-testid="dependency-project">
                     {project}
+                </span>
+            })}
+            {through.map(|via| view! {
+                <span class="min-w-0 truncate text-stone-400 dark:text-stone-500"
+                    data-testid="dependency-through">
+                    {format!("through {via}")}
                 </span>
             })}
             <span class="flex-1" />
@@ -589,6 +599,14 @@ pub fn TaskDependenciesSection(
             _ => (Vec::new(), Vec::new()),
         })
     });
+    // What the prerequisites wait for in turn (S7b), and whether the
+    // chain goes on past what was read.
+    let further = Memo::new(move |_| {
+        deps.with(|d| match d {
+            Some(Ok(found)) => (found.also.clone(), found.also_truncated),
+            _ => (Vec::new(), false),
+        })
+    });
 
     const HEADING: &str =
         "font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400";
@@ -647,6 +665,7 @@ pub fn TaskDependenciesSection(
                                         link=link
                                         own_node=node_id
                                         on_remove=may_edit.then_some(on_remove)
+                                        through=None
                                         busy=busy
                                     />
                                 }).collect_view()}
@@ -681,13 +700,39 @@ pub fn TaskDependenciesSection(
                             busy=busy
                         />
                     })}
+                    // Not this task's own links: shown, never removed here.
+                    {move || {
+                        let (chain, more) = further.get();
+                        (!chain.is_empty() || more).then(|| view! {
+                            <div class=HEADING>"Further down the chain"</div>
+                            <ul class="space-y-0.5" aria-label="Further down the chain"
+                                data-testid="chain-list">
+                                {chain.into_iter().map(|c| view! {
+                                    <LinkRow
+                                        link=c.task
+                                        own_node=node_id
+                                        on_remove=None
+                                        // Plain text, as every linked task's
+                                        // title is: it may be someone else's.
+                                        through=Some(crate::markdown::markdown_inline_plain_text(&c.via_title))
+                                        busy=busy
+                                    />
+                                }).collect_view()}
+                            </ul>
+                            {more.then(|| view! {
+                                <p class="text-stone-400 dark:text-stone-500" data-testid="chain-more">
+                                    "The chain goes on: only its first links are shown."
+                                </p>
+                            })}
+                        })
+                    }}
                     {move || {
                         let links = lists.with(|l| l.1.clone());
                         (!links.is_empty()).then(|| view! {
                             <div class=HEADING>"Blocks"</div>
                             <ul class="space-y-0.5" aria-label="Blocks" data-testid="blocks-list">
                                 {links.into_iter().map(|link| view! {
-                                    <LinkRow link=link own_node=node_id on_remove=None busy=busy />
+                                    <LinkRow link=link own_node=node_id on_remove=None through=None busy=busy />
                                 }).collect_view()}
                             </ul>
                         })

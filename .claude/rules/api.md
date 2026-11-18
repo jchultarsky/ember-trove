@@ -834,7 +834,9 @@ cargo check && cargo clippy -- -D warnings
   direction has exactly one group, so no link is left off the page),
   `grouped` orders it, `live_users` is the archive notice's count.
   Don't add a list route per group, and don't count in the browser from
-  anything but this answer.
+  anything but this answer. (S7b's `GET /nodes/{id}/blockers` is not a
+  group: it is what lies beyond the answer. Its server-side count is
+  held equal to `blockers::direct` of this answer by a test.)
 - **"Live"** is `common::node::is_live(status, project_state)`: not
   archived, and not a complete or cancelled Project. Not "active": that
   is a Project's state. Its SQL is `repo::node::live(alias)`, built from
@@ -865,6 +867,61 @@ cargo check && cargo clippy -- -D warnings
   edit rights on the old target and view rights on the old source; a
   `related_to` has no direction to turn. It is general: any link the
   caller could delete and then make the other way round.
+
+## Blockers (S7b, #346)
+
+- **Display only.** Nothing here writes, prevents or reorders (§6.4).
+  The rules are `common::blockers`: `satisfies_dependency` (the §6.4
+  table), `still_waits` (in use and not itself met), `is_blocked` (it
+  still waits and has an unmet dependency: a Published Article is never
+  "Blocked"), `passes_on` (a chain goes on only through a node that
+  still waits, never an Area), `chain` (generic; tasks use it through
+  `task_dependency::chained`).
+- **The SQL twins are built from the rule's own triples**
+  (`repo::node::satisfies_dependency`, `passes_on`, from
+  `satisfying_triples()` / `passing_triples()`): an `IN` over whole
+  `(kind, status, state)` rows with `COALESCE(project_state, '')`.
+  Never `NOT (state IN (…))`: it is NULL for a node with no state and
+  drops the row. `the_sql_for_a_met_dependency_and_for_going_on_are_the_shared_rules`
+  holds them to the rule.
+- **A walk's row is the link alone**, `(source_id, target_id)`, and its
+  halves are joined with `UNION` (`EdgeRepo::blockers`,
+  `TaskDependencyRepo::chain`). A depth or a path in the row makes every
+  pass a new row, and a legacy loop (a restore keeps one) never ends.
+  The cut (`LIMIT CHAIN_LIMIT + 1`, numbered with `row_number()`)
+  comes before the titles are joined, and the link past the limit is the
+  one dropped: it is the last found, so nothing kept hangs on it. Never
+  trim by the order of the joined rows: that dropped a link from the
+  middle of a long chain. The limit counts the node's own unmet
+  dependencies too.
+- **Every hop checks the reader, and so does the start.** The start's
+  own visibility is in the SQL of all four reads (`blockers`,
+  `blocked_by_for_nodes`, `chain`, `blocked_tasks_for_nodes`), though
+  every route checks it first: a count of links from a hidden node is a
+  link with a hidden end. A link is taken when its target is
+  `visible_to` the reader (tasks: `shown_to`) and not met. The walk
+  stops at a hidden node and shows nothing beyond it, even a node the
+  reader could read: "stops here" and "nothing further" must be one
+  answer. `a_chain_of_blockers_is_walked_only_through_what_its_reader_can_see`
+  checks that every node of a chain hangs on a link the reader finds in
+  that hop's own `list_for_node_with_titles`.
+- **A per-reader count never goes into `Node`.** `GET /nodes/{id}`
+  answers `ViewedNode { node, blocked_by }` (the `ListedTask`
+  precedent). `Node::edge_count` is the cautionary case: only `list`
+  fills it, and the dashboard's internal `list` call runs with no
+  subject.
+- **The cards' counts** (`ProjectDashboardEntry::blocked_by`,
+  `blocked_tasks`) are read in `dashboard_entries` with
+  `subject_scope(claims)`, after its five other reads: a Focus card may
+  be someone else's Project. `blocked_tasks_for_nodes` reuses
+  `blocked_by_count`; the caller has checked the nodes.
+- **Known, older, next release:** a `depends_on` link whose target the
+  source's owner can't see is in no list of theirs and still decides
+  loop refusals (owner decision 2026-11-17: a count and a remove for
+  the node's editors, as `not_shown` gives a task's). With S7b it does
+  one thing more: whoever can see both ends (its maker, an admin,
+  anyone both nodes are shared with) reads the owner's node as blocked,
+  and the owner doesn't. Nothing hidden is shown to anyone.
 
 ## Security rules from the 2026-11-10 audit
 

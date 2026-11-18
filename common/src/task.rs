@@ -351,6 +351,17 @@ pub struct ProjectDashboardEntry {
     /// of the body (retired 2026-11-12).
     #[serde(default)]
     pub brief: Option<crate::brief::ProjectBrief>,
+    /// How many of the Project's own dependencies are not met, among
+    /// those this reader can see (S7b; `ViewedNode::blocked_by`). The
+    /// card says "Blocked" by `blockers::is_blocked`. It never changes
+    /// where the card stands: surfaced, never enforced (§6.4).
+    #[serde(default)]
+    pub blocked_by: u32,
+    /// How many of the Project's tasks still to do wait for a task that
+    /// is not done (S7b, owner decision 2026-11-17): the tasks that say
+    /// "Blocked" in its list, counted for this reader.
+    #[serde(default)]
+    pub blocked_tasks: u32,
 }
 
 /// Why a task can't be made without a Project or taken off its own

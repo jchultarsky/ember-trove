@@ -2,7 +2,7 @@ use common::{
     id::NodeId,
     node::{
         CreateNodeRequest, Node, NodeDeletionPreview, NodeListResponse, NodeSort, NodeTitleEntry,
-        ProjectStatusCount, UpdateNodeRequest,
+        ProjectStatusCount, UpdateNodeRequest, ViewedNode,
     },
     project_state::{DeclareProjectState, ProjectState},
 };
@@ -91,6 +91,12 @@ pub async fn fetch_project_statuses() -> Result<Vec<ProjectStatusCount>, UiError
 }
 
 pub async fn fetch_node(id: NodeId) -> Result<Node, UiError> {
+    get_json(&format!("/nodes/{id}")).await
+}
+
+/// The same answer, read with the count the node's own page shows
+/// (S7b): how many of its dependencies are not met, for this reader.
+pub async fn fetch_viewed_node(id: NodeId) -> Result<ViewedNode, UiError> {
     get_json(&format!("/nodes/{id}")).await
 }
 

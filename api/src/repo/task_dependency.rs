@@ -97,6 +97,30 @@ pub trait TaskDependencyRepo: Send + Sync {
         viewer: Option<&str>,
     ) -> Result<(), EmberTroveError>;
 
+    /// What `task`'s prerequisites wait for in turn (S7b, §9.3), and
+    /// whether there was more than was read. Only through tasks
+    /// `viewer` is shown that still hold back, going on only through
+    /// ones still to do; a hidden or trashed task ends the walk, and
+    /// nothing beyond it is shown. A `task` that `viewer` is not shown
+    /// has no chain, whoever asks: the route checks that too, and this
+    /// doesn't rely on it.
+    async fn chain(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(Vec<common::task_dependency::ChainedTask>, bool), EmberTroveError>;
+
+    /// For each of `node_ids` that has any: how many of its tasks still
+    /// to do wait for a task that is not done (S7b): the rows of its
+    /// task list that say "Blocked" for `viewer`
+    /// ([`blocked_by_count`], the one spelling). A node `viewer` can't
+    /// view gets no count, whoever asks.
+    async fn blocked_tasks_for_nodes(
+        &self,
+        node_ids: &[NodeId],
+        viewer: Option<&str>,
+    ) -> Result<Vec<(NodeId, u32)>, EmberTroveError>;
+
     /// The tasks `subject` could make `task` wait for, matching `q`:
     /// still to do, on a node they own or were given, and not one that
     /// would be refused. `subject` is the person, never an admin's
@@ -130,6 +154,19 @@ pub(crate) fn holds_back_sql(task: &str) -> String {
     let states = holding_back_states()
         .iter()
         .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{task}.status::text IN ({states})")
+}
+
+/// SQL predicate: a chain goes on through the task aliased `task`
+/// (`common::task_dependency::passes_on`): it is still to do. From the
+/// enum, like [`holds_back_sql`].
+pub(crate) fn passes_on_sql(task: &str) -> String {
+    let states = TaskStatus::ALL
+        .iter()
+        .filter(|s| common::task_dependency::passes_on(s))
+        .map(|s| format!("'{}'", s.as_str()))
         .collect::<Vec<_>>()
         .join(", ");
     format!("{task}.status::text IN ({states})")
@@ -291,6 +328,126 @@ impl TaskDependencyRepo for PgTaskDependencyRepo {
         .await
         .map_err(failed)?;
         Ok((links(blocked_by)?, links(blocks)?))
+    }
+
+    async fn chain(
+        &self,
+        task: TaskId,
+        viewer: Option<&str>,
+    ) -> Result<(Vec<common::task_dependency::ChainedTask>, bool), EmberTroveError> {
+        use common::blockers::CHAIN_LIMIT;
+        use common::task_dependency::{TaskHop, chained};
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            /// The link's place in the order the walk found it.
+            n: i64,
+            from_id: Uuid,
+            #[sqlx(flatten)]
+            link: LinkRow,
+        }
+        // As `EdgeRepo::blockers`: the row is the link alone and the
+        // halves are joined with UNION, so a loop ends. A link is taken
+        // when the task it leads to is shown to the reader and still
+        // holds back; the walk starts from a task still to do and goes
+        // on only through such a task.
+        let rows = sqlx::query_as::<_, Row>(&format!(
+            r#"
+            WITH RECURSIVE walk(task_id, depends_on_id) AS (
+                SELECT d.task_id, d.depends_on_id
+                FROM task_dependencies d
+                JOIN node_tasks s ON s.id = d.task_id
+                JOIN nodes sn ON sn.id = s.node_id
+                JOIN node_tasks p ON p.id = d.depends_on_id
+                JOIN nodes pn ON pn.id = p.node_id
+                WHERE d.task_id = $1
+                  AND {s_shown} AND {s_goes_on}
+                  AND {shown} AND {holds}
+              UNION
+                SELECT d.task_id, d.depends_on_id
+                FROM walk w
+                JOIN node_tasks via ON via.id = w.depends_on_id
+                JOIN task_dependencies d ON d.task_id = w.depends_on_id
+                JOIN node_tasks p ON p.id = d.depends_on_id
+                JOIN nodes pn ON pn.id = p.node_id
+                WHERE {via_goes_on}
+                  AND {shown} AND {holds}
+            ),
+            cut AS (
+                SELECT row_number() OVER () AS n, task_id, depends_on_id
+                FROM walk
+                LIMIT $3
+            )
+            SELECT c.n, c.task_id AS from_id, {LINK_COLS}
+            FROM cut c
+            JOIN node_tasks p ON p.id = c.depends_on_id
+            JOIN nodes pn ON pn.id = p.node_id
+            "#,
+            s_shown = shown_to("s", "sn", 2),
+            s_goes_on = passes_on_sql("s"),
+            via_goes_on = passes_on_sql("via"),
+            shown = shown_to("p", "pn", 2),
+            holds = holds_back_sql("p"),
+        ))
+        .bind(task.0)
+        .bind(viewer)
+        .bind(i64::try_from(CHAIN_LIMIT + 1).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("read task chain failed: {e}")))?;
+
+        // The link past the limit is the last one found: it says there
+        // is more and is left out. Trimming by the join's order, which
+        // may differ, could drop a link from the middle of the chain.
+        let limit = i64::try_from(CHAIN_LIMIT).unwrap_or(i64::MAX);
+        let truncated = rows.iter().any(|r| r.n > limit);
+        let hops = rows
+            .into_iter()
+            .filter(|r| r.n <= limit)
+            .map(|r| {
+                Ok(TaskHop {
+                    from: TaskId(r.from_id),
+                    to: r.link.into_link()?,
+                })
+            })
+            .collect::<Result<Vec<_>, EmberTroveError>>()?;
+        Ok((chained(task, hops), truncated))
+    }
+
+    async fn blocked_tasks_for_nodes(
+        &self,
+        node_ids: &[NodeId],
+        viewer: Option<&str>,
+    ) -> Result<Vec<(NodeId, u32)>, EmberTroveError> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids: Vec<Uuid> = node_ids.iter().map(|n| n.0).collect();
+        let rows: Vec<(Uuid, i32)> = sqlx::query_as(&format!(
+            r#"
+            SELECT t.node_id, count(*)::int4
+            FROM node_tasks t
+            JOIN nodes tn ON tn.id = t.node_id
+            WHERE t.node_id = ANY($1)
+              AND {t_shown}
+              AND {goes_on}
+              AND {blocked_by} > 0
+            GROUP BY t.node_id
+            "#,
+            t_shown = shown_to("t", "tn", 2),
+            // Still to do: a finished task is never blocked
+            // (`task_dependency::is_blocked`).
+            goes_on = passes_on_sql("t"),
+            blocked_by = blocked_by_count("t.id", 2),
+        ))
+        .bind(&ids)
+        .bind(viewer)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| EmberTroveError::Internal(format!("blocked tasks failed: {e}")))?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, n)| (NodeId(id), as_count(n)))
+            .collect())
     }
 
     async fn add(&self, task: TaskId, depends_on: TaskId) -> Result<(), EmberTroveError> {

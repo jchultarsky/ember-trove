@@ -54,7 +54,10 @@
 //   v21: reverse indexes (S7a, #342) — a node's links carry each end's
 //        kind and standing and `may_remove`; evicts cached links without
 //        them, which would show no remove control and no "Archived".
-const CACHE_NAME = "ember-trove-v21";
+//   v22: blockers (S7b, #346) — a node's own answer, the dashboard and
+//        Focus cards and a task's dependencies gain fields; evicts
+//        cached answers without them, which would show nothing blocked.
+const CACHE_NAME = "ember-trove-v22";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;
