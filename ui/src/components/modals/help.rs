@@ -269,11 +269,13 @@ const CONCEPTS: &[Concept] = &[
     },
     Concept {
         title: "People",
-        body: "Your own registry of the people you deal with: nobody else sees it. \
-               An email address belongs to one person. Saving a second person with \
-               an address someone already has is refused, and the notice opens the \
-               person who has it. People who shared an address before this rule \
-               stay as they are; Data health lists them.",
+        body: "Your own registry of the people you deal with. Nobody else sees \
+               their details; on a Project you share, others see a person's name \
+               and role only. An email address belongs to one person. Saving a \
+               second person with an address someone already has is refused, and \
+               the notice names who has it, with a way to open them. People who \
+               shared an address before this rule stay as they are; Data health \
+               lists them.",
     },
     Concept {
         title: "Captures",

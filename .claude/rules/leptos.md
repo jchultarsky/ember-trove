@@ -346,10 +346,13 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   address and never offers to save anyway. It navigates with the dialog
   **still open**, so the unmount keeps what was typed as a draft (#170);
   closing first drops it, as every closing does. The rows the refusal is
-  about are marked through `ContactListEditor`'s `flagged` (keys from
-  `common::person::email_key`); a row's input calls `flagged.notify()`
-  so the mark follows what is typed. The same address twice is caught by
-  `listed_twice` before anything is sent.
+  about are marked through `ContactListEditor`'s `flagged` (`Flagged`):
+  a mark is worked out from what the rows hold now (`Flagged::marks`),
+  and a row's input calls `flagged.notify()`, so it goes when the row is
+  put right. The same address twice is caught by `listed_twice` before
+  anything is sent. Both key a typed value with `typed_key`, which trims
+  first, as the API does. After a refusal the keyboard goes to the first
+  marked address.
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before

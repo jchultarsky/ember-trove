@@ -58,9 +58,11 @@ test('the registry: one editor for new and edit, and an address is one person’
     await expect(taken).toContainText(email);
     await expect(dlg.getByRole('button', { name: /anyway/i })).toHaveCount(0);
     await expect(dlg).toBeVisible();
-    // The row that holds the address is marked, until it is changed.
+    // The row that holds the address is marked, until it is changed, and
+    // the keyboard is on it.
     const address = dlg.getByRole('textbox', { name: 'email', exact: true });
     await expect(address).toHaveAttribute('aria-invalid', 'true');
+    await expect(address).toBeFocused();
     await address.fill(`${email}.x`);
     await expect(address).toHaveAttribute('aria-invalid', 'false');
     await address.fill(email);
@@ -100,7 +102,14 @@ test('the registry: one editor for new and edit, and an address is one person’
       );
     }
     expect(sent).toBe(0);
+    await expect(rows.nth(0).getByRole('textbox', { name: 'email', exact: true })).toBeFocused();
+    // One of the two taken off: the other is no longer marked.
     await rows.nth(1).getByRole('button', { name: 'Remove email' }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0).getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute(
+      'aria-invalid',
+      'false',
+    );
 
     // With an address of their own, the same dialog saves.
     await dlg.getByRole('button', { name: 'Save' }).click();
