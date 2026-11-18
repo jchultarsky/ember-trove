@@ -33,7 +33,12 @@ pub trait PersonRepo: Send + Sync {
     /// NotFound unless `owner` owns it (another owner's id is indistinguishable
     /// from a missing one).
     async fn get(&self, owner: &str, id: PersonId) -> Result<Person, EmberTroveError>;
+    /// `AlreadyExists` when the database refuses the save because it would
+    /// give the person an address another of the owner's people lists
+    /// (S8a, ONTOLOGY §7.1; the trigger of migration 056). The route asks
+    /// [`Self::email_collisions`] first, so this is the answer to a race.
     async fn create(&self, owner: &str, input: &PersonInput) -> Result<Person, EmberTroveError>;
+    /// As [`Self::create`]; NotFound unless `owner` owns `id`.
     async fn update(
         &self,
         owner: &str,
@@ -41,11 +46,22 @@ pub trait PersonRepo: Send + Sync {
         input: &PersonInput,
     ) -> Result<Person, EmberTroveError>;
     async fn delete(&self, owner: &str, id: PersonId) -> Result<(), EmberTroveError>;
-    /// The owner's people with an email in `lowered` (the duplicate warning).
-    async fn find_by_emails(
+    /// The owner's **other** people whom a save of `id` (`None`: a person
+    /// not yet made) with `emails` would collide with: those who list an
+    /// address that `emails` holds and the stored person does not. An
+    /// address the person already has is never a collision, so people who
+    /// shared one before the rule stay editable (owner decision,
+    /// 2026-11-18). The database decides with the same function
+    /// (`person_email_collisions`); this read is for saying who.
+    ///
+    /// SECURITY: scoped to `owner`, with no admin bypass. An `id` that is
+    /// not the owner's finds nothing, so the save that follows answers
+    /// 404 as it would for any id.
+    async fn email_collisions(
         &self,
         owner: &str,
-        lowered: &[String],
+        id: Option<PersonId>,
+        emails: &[ContactPoint],
     ) -> Result<Vec<DuplicateMatch>, EmberTroveError>;
     /// "Used in": the nodes this person appears in, with their role there.
     async fn usages(&self, owner: &str, id: PersonId) -> Result<Vec<PersonUsage>, EmberTroveError>;
@@ -129,6 +145,26 @@ const PERSON_COLS: &str = "id, owner_id, display_name, company, position, emails
 
 fn internal(what: &str) -> impl Fn(sqlx::Error) -> EmberTroveError + '_ {
     move |e| EmberTroveError::Internal(format!("{what} failed: {e}"))
+}
+
+/// What a save is told when the database refuses it for the email rule.
+/// It names nothing: the route reads who has the address separately.
+pub(crate) const EMAIL_TAKEN: &str = "an email address already belongs to another person";
+
+/// A failed person write. The email rule's refusal (migration 056's
+/// trigger, raised under the constraint name `people_email_identity`) is
+/// `AlreadyExists`; anything else is internal.
+///
+/// SECURITY: the driver's error is formatted with `Display`, which is the
+/// message alone. Never `{e:?}` or the error's detail: a detail can quote
+/// a row.
+fn save_failed(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
+    move |e| match &e {
+        sqlx::Error::Database(db) if db.constraint() == Some("people_email_identity") => {
+            EmberTroveError::AlreadyExists(EMAIL_TAKEN.to_string())
+        }
+        _ => EmberTroveError::Internal(format!("{what} failed: {e}")),
+    }
 }
 
 fn person_not_found(id: PersonId) -> EmberTroveError {
@@ -244,7 +280,7 @@ impl PersonRepo for PgPersonRepo {
         .bind(&p.notes)
         .fetch_one(&self.pool)
         .await
-        .map_err(internal("create person"))?;
+        .map_err(save_failed("create person"))?;
         Ok(row.into())
     }
 
@@ -274,7 +310,7 @@ impl PersonRepo for PgPersonRepo {
         .bind(&p.notes)
         .fetch_optional(&self.pool)
         .await
-        .map_err(internal("update person"))?
+        .map_err(save_failed("update person"))?
         .map(Person::from)
         .ok_or_else(|| person_not_found(id))
     }
@@ -292,10 +328,11 @@ impl PersonRepo for PgPersonRepo {
         Ok(())
     }
 
-    async fn find_by_emails(
+    async fn email_collisions(
         &self,
         owner: &str,
-        lowered: &[String],
+        id: Option<PersonId>,
+        emails: &[ContactPoint],
     ) -> Result<Vec<DuplicateMatch>, EmberTroveError> {
         #[derive(sqlx::FromRow)]
         struct Row {
@@ -303,22 +340,32 @@ impl PersonRepo for PgPersonRepo {
             display_name: String,
             email: String,
         }
-        if lowered.is_empty() {
+        if emails.is_empty() {
             return Ok(Vec::new());
         }
+        // The stored list is read here, in the statement, and only for a
+        // person the owner has: `$2` is NULL for a new one. The last line
+        // keeps another account's id from finding anything.
         let rows = sqlx::query_as::<_, Row>(
             r#"
-            SELECT p.id, p.display_name, e->>'value' AS email
-            FROM people p, jsonb_array_elements(p.emails) e
-            WHERE p.owner_id = $1 AND lower(e->>'value') = ANY($2)
-            ORDER BY lower(p.display_name), p.id
+            SELECT c.person_id AS id, p.display_name, c.email
+            FROM person_email_collisions(
+                     $1, $2::uuid,
+                     COALESCE((SELECT emails FROM people WHERE id = $2 AND owner_id = $1),
+                              '[]'::jsonb),
+                     $3::jsonb) c
+            JOIN people p ON p.id = c.person_id
+            WHERE $2::uuid IS NULL
+               OR EXISTS (SELECT 1 FROM people WHERE id = $2 AND owner_id = $1)
+            ORDER BY lower(p.display_name), p.id, c.email
             "#,
         )
         .bind(owner)
-        .bind(lowered)
+        .bind(id.map(|id| id.0))
+        .bind(Json(emails))
         .fetch_all(&self.pool)
         .await
-        .map_err(internal("find people by email"))?;
+        .map_err(internal("read email collisions"))?;
         Ok(rows
             .into_iter()
             .map(|r| DuplicateMatch {

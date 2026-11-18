@@ -19,13 +19,20 @@ async function wipePeople(request: APIRequestContext, stamp: string) {
 /** The shared person editor: a dialog (desktop) or sheet (phone). */
 const editor = (page: Page) => page.getByRole('dialog', { name: /New person|Edit person/ });
 
-test('the registry: one editor for new and edit, and the duplicate warning', async ({ page, request }) => {
+test('the registry: one editor for new and edit, and an address is one person’s', async ({
+  page,
+  request,
+}) => {
   const stamp = `${Date.now()}`;
   const name = `e2e Ada ${stamp}`;
   const email = `ada.${stamp}@example.com`;
+  const own = `ada.own.${stamp}@example.com`;
+  const originalName = `e2e Ada original ${stamp}`;
   await wipePeople(request, stamp);
   try {
-    // Someone already has the email: saving it on a second person warns.
+    // Someone already has the address (S8a, #353; ONTOLOGY §7.1: the same
+    // address is the same person), so a second person can't be saved with
+    // it. Until 3.30.0 this was a warning with "Save anyway".
     const first = await request.post('/api/people', {
       data: { display_name: `e2e Ada original ${stamp}`, emails: [{ label: 'work', value: email, preferred: true }] },
     });
@@ -44,11 +51,70 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await dlg.getByRole('button', { name: 'Add phone' }).click();
     await dlg.getByRole('textbox', { name: 'phone', exact: true }).fill('+1 555 010 0000');
     await dlg.getByRole('button', { name: 'Save' }).click();
-    // The duplicate warning shows inside the editor.
-    const warning = dlg.getByTestId('duplicate-warning');
-    await expect(warning).toContainText(`e2e Ada original ${stamp}`);
-    await warning.getByRole('button', { name: 'Save anyway' }).click();
+    // Refused, inside the editor: whose address it is, and no way round.
+    const taken = dlg.getByTestId('email-taken');
+    await expect(taken).toContainText('Not saved.');
+    await expect(taken.getByRole('button', { name: originalName })).toBeVisible();
+    await expect(taken).toContainText(email);
+    await expect(dlg.getByRole('button', { name: /anyway/i })).toHaveCount(0);
+    await expect(dlg).toBeVisible();
+    // The row that holds the address is marked, until it is changed, and
+    // the keyboard is on it.
+    const address = dlg.getByRole('textbox', { name: 'email', exact: true });
+    await expect(address).toHaveAttribute('aria-invalid', 'true');
+    await expect(address).toBeFocused();
+    await address.fill(`${email}.x`);
+    await expect(address).toHaveAttribute('aria-invalid', 'false');
+    await address.fill(email);
+    await expect(address).toHaveAttribute('aria-invalid', 'true');
+    const made: Person[] = await (await request.get(`/api/people?q=${stamp}`)).json();
+    expect(made.map((p) => p.display_name)).toEqual([originalName]);
+    // The old override is ignored, whatever the address's case.
+    const forced = await request.post('/api/people?confirm=true', {
+      data: { display_name: name, emails: [{ label: 'work', value: email.toUpperCase() }] },
+    });
+    expect(forced.status()).toBe(409);
+    expect((await forced.json()).matches[0].display_name).toBe(originalName);
+    // The same address twice on one person is refused too, in words.
+    const twice = await request.post('/api/people', {
+      data: { display_name: name, emails: [{ value: own }, { value: ` ${own.toUpperCase()}` }] },
+    });
+    expect(twice.status()).toBe(422);
+    expect((await twice.json()).error).toBe('an email address is listed twice');
+
+    // The same address twice in the dialog: said at once, on both rows,
+    // and nothing is sent.
+    await address.fill(own);
+    await dlg.getByRole('button', { name: 'Add email' }).click();
+    const rows = dlg.getByTestId('email-row');
+    await rows.nth(1).getByRole('textbox', { name: 'email', exact: true }).fill(` ${own.toUpperCase()}`);
+    let sent = 0;
+    await page.route('**/api/people', (route) => {
+      if (route.request().method() === 'POST') sent += 1;
+      return route.fallback();
+    });
+    await dlg.getByRole('button', { name: 'Save' }).click();
+    await expect(dlg.getByRole('alert')).toContainText('An email address is listed twice.');
+    for (const i of [0, 1]) {
+      await expect(rows.nth(i).getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute(
+        'aria-invalid',
+        'true',
+      );
+    }
+    expect(sent).toBe(0);
+    await expect(rows.nth(0).getByRole('textbox', { name: 'email', exact: true })).toBeFocused();
+    // One of the two taken off: the other is no longer marked.
+    await rows.nth(1).getByRole('button', { name: 'Remove email' }).click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0).getByRole('textbox', { name: 'email', exact: true })).toHaveAttribute(
+      'aria-invalid',
+      'false',
+    );
+
+    // With an address of their own, the same dialog saves.
+    await dlg.getByRole('button', { name: 'Save' }).click();
     await expect(dlg).toHaveCount(0);
+    await page.unroute('**/api/people');
     // Saving returns to the registry (#154): the new row is there,
     // highlighted, with a toast. Its card is a row click away.
     await expect(page).toHaveURL(/\/people$/);
@@ -67,7 +133,7 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     // The card: contact values are actions.
     const card = page.getByTestId('person-card');
     await expect(card.getByRole('heading', { name })).toBeVisible();
-    await expect(card.getByRole('link', { name: email })).toHaveAttribute('href', `mailto:${email}`);
+    await expect(card.getByRole('link', { name: own })).toHaveAttribute('href', `mailto:${own}`);
     await expect(card.getByRole('link', { name: '+1 555 010 0000' })).toHaveAttribute('href', 'tel:+15550100000');
 
     // Edit opens the same editor on the saved values.
@@ -79,16 +145,39 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
     await expect(editor(page).getByRole('textbox', { name: 'Position' }))
       .toHaveAccessibleDescription('Their job title \u2014 stays with the person on every node.');
     await editor(page).getByRole('textbox', { name: 'Position' }).fill('Analyst');
-    // Ctrl/⌘+Enter saves from any field. The person keeps their own email,
-    // which matches the original's, so this is a confirmed duplicate: the
-    // warning shows again, and "Save anyway" saves.
+    // Ctrl/⌘+Enter saves from any field.
     await page.keyboard.press('ControlOrMeta+Enter');
-    await editor(page).getByTestId('duplicate-warning').getByRole('button', { name: 'Save anyway' }).click();
     await expect(editor(page)).toHaveCount(0);
     await expect(card).toContainText('Analyst');
 
-    // Re-saving a person whose email no one else has never warns.
+    // Adding the other person's address on an edit is refused the same
+    // way, and the notice opens that person.
     const original: Person = await first.json();
+    await card.getByRole('button', { name: 'Edit' }).click();
+    await editor(page).getByRole('button', { name: 'Add email' }).click();
+    await editor(page)
+      .getByTestId('email-row')
+      .nth(1)
+      .getByRole('textbox', { name: 'email', exact: true })
+      .fill(email);
+    await editor(page).getByRole('button', { name: 'Save' }).click();
+    await editor(page).getByTestId('email-taken').getByRole('button', { name: originalName }).click();
+    await expect(page).toHaveURL(new RegExp(`/people/${original.id}$`));
+    await expect(editor(page)).toHaveCount(0);
+    await expect(page.getByTestId('person-card').getByRole('heading', { name: originalName })).toBeVisible();
+    const mine: Person[] = await (await request.get(`/api/people?q=${encodeURIComponent(own)}`)).json();
+    expect(mine[0].emails.map((e) => e.value)).toEqual([own]);
+    // What was typed was not lost by opening them: back on the first
+    // person the dialog reopens with it (#170), and Discard ends it.
+    await page.goBack();
+    await expect(editor(page).getByTestId('form-draft-recovery')).toBeVisible();
+    await expect(
+      editor(page).getByTestId('email-row').nth(1).getByRole('textbox', { name: 'email', exact: true }),
+    ).toHaveValue(email);
+    await editor(page).getByRole('button', { name: 'Discard' }).click();
+    await expect(editor(page)).toHaveCount(0);
+
+    // Re-saving a person whose email no one else has is never refused.
     const resave = await request.put(`/api/people/${original.id}`, {
       data: { display_name: original.display_name, emails: [{ label: 'work', value: `solo.${stamp}@example.com` }] },
     });
@@ -100,7 +189,7 @@ test('the registry: one editor for new and edit, and the duplicate warning', asy
 
     // The registry search finds them by email.
     await page.goto('/people');
-    await page.getByRole('searchbox', { name: 'Search people' }).fill(`ada.${stamp}`);
+    await page.getByRole('searchbox', { name: 'Search people' }).fill(`ada.own.${stamp}`);
     await expect(page.getByTestId('person-row')).toHaveCount(1);
   } finally {
     await wipePeople(request, stamp);

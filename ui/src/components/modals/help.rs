@@ -268,6 +268,16 @@ const CONCEPTS: &[Concept] = &[
                one person and not for another.",
     },
     Concept {
+        title: "People",
+        body: "Your own registry of the people you deal with. Nobody else sees \
+               their details; on a Project you share, others see a person's name \
+               and role only. An email address belongs to one person. Saving a \
+               second person with an address someone already has is refused, and \
+               the notice names who has it, with a way to open them. People who \
+               shared an address before this rule stay as they are; Data health \
+               lists them.",
+    },
+    Concept {
         title: "Captures",
         body: "Where input waits to be processed (Tasks \u{2192} Captures). Quick \
                capture (n, the + on that page, the palette, the iOS Share Sheet) \

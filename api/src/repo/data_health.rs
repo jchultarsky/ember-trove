@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use common::{
     EmberTroveError,
     data_health::{
-        ITEM_CAP, LabelReadingRef, LinkRef, Ref, RuleCount, RuleId, RuleReport, StillOpenRef,
-        Violation,
+        ITEM_CAP, LabelReadingRef, LinkRef, RELATED_CAP, Ref, RuleCount, RuleId, RuleReport,
+        StillOpenRef, Violation,
     },
     edge::EdgeType,
     node::NodeType,
@@ -91,6 +91,7 @@ impl DataHealthRepo for PgDataHealthRepo {
                 EdgeType::DerivedFrom,
                 RuleId::DerivedFromCycle,
             ),
+            shared_emails(&mut tx, owner).await?,
         ];
         tx.commit().await.map_err(db)?;
 
@@ -169,6 +170,98 @@ fn task_violation(r: TaskRow) -> Violation {
         Ref::task(r.id, r.title, r.node_id, r.node_archived).with_closed(r.closed),
         vec![Ref::node(r.node_id, r.node_title, r.node_archived)],
     )
+}
+
+#[derive(FromRow)]
+struct SharedEmailRow {
+    id: Uuid,
+    display_name: String,
+    other_id: Uuid,
+    other_name: String,
+    /// How many others this person shares with, beyond the rows fetched.
+    others: i64,
+    total: i64,
+}
+
+/// People of mine who list an email address that another of my people
+/// lists too (S8a, §7.1). One item per person, with the others they share
+/// with. The count is of people.
+///
+/// SECURITY: `p.owner_id = $1` on every row read, and no other filter: a
+/// person is only ever named to their owner, and two accounts that hold
+/// the same address never appear in each other's report. No address is
+/// in the answer: the people are named, and their pages show it.
+async fn shared_emails(
+    conn: &mut PgConnection,
+    owner: &str,
+) -> Result<RuleReport, EmberTroveError> {
+    let rows: Vec<SharedEmailRow> = sqlx::query_as(
+        r#"
+        WITH keys AS (
+            SELECT DISTINCT p.id, p.display_name,
+                   person_email_key(e.value ->> 'value') AS k
+            FROM people p
+            CROSS JOIN LATERAL jsonb_array_elements(p.emails) AS e(value)
+            WHERE p.owner_id = $1
+              AND person_email_key(e.value ->> 'value') <> ''
+        ),
+        shared AS (
+            SELECT k FROM keys GROUP BY k HAVING count(*) > 1
+        ),
+        pairs AS (
+            SELECT DISTINCT a.id, a.display_name,
+                   b.id AS other_id, b.display_name AS other_name
+            FROM keys a
+            JOIN shared s ON s.k = a.k
+            JOIN keys b ON b.k = a.k AND b.id <> a.id
+        ),
+        -- Cut by people and, for each, by the others shown: a cut of the
+        -- pair rows would leave the last person with some of theirs
+        -- missing and nothing saying so.
+        ranked AS (
+            SELECT pairs.*,
+                   dense_rank() OVER (ORDER BY lower(display_name), id) AS person_no,
+                   row_number() OVER (PARTITION BY id ORDER BY lower(other_name), other_id) AS nth,
+                   count(*) OVER (PARTITION BY id) AS others
+            FROM pairs
+        )
+        SELECT id, display_name, other_id, other_name, others,
+               (SELECT count(DISTINCT id) FROM pairs) AS total
+        FROM ranked
+        WHERE person_no <= $2 AND nth <= $3
+        ORDER BY person_no, nth
+        "#,
+    )
+    .bind(owner)
+    .bind(LIMIT)
+    .bind(RELATED_CAP as i64)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db)?;
+    let count = count_of(rows.first().map(|r| r.total));
+    // Rows arrive grouped by person.
+    let mut items: Vec<(Ref, Vec<Ref>, u64)> = Vec::new();
+    for r in rows {
+        let other = Ref::person(r.other_id, r.other_name);
+        match items.last_mut() {
+            Some((subject, others, _)) if subject.id == r.id => others.push(other),
+            _ => items.push((
+                Ref::person(r.id, r.display_name),
+                vec![other],
+                count_of(Some(r.others)),
+            )),
+        }
+    }
+    let items = items
+        .into_iter()
+        .map(|(subject, others, all)| {
+            let mut item = Violation::new(subject, others);
+            // The exact number left out, not only those fetched.
+            item.more = all.saturating_sub(item.related.len() as u64);
+            item
+        })
+        .collect();
+    Ok(RuleReport::with_count(RuleId::SharedEmail, count, items))
 }
 
 #[derive(FromRow)]
@@ -770,6 +863,7 @@ struct SqlCounts {
     status_on_non_project: i64,
     depends_on_area: i64,
     derived_from_area: i64,
+    shared_email: i64,
 }
 
 /// Every rule over all data, no subject filter. Only numbers are read
@@ -792,7 +886,27 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
             WHERE e.edge_type = 'depends_on' AND t.node_type = 'area') AS depends_on_area,
           (SELECT count(*) FROM edges e JOIN nodes t ON t.id = e.target_id
-            WHERE e.edge_type = 'derived_from' AND t.node_type = 'area') AS derived_from_area
+            WHERE e.edge_type = 'derived_from' AND t.node_type = 'area') AS derived_from_area,
+          -- SECURITY: a pair is two people of ONE account. Counted across
+          -- accounts, the number would say that two accounts know the
+          -- same person.
+          -- Each key is worked out once and its holders counted within
+          -- the account (`PARTITION BY owner_id, k`). A join of people to
+          -- people took 36 s on an account of 4,000 (review of #353).
+          (SELECT count(*) FROM (
+              SELECT DISTINCT owner_id, id FROM (
+                  SELECT owner_id, id,
+                         count(*) OVER (PARTITION BY owner_id, k) AS holders
+                  FROM (
+                      SELECT DISTINCT p.owner_id, p.id,
+                             person_email_key(e.value ->> 'value') AS k
+                      FROM people p
+                      CROSS JOIN LATERAL jsonb_array_elements(p.emails) AS e(value)
+                      WHERE person_email_key(e.value ->> 'value') <> ''
+                  ) keys
+              ) held
+              WHERE holders > 1
+           ) shared) AS shared_email
         "#,
     )
     .fetch_one(&mut *conn)
@@ -873,6 +987,10 @@ async fn all_counts(conn: &mut PgConnection) -> Result<Vec<RuleCount>, EmberTrov
         RuleCount {
             rule: RuleId::DerivedFromCycle,
             count: loop_count(conn, "derived_from").await?,
+        },
+        RuleCount {
+            rule: RuleId::SharedEmail,
+            count: n(sql.shared_email),
         },
     ];
     debug_assert!(counts.iter().zip(RuleId::ALL).all(|(c, id)| c.rule == *id));
