@@ -93,6 +93,9 @@ pub struct MentionPicker {
     /// node's body ([`Self::with_wiki_links`]): the page is rendered
     /// with them, and "Update" asks the same render what it shows.
     titles: StoredValue<Option<Signal<HashMap<String, NodeId>>>>,
+    /// While the picker itself is editing the box ([`Self::edit`]): the
+    /// `input` event of that edit is not the person typing.
+    editing: StoredValue<bool>,
     id: StoredValue<String>,
 }
 
@@ -123,6 +126,7 @@ impl MentionPicker {
             picked: RwSignal::new(Vec::new()),
             kept: RwSignal::new(Vec::new()),
             titles: StoredValue::new(None),
+            editing: StoredValue::new(false),
             id: StoredValue::new(format!(
                 "mention-picker-{}",
                 NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -237,9 +241,12 @@ impl MentionPicker {
     /// drop or an undo the list shows with nobody ready, as it does when
     /// the cursor is moved.
     pub fn after_input(&self, ev: &leptos::ev::Event) {
-        let typed = ev
-            .dyn_ref::<web_sys::InputEvent>()
-            .is_some_and(|ev| typed_by(&ev.input_type()));
+        // An edit the picker makes (a pick, "Update") is an `insertText`
+        // too, and nobody typed it.
+        let typed = !self.editing.get_value()
+            && ev
+                .dyn_ref::<web_sys::InputEvent>()
+                .is_some_and(|ev| typed_by(&ev.input_type()));
         self.follow(typed);
     }
 
@@ -409,6 +416,9 @@ impl MentionPicker {
             u32::try_from(from).unwrap_or(u32::MAX),
             u32::try_from(to).unwrap_or(u32::MAX),
         );
+        // The browser sends the box its `input` event before this
+        // returns.
+        self.editing.set_value(true);
         let by_browser = document()
             .dyn_into::<web_sys::HtmlDocument>()
             .ok()
@@ -422,6 +432,7 @@ impl MentionPicker {
                 }
             })
             .unwrap_or(false);
+        self.editing.set_value(false);
         if by_browser && el.value() == whole {
             return true;
         }

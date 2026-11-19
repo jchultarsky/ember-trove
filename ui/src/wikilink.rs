@@ -12,10 +12,79 @@ use common::id::NodeId;
 /// The returned string is passed to `pulldown_cmark` before HTML rendering.
 /// Inline HTML is preserved by pulldown-cmark and then sanitized by ammonia
 /// (which allows exactly these two classes, and `data-node-id` on `<a>`).
+#[cfg(test)]
 pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) -> String {
+    preprocess_wikilinks_moved(content, title_map).0
+}
+
+/// Where a byte offset of a text is after its wiki links were written
+/// as HTML: for something found in the text as written (a mention of a
+/// person) that has to be found again in the rewritten one. Scanning
+/// the rewritten text again finds other things: the HTML changes which
+/// backticks pair, and what a `[[` reaches to.
+pub struct Moved {
+    /// For each wiki link, in order: where it ended in the text, and how
+    /// much longer the rewritten text is up to there.
+    after: Vec<(usize, isize)>,
+    /// Where each wiki link's HTML is in the rewritten text.
+    written: Vec<std::ops::Range<usize>>,
+}
+
+impl Moved {
+    /// Nothing moved: the text is as written (a note has no wiki links).
+    pub fn nowhere() -> Self {
+        Self {
+            after: Vec::new(),
+            written: Vec::new(),
+        }
+    }
+
+    /// Whether `range` of the rewritten text lies in the HTML written
+    /// for a wiki link: HTML of the app's own, not of the text's writer.
+    /// (The link's words are escaped, so no tag of the writer's is in
+    /// there.)
+    pub fn wrote(&self, range: &std::ops::Range<usize>) -> bool {
+        self.written
+            .iter()
+            .any(|ours| ours.start <= range.start && range.end <= ours.end)
+    }
+
+    /// `offset` of the text as written, in the rewritten text. Exact for
+    /// an offset outside every wiki link.
+    pub fn at(&self, offset: usize) -> usize {
+        let grown = self
+            .after
+            .iter()
+            .take_while(|(end, _)| *end <= offset)
+            .last()
+            .map_or(0, |(_, grown)| *grown);
+        offset.saturating_add_signed(grown)
+    }
+}
+
+/// [`preprocess_wikilinks`], and where everything else in the text went.
+pub fn preprocess_wikilinks_moved(
+    content: &str,
+    title_map: &HashMap<String, NodeId>,
+) -> (String, Moved) {
     // The one scanner (`common::wikilink::wikilinks`; #281, 3.1). It skips
     // code, so no `<a>` is put inside a code span or a fenced block.
-    common::wikilink::replace_wikilinks(content, |link| wikilink_html(link, title_map))
+    let mut out = String::with_capacity(content.len());
+    let mut after = Vec::new();
+    let mut written = Vec::new();
+    let mut at = 0;
+    for link in common::wikilink::wikilinks(content) {
+        out.push_str(content.get(at..link.range.start).unwrap_or_default());
+        let from = out.len();
+        out.push_str(&wikilink_html(&link, title_map));
+        written.push(from..out.len());
+        at = link.range.end;
+        let grown = isize::try_from(out.len()).unwrap_or(isize::MAX)
+            - isize::try_from(at).unwrap_or(isize::MAX);
+        after.push((at, grown));
+    }
+    out.push_str(content.get(at..).unwrap_or_default());
+    (out, Moved { after, written })
 }
 
 /// One wiki link as HTML: what [`preprocess_wikilinks`] writes for it.

@@ -393,9 +393,16 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   `@[label](person:id)` for the API; never scan for `@[` anywhere else.
   - **A mention is shown only where both readers agree it is one**
     (`ui/src/mention.rs`, `with_mentions`): `common::mention::mentions`
-    reads a token at that place in the text (after wiki links are
-    written; a wiki link's words hold no `@`), **and** the Markdown
-    parser read the same bytes as an inline link, outside an image.
+    reads a token at that place in the text **as written**, **and** the
+    Markdown parser read the same bytes as an inline link, outside an
+    image.
+  - **The text is scanned for mentions once, as written** (`Token::all`),
+    and each one is found again by position after the wiki links are
+    written as HTML (`wikilink::Moved`). Never scan the rewritten text:
+    it holds other tokens (a wiki link's HTML changes which backticks
+    pair), and the editor counts in the text as written. With two lists,
+    "the second mention is shown" was true of one token and done to
+    another, in a link's address (fifth review of #362).
     It is replaced among the parsed events: a fixed opening tag, the
     name as a `Text` event (the HTML writer escapes it), a closing tag.
   - **The sanitizer is the last thing that touches rendered HTML.**
@@ -416,15 +423,25 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     (`<div><a href='https://elsewhere/?q=`, a blank line), and what
     Markdown writes next is then that attribute's value to the
     sanitizer. No rule about where a token sits lists every such case.
-    So each person named must be in the sanitizer's output as the
-    element written for them, as often as written; if not, the text is
-    rendered again with nobody named. The check reads the output and
-    never changes it. Anything else that puts a reader-only secret into
-    rendered Markdown needs the same check.
+    So every mention written must be in the sanitizer's output as the
+    element written for it, as often as written. One that names nobody
+    is checked too: its label is a name someone picked, and a page is
+    not the same for every reader (a wiki link is an `<a>` for one and
+    a `<span>` for another, and inside `<svg>` the HTML parser treats
+    them differently). The check reads the output and never changes
+    it. Anything else that puts a reader-only secret into rendered
+    Markdown needs the same check.
+  - **A text that fails the check is shown with its raw HTML as text**
+    (`markdown::checked`, `RawHtml::AsText`): nothing of the writer's
+    is then HTML, so there is no attribute to fall into; the mentions
+    are mentions and the writer's link is no link. Both attempts parse
+    **the same text** (wiki links written as HTML; their own tags
+    stay, `Moved::wrote`), so Markdown reads the same links in each.
+    `checked` never returns an attempt that failed, or one unchecked.
   - **The element it looks for can't be typed** (`Resolved::mark`;
-    fourth review). Each render makes a random class, writes it on the
-    mentions that name someone, and allows it in that render's
-    sanitizer alone (`sanitizer_naming`). Without it a writer typed the
+    fourth review). Each render makes a random class, writes it on
+    every mention, and allows it in that render's sanitizer alone
+    (`sanitizer_naming`). Without it a writer typed the
     element once per guessed name beside a mention made to fall into
     their link's address, and the right guess made the count come out.
     So rendered markup is `class="mention m-<32 hex>"`: match
@@ -439,9 +456,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     type them and give their own words the plain look of a name, as
     they can make them bold. That is accepted: no name is told by it.
     The look of a link is styled only for `a.mention[href^="/people/"]`.
-  - A token inside a link the writer wrote in HTML is not resolved
-    (`anchors_opened`). That is tidiness, not a boundary: it reads
-    tags by eye and can be fooled.
+  - A token inside a link the writer wrote in HTML names nobody
+    (`anchors_opened`): it is written with its label, and checked like
+    the rest. That is tidiness, not a boundary: it reads tags by eye
+    and can be fooled. Don't leave such a token to Markdown as a plain
+    link: unchecked, its label fell into the writer's address.
   - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
     `<span class="mention">` with no id in the markup; nobody to name →
     `<span class="mention-unresolved">` with the label. Told apart
@@ -483,8 +502,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       the end of a line that ends in `@bob` is a new line. A paste, a
       drop and an undo are not typing either: `after_input` takes the
       event and reads its `inputType` (`common::mention::typed_by`).
-      Before a pick, Enter and Tab check the list is still about where
-      the cursor is.
+      Nor is an edit the picker itself makes (`editing`). Before a
+      pick, Enter and Tab check the list is still about where the
+      cursor is.
     - Escape closes the list only (it must not reach the editor's
       Escape), and the "couldn't load your People" alert the same way.
       Ctrl/⌘+Enter stays the editor's and closes the list; any other

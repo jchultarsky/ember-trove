@@ -15,9 +15,9 @@
 //! parser read one (`ui/src/mention.rs`). Where they differ (a token in
 //! an image's alt text, or inside raw HTML) a row may exist and the page
 //! names nobody there: it can understate, never the other way. (The
-//! page scans the text after its wiki links are written as HTML. A
-//! label holds no `<`, so that HTML can't make a token of something
-//! that was none.)
+//! page takes its mentions from this scanner's reading of the text as
+//! written, and finds each again by position once the wiki links are
+//! written as HTML. It never scans the rewritten text.)
 
 use std::ops::Range;
 
@@ -86,13 +86,14 @@ fn token_at(text: &str, open: usize) -> Option<Mention<'_>> {
     let label_start = open + OPEN.len();
     let rest = text.get(label_start..)?;
     // The label ends at the first `]`. A `[`, a backtick, a backslash,
-    // a `<` or a line break before it means this is not a mention, and
+    // a `<` or a line break (a lone CR too: a text box makes it a line
+    // feed) before it means this is not a mention, and
     // the look stops there: never to the end of a long line for each
     // `@[` on it. (A backslash: Markdown would read `\]` as part of the
     // label. A `<`: Markdown would read a tag there, and a tag's own
     // text can hold a `]`. The page shows a mention only where both
     // readers agree.)
-    let label_len = rest.find([']', '[', '`', '\\', '<', '\n'])?;
+    let label_len = rest.find([']', '[', '`', '\\', '<', '\n', '\r'])?;
     if !rest.get(label_len..)?.starts_with(']') {
         return None;
     }
@@ -343,8 +344,10 @@ pub fn refresh_labels_at(
 /// event with no type (a script set the value) is not typing.
 #[must_use]
 pub fn typed_by(input_type: &str) -> bool {
-    matches!(input_type, "insertText" | "insertCompositionText")
-        || input_type.starts_with("deleteContent")
+    matches!(
+        input_type,
+        "insertText" | "insertCompositionText" | "insertFromComposition"
+    ) || input_type.starts_with("deleteContent")
         || input_type.starts_with("deleteWord")
 }
 
@@ -705,6 +708,7 @@ mod tests {
             format!("@[A[da](person:{ADA})"),
             format!("@[A`da](person:{ADA})"),
             format!("@[Ada\nLovelace](person:{ADA})"),
+            format!("@[Ada\rLovelace](person:{ADA})"),
             // Markdown reads `\]` as part of a longer label.
             format!("@[Ada\\](person:{ADA})"),
             format!("@[A\\da](person:{ADA})"),
@@ -914,6 +918,8 @@ mod tests {
         for typed in [
             "insertText",
             "insertCompositionText",
+            // What Safari sends when an input method commits.
+            "insertFromComposition",
             "deleteContentBackward",
             "deleteContentForward",
             "deleteWordBackward",

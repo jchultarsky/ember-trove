@@ -38,10 +38,12 @@
 //! Markdown writes next, a mention included, is then that attribute's
 //! value to the sanitizer (third review of #362). No rule about where a
 //! token sits can list every such case. So after sanitizing, each named
-//! mention must be in the output as the element it was written as, as
+//! mention (one that names nobody too: its label is a name someone
+//! picked) must be in the output as the element it was written as, as
 //! often as it was written. If one is not, the whole text is rendered
-//! again with nobody named. The check only reads the sanitizer's
-//! output; it never changes it.
+//! again **with its raw HTML shown as text**: nothing of the writer's
+//! is then left for a mention to fall into. The check only reads the
+//! sanitizer's output; it never changes it.
 //!
 //! The element it looks for carries a class made for that one render
 //! from random bits ([`Resolved::mark`]), which only that render's
@@ -70,8 +72,8 @@ use uuid::Uuid;
 ///   owner can no longer open the node): the label as it was typed,
 ///   marked unresolved, in words too (`title`).
 ///
-/// `mark` is this render's own class ([`Resolved::mark`]), written on a
-/// mention that names someone.
+/// `mark` is this render's own class ([`Resolved::mark`]), written on
+/// every one of them.
 fn shown<'a>(
     person: PersonId,
     label: &str,
@@ -94,7 +96,7 @@ fn shown<'a>(
             "</span>",
         ),
         None => (
-            r#"<span class="mention-unresolved" title="Not linked to a person">"#.to_string(),
+            format!(r#"<span class="mention-unresolved {mark}" title="Not linked to a person">"#),
             format!("@{label}"),
             "</span>",
         ),
@@ -111,12 +113,44 @@ fn shown<'a>(
     )
 }
 
-/// The mentions a render named someone for, as they were written: what
+/// One mention of a person in a text, as `common::mention::mentions`
+/// reads it in the text **as written**, and where it is in the text the
+/// Markdown parser is given (the same place, unless wiki links were
+/// written as HTML before it: `wikilink::Moved`).
+///
+/// SECURITY: never scan the rewritten text for mentions. It holds other
+/// tokens than the text does (the HTML of a wiki link changes which
+/// backticks pair), and the editor's "Update" goes by the text's own:
+/// with two lists, "the second mention is shown" was true of one token
+/// and applied to another, in a link's address (fifth review of #362).
+pub struct Token {
+    pub start: usize,
+    pub end: usize,
+    pub person: PersonId,
+    pub label: String,
+}
+
+impl Token {
+    /// The mentions of `source`, each where `moved` puts it.
+    pub fn all(source: &str, moved: &crate::wikilink::Moved) -> Vec<Token> {
+        mentions(source)
+            .into_iter()
+            .map(|m| Token {
+                start: moved.at(m.range.start),
+                end: moved.at(m.range.end),
+                person: m.person_id,
+                label: m.label.to_string(),
+            })
+            .collect()
+    }
+}
+
+/// The mentions a render wrote, as they were written: what
 /// [`Self::intact`] looks for in the sanitized result.
 pub struct Resolved {
     /// A class made for this one render, from random bits, written on
-    /// every mention that names someone and allowed by this render's
-    /// sanitizer alone (`markdown::sanitizer_naming`).
+    /// every mention and allowed by this render's sanitizer alone
+    /// (`markdown::sanitizer_naming`).
     ///
     /// SECURITY: it is what a writer can't type. Without it a writer
     /// could type the element themselves, once for each name on a list
@@ -124,8 +158,8 @@ pub struct Resolved {
     /// address: the right guess made the count below come out, and the
     /// name went to that address (fourth review of #362).
     mark: String,
-    /// The HTML of each named mention, as the HTML writer writes its
-    /// three events on their own.
+    /// The HTML of each mention written, named or not, as the HTML
+    /// writer writes its three events on their own.
     written: Vec<String>,
     /// For each mention of the text, in `common::mention::mentions`'
     /// order: whether it was written as a mention that names someone.
@@ -146,9 +180,17 @@ impl Resolved {
         &self.mark
     }
 
-    /// Whether every named mention is in `html` (the sanitizer's output
-    /// for the whole text) as the element it was written as, as often as
-    /// it was written. `clean` is that same sanitizer.
+    /// Whether every mention written is in `html` (the sanitizer's
+    /// output for the whole text) as the element it was written as, as
+    /// often as it was written. `clean` is that same sanitizer.
+    ///
+    /// One that names nobody is checked too. Its words are the label,
+    /// and a label is a name: the one the author picked, or the current
+    /// one after "Update". What a text does to a mention can differ
+    /// from reader to reader (a wiki link is an `<a>` for one and a
+    /// `<span>` for another, and the HTML parser treats the two
+    /// differently inside `<svg>`), so each reader's own page is checked
+    /// for all of them.
     ///
     /// SECURITY: this is what keeps a name out of a writer's attribute.
     /// The element, cleaned on its own, is how the sanitizer serialises
@@ -172,21 +214,19 @@ impl Resolved {
     }
 
     /// For each mention of the text, in `common::mention::mentions`'
-    /// order: whether the page shows it as a mention that names
-    /// someone. All false when the result was not [`Self::intact`].
-    pub fn named(self, intact: bool) -> Vec<bool> {
-        if intact {
-            self.named
-        } else {
-            vec![false; self.named.len()]
-        }
+    /// order: whether this render wrote it as a mention that names
+    /// someone. Means something only for a result that is
+    /// [`Self::intact`].
+    pub fn named(self) -> Vec<bool> {
+        self.named
     }
 }
 
 /// How many `<a …>` a piece of the writer's own HTML opens, less how
 /// many `</a>` it closes. A token between the two is the text of the
-/// writer's link: resolving it would put a person's name, styled as a
-/// mention, on a link to the writer's address.
+/// writer's link: naming the person there would put their name, styled
+/// as a mention, on a link to the writer's address. It is shown with
+/// its label instead.
 ///
 /// This is tidiness, not a boundary: it reads tags by eye, and a
 /// `</a>` in the same piece of HTML fools it. What keeps a name out of
@@ -212,23 +252,21 @@ fn anchors_opened(html: &str) -> i32 {
     opened
 }
 
-/// `events` (parsed from `source`, with where each came from) with every
-/// mention replaced by what `people` lets its reader see, and the ones
-/// that named someone, for the caller to check in the sanitized result
-/// ([`Resolved::intact`]).
+/// `events` (parsed, with where in the parsed text each came from) with
+/// every one of `tokens` that the parser read as a link replaced by
+/// what `people` lets its reader see; and what was written, for the
+/// caller to check in the sanitized result ([`Resolved::intact`]).
 pub fn with_mentions<'a>(
-    source: &str,
     events: Vec<(Event<'a>, Range<usize>)>,
+    tokens: &[Token],
     people: &[MentionName],
 ) -> (Vec<Event<'a>>, Resolved) {
-    // Where the one scanner reads a token: its start (the `@`) to its
-    // end, whose it is, and which one of the text's mentions it is.
-    let scanned = mentions(source);
-    let mut resolved = Resolved::new(scanned.len());
-    let tokens: HashMap<usize, (usize, PersonId, &str, usize)> = scanned
+    let mut resolved = Resolved::new(tokens.len());
+    // By where each starts (its `@`): which of the text's mentions it is.
+    let tokens: HashMap<usize, (&Token, usize)> = tokens
         .iter()
         .enumerate()
-        .map(|(nth, m)| (m.range.start, (m.range.end, m.person_id, m.label, nth)))
+        .map(|(nth, token)| (token.start, (token, nth)))
         .collect();
     let mut out: Vec<Event<'a>> = Vec::with_capacity(events.len());
     let mut in_image = 0usize;
@@ -246,31 +284,26 @@ pub fn with_mentions<'a>(
         // A link over exactly the bytes of a token, less its `@`. (Only
         // an inline link `[label](person:id)` can be that.)
         let token = match &event {
-            Event::Start(Tag::Link { .. }) if in_image == 0 && in_anchor == 0 => range
+            Event::Start(Tag::Link { .. }) if in_image == 0 => range
                 .start
                 .checked_sub(1)
                 .and_then(|at| tokens.get(&at))
-                .filter(|(end, _, _, _)| *end == range.end),
+                .filter(|(token, _)| token.end == range.end),
             _ => None,
         };
         // The `@` is the text right before the link: it is taken off
         // below, so it has to be there.
         let after_at = matches!(out.last(), Some(Event::Text(text)) if text.ends_with('@'));
-        let Some((_, person, label, nth)) = token.filter(|_| after_at) else {
+        let Some((token, nth)) = token.filter(|_| after_at) else {
             out.push(event);
             continue;
         };
         // The link's own events are the label, which the scanner has
-        // already read. (A label holds no `<` and no `[`, so nothing in
-        // it is a link of its own; the count is for a parser that would
-        // find one all the same.)
-        let mut depth = 0usize;
+        // already read. (A label holds no `<` and no `[`, so there is
+        // no link inside this one to end first.)
         for (inner, _) in events.by_ref() {
-            match inner {
-                Event::Start(Tag::Link { .. }) => depth += 1,
-                Event::End(TagEnd::Link) if depth == 0 => break,
-                Event::End(TagEnd::Link) => depth -= 1,
-                _ => {}
+            if matches!(inner, Event::End(TagEnd::Link)) {
+                break;
             }
         }
         // The `@` belongs to the mention.
@@ -280,14 +313,18 @@ pub fn with_mentions<'a>(
                 out.push(Event::Text(CowStr::from(before.to_string())));
             }
         }
-        let (events_of_it, named) = shown(*person, label, people, &resolved.mark);
-        if named {
-            let mut written = String::new();
-            cmark_html::push_html(&mut written, events_of_it.iter().cloned());
-            resolved.written.push(written);
-            if let Some(slot) = resolved.named.get_mut(*nth) {
-                *slot = true;
-            }
+        // Inside a link the writer wrote in HTML, nobody is named: the
+        // name would be the words of a link to the writer's address. It
+        // is still written as a mention, with its label, so that it is
+        // checked like every other: left as Markdown's own link, its
+        // label could fall into that address unseen.
+        let known: &[MentionName] = if in_anchor > 0 { &[] } else { people };
+        let (events_of_it, named) = shown(token.person, &token.label, known, &resolved.mark);
+        let mut written = String::new();
+        cmark_html::push_html(&mut written, events_of_it.iter().cloned());
+        resolved.written.push(written);
+        if let Some(slot) = resolved.named.get_mut(*nth) {
+            *slot = named;
         }
         out.extend(events_of_it);
     }
@@ -569,6 +606,21 @@ mod tests {
         // not the link leads anywhere.
         assert_eq!(html.matches("class=\"mention\"").count(), 1, "{html}");
         assert!(html.contains(r#"<span class="wikilink-unresolved">Nowhere</span>"#));
+        // Where a text's raw HTML is shown as text (it would not leave a
+        // mention whole), a wiki link is still a link: its tags are the
+        // app's own.
+        let hostile = format!(
+            "[[Plan]] and\n\n<div></a><a href='https://attacker.example/?q=\n\n{token}\n\n'>x</a></div>\n"
+        );
+        let html = render_markdown(&hostile, &titles, &named("Ada", true));
+        assert!(
+            html.contains(r#"<a class="wikilink" data-node-id="#),
+            "{html}"
+        );
+        assert!(
+            html.contains("&lt;div&gt;") && html.contains("class=\"mention\""),
+            "{html}"
+        );
         // In a note, wiki links are text and the mention is a mention.
         let note = render_note(&format!("[[Plan]] with {token}"), &named("Ada", true));
         assert!(
@@ -641,7 +693,8 @@ mod tests {
     /// mention Markdown writes next is then that attribute's value: the
     /// person's name in the writer's link address. No rule about where a
     /// token sits caught these; the check of the result does, and the
-    /// text is then shown with nobody named.
+    /// text is then shown with its raw HTML as text: the mention is a
+    /// mention, and the writer's link is no link.
     #[test]
     fn a_name_is_never_in_an_attribute_however_the_html_is_split() {
         let token = mention_token("x", ada());
@@ -678,30 +731,62 @@ mod tests {
             format!(
                 "<pre></pre><a href='https://attacker.example/?</a>q=\n{token}\n' <b>Quarterly report</b></a>\n"
             ),
-            // With a mention before and after it that would be fine alone:
-            // one that is not whole, and nobody in the text is named.
+            // With a mention before and after it that would be fine alone.
             format!(
                 "Intro {token}.\n\n<div><a x='</a>' href='https://attacker.example/?q=\n\nThanks {token} for the review.\n\n' <b>Quarterly report</b></a></div>\n\nOutro {token}.\n"
             ),
-            // Not an attribute, and not an element either.
-            format!("<!--\n\n{token}\n\n-->\n"),
-            format!("<textarea>\n\n{token}\n\n</textarea>\n"),
-            format!("<script>\n\n{token}\n\n</script>\n"),
         ];
         for text in &cases {
             for mine in [true, false] {
                 for html in renderings(text, &named(SECRET, mine)) {
                     assert!(!in_an_attribute(&html, SECRET), "{text:?} -> {html}");
-                    assert!(!html.contains(SECRET), "{text:?} -> {html}");
-                    assert!(!html.contains("/people/"), "{text:?} -> {html}");
+                    // Nothing of the writer's HTML is HTML any more: no
+                    // link of theirs, and their tags are words.
+                    assert!(!in_an_attribute(&html, "attacker"), "{text:?} -> {html}");
+                    assert!(html.contains("&lt;"), "{text:?} -> {html}");
+                    // Every mention in it is whole, and named.
+                    let mentions = text.matches("person:").count();
+                    assert_eq!(
+                        html.matches(&format!(">@{SECRET}</")).count(),
+                        mentions,
+                        "{text:?} -> {html}"
+                    );
                 }
             }
         }
-        // The outline of a body is made again too.
+        // Where the HTML parser reads no element and Markdown no link (a
+        // comment, a text box, a script), nothing is written for it.
+        for text in [
+            format!("<!--\n\n{token}\n\n-->\n"),
+            format!("<textarea>\n\n{token}\n\n</textarea>\n"),
+            format!("<script>\n\n{token}\n\n</script>\n"),
+        ] {
+            for html in renderings(&text, &named(SECRET, true)) {
+                assert!(!html.contains(SECRET), "{text:?} -> {html}");
+            }
+        }
+        // The outline of a body is made with the attempt that held.
         let text = format!("## Ask {token}\n\n<div title='\n\n{token}\n\n'>x</div>\n");
         let body = render_body(&text, &HashMap::new(), &named(SECRET, true));
-        assert_eq!(body.outline[0].text, "Ask @x");
-        assert!(!body.html.contains(SECRET), "{}", body.html);
+        assert_eq!(body.outline[0].text, format!("Ask @{SECRET}"));
+        assert!(!in_an_attribute(&body.html, SECRET), "{}", body.html);
+        assert!(body.html.contains("&lt;div title="), "{}", body.html);
+    }
+
+    /// A mention that names nobody is checked too: its words are the
+    /// label, which is a name someone picked (or brought up to date).
+    #[test]
+    fn a_label_is_never_in_an_attribute_either() {
+        let label = "Zq9Label";
+        let token = mention_token(label, ada());
+        let text = format!(
+            "<div></a><a href='https://attacker.example/?q=\n\n{token}\n\n' <b>Quarterly report</b></a></div>\n"
+        );
+        for html in renderings(&text, &[]) {
+            assert!(!in_an_attribute(&html, label), "{html}");
+            assert!(!in_an_attribute(&html, "attacker"), "{html}");
+            assert!(html.contains(&format!(">@{label}</span>")), "{html}");
+        }
     }
 
     #[test]
@@ -731,11 +816,9 @@ mod tests {
         // The same element without this render's class is not it.
         let unmarked_copy = whole.replace(&format!(" {mark}"), "");
         assert!(!twice.intact(&unmarked_copy, clean), "{unmarked_copy}");
-        // Nobody named: nothing to look for.
+        // Nothing written: nothing to look for.
         let nobody = Resolved::new(0);
         assert!(nobody.intact("anything", clean));
-        // Which mentions were named is given only for an intact result.
-        assert_eq!(twice.named(false), [false; 3]);
     }
 
     /// SECURITY (fourth review of #362): a writer who has a list of names
@@ -767,9 +850,8 @@ mod tests {
                 crate::markdown::render_body(&text, &HashMap::new(), &named(SECRET, mine)).html,
             ] {
                 assert!(!in_an_attribute(&html, SECRET), "{html}");
-                // The guesses are the writer's own words, and stay. The
-                // mention reads as its label.
-                assert!(html.contains("@x"), "{html}");
+                // The writer's link is no link: its HTML is shown as text.
+                assert!(!in_an_attribute(&html, "attacker"), "{html}");
             }
         }
         // A class that looks like a render's own is not kept from a text:
@@ -808,12 +890,14 @@ mod tests {
             named_mentions(&text, Some(&HashMap::new()), &people),
             [false, true, false, false, true]
         );
-        // Nobody to name, or a text whose result is not whole: none.
+        // Nobody to name: none.
         assert_eq!(named_mentions(&text, None, &[]), [false; 5]);
+        // A text whose HTML would swallow one is shown with that HTML as
+        // text, and then both are mentions on the page.
         let swallowed = format!(
             "{token}\n\n<div></a><a href='https://attacker.example/?q=\n\n{token}\n\n' <b>x</b></a></div>\n"
         );
-        assert_eq!(named_mentions(&swallowed, None, &people), [false, false]);
+        assert_eq!(named_mentions(&swallowed, None, &people), [true, true]);
         // With wiki links in the text, the order is still the text's.
         let titles: HashMap<String, NodeId> =
             [("plan".to_string(), NodeId(Uuid::from_u128(7)))].into();
@@ -1013,7 +1097,8 @@ mod tests {
                 let parsed: Vec<_> = Parser::new_ext(&text, options).into_offset_iter().collect();
                 let was_balanced =
                     balanced(&parsed.iter().map(|(e, _)| e.clone()).collect::<Vec<_>>());
-                let (events, _) = super::with_mentions(&text, parsed, &people);
+                let tokens = super::Token::all(&text, &crate::wikilink::Moved::nowhere());
+                let (events, _) = super::with_mentions(parsed, &tokens, &people);
                 assert!(!was_balanced || balanced(&events), "{text:?}");
                 for html in [
                     render_note(&text, &people),
@@ -1032,5 +1117,238 @@ mod tests {
         }
         // The pieces do make real mentions: the test is not vacuous.
         assert!(named_somewhere > 500, "{named_somewhere}");
+    }
+
+    // ── "Update" (fifth review of #362) ──
+
+    /// The text after the editor's "Update", done as the picker does it:
+    /// the labels of the mentions the editor's page shows are brought up
+    /// to the person's current name (`SECRET`).
+    fn updated(text: &str, titles: Option<&HashMap<String, NodeId>>) -> Option<String> {
+        let shown = named_mentions(text, titles, &named(SECRET, true));
+        assert_eq!(
+            shown.len(),
+            common::mention::mentions(text).len(),
+            "{text:?}"
+        );
+        let own = [(ada(), SECRET.to_string())];
+        common::mention::refresh_labels_at(text, &own, &[], 0, Some(&shown)).map(|fresh| fresh.text)
+    }
+
+    /// Every way a reader may get a body: wiki links that lead somewhere
+    /// for them or not, the person their own, someone else's, or nobody
+    /// they are told of.
+    fn every_readers_page(text: &str, titles: &HashMap<String, NodeId>) -> Vec<String> {
+        let mut pages = Vec::new();
+        for titles in [titles, &HashMap::new()] {
+            for people in [named(SECRET, true), named(SECRET, false), Vec::new()] {
+                pages.push(crate::markdown::render_markdown(text, titles, &people));
+                pages.push(crate::markdown::render_body(text, titles, &people).html);
+            }
+        }
+        pages
+    }
+
+    fn plan_and_t() -> HashMap<String, NodeId> {
+        [
+            ("plan".to_string(), NodeId(Uuid::from_u128(7))),
+            ("t".to_string(), NodeId(Uuid::from_u128(8))),
+        ]
+        .into()
+    }
+
+    /// SECURITY: "Update" writes the person's current name into the text.
+    /// It must write it only into a mention, and into one that is a
+    /// mention on every reader's page. These texts each got it into a
+    /// link's address.
+    #[test]
+    fn update_writes_the_name_only_where_every_reader_has_a_mention() {
+        let id = ada().0.hyphenated();
+        let titles = plan_and_t();
+        for (text, refreshed) in [
+            // A wiki link around a wiki link: scanned again after the
+            // inner one is written as HTML, the text has other mentions
+            // than it has as written. "The first is shown" was said of
+            // one and done to another.
+            (
+                format!(
+                    "[[a [[b]] [r](<https://attacker.example/?q=@[x](person:{id})>) ]] @[y](person:{id})"
+                ),
+                1,
+            ),
+            // The same with as many mentions either way, and the same
+            // labels: a wiki link's HTML drops a backtick of its target.
+            (
+                format!(
+                    "[[a ` b|c]] Met @[Ada](person:{id}). ` [Quarterly report](<https://attacker.example/?q=@[Ada](person:{id})>) [[d [[e]] @[Ada](person:{id}) ]]"
+                ),
+                1,
+            ),
+            // A page that is not the same for every reader: `[[T]]` is an
+            // `<a>` for whoever sees T and a `<span>` for whoever does
+            // not, and inside `<svg>` only the `<span>` ends the SVG. For
+            // the second reader what follows opened an attribute.
+            (
+                format!(
+                    "<div><svg>[[T]]<![CDATA[></a><a href='https://attacker.example/?q=]]><p>\n\n@[old](person:{id})\n\n' <b>Quarterly report</b></a></div>\n"
+                ),
+                1,
+            ),
+            // A wiki link in a link's address is HTML there for Markdown,
+            // which then reads no address; left as typed it would be one.
+            (
+                format!(
+                    "[r](<https://attacker.example/?q=[[T]]@[x](person:{id})>) <div><svg>[[T]]<![CDATA[></a><a title=']]><p>\n\n@[y](person:{id})\n\n'>z</a></div>\n"
+                ),
+                2,
+            ),
+        ] {
+            for editors in [&titles, &HashMap::new()] {
+                let Some(after) = updated(&text, Some(editors)) else {
+                    continue;
+                };
+                assert!(
+                    after.matches(SECRET).count() <= refreshed,
+                    "{text:?} -> {after:?}"
+                );
+                for page in every_readers_page(&after, &titles) {
+                    assert!(!in_an_attribute(&page, SECRET), "{after:?} -> {page}");
+                }
+            }
+        }
+        // The first two do have a mention to bring up to date, and it is
+        // the one outside the address.
+        let text = format!(
+            "[[a [[b]] [r](<https://attacker.example/?q=@[x](person:{id})>) ]] @[y](person:{id})"
+        );
+        assert_eq!(
+            updated(&text, Some(&titles)),
+            Some(text.replace("@[y]", &format!("@[{SECRET}]")))
+        );
+    }
+
+    /// The same, for many texts put together from wiki links, tokens,
+    /// backticks, addresses and HTML: after "Update", the name is in no
+    /// attribute on any reader's page.
+    #[test]
+    fn update_on_pieces_put_together_never_puts_the_name_in_an_attribute() {
+        let id = ada().0.hyphenated().to_string();
+        let token = mention_token("x", ada());
+        let pieces: Vec<String> = [
+            token.as_str(),
+            token.as_str(),
+            token.as_str(),
+            &format!("[r](<https://attacker.example/?q={token}>)"),
+            &format!("[r](https://attacker.example/?q={token})"),
+            &format!("<a href='https://attacker.example/?q={token}'>r</a>"),
+            &format!("![{token}](/favicon.ico)"),
+            &format!("(person:{id})"),
+            "[r](<https://attacker.example/?q=",
+            ">)",
+            "[r](https://attacker.example/?q=",
+            ")",
+            "[[",
+            "]]",
+            "[[a ",
+            "[[a|",
+            "[[T]]",
+            "[[Plan]]",
+            "[[Plan|b]]",
+            "[[Nowhere]]",
+            " b|c]]",
+            "|",
+            "`",
+            "``",
+            "```",
+            "\\`",
+            "[",
+            "]",
+            "@[",
+            "@",
+            "](",
+            "<div><svg>",
+            "<svg>",
+            "</svg>",
+            "<math>",
+            "<![CDATA[",
+            "]]>",
+            "<p>",
+            "<![CDATA[></a><a href='https://attacker.example/?q=]]><p>",
+            "<div></a><a href='https://attacker.example/?q=",
+            "<div title='",
+            "' <b>Quarterly report</b></a></div>",
+            "'>",
+            "\">",
+            "<a href=\"https://attacker.example/\">",
+            "</a>",
+            "<span>",
+            "</span>",
+            "<!--",
+            "-->",
+            "<textarea>",
+            "<select>",
+            "<table><tr><td>",
+            "> ",
+            "- ",
+            "# ",
+            "    ",
+            "word",
+            "é👉",
+            "&#64;",
+            "\\",
+            "<",
+            ">",
+            "'",
+            "\"",
+        ]
+        .iter()
+        .map(|p| (*p).to_string())
+        .collect();
+        let gaps = ["", "", " ", "\n", "\n\n", "\r\n"];
+        let titles = plan_and_t();
+        let mut state = 0x0bad_5eed_cafe_u64;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as usize
+        };
+        let mut updates = 0usize;
+        for _ in 0..1_500 {
+            let mut text = String::new();
+            for _ in 0..2 + next() % 8 {
+                text.push_str(&pieces[next() % pieces.len()]);
+                text.push_str(gaps[next() % gaps.len()]);
+            }
+            // A body, edited by someone who sees the wiki links' targets
+            // and by someone who does not.
+            for editors in [&titles, &HashMap::new()] {
+                if let Some(after) = updated(&text, Some(editors)) {
+                    updates += 1;
+                    for titles in [&titles, &HashMap::new()] {
+                        for people in [named(SECRET, true), Vec::new()] {
+                            let page = crate::markdown::render_markdown(&after, titles, &people);
+                            assert!(
+                                !in_an_attribute(&page, SECRET),
+                                "{text:?} -> {after:?} -> {page}"
+                            );
+                        }
+                    }
+                }
+            }
+            // A note.
+            if let Some(after) = updated(&text, None) {
+                updates += 1;
+                for people in [named(SECRET, false), Vec::new()] {
+                    let page = crate::markdown::render_note(&after, &people);
+                    assert!(
+                        !in_an_attribute(&page, SECRET),
+                        "{text:?} -> {after:?} -> {page}"
+                    );
+                }
+            }
+        }
+        // The pieces do make mentions to bring up to date.
+        assert!(updates > 500, "{updates}");
     }
 }

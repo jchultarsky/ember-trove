@@ -22,8 +22,8 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
-use crate::mention::{Resolved, with_mentions};
-use crate::wikilink::preprocess_wikilinks;
+use crate::mention::{Resolved, Token, with_mentions};
+use crate::wikilink::{Moved, preprocess_wikilinks_moved};
 use common::id::NodeId;
 use common::mention::MentionName;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html as cmark_html};
@@ -205,59 +205,138 @@ pub(crate) fn sanitized_naming(html: &str, mark: &str) -> String {
     sanitizer_naming(Some(mark)).clean(html).to_string()
 }
 
-/// The parsed events of `text`, with each mention of a person replaced
-/// by what `people` lets the reader see ([`with_mentions`]), and the
-/// mentions that named someone.
-fn events_with_mentions<'a>(text: &'a str, people: &[MentionName]) -> (Vec<Event<'a>>, Resolved) {
-    let events = Parser::new_ext(text, MD_OPTIONS)
-        .into_offset_iter()
-        .collect();
-    with_mentions(text, events, people)
+/// How a text's own raw HTML is written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RawHtml {
+    /// As HTML, for the sanitizer to judge. The usual way.
+    AsWritten,
+    /// As the characters it is made of. For a text whose HTML does not
+    /// leave a mention whole: with nothing of the writer's parsed as
+    /// HTML, there is no attribute for one to fall into.
+    ///
+    /// SECURITY: the text given to the Markdown parser is the same in
+    /// both ways, wiki links written and all; only what is done with the
+    /// parser's HTML events differs. So Markdown reads the same links in
+    /// both, and a mention in the one is a mention in the other. (Were
+    /// the wiki links left as typed here, `[[T]]` in a link's address
+    /// would make an address of what was none, with a token in it.)
+    AsText,
 }
 
-/// The shared path of [`render_markdown`] and [`render_note`]: parse,
-/// replace the mentions among the events, write the HTML, and sanitize
-/// it last. Then check that every person named came out as the element
-/// written for them (`Resolved::intact`); if not, the text is rendered
-/// again with nobody named.
+/// A text ready for the Markdown parser: its wiki links written as HTML
+/// (where it has any), and where each mention of a person in the text
+/// **as written** is in it.
+struct Prepared {
+    text: String,
+    tokens: Vec<Token>,
+    moved: Moved,
+}
+
+fn prepare(source: &str, title_map: Option<&HashMap<String, NodeId>>) -> Prepared {
+    let (text, moved) = match title_map {
+        Some(titles) => preprocess_wikilinks_moved(source, titles),
+        None => (source.to_string(), Moved::nowhere()),
+    };
+    Prepared {
+        tokens: Token::all(source, &moved),
+        text,
+        moved,
+    }
+}
+
+/// The parsed events of a prepared text, with each mention of a person
+/// replaced by what `people` lets the reader see ([`with_mentions`]),
+/// and what was written for them.
+fn events_with_mentions<'a>(
+    prepared: &'a Prepared,
+    people: &[MentionName],
+    raw: RawHtml,
+) -> (Vec<Event<'a>>, Resolved) {
+    let events = Parser::new_ext(&prepared.text, MD_OPTIONS)
+        .into_offset_iter()
+        .map(|(event, range)| {
+            let event = match event {
+                // The tags of a wiki link are the app's own, and stay.
+                Event::InlineHtml(html)
+                    if raw == RawHtml::AsText && !prepared.moved.wrote(&range) =>
+                {
+                    Event::Text(html)
+                }
+                Event::Html(html) if raw == RawHtml::AsText => Event::Text(html),
+                Event::Start(Tag::HtmlBlock) if raw == RawHtml::AsText => {
+                    Event::Start(Tag::Paragraph)
+                }
+                Event::End(TagEnd::HtmlBlock) if raw == RawHtml::AsText => {
+                    Event::End(TagEnd::Paragraph)
+                }
+                event => event,
+            };
+            (event, range)
+        })
+        .collect();
+    with_mentions(events, &prepared.tokens, people)
+}
+
+/// A rendering whose mentions are whole, and for each mention of
+/// `source` (in `common::mention::mentions`' order) whether it is shown
+/// as one that names someone.
+///
+/// `render` writes and sanitizes one attempt. The text is tried as
+/// written; if that leaves a mention not whole (`Resolved::intact`), with
+/// its raw HTML as text. SECURITY: never return an attempt that failed
+/// the check, and never one that was not checked.
+fn checked<T>(
+    source: &str,
+    title_map: Option<&HashMap<String, NodeId>>,
+    people: &[MentionName],
+    render: impl Fn(&Prepared, &[MentionName], RawHtml) -> (T, Resolved),
+    html_of: impl Fn(&T) -> &str,
+) -> (T, Vec<bool>) {
+    let prepared = prepare(source, title_map);
+    for (raw, people) in [
+        (RawHtml::AsWritten, people),
+        (RawHtml::AsText, people),
+        // Not reached by any text found: with no raw HTML, Markdown
+        // writes each mention where the HTML parser reads an element.
+        (RawHtml::AsText, &[]),
+    ] {
+        let (out, resolved) = render(&prepared, people, raw);
+        let intact = resolved.intact(html_of(&out), |h| {
+            sanitizer_naming(Some(resolved.mark())).clean(h).to_string()
+        });
+        if intact {
+            return (out, resolved.named());
+        }
+    }
+    // Nothing held. Show no text of it at all rather than one unchecked.
+    let nothing = Prepared {
+        text: String::new(),
+        tokens: Vec::new(),
+        moved: Moved::nowhere(),
+    };
+    let named = vec![false; common::mention::mentions(source).len()];
+    (render(&nothing, &[], RawHtml::AsText).0, named)
+}
+
+/// One attempt at [`render_markdown`] / [`render_note`]: parse, replace
+/// the mentions among the events, write the HTML, and sanitize it last.
+fn html_of(prepared: &Prepared, people: &[MentionName], raw: RawHtml) -> (String, Resolved) {
+    let (events, resolved) = events_with_mentions(prepared, people, raw);
+    let mut html_out = String::new();
+    cmark_html::push_html(&mut html_out, events.into_iter());
+    let html = sanitizer_naming(Some(resolved.mark()))
+        .clean(&html_out)
+        .to_string();
+    (html, resolved)
+}
+
+/// The shared path of [`render_markdown`] and [`render_note`].
 fn render_with_mentions(
     source: &str,
     title_map: Option<&HashMap<String, NodeId>>,
     people: &[MentionName],
 ) -> String {
-    render_checked(source, title_map, people).0
-}
-
-/// [`render_with_mentions`], and for each mention of `source` (in
-/// `common::mention::mentions`' order) whether the page shows it as a
-/// mention that names someone.
-fn render_checked(
-    source: &str,
-    title_map: Option<&HashMap<String, NodeId>>,
-    people: &[MentionName],
-) -> (String, Vec<bool>) {
-    let preprocessed = match title_map {
-        Some(titles) => Cow::Owned(preprocess_wikilinks(source, titles)),
-        None => Cow::Borrowed(source),
-    };
-    let once = |people: &[MentionName]| {
-        let (events, resolved) = events_with_mentions(&preprocessed, people);
-        let mut html_out = String::new();
-        cmark_html::push_html(&mut html_out, events.into_iter());
-        let html = sanitizer_naming(Some(resolved.mark()))
-            .clean(&html_out)
-            .to_string();
-        (html, resolved)
-    };
-    let (html, resolved) = once(people);
-    let intact = resolved.intact(&html, |h| {
-        sanitizer_naming(Some(resolved.mark())).clean(h).to_string()
-    });
-    if intact {
-        (html, resolved.named(true))
-    } else {
-        (once(&[]).0, resolved.named(false))
-    }
+    checked(source, title_map, people, html_of, String::as_str).0
 }
 
 /// For each mention of `source` (in `common::mention::mentions`' order):
@@ -272,7 +351,7 @@ pub fn named_mentions(
     title_map: Option<&HashMap<String, NodeId>>,
     people: &[MentionName],
 ) -> Vec<bool> {
-    render_checked(source, title_map, people).1
+    checked(source, title_map, people, html_of, String::as_str).1
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -324,27 +403,19 @@ pub fn render_body(
     title_map: &HashMap<String, NodeId>,
     people: &[MentionName],
 ) -> RenderedBody {
-    let preprocessed = preprocess_wikilinks(source, title_map);
-    let (body, resolved) = body_of(&preprocessed, people);
-    // As `render_with_mentions`: a person named must have come out as
-    // the element written for them, or nobody is named. The outline is
-    // made again too: it reads the names.
-    let intact = resolved.intact(&body.html, |h| {
-        sanitizer_naming(Some(resolved.mark())).clean(h).to_string()
-    });
-    if intact {
-        body
-    } else {
-        body_of(&preprocessed, &[]).0
-    }
+    // As `render_with_mentions`: every mention must have come out whole.
+    // The outline is made with each attempt: it reads the names.
+    checked(source, Some(title_map), people, body_of, |body| {
+        body.html.as_str()
+    })
+    .0
 }
 
-/// One pass of [`render_body`] over the text with its wiki links
-/// already written.
-fn body_of(preprocessed: &str, people: &[MentionName]) -> (RenderedBody, Resolved) {
+/// One attempt at [`render_body`].
+fn body_of(prepared: &Prepared, people: &[MentionName], raw: RawHtml) -> (RenderedBody, Resolved) {
     // A mention in a heading is a `Text` event by now, so the outline
     // reads it as its name.
-    let (parsed, resolved) = events_with_mentions(preprocessed, people);
+    let (parsed, resolved) = events_with_mentions(prepared, people, raw);
     let mut outline = Vec::new();
     let mut next_id = 0usize;
     // The open h2/h3: (level, id, text so far).
