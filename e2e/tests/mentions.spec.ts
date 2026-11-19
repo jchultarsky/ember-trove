@@ -81,7 +81,15 @@ test('typing @ lists your people, and a pick by keyboard puts a mention in the t
   await person(request, { display_name: `e2e Bea ${stamp}` });
   const node = await createNode(request, `${NODE} minutes ${stamp}`, { body: '' });
   try {
+    // The registry is read when the first @ is typed, once: not with the
+    // editor, and not again at every keystroke after it.
+    const registryReads: string[] = [];
+    page.on('request', (r) => {
+      const url = new URL(r.url());
+      if (r.method() === 'GET' && url.pathname === '/api/people') registryReads.push(url.search);
+    });
     const editor = await openEditor(page, node.id);
+    expect(registryReads).toHaveLength(0);
     await editor.pressSequentially(`Met @Ada ${stamp}`.slice(0, -4), { delay: 15 });
     // Name and email, and only the one who matches; the first is ready.
     const options = list(page).getByRole('option');
@@ -102,10 +110,22 @@ test('typing @ lists your people, and a pick by keyboard puts a mention in the t
     await expect(editor).toBeFocused();
     // The preview names them at once, as a link.
     await expect(page.locator('a.mention')).toHaveText(`@${ada.display_name}`);
+    expect(registryReads).toHaveLength(1);
     // The pick is one edit of the box: undo takes it back, redo puts it in.
     await page.keyboard.press('ControlOrMeta+z');
     expect(await editor.inputValue()).not.toContain('person:');
     await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expect(editor).toHaveValue(`Met ${token(ada)} `);
+    // A new @ reads the registry again, so someone added since is
+    // offered; typing on after it does not.
+    const cy = await person(request, { display_name: `e2e Cy ${stamp}` });
+    await editor.press('End');
+    await editor.pressSequentially(`@Cy ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(options).toHaveCount(1);
+    await expect(options.first()).toContainText(cy.display_name);
+    expect(registryReads).toHaveLength(2);
+    await page.keyboard.press('Escape');
+    for (const _ of `@Cy ${stamp}`.slice(0, -4)) await page.keyboard.press('Backspace');
     await expect(editor).toHaveValue(`Met ${token(ada)} `);
 
     await page.getByRole('button', { name: 'Done', exact: true }).click();
@@ -199,11 +219,42 @@ test('@ then Enter is a new line; an email address opens nothing; Escape closes 
     await page.keyboard.press('Shift+Tab');
     await expect(list(page)).toHaveCount(0);
     expect(await editor.inputValue()).toMatch(/@zed\.mention9x\d+$/);
+    // The same with someone highlighted: Shift+Tab never picks.
+    await editor.focus();
+    await editor.press('End');
+    await editor.pressSequentially(` @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    await page.keyboard.press('Shift+Tab');
+    await expect(list(page)).toHaveCount(0);
+    expect(await editor.inputValue()).toMatch(/ @Ada mention9x\d+$/);
+    // The list follows the cursor when a key moves it and types nothing:
+    // End comes back to the mention being typed, Home leaves it. (On a
+    // short line of its own: Home goes to the start of the line as it is
+    // laid out, which on a long wrapped line is not the start.)
+    await editor.focus();
+    await editor.press('End');
+    await expect(list(page)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await editor.press('Enter');
+    await editor.pressSequentially(`@Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    await editor.press('Home');
+    await expect(list(page)).toHaveCount(0);
+    await editor.press('End');
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    // An arrow key the list used keeps its highlight when the key comes up.
+    await person(request, { display_name: `e2e Ada Two ${stamp}` });
+    await editor.pressSequentially(` x @${stamp}`, { delay: 15 });
+    await expect(list(page).getByRole('option')).toHaveCount(2);
+    await page.keyboard.press('ArrowDown');
+    await expect(list(page).getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Escape');
     // Tab picks a highlighted one, after text that is not ASCII (the
     // cursor is counted in UTF-16 units, the text in bytes).
     await editor.focus();
     await editor.press('End');
     await editor.pressSequentially(` 👉 — @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).getByRole('option')).toHaveCount(1);
     await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
     await page.keyboard.press('Tab');
     expect(await editor.inputValue()).toMatch(new RegExp(` 👉 — @\\[e2e Ada ${stamp}\\]\\(person:${ada.id}\\) $`));
@@ -262,6 +313,35 @@ test('a note mentions a person; Escape in the list keeps the edit; the trash lea
     await card.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(card.locator('a.mention')).toHaveText(`@${ada.display_name}`);
 
+    // A note written without a mention, then edited to hold one: the
+    // card is drawn from the save's own answer, names included.
+    await page.locator('button[title="Add note"]').click();
+    await box.fill(`plain words ${stamp}`);
+    await page.locator('button[title="Save note"]').click();
+    const plain = page.locator('[data-note-id]').filter({ hasText: `plain words ${stamp}` });
+    await expect(plain).toBeVisible();
+    const plainId = await plain.getAttribute('data-note-id');
+    const second = page.locator(`[data-note-id="${plainId}"]`);
+    await second.locator('button[title="Edit note"]').click();
+    const secondEdit = second.getByPlaceholder('Note…');
+    await secondEdit.press('End');
+    await secondEdit.pressSequentially(` with @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await page.keyboard.press('Enter');
+    await second.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(second.locator('a.mention')).toHaveText(`@${ada.display_name}`);
+
+    // Ctrl/⌘+Enter with the list open, someone highlighted, saves what was
+    // typed: it picks nobody, and the list goes.
+    await page.locator('button[title="Add note"]').click();
+    await box.pressSequentially(`typed @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    await page.keyboard.press('ControlOrMeta+Enter');
+    await expect(list(page)).toHaveCount(0);
+    const typed = page.locator('[data-note-id]').filter({ hasText: 'typed @Ada' });
+    await expect(typed).toBeVisible();
+    await expect(typed.locator('.mention, .mention-unresolved')).toHaveCount(0);
+
     // After a rename the card shows the new name, and editing the note
     // changes nothing in its text unasked: the editor says the name is
     // older and offers to update it.
@@ -290,8 +370,11 @@ test('a note mentions a person; Escape in the list keeps the edit; the trash lea
       })
       .toContain(token({ ...ada, display_name: king }));
 
-    // In the trash it is in nobody's "Mentioned in".
+    // In the trash a note is in nobody's "Mentioned in".
+    expect(await mentionedIn()).toEqual([expect.objectContaining({ node_id: node.id, notes: 2 })]);
     expect((await request.delete(`/api/notes/${noteId}`)).status()).toBe(204);
+    expect(await mentionedIn()).toEqual([expect.objectContaining({ node_id: node.id, notes: 1 })]);
+    expect((await request.delete(`/api/notes/${plainId}`)).status()).toBe(204);
     expect(await mentionedIn()).toEqual([]);
   } finally {
     await wipe(request);
@@ -529,9 +612,40 @@ test('after a rename the editor offers to update the name in the text, and never
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
 
-    await openEditor(page, node.id);
+    // "Keep as typed" is for the names it was pressed for. Another
+    // person's older name is still offered afterwards, and "Update"
+    // then leaves the kept one alone.
+    const bea = await person(request, { display_name: `e2e Bea ${stamp}` });
+    const kept = await openEditor(page, node.id);
+    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Keep as typed' }).click();
+    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    await kept.press('End');
+    await kept.pressSequentially(` @Bea ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    await page.keyboard.press('Enter');
+    await expect(kept).toHaveValue(`${before} ${token(bea)} `);
+    await kept.fill(`${before} ${token(bea, 'B')}`);
+    await expect(page.getByTestId('stale-mentions')).toContainText('1 mention shows an older name.');
     await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
-    await expect(page.getByPlaceholder(/Write in Markdown/)).toHaveValue(`Met ${token(renamed)}.`);
+    await expect(kept).toHaveValue(`${before} ${token(bea)}`);
+    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    await kept.fill(before);
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
+    expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(before);
+
+    const editor3 = await openEditor(page, node.id);
+    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
+    await expect(editor3).toHaveValue(`Met ${token(renamed)}.`);
+    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    // It is one edit of the box, with the keyboard back in it: undo takes
+    // it back (and the notice with it), redo makes it again.
+    await expect(editor3).toBeFocused();
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(editor3).toHaveValue(before);
+    await expect(page.getByTestId('stale-mentions')).toBeVisible();
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expect(editor3).toHaveValue(`Met ${token(renamed)}.`);
     await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
@@ -582,6 +696,57 @@ test('the Notes page: the list opens under the box, in view, and a pick is poste
   }
 });
 
+test('the registry arriving late, failing, and coming back', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipe(request);
+  const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
+  const node = await createNode(request, `${NODE} registry ${stamp}`, { body: '' });
+  const registry = (url: URL) => url.pathname === '/api/people';
+  try {
+    const editor = await openEditor(page, node.id);
+    // The answer is held until the whole name is typed: when it comes,
+    // the one who matches is ready for Enter, as if it had been there.
+    let release: () => void = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    await page.route(registry, async (route) => {
+      await held;
+      await route.continue();
+    });
+    await editor.pressSequentially(`Met @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page)).toHaveCount(0);
+    release();
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveValue(`Met ${token(ada)} `);
+    await page.unroute(registry);
+
+    // A read that fails is said, not shown as "nobody".
+    await page.route(registry, (route) => route.fulfill({ status: 500, body: 'no' }));
+    await editor.pressSequentially('and @', { delay: 15 });
+    const alert = list(page).getByRole('alert');
+    await expect(alert).toContainText('Couldn’t load your People');
+    // Escape puts it away and nothing else: still editing, text kept.
+    await page.keyboard.press('Escape');
+    await expect(list(page)).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}/edit$`));
+    await expect(editor).toBeFocused();
+    await expect(editor).toHaveValue(`Met ${token(ada)} and @`);
+    // Typing @ again reads it again.
+    await page.unroute(registry);
+    await editor.pressSequentially(` @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).getByRole('alert')).toHaveCount(0);
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveValue(`Met ${token(ada)} and @ ${token(ada)} `);
+    await editor.fill('');
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
+  } finally {
+    await wipe(request);
+  }
+});
+
 test('a mention is shown only where Markdown reads a link', async ({ page, request }) => {
   const stamp = newStamp();
   await wipe(request);
@@ -594,14 +759,34 @@ test('a mention is shown only where Markdown reads a link', async ({ page, reque
     `<a href='https://attacker.example/?q=${token(ada, 'A')}'>Quarterly report</a>`,
     `[a link](https://attacker.example/${token(ada, 'A')})`,
     `\`${token(ada, 'A')}\``,
+    // In an image's alt text, and as the words of a link the writer
+    // wrote by hand: not a mention there either.
+    `![${token(ada, 'A')}](/favicon.ico)`,
+    `<a href="https://attacker.example/">${token(ada, 'A')}</a>`,
+    // What broke out of the sanitizer while a mention's markup was put
+    // in after it: forged markers around an attribute.
+    `<a href="https://attacker.example/" title="&#xE000;">Sign in again</a>&#xE001;<span title=" class=etl-root style=position:fixed;inset:0 onmouseover=alert(1) x=">.</span>`,
+    // A writer may type the class. It is a word on their own link, and
+    // does not get the look of a link to a person.
+    `<a class="mention" href="https://attacker.example/">@Boss</a>`,
   ].join('\n\n');
   const node = await createNode(request, `${NODE} places ${stamp}`, { body });
   try {
     await page.goto(`/nodes/${node.id}`);
-    await expect(page.locator('a.mention')).toHaveCount(1);
-    await expect(page.locator('a.mention')).toHaveText(`@${ada.display_name}`);
+    const real = page.locator('a.mention[href^="/people/"]');
+    await expect(real).toHaveCount(1);
+    await expect(real).toHaveText(`@${ada.display_name}`);
+    const typed = page.locator('a.mention:not([href^="/people/"])');
+    await expect(typed).toHaveText('@Boss');
+    const colour = (el: Element) => getComputedStyle(el).color;
+    expect(await typed.evaluate(colour)).not.toBe(await real.evaluate(colour));
     const html = await page.locator('.prose').first().innerHTML();
     expect(html.match(/Secret/g) ?? []).toHaveLength(1);
+    // Nothing a writer typed became a class, a handler or a position.
+    expect(await page.locator('.prose [class~="etl-root"], .prose [onmouseover]').count()).toBe(0);
+    for (const el of await page.locator('.prose [style]').all()) {
+      expect(await el.getAttribute('style')).not.toMatch(/position|inset/);
+    }
     for (const link of await page.locator('.prose a[href^="http"]').all()) {
       expect(await link.getAttribute('href')).not.toContain('Secret');
     }

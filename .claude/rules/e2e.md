@@ -250,6 +250,15 @@ CI job is too slow a feedback loop for selector work.
     the node with the token in its body, or save the body as that
     identity with the token new in that save. Saving a body that had
     the token already makes nothing.
+  - Where the cursor is after a key (2026-11-19): an undo of a pick
+    leaves what it put back **selected**, so the cursor is at the `@`,
+    not after the name, and the list does not reopen. `Home` in a
+    textarea goes to the start of the line as laid out; on a long
+    wrapped line that is not the start of the line. Test cursor keys
+    on a short line of its own.
+  - To fake the registry: `page.route((url) => url.pathname ===
+    '/api/people', …)`. Hold the answer to make it arrive late, fulfil
+    with 500 for the alert. `unroute` before the next step.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,

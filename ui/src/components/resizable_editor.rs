@@ -137,6 +137,12 @@ pub fn ResizableEditor(
                         picker.after_input();
                     }
                 }
+                // An arrow, Home or End moves the cursor without an `input`.
+                on:keyup=move |ev: leptos::ev::KeyboardEvent| {
+                    if let Some(picker) = mentions {
+                        picker.on_keyup(&ev);
+                    }
+                }
                 on:blur=move |_| {
                     if let Some(picker) = mentions {
                         picker.close();

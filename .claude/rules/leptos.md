@@ -391,18 +391,34 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     keyboard goes to the form's alert (`focus_alert_if_lost`).
 - **Mentions of people** (S9, #360). `common::mention` reads
   `@[label](person:id)` for the API; never scan for `@[` anywhere else.
-  - **A mention is rendered only where Markdown reads a link**
-    (`ui/src/mention.rs`). `Mentions::mark` finds it in the parsed
-    events (an `@`, then an inline link to `person:<id>`) and puts a
-    marker there; after the sanitizer has run, `fill_html` puts the
-    mention's HTML at the marker. **Never put HTML for a name into the
-    Markdown source**: a token inside a writer's own
-    `<a href='https://elsewhere/?q=…'>` then carried the person's name
-    to that address on a click (review of #361's second half).
-  - So the sanitizer allows **none** of the mention's classes, and a
-    writer can't dress a link of their own up as one. The filled HTML
-    is not sanitized again: everything in it is written by `Shown::of`
-    (fixed tags, a canonical id, the name through `html_inert`).
+  - **A mention is shown only where both readers agree it is one**
+    (`ui/src/mention.rs`, `with_mentions`): `common::mention::mentions`
+    reads a token at that place in the source, **and** the Markdown
+    parser read the same bytes as an inline link, outside an image.
+    It is replaced among the parsed events: a fixed opening tag, the
+    name as a `Text` event (the HTML writer escapes it), a closing tag.
+  - **The sanitizer is the last thing that touches rendered HTML.**
+    Two designs were tried and must not come back (both reviews of
+    #362):
+    - HTML for the name put into the Markdown **source**: a token
+      inside a writer's own `<a href='https://elsewhere/?q=…'>` carried
+      the person's name to that address on a click.
+    - HTML put in **after** the sanitizer, at markers in the text: a
+      writer forged the markers, and the fill cut through sanitized
+      markup, leaving attributes of the writer's choosing on an
+      allowed element.
+    Anything new that a renderer adds goes in as events, before the
+    HTML is written. Each renderer's output, cleaned again, must be
+    unchanged (`nothing_a_writer_types_gets_past_the_sanitizer`).
+  - The sanitizer allows the mention's classes by name (`mention` on
+    `a` and `span`, `mention-unresolved` on `span`), so a writer can
+    type them and give their own words the plain look of a name, as
+    they can make them bold. That is accepted: no name is told by it.
+    The look of a link is styled only for `a.mention[href^="/people/"]`.
+  - A token inside a link the writer wrote in HTML is not resolved
+    (`anchors_opened`). That is tidiness, not a boundary: the name
+    would only be words on the page there, to a reader who may know
+    it.
   - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
     `<span class="mention">` with no id in the markup; nobody to name →
     `<span class="mention-unresolved">` with the label. Told apart
@@ -431,13 +447,27 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       only when a **name** matches what was typed. A bare `@` or an
       address-only match needs an arrow key first.
     - Escape closes the list only (it must not reach the editor's
-      Escape). Ctrl/⌘+Enter stays the editor's and closes the list.
-      Shift+Tab leaves the field.
-    - A pick is one `insertText` edit by the browser, so Ctrl+Z undoes
-      it and the box's own `input` handler sets the signal. Don't
-      `set_value` a textarea for an edit the user may want to undo.
-    - The registry is read once, on the first `@` (`wanted` is set only
-      when false: a signal set to the value it has still notifies).
+      Escape), and the "couldn't load your People" alert the same way.
+      Ctrl/⌘+Enter stays the editor's and closes the list. Shift+Tab
+      leaves the field.
+    - A pick is one `insertText` edit by the browser (`edit`), so
+      Ctrl+Z undoes it and the box's own `input` handler sets the
+      signal. "Update" is one such edit too. Don't `set_value` a
+      textarea for an edit the user may want to undo.
+    - Offsets from the box (`selectionStart`) count in the box's own
+      text (`el.value()`), not in the editor's signal: a text saved
+      with CRLF line ends differs until the first keystroke.
+    - The registry is read when an `@` starts a mention: at the first
+      one, and again at each later one (a person added since, a read
+      that failed). Never per keystroke: `reads` is bumped only when
+      the `@` is a new one (a signal set to the value it has still
+      notifies).
+    - The highlight is derived from the list as it is
+      (`active_in`): whoever an arrow key moved to, **by person**, else
+      the first when a name matches. So it is right when the registry
+      arrives after the name was typed, and Enter never picks someone
+      who slid into a highlighted row.
+    - `on_keyup` follows the cursor on an arrow, Home or End.
     - Option ids are keyed by person, and an `aria-live` line says how
       many people there are and who is highlighted.
     - The list docks under a note's box (`Dock::Below`): above it, the
@@ -446,7 +476,8 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     The editor's baseline, Revert, the 412 fingerprints and draft
     recovery all hold "the text as loaded". `MentionPicker::notice`
     (in the page's flow, above the box) offers "Update" and "Keep as
-    typed".
+    typed". "Keep as typed" remembers the labels it was pressed for
+    (`kept`), so a name that goes stale later is still offered.
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before

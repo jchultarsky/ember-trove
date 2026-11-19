@@ -22,7 +22,7 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
-use crate::mention::{Mentions, without_markers};
+use crate::mention::with_mentions;
 use crate::wikilink::preprocess_wikilinks;
 use common::id::NodeId;
 use common::mention::MentionName;
@@ -114,10 +114,9 @@ fn sanitize_style(value: &str) -> Option<String> {
 /// - Adds `<span>`, `<div>`, `<input>` (for task-list checkboxes)
 /// - Permits `style` on block/inline elements, with its VALUE filtered to a
 ///   safe CSS-property allowlist (see [`sanitize_style`])
-/// - Permits `data-node-id` on `<a>` and one class each on `<a>` and
-///   `<span>`: the two the WikiLink renderer writes. (A mention's HTML is
-///   put in after sanitizing, `crate::mention`; none of its classes is
-///   allowed here.)
+/// - Permits `data-node-id` on `<a>`, and by name the classes the
+///   renderers themselves write: the WikiLink renderer's two and the
+///   mention renderer's two (`crate::mention`).
 ///
 /// SECURITY: `class` is never allowed as a free attribute. The app's own
 /// stylesheet has classes that cover the screen (the loader's `etl-root`,
@@ -127,12 +126,19 @@ fn sanitizer() -> ammonia::Builder<'static> {
     let mut b = ammonia::Builder::new();
     b.add_tags(&["span", "div", "input"]);
     b.add_tag_attributes("a", &["data-node-id"]);
-    // By name, and no others: the two the WikiLink renderer writes. A
-    // mention's classes are NOT here: its HTML is put in after this has
-    // run (`crate::mention`), so a writer can't dress a link of their own
-    // up as a mention.
-    b.add_allowed_classes("a", &["wikilink"]);
-    b.add_allowed_classes("span", &["wikilink-unresolved"]);
+    // By name, and no others: the classes the WikiLink renderer and the
+    // mention renderer write. None of them places or sizes anything
+    // (`input.css`). A writer can type them too, and so give words of
+    // their own the plain look of a name; the look of a link to a person
+    // is styled only for a link to `/people/…`.
+    //
+    // SECURITY: this sanitizer is the LAST thing that touches the HTML.
+    // Never change its output afterwards (see `crate::mention`).
+    b.add_allowed_classes("a", &["wikilink", "mention"]);
+    b.add_allowed_classes(
+        "span",
+        &["wikilink-unresolved", "mention", "mention-unresolved"],
+    );
     b.add_tag_attributes("input", &["type", "checked", "disabled"]);
     b.add_tag_attributes("img", &["src", "alt", "width", "height", "style"]);
     for &tag in STYLED_ELEMENTS {
@@ -168,24 +174,38 @@ pub fn render_markdown(
     render_with_mentions(source, Some(title_map), people)
 }
 
+/// `html` as the sanitizer leaves it. Cleaning a renderer's output again
+/// must change nothing: the mention tests hold every renderer to that.
+#[cfg(test)]
+pub(crate) fn sanitized(html: &str) -> String {
+    sanitizer().clean(html).to_string()
+}
+
+/// The parsed events of `text`, with each mention of a person replaced
+/// by what `people` lets the reader see ([`with_mentions`]).
+fn events_with_mentions<'a>(text: &'a str, people: &[MentionName]) -> Vec<Event<'a>> {
+    let events = Parser::new_ext(text, MD_OPTIONS)
+        .into_offset_iter()
+        .collect();
+    with_mentions(text, events, people)
+}
+
 /// The shared path of [`render_markdown`] and [`render_note`]: parse,
-/// mark the mentions among the events, write and sanitize the HTML, then
-/// put each mention where its marker is.
+/// replace the mentions among the events, write the HTML, and sanitize
+/// it last.
 fn render_with_mentions(
     source: &str,
     title_map: Option<&HashMap<String, NodeId>>,
     people: &[MentionName],
 ) -> String {
-    let source = without_markers(source);
     let preprocessed = match title_map {
-        Some(titles) => Cow::Owned(preprocess_wikilinks(&source, titles)),
-        None => source,
+        Some(titles) => Cow::Owned(preprocess_wikilinks(source, titles)),
+        None => Cow::Borrowed(source),
     };
-    let events: Vec<Event<'_>> = Parser::new_ext(&preprocessed, MD_OPTIONS).collect();
-    let (events, mentions) = Mentions::mark(events, people);
+    let events = events_with_mentions(&preprocessed, people);
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, events.into_iter());
-    mentions.fill_html(&sanitizer().clean(&html_out).to_string())
+    sanitizer().clean(&html_out).to_string()
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -237,10 +257,10 @@ pub fn render_body(
     title_map: &HashMap<String, NodeId>,
     people: &[MentionName],
 ) -> RenderedBody {
-    let source = without_markers(source);
-    let preprocessed = preprocess_wikilinks(&source, title_map);
-    let parsed: Vec<Event<'_>> = Parser::new_ext(&preprocessed, MD_OPTIONS).collect();
-    let (parsed, mentions) = Mentions::mark(parsed, people);
+    let preprocessed = preprocess_wikilinks(source, title_map);
+    // A mention in a heading is a `Text` event by now, so the outline
+    // reads it as its name.
+    let parsed = events_with_mentions(&preprocessed, people);
     let mut outline = Vec::new();
     let mut next_id = 0usize;
     // The open h2/h3: (level, id, text so far).
@@ -265,8 +285,6 @@ pub fn render_body(
         }
         Event::End(TagEnd::Heading(_)) => {
             if let Some((level, id, text)) = current.take() {
-                // A mention in a heading reads as its name.
-                let text = mentions.fill_plain(&text);
                 let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !text.is_empty() {
                     outline.push(OutlineEntry { level, text, id });
@@ -291,7 +309,7 @@ pub fn render_body(
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, events);
     RenderedBody {
-        html: mentions.fill_html(&sanitizer().clean(&html_out).to_string()),
+        html: sanitizer().clean(&html_out).to_string(),
         outline,
     }
 }

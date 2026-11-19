@@ -10,6 +10,11 @@
 //! plain-text views all go through [`mentions`]. Who may make a mention,
 //! and to whom a person is named, are the API's rules
 //! (`api/src/repo/mention.rs`); nothing here decides that.
+//!
+//! The page shows a mention only where this scanner **and** the Markdown
+//! parser read one (`ui/src/mention.rs`). Where they differ (an autolink
+//! in the label, a token in an image's alt text) a row may exist and the
+//! page names nobody there: it can understate, never the other way.
 
 use std::ops::Range;
 
@@ -40,8 +45,8 @@ pub struct Mention<'a> {
 /// Every mention in `text`, in order. The one scanner.
 ///
 /// - `@[label](person:id)`, on one line.
-/// - The label is not empty and holds no `[`, `]` or backtick
-///   ([`mention_token`] never writes one).
+/// - The label is not empty and holds no `[`, `]`, backtick or
+///   backslash ([`mention_token`] never writes one).
 /// - The id has one spelling: 36 characters, lower case, hyphenated.
 ///   An upper-case or braced UUID is plain text. One spelling means two
 ///   tokens for one person can't look different to the sync and the
@@ -77,10 +82,12 @@ pub fn mentions(text: &str) -> Vec<Mention<'_>> {
 fn token_at(text: &str, open: usize) -> Option<Mention<'_>> {
     let label_start = open + OPEN.len();
     let rest = text.get(label_start..)?;
-    // The label ends at the first `]`. A `[`, a backtick or a line break
-    // before it means this is not a mention, and the look stops there:
-    // never to the end of a long line for each `@[` on it.
-    let label_len = rest.find([']', '[', '`', '\n'])?;
+    // The label ends at the first `]`. A `[`, a backtick, a backslash
+    // or a line break before it means this is not a mention, and the
+    // look stops there: never to the end of a long line for each `@[`
+    // on it. (A backslash: Markdown would read `\]` as part of the
+    // label, and the page shows a mention only where both agree.)
+    let label_len = rest.find([']', '[', '`', '\\', '\n'])?;
     if !rest.get(label_len..)?.starts_with(']') {
         return None;
     }
@@ -221,24 +228,56 @@ pub fn plain(text: &str) -> String {
     replace_mentions(text, |m| format!("@{}", m.label))
 }
 
+/// The mentions of the author's own people whose label is not their
+/// current name, as (person, label as written): what a notice may
+/// offer to bring up to date, and what "Keep as typed" remembers.
+#[must_use]
+pub fn stale_labels(text: &str, own_names: &[(PersonId, String)]) -> Vec<(PersonId, String)> {
+    let mut stale: Vec<(PersonId, String)> = Vec::new();
+    for m in mentions(text) {
+        let current = own_names
+            .iter()
+            .find(|(id, _)| *id == m.person_id)
+            .map(|(_, name)| mention_label(name));
+        if current.is_some_and(|label| label != m.label) {
+            let pair = (m.person_id, m.label.to_string());
+            if !stale.contains(&pair) {
+                stale.push(pair);
+            }
+        }
+    }
+    stale
+}
+
 /// `text` with the labels of the author's own people brought up to
-/// their current names, and how many labels changed. `None` when every
-/// label of theirs is current.
+/// their current names, and how many labels changed. `None` when
+/// nothing is to change.
 ///
-/// Only people in `own_names` are touched: someone else's label is what
-/// that person wrote, and their names are not this author's to know.
+/// - Only people in `own_names` are touched: someone else's label is
+///   what that person wrote, and their names are not this author's to
+///   know.
+/// - A label in `kept` (a person and a label as written) is left as it
+///   is: the author chose to keep it.
+///
 /// The result is offered to the author as an edit; nothing rewrites
 /// text on its own.
 #[must_use]
-pub fn refresh_labels(text: &str, own_names: &[(PersonId, String)]) -> Option<(String, usize)> {
+pub fn refresh_labels(
+    text: &str,
+    own_names: &[(PersonId, String)],
+    kept: &[(PersonId, String)],
+) -> Option<(String, usize)> {
     let mut changed = 0;
     let refreshed = replace_mentions(text, |m| {
         let current = own_names
             .iter()
             .find(|(id, _)| *id == m.person_id)
             .map(|(_, name)| mention_label(name));
+        let is_kept = kept
+            .iter()
+            .any(|(id, label)| *id == m.person_id && label == m.label);
         match current {
-            Some(label) if label != m.label => {
+            Some(label) if label != m.label && !is_kept => {
                 changed += 1;
                 mention_token(&label, m.person_id)
             }
@@ -246,24 +285,6 @@ pub fn refresh_labels(text: &str, own_names: &[(PersonId, String)]) -> Option<(S
         }
     });
     (changed > 0).then_some((refreshed, changed))
-}
-
-/// `text` as HTML in which nothing is markup, for a name put into
-/// Markdown before it is rendered: every character that is not a letter
-/// or a digit is written as a numeric entity. A name such as
-/// `[x](https://e)` or `*a*` would otherwise be read as Markdown inside
-/// the mention.
-#[must_use]
-pub fn html_inert(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if c.is_alphanumeric() {
-            out.push(c);
-        } else {
-            out.push_str(&format!("&#{};", u32::from(c)));
-        }
-    }
-    out
 }
 
 // ── The picker ─────────────────────────────────────────────────────────
@@ -594,6 +615,9 @@ mod tests {
             format!("@[A[da](person:{ADA})"),
             format!("@[A`da](person:{ADA})"),
             format!("@[Ada\nLovelace](person:{ADA})"),
+            // Markdown reads `\]` as part of a longer label.
+            format!("@[Ada\\](person:{ADA})"),
+            format!("@[A\\da](person:{ADA})"),
         ] {
             assert!(mentions(&not_one).is_empty(), "{not_one}");
         }
@@ -663,32 +687,43 @@ mod tests {
     fn only_own_labels_are_refreshed() {
         let text = format!("@[Ada Lovelace](person:{ADA}) met @[Bea](person:{BEA}).");
         let own = [(id(ADA), "Ada King".to_string())];
-        let (fresh, changed) = refresh_labels(&text, &own).expect("stale");
+        assert_eq!(
+            stale_labels(&text, &own),
+            [(id(ADA), "Ada Lovelace".to_string())]
+        );
+        let (fresh, changed) = refresh_labels(&text, &own, &[]).expect("stale");
         assert_eq!(
             fresh,
             format!("@[Ada King](person:{ADA}) met @[Bea](person:{BEA}).")
         );
         assert_eq!(changed, 1);
         // Current already, or nobody of theirs: nothing to offer.
-        assert_eq!(refresh_labels(&fresh, &own), None);
-        assert_eq!(refresh_labels(&text, &[]), None);
+        assert_eq!(refresh_labels(&fresh, &own, &[]), None);
+        assert_eq!(stale_labels(&fresh, &own), []);
+        assert_eq!(refresh_labels(&text, &[], &[]), None);
         // A name that needs tidying counts as current once tidied.
         let odd = [(id(ADA), " Ada  [King] ".to_string())];
-        let (fresh, _) = refresh_labels(&text, &odd).expect("stale");
+        let (fresh, _) = refresh_labels(&text, &odd, &[]).expect("stale");
         assert!(fresh.starts_with("@[Ada (King)](person:"), "{fresh}");
-        assert_eq!(refresh_labels(&fresh, &odd), None);
+        assert_eq!(refresh_labels(&fresh, &odd, &[]), None);
     }
 
     #[test]
-    fn a_name_is_never_markup() {
-        assert_eq!(html_inert("Ada"), "Ada");
-        assert_eq!(html_inert("Ada L."), "Ada&#32;L&#46;");
-        let hostile = html_inert("[x](https://e) *a* <b> &amp; `c`");
-        for c in ['[', ']', '(', ')', '*', '<', '>', '`', ' ', '_'] {
-            assert!(!hostile.contains(c), "{c:?} in {hostile}");
-        }
-        // Letters of any script stay readable.
-        assert_eq!(html_inert("José李"), "José李");
+    fn a_label_the_author_kept_is_left_and_another_is_still_offered() {
+        let text = format!("@[Countess](person:{ADA}) and @[A. L.](person:{ADA})");
+        let own = [(id(ADA), "Ada King".to_string())];
+        let kept = [(id(ADA), "Countess".to_string())];
+        let (fresh, changed) = refresh_labels(&text, &own, &kept).expect("one left");
+        assert_eq!(
+            fresh,
+            format!("@[Countess](person:{ADA}) and @[Ada King](person:{ADA})")
+        );
+        assert_eq!(changed, 1);
+        // Everything stale is kept: nothing to offer.
+        assert_eq!(
+            refresh_labels(&text, &own, &stale_labels(&text, &own)),
+            None
+        );
     }
 
     #[test]

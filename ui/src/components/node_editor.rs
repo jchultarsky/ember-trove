@@ -1681,6 +1681,13 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                                 mention_picker.after_input();
                             }
                         }
+                        // An arrow, Home or End moves the cursor without
+                        // an `input`.
+                        on:keyup=move |ev: leptos::ev::KeyboardEvent| {
+                            if wikilink_query.get_untracked().is_none() {
+                                mention_picker.on_keyup(&ev);
+                            }
+                        }
                         on:blur=move |_| mention_picker.close()
                         aria-autocomplete="list"
                         aria-controls=move || mention_picker.controls()
