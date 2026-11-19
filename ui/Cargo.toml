@@ -36,6 +36,7 @@ web-sys = { version = "0.3", features = [
     "DataTransferItemList",
     "Document",
     "HtmlDocument",
+    "InputEvent",
     "DomRect",
     "DragEvent",
     "Element",

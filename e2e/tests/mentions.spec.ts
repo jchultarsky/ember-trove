@@ -258,9 +258,30 @@ test('@ then Enter is a new line; an email address opens nothing; Escape closes 
     await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(0);
     await editor.pressSequentially(stamp.slice(-4, -3), { delay: 15 });
     await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    // Text that arrives by a paste is not typing: the list shows, nobody
+    // is ready, and Enter is a new line.
+    await page.keyboard.press('Escape');
+    await editor.evaluate((el: HTMLTextAreaElement, pasted: string) => {
+      el.setRangeText(pasted, el.value.length, el.value.length, 'end');
+      el.dispatchEvent(new InputEvent('input', { inputType: 'insertFromPaste', bubbles: true }));
+    }, `\n@Ada ${stamp}`.slice(0, -4));
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(0);
+    await editor.pressSequentially(stamp.slice(-4, -3), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
     // A key with a modifier that is not the save chord leaves the list.
     await page.keyboard.press('Control');
     await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    // The cursor has gone elsewhere with no event to follow (⌘← on a Mac
+    // sends no keyup): Enter is the editor's, a new line, and not a pick.
+    const mentionsBefore = (await editor.inputValue()).split('](person:').length;
+    await editor.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(0, 0));
+    await page.keyboard.press('Enter');
+    await expect(list(page)).toHaveCount(0);
+    const afterEnter = await editor.inputValue();
+    expect(afterEnter.startsWith('\n')).toBe(true);
+    expect(afterEnter.split('](person:').length).toBe(mentionsBefore);
+    await editor.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.value.length, el.value.length));
     // An arrow key the list used keeps its highlight when the key comes up.
     await person(request, { display_name: `e2e Ada Two ${stamp}` });
     await editor.pressSequentially(` x @${stamp}`, { delay: 15 });
@@ -700,6 +721,39 @@ test('after a rename the editor offers to update the name in the text, and never
     expect(await editor4.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(`Met ${token(short)}.`.length);
     await page.keyboard.press('ControlOrMeta+z');
     await expect(editor4).toHaveValue(`Met ${token(renamed)}.`);
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('Update leaves a token in a link’s address alone', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipe(request);
+  const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
+  // A real mention, and the same token where the page shows no mention:
+  // in the address of a link, and in a Markdown link's address. Brought
+  // up to date there, the person's current name would go to that address
+  // on a click.
+  const planted = [
+    `<a href='https://attacker.example/?q=${token(ada)}'>Quarterly report</a>`,
+    `[Minutes](<https://attacker.example/?m=${token(ada)}>)`,
+  ].join(' ');
+  const before = `Met ${token(ada)}. ${planted}`;
+  const node = await createNode(request, `${NODE} planted ${stamp}`, { body: before });
+  const renamed = { ...ada, display_name: `e2e Ada King ${stamp}` };
+  expect(
+    (await request.put(`/api/people/${ada.id}`, { data: { display_name: renamed.display_name } })).status(),
+  ).toBe(200);
+  try {
+    const editor = await openEditor(page, node.id);
+    // One mention shows an older name, not three.
+    await expect(page.getByTestId('stale-mentions')).toContainText('1 mention shows an older name.');
+    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
+    await expect(editor).toHaveValue(`Met ${token(renamed)}. ${planted}`);
+    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    for (const link of await page.locator('.prose a[href^="http"]').all()) {
+      expect(await link.getAttribute('href')).not.toContain('King');
+    }
   } finally {
     await wipe(request);
   }

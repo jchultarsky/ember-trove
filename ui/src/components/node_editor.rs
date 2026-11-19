@@ -858,7 +858,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
     // S9: the `@` picker, and the people the preview may name: those the
     // node came with (other readers' included), and the author's own.
-    let mention_picker = MentionPicker::new(body, textarea_ref);
+    let mention_picker = MentionPicker::new(body, textarea_ref).with_wiki_links(wikilink_map);
 
     // If editing, fetch existing node data.
     if let Some(id) = node {
@@ -1309,7 +1309,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
         if query.is_some() {
             mention_picker.close();
         } else {
-            mention_picker.after_input();
+            mention_picker.after_input(&ev);
         }
         wikilink_query.set(query);
     };

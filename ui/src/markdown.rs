@@ -123,7 +123,23 @@ fn sanitize_style(value: &str) -> Option<String> {
 /// Tailwind's `fixed inset-0`), so any class a writer could choose is the
 /// overlay `sanitize_style` exists to stop (2026-11-10).
 fn sanitizer() -> ammonia::Builder<'static> {
+    sanitizer_naming(None)
+}
+
+/// [`sanitizer`], for a render that names people: it also allows that
+/// render's own class (`mention::Resolved::mark`) on a mention's `<a>`
+/// and `<span>`.
+///
+/// SECURITY: the class is random and made for one render, so no writer
+/// can have typed it. The render's check of its result looks for it
+/// (`Resolved::intact`). Never allow a class here that a text could
+/// know.
+fn sanitizer_naming(mark: Option<&str>) -> ammonia::Builder<'_> {
     let mut b = ammonia::Builder::new();
+    if let Some(mark) = mark {
+        b.add_allowed_classes("a", std::iter::once(mark));
+        b.add_allowed_classes("span", std::iter::once(mark));
+    }
     b.add_tags(&["span", "div", "input"]);
     b.add_tag_attributes("a", &["data-node-id"]);
     // By name, and no others: the classes the WikiLink renderer and the
@@ -174,11 +190,19 @@ pub fn render_markdown(
     render_with_mentions(source, Some(title_map), people)
 }
 
-/// `html` as the sanitizer leaves it. Cleaning a renderer's output again
-/// must change nothing: the mention tests hold every renderer to that.
+/// `html` as the sanitizer leaves it, for tests. (Cleaning a renderer's
+/// output again changes nothing a writer could use: the mention tests
+/// hold their texts to that. It is not true of every text: the HTML
+/// parser can shape a tree differently the second time.)
 #[cfg(test)]
 pub(crate) fn sanitized(html: &str) -> String {
     sanitizer().clean(html).to_string()
+}
+
+/// [`sanitized`] by a sanitizer that allows `mark`, for tests.
+#[cfg(test)]
+pub(crate) fn sanitized_naming(html: &str, mark: &str) -> String {
+    sanitizer_naming(Some(mark)).clean(html).to_string()
 }
 
 /// The parsed events of `text`, with each mention of a person replaced
@@ -201,6 +225,17 @@ fn render_with_mentions(
     title_map: Option<&HashMap<String, NodeId>>,
     people: &[MentionName],
 ) -> String {
+    render_checked(source, title_map, people).0
+}
+
+/// [`render_with_mentions`], and for each mention of `source` (in
+/// `common::mention::mentions`' order) whether the page shows it as a
+/// mention that names someone.
+fn render_checked(
+    source: &str,
+    title_map: Option<&HashMap<String, NodeId>>,
+    people: &[MentionName],
+) -> (String, Vec<bool>) {
     let preprocessed = match title_map {
         Some(titles) => Cow::Owned(preprocess_wikilinks(source, titles)),
         None => Cow::Borrowed(source),
@@ -209,14 +244,35 @@ fn render_with_mentions(
         let (events, resolved) = events_with_mentions(&preprocessed, people);
         let mut html_out = String::new();
         cmark_html::push_html(&mut html_out, events.into_iter());
-        (sanitizer().clean(&html_out).to_string(), resolved)
+        let html = sanitizer_naming(Some(resolved.mark()))
+            .clean(&html_out)
+            .to_string();
+        (html, resolved)
     };
     let (html, resolved) = once(people);
-    if resolved.intact(&html, |h| sanitizer().clean(h).to_string()) {
-        html
+    let intact = resolved.intact(&html, |h| {
+        sanitizer_naming(Some(resolved.mark())).clean(h).to_string()
+    });
+    if intact {
+        (html, resolved.named(true))
     } else {
-        once(&[]).0
+        (once(&[]).0, resolved.named(false))
     }
+}
+
+/// For each mention of `source` (in `common::mention::mentions`' order):
+/// whether the page shows it as a mention that names someone in
+/// `people`. `title_map` as for [`render_markdown`]; `None` for a note.
+///
+/// For the editor's "this mention shows an older name": a token is not
+/// always a mention the page shows (one in a link's address is not),
+/// and only one that is may have its label brought up to date.
+pub fn named_mentions(
+    source: &str,
+    title_map: Option<&HashMap<String, NodeId>>,
+    people: &[MentionName],
+) -> Vec<bool> {
+    render_checked(source, title_map, people).1
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -273,7 +329,10 @@ pub fn render_body(
     // As `render_with_mentions`: a person named must have come out as
     // the element written for them, or nobody is named. The outline is
     // made again too: it reads the names.
-    if resolved.intact(&body.html, |h| sanitizer().clean(h).to_string()) {
+    let intact = resolved.intact(&body.html, |h| {
+        sanitizer_naming(Some(resolved.mark())).clean(h).to_string()
+    });
+    if intact {
         body
     } else {
         body_of(&preprocessed, &[]).0
@@ -333,13 +392,10 @@ fn body_of(preprocessed: &str, people: &[MentionName]) -> (RenderedBody, Resolve
     });
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, events);
-    (
-        RenderedBody {
-            html: sanitizer().clean(&html_out).to_string(),
-            outline,
-        },
-        resolved,
-    )
+    let html = sanitizer_naming(Some(resolved.mark()))
+        .clean(&html_out)
+        .to_string();
+    (RenderedBody { html, outline }, resolved)
 }
 
 /// Render a note: Markdown with its mentions of people (S9), for the

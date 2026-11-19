@@ -28,10 +28,12 @@
 //! handler sets the editor's signal: drafts, autosave and the dirty
 //! state see an ordinary edit.
 
-use common::id::PersonId;
+use std::collections::HashMap;
+
+use common::id::{NodeId, PersonId};
 use common::mention::{
     MentionName, MentionQuery, PickerMatch, edit_between, insert_mention, mention_edit,
-    mention_query_at, picker_match, refresh_labels, refresh_labels_at, stale_labels,
+    mention_query_at, picker_match, refresh_labels, refresh_labels_at, stale_labels, typed_by,
 };
 use common::person::{Person, primary};
 use leptos::prelude::*;
@@ -87,6 +89,10 @@ pub struct MentionPicker {
     /// written) the author chose to leave. A label that goes stale later,
     /// or another person's, is still offered.
     kept: RwSignal<Vec<(PersonId, String)>>,
+    /// The titles the text's wiki links resolve to, where the text is a
+    /// node's body ([`Self::with_wiki_links`]): the page is rendered
+    /// with them, and "Update" asks the same render what it shows.
+    titles: StoredValue<Option<Signal<HashMap<String, NodeId>>>>,
     id: StoredValue<String>,
 }
 
@@ -116,11 +122,19 @@ impl MentionPicker {
             known: RwSignal::new(Vec::new()),
             picked: RwSignal::new(Vec::new()),
             kept: RwSignal::new(Vec::new()),
+            titles: StoredValue::new(None),
             id: StoredValue::new(format!(
                 "mention-picker-{}",
                 NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             )),
         }
+    }
+
+    /// For a node's body: the titles its wiki links resolve to, as the
+    /// preview is rendered with. A note has no wiki links and needs none.
+    pub fn with_wiki_links(self, titles: Signal<HashMap<String, NodeId>>) -> Self {
+        self.titles.set_value(Some(titles));
+        self
     }
 
     /// The people the text came with (`ViewedNode.mentions`, a note's
@@ -218,9 +232,15 @@ impl MentionPicker {
     }
 
     /// Call from the text box's `input` handler, after the text signal
-    /// is set: follows the `@` at the cursor, if any.
-    pub fn after_input(&self) {
-        self.follow(true);
+    /// is set: follows the `@` at the cursor, if any. `ev` says whether
+    /// the person typed (`common::mention::typed_by`): after a paste, a
+    /// drop or an undo the list shows with nobody ready, as it does when
+    /// the cursor is moved.
+    pub fn after_input(&self, ev: &leptos::ev::Event) {
+        let typed = ev
+            .dyn_ref::<web_sys::InputEvent>()
+            .is_some_and(|ev| typed_by(&ev.input_type()));
+        self.follow(typed);
     }
 
     /// Call from the text box's `click` handler: the cursor may now be in
@@ -352,6 +372,15 @@ impl MentionPicker {
                 let Some((person, _)) = active.and_then(|i| options.get(i).cloned()) else {
                     return false;
                 };
+                // The list must still be about where the cursor is. It
+                // can have moved with no event to follow (⌘← on a Mac
+                // sends no `keyup`): the key is then the editor's.
+                let text = self.text();
+                let here = self.cursor().and_then(|c| mention_query_at(&text, c));
+                if here.as_ref() != Some(&typing) {
+                    self.follow(false);
+                    return false;
+                }
                 ev.prevent_default();
                 ev.stop_propagation();
                 self.pick(&person);
@@ -472,15 +501,38 @@ impl MentionPicker {
         ))
     }
 
-    /// How many labels of the author's own people show an older name
-    /// that the author has not chosen to keep.
+    /// For each mention of `text`: whether the page shows it as a
+    /// mention that names someone (`markdown::named_mentions`, with the
+    /// names and the wiki links the preview is rendered with).
+    ///
+    /// SECURITY: "Update" may touch only these. A token with the id of
+    /// the author's person can sit in a link's address or an attribute,
+    /// put there by someone else; the page shows no mention there, and a
+    /// label brought up to date there is the person's current name sent
+    /// to that address on a click (fourth review of #362).
+    fn shown_in(&self, text: &str, names: &[MentionName], tracked: bool) -> Vec<bool> {
+        let titles = self.titles.get_value().map(|titles| {
+            if tracked {
+                titles.get()
+            } else {
+                titles.get_untracked()
+            }
+        });
+        crate::markdown::named_mentions(text, titles.as_ref(), names)
+    }
+
+    /// How many mentions the page shows have a label of the author's own
+    /// person that is an older name, and that the author has not chosen
+    /// to keep.
     fn stale_count(&self) -> Option<usize> {
-        refresh_labels(
-            &self.value.get(),
-            &Self::own(self.names()),
-            &self.kept.get(),
-        )
-        .map(|(_, changed)| changed)
+        let text = self.value.get();
+        let names = self.names();
+        let own = Self::own(names.clone());
+        let kept = self.kept.get();
+        // Nothing stale at all (the usual case): no need to render.
+        refresh_labels(&text, &own, &kept)?;
+        let shown = self.shown_in(&text, &names, true);
+        refresh_labels_at(&text, &own, &kept, 0, Some(&shown)).map(|fresh| fresh.changed)
     }
 
     /// "Update": the older names brought up to date, as one edit of the
@@ -498,11 +550,14 @@ impl MentionPicker {
         };
         let text = el.value();
         let cursor = el.selection_start().ok().flatten().unwrap_or(0) as usize;
+        let names = Self::names_of(self.known.get_untracked(), self.picked.get_untracked());
+        let shown = self.shown_in(&text, &names, false);
         let Some(fresh) = refresh_labels_at(
             &text,
-            &self.own_untracked(),
+            &Self::own(names),
             &self.kept.get_untracked(),
             cursor,
+            Some(&shown),
         ) else {
             return;
         };
@@ -707,5 +762,150 @@ impl MentionPicker {
                 </div>
             }.into_any())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::person::ContactPoint;
+    use uuid::Uuid;
+
+    fn person(n: u128, name: &str, email: Option<&str>) -> Person {
+        Person {
+            id: PersonId(Uuid::from_u128(n)),
+            owner_id: "me".to_string(),
+            display_name: name.to_string(),
+            company: Some("Lovelace Ltd".to_string()),
+            position: None,
+            emails: email
+                .map(|value| ContactPoint {
+                    label: String::new(),
+                    value: value.to_string(),
+                    preferred: true,
+                })
+                .into_iter()
+                .collect(),
+            phones: vec![ContactPoint {
+                label: String::new(),
+                value: "+1 555 010 4242".to_string(),
+                preferred: false,
+            }],
+            addresses: Vec::new(),
+            notes: None,
+            created_at: chrono::DateTime::UNIX_EPOCH,
+            updated_at: chrono::DateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn registry() -> Vec<Person> {
+        vec![
+            person(1, "Ada Lovelace", Some("countess@example.com")),
+            person(2, "Bea Adams", Some("ada.fan@example.com")),
+            person(3, "Cy Young", None),
+        ]
+    }
+
+    fn ids(offered: &[(Person, PickerMatch)]) -> Vec<u128> {
+        offered.iter().map(|(p, _)| p.id.0.as_u128()).collect()
+    }
+
+    #[test]
+    fn people_are_offered_by_name_first_then_by_address() {
+        // "ada": a word of Ada's name, of Bea's ("Adams"); nobody by a
+        // company or a phone number.
+        let offered = MentionPicker::offered(registry(), "ada");
+        assert_eq!(ids(&offered), [1, 2]);
+        assert!(offered.iter().all(|(_, how)| *how == PickerMatch::Name));
+        // "countess": only an address. Listed, after any name match.
+        let offered = MentionPicker::offered(registry(), "countess");
+        assert_eq!(ids(&offered), [1]);
+        assert_eq!(offered[0].1, PickerMatch::Email);
+        assert!(MentionPicker::offered(registry(), "4242").is_empty());
+        assert!(MentionPicker::offered(registry(), "lovelace ltd").is_empty());
+        // A bare `@` offers everyone, up to what the list shows.
+        assert_eq!(ids(&MentionPicker::offered(registry(), "")), [1, 2, 3]);
+        let many: Vec<Person> = (0..20).map(|n| person(n, "Ann", None)).collect();
+        assert_eq!(MentionPicker::offered(many, "an").len(), SHOWN);
+    }
+
+    /// SECURITY: Enter picks only someone a typed name matched. A mention
+    /// made by accident in shared text tells its readers a name.
+    #[test]
+    fn somebody_is_ready_only_for_a_typed_name() {
+        let ready = |query: &str, typed: bool| {
+            MentionPicker::ready(&MentionPicker::offered(registry(), query), query, typed)
+        };
+        assert_eq!(ready("ada", true), Some(0));
+        // A bare `@`, or white space only.
+        assert_eq!(ready("", true), None);
+        assert_eq!(ready("  ", true), None);
+        // Only an address matches.
+        assert_eq!(ready("countess", true), None);
+        // Nobody matches.
+        assert_eq!(ready("zed", true), None);
+        // The cursor moved here, or the text was pasted: nobody.
+        assert_eq!(ready("ada", false), None);
+    }
+
+    #[test]
+    fn the_highlight_is_a_person_not_a_row() {
+        let options = MentionPicker::offered(registry(), "ada");
+        let bea = PersonId(Uuid::from_u128(2));
+        let at = |moved, options: &[(Person, PickerMatch)], typed| {
+            MentionPicker::active_in(moved, options, "ada", typed)
+        };
+        // An arrow key moved to Bea, the second row.
+        assert_eq!(at(Some(bea), &options, true), Some(1));
+        // The list changes under it: someone new sorts first. Still Bea.
+        let mut longer = registry();
+        longer.insert(0, person(9, "Aaron Ada", None));
+        let longer = MentionPicker::offered(longer, "ada");
+        assert_eq!(ids(&longer), [9, 1, 2]);
+        assert_eq!(at(Some(bea), &longer, true), Some(2));
+        // An arrow key's choice holds wherever the cursor came from.
+        assert_eq!(at(Some(bea), &options, false), Some(1));
+        // Bea is no longer offered: back to whoever is ready, if anyone.
+        let without: Vec<_> = options
+            .iter()
+            .filter(|(p, _)| p.id != bea)
+            .cloned()
+            .collect();
+        assert_eq!(at(Some(bea), &without, true), Some(0));
+        assert_eq!(at(Some(bea), &without, false), None);
+        assert_eq!(at(None, &options, true), Some(0));
+        assert_eq!(at(None, &options, false), None);
+    }
+
+    /// SECURITY: the preview names who the text came with and who was
+    /// picked here, never everyone in the registry.
+    #[test]
+    fn the_names_are_who_the_text_came_with_and_who_was_picked() {
+        let name = |n: u128, name: &str, mine: bool| MentionName {
+            person_id: PersonId(Uuid::from_u128(n)),
+            display_name: name.to_string(),
+            mine,
+        };
+        let names = MentionPicker::names_of(
+            vec![name(1, "Ada King", true), name(7, "Theirs", false)],
+            vec![name(1, "Ada (as picked)", true), name(2, "Bea", true)],
+        );
+        // Who the text came with wins over a pick of the same person.
+        assert_eq!(
+            names,
+            [
+                name(1, "Ada King", true),
+                name(7, "Theirs", false),
+                name(2, "Bea", true)
+            ]
+        );
+        // Only the author's own are theirs to bring up to date.
+        assert_eq!(
+            MentionPicker::own(names),
+            [
+                (PersonId(Uuid::from_u128(1)), "Ada King".to_string()),
+                (PersonId(Uuid::from_u128(2)), "Bea".to_string())
+            ]
+        );
     }
 }

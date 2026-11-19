@@ -57,6 +57,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     everything, and its result is checked: if a person named did not
     come out as the element written for them (raw HTML can swallow what
     follows it into an attribute), the text is shown with nobody named.
+    That element carries a class made at random for each render, so
+    nobody can type it.
+  - "Update" changes the name only in mentions the page shows. A token
+    someone put in a link's address is left as it is.
 - **The text scanners are linear.** The wiki-link and code-span
   scanners, which run on every save, were quadratic on text made to be
   slow (a megabyte of `[[` took most of a minute of the server's time).

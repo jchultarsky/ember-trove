@@ -129,7 +129,7 @@ pub fn ResizableEditor(
                 on:input=move |ev| {
                     value.set(event_target_value(&ev));
                     if let Some(picker) = mentions {
-                        picker.after_input();
+                        picker.after_input(&ev);
                     }
                 }
                 on:click=move |_| {

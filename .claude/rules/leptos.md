@@ -421,6 +421,16 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     rendered again with nobody named. The check reads the output and
     never changes it. Anything else that puts a reader-only secret into
     rendered Markdown needs the same check.
+  - **The element it looks for can't be typed** (`Resolved::mark`;
+    fourth review). Each render makes a random class, writes it on the
+    mentions that name someone, and allows it in that render's
+    sanitizer alone (`sanitizer_naming`). Without it a writer typed the
+    element once per guessed name beside a mention made to fall into
+    their link's address, and the right guess made the count come out.
+    So rendered markup is `class="mention m-<32 hex>"`: match
+    `.mention` in CSS and tests, never the whole attribute. Never
+    allow a class in the sanitizer that a text could know and a check
+    relies on.
   - Test a claim like "never in an attribute" by walking the output's
     attributes (`attribute_values` in the tests) and with the
     fixed-sequence fuzz, not with `contains("href=\"https://evil")`.
@@ -447,8 +457,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     in it** (`MentionPicker::set_known`, `names`), never "everyone in
     my registry". A token someone else typed with the id of the
     author's person is not a mention; the preview must not show it as
-    one, and "Update" must not write the person's current name into
-    text the planter can read.
+    one.
+  - **"Update" touches only mentions the page shows as naming someone**
+    (`markdown::named_mentions`, passed to
+    `common::mention::refresh_labels_at` as `only`; fourth review). A
+    token is not always one: with the id of a person who is really
+    mentioned elsewhere in the text, it can sit in a link's address,
+    and a label brought up to date there is the current name sent to
+    that address on a click. The notice counts the same ones. A text
+    whose result failed the check offers nothing. The body's picker
+    is given the wiki-link titles the preview renders with
+    (`with_wiki_links`), so it asks the same render.
   - **The picker is `MentionPicker`** (`mention_picker.rs`), one hook
     for the body textarea and `ResizableEditor` (`mentions=` is opt-in:
     notes only). The textarea calls `on_keydown` first and returns if
@@ -461,7 +480,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       address-only match, or a list that opened because the cursor
       moved into an `@…` already in the text (`after_click`,
       `on_keyup`; `by_typing` false) needs an arrow key first: Enter at
-      the end of a line that ends in `@bob` is a new line.
+      the end of a line that ends in `@bob` is a new line. A paste, a
+      drop and an undo are not typing either: `after_input` takes the
+      event and reads its `inputType` (`common::mention::typed_by`).
+      Before a pick, Enter and Tab check the list is still about where
+      the cursor is.
     - Escape closes the list only (it must not reach the editor's
       Escape), and the "couldn't load your People" alert the same way.
       Ctrl/⌘+Enter stays the editor's and closes the list; any other

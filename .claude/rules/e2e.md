@@ -260,8 +260,13 @@ CI job is too slow a feedback loop for selector work.
     '/api/people', …)`. Hold the answer to make it arrive late, fulfil
     with 500 for the alert. `unroute` before the next step.
   - A list that opened because the cursor moved (a click, End) has
-    nobody ready. To get a ready option, **type** a character of the
-    name.
+    nobody ready, and neither has one that follows a `fill` or a paste
+    (the `input` event is not typing). To get a ready option, **type**
+    a character of the name (`pressSequentially`). To fake a paste,
+    `setRangeText` and dispatch `new InputEvent('input', { inputType:
+    'insertFromPaste', bubbles: true })`.
+  - A named mention's class attribute is `mention m-<random>`: locate
+    with `.mention` / `a.mention`, never `[class="mention"]`.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,

