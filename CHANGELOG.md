@@ -6,6 +6,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Mentions of people in text: the rules and the API** (S9 of the
+  ontology programme, #360; ONTOLOGY §7.3). A body or a note can hold a
+  mention of one of your People, written `@[name](person:id)`. The
+  picker and the rendering follow in the next change; until then a
+  token typed by hand reads as "@name".
+  - `GET /api/nodes/{id}`, the note lists and the note writes answer
+    with the people their text mentions, as the reader may know them
+    (`mentions`: id, name, and whether the person is the reader's own).
+  - `GET /api/people/{id}/mentions`: "Mentioned in", for the person's
+    owner, listing only nodes they can open.
+  - Migration 057 adds two tables that record which mentions are real.
+    Backup format 14 carries them; older archives still restore.
+
+### Security
+- **A mention never tells a reader more than a name, and nobody can
+  look a name up.**
+  - A save makes a mention only for a token that save adds, of the
+    saver's own People. A token typed or pasted with someone else's id
+    names nobody: not for the one who typed it, and not when that
+    person's owner later saves, restores or copies the text.
+  - A person is named to another reader only while the person's owner
+    can still open the node.
+  - There is no lookup of a name by id: names come only with text the
+    reader may already read.
+  - Mentions are saved in the transaction that saves the text.
+- **The text scanners are linear.** The wiki-link and code-span
+  scanners, which run on every save, were quadratic on text made to be
+  slow (a megabyte of `[[` took most of a minute of the server's time).
+
 ## [3.31.0] - 2026-11-18
 
 ### Added

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::id::{NodeId, NoteId};
+use crate::mention::MentionName;
 
 fn default_note_color() -> String {
     "default".to_string()
@@ -53,6 +54,23 @@ pub struct ReaderNote {
     /// That, or the reader owns the node, or is an admin.
     #[serde(default)]
     pub may_remove: bool,
+    /// The people this note mentions, as this reader may know them (S9,
+    /// `mention::MentionName`). A mention whose person is not here shows
+    /// as unresolved.
+    #[serde(default)]
+    pub mentions: Vec<MentionName>,
+}
+
+/// What a note write answers with: the note, and the people it mentions
+/// as the writer may know them, so the page can show the saved note
+/// without reading the list again. The note's fields are at the top
+/// level, as before: a page that reads only a `Note` still does.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct SavedNote {
+    #[serde(flatten)]
+    pub note: Note,
+    #[serde(default)]
+    pub mentions: Vec<MentionName>,
 }
 
 impl std::ops::Deref for ReaderNote {
@@ -379,6 +397,7 @@ mod edited_tests {
             edited_at: None,
         };
         let reader = ReaderNote {
+            mentions: Vec::new(),
             note: note.clone(),
             may_edit: true,
             may_remove: false,

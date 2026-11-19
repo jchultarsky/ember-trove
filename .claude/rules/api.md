@@ -199,6 +199,99 @@ cargo check && cargo clippy -- -D warnings
 - Tests that need a pair call `people_who_share` (it uses the restore's
   setting); the migration test follows the 053 pattern.
 
+## Mentions of people in text (S9, #360; ONTOLOGY §7.3, §14)
+
+- The syntax is `@[label](person:<id>)` and `common::mention::mentions`
+  is its only reader (code and wiki links are skipped; one spelling of
+  an id). The label is never used to find anyone.
+- **A token is real only if it has a row** (`node_mentions`,
+  `note_mentions`; migration 057). Without a row nobody is named for
+  it. A person's id is not a secret (a sharee sees it in a shared
+  Project's People list and in the raw text), so the rows, not the
+  tokens, are what counts.
+- **SECURITY, rule 1: who may make a row.** A save makes a row only
+  for a mention **it adds**, of the saver's own person:
+  `repo::mention::sync_body_on(conn, node, mentioned, make, saver)`,
+  where `make` is `common::mention::added_mentions(old body, new
+  body)` (a person the new text mentions more often than the old), and
+  the insert is one `INSERT … SELECT … WHERE p.owner_id = $saver`.
+  - Never "every token of the saver's people in the body". A co-editor
+    can plant a token with the id of the owner's person, hidden in a
+    comment; the owner's next save of that body must not make it real
+    (found by the review of #361;
+    `a_planted_token_is_never_made_real_by_its_owner`).
+  - Never the node's owner's people, never "any person that exists".
+  - A row whose token is still in the text is kept, whoever made it; a
+    row whose token left is deleted.
+  - **A version put back makes none** (`NodeRepo::restore_body`, not
+    `update`): its text is not something the restorer typed. **A copy
+    carries only the copier's own mentions that were real on the
+    source** (`NodeRepo::duplicate`, not `create`). Anything else that
+    writes a body with text its caller did not type goes the same way.
+  - So a mention can go unresolved and stay so until its person's owner
+    mentions them again (takes the token out and puts it in, in saves
+    of their own). It understates; it never reveals.
+  - A note has one writer, its author, so `sync_note_on` makes a row
+    for every person of the author's the note mentions.
+- **SECURITY, rule 2: to whom a person is named.** `named_to` in
+  `repo/mention.rs`: to their owner, and to another reader only while
+  the person's owner can still open the node
+  (`owned_or_granted("n", "p.owner_id")`, a column, never a bind).
+  Otherwise a co-editor could mention their own contact in someone's
+  node, lose access, and the owner would keep reading that contact's
+  name.
+- **The reader is a `&str`, never an `Option`**, in `for_node` and
+  `for_notes`: an admin reads names as themself. (An admin may open
+  every node and is told the names in it, as for memberships: owner
+  decision of 2026-11-18, "a sharee, the admin". Still no way into the
+  registry.) Rule 2 reads `permissions`, as every rights check does, so
+  a suspended account's people stay named where it still holds a
+  grant. Only `mentioned_in`
+  takes `subject_scope` (which nodes to list; the person is the
+  caller's own, checked first with `PersonRepo::get`).
+- **There is no lookup of a name by id, and none may be added.** Names
+  ride on the text's own answer (`ViewedNode.mentions`,
+  `ReaderNote.mentions`, `SavedNote`), after that route's access check,
+  and for the **caller**, never for a note's author (a node's owner may
+  restore someone else's note).
+- **The sync runs in the transaction that writes the text**, inside the
+  four statements that write it: `insert_node`, `PgNodeRepo::save`
+  (behind `update` and `restore_body`), `insert_note`,
+  `PgNoteRepo::update`. A new statement that writes a body or a note's
+  text calls the sync on the same connection. (The wiki-link sync runs
+  after the commit; that is fine for edges, which the text can rebuild.
+  A mention row can't be rebuilt: it records who saved.) A save syncs
+  only when the request carries a body.
+  - The exceptions are the two old backfills (`backfill.rs`), which
+    write `nodes.body` with raw SQL and sync nothing. They have run on
+    every installation, and their texts are from before mentions
+    existed. A new backfill that writes a body must drop the rows of
+    tokens it removes (it can make none: nobody is saving).
+  - **The scan happens before the transaction opens** where the text
+    is at hand (`mentioned_ids` of the new body), and the scanners are
+    linear (`wikilink::covered`; `a_megabyte_of_the_worst_input_is_
+    scanned_at_once`). They were quadratic on hostile input, and inside
+    the transaction that held a pooled connection and the row for the
+    whole scan. Keep any new scanner linear, and keep CPU out of a
+    transaction.
+  - The insert comes before the delete: it locks people, the delete
+    locks rows here. The other order could deadlock with an account
+    purge.
+- The insert locks the people it reads (`FOR KEY SHARE`): a person
+  deleted mid-save then costs the save nothing
+  (`a_person_deleted_during_a_save_loses_no_save`).
+- A note in the trash keeps its rows; every read joins
+  `nn.deleted_at IS NULL`.
+- Nothing about mentions goes to History or a webhook, and the node
+  deletion preview doesn't count them (derived, and per reader).
+- Backup format 14 carries the rows; a restore takes back only those
+  `BackupData::restorable_mentions` lets through (the text has the
+  token, the person is in the archive, a note's row is its author's
+  person).
+- **For S8c:** a merge of two people rewrites the tokens of the one
+  that goes and moves its rows; a report of tokens with no row
+  ("leftovers") scans text, since a deleted person's rows are gone.
+
 ## Captures (#234)
 
 - A capture is unclassified Inbox input (`captures`, migration 043). Notes
@@ -270,7 +363,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12, task dependencies 13)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12, task dependencies 13, mentions 14)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction

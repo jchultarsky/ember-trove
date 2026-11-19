@@ -40,6 +40,10 @@ pub struct AppState {
     pub permissions: Arc<dyn PermissionRepo>,
     /// People and memberships (#147). Owner-scoped, no admin bypass.
     pub people: Arc<dyn PersonRepo>,
+    /// Mentions of people in text (S9). Reads only: the rows are written
+    /// by the statements that write the text. Each read is for a reader
+    /// in person.
+    pub mentions: Arc<dyn crate::repo::mention::MentionRepo>,
     /// Project Briefs (#282). Keyed by node; routes check node rights.
     pub briefs: Arc<dyn crate::repo::brief::BriefRepo>,
     /// Focus (#282). Private to each account, no admin bypass.

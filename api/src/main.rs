@@ -192,6 +192,7 @@ async fn main() -> anyhow::Result<()> {
         attachments: Arc::new(PgAttachmentRepo::new(pool.clone())),
         permissions: Arc::new(PgPermissionRepo::new(pool.clone())),
         people: Arc::new(repo::person::PgPersonRepo::new(pool.clone())),
+        mentions: Arc::new(repo::mention::PgMentionRepo::new(pool.clone())),
         briefs: Arc::new(repo::brief::PgBriefRepo::new(pool.clone())),
         focus: Arc::new(repo::project_focus::PgFocusRepo::new(pool.clone())),
         task_dependencies: Arc::new(repo::task_dependency::PgTaskDependencyRepo::new(

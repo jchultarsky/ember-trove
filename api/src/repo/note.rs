@@ -219,6 +219,8 @@ impl ReaderRow {
             note: self.note.into_note(),
             may_edit: self.may_edit,
             may_remove: self.may_remove,
+            // Filled by the route, for its reader (`MentionRepo`).
+            mentions: Vec::new(),
         }
     }
 }
@@ -240,14 +242,20 @@ impl FeedRow {
     }
 }
 
-/// Insert a note on a node (`NoteRepo::create`), on any executor, so
+/// Insert a note on a node (`NoteRepo::create`), on a connection, so
 /// capture conversion (#234) can do it inside its transaction.
-pub(crate) async fn insert_note<'e, E: sqlx::PgExecutor<'e>>(
-    ex: E,
+///
+/// The note's mentions are recorded here, by the same connection (S9):
+/// one of the four statements that write text. Call it inside a
+/// transaction. A note's only writer is its author, so only the
+/// author's own people are recorded.
+pub(crate) async fn insert_note(
+    conn: &mut sqlx::PgConnection,
     node_id: NodeId,
     owner_id: &str,
     req: &CreateNoteRequest,
 ) -> Result<Note, EmberTroveError> {
+    let mentioned = common::mention::mentioned_ids(&req.body);
     let row = sqlx::query_as::<_, NoteRow>(&format!(
         r#"
         INSERT INTO node_notes (node_id, owner_id, body, color)
@@ -260,11 +268,13 @@ pub(crate) async fn insert_note<'e, E: sqlx::PgExecutor<'e>>(
     .bind(owner_id)
     .bind(&req.body)
     .bind(&req.color)
-    .fetch_one(ex)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|e| EmberTroveError::Internal(format!("create note failed: {e}")))?;
 
-    Ok(row.into_note())
+    let note = row.into_note();
+    super::mention::sync_note_on(conn, note.id, &mentioned, owner_id).await?;
+    Ok(note)
 }
 
 /// Every live note, all owners. A free function so the backup can run it on its one
@@ -296,7 +306,11 @@ impl NoteRepo for PgNoteRepo {
         owner_id: &str,
         req: CreateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
-        insert_note(&self.pool, node_id, owner_id, &req).await
+        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("create note failed: {e}"));
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        let note = insert_note(&mut tx, node_id, owner_id, &req).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(note)
     }
 
     async fn update(
@@ -305,6 +319,11 @@ impl NoteRepo for PgNoteRepo {
         actor: NoteActor<'_>,
         req: UpdateNoteRequest,
     ) -> Result<Note, EmberTroveError> {
+        let db_err = |e: sqlx::Error| EmberTroveError::Internal(format!("update note failed: {e}"));
+        // Read before the transaction opens (a note is at most 10,000
+        // characters, but the rule is the same as for a body).
+        let mentioned = common::mention::mentioned_ids(&req.body);
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
         let row = sqlx::query_as::<_, NoteRow>(&format!(
             r#"
             UPDATE node_notes
@@ -325,12 +344,19 @@ impl NoteRepo for PgNoteRepo {
         .bind(note_id.0)
         .bind(actor.subject)
         .bind(actor.admin)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| EmberTroveError::Internal(format!("update note failed: {e}")))?
+        .map_err(db_err)?
         .ok_or_else(|| EmberTroveError::NotFound("note not found".to_string()))?;
 
-        Ok(row.into_note())
+        // S9: the note's mentions, in this transaction. One of the four
+        // statements that write text. Only the author gets this far
+        // (`author_may_write`), and the rows are for the author's own
+        // people.
+        let note = row.into_note();
+        super::mention::sync_note_on(&mut tx, note.id, &mentioned, &note.owner_id).await?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(note)
     }
 
     async fn delete(&self, note_id: NoteId, actor: NoteActor<'_>) -> Result<(), EmberTroveError> {

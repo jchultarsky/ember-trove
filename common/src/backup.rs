@@ -98,7 +98,13 @@ pub struct EntityCounts {
 /// and say nothing, so the number moves. Archives of 3 to 12 still
 /// restore: they have none, and since every restore replaces the tasks,
 /// none is left behind.
-pub const SCHEMA_VERSION: u32 = 13;
+/// 14 (S9, #360): the archive carries the mentions of people in text
+/// (`mentions`): which mention tokens are real, which can't be worked
+/// out again from the text (it depends on who saved it). An older
+/// release would restore the text without them, and every mention would
+/// show as unresolved with nothing said, so the number moves. Archives
+/// of 3 to 13 still restore: no text in them holds a mention.
+pub const SCHEMA_VERSION: u32 = 14;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -517,6 +523,69 @@ pub struct BackupData {
     /// end, and loops (`task_dependency::without_loops`).
     #[serde(default)]
     pub task_dependencies: Vec<crate::task_dependency::TaskDependency>,
+    // ── Format 14: mentions of people in text (S9, #360) ──────────────────
+    /// Which mentions in the bodies and notes are real
+    /// (`node_mentions`, `note_mentions`). A plain list like `briefs`: a
+    /// row hangs on its node or note and on its person, and every restore
+    /// replaces those. Restore puts back only what
+    /// [`BackupData::restorable_mentions`] lets through.
+    #[serde(default)]
+    pub mentions: Vec<crate::mention::BackupMention>,
+}
+
+impl BackupData {
+    /// The archive's mentions as a restore lands them (S9): each once,
+    /// and only a row that
+    /// - names a person the archive holds,
+    /// - sits on a node body or a note the archive holds (exactly one of
+    ///   the two), whose text has a mention token for that person, and
+    /// - for a note, is of the note's author's own person: a note has one
+    ///   writer, so that rule can be checked again here.
+    ///
+    /// SECURITY: a row is what names a person to a text's readers. An
+    /// archive is written by the server, but a row that no text backs
+    /// must not come back from one all the same.
+    #[must_use]
+    pub fn restorable_mentions(&self) -> Vec<crate::mention::BackupMention> {
+        use crate::mention::mentioned_ids;
+        use std::collections::HashMap;
+        let owners: HashMap<_, &str> = self
+            .people
+            .iter()
+            .map(|p| (p.id, p.owner_id.as_str()))
+            .collect();
+        let bodies: HashMap<_, Vec<_>> = self
+            .nodes
+            .iter()
+            .map(|n| (n.id, mentioned_ids(n.body.as_deref().unwrap_or_default())))
+            .collect();
+        let notes: HashMap<_, (&str, Vec<_>)> = self
+            .notes
+            .iter()
+            .filter(|n| n.node_id.is_some())
+            .map(|n| (n.id, (n.owner_id.as_str(), mentioned_ids(&n.body))))
+            .collect();
+        let mut kept: Vec<crate::mention::BackupMention> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for m in &self.mentions {
+            let Some(owner) = owners.get(&m.person_id) else {
+                continue;
+            };
+            let backed = match (m.node_id, m.note_id) {
+                (Some(node), None) => bodies
+                    .get(&node)
+                    .is_some_and(|ids| ids.contains(&m.person_id)),
+                (None, Some(note)) => notes
+                    .get(&note)
+                    .is_some_and(|(author, ids)| author == owner && ids.contains(&m.person_id)),
+                _ => false,
+            };
+            if backed && seen.insert((m.node_id, m.note_id, m.person_id)) {
+                kept.push(m.clone());
+            }
+        }
+        kept
+    }
 }
 
 impl BackupData {
@@ -649,11 +718,103 @@ mod tests {
         }
     }
 
+    /// Format 14 (S9): the archive carries which mentions are real, and a
+    /// restore takes back only rows its own text and people back up.
+    #[test]
+    fn an_archive_carries_mentions_and_a_restore_takes_only_backed_ones() {
+        use crate::id::{NodeId, NoteId, PersonId};
+        use crate::mention::{BackupMention, mention_token};
+        assert_eq!(SCHEMA_VERSION, 14);
+        let older: BackupData = serde_json::from_str(
+            r#"{"nodes":[],"edges":[],"tags":[],"notes":[],"tasks":[],"attachments":[]}"#,
+        )
+        .expect("an older archive");
+        assert!(older.mentions.is_empty());
+
+        let id = |n: u128| uuid::Uuid::from_u128(n);
+        let (ada, bo, gone) = (PersonId(id(1)), PersonId(id(2)), PersonId(id(3)));
+        let (node, other_node) = (NodeId(id(10)), NodeId(id(11)));
+        let (note, bobs_note) = (NoteId(id(20)), NoteId(id(21)));
+        let text = format!(
+            "{} {} {}",
+            mention_token("Ada", ada),
+            mention_token("Bo", bo),
+            mention_token("Gone", gone)
+        );
+        let data: BackupData = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                { "id": node, "owner_id": "alice", "node_type": "article", "title": "A",
+                  "slug": "a", "body": text, "metadata": {}, "status": "draft", "tags": [], "pinned": false,
+                  "edge_count": 0,
+                  "created_at": "2026-11-18T00:00:00Z", "updated_at": "2026-11-18T00:00:00Z" },
+                { "id": other_node, "owner_id": "alice", "node_type": "article", "title": "B",
+                  "slug": "b", "body": "no mention", "metadata": {}, "status": "draft", "tags": [], "pinned": false,
+                  "edge_count": 0,
+                  "created_at": "2026-11-18T00:00:00Z", "updated_at": "2026-11-18T00:00:00Z" }
+            ],
+            "edges": [], "tags": [], "tasks": [], "attachments": [],
+            "notes": [
+                { "id": note, "node_id": node, "owner_id": "alice", "body": text,
+                  "created_at": "2026-11-18T00:00:00Z", "updated_at": "2026-11-18T00:00:00Z" },
+                { "id": bobs_note, "node_id": node, "owner_id": "bob", "body": text,
+                  "created_at": "2026-11-18T00:00:00Z", "updated_at": "2026-11-18T00:00:00Z" }
+            ],
+            "people": [
+                { "id": ada, "owner_id": "alice", "display_name": "Ada", "emails": [], "phones": [],
+                  "created_at": "2026-11-18T00:00:00Z", "updated_at": "2026-11-18T00:00:00Z" },
+                { "id": bo, "owner_id": "bob", "display_name": "Bo", "emails": [], "phones": [],
+                  "created_at": "2026-11-18T00:00:00Z", "updated_at": "2026-11-18T00:00:00Z" }
+            ],
+            "mentions": [
+                { "node_id": node, "person_id": ada },
+                { "node_id": node, "person_id": ada },
+                { "node_id": node, "person_id": bo },
+                { "node_id": node, "person_id": gone },
+                { "node_id": other_node, "person_id": ada },
+                { "node_id": id(99), "person_id": ada },
+                { "note_id": note, "person_id": ada },
+                { "note_id": note, "person_id": bo },
+                { "note_id": bobs_note, "person_id": bo },
+                { "note_id": id(98), "person_id": ada },
+                { "node_id": node, "note_id": note, "person_id": ada },
+                { "person_id": ada }
+            ]
+        }))
+        .expect("an archive");
+        let body = |node, person| BackupMention {
+            node_id: Some(node),
+            note_id: None,
+            person_id: person,
+        };
+        let on_note = |note, person| BackupMention {
+            node_id: None,
+            note_id: Some(note),
+            person_id: person,
+        };
+        assert_eq!(
+            data.restorable_mentions(),
+            [
+                // Once; and Bo's on Alice's body (a co-editor's) stays.
+                body(node, ada),
+                body(node, bo),
+                // A note's rows are its author's people only.
+                on_note(note, ada),
+                on_note(bobs_note, bo),
+            ],
+            "not: a person the archive lacks, a text without the token, \
+             a node or note it lacks, both or neither of node and note"
+        );
+        let written = serde_json::to_value(&data).expect("json");
+        assert_eq!(
+            written["mentions"][0],
+            serde_json::json!({ "node_id": node, "person_id": ada })
+        );
+    }
+
     /// Format 13 (S5d): the archive carries which task waits for which.
     /// An older archive has no such list and reads as none.
     #[test]
     fn an_archive_carries_task_dependencies_and_an_older_one_has_none() {
-        assert_eq!(SCHEMA_VERSION, 13);
         let older: BackupData = serde_json::from_str(
             r#"{"nodes":[],"edges":[],"tags":[],"notes":[],"tasks":[],"attachments":[]}"#,
         )

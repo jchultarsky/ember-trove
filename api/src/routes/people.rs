@@ -23,6 +23,7 @@ use common::{
     EmberTroveError,
     auth::AuthClaims,
     id::{MembershipId, NodeId, PersonId},
+    mention::PersonMention,
     ontology::Capability,
     person::{
         DuplicateMatch, DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView,
@@ -32,7 +33,7 @@ use common::{
 use uuid::Uuid;
 
 use crate::{
-    auth::permissions::{require_editor, require_viewer},
+    auth::permissions::{require_editor, require_viewer, subject_scope},
     error::ApiError,
     routes::capability::refuse_unless,
     state::AppState,
@@ -48,6 +49,7 @@ pub fn router() -> Router<AppState> {
             get(get_person).put(update_person).delete(delete_person),
         )
         .route("/{id}/usages", get(person_usages))
+        .route("/{id}/mentions", get(person_mentions))
 }
 
 /// `/api/nodes/{node_id}/people`
@@ -210,6 +212,27 @@ async fn person_usages(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<PersonUsage>>, ApiError> {
     Ok(Json(state.people.usages(&claims.sub, PersonId(id)).await?))
+}
+
+/// GET /people/{id}/mentions — "Mentioned in" (S9, ONTOLOGY §7.3): the
+/// nodes whose body or notes mention this person.
+///
+/// The person must be the caller's own: another account's reads like a
+/// missing one, as on every route here (`PersonRepo::get`). Only nodes
+/// the caller can open are listed (§14), with no count of the rest; an
+/// admin may open every node, and still only for their own person.
+async fn person_mentions(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<PersonMention>>, ApiError> {
+    state.people.get(&claims.sub, PersonId(id)).await?;
+    Ok(Json(
+        state
+            .mentions
+            .mentioned_in(PersonId(id), subject_scope(&claims))
+            .await?,
+    ))
 }
 
 async fn role_suggestions(
