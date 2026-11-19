@@ -395,7 +395,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     (`ui/src/mention.rs`, `with_mentions`): `common::mention::mentions`
     reads a token at that place in the text **as written**, **and** the
     Markdown parser read the same bytes as an inline link, outside an
-    image.
+    image. That is true of one reader's page. Don't build on "every
+    reader's Markdown reads the same links": it does not (see "Nothing
+    writes a person's current name" below).
   - **The text is scanned for mentions once, as written** (`Token::all`),
     and each one is found again by position after the wiki links are
     written as HTML (`wikilink::Moved`). Never scan the rewritten text:
@@ -438,6 +440,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     **the same text** (wiki links written as HTML; their own tags
     stay, `Moved::wrote`), so Markdown reads the same links in each.
     `checked` never returns an attempt that failed, or one unchecked.
+  - **The check is one pass over the page** (`Resolved::intact`): the
+    writer chooses how many different labels a text has, and a search
+    of the page for each took a third of a minute on a body of the
+    size the API allows. Anything checked per mention must not search
+    the whole page per mention.
   - **The element it looks for can't be typed** (`Resolved::mark`;
     fourth review). Each render makes a random class, writes it on
     every mention, and allows it in that render's sanitizer alone
@@ -477,16 +484,20 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     my registry". A token someone else typed with the id of the
     author's person is not a mention; the preview must not show it as
     one.
-  - **"Update" touches only mentions the page shows as naming someone**
-    (`markdown::named_mentions`, passed to
-    `common::mention::refresh_labels_at` as `only`; fourth review). A
-    token is not always one: with the id of a person who is really
-    mentioned elsewhere in the text, it can sit in a link's address,
-    and a label brought up to date there is the current name sent to
-    that address on a click. The notice counts the same ones. A text
-    whose result failed the check offers nothing. The body's picker
-    is given the wiki-link titles the preview renders with
-    (`with_wiki_links`), so it asks the same render.
+  - **Nothing writes a person's current name into a text.** A label is
+    the name as it was when the mention was picked; the page shows the
+    current one. An "Update" for labels that show an older name was
+    built and taken out (2026-11-19). It wrote the name into every
+    token the editor's page showed as a mention, and three reviews in
+    a row found a text for which one of those was, to another reader
+    or after the edit itself, the address of a link: the Markdown
+    parser reads a text differently by its length and by which wiki
+    links lead somewhere (a link label's limit of 1,000 counted
+    characters, a budget for reference links that the text's size
+    sets). Before building it again, give the parser one text for
+    every reader (a placeholder of fixed shape for each wiki link,
+    swapped after the parse), and check the text again after the
+    edit. It belongs with the merge tool (S8c).
   - **The picker is `MentionPicker`** (`mention_picker.rs`), one hook
     for the body textarea and `ResizableEditor` (`mentions=` is opt-in:
     notes only). The textarea calls `on_keydown` first and returns if
@@ -512,12 +523,10 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       itself, on many keyboards). Shift+Tab leaves the field.
     - A pick is one `insertText` edit by the browser (`edit`), so
       Ctrl+Z undoes it and the box's own `input` handler sets the
-      signal. "Update" is one such edit too: of the part that differs
-      (`common::mention::edit_between`), with the cursor put back in
-      its place in the words and never inside a token
-      (`refresh_labels_at`). Don't `set_value` a textarea for an edit
-      the user may want to undo, and don't replace the whole text: the
-      box's `input` handler then sees the cursor at the very end.
+      signal. Don't `set_value` a textarea for an edit the user may
+      want to undo, and don't replace the whole text for a small
+      change: the box's `input` handler then sees the cursor at the
+      very end.
     - Offsets from the box (`selectionStart`) count in the box's own
       text (`el.value()`), not in the editor's signal: a text saved
       with CRLF line ends differs until the first keystroke.
@@ -536,12 +545,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       many people there are and who is highlighted.
     - The list docks under a note's box (`Dock::Below`): above it, the
       Notes page cut it off.
-  - **A stale label is never rewritten unasked**, in a body or a note.
-    The editor's baseline, Revert, the 412 fingerprints and draft
-    recovery all hold "the text as loaded". `MentionPicker::notice`
-    (in the page's flow, above the box) offers "Update" and "Keep as
-    typed". "Keep as typed" remembers the labels it was pressed for
-    (`kept`), so a name that goes stale later is still offered.
+  - **A stale label is never rewritten**, in a body or a note. The
+    editor's baseline, Revert, the 412 fingerprints and draft recovery
+    all hold "the text as loaded".
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before

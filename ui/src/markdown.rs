@@ -274,12 +274,10 @@ fn events_with_mentions<'a>(
             (event, range)
         })
         .collect();
-    with_mentions(events, &prepared.tokens, people)
+    with_mentions(events, &prepared.tokens, &prepared.moved, people)
 }
 
-/// A rendering whose mentions are whole, and for each mention of
-/// `source` (in `common::mention::mentions`' order) whether it is shown
-/// as one that names someone.
+/// A rendering whose mentions are whole.
 ///
 /// `render` writes and sanitizes one attempt. The text is tried as
 /// written; if that leaves a mention not whole (`Resolved::intact`), with
@@ -291,7 +289,7 @@ fn checked<T>(
     people: &[MentionName],
     render: impl Fn(&Prepared, &[MentionName], RawHtml) -> (T, Resolved),
     html_of: impl Fn(&T) -> &str,
-) -> (T, Vec<bool>) {
+) -> T {
     let prepared = prepare(source, title_map);
     for (raw, people) in [
         (RawHtml::AsWritten, people),
@@ -301,11 +299,9 @@ fn checked<T>(
         (RawHtml::AsText, &[]),
     ] {
         let (out, resolved) = render(&prepared, people, raw);
-        let intact = resolved.intact(html_of(&out), |h| {
-            sanitizer_naming(Some(resolved.mark())).clean(h).to_string()
-        });
-        if intact {
-            return (out, resolved.named());
+        let sanitizer = sanitizer_naming(Some(resolved.mark()));
+        if resolved.intact(html_of(&out), |h| sanitizer.clean(h).to_string()) {
+            return out;
         }
     }
     // Nothing held. Show no text of it at all rather than one unchecked.
@@ -314,8 +310,7 @@ fn checked<T>(
         tokens: Vec::new(),
         moved: Moved::nowhere(),
     };
-    let named = vec![false; common::mention::mentions(source).len()];
-    (render(&nothing, &[], RawHtml::AsText).0, named)
+    render(&nothing, &[], RawHtml::AsText).0
 }
 
 /// One attempt at [`render_markdown`] / [`render_note`]: parse, replace
@@ -336,22 +331,7 @@ fn render_with_mentions(
     title_map: Option<&HashMap<String, NodeId>>,
     people: &[MentionName],
 ) -> String {
-    checked(source, title_map, people, html_of, String::as_str).0
-}
-
-/// For each mention of `source` (in `common::mention::mentions`' order):
-/// whether the page shows it as a mention that names someone in
-/// `people`. `title_map` as for [`render_markdown`]; `None` for a note.
-///
-/// For the editor's "this mention shows an older name": a token is not
-/// always a mention the page shows (one in a link's address is not),
-/// and only one that is may have its label brought up to date.
-pub fn named_mentions(
-    source: &str,
-    title_map: Option<&HashMap<String, NodeId>>,
-    people: &[MentionName],
-) -> Vec<bool> {
-    checked(source, title_map, people, html_of, String::as_str).1
+    checked(source, title_map, people, html_of, String::as_str)
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -408,7 +388,6 @@ pub fn render_body(
     checked(source, Some(title_map), people, body_of, |body| {
         body.html.as_str()
     })
-    .0
 }
 
 /// One attempt at [`render_body`].

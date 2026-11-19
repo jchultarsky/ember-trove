@@ -858,7 +858,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
     // S9: the `@` picker, and the people the preview may name: those the
     // node came with (other readers' included), and the author's own.
-    let mention_picker = MentionPicker::new(body, textarea_ref).with_wiki_links(wikilink_map);
+    let mention_picker = MentionPicker::new(body, textarea_ref);
 
     // If editing, fetch existing node data.
     if let Some(id) = node {
@@ -1653,10 +1653,6 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     </div>
                 }
             })}
-            // S9: a mention's label is the name as it was when picked. A
-            // rename shows on the page at once; the raw text is brought up
-            // to date only when the author says so, as an ordinary edit.
-            <div class="px-4 empty:hidden">{mention_picker.notice()}</div>
             // Split editor + preview
             <div class="flex flex-1 divide-x divide-stone-200 dark:divide-stone-700 min-h-0">
                 // Editor pane (relative so the autocomplete dropdown can be positioned)

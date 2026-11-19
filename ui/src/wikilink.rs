@@ -44,19 +44,25 @@ impl Moved {
     /// (The link's words are escaped, so no tag of the writer's is in
     /// there.)
     pub fn wrote(&self, range: &std::ops::Range<usize>) -> bool {
-        self.written
-            .iter()
-            .any(|ours| ours.start <= range.start && range.end <= ours.end)
+        // The last one that starts at or before it, if it reaches that far.
+        let before = self
+            .written
+            .partition_point(|ours| ours.start <= range.start);
+        before
+            .checked_sub(1)
+            .and_then(|last| self.written.get(last))
+            .is_some_and(|ours| range.end <= ours.end)
     }
 
     /// `offset` of the text as written, in the rewritten text. Exact for
     /// an offset outside every wiki link.
     pub fn at(&self, offset: usize) -> usize {
-        let grown = self
-            .after
-            .iter()
-            .take_while(|(end, _)| *end <= offset)
-            .last()
+        // The last wiki link that ends at or before it. (In order, so a
+        // search by halves: a body can hold thousands of each.)
+        let before = self.after.partition_point(|(end, _)| *end <= offset);
+        let grown = before
+            .checked_sub(1)
+            .and_then(|last| self.after.get(last))
             .map_or(0, |(_, grown)| *grown);
         offset.saturating_add_signed(grown)
     }
@@ -109,15 +115,11 @@ pub fn wikilink_html(
     }
 }
 
-/// `@` too: a wiki link's words are not a place for a mention of a
-/// person (`common::mention::mentions` says so of the source), and the
-/// mention renderer reads this text after the wiki links are written.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-        .replace('@', "&#64;")
 }
 
 /// The lowercased-title → node map for the `[[links]]` in `body`, fetched

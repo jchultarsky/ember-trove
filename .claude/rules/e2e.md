@@ -241,8 +241,7 @@ CI job is too slow a feedback loop for selector work.
     `@Ada <stamp>` minus a few characters to get exactly one option.
   - On the page: `a.mention` (the reader's own person),
     `span.mention` (someone else's, name only), `.mention-unresolved`.
-    Other test ids: `stale-mentions`, `mentioned-in`,
-    `mentioned-in-row`.
+    Other test ids: `mentioned-in`, `mentioned-in-row`.
   - What a reader is told is `GET /api/nodes/{id}` → `mentions`; assert
     it with `toEqual` on the whole list, so an extra field fails.
   - A row is made only by a save that **adds** the token, made by the

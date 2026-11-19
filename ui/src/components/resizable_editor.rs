@@ -113,8 +113,6 @@ pub fn ResizableEditor(
     view! {
         // Relative: the `@` list docks under the box.
         <div class="w-full relative">
-            // "Some mentions show an older name", in the flow above it.
-            {mentions.map(|picker| picker.notice())}
             {mentions.map(|picker| picker.view(Dock::Below))}
             <textarea
                 node_ref=textarea_ref

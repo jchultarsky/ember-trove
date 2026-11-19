@@ -24,8 +24,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     and puts it back, or you put back an old version, it shows as
     unresolved until you mention them again.
   - After a rename the page shows the new name at once. The name in the
-    raw text stays as typed: the editor says so and offers "Update" or
-    "Keep as typed", for a body and for a note alike.
+    raw text stays as typed, in a body and in a note alike.
   - Deleting a person leaves the name as typed in the text, no longer a
     link; the confirmation says so.
   - Search finds a mention by the name as typed. Task titles, Briefs,
@@ -59,8 +58,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
     follows it into an attribute), the text is shown with its raw HTML
     as plain text. That element carries a class made at random for each
     render, so nobody can type it.
-  - "Update" changes the name only in mentions the page shows. A token
-    someone put in a link's address is left as it is.
+  - Nothing writes a person's current name into a text: a mention's
+    label stays as it was when picked, and the page shows the current
+    name.
 - **The text scanners are linear.** The wiki-link and code-span
   scanners, which run on every save, were quadratic on text made to be
   slow (a megabyte of `[[` took most of a minute of the server's time).

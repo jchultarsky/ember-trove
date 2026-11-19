@@ -28,12 +28,10 @@
 //! handler sets the editor's signal: drafts, autosave and the dirty
 //! state see an ordinary edit.
 
-use std::collections::HashMap;
-
-use common::id::{NodeId, PersonId};
+use common::id::PersonId;
 use common::mention::{
-    MentionName, MentionQuery, PickerMatch, edit_between, insert_mention, mention_edit,
-    mention_query_at, picker_match, refresh_labels, refresh_labels_at, stale_labels, typed_by,
+    MentionName, MentionQuery, PickerMatch, insert_mention, mention_edit, mention_query_at,
+    picker_match, typed_by,
 };
 use common::person::{Person, primary};
 use leptos::prelude::*;
@@ -85,14 +83,6 @@ pub struct MentionPicker {
     known: RwSignal<Vec<MentionName>>,
     /// People picked in this editor, for the preview before a save.
     picked: RwSignal<Vec<MentionName>>,
-    /// "Keep as typed": the older names (a person and the label as
-    /// written) the author chose to leave. A label that goes stale later,
-    /// or another person's, is still offered.
-    kept: RwSignal<Vec<(PersonId, String)>>,
-    /// The titles the text's wiki links resolve to, where the text is a
-    /// node's body ([`Self::with_wiki_links`]): the page is rendered
-    /// with them, and "Update" asks the same render what it shows.
-    titles: StoredValue<Option<Signal<HashMap<String, NodeId>>>>,
     /// While the picker itself is editing the box ([`Self::edit`]): the
     /// `input` event of that edit is not the person typing.
     editing: StoredValue<bool>,
@@ -124,21 +114,12 @@ impl MentionPicker {
             people,
             known: RwSignal::new(Vec::new()),
             picked: RwSignal::new(Vec::new()),
-            kept: RwSignal::new(Vec::new()),
-            titles: StoredValue::new(None),
             editing: StoredValue::new(false),
             id: StoredValue::new(format!(
                 "mention-picker-{}",
                 NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             )),
         }
-    }
-
-    /// For a node's body: the titles its wiki links resolve to, as the
-    /// preview is rendered with. A note has no wiki links and needs none.
-    pub fn with_wiki_links(self, titles: Signal<HashMap<String, NodeId>>) -> Self {
-        self.titles.set_value(Some(titles));
-        self
     }
 
     /// The people the text came with (`ViewedNode.mentions`, a note's
@@ -241,8 +222,8 @@ impl MentionPicker {
     /// drop or an undo the list shows with nobody ready, as it does when
     /// the cursor is moved.
     pub fn after_input(&self, ev: &leptos::ev::Event) {
-        // An edit the picker makes (a pick, "Update") is an `insertText`
-        // too, and nobody typed it.
+        // An edit the picker makes (a pick) is an `insertText` too, and
+        // nobody typed it.
         let typed = !self.editing.get_value()
             && ev
                 .dyn_ref::<web_sys::InputEvent>()
@@ -489,143 +470,18 @@ impl MentionPicker {
     /// SECURITY: not "everyone in the author's registry". A token someone
     /// else put in the text with the id of the author's person is not a
     /// mention (the API makes no row for it), and must not look like one
-    /// here, or have its name brought up to date in the raw text, which
-    /// the one who planted it can read.
+    /// here.
+    ///
+    /// Nothing here writes a person's current name into the text, and
+    /// nothing should (2026-11-19). An "Update" for labels that show an
+    /// older name was built and taken out: it wrote the name into every
+    /// token the page showed as a mention, and three reviews in a row
+    /// found a text for which one of those was, to another reader or
+    /// after the edit, the address of a link (Markdown reads a text
+    /// differently by its length and by which wiki links lead somewhere).
+    /// The page shows the current name without it.
     pub fn names(&self) -> Vec<MentionName> {
         Self::names_of(self.known.get(), self.picked.get())
-    }
-
-    /// The author's own people among `names`, with their current names:
-    /// the only labels the notice may offer to change.
-    fn own(names: Vec<MentionName>) -> Vec<(PersonId, String)> {
-        names
-            .into_iter()
-            .filter(|n| n.mine)
-            .map(|n| (n.person_id, n.display_name))
-            .collect()
-    }
-
-    fn own_untracked(&self) -> Vec<(PersonId, String)> {
-        Self::own(Self::names_of(
-            self.known.get_untracked(),
-            self.picked.get_untracked(),
-        ))
-    }
-
-    /// For each mention of `text`: whether the page shows it as a
-    /// mention that names someone (`markdown::named_mentions`, with the
-    /// names and the wiki links the preview is rendered with).
-    ///
-    /// SECURITY: "Update" may touch only these. A token with the id of
-    /// the author's person can sit in a link's address or an attribute,
-    /// put there by someone else; the page shows no mention there, and a
-    /// label brought up to date there is the person's current name sent
-    /// to that address on a click (fourth review of #362).
-    fn shown_in(&self, text: &str, names: &[MentionName], tracked: bool) -> Vec<bool> {
-        let titles = self.titles.get_value().map(|titles| {
-            if tracked {
-                titles.get()
-            } else {
-                titles.get_untracked()
-            }
-        });
-        crate::markdown::named_mentions(text, titles.as_ref(), names)
-    }
-
-    /// How many mentions the page shows have a label of the author's own
-    /// person that is an older name, and that the author has not chosen
-    /// to keep.
-    fn stale_count(&self) -> Option<usize> {
-        let text = self.value.get();
-        let names = self.names();
-        let own = Self::own(names.clone());
-        let kept = self.kept.get();
-        // Nothing stale at all (the usual case): no need to render.
-        refresh_labels(&text, &own, &kept)?;
-        let shown = self.shown_in(&text, &names, true);
-        refresh_labels_at(&text, &own, &kept, 0, Some(&shown)).map(|fresh| fresh.changed)
-    }
-
-    /// "Update": the older names brought up to date, as one edit of the
-    /// box (it can be undone), worked out from the text as the box holds
-    /// it now. Offered as an edit ([`Self::notice`]), never applied
-    /// unasked.
-    ///
-    /// The edit is the part of the text that differs, not the whole of
-    /// it: replacing everything left the cursor at the very end for the
-    /// box's `input` handler, which opened a list for an `@ad` or `[[x`
-    /// the text happened to end with.
-    fn update_labels(&self) {
-        let Some(el) = self.textarea.get_untracked() else {
-            return;
-        };
-        let text = el.value();
-        let cursor = el.selection_start().ok().flatten().unwrap_or(0) as usize;
-        let names = Self::names_of(self.known.get_untracked(), self.picked.get_untracked());
-        let shown = self.shown_in(&text, &names, false);
-        let Some(fresh) = refresh_labels_at(
-            &text,
-            &Self::own(names),
-            &self.kept.get_untracked(),
-            cursor,
-            Some(&shown),
-        ) else {
-            return;
-        };
-        let top = el.scroll_top();
-        let edit = edit_between(&text, &fresh.text);
-        self.edit(&el, edit.from, edit.to, &edit.insert, &fresh.text);
-        // The cursor goes back to its place in the words (never into a
-        // token: the next key would break it), and the box does not jump.
-        let at = u32::try_from(fresh.cursor).unwrap_or(u32::MAX);
-        let _ = el.set_selection_range(at, at);
-        el.set_scroll_top(top);
-    }
-
-    /// "Keep as typed": the older names that are in the text now stay,
-    /// and the notice goes. A name that goes stale later is offered.
-    fn keep_labels(&self) {
-        let stale = stale_labels(&self.text(), &self.own_untracked());
-        self.kept.update(|kept| {
-            for pair in stale {
-                if !kept.contains(&pair) {
-                    kept.push(pair);
-                }
-            }
-        });
-    }
-
-    /// The notice that some mentions show an older name, with "Update"
-    /// and "Keep as typed". In the page's flow, above the text box: over
-    /// the box it hid the first line and could not be put away.
-    pub fn notice(&self) -> impl IntoView + use<> {
-        let picker = *self;
-        move || {
-            picker.stale_count().map(|changed| {
-                view! {
-                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-1.5 \
-                            mb-1 text-xs bg-amber-50 dark:bg-amber-900/30 text-amber-900 \
-                            dark:text-amber-200"
-                        role="status" data-testid="stale-mentions">
-                        <span>
-                            {if changed == 1 {
-                                "1 mention shows an older name.".to_string()
-                            } else {
-                                format!("{changed} mentions show an older name.")
-                            }}
-                        </span>
-                        <button type="button" class="underline cursor-pointer"
-                            on:click=move |_| picker.update_labels()>
-                            "Update"
-                        </button>
-                        <button type="button" class="underline cursor-pointer"
-                            on:click=move |_| picker.keep_labels()>
-                            "Keep as typed"
-                        </button>
-                    </div>
-                }
-            })
-        }
     }
 
     /// The id of the list, for the text box's `aria-controls`, while it
@@ -908,14 +764,6 @@ mod tests {
                 name(1, "Ada King", true),
                 name(7, "Theirs", false),
                 name(2, "Bea", true)
-            ]
-        );
-        // Only the author's own are theirs to bring up to date.
-        assert_eq!(
-            MentionPicker::own(names),
-            [
-                (PersonId(Uuid::from_u128(1)), "Ada King".to_string()),
-                (PersonId(Uuid::from_u128(2)), "Bea".to_string())
             ]
         );
     }
