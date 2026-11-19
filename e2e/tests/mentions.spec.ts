@@ -89,7 +89,12 @@ test('typing @ lists your people, and a pick by keyboard puts a mention in the t
     await expect(options.first()).toContainText(ada.display_name);
     await expect(options.first()).toContainText(`ada.${stamp}@example.com`);
     await expect(options.first()).toHaveAttribute('aria-selected', 'true');
-    await expect(editor).toHaveAttribute('aria-activedescendant', /mention-picker-\d+-opt-0/);
+    // Tied to the text box for a screen reader, by the person, and said.
+    await expect(editor).toHaveAttribute(
+      'aria-activedescendant',
+      new RegExp(`mention-picker-\\d+-${ada.id.replace(/-/g, '')}`),
+    );
+    await expect(page.getByTestId('mention-heard')).toHaveText(`1 person. ${ada.display_name} highlighted.`);
 
     await page.keyboard.press('Enter');
     await expect(list(page)).toHaveCount(0);
@@ -97,6 +102,11 @@ test('typing @ lists your people, and a pick by keyboard puts a mention in the t
     await expect(editor).toBeFocused();
     // The preview names them at once, as a link.
     await expect(page.locator('a.mention')).toHaveText(`@${ada.display_name}`);
+    // The pick is one edit of the box: undo takes it back, redo puts it in.
+    await page.keyboard.press('ControlOrMeta+z');
+    expect(await editor.inputValue()).not.toContain('person:');
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expect(editor).toHaveValue(`Met ${token(ada)} `);
 
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
@@ -126,7 +136,12 @@ test('@ then Enter is a new line; an email address opens nothing; Escape closes 
 }) => {
   const stamp = newStamp();
   await wipe(request);
-  const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
+  const ada = await person(request, {
+    display_name: `e2e Ada ${stamp}`,
+    company: `Secret Co ${stamp}`,
+    emails: [{ value: `zed.${stamp}@example.com` }],
+    phones: [{ value: '+1 555 010 4242' }],
+  });
   const node = await createNode(request, `${NODE} keys ${stamp}`, { body: '' });
   try {
     const editor = await openEditor(page, node.id);
@@ -160,12 +175,39 @@ test('@ then Enter is a new line; an email address opens nothing; Escape closes 
     await page.keyboard.press('ArrowDown');
     await expect(list(page).getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Enter');
-    expect(await editor.inputValue()).toMatch(/ and @\[e2e [A-Za-z]+ mention9x\d+\]\(person:[0-9a-f-]{36}\) $/);
+    expect(await editor.inputValue()).toMatch(/ and @\[[^\]]+\]\(person:[0-9a-f-]{36}\) $/);
     // A pointer picks too, and the text box keeps the keyboard.
     await editor.pressSequentially(`@Ada ${stamp}`.slice(0, -4), { delay: 15 });
     await list(page).getByRole('option').first().click();
     await expect(editor).toBeFocused();
     expect(await editor.inputValue()).toContain(`${token(ada)} `);
+
+    // Who is offered: by a word of the name or the start of an address.
+    // Never by a phone number or a company: "lunch @12" then Enter must
+    // not put whoever has 12 in a number into a text others read.
+    await editor.pressSequentially('lunch @4242', { delay: 15 });
+    await expect(list(page)).toHaveCount(0);
+    await editor.pressSequentially(' see @Secret', { delay: 15 });
+    await expect(list(page)).toHaveCount(0);
+    // By the start of an address they are listed, with nobody ready:
+    // Enter is a new line until an arrow key chooses.
+    await editor.pressSequentially(` @zed.${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(0);
+    await expect(page.getByTestId('mention-heard')).toHaveText('1 person. Arrow down to choose.');
+    // Shift+Tab leaves the field and picks nobody.
+    await page.keyboard.press('Shift+Tab');
+    await expect(list(page)).toHaveCount(0);
+    expect(await editor.inputValue()).toMatch(/@zed\.mention9x\d+$/);
+    // Tab picks a highlighted one, after text that is not ASCII (the
+    // cursor is counted in UTF-16 units, the text in bytes).
+    await editor.focus();
+    await editor.press('End');
+    await editor.pressSequentially(` 👉 — @Ada ${stamp}`.slice(0, -4), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    await page.keyboard.press('Tab');
+    expect(await editor.inputValue()).toMatch(new RegExp(` 👉 — @\\[e2e Ada ${stamp}\\]\\(person:${ada.id}\\) $`));
+    await expect(editor).toBeFocused();
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
   } finally {
@@ -189,6 +231,7 @@ test('a note mentions a person; Escape in the list keeps the edit; the trash lea
     await box.click();
     await box.pressSequentially(`Call @Ada ${stamp}`.slice(0, -4), { delay: 15 });
     await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page)).toBeInViewport({ ratio: 1 });
     await page.keyboard.press('Enter');
     await expect(box).toHaveValue(`Call ${token(ada)} `);
     await page.locator('button[title="Save note"]').click();
@@ -218,6 +261,34 @@ test('a note mentions a person; Escape in the list keeps the edit; the trash lea
     // Saved with what was typed: the mention is still named on the card.
     await card.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(card.locator('a.mention')).toHaveText(`@${ada.display_name}`);
+
+    // After a rename the card shows the new name, and editing the note
+    // changes nothing in its text unasked: the editor says the name is
+    // older and offers to update it.
+    const king = `e2e Ada King ${stamp}`;
+    expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: king } })).status()).toBe(200);
+    await page.reload();
+    await expect(card.locator('a.mention')).toHaveText(`@${king}`);
+    await card.locator('button[title="Edit note"]').click();
+    const again = card.getByPlaceholder('Note…');
+    await expect(card.getByTestId('stale-mentions')).toContainText('1 mention shows an older name.');
+    await again.press('End');
+    await again.pressSequentially(' more words', { delay: 5 });
+    await card.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(card.getByText('more words')).toBeVisible();
+    const saved: { id: string; body: string }[] = await (await request.get(`/api/nodes/${node.id}/notes`)).json();
+    expect(saved.find((n) => n.id === noteId)?.body).toContain(token(ada));
+    // "Update" does it, as an edit the author makes.
+    await card.locator('button[title="Edit note"]').click();
+    await card.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
+    await expect(card.getByTestId('stale-mentions')).toHaveCount(0);
+    await card.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect
+      .poll(async () => {
+        const notes: { id: string; body: string }[] = await (await request.get(`/api/nodes/${node.id}/notes`)).json();
+        return notes.find((n) => n.id === noteId)?.body ?? '';
+      })
+      .toContain(token({ ...ada, display_name: king }));
 
     // In the trash it is in nobody's "Mentioned in".
     expect((await request.delete(`/api/notes/${noteId}`)).status()).toBe(204);
@@ -271,6 +342,16 @@ test('someone the node is shared with sees the name and nothing else', async ({
     await expect(page.locator('a.mention')).toHaveCount(0);
     await expect(page.locator('main')).not.toContainText('example.com');
 
+    // In their editor (they may edit): the preview names the person the
+    // text came with, as plain text, and offers no update of a name that
+    // is not theirs.
+    await page.goto(`/nodes/${node.id}/edit`);
+    await expect(page.getByPlaceholder(/Write in Markdown/)).toBeVisible();
+    await expect(page.locator('span.mention')).toHaveText(`@${ada.display_name}`);
+    await expect(page.locator('a.mention')).toHaveCount(0);
+    await page.goto(`/nodes/${node.id}`);
+    await expect(page.locator('span.mention')).toHaveCount(2);
+
     // A rename shows to them, while the person's owner can open the node.
     const renamed = await request.put(`/api/people/${ada.id}`, {
       data: { display_name: `e2e Ada King ${stamp}`, emails: [{ value: `ada.${stamp}@example.com` }] },
@@ -306,7 +387,8 @@ test('a token with someone else’s id names nobody, whoever saves it', async ({
     expect(await named(otherRequest, (await copy.json()).id)).toEqual([]);
 
     // Cut out of the shared body and put back by them: plain text until
-    // the person's owner saves. It can understate; it never reveals.
+    // the person's owner mentions them again. It can understate; it
+    // never reveals.
     await saveBody(otherRequest, node.id, 'taken out');
     await saveBody(otherRequest, node.id, `Met ${token(ada)}.`);
     expect(await named(request, node.id)).toEqual([]);
@@ -314,6 +396,23 @@ test('a token with someone else’s id names nobody, whoever saves it', async ({
     await page.goto(`/nodes/${node.id}`);
     await expect(page.locator('.mention-unresolved')).toHaveText(`@${ada.display_name}`);
     await expect(page.locator('a.mention')).toHaveCount(0);
+    // Her own save around it does not make it real either: she did not
+    // put it there. (A token planted with her person's id, hidden in a
+    // comment, would otherwise be named to the planter by her next save.)
+    await saveBody(request, node.id, `Met ${token(ada)}. And a word of hers.`);
+    expect(await named(request, node.id)).toEqual([]);
+    // In her editor the token is not shown as a mention, and its name
+    // is not offered for update: "Update" would write her person's
+    // current name into text the other one reads.
+    expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: `e2e Ada King ${stamp}` } })).status()).toBe(200);
+    await page.goto(`/nodes/${node.id}/edit`);
+    await expect(page.getByPlaceholder(/Write in Markdown/)).toBeVisible();
+    await expect(page.locator('.mention-unresolved')).toHaveText(`@${ada.display_name}`);
+    await expect(page.locator('a.mention')).toHaveCount(0);
+    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: ada.display_name } })).status()).toBe(200);
+    // She mentions them again herself: out, then in, in saves of her own.
+    await saveBody(request, node.id, 'taken out by its owner');
     await saveBody(request, node.id, `Met ${token(ada)}.`);
     expect(await named(request, node.id)).toEqual([
       { person_id: ada.id, display_name: ada.display_name, mine: true },
@@ -422,6 +521,14 @@ test('after a rename the editor offers to update the name in the text, and never
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
     expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(before);
 
+    // "Keep as typed" puts the notice away and changes nothing.
+    await openEditor(page, node.id);
+    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Keep as typed' }).click();
+    await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    await expect(page.getByPlaceholder(/Write in Markdown/)).toHaveValue(before);
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
+
     await openEditor(page, node.id);
     await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
     await expect(page.getByPlaceholder(/Write in Markdown/)).toHaveValue(`Met ${token(renamed)}.`);
@@ -429,6 +536,75 @@ test('after a rename the editor offers to update the name in the text, and never
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
     expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(`Met ${token(renamed)}.`);
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('the Notes page: the list opens under the box, in view, and a pick is posted', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipe(request);
+  const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
+  await person(request, { display_name: `e2e Adam ${stamp}` });
+  await person(request, { display_name: `e2e Adele ${stamp}` });
+  const node = await createNode(request, `${NODE} feed ${stamp}`, { body: 'x' });
+  try {
+    await page.goto('/notes');
+    const box = page.getByPlaceholder('Write a note…  (Ctrl+Enter to post)');
+    await box.click();
+    // Several people (the stamp is a word of each name): the whole list
+    // is in view, not cut off above the box. The first by name is ready.
+    await box.pressSequentially(`Seen @${stamp}`, { delay: 15 });
+    await expect(list(page).getByRole('option')).toHaveCount(3);
+    await expect(list(page)).toBeInViewport({ ratio: 1 });
+    await expect(list(page).getByRole('option').first()).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Enter');
+    await expect(box).toHaveValue(`Seen ${token(ada)} `);
+
+    const picker = page.getByRole('combobox', { name: 'Note on a node…' });
+    await picker.fill(`${NODE} feed ${stamp}`);
+    // The picker's own list: the page's sort and filter selects have
+    // options too.
+    await expect(page.locator('[role="listbox"] [role="option"][aria-selected="true"]')).toContainText(
+      `${NODE} feed ${stamp}`,
+    );
+    await picker.press('Enter');
+    await box.focus();
+    await page.keyboard.press('ControlOrMeta+Enter');
+    // Posted, and shown in the feed with their name as a link.
+    await expect(page.locator('a.mention').first()).toHaveText(`@${ada.display_name}`);
+    await expect(list(page)).toHaveCount(0);
+    expect(await (await request.get(`/api/people/${ada.id}/mentions`)).json()).toEqual([
+      expect.objectContaining({ node_id: node.id, in_body: false, notes: 1 }),
+    ]);
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('a mention is shown only where Markdown reads a link', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipe(request);
+  const ada = await person(request, { display_name: `e2e Ada Secret ${stamp}` });
+  // A real mention, and the same token in a link's address, an
+  // attribute and code: a name in a writer's own address would travel
+  // there on a click.
+  const body = [
+    `Met ${token(ada, 'A')}.`,
+    `<a href='https://attacker.example/?q=${token(ada, 'A')}'>Quarterly report</a>`,
+    `[a link](https://attacker.example/${token(ada, 'A')})`,
+    `\`${token(ada, 'A')}\``,
+  ].join('\n\n');
+  const node = await createNode(request, `${NODE} places ${stamp}`, { body });
+  try {
+    await page.goto(`/nodes/${node.id}`);
+    await expect(page.locator('a.mention')).toHaveCount(1);
+    await expect(page.locator('a.mention')).toHaveText(`@${ada.display_name}`);
+    const html = await page.locator('.prose').first().innerHTML();
+    expect(html.match(/Secret/g) ?? []).toHaveLength(1);
+    for (const link of await page.locator('.prose a[href^="http"]').all()) {
+      expect(await link.getAttribute('href')).not.toContain('Secret');
+    }
   } finally {
     await wipe(request);
   }
@@ -457,6 +633,29 @@ test.describe('at phone width', () => {
         await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
       ).toBeLessThanOrEqual(1);
       await page.keyboard.press('Escape');
+    } finally {
+      await wipe(request);
+    }
+  });
+
+  test('a long name in the text wraps', async ({ page, request }) => {
+    const stamp = newStamp();
+    await wipe(request);
+    const long = await person(request, {
+      display_name: `e2e ${'Wolfeschlegelsteinhausenbergerdorff'.repeat(3)} ${stamp}`,
+    });
+    const node = await createNode(request, `${NODE} long ${stamp}`, {
+      body: `Met ${token(long)} and ${token({ ...long, id: '00000000-0000-4000-8000-000000000000' }, 'Nobody'.repeat(30))}.`,
+    });
+    try {
+      await page.goto(`/nodes/${node.id}`);
+      await expect(page.locator('a.mention')).toBeVisible();
+      await expect(page.locator('.mention-unresolved')).toBeVisible();
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+      ).toBeLessThanOrEqual(1);
+      const box = await page.locator('a.mention').boundingBox();
+      expect(box && box.x + box.width).toBeLessThanOrEqual(375);
     } finally {
       await wipe(request);
     }

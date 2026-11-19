@@ -859,7 +859,6 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     // S9: the `@` picker, and the people the preview may name: those the
     // node came with (other readers' included), and the author's own.
     let mention_picker = MentionPicker::new(body, textarea_ref);
-    let loaded_mentions = RwSignal::new(Vec::<common::mention::MentionName>::new());
 
     // If editing, fetch existing node data.
     if let Some(id) = node {
@@ -869,7 +868,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             // reader may know them, for the preview (S9).
             match crate::api::fetch_viewed_node(id).await {
                 Ok(viewed) => {
-                    loaded_mentions.set(viewed.mentions.clone());
+                    mention_picker.set_known(viewed.mentions.clone());
                     let n = viewed.node;
                     let snap: Snapshot = (
                         n.title.clone(),
@@ -1348,15 +1347,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
     let preview_html = move || {
         let title_map = wikilink_map.get();
-        // Own people first (a pick shows at once); then whoever the node
-        // came with.
-        let mut people = mention_picker.own_names();
-        for name in loaded_mentions.get() {
-            if !people.iter().any(|p| p.person_id == name.person_id) {
-                people.push(name);
-            }
-        }
-        render_markdown(&body.get(), &title_map, &people)
+        // Who the node came with, and whoever was picked here. Not the
+        // whole registry: a token someone else typed with the id of the
+        // author's person is not a mention, and must not look like one.
+        render_markdown(&body.get(), &title_map, &mention_picker.names())
     };
 
     view! {
@@ -1659,6 +1653,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                     </div>
                 }
             })}
+            // S9: a mention's label is the name as it was when picked. A
+            // rename shows on the page at once; the raw text is brought up
+            // to date only when the author says so, as an ordinary edit.
+            <div class="px-4 empty:hidden">{mention_picker.notice()}</div>
             // Split editor + preview
             <div class="flex flex-1 divide-x divide-stone-200 dark:divide-stone-700 min-h-0">
                 // Editor pane (relative so the autocomplete dropdown can be positioned)
@@ -1704,33 +1702,6 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         }
                     />
                     {mention_picker.view(Dock::Inside)}
-                    // S9: a mention's label is the name as it was when
-                    // picked. A rename shows on the page at once; the raw
-                    // text is brought up to date only when the author says
-                    // so, as an ordinary edit.
-                    {move || mention_picker.stale_labels(&body.get()).map(|(fresh, changed)| view! {
-                        <div class="absolute top-2 left-4 right-4 z-40 flex flex-wrap items-center gap-2
-                            rounded-lg px-3 py-1.5 text-xs bg-amber-50 dark:bg-amber-900/30
-                            text-amber-900 dark:text-amber-200 shadow"
-                            role="status" data-testid="stale-mentions">
-                            <span>
-                                {if changed == 1 {
-                                    "1 mention shows an older name.".to_string()
-                                } else {
-                                    format!("{changed} mentions show an older name.")
-                                }}
-                            </span>
-                            <button type="button" class="underline cursor-pointer"
-                                on:click=move |_| {
-                                    body.set(fresh.clone());
-                                    if let Some(el) = textarea_ref.get_untracked() {
-                                        el.set_value(&fresh);
-                                    }
-                                }>
-                                "Update"
-                            </button>
-                        </div>
-                    })}
                     // Image uploading indicator
                     {move || img_uploading.get().then(|| view! {
                         <div class="absolute top-2 right-2 z-40 flex items-center gap-1.5

@@ -12,7 +12,6 @@ use common::id::NodeId;
 /// The returned string is passed to `pulldown_cmark` before HTML rendering.
 /// Inline HTML is preserved by pulldown-cmark and then sanitized by ammonia
 /// (which allows exactly these two classes, and `data-node-id` on `<a>`).
-#[cfg(test)]
 pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) -> String {
     // The one scanner (`common::wikilink::wikilinks`; #281, 3.1). It skips
     // code, so no `<a>` is put inside a code span or a fenced block.
@@ -20,8 +19,7 @@ pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) 
 }
 
 /// One wiki link as HTML: what [`preprocess_wikilinks`] writes for it.
-/// Shared with `mention::preprocess_links`, which splices wiki links and
-/// mentions in one pass.
+/// One link, so the text and its tests have one place to look.
 pub fn wikilink_html(
     link: &common::wikilink::WikiLink<'_>,
     title_map: &HashMap<String, NodeId>,

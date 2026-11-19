@@ -274,6 +274,7 @@ fn NoteCard(note: ReaderNote, ctx: NoteCtx) -> impl IntoView {
     // S9: the `@` picker of this note's editor.
     let edit_ref: NodeRef<leptos::html::Textarea> = NodeRef::new();
     let mentions = MentionPicker::new(edit_body, edit_ref);
+    mentions.set_known(note.mentions.clone());
 
     // Shared by Ctrl+Enter (editor on_submit) and the Save button; Escape
     // and Cancel share do_cancel.
@@ -292,14 +293,7 @@ fn NoteCard(note: ReaderNote, ctx: NoteCtx) -> impl IntoView {
             return;
         }
         let req = UpdateNoteRequest {
-            // The words changed, so this is an edit already: the labels of
-            // the writer's own people are brought up to their current
-            // names with it (S9). An unchanged note is never rewritten.
-            body: if new_body == orig_body.get_value().trim() {
-                new_body
-            } else {
-                mentions.refreshed(&new_body)
-            },
+            body: new_body,
             color: new_color,
         };
         saving.set(true);

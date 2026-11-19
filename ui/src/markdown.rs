@@ -22,7 +22,8 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
-use crate::mention::preprocess_links;
+use crate::mention::{Mentions, without_markers};
+use crate::wikilink::preprocess_wikilinks;
 use common::id::NodeId;
 use common::mention::MentionName;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html as cmark_html};
@@ -114,7 +115,9 @@ fn sanitize_style(value: &str) -> Option<String> {
 /// - Permits `style` on block/inline elements, with its VALUE filtered to a
 ///   safe CSS-property allowlist (see [`sanitize_style`])
 /// - Permits `data-node-id` on `<a>` and one class each on `<a>` and
-///   `<span>`: the two the WikiLink renderer writes
+///   `<span>`: the two the WikiLink renderer writes. (A mention's HTML is
+///   put in after sanitizing, `crate::mention`; none of its classes is
+///   allowed here.)
 ///
 /// SECURITY: `class` is never allowed as a free attribute. The app's own
 /// stylesheet has classes that cover the screen (the loader's `etl-root`,
@@ -124,13 +127,12 @@ fn sanitizer() -> ammonia::Builder<'static> {
     let mut b = ammonia::Builder::new();
     b.add_tags(&["span", "div", "input"]);
     b.add_tag_attributes("a", &["data-node-id"]);
-    // By name, and no others: the WikiLink renderer's two, and the three
-    // a mention is written with (S9, `crate::mention`).
-    b.add_allowed_classes("a", &["wikilink", "mention"]);
-    b.add_allowed_classes(
-        "span",
-        &["wikilink-unresolved", "mention", "mention-unresolved"],
-    );
+    // By name, and no others: the two the WikiLink renderer writes. A
+    // mention's classes are NOT here: its HTML is put in after this has
+    // run (`crate::mention`), so a writer can't dress a link of their own
+    // up as a mention.
+    b.add_allowed_classes("a", &["wikilink"]);
+    b.add_allowed_classes("span", &["wikilink-unresolved"]);
     b.add_tag_attributes("input", &["type", "checked", "disabled"]);
     b.add_tag_attributes("img", &["src", "alt", "width", "height", "style"]);
     for &tag in STYLED_ELEMENTS {
@@ -153,21 +155,37 @@ fn sanitizer() -> ammonia::Builder<'static> {
 /// Render Markdown with WikiLink resolution.
 ///
 /// `[[title]]` and `[[title|display]]` are first expanded by
-/// [`preprocess_links`], then rendered with pulldown-cmark, and finally
-/// sanitised by ammonia.
+/// [`preprocess_wikilinks`], then rendered with pulldown-cmark, and
+/// finally sanitised by ammonia.
 ///
-/// Mentions of people (S9) are expanded in the same pass, for the people
-/// in `people`: those the reader may be told the name of.
+/// Mentions of people (S9) are shown for the people in `people`: those
+/// the reader may be told the name of ([`crate::mention`]).
 pub fn render_markdown(
     source: &str,
     title_map: &HashMap<String, NodeId>,
     people: &[MentionName],
 ) -> String {
-    let preprocessed = preprocess_links(source, Some(title_map), people);
-    let parser = Parser::new_ext(&preprocessed, MD_OPTIONS);
+    render_with_mentions(source, Some(title_map), people)
+}
+
+/// The shared path of [`render_markdown`] and [`render_note`]: parse,
+/// mark the mentions among the events, write and sanitize the HTML, then
+/// put each mention where its marker is.
+fn render_with_mentions(
+    source: &str,
+    title_map: Option<&HashMap<String, NodeId>>,
+    people: &[MentionName],
+) -> String {
+    let source = without_markers(source);
+    let preprocessed = match title_map {
+        Some(titles) => Cow::Owned(preprocess_wikilinks(&source, titles)),
+        None => source,
+    };
+    let events: Vec<Event<'_>> = Parser::new_ext(&preprocessed, MD_OPTIONS).collect();
+    let (events, mentions) = Mentions::mark(events, people);
     let mut html_out = String::new();
-    cmark_html::push_html(&mut html_out, parser);
-    sanitizer().clean(&html_out).to_string()
+    cmark_html::push_html(&mut html_out, events.into_iter());
+    mentions.fill_html(&sanitizer().clean(&html_out).to_string())
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -219,12 +237,15 @@ pub fn render_body(
     title_map: &HashMap<String, NodeId>,
     people: &[MentionName],
 ) -> RenderedBody {
-    let preprocessed = preprocess_links(source, Some(title_map), people);
+    let source = without_markers(source);
+    let preprocessed = preprocess_wikilinks(&source, title_map);
+    let parsed: Vec<Event<'_>> = Parser::new_ext(&preprocessed, MD_OPTIONS).collect();
+    let (parsed, mentions) = Mentions::mark(parsed, people);
     let mut outline = Vec::new();
     let mut next_id = 0usize;
     // The open h2/h3: (level, id, text so far).
     let mut current: Option<(u8, String, String)> = None;
-    let events = Parser::new_ext(&preprocessed, MD_OPTIONS).map(|ev| match ev {
+    let events = parsed.into_iter().map(|ev| match ev {
         Event::Start(Tag::Heading {
             level: level @ (HeadingLevel::H2 | HeadingLevel::H3),
             classes,
@@ -244,6 +265,8 @@ pub fn render_body(
         }
         Event::End(TagEnd::Heading(_)) => {
             if let Some((level, id, text)) = current.take() {
+                // A mention in a heading reads as its name.
+                let text = mentions.fill_plain(&text);
                 let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 if !text.is_empty() {
                     outline.push(OutlineEntry { level, text, id });
@@ -268,7 +291,7 @@ pub fn render_body(
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, events);
     RenderedBody {
-        html: sanitizer().clean(&html_out).to_string(),
+        html: mentions.fill_html(&sanitizer().clean(&html_out).to_string()),
         outline,
     }
 }
@@ -276,11 +299,7 @@ pub fn render_body(
 /// Render a note: Markdown with its mentions of people (S9), for the
 /// people in `people`. Notes have no wiki links (`[[x]]` is text there).
 pub fn render_note(source: &str, people: &[MentionName]) -> String {
-    let preprocessed = preprocess_links(source, None, people);
-    let parser = Parser::new_ext(&preprocessed, MD_OPTIONS);
-    let mut html_out = String::new();
-    cmark_html::push_html(&mut html_out, parser);
-    sanitizer().clean(&html_out).to_string()
+    render_with_mentions(source, None, people)
 }
 
 /// Render Markdown with nothing resolved (a Brief, a template preview).

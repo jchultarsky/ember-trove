@@ -390,38 +390,63 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     in the handler. When an answer removes the focused control, the
     keyboard goes to the form's alert (`focus_alert_if_lost`).
 - **Mentions of people** (S9, #360). `common::mention` reads
-  `@[label](person:id)`; never scan for `@[` anywhere else.
-  - **Rendering is `mention::preprocess_links`**: wiki links and
-    mentions spliced into the Markdown in one pass (two passes would
-    scan each other's HTML). `render_markdown` and `render_body` take
-    the people to name (`MentionName`, which came with the node);
+  `@[label](person:id)` for the API; never scan for `@[` anywhere else.
+  - **A mention is rendered only where Markdown reads a link**
+    (`ui/src/mention.rs`). `Mentions::mark` finds it in the parsed
+    events (an `@`, then an inline link to `person:<id>`) and puts a
+    marker there; after the sanitizer has run, `fill_html` puts the
+    mention's HTML at the marker. **Never put HTML for a name into the
+    Markdown source**: a token inside a writer's own
+    `<a href='https://elsewhere/?q=…'>` then carried the person's name
+    to that address on a click (review of #361's second half).
+  - So the sanitizer allows **none** of the mention's classes, and a
+    writer can't dress a link of their own up as one. The filled HTML
+    is not sanitized again: everything in it is written by `Shown::of`
+    (fixed tags, a canonical id, the name through `html_inert`).
+  - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
+    `<span class="mention">` with no id in the markup; nobody to name →
+    `<span class="mention-unresolved">` with the label. Told apart
+    without colour (`input.css`).
+  - `render_markdown` and `render_body` take the people to name;
     `render_note` is for notes (no wiki links there). Anything else
     (`render_markdown_plain`: a Brief, a template) shows "@name" with
     no link, because the sanitizer drops the `person:` scheme.
-  - **A name goes into Markdown through `html_inert`**, every character
-    that is not a letter or digit as an entity. A name is user text
-    from another record; it must never be parsed.
-  - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
-    `<span class="mention">` with no id in the markup; nobody to name →
-    `<span class="mention-unresolved">` with the label. The three
-    classes are in the sanitizer by name.
   - **The names come from the API with the text** (`ViewedNode.mentions`,
     `ReaderNote.mentions`, `SavedNote`). Don't add a "resolve these ids"
-    call: there is deliberately no such endpoint. The editor's preview
-    also names the author's own people (`MentionPicker::own_names`).
+    call: there is deliberately no such endpoint.
+  - **The editor names only who the text came with and who was picked
+    in it** (`MentionPicker::set_known`, `names`), never "everyone in
+    my registry". A token someone else typed with the id of the
+    author's person is not a mention; the preview must not show it as
+    one, and "Update" must not write the person's current name into
+    text the planter can read.
   - **The picker is `MentionPicker`** (`mention_picker.rs`), one hook
     for the body textarea and `ResizableEditor` (`mentions=` is opt-in:
     notes only). The textarea calls `on_keydown` first and returns if
-    it was used. Escape closes the list only (it must not reach the
-    editor's Escape); Enter and Tab pick only a highlighted option, and
-    a bare `@` highlights none, so `@` then Enter is a new line.
-    Ctrl/⌘+Enter stays the editor's. A pick goes through the editor's
-    own signal, so drafts and autosave see an ordinary edit.
-  - **A stale label is never rewritten on open.** The editor's
-    baseline, Revert, the 412 fingerprints and draft recovery all hold
-    "the text as loaded". The body editor shows a notice with Update
-    (`stale_labels`); a note's labels are refreshed in `do_save`, only
-    when its words changed anyway (`refreshed`).
+    it was used.
+    - People are offered by `common::mention::picker_match`: a word of
+      the name, or the start of an email address. Never by company or
+      phone (`"lunch @12"` offered whoever had 12 in a number).
+    - Enter and Tab pick only a highlighted option; one is highlighted
+      only when a **name** matches what was typed. A bare `@` or an
+      address-only match needs an arrow key first.
+    - Escape closes the list only (it must not reach the editor's
+      Escape). Ctrl/⌘+Enter stays the editor's and closes the list.
+      Shift+Tab leaves the field.
+    - A pick is one `insertText` edit by the browser, so Ctrl+Z undoes
+      it and the box's own `input` handler sets the signal. Don't
+      `set_value` a textarea for an edit the user may want to undo.
+    - The registry is read once, on the first `@` (`wanted` is set only
+      when false: a signal set to the value it has still notifies).
+    - Option ids are keyed by person, and an `aria-live` line says how
+      many people there are and who is highlighted.
+    - The list docks under a note's box (`Dock::Below`): above it, the
+      Notes page cut it off.
+  - **A stale label is never rewritten unasked**, in a body or a note.
+    The editor's baseline, Revert, the 412 fingerprints and draft
+    recovery all hold "the text as loaded". `MentionPicker::notice`
+    (in the page's flow, above the box) offers "Update" and "Keep as
+    typed".
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before

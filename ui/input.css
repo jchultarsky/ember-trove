@@ -302,25 +302,40 @@ input[type="checkbox"]:checked::after {
 
 /* ── Mentions of people (S9) ──────────────────────────────────────────────────
    A link for the reader's own person; plain, a touch stronger than the text
-   around it, for a person of someone else's (a name and no more); muted for
-   one that names nobody. Not struck through like an unresolved wiki link: the
-   name as typed is still what the author wrote. */
+   around it, for a person of someone else's (a name and no more); a dotted
+   underline for one that names nobody. Told apart without colour: the link
+   is underlined, the name is not, the unresolved one is dotted (and says so
+   in its title). A long name wraps. `unicode-bidi: isolate` keeps a name
+   with a direction override from reordering the text around it. These
+   classes are written by the app only (`ui/src/mention.rs`): the sanitizer
+   lets no writer use them. */
+.mention,
+.mention-unresolved {
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+}
 .mention {
   font-weight: 500;
-  white-space: nowrap;
 }
 a.mention {
-  color: #fb923c; /* orange-400, as a wiki link */
-  text-decoration: none;
+  color: #c2410c; /* orange-700: readable on white */
+  text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
+.dark a.mention {
+  color: #fb923c; /* orange-400, as a wiki link */
+}
 a.mention:hover {
-  color: #fdba74; /* orange-300 */
-  text-decoration: underline;
+  text-decoration-thickness: 2px;
 }
 .mention-unresolved {
+  color: #78716c; /* stone-500 */
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.dark .mention-unresolved {
   color: #a8a29e; /* stone-400 */
-  white-space: nowrap;
 }
 
 /* ── Spark on task completion (design phase 3) ────────────────────────────────

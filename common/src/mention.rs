@@ -110,6 +110,14 @@ fn canonical_id(id: &str) -> Option<PersonId> {
     (parsed.hyphenated().to_string() == id).then_some(PersonId(parsed))
 }
 
+/// The person a link destination names, if it is `person:<id>` with the
+/// id spelled the one way [`mentions`] reads it. For the renderer, which
+/// finds a mention as Markdown does: an `@` and then such a link.
+#[must_use]
+pub fn person_of_link(destination: &str) -> Option<PersonId> {
+    canonical_id(destination.strip_prefix("person:")?)
+}
+
 /// `text` with each mention replaced by what `shown` returns for it.
 /// Everything else is copied as it is, code included.
 pub fn replace_mentions(text: &str, mut shown: impl FnMut(&Mention<'_>) -> String) -> String {
@@ -337,10 +345,43 @@ pub fn mention_query_at(text: &str, cursor: usize) -> Option<MentionQuery> {
     })
 }
 
-/// `text` with the mention being typed (`typed`, from
-/// [`mention_query_at`] at this `cursor`) replaced by the token for the
-/// person picked, and the UTF-16 cursor position after it. A space
-/// follows the token unless white space is there already.
+/// A pick, as an edit of the text box: replace the UTF-16 range
+/// `from..to` (the `@` and what was typed after it) with `insert`.
+/// Given to the browser as one edit, it can be undone with Ctrl+Z.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionEdit {
+    pub from: usize,
+    pub to: usize,
+    pub insert: String,
+}
+
+/// The edit that puts a mention of the person picked where the mention
+/// being typed is (`typed`, from [`mention_query_at`] at this `cursor`).
+/// A space follows the token unless white space is there already.
+#[must_use]
+pub fn mention_edit(
+    text: &str,
+    typed: &MentionQuery,
+    cursor: usize,
+    name: &str,
+    id: PersonId,
+) -> MentionEdit {
+    let cut = utf16_to_utf8_offset(text, cursor).max(typed.at);
+    let tail = text.get(cut..).unwrap_or_default();
+    let space = if tail.starts_with(char::is_whitespace) {
+        ""
+    } else {
+        " "
+    };
+    MentionEdit {
+        from: utf8_to_utf16_offset(text, typed.at),
+        to: utf8_to_utf16_offset(text, cut),
+        insert: format!("{}{space}", mention_token(name, id)),
+    }
+}
+
+/// `text` after [`mention_edit`], and the UTF-16 cursor position after
+/// what was put in.
 #[must_use]
 pub fn insert_mention(
     text: &str,
@@ -349,19 +390,57 @@ pub fn insert_mention(
     name: &str,
     id: PersonId,
 ) -> (String, usize) {
-    let cut = utf16_to_utf8_offset(text, cursor).max(typed.at);
-    let head = text.get(..typed.at).unwrap_or_default();
-    let tail = text.get(cut..).unwrap_or_default();
-    let space = if tail.starts_with(char::is_whitespace) {
-        ""
-    } else {
-        " "
-    };
-    let inserted = format!("{}{space}", mention_token(name, id));
-    let after = head.len() + inserted.len();
-    let out = format!("{head}{inserted}{tail}");
-    let cursor = utf8_to_utf16_offset(&out, after);
+    let edit = mention_edit(text, typed, cursor, name, id);
+    let head = text
+        .get(..utf16_to_utf8_offset(text, edit.from))
+        .unwrap_or_default();
+    let tail = text
+        .get(utf16_to_utf8_offset(text, edit.to)..)
+        .unwrap_or_default();
+    let out = format!("{head}{}{tail}", edit.insert);
+    let cursor = utf8_to_utf16_offset(&out, head.len() + edit.insert.len());
     (out, cursor)
+}
+
+/// How a person matches what is typed after `@`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PickerMatch {
+    /// A word of their name starts with it: they are who was meant, and
+    /// the first such person is ready for Enter.
+    Name,
+    /// One of their email addresses starts with it: listed, never ready.
+    Email,
+}
+
+/// Whether a person is offered for `query`, and how.
+///
+/// Only the name (from the start of any of its words) and the start of
+/// an email address count. Not a company, a phone number or the middle
+/// of anything: "lunch @12" must not offer whoever has 12 in a phone
+/// number, with Enter then putting them into a text others read. An
+/// empty query offers everyone, with nobody ready.
+#[must_use]
+pub fn picker_match(display_name: &str, emails: &[&str], query: &str) -> Option<PickerMatch> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Some(PickerMatch::Name);
+    }
+    let name = display_name.to_lowercase();
+    let at_a_word = name
+        .char_indices()
+        .filter(|(i, _)| {
+            name.get(..*i)
+                .and_then(|before| before.chars().next_back())
+                .is_none_or(|c| !c.is_alphanumeric())
+        })
+        .any(|(i, _)| name.get(i..).is_some_and(|rest| rest.starts_with(&query)));
+    if at_a_word {
+        return Some(PickerMatch::Name);
+    }
+    emails
+        .iter()
+        .any(|e| e.trim().to_lowercase().starts_with(&query))
+        .then_some(PickerMatch::Email)
 }
 
 /// `byte_offset`, moved to the end of the mention it is inside of, if
@@ -685,6 +764,56 @@ mod tests {
         assert_eq!(out, format!("Met @[Ada](person:{ADA}) yesterday"));
         assert_eq!(after, format!("Met @[Ada](person:{ADA})").len());
         assert_eq!(mentions(&out).len(), 1);
+    }
+
+    #[test]
+    fn a_pick_is_one_edit_of_the_text_box() {
+        let text = "👉 Met @ad yesterday";
+        let cursor = "👉 Met @ad".encode_utf16().count();
+        let typed = mention_query_at(text, cursor).expect("typing");
+        let edit = mention_edit(text, &typed, cursor, "Ada", id(ADA));
+        assert_eq!(
+            edit,
+            MentionEdit {
+                from: "👉 Met ".encode_utf16().count(),
+                to: cursor,
+                insert: format!("@[Ada](person:{ADA})"),
+            }
+        );
+        // At the end of the text a space follows.
+        let text = "@ad";
+        let typed = mention_query_at(text, 3).expect("typing");
+        assert!(
+            mention_edit(text, &typed, 3, "Ada", id(ADA))
+                .insert
+                .ends_with(") ")
+        );
+    }
+
+    #[test]
+    fn the_picker_offers_people_by_name_or_the_start_of_an_address() {
+        let ada = |q: &str| {
+            picker_match(
+                "Ada Lovelace-King",
+                &["ada.l@example.com", "countess@work.example"],
+                q,
+            )
+        };
+        assert_eq!(ada(""), Some(PickerMatch::Name));
+        assert_eq!(ada("ad"), Some(PickerMatch::Name));
+        assert_eq!(ada("ADA LOVE"), Some(PickerMatch::Name));
+        assert_eq!(ada("love"), Some(PickerMatch::Name));
+        assert_eq!(ada("king"), Some(PickerMatch::Name));
+        assert_eq!(ada("countess"), Some(PickerMatch::Email));
+        // Not the middle of a word, the domain, or anything else of them.
+        assert_eq!(ada("da"), None);
+        assert_eq!(ada("example"), None);
+        assert_eq!(ada("ovelace"), None);
+        // A phone number or a company is no way to be offered.
+        assert_eq!(picker_match("Bo", &[], "12"), None);
+        assert_eq!(picker_match("Bo", &[], "acme"), None);
+        // Name matches sort before address matches.
+        assert!(PickerMatch::Name < PickerMatch::Email);
     }
 
     #[test]

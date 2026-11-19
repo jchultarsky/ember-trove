@@ -245,8 +245,11 @@ CI job is too slow a feedback loop for selector work.
     `mentioned-in-row`.
   - What a reader is told is `GET /api/nodes/{id}` → `mentions`; assert
     it with `toEqual` on the whole list, so an extra field fails.
-  - A row is made only when the person's owner saves: to set up a real
-    mention through the API, save the body **as that identity**.
+  - A row is made only by a save that **adds** the token, made by the
+    person's owner: to set up a real mention through the API, create
+    the node with the token in its body, or save the body as that
+    identity with the token new in that save. Saving a body that had
+    the token already makes nothing.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,
