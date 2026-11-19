@@ -1678,7 +1678,7 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         on:input=on_body_input
                         on:click=move |_| {
                             if wikilink_query.get_untracked().is_none() {
-                                mention_picker.after_input();
+                                mention_picker.after_click();
                             }
                         }
                         // An arrow, Home or End moves the cursor without

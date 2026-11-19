@@ -12,9 +12,9 @@
 //! (`api/src/repo/mention.rs`); nothing here decides that.
 //!
 //! The page shows a mention only where this scanner **and** the Markdown
-//! parser read one (`ui/src/mention.rs`). Where they differ (an autolink
-//! in the label, a token in an image's alt text) a row may exist and the
-//! page names nobody there: it can understate, never the other way.
+//! parser read one (`ui/src/mention.rs`). Where they differ (a token in
+//! an image's alt text, or inside raw HTML) a row may exist and the page
+//! names nobody there: it can understate, never the other way.
 
 use std::ops::Range;
 
@@ -115,14 +115,6 @@ fn token_at(text: &str, open: usize) -> Option<Mention<'_>> {
 fn canonical_id(id: &str) -> Option<PersonId> {
     let parsed = Uuid::parse_str(id).ok()?;
     (parsed.hyphenated().to_string() == id).then_some(PersonId(parsed))
-}
-
-/// The person a link destination names, if it is `person:<id>` with the
-/// id spelled the one way [`mentions`] reads it. For the renderer, which
-/// finds a mention as Markdown does: an `@` and then such a link.
-#[must_use]
-pub fn person_of_link(destination: &str) -> Option<PersonId> {
-    canonical_id(destination.strip_prefix("person:")?)
 }
 
 /// `text` with each mention replaced by what `shown` returns for it.
@@ -267,8 +259,39 @@ pub fn refresh_labels(
     own_names: &[(PersonId, String)],
     kept: &[(PersonId, String)],
 ) -> Option<(String, usize)> {
-    let mut changed = 0;
-    let refreshed = replace_mentions(text, |m| {
+    refresh_labels_at(text, own_names, kept, 0).map(|fresh| (fresh.text, fresh.changed))
+}
+
+/// What [`refresh_labels_at`] gives: the text, how many labels changed,
+/// and where the cursor is in it (a UTF-16 offset).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refreshed {
+    pub text: String,
+    pub changed: usize,
+    pub cursor: usize,
+}
+
+/// [`refresh_labels`], and where a cursor at the UTF-16 offset `cursor`
+/// of `text` is afterwards: it keeps its place in the words around it.
+/// A cursor inside a token goes to the end of that token, never into
+/// its id: the next key typed there would break the mention.
+#[must_use]
+pub fn refresh_labels_at(
+    text: &str,
+    own_names: &[(PersonId, String)],
+    kept: &[(PersonId, String)],
+    cursor: usize,
+) -> Option<Refreshed> {
+    let at = utf16_to_utf8_offset(text, cursor);
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0usize;
+    let mut changed = 0usize;
+    let mut moved: Option<usize> = None;
+    for m in mentions(text) {
+        if moved.is_none() && at <= m.range.start {
+            moved = Some(out.len() + at.saturating_sub(copied));
+        }
+        out.push_str(text.get(copied..m.range.start).unwrap_or_default());
         let current = own_names
             .iter()
             .find(|(id, _)| *id == m.person_id)
@@ -279,15 +302,54 @@ pub fn refresh_labels(
         match current {
             Some(label) if label != m.label && !is_kept => {
                 changed += 1;
-                mention_token(&label, m.person_id)
+                out.push_str(&mention_token(&label, m.person_id));
             }
-            _ => text.get(m.range.clone()).unwrap_or_default().to_string(),
+            _ => out.push_str(text.get(m.range.clone()).unwrap_or_default()),
         }
-    });
-    (changed > 0).then_some((refreshed, changed))
+        if moved.is_none() && at < m.range.end {
+            moved = Some(out.len());
+        }
+        copied = m.range.end;
+    }
+    let moved = moved.unwrap_or(out.len() + at.saturating_sub(copied));
+    out.push_str(text.get(copied..).unwrap_or_default());
+    (changed > 0).then(|| Refreshed {
+        cursor: utf8_to_utf16_offset(&out, moved),
+        text: out,
+        changed,
+    })
 }
 
-// ── The picker ─────────────────────────────────────────────────────────
+/// The one edit that turns `old` into `new`: the UTF-16 range of `old`
+/// that differs, and what replaces it. For a change the text box makes
+/// as one edit (it can be undone), which leaves the box's cursor right
+/// after `insert` and not at the end of the text.
+#[must_use]
+pub fn edit_between(old: &str, new: &str) -> MentionEdit {
+    let head: usize = old
+        .chars()
+        .zip(new.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let old_rest = old.get(head..).unwrap_or_default();
+    let new_rest = new.get(head..).unwrap_or_default();
+    let tail: usize = old_rest
+        .chars()
+        .rev()
+        .zip(new_rest.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    MentionEdit {
+        from: utf8_to_utf16_offset(old, head),
+        to: utf8_to_utf16_offset(old, old.len() - tail),
+        insert: new_rest
+            .get(..new_rest.len() - tail)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
 
 /// JavaScript counts string positions in UTF-16 code units and Rust in
 /// UTF-8 bytes. Slicing by a UTF-16 offset can land inside a character
@@ -724,6 +786,87 @@ mod tests {
             refresh_labels(&text, &own, &stale_labels(&text, &own)),
             None
         );
+        // Kept for one person is not kept for another with that label.
+        let text = format!("@[Old](person:{ADA}) and @[Old](person:{BEA})");
+        let own = [
+            (id(ADA), "Ada King".to_string()),
+            (id(BEA), "Bea".to_string()),
+        ];
+        let (fresh, changed) =
+            refresh_labels(&text, &own, &[(id(ADA), "Old".to_string())]).expect("Bea's");
+        assert_eq!(
+            fresh,
+            format!("@[Old](person:{ADA}) and @[Bea](person:{BEA})")
+        );
+        assert_eq!(changed, 1);
+        // A name that needs tidying is current once tidied: not stale.
+        let tidy = format!("@[Ada (King)](person:{ADA})");
+        assert_eq!(
+            stale_labels(&tidy, &[(id(ADA), " Ada  [King] ".to_string())]),
+            []
+        );
+    }
+
+    #[test]
+    fn the_cursor_keeps_its_place_when_labels_are_refreshed() {
+        let own = [(id(ADA), "Ada King".to_string())];
+        let token = format!("@[Ada](person:{ADA})");
+        let fresh_token = format!("@[Ada King](person:{ADA})");
+        let text = format!("é {token} met {token}.");
+        let fresh = format!("é {fresh_token} met {fresh_token}.");
+        let at = |cursor: usize| {
+            let got = refresh_labels_at(&text, &own, &[], cursor).expect("stale");
+            assert_eq!((got.text.as_str(), got.changed), (fresh.as_str(), 2));
+            got.cursor
+        };
+        let len16 = |s: &str| s.encode_utf16().count();
+        // Before the first token: where it was.
+        assert_eq!(at(0), 0);
+        assert_eq!(at(2), 2, "right before the token");
+        // Inside a token (its label, its id): to the end of that token.
+        for inside in [3, 5, 20, 2 + len16(&token) - 1] {
+            assert_eq!(at(inside), 2 + len16(&fresh_token), "{inside}");
+        }
+        // Right after the first token, and in the words between.
+        assert_eq!(at(2 + len16(&token)), 2 + len16(&fresh_token));
+        assert_eq!(at(2 + len16(&token) + 3), 2 + len16(&fresh_token) + 3);
+        // At the end, and past it.
+        assert_eq!(at(len16(&text)), len16(&fresh));
+        assert_eq!(at(len16(&text) + 50), len16(&fresh));
+        // The result never has the cursor inside a token.
+        for cursor in 0..=len16(&text) {
+            let got = at(cursor);
+            let byte = utf16_to_utf8_offset(&fresh, got);
+            assert_eq!(outside_a_token(&fresh, byte), byte, "{cursor} -> {got}");
+        }
+    }
+
+    #[test]
+    fn a_change_is_one_edit_of_the_part_that_differs() {
+        let apply = |old: &str, edit: &MentionEdit| {
+            let from = utf16_to_utf8_offset(old, edit.from);
+            let to = utf16_to_utf8_offset(old, edit.to);
+            format!("{}{}{}", &old[..from], edit.insert, &old[to..])
+        };
+        for (old, new) in [
+            ("👉 @[Ada](person:x) end", "👉 @[Ada King](person:x) end"),
+            ("@[A](p) and @[B](q)", "@[Ann](p) and @[Bea](q)"),
+            ("same", "same"),
+            ("", "all new"),
+            ("all gone", ""),
+            ("aaa", "aa"),
+            ("aa", "aaa"),
+            ("é—x", "é–x"),
+        ] {
+            let edit = edit_between(old, new);
+            assert_eq!(apply(old, &edit), new, "{old:?} -> {new:?}: {edit:?}");
+        }
+        // Only what differs: the words around a renamed label stay.
+        let edit = edit_between(
+            "Met @[Ada](person:x) today",
+            "Met @[Ada King](person:x) today",
+        );
+        assert_eq!((edit.from, edit.to, edit.insert.as_str()), (9, 9, " King"));
     }
 
     #[test]

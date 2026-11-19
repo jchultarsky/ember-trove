@@ -22,7 +22,7 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
-use crate::mention::with_mentions;
+use crate::mention::{Resolved, with_mentions};
 use crate::wikilink::preprocess_wikilinks;
 use common::id::NodeId;
 use common::mention::MentionName;
@@ -182,8 +182,9 @@ pub(crate) fn sanitized(html: &str) -> String {
 }
 
 /// The parsed events of `text`, with each mention of a person replaced
-/// by what `people` lets the reader see ([`with_mentions`]).
-fn events_with_mentions<'a>(text: &'a str, people: &[MentionName]) -> Vec<Event<'a>> {
+/// by what `people` lets the reader see ([`with_mentions`]), and the
+/// mentions that named someone.
+fn events_with_mentions<'a>(text: &'a str, people: &[MentionName]) -> (Vec<Event<'a>>, Resolved) {
     let events = Parser::new_ext(text, MD_OPTIONS)
         .into_offset_iter()
         .collect();
@@ -192,7 +193,9 @@ fn events_with_mentions<'a>(text: &'a str, people: &[MentionName]) -> Vec<Event<
 
 /// The shared path of [`render_markdown`] and [`render_note`]: parse,
 /// replace the mentions among the events, write the HTML, and sanitize
-/// it last.
+/// it last. Then check that every person named came out as the element
+/// written for them (`Resolved::intact`); if not, the text is rendered
+/// again with nobody named.
 fn render_with_mentions(
     source: &str,
     title_map: Option<&HashMap<String, NodeId>>,
@@ -202,10 +205,18 @@ fn render_with_mentions(
         Some(titles) => Cow::Owned(preprocess_wikilinks(source, titles)),
         None => Cow::Borrowed(source),
     };
-    let events = events_with_mentions(&preprocessed, people);
-    let mut html_out = String::new();
-    cmark_html::push_html(&mut html_out, events.into_iter());
-    sanitizer().clean(&html_out).to_string()
+    let once = |people: &[MentionName]| {
+        let (events, resolved) = events_with_mentions(&preprocessed, people);
+        let mut html_out = String::new();
+        cmark_html::push_html(&mut html_out, events.into_iter());
+        (sanitizer().clean(&html_out).to_string(), resolved)
+    };
+    let (html, resolved) = once(people);
+    if resolved.intact(&html, |h| sanitizer().clean(h).to_string()) {
+        html
+    } else {
+        once(&[]).0
+    }
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -258,9 +269,23 @@ pub fn render_body(
     people: &[MentionName],
 ) -> RenderedBody {
     let preprocessed = preprocess_wikilinks(source, title_map);
+    let (body, resolved) = body_of(&preprocessed, people);
+    // As `render_with_mentions`: a person named must have come out as
+    // the element written for them, or nobody is named. The outline is
+    // made again too: it reads the names.
+    if resolved.intact(&body.html, |h| sanitizer().clean(h).to_string()) {
+        body
+    } else {
+        body_of(&preprocessed, &[]).0
+    }
+}
+
+/// One pass of [`render_body`] over the text with its wiki links
+/// already written.
+fn body_of(preprocessed: &str, people: &[MentionName]) -> (RenderedBody, Resolved) {
     // A mention in a heading is a `Text` event by now, so the outline
     // reads it as its name.
-    let parsed = events_with_mentions(&preprocessed, people);
+    let (parsed, resolved) = events_with_mentions(preprocessed, people);
     let mut outline = Vec::new();
     let mut next_id = 0usize;
     // The open h2/h3: (level, id, text so far).
@@ -308,10 +333,13 @@ pub fn render_body(
     });
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, events);
-    RenderedBody {
-        html: sanitizer().clean(&html_out).to_string(),
-        outline,
-    }
+    (
+        RenderedBody {
+            html: sanitizer().clean(&html_out).to_string(),
+            outline,
+        },
+        resolved,
+    )
 }
 
 /// Render a note: Markdown with its mentions of people (S9), for the

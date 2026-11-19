@@ -259,6 +259,9 @@ CI job is too slow a feedback loop for selector work.
   - To fake the registry: `page.route((url) => url.pathname ===
     '/api/people', …)`. Hold the answer to make it arrive late, fulfil
     with 500 for the alert. `unroute` before the next step.
+  - A list that opened because the cursor moved (a click, End) has
+    nobody ready. To get a ready option, **type** a character of the
+    name.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,

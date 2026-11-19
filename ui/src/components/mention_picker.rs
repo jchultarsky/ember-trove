@@ -11,14 +11,17 @@
 //! first and stops if the picker used the key:
 //! - Up and Down move the highlight.
 //! - Enter and Tab pick, **only when an option is highlighted**. Nobody
-//!   is highlighted on a bare `@`, or when what is typed matches only an
-//!   email address: an arrow key chooses first. So `@` then Enter is a
-//!   new line. A mention made by accident in shared text would tell its
-//!   readers a name.
+//!   is highlighted on a bare `@`, when what is typed matches only an
+//!   email address, or when the cursor only moved into an `@…` that was
+//!   in the text already: an arrow key chooses first. So `@` then Enter
+//!   is a new line, and so is Enter at the end of a line that happens
+//!   to end in `@bob`. A mention made by accident in shared text would
+//!   tell its readers a name.
 //! - Escape closes the list (or the word that the registry could not be
 //!   read) and nothing else: it never reaches the editor's own Escape,
 //!   which would discard an edit.
 //! - Ctrl/⌘+Enter is left to the editor (save), and closes the list.
+//!   Any other key with a modifier is left alone.
 //!
 //! A pick is given to the browser as one edit of the text box
 //! (`insertText`), so Ctrl+Z takes it back, and the box's own `input`
@@ -27,8 +30,8 @@
 
 use common::id::PersonId;
 use common::mention::{
-    MentionName, MentionQuery, PickerMatch, insert_mention, mention_edit, mention_query_at,
-    picker_match, refresh_labels, stale_labels,
+    MentionName, MentionQuery, PickerMatch, edit_between, insert_mention, mention_edit,
+    mention_query_at, picker_match, refresh_labels, refresh_labels_at, stale_labels,
 };
 use common::person::{Person, primary};
 use leptos::prelude::*;
@@ -59,6 +62,11 @@ pub struct MentionPicker {
     textarea: NodeRef<leptos::html::Textarea>,
     /// The mention being typed, while the list follows it.
     typing: RwSignal<Option<MentionQuery>>,
+    /// Whether the list follows something just typed. False when the
+    /// cursor only moved into an `@…` that was in the text already (a
+    /// click, an arrow key, End): nobody is ready then, and Enter is a
+    /// new line, as it is anywhere else in the text.
+    by_typing: RwSignal<bool>,
     /// Who an arrow key moved the highlight to. By person, not by place:
     /// the list can change under it (the registry is read again), and
     /// Enter must never pick someone the author did not look at.
@@ -100,6 +108,7 @@ impl MentionPicker {
             value,
             textarea,
             typing: RwSignal::new(None),
+            by_typing: RwSignal::new(false),
             moved: RwSignal::new(None),
             dismissed: RwSignal::new(None),
             reads,
@@ -156,10 +165,12 @@ impl MentionPicker {
     }
 
     /// The option Enter picks when no arrow key has chosen: the first,
-    /// and only when a name matches what was typed. On a bare `@`, or
-    /// when only an address matches, nobody: see the module doc.
-    fn ready(options: &[(Person, PickerMatch)], query: &str) -> Option<usize> {
-        (!query.trim().is_empty()
+    /// and only when a name matches what was **typed**. On a bare `@`,
+    /// when only an address matches, or when the cursor only moved here
+    /// (`typed` false), nobody: see the module doc.
+    fn ready(options: &[(Person, PickerMatch)], query: &str, typed: bool) -> Option<usize> {
+        (typed
+            && !query.trim().is_empty()
             && options
                 .first()
                 .is_some_and(|(_, how)| *how == PickerMatch::Name))
@@ -174,10 +185,11 @@ impl MentionPicker {
         moved: Option<PersonId>,
         options: &[(Person, PickerMatch)],
         query: &str,
+        typed: bool,
     ) -> Option<usize> {
         moved
             .and_then(|id| options.iter().position(|(p, _)| p.id == id))
-            .or_else(|| Self::ready(options, query))
+            .or_else(|| Self::ready(options, query, typed))
     }
 
     fn options(&self) -> Vec<(Person, PickerMatch)> {
@@ -205,9 +217,20 @@ impl MentionPicker {
         self.moved.set(None);
     }
 
-    /// Call from the text box's `input` (and `click`) handler, after the
-    /// text signal is set: follows the `@` at the cursor, if any.
+    /// Call from the text box's `input` handler, after the text signal
+    /// is set: follows the `@` at the cursor, if any.
     pub fn after_input(&self) {
+        self.follow(true);
+    }
+
+    /// Call from the text box's `click` handler: the cursor may now be in
+    /// an `@…` that is in the text already. The list opens for it, with
+    /// nobody ready.
+    pub fn after_click(&self) {
+        self.follow(false);
+    }
+
+    fn follow(&self, typed: bool) {
         let text = self.text();
         let typing = self.cursor().and_then(|c| mention_query_at(&text, c));
         let Some(typing) = typing else {
@@ -232,6 +255,7 @@ impl MentionPicker {
         }
         self.dismissed.set(None);
         self.moved.set(None);
+        self.by_typing.set(typed);
         self.typing.set(Some(typing));
     }
 
@@ -258,7 +282,7 @@ impl MentionPicker {
         // used did not move it, and must not reset the highlight.
         let left_a_dismissed = now.is_none() && self.dismissed.get_untracked().is_some();
         if now != self.typing.get_untracked() || left_a_dismissed {
-            self.after_input();
+            self.follow(false);
         }
     }
 
@@ -276,9 +300,14 @@ impl MentionPicker {
             return false;
         }
         if ev.ctrl_key() || ev.meta_key() || ev.alt_key() {
-            // The editor's chord (save). The list must not stay up over
-            // a box the editor is about to empty.
-            self.close();
+            // The editor's chord. Ctrl/⌘+Enter saves: the list must not
+            // stay up over a box the editor is about to empty. Anything
+            // else is left alone: on many keyboards AltGr or Option types
+            // a letter (or the `@` itself), and closing the list for it
+            // made the next keystroke a "new" `@`.
+            if ev.key() == "Enter" {
+                self.close();
+            }
             return false;
         }
         let Some(typing) = self.typing.get_untracked() else {
@@ -290,7 +319,12 @@ impl MentionPicker {
         if options.is_empty() && !self.failed_untracked() {
             return false;
         }
-        let active = Self::active_in(self.moved.get_untracked(), &options, &typing.query);
+        let active = Self::active_in(
+            self.moved.get_untracked(),
+            &options,
+            &typing.query,
+            self.by_typing.get_untracked(),
+        );
         match ev.key().as_str() {
             // Escape closes what the picker shows, the failed-read alert
             // too, and never reaches the editor's own Escape.
@@ -350,8 +384,13 @@ impl MentionPicker {
             .dyn_into::<web_sys::HtmlDocument>()
             .ok()
             .and_then(|doc| {
-                doc.exec_command_with_show_ui_and_value("insertText", false, insert)
-                    .ok()
+                // Nothing to put in: the selection is taken out.
+                if insert.is_empty() {
+                    doc.exec_command("delete").ok()
+                } else {
+                    doc.exec_command_with_show_ui_and_value("insertText", false, insert)
+                        .ok()
+                }
             })
             .unwrap_or(false);
         if by_browser && el.value() == whole {
@@ -448,22 +487,32 @@ impl MentionPicker {
     /// box (it can be undone), worked out from the text as the box holds
     /// it now. Offered as an edit ([`Self::notice`]), never applied
     /// unasked.
+    ///
+    /// The edit is the part of the text that differs, not the whole of
+    /// it: replacing everything left the cursor at the very end for the
+    /// box's `input` handler, which opened a list for an `@ad` or `[[x`
+    /// the text happened to end with.
     fn update_labels(&self) {
         let Some(el) = self.textarea.get_untracked() else {
             return;
         };
         let text = el.value();
-        let Some((fresh, _)) =
-            refresh_labels(&text, &self.own_untracked(), &self.kept.get_untracked())
-        else {
+        let cursor = el.selection_start().ok().flatten().unwrap_or(0) as usize;
+        let Some(fresh) = refresh_labels_at(
+            &text,
+            &self.own_untracked(),
+            &self.kept.get_untracked(),
+            cursor,
+        ) else {
             return;
         };
-        let cursor = el.selection_start().ok().flatten().unwrap_or(0);
         let top = el.scroll_top();
-        let whole = text.encode_utf16().count();
-        self.edit(&el, 0, whole, &fresh, &fresh);
-        // The edit left the cursor at the end, and the box scrolled there.
-        let _ = el.set_selection_range(cursor, cursor);
+        let edit = edit_between(&text, &fresh.text);
+        self.edit(&el, edit.from, edit.to, &edit.insert, &fresh.text);
+        // The cursor goes back to its place in the words (never into a
+        // token: the next key would break it), and the box does not jump.
+        let at = u32::try_from(fresh.cursor).unwrap_or(u32::MAX);
+        let _ = el.set_selection_range(at, at);
         el.set_scroll_top(top);
     }
 
@@ -529,8 +578,13 @@ impl MentionPicker {
     pub fn active_descendant(&self) -> Option<String> {
         let options = self.options();
         let typing = self.typing.get()?;
-        Self::active_in(self.moved.get(), &options, &typing.query)
-            .and_then(|i| options.get(i).map(|(p, _)| self.option_id(p.id)))
+        Self::active_in(
+            self.moved.get(),
+            &options,
+            &typing.query,
+            self.by_typing.get(),
+        )
+        .and_then(|i| options.get(i).map(|(p, _)| self.option_id(p.id)))
     }
 
     /// The list. Renders nothing while it is closed.
@@ -571,7 +625,7 @@ impl MentionPicker {
                 .map(|(p, _)| p.display_name.clone())
                 .collect();
             let ids: Vec<PersonId> = options.iter().map(|(p, _)| p.id).collect();
-            let ready = Self::ready(&options, &query);
+            let ready = Self::ready(&options, &query, picker.by_typing.get());
             // As `active_in`: whoever an arrow key moved to, else the one
             // who is ready.
             let active = Signal::derive(move || {

@@ -227,20 +227,39 @@ test('@ then Enter is a new line; an email address opens nothing; Escape closes 
     await page.keyboard.press('Shift+Tab');
     await expect(list(page)).toHaveCount(0);
     expect(await editor.inputValue()).toMatch(/ @Ada mention9x\d+$/);
-    // The list follows the cursor when a key moves it and types nothing:
-    // End comes back to the mention being typed, Home leaves it. (On a
-    // short line of its own: Home goes to the start of the line as it is
-    // laid out, which on a long wrapped line is not the start.)
+    // The list follows the cursor when a key moves it and types nothing.
+    // Moved into an @… that is in the text already, nobody is ready: Enter
+    // at the end of a line that ends in "@bob" is a new line, as anywhere.
     await editor.focus();
     await editor.press('End');
-    await expect(list(page)).toBeVisible();
-    await page.keyboard.press('Escape');
-    await editor.press('Enter');
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(0);
+    await page.keyboard.press('Enter');
+    await expect(list(page)).toHaveCount(0);
+    expect(await editor.inputValue()).toMatch(/ @Ada mention9x\d+\n$/);
+    // Home leaves the mention being typed, End comes back to it. (On a
+    // short line of its own: Home goes to the start of the line as it is
+    // laid out, which on a long wrapped line is not the start.)
     await editor.pressSequentially(`@Ada ${stamp}`.slice(0, -4), { delay: 15 });
     await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
     await editor.press('Home');
     await expect(list(page)).toHaveCount(0);
     await editor.press('End');
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(0);
+    // A click into it is the same; typing on makes the match ready again.
+    await editor.press('Home');
+    await expect(list(page)).toHaveCount(0);
+    await editor.evaluate((el: HTMLTextAreaElement) => {
+      el.setSelectionRange(el.value.length, el.value.length);
+      el.click();
+    });
+    await expect(list(page).getByRole('option')).toHaveCount(1);
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(0);
+    await editor.pressSequentially(stamp.slice(-4, -3), { delay: 15 });
+    await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+    // A key with a modifier that is not the save chord leaves the list.
+    await page.keyboard.press('Control');
     await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
     // An arrow key the list used keeps its highlight when the key comes up.
     await person(request, { display_name: `e2e Ada Two ${stamp}` });
@@ -248,6 +267,15 @@ test('@ then Enter is a new line; an email address opens nothing; Escape closes 
     await expect(list(page).getByRole('option')).toHaveCount(2);
     await page.keyboard.press('ArrowDown');
     await expect(list(page).getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
+    // Closed with Escape it stays closed for that @, until the cursor has
+    // been somewhere else.
+    await page.keyboard.press('Escape');
+    await editor.pressSequentially('x', { delay: 15 });
+    await page.keyboard.press('Backspace');
+    await expect(list(page)).toHaveCount(0);
+    await editor.press('Home');
+    await editor.press('End');
+    await expect(list(page).getByRole('option')).toHaveCount(2);
     await page.keyboard.press('Escape');
     // Tab picks a highlighted one, after text that is not ASCII (the
     // cursor is counted in UTF-16 units, the text in bytes).
@@ -635,9 +663,17 @@ test('after a rename the editor offers to update the name in the text, and never
     expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(before);
 
     const editor3 = await openEditor(page, node.id);
+    // With the cursor inside the token (in its label):
+    await editor3.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(10, 10));
     await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
     await expect(editor3).toHaveValue(`Met ${token(renamed)}.`);
     await expect(page.getByTestId('stale-mentions')).toHaveCount(0);
+    // The cursor is after the token, never inside it: the next key typed
+    // must not break the mention.
+    expect(await editor3.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([
+      `Met ${token(renamed)}`.length,
+      `Met ${token(renamed)}`.length,
+    ]);
     // It is one edit of the box, with the keyboard back in it: undo takes
     // it back (and the notice with it), redo makes it again.
     await expect(editor3).toBeFocused();
@@ -650,6 +686,20 @@ test('after a rename the editor offers to update the name in the text, and never
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
     expect((await (await request.get(`/api/nodes/${node.id}`)).json()).body).toBe(`Met ${token(renamed)}.`);
+
+    // A shorter name: the edit only takes characters out, and is still
+    // one edit. The cursor, at the end of the text, stays at the end.
+    const short = { ...ada, display_name: `e2e Ad ${stamp}` };
+    expect((await request.put(`/api/people/${ada.id}`, { data: { display_name: short.display_name } })).status()).toBe(
+      200,
+    );
+    const editor4 = await openEditor(page, node.id);
+    await editor4.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.value.length, el.value.length));
+    await page.getByTestId('stale-mentions').getByRole('button', { name: 'Update' }).click();
+    await expect(editor4).toHaveValue(`Met ${token(short)}.`);
+    expect(await editor4.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(`Met ${token(short)}.`.length);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(editor4).toHaveValue(`Met ${token(renamed)}.`);
   } finally {
     await wipe(request);
   }
@@ -739,6 +789,29 @@ test('the registry arriving late, failing, and coming back', async ({ page, requ
     await expect(list(page).getByRole('alert')).toHaveCount(0);
     await page.keyboard.press('Enter');
     await expect(editor).toHaveValue(`Met ${token(ada)} and @ ${token(ada)} `);
+
+    // The highlight is on a person, not on a row: when the list changes
+    // under it, Enter still picks who was highlighted.
+    await person(request, { display_name: `e2e Aaa ${stamp}` });
+    let arrive: () => void = () => {};
+    const waiting = new Promise<void>((done) => (arrive = done));
+    await page.route(registry, async (route) => {
+      await waiting;
+      await route.continue();
+    });
+    await editor.pressSequentially(`@${stamp}`, { delay: 15 });
+    const options = list(page).getByRole('option');
+    await expect(options).toHaveCount(1);
+    await page.keyboard.press('ArrowDown');
+    await expect(options.first()).toHaveAttribute('aria-selected', 'true');
+    arrive();
+    await expect(options).toHaveCount(2);
+    await expect(options.first()).toContainText(`e2e Aaa ${stamp}`);
+    await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expect(options.nth(1)).toContainText(ada.display_name);
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveValue(`Met ${token(ada)} and @ ${token(ada)} ${token(ada)} `);
+    await page.unroute(registry);
     await editor.fill('');
     await page.getByRole('button', { name: 'Done', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/nodes/${node.id}$`));
@@ -790,6 +863,45 @@ test('a mention is shown only where Markdown reads a link', async ({ page, reque
     for (const link of await page.locator('.prose a[href^="http"]').all()) {
       expect(await link.getAttribute('href')).not.toContain('Secret');
     }
+  } finally {
+    await wipe(request);
+  }
+});
+
+test('a text made to swallow a mention into a link’s address names nobody', async ({ page, request }) => {
+  const stamp = newStamp();
+  await wipe(request);
+  const ada = await person(request, { display_name: `e2e Ada Secret ${stamp}` });
+  // Raw HTML that ends inside an open attribute: to the browser, what
+  // Markdown writes next is that attribute's value. The name would be in
+  // the writer's address. The page checks what it rendered, and shows
+  // the whole text with nobody named.
+  const body = [
+    `Intro ${token(ada, 'A')}.`,
+    `<div></a><a href='https://attacker.example/?q=`,
+    `Thanks ${token(ada, 'A')} for the review.`,
+    `' <b>Quarterly report</b></a></div>`,
+    `Outro ${token(ada, 'A')}.`,
+  ].join('\n\n');
+  const node = await createNode(request, `${NODE} swallowed ${stamp}`, { body });
+  try {
+    // The API does name them: the page is what holds the name back.
+    expect(await named(request, node.id)).toEqual([
+      { person_id: ada.id, display_name: ada.display_name, mine: true },
+    ]);
+    await page.goto(`/nodes/${node.id}`);
+    const prose = page.locator('.prose').first();
+    await expect(prose).toContainText('Intro');
+    await expect(prose.locator('.mention-unresolved').first()).toHaveText('@A');
+    await expect(prose.locator('.mention')).toHaveCount(0);
+    expect(await prose.innerHTML()).not.toContain('Secret');
+    for (const link of await prose.locator('a[href]').all()) {
+      expect(await link.getAttribute('href')).not.toContain('Secret');
+    }
+    // The same in the editor's preview.
+    await openEditor(page, node.id);
+    await expect(page.locator('.mention-unresolved').first()).toHaveText('@A');
+    await expect(page.locator('a.mention[href^="/people/"]')).toHaveCount(0);
   } finally {
     await wipe(request);
   }

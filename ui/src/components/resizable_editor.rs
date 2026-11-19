@@ -134,7 +134,7 @@ pub fn ResizableEditor(
                 }
                 on:click=move |_| {
                     if let Some(picker) = mentions {
-                        picker.after_input();
+                        picker.after_click();
                     }
                 }
                 // An arrow, Home or End moves the cursor without an `input`.

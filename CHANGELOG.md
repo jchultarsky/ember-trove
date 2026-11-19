@@ -52,10 +52,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - There is no lookup of a name by id: names come only with text the
     reader may already read.
   - Mentions are saved in the transaction that saves the text.
-  - A mention is shown only where Markdown reads a link. A name is
-    written as words on the page and nowhere else: never in a writer's
-    own link address or attribute, or an image's alt text. The
-    sanitizer runs last, on everything.
+  - A mention is shown only where Markdown reads a link, and a name
+    is written as words on the page. The sanitizer runs last, on
+    everything, and its result is checked: if a person named did not
+    come out as the element written for them (raw HTML can swallow what
+    follows it into an attribute), the text is shown with nobody named.
 - **The text scanners are linear.** The wiki-link and code-span
   scanners, which run on every save, were quadratic on text made to be
   slow (a megabyte of `[[` took most of a minute of the server's time).

@@ -40,11 +40,15 @@ pub fn wikilink_html(
     }
 }
 
+/// `@` too: a wiki link's words are not a place for a mention of a
+/// person (`common::mention::mentions` says so of the source), and the
+/// mention renderer reads this text after the wiki links are written.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('@', "&#64;")
 }
 
 /// The lowercased-title → node map for the `[[links]]` in `body`, fetched

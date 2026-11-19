@@ -393,7 +393,8 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   `@[label](person:id)` for the API; never scan for `@[` anywhere else.
   - **A mention is shown only where both readers agree it is one**
     (`ui/src/mention.rs`, `with_mentions`): `common::mention::mentions`
-    reads a token at that place in the source, **and** the Markdown
+    reads a token at that place in the text (after wiki links are
+    written; a wiki link's words hold no `@`), **and** the Markdown
     parser read the same bytes as an inline link, outside an image.
     It is replaced among the parsed events: a fixed opening tag, the
     name as a `Text` event (the HTML writer escapes it), a closing tag.
@@ -408,17 +409,29 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       markup, leaving attributes of the writer's choosing on an
       allowed element.
     Anything new that a renderer adds goes in as events, before the
-    HTML is written. Each renderer's output, cleaned again, must be
-    unchanged (`nothing_a_writer_types_gets_past_the_sanitizer`).
+    HTML is written.
+  - **The result is checked, not trusted** (`Resolved::intact`; third
+    review of #362). Markdown and the HTML parser read a text
+    differently: raw HTML can end inside an open attribute
+    (`<div><a href='https://elsewhere/?q=`, a blank line), and what
+    Markdown writes next is then that attribute's value to the
+    sanitizer. No rule about where a token sits lists every such case.
+    So each person named must be in the sanitizer's output as the
+    element written for them, as often as written; if not, the text is
+    rendered again with nobody named. The check reads the output and
+    never changes it. Anything else that puts a reader-only secret into
+    rendered Markdown needs the same check.
+  - Test a claim like "never in an attribute" by walking the output's
+    attributes (`attribute_values` in the tests) and with the
+    fixed-sequence fuzz, not with `contains("href=\"https://evil")`.
   - The sanitizer allows the mention's classes by name (`mention` on
     `a` and `span`, `mention-unresolved` on `span`), so a writer can
     type them and give their own words the plain look of a name, as
     they can make them bold. That is accepted: no name is told by it.
     The look of a link is styled only for `a.mention[href^="/people/"]`.
   - A token inside a link the writer wrote in HTML is not resolved
-    (`anchors_opened`). That is tidiness, not a boundary: the name
-    would only be words on the page there, to a reader who may know
-    it.
+    (`anchors_opened`). That is tidiness, not a boundary: it reads
+    tags by eye and can be fooled.
   - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
     `<span class="mention">` with no id in the markup; nobody to name →
     `<span class="mention-unresolved">` with the label. Told apart
@@ -444,16 +457,24 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
       the name, or the start of an email address. Never by company or
       phone (`"lunch @12"` offered whoever had 12 in a number).
     - Enter and Tab pick only a highlighted option; one is highlighted
-      only when a **name** matches what was typed. A bare `@` or an
-      address-only match needs an arrow key first.
+      only when a **name** matches what was **typed**. A bare `@`, an
+      address-only match, or a list that opened because the cursor
+      moved into an `@…` already in the text (`after_click`,
+      `on_keyup`; `by_typing` false) needs an arrow key first: Enter at
+      the end of a line that ends in `@bob` is a new line.
     - Escape closes the list only (it must not reach the editor's
       Escape), and the "couldn't load your People" alert the same way.
-      Ctrl/⌘+Enter stays the editor's and closes the list. Shift+Tab
-      leaves the field.
+      Ctrl/⌘+Enter stays the editor's and closes the list; any other
+      key with a modifier is left alone (AltGr types letters, and `@`
+      itself, on many keyboards). Shift+Tab leaves the field.
     - A pick is one `insertText` edit by the browser (`edit`), so
       Ctrl+Z undoes it and the box's own `input` handler sets the
-      signal. "Update" is one such edit too. Don't `set_value` a
-      textarea for an edit the user may want to undo.
+      signal. "Update" is one such edit too: of the part that differs
+      (`common::mention::edit_between`), with the cursor put back in
+      its place in the words and never inside a token
+      (`refresh_labels_at`). Don't `set_value` a textarea for an edit
+      the user may want to undo, and don't replace the whole text: the
+      box's `input` handler then sees the cursor at the very end.
     - Offsets from the box (`selectionStart`) count in the box's own
       text (`el.value()`), not in the editor's signal: a text saved
       with CRLF line ends differs until the first keystroke.
