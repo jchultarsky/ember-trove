@@ -404,13 +404,8 @@ impl MentionPicker {
             .dyn_into::<web_sys::HtmlDocument>()
             .ok()
             .and_then(|doc| {
-                // Nothing to put in: the selection is taken out.
-                if insert.is_empty() {
-                    doc.exec_command("delete").ok()
-                } else {
-                    doc.exec_command_with_show_ui_and_value("insertText", false, insert)
-                        .ok()
-                }
+                doc.exec_command_with_show_ui_and_value("insertText", false, insert)
+                    .ok()
             })
             .unwrap_or(false);
         self.editing.set_value(false);

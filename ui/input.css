@@ -308,8 +308,9 @@ input[type="checkbox"]:checked::after {
    in its title). A long name wraps. `unicode-bidi: isolate` keeps a name
    with a direction override from reordering the text around it. A writer
    can type these classes (the sanitizer allows them by name), so none of
-   them places or sizes anything, and the link's look is only for a link
-   to a person's card. */
+   them places or sizes anything. The link's look is only for a link to a
+   person's card that carries a render's own class (`mention m-…`, which
+   no text can hold: `ui/src/mention.rs`). */
 .mention,
 .mention-unresolved {
   unicode-bidi: isolate;
@@ -318,16 +319,16 @@ input[type="checkbox"]:checked::after {
 .mention {
   font-weight: 500;
 }
-a.mention[href^="/people/"] {
+a[class^="mention m-"][href^="/people/"] {
   color: #c2410c; /* orange-700: readable on white */
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
 }
-.dark a.mention[href^="/people/"] {
+.dark a[class^="mention m-"][href^="/people/"] {
   color: #fb923c; /* orange-400, as a wiki link */
 }
-a.mention[href^="/people/"]:hover {
+a[class^="mention m-"][href^="/people/"]:hover {
   text-decoration-thickness: 2px;
 }
 .mention-unresolved {

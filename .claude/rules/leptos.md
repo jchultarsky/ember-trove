@@ -402,9 +402,8 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     and each one is found again by position after the wiki links are
     written as HTML (`wikilink::Moved`). Never scan the rewritten text:
     it holds other tokens (a wiki link's HTML changes which backticks
-    pair), and the editor counts in the text as written. With two lists,
-    "the second mention is shown" was true of one token and done to
-    another, in a link's address (fifth review of #362).
+    pair), and the API, which decides who is mentioned, reads the text
+    as written (fifth review of #362).
     It is replaced among the parsed events: a fixed opening tag, the
     name as a `Text` event (the HTML writer escapes it), a closing tag.
   - **The sanitizer is the last thing that touches rendered HTML.**
@@ -439,7 +438,8 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     are mentions and the writer's link is no link. Both attempts parse
     **the same text** (wiki links written as HTML; their own tags
     stay, `Moved::wrote`), so Markdown reads the same links in each.
-    `checked` never returns an attempt that failed, or one unchecked.
+    `checked` never returns an attempt that failed the check; were all
+    to fail (none has), it renders nothing.
   - **The check is one pass over the page** (`Resolved::intact`): the
     writer chooses how many different labels a text has, and a search
     of the page for each took a third of a minute on a body of the
@@ -462,7 +462,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     `a` and `span`, `mention-unresolved` on `span`), so a writer can
     type them and give their own words the plain look of a name, as
     they can make them bold. That is accepted: no name is told by it.
-    The look of a link is styled only for `a.mention[href^="/people/"]`.
+    The look of a link to a person is styled only for an element that
+    carries a render's own class and leads to `/people/…`
+    (`a[class^="mention m-"][href^="/people/"]` in `input.css`): the
+    sanitizer strips every `m-…` but its own render's, so a writer's
+    `<a class="mention" href="/people/…">` does not get it.
   - A token inside a link the writer wrote in HTML names nobody
     (`anchors_opened`): it is written with its label, and checked like
     the rest. That is tidiness, not a boundary: it reads tags by eye
@@ -617,14 +621,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   (`api::fetch_node_list`) and shows the rows as they come. Filtering or
   sorting a page in the browser orders only what happened to be loaded.
 - **Wiki links are read by `common::wikilink` only** (#281, 3.1). The
-  renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
+  renderer (`wikilink.rs::preprocess_wikilinks_moved`) and the excerpts use
   `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`
   autocomplete is the exception: it looks backwards from the cursor.
-- **Rendered Markdown never keeps a class the writer chose** (2026-11-10).
-  `markdown::sanitizer` allows `wikilink` on `<a>` and
-  `wikilink-unresolved` on `<span>` through `add_allowed_classes`, and
-  nothing else: the app's own stylesheet has classes that cover the
-  screen. A renderer that needs a new class adds it there, by name.
+- **Rendered Markdown keeps only classes the renderers write, by name**
+  (2026-11-10): `markdown::sanitizer` allows `wikilink` and `mention`
+  on `<a>`, `wikilink-unresolved`, `mention` and `mention-unresolved`
+  on `<span>` (and each render's own random class, `sanitizer_naming`)
+  through `add_allowed_classes`, and nothing else: the app's own
+  stylesheet has classes that cover the screen. A writer can type the
+  named ones, so none of them may place or size anything. A renderer
+  that needs a new class adds it there, by name.
 - **The service worker never writes** (2026-11-10). Any site can make a
   browser post to an address the worker answers, and the worker's own
   requests carry the session. A share goes to the app as

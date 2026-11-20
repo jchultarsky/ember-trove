@@ -27,10 +27,11 @@
 //! So: the mention is written **as events, before the HTML is written,
 //! and the sanitizer runs last, on everything**. The name is a `Text`
 //! event, which the HTML writer escapes; the tags around it are fixed
-//! strings with a canonical id. The sanitizer allows the two classes by
-//! name. A writer can therefore give words of their own the plain look
-//! of a name (as they can make them bold); the link's look is styled
-//! only for a link to `/people/…` (`input.css`).
+//! strings with a canonical id. The sanitizer allows the mention's
+//! classes by name. A writer can therefore give words of their own the
+//! plain look of a name (as they can make them bold); the look of a link
+//! to a person is styled only for an element that carries a render's own
+//! class (`input.css`).
 //!
 //! **And the result is checked, not trusted** ([`Resolved::intact`]).
 //! Markdown and the HTML parser do not read a text the same way: a
@@ -75,8 +76,8 @@ use uuid::Uuid;
 ///
 /// `mark` is this render's own class ([`Resolved::mark`]), written on
 /// every one of them.
-fn shown<'a>(person: PersonId, label: &str, people: &[MentionName], mark: &str) -> [Event<'a>; 3] {
-    let (open, words, close) = match people.iter().find(|p| p.person_id == person) {
+fn shown<'a>(label: &str, named: Option<&MentionName>, mark: &str) -> [Event<'a>; 3] {
+    let (open, words, close) = match named {
         Some(named) if named.mine => (
             format!(
                 r#"<a class="mention {mark}" href="/people/{}">"#,
@@ -165,6 +166,17 @@ impl Resolved {
     /// This render's own class, for its sanitizer to allow.
     pub fn mark(&self) -> &str {
         &self.mark
+    }
+
+    /// A result no page can satisfy: a mention was written, and no page
+    /// has it. For the test of what a render does when nothing holds.
+    #[cfg(test)]
+    pub(crate) fn never_intact() -> Self {
+        let mut resolved = Self::new();
+        resolved
+            .written
+            .push("<span>never on any page</span>".to_string());
+        resolved
     }
 
     /// Whether every mention written is in `html` (the sanitizer's
@@ -277,6 +289,10 @@ pub fn with_mentions<'a>(
     let mut resolved = Resolved::new();
     // By where each starts (its `@`).
     let tokens: HashMap<usize, &Token> = tokens.iter().map(|token| (token.start, token)).collect();
+    // By person, once: a text can mention thousands, and a search of
+    // the list for each mention is that many times that many.
+    let people: HashMap<PersonId, &MentionName> =
+        people.iter().rev().map(|p| (p.person_id, p)).collect();
     let mut out: Vec<Event<'a>> = Vec::with_capacity(events.len());
     let mut in_image = 0usize;
     let mut in_anchor = 0i32;
@@ -330,8 +346,12 @@ pub fn with_mentions<'a>(
         // is still written as a mention, with its label, so that it is
         // checked like every other: left as Markdown's own link, its
         // label could fall into that address unseen.
-        let known: &[MentionName] = if in_anchor > 0 { &[] } else { people };
-        let events_of_it = shown(token.person, &token.label, known, &resolved.mark);
+        let named = if in_anchor > 0 {
+            None
+        } else {
+            people.get(&token.person).copied()
+        };
+        let events_of_it = shown(&token.label, named, &resolved.mark);
         let mut written = String::new();
         cmark_html::push_html(&mut written, events_of_it.iter().cloned());
         resolved.written.push(written);
@@ -630,6 +650,32 @@ mod tests {
             html.contains("&lt;div&gt;") && html.contains("class=\"mention\""),
             "{html}"
         );
+        // Each wiki link's own tags, and only those: inline HTML of the
+        // writer's after one is text like the rest, and every link kept
+        // is closed.
+        let hostile = format!(
+            "[[Plan]] <b title='w'>bold</b> [[Nowhere]] <i>it</i> [[Plan|again]]\n\n<div></a><a href='https://attacker.example/?q=\n\n{token}\n\n'>x</a></div>\n"
+        );
+        let html = render_markdown(&hostile, &titles, &named("Ada", true));
+        assert_eq!(
+            html.matches(r#"<a class="wikilink" data-node-id="#).count(),
+            2,
+            "{html}"
+        );
+        assert!(
+            html.contains(">Plan</a>") && html.contains(">again</a>"),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<span class="wikilink-unresolved">Nowhere</span>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains("&lt;b title=") && html.contains("&lt;i&gt;"),
+            "{html}"
+        );
+        assert!(!html.contains("<b") && !html.contains("<i>"), "{html}");
+        assert!(html.contains(">@Ada</a>"), "{html}");
         // A mention right after a wiki link is found where the link's
         // HTML has moved it to.
         let html = render_markdown(
@@ -958,6 +1004,13 @@ mod tests {
         // A stray end tag before it changes nothing.
         let html = render_note(&format!("</a> then {token}"), &people);
         assert_eq!(html.matches("class=\"mention\"").count(), 1, "{html}");
+        // After a link of the writer's that is closed, a person is named
+        // again.
+        let html = render_note(
+            &format!("<a href=\"https://e.example/\">a link</a> then {token}"),
+            &people,
+        );
+        assert!(html.contains(&format!(">@{SECRET}</a>")), "{html}");
         // A label holds no `<`: with an autolink in it, this is a link
         // to nothing, not a mention, and what follows stays.
         let id = ada().0.hyphenated();
@@ -966,8 +1019,7 @@ mod tests {
             &people,
         );
         assert!(!html.contains(SECRET) && html.contains(" tail"), "{html}");
-        // Nor with a wiki link written into it (the page scans after
-        // wiki links are written as HTML).
+        // Nor with a wiki link in it: a label holds no `[`.
         for text in [
             format!("@[a [[x]] b](person:{id})"),
             format!("@[x [[a|b](person:{id})]]"),

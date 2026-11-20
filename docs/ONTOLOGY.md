@@ -507,8 +507,9 @@ ID, not their name**.
 
 - Disambiguation happens at authoring time, by the author — never by
   algorithmic guessing. **Plain names in text are never auto-resolved.**
-- A mention renders as a link to the Person (displaying their current
-  name) and feeds a **"Mentioned in"** reverse list on the Person's page.
+- A mention renders as a link to the Person for their owner (displaying
+  their current name; another reader gets the name as plain text, §14)
+  and feeds a **"Mentioned in"** reverse list on the Person's page.
 - A mention is **not membership**: it says "this text refers to this
   person," nothing more.
 - The addressing symmetry: nodes are addressed by title (`[[Title]]` — a
@@ -518,8 +519,8 @@ ID, not their name**.
   identity. The name beside it is what the author saw when they picked
   the Person: it keeps the raw text readable, and it is what shows when
   the mention cannot be resolved. It is never used to find anyone, and it
-  can be older than the Person's current name; the editor offers to bring
-  it up to date and never does so unasked.
+  can be older than the Person's current name: nothing rewrites it, and
+  the page shows the current name without it.
 - **A mention is real only when its author made it.** A save makes a
   mention only for a mention it **adds** to the text, and only of the
   saver's own People. A token typed or pasted with another account's

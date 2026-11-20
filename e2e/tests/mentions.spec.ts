@@ -463,8 +463,7 @@ test('someone the node is shared with sees the name and nothing else', async ({
     await expect(page.locator('main')).not.toContainText('example.com');
 
     // In their editor (they may edit): the preview names the person the
-    // text came with, as plain text, and offers no update of a name that
-    // is not theirs.
+    // text came with, as plain text.
     await page.goto(`/nodes/${node.id}/edit`);
     await expect(page.getByPlaceholder(/Write in Markdown/)).toBeVisible();
     await expect(page.locator('span.mention')).toHaveText(`@${ada.display_name}`);
@@ -778,19 +777,24 @@ test('a mention is shown only where Markdown reads a link', async ({ page, reque
     // in after it: forged markers around an attribute.
     `<a href="https://attacker.example/" title="&#xE000;">Sign in again</a>&#xE001;<span title=" class=etl-root style=position:fixed;inset:0 onmouseover=alert(1) x=">.</span>`,
     // A writer may type the class. It is a word on their own link, and
-    // does not get the look of a link to a person.
+    // does not get the look of a link to a person: not on a link to
+    // somewhere else, and not on one to a person's card either (the id
+    // is in the raw text for any co-editor to read).
     `<a class="mention" href="https://attacker.example/">@Boss</a>`,
+    `<a class="mention" href="/people/${ada.id}">@Chief</a>`,
   ].join('\n\n');
   const node = await createNode(request, `${NODE} places ${stamp}`, { body });
   try {
     await page.goto(`/nodes/${node.id}`);
-    const real = page.locator('a.mention[href^="/people/"]');
+    const real = page.locator('a[class^="mention m-"][href^="/people/"]');
     await expect(real).toHaveCount(1);
     await expect(real).toHaveText(`@${ada.display_name}`);
-    const typed = page.locator('a.mention:not([href^="/people/"])');
-    await expect(typed).toHaveText('@Boss');
     const colour = (el: Element) => getComputedStyle(el).color;
-    expect(await typed.evaluate(colour)).not.toBe(await real.evaluate(colour));
+    for (const words of ['@Boss', '@Chief']) {
+      const typed = page.locator('a[class="mention"]', { hasText: words });
+      await expect(typed).toHaveCount(1);
+      expect(await typed.evaluate(colour)).not.toBe(await real.evaluate(colour));
+    }
     const html = await page.locator('.prose').first().innerHTML();
     expect(html.match(/Secret/g) ?? []).toHaveLength(1);
     // Nothing a writer typed became a class, a handler or a position.

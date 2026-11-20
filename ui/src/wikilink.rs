@@ -11,7 +11,7 @@ use common::id::NodeId;
 ///
 /// The returned string is passed to `pulldown_cmark` before HTML rendering.
 /// Inline HTML is preserved by pulldown-cmark and then sanitized by ammonia
-/// (which allows exactly these two classes, and `data-node-id` on `<a>`).
+/// (which allows these two classes by name, and `data-node-id` on `<a>`).
 #[cfg(test)]
 pub fn preprocess_wikilinks(content: &str, title_map: &HashMap<String, NodeId>) -> String {
     preprocess_wikilinks_moved(content, title_map).0
@@ -194,6 +194,54 @@ mod case_tests {
             html.starts_with("`[[Rust]]` makes <a class=\"wikilink\""),
             "{html}"
         );
+    }
+
+    /// SECURITY: a wiki link's words are escaped, in both of its forms.
+    /// `Moved::wrote` rests on it: the only tags in what is written for
+    /// a wiki link are the app's own.
+    #[test]
+    fn a_links_words_are_never_tags() {
+        let id = NodeId(uuid::Uuid::from_u128(7));
+        let map: HashMap<String, NodeId> = [("rust".to_string(), id)].into();
+        let words = r#"<b onclick="x">bold</b> & "q""#;
+        let escaped = "&lt;b onclick=&quot;x&quot;&gt;bold&lt;/b&gt; &amp; &quot;q&quot;";
+        assert_eq!(
+            preprocess_wikilinks(&format!("[[Rust|{words}]]"), &map),
+            format!(
+                r#"<a class="wikilink" data-node-id="{}">{escaped}</a>"#,
+                id.0
+            )
+        );
+        assert_eq!(
+            preprocess_wikilinks(&format!("[[Nowhere|{words}]]"), &map),
+            format!(r#"<span class="wikilink-unresolved">{escaped}</span>"#)
+        );
+        // And where each one was written is known, in order, exactly.
+        let (text, moved) =
+            preprocess_wikilinks_moved("a [[Rust]] b [[Nowhere]] c [[Rust|d]] e", &map);
+        let first = text.find("<a ").unwrap_or_default();
+        let second = text.find("<span").unwrap_or_default();
+        let third = text.rfind("<a ").unwrap_or_default();
+        for start in [first, second, third] {
+            assert!(moved.wrote(&(start..start + 3)), "{start} in {text}");
+        }
+        // Not what lies between them, before them or after them, and not
+        // a range that runs out of one.
+        for range in [
+            0..1,
+            first - 1..first + 3,
+            second - 3..second - 1,
+            text.len() - 2..text.len(),
+        ] {
+            assert!(!moved.wrote(&range), "{range:?} in {text}");
+        }
+        let end_of_first = text.find("</a>").unwrap_or_default() + 4;
+        assert!(moved.wrote(&(end_of_first - 4..end_of_first)));
+        assert!(!moved.wrote(&(end_of_first - 4..end_of_first + 1)));
+        // A place after each link is where the link's HTML has pushed it.
+        assert_eq!(moved.at(0), 0);
+        assert_eq!(moved.at(10), end_of_first, "right after `[[Rust]]`");
+        assert_eq!(text.get(moved.at(11)..moved.at(12)), Some("b"));
     }
 
     #[test]

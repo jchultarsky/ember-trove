@@ -146,7 +146,8 @@ fn sanitizer_naming(mark: Option<&str>) -> ammonia::Builder<'_> {
     // mention renderer write. None of them places or sizes anything
     // (`input.css`). A writer can type them too, and so give words of
     // their own the plain look of a name; the look of a link to a person
-    // is styled only for a link to `/people/…`.
+    // is styled only for an element with a render's own class
+    // (`sanitizer_naming`) that leads to `/people/…`.
     //
     // SECURITY: this sanitizer is the LAST thing that touches the HTML.
     // Never change its output afterwards (see `crate::mention`).
@@ -177,7 +178,7 @@ fn sanitizer_naming(mark: Option<&str>) -> ammonia::Builder<'_> {
 /// Render Markdown with WikiLink resolution.
 ///
 /// `[[title]]` and `[[title|display]]` are first expanded by
-/// [`preprocess_wikilinks`], then rendered with pulldown-cmark, and
+/// [`preprocess_wikilinks_moved`], then rendered with pulldown-cmark, and
 /// finally sanitised by ammonia.
 ///
 /// Mentions of people (S9) are shown for the people in `people`: those
@@ -282,7 +283,8 @@ fn events_with_mentions<'a>(
 /// `render` writes and sanitizes one attempt. The text is tried as
 /// written; if that leaves a mention not whole (`Resolved::intact`), with
 /// its raw HTML as text. SECURITY: never return an attempt that failed
-/// the check, and never one that was not checked.
+/// the check. Should every attempt fail (none has), nothing of the text
+/// is rendered.
 fn checked<T>(
     source: &str,
     title_map: Option<&HashMap<String, NodeId>>,
@@ -764,11 +766,40 @@ mod tests {
         assert!(!render_markdown_plain("a\nb").contains("<br"));
     }
 
+    /// SECURITY: a render whose mentions are not whole is never shown.
+    /// No text is known to fail every attempt; if one did, nothing of it
+    /// is rendered, rather than something unchecked.
+    #[test]
+    fn a_text_that_no_attempt_holds_is_rendered_as_nothing() {
+        let attempts = std::cell::Cell::new(0);
+        let out = checked(
+            "words of the text",
+            None,
+            &[],
+            |prepared, _, _| {
+                attempts.set(attempts.get() + 1);
+                // What a render that ignored the check would have shown.
+                (
+                    format!("<p>{}</p>", prepared.text),
+                    if prepared.text.is_empty() {
+                        crate::mention::with_mentions(Vec::new(), &[], &Moved::nowhere(), &[]).1
+                    } else {
+                        Resolved::never_intact()
+                    },
+                )
+            },
+            String::as_str,
+        );
+        // As written, as text, as text with nobody named; then nothing.
+        assert_eq!(attempts.get(), 4);
+        assert_eq!(out, "<p></p>");
+    }
+
     /// SECURITY: `class` is as good as `style` for an overlay. The app's own
     /// stylesheet has classes that cover the whole screen (the loader's
     /// `etl-root`, Tailwind's `fixed inset-0`), so a shared note carrying
     /// `<a class="etl-root" href="https://evil.example">` would put a
-    /// clickable page over the reader's app. Only the two classes the
+    /// clickable page over the reader's app. Only the classes the
     /// renderer itself writes survive.
     #[test]
     fn user_written_classes_are_stripped_from_every_renderer() {
@@ -791,7 +822,8 @@ mod tests {
             // The text and the link itself stay.
             assert!(html.contains("sign in"), "{html}");
             assert!(html.contains(r#"href="https://example.com""#), "{html}");
-            // The renderer's own two classes are the ones allowed.
+            // The WikiLink renderer's own two classes are among the few
+            // allowed.
             assert!(html.contains(r#"class="wikilink""#), "{html}");
             assert!(html.contains(r#"class="wikilink-unresolved""#), "{html}");
         }
