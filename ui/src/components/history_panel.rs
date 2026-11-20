@@ -36,10 +36,11 @@ use crate::components::activity_lines::{
 };
 use crate::components::format_helpers::format_timestamp;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::mention_picker::MentionPicker;
 use crate::components::node_section::{NodeSection, SectionShell};
 use crate::components::resizable_editor::ResizableEditor;
 use crate::components::toast::{ToastLevel, ToastState, push_toast, push_undo_toast};
-use crate::markdown::render_markdown_plain;
+use crate::markdown::render_note;
 
 /// Post-it palette — 5 warm colours + neutral default.
 /// Each entry: (key, swatch inline-style, full Tailwind card classes).
@@ -218,12 +219,14 @@ impl NoteCtx {
     /// the one it replaces. The card is then drawn again from what was
     /// saved, at once: waiting for a reload left the old words on screen,
     /// and an Edit opened in that moment started from them.
-    fn saved(self, saved: common::note::Note) {
+    fn saved(self, saved: common::note::SavedNote) {
         self.notes.try_update(|notes| {
             if let Some(Ok(list)) = notes
-                && let Some(slot) = list.iter_mut().find(|n| n.id == saved.id)
+                && let Some(slot) = list.iter_mut().find(|n| n.id == saved.note.id)
             {
-                slot.note = saved;
+                slot.note = saved.note;
+                // The people it mentions now, as the writer may know them.
+                slot.mentions = saved.mentions;
             }
         });
     }
@@ -268,6 +271,10 @@ fn NoteCard(note: ReaderNote, ctx: NoteCtx) -> impl IntoView {
     let orig_color = StoredValue::new(note.color.clone());
     let save_error = RwSignal::new(Option::<String>::None);
     let saving = RwSignal::new(false);
+    // S9: the `@` picker of this note's editor.
+    let edit_ref: NodeRef<leptos::html::Textarea> = NodeRef::new();
+    let mentions = MentionPicker::new(edit_body, edit_ref);
+    mentions.set_known(note.mentions.clone());
 
     // Shared by Ctrl+Enter (editor on_submit) and the Save button; Escape
     // and Cancel share do_cancel.
@@ -331,7 +338,9 @@ fn NoteCard(note: ReaderNote, ctx: NoteCtx) -> impl IntoView {
     });
 
     // Markdown rendered once per card; a changed note gets a new card.
-    let body_html = render_markdown_plain(&note.body);
+    // Its mentions are named as this reader may know them (S9): the
+    // names came with the note.
+    let body_html = render_note(&note.body, &note.mentions);
     let title = common::note::note_title(&note.body);
     let card_class = palette_card_class(&note.color).to_string();
 
@@ -447,6 +456,8 @@ fn NoteCard(note: ReaderNote, ctx: NoteCtx) -> impl IntoView {
             {move || editing.get().then(move || view! {
                 <ResizableEditor
                     value=edit_body
+                    node_ref=edit_ref
+                    mentions=mentions
                     placeholder="Note…"
                     initial_height=ctx.heights.get_untracked().get(&note_id.0).copied()
                     on_resize=Callback::new(move |h: i32| {
@@ -746,6 +757,9 @@ pub fn HistoryPanel(
         });
     };
 
+    // S9: the `@` picker of the add box.
+    let add_ref: NodeRef<leptos::html::Textarea> = NodeRef::new();
+    let add_mentions = MentionPicker::new(body, add_ref);
     let do_add = move || {
         let trimmed = body.get_untracked().trim().to_string();
         if trimmed.is_empty() || adding.get_untracked() {
@@ -837,6 +851,8 @@ pub fn HistoryPanel(
                     border border-stone-200 dark:border-stone-700 p-3">
                     <ResizableEditor
                         value=body
+                        node_ref=add_ref
+                        mentions=add_mentions
                         placeholder="Write a note… (Ctrl+Enter to save)"
                         on_submit=Callback::new(move |()| do_add())
                         class="w-full bg-transparent text-sm text-stone-800 dark:text-stone-200 \

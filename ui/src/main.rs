@@ -8,6 +8,7 @@ mod focus_note;
 mod focus_task;
 mod keyboard;
 mod markdown;
+mod mention;
 mod note_actions;
 mod perf;
 mod recent;

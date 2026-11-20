@@ -17,9 +17,11 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast as _;
 
 use crate::app::TemplatePrefill;
+use crate::components::mention_picker::{Dock, MentionPicker};
 use crate::components::toast::{ToastLevel, ToastState, push_toast};
 use crate::markdown::render_markdown;
 use crate::templates::template_for_type;
+use common::mention::{utf8_to_utf16_offset, utf16_to_utf8_offset};
 use leptos_router::hooks::use_navigate;
 
 fn node_type_label(nt: &NodeType) -> &'static str {
@@ -202,32 +204,6 @@ fn recovery_message(base: DraftBase) -> &'static str {
 /// Convert a UTF-16 code-unit offset (as reported by `selectionStart` in the
 /// DOM) to a UTF-8 byte offset safe for slicing a Rust `&str`.
 ///
-/// JavaScript string APIs count positions in UTF-16 code units, but Rust
-/// strings are UTF-8. Slicing by a UTF-16 offset can land mid-char and
-/// trigger `core::str::slice_error_fail` — e.g. right after an emoji (👉),
-/// em-dash (—), curly quote (’), or `π`. The resulting WASM panic poisons
-/// the Leptos event-dispatch `RefCell`, so every subsequent keystroke is
-/// silently dropped and the user's edit reverts on save. Always route cursor
-/// values from `selection_start()` through this helper before using them to
-/// index `text`.
-fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
-    let mut utf16_count = 0usize;
-    for (byte_idx, ch) in text.char_indices() {
-        if utf16_count >= utf16_offset {
-            return byte_idx;
-        }
-        utf16_count += ch.len_utf16();
-    }
-    text.len()
-}
-
-/// Inverse of [`utf16_to_utf8_offset`]: convert a UTF-8 byte offset back to a
-/// UTF-16 code-unit offset for passing to DOM APIs like `setSelectionRange`.
-fn utf8_to_utf16_offset(text: &str, byte_offset: usize) -> usize {
-    let clamped = byte_offset.min(text.len());
-    text[..clamped].encode_utf16().count()
-}
-
 /// Return the partial wiki-link query being typed at the cursor, if any.
 ///
 /// Looks backwards from `cursor` for an unclosed `[[`. Returns the text
@@ -800,7 +776,11 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             })
             .unwrap_or(0) as usize;
         let current = body.get_untracked();
-        let cursor = utf16_to_utf8_offset(&current, cursor_u16);
+        // Never inside a mention's token: text put in there would un-make
+        // the mention at the next save (S9).
+        let cursor =
+            common::mention::outside_a_token(&current, utf16_to_utf8_offset(&current, cursor_u16));
+        let cursor_u16 = utf8_to_utf16_offset(&current, cursor);
         let new_val = format!(
             "{}{}{}",
             &current[..cursor],
@@ -876,12 +856,20 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
     Effect::new(move |_| suggest_q.set(wikilink_query.get().unwrap_or_default()));
     let suggestions = crate::components::node_picker::use_title_suggestions(suggest_q);
 
+    // S9: the `@` picker, and the people the preview may name: those the
+    // node came with (other readers' included), and the author's own.
+    let mention_picker = MentionPicker::new(body, textarea_ref);
+
     // If editing, fetch existing node data.
     if let Some(id) = node {
         fetching.set(true);
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::api::fetch_node(id).await {
-                Ok(n) => {
+            // The viewed node: with the people its body mentions, as this
+            // reader may know them, for the preview (S9).
+            match crate::api::fetch_viewed_node(id).await {
+                Ok(viewed) => {
+                    mention_picker.set_known(viewed.mentions.clone());
+                    let n = viewed.node;
                     let snap: Snapshot = (
                         n.title.clone(),
                         n.body.clone().unwrap_or_default(),
@@ -1317,6 +1305,12 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
             .get()
             .and_then(|el| el.selection_start().ok().flatten())
             .and_then(|cursor| wikilink_query_at(&val, cursor as usize));
+        // One list at a time: an open `[[` keeps the `@` list shut.
+        if query.is_some() {
+            mention_picker.close();
+        } else {
+            mention_picker.after_input(&ev);
+        }
         wikilink_query.set(query);
     };
 
@@ -1353,7 +1347,10 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
 
     let preview_html = move || {
         let title_map = wikilink_map.get();
-        render_markdown(&body.get(), &title_map)
+        // Who the node came with, and whoever was picked here. Not the
+        // whole registry: a token someone else typed with the id of the
+        // author's person is not a mention, and must not look like one.
+        render_markdown(&body.get(), &title_map, &mention_picker.names())
     };
 
     view! {
@@ -1675,6 +1672,22 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         placeholder="Write in Markdown… use [[Node Title]] to link nodes, or drag & drop images"
                         prop:value=move || body.get()
                         on:input=on_body_input
+                        on:click=move |_| {
+                            if wikilink_query.get_untracked().is_none() {
+                                mention_picker.after_click();
+                            }
+                        }
+                        // An arrow, Home or End moves the cursor without
+                        // an `input`.
+                        on:keyup=move |ev: leptos::ev::KeyboardEvent| {
+                            if wikilink_query.get_untracked().is_none() {
+                                mention_picker.on_keyup(&ev);
+                            }
+                        }
+                        on:blur=move |_| mention_picker.close()
+                        aria-autocomplete="list"
+                        aria-controls=move || mention_picker.controls()
+                        aria-activedescendant=move || mention_picker.active_descendant()
                         spellcheck="true"
                         on:dragover=on_img_dragover
                         on:dragleave=on_img_dragleave
@@ -1682,11 +1695,16 @@ pub fn NodeEditor(node: Option<NodeId>) -> impl IntoView {
                         on:paste=on_img_paste
                         // Close dropdown on Escape
                         on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                            // The `@` list takes its keys first (S9).
+                            if mention_picker.on_keydown(&ev) {
+                                return;
+                            }
                             if ev.key() == "Escape" {
                                 wikilink_query.set(None);
                             }
                         }
                     />
+                    {mention_picker.view(Dock::Inside)}
                     // Image uploading indicator
                     {move || img_uploading.get().then(|| view! {
                         <div class="absolute top-2 right-2 z-40 flex items-center gap-1.5

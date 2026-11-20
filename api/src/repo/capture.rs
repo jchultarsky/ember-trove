@@ -270,7 +270,7 @@ impl CaptureRepo for PgCaptureRepo {
         }
         let made = match into {
             Destination::Node { req, home } => {
-                let node = super::node::insert_node(&mut *tx, owner, &req).await?;
+                let node = super::node::insert_node(&mut tx, owner, &req, None).await?;
                 let grant = GrantPermissionRequest {
                     subject_id: owner.to_string(),
                     role: PermissionRole::Owner,
@@ -285,7 +285,7 @@ impl CaptureRepo for PgCaptureRepo {
                 Made::Node(Box::new(node))
             }
             Destination::Note { node_id, req } => {
-                Made::Note(super::note::insert_note(&mut *tx, node_id, owner, &req).await?)
+                Made::Note(super::note::insert_note(&mut tx, node_id, owner, &req).await?)
             }
             Destination::Task { node_id, req } => Made::Task {
                 project: node_id,

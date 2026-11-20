@@ -70,11 +70,19 @@ pub fn link_first_mention(body: &str, title: &str) -> Option<String> {
     }
 
     // Off-limits for rewriting: existing links, by the one scanner (#281,
-    // 3.1), and code, where a `[[…]]` would be shown as typed.
+    // 3.1), code, where a `[[…]]` would be shown as typed, and mentions
+    // of people (S9): a person named like the node would otherwise get
+    // a wiki link written into their mention's label, which un-makes
+    // the mention.
     let link_spans: Vec<(usize, usize)> = crate::wikilink::wikilinks(body)
         .into_iter()
         .map(|link| link.range)
         .chain(crate::wikilink::code_ranges(body))
+        .chain(
+            crate::mention::mentions(body)
+                .into_iter()
+                .map(|mention| mention.range),
+        )
         .map(|r| (r.start, r.end))
         .collect();
 
@@ -117,6 +125,20 @@ pub fn link_first_mention(body: &str, title: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S9: a person named like the node keeps their mention.
+    #[test]
+    fn a_mention_is_not_rewritten() {
+        let id = "3f2a6b10-7c1d-4e2f-8a9b-0c1d2e3f4a5b";
+        let only = format!("Met @[Ada](person:{id}) today.");
+        assert_eq!(link_first_mention(&only, "Ada"), None);
+        // The plain word after it is the one that is linked.
+        let both = format!("Met @[Ada](person:{id}); Ada said so.");
+        assert_eq!(
+            link_first_mention(&both, "Ada"),
+            Some(format!("Met @[Ada](person:{id}); [[Ada]] said so."))
+        );
+    }
 
     #[test]
     fn link_mention_exact_case() {

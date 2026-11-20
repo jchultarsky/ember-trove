@@ -11,6 +11,7 @@ pub mod edge;
 pub mod editor_pref;
 pub mod favorite;
 pub mod graph;
+pub mod mention;
 pub mod node;
 pub mod node_link;
 pub mod node_version;

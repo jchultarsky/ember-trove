@@ -300,6 +300,46 @@ input[type="checkbox"]:checked::after {
   cursor: default;
 }
 
+/* ── Mentions of people (S9) ──────────────────────────────────────────────────
+   A link for the reader's own person; plain, a touch stronger than the text
+   around it, for a person of someone else's (a name and no more); a dotted
+   underline for one that names nobody. Told apart without colour: the link
+   is underlined, the name is not, the unresolved one is dotted (and says so
+   in its title). A long name wraps. `unicode-bidi: isolate` keeps a name
+   with a direction override from reordering the text around it. A writer
+   can type these classes (the sanitizer allows them by name), so none of
+   them places or sizes anything. The link's look is only for a link to a
+   person's card that carries a render's own class (`mention m-…`, which
+   no text can hold: `ui/src/mention.rs`). */
+.mention,
+.mention-unresolved {
+  unicode-bidi: isolate;
+  overflow-wrap: anywhere;
+}
+.mention {
+  font-weight: 500;
+}
+a[class^="mention m-"][href^="/people/"] {
+  color: #c2410c; /* orange-700: readable on white */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.dark a[class^="mention m-"][href^="/people/"] {
+  color: #fb923c; /* orange-400, as a wiki link */
+}
+a[class^="mention m-"][href^="/people/"]:hover {
+  text-decoration-thickness: 2px;
+}
+.mention-unresolved {
+  color: #78716c; /* stone-500 */
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.dark .mention-unresolved {
+  color: #a8a29e; /* stone-400 */
+}
+
 /* ── Spark on task completion (design phase 3) ────────────────────────────────
    The signature micro-interaction: completing a task strikes a brief burst of
    ember particles off the checkbox. Particles are spawned by

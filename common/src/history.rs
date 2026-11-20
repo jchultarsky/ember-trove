@@ -156,6 +156,7 @@ mod tests {
 
     fn note(id: u128, minutes: i64) -> ReaderNote {
         ReaderNote {
+            mentions: Vec::new(),
             note: Note {
                 id: NoteId(Uuid::from_u128(id)),
                 node_id: NodeId(Uuid::nil()),

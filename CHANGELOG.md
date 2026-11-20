@@ -6,6 +6,67 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.32.0] - 2026-11-19
+
+### Added
+- **Mention a person by typing `@`** (S9, #360; ONTOLOGY §7.3), in a
+  node's body or in a note.
+  - A list of your People opens at the editor, with name and email.
+    People are offered by name, or by the start of an email address.
+    Up and Down choose, Enter or Tab picks, Escape closes it, and
+    Ctrl+Z takes a pick back. Enter picks only when a name matches what
+    you typed: `@` followed straight by Enter is a new line, and an
+    email address typed in text opens nothing.
+  - The page shows the person's current name as a link to their card.
+    Their card lists where they are mentioned ("Mentioned in").
+  - Someone you share the node with sees the name as plain text and
+    nothing else of the person.
+  - A mention is made by picking the person (or typing their token)
+    yourself. If someone else takes your mention out of a shared text
+    and puts it back, or you put back an old version, it shows as
+    unresolved until you mention them again.
+  - After a rename the page shows the new name at once. The name in the
+    raw text stays as typed, in a body and in a note alike.
+  - Deleting a person leaves the name as typed in the text, no longer a
+    link; the confirmation says so.
+  - Search finds a mention by the name as typed. Task titles, Briefs,
+    captures and templates are not places for mentions: a token there
+    reads "@name".
+- **Mentions in the API** (S9, #360):
+  - `GET /api/nodes/{id}`, the note lists and the note writes answer
+    with the people their text mentions, as the reader may know them
+    (`mentions`: id, name, and whether the person is the reader's own).
+  - `GET /api/people/{id}/mentions`: "Mentioned in", for the person's
+    owner, listing only nodes they can open.
+  - Migration 057 adds two tables that record which mentions are real.
+    Backup format 14 carries them; older archives still restore.
+
+### Security
+- **A mention never tells a reader more than a name, and nobody can
+  look a name up.**
+  - A save makes a mention only for a token that save adds, of the
+    saver's own People. A token typed or pasted with someone else's id
+    names nobody: not for the one who typed it, and not when that
+    person's owner later saves, restores or copies the text.
+  - A person is named to another reader only while the person's owner
+    can still open the node.
+  - There is no lookup of a name by id: names come only with text the
+    reader may already read.
+  - Mentions are saved in the transaction that saves the text.
+  - A mention is shown only where Markdown reads a link, and a name
+    is written as words on the page. The sanitizer runs last, on
+    everything, and its result is checked: if a mention did not come
+    out as the element written for it (raw HTML can swallow what
+    follows it into an attribute), the text is shown with its raw HTML
+    as plain text. That element carries a class made at random for each
+    render, so nobody can type it.
+  - Nothing writes a person's current name into a text: a mention's
+    label stays as it was when picked, and the page shows the current
+    name.
+- **The text scanners are linear.** The wiki-link and code-span
+  scanners, which run on every save, were quadratic on text made to be
+  slow (a megabyte of `[[` took most of a minute of the server's time).
+
 ## [3.31.0] - 2026-11-18
 
 ### Added

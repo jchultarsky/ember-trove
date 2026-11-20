@@ -59,7 +59,10 @@
 //        cached answers without them, which would show nothing blocked.
 //   v23: links not shown (#349) — a node's own answer carries
 //        `links_not_shown`; an older cached answer would hide the marker.
-const CACHE_NAME = "ember-trove-v23";
+//   v24: mentions of people (S9, #360) — a node's own answer and its
+//        notes carry `mentions`; an older cached answer would show every
+//        mention as unresolved.
+const CACHE_NAME = "ember-trove-v24";
 
 // Trunk's content-hashed output, e.g. /ui-847b9072e1d6f172_bg.wasm.
 const HASHED_ASSET = /-[0-9a-f]{16}(_bg)?\.[a-z0-9]+$/;

@@ -92,6 +92,22 @@ impl NodeRepo for StubNodeRepo {
     async fn create(&self, _: &str, _: CreateNodeRequest) -> Result<Node, EmberTroveError> {
         unimplemented!()
     }
+    async fn duplicate(
+        &self,
+        _: &str,
+        _: CreateNodeRequest,
+        _: NodeId,
+    ) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
+    async fn restore_body(
+        &self,
+        _: NodeId,
+        _: String,
+        _: &crate::repo::activity::ActivityActor,
+    ) -> Result<Node, EmberTroveError> {
+        unimplemented!()
+    }
     async fn get(&self, id: NodeId) -> Result<Node, EmberTroveError> {
         // Canonical owners for the authz world: the creator of AZ_OWNED_NODE is
         // "creator" (test-sub holds a *granted* Owner row there).
@@ -1122,6 +1138,7 @@ fn echo_note(
 ) -> common::note::ReaderNote {
     let scope = scope.map_or_else(String::new, |s| format!("scope={} ", s.unwrap_or("all")));
     common::note::ReaderNote {
+        mentions: Vec::new(),
         note: Note {
             id: common::id::NoteId(Uuid::from_u128(1)),
             node_id: node,
@@ -1187,7 +1204,10 @@ impl NoteRepo for StubNoteRepo {
         Ok(Note {
             id,
             node_id: NodeId(Uuid::nil()),
-            owner_id: actor.subject.to_string(),
+            // Someone else's note, restored by `actor` (a node's owner
+            // may): what a route reads for its caller must not be read
+            // for this author.
+            owner_id: format!("author-not-{}", actor.subject),
             body: "restored".to_string(),
             color: "yellow".to_string(),
             created_at: chrono::Utc::now(),
@@ -1705,6 +1725,78 @@ fn stub_person_write(
         created_at: now,
         updated_at: now,
     })
+}
+
+thread_local! {
+    /// The reader each mention read was made for (S9), in order. Its own
+    /// list: `GET /nodes/{id}` reads names on every call, and the other
+    /// tests' `VIEWERS` must not see that.
+    static MENTION_READERS: std::cell::RefCell<Vec<(&'static str, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The mention reads since the last look, emptied.
+fn mention_reads() -> Vec<(&'static str, String)> {
+    MENTION_READERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
+/// Names one person, Ada, for whatever text it is asked about, and
+/// records for whom. `mentioned_in` panics for any person but the
+/// caller's own (`AZ_PERSON`): a route that asked where someone else's
+/// person is mentioned must not pass on its status code alone.
+struct StubMentionRepo;
+impl StubMentionRepo {
+    fn ada(reader: &str) -> common::mention::MentionName {
+        common::mention::MentionName {
+            person_id: common::id::PersonId(Uuid::from_u128(AZ_PERSON)),
+            display_name: "Ada".into(),
+            mine: reader == "test-sub",
+        }
+    }
+}
+#[async_trait]
+impl crate::repo::mention::MentionRepo for StubMentionRepo {
+    async fn for_node(
+        &self,
+        _: NodeId,
+        reader: &str,
+    ) -> Result<Vec<common::mention::MentionName>, EmberTroveError> {
+        MENTION_READERS.with(|v| v.borrow_mut().push(("for_node", reader.to_string())));
+        Ok(vec![Self::ada(reader)])
+    }
+    async fn for_notes(
+        &self,
+        notes: &[common::id::NoteId],
+        reader: &str,
+    ) -> Result<
+        std::collections::HashMap<common::id::NoteId, Vec<common::mention::MentionName>>,
+        EmberTroveError,
+    > {
+        MENTION_READERS.with(|v| v.borrow_mut().push(("for_notes", reader.to_string())));
+        Ok(notes
+            .iter()
+            .map(|n| (*n, vec![Self::ada(reader)]))
+            .collect())
+    }
+    async fn mentioned_in(
+        &self,
+        person: common::id::PersonId,
+        reader: Option<&str>,
+    ) -> Result<Vec<common::mention::PersonMention>, EmberTroveError> {
+        assert_eq!(
+            person.0.as_u128(),
+            AZ_PERSON,
+            "asked where a person who is not the caller's is mentioned"
+        );
+        saw_viewer("mentions.mentioned_in", reader);
+        Ok(vec![common::mention::PersonMention {
+            node_id: NodeId(Uuid::from_u128(AZ_OWNED_NODE)),
+            node_title: "A node".into(),
+            node_type: common::node::NodeType::Article,
+            in_body: true,
+            notes: 2,
+        }])
+    }
 }
 
 struct StubPersonRepo;
@@ -2284,6 +2376,7 @@ fn test_state() -> AppState {
         activity: Arc::new(StubActivityRepo),
         data_health: Arc::new(StubDataHealthRepo::default()),
         people: Arc::new(StubPersonRepo),
+        mentions: Arc::new(StubMentionRepo),
         briefs: Arc::new(StubBriefRepo),
         focus: Arc::new(StubFocusRepo),
         task_dependencies: Arc::new(StubTaskDependencyRepo),
@@ -2774,9 +2867,10 @@ async fn note_restore_returns_restored_note_for_owner() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["id"], id.to_string());
-    // Restore is owner-scoped: the stub echoes the owner the handler passed,
-    // which must be the caller's sub.
-    assert_eq!(json["owner_id"], "test-sub");
+    // Restore is scoped to its caller: the stub's note names the actor the
+    // handler passed (as someone else's note, restored by them), which
+    // must be the caller's sub.
+    assert_eq!(json["owner_id"], "author-not-test-sub");
 }
 
 // ── Dashboard recent activity recap (Phase 7 / v2.9.0) ───────────────────────
@@ -5790,6 +5884,158 @@ async fn someone_elses_person_is_a_404_like_a_missing_one() {
         (status, body["display_name"].as_str()),
         (StatusCode::OK, Some("Ada"))
     );
+}
+
+/// S9 (#360; ONTOLOGY §7.3, §14): "Mentioned in" is the person's owner's
+/// alone. Another account's person reads exactly like a missing one, and
+/// the mention repo is not asked (its stub panics for a foreign person).
+#[tokio::test]
+async fn mentioned_in_is_for_the_persons_owner_only() {
+    let missing = people_call(
+        "GET",
+        &format!("/people/{}/mentions", Uuid::new_v4()),
+        serde_json::json!({}),
+    )
+    .await;
+    let foreign = people_call(
+        "GET",
+        // Any id the stub registry doesn't hold for this account.
+        &format!("/people/{}/mentions", Uuid::from_u128(0x5e_0f01)),
+        serde_json::json!({}),
+    )
+    .await;
+    // The same status and the same words (the message names the id that
+    // was asked for, nothing of the person).
+    assert_eq!(missing.0, StatusCode::NOT_FOUND);
+    assert_eq!(foreign.0, missing.0);
+    let words = |body: &serde_json::Value| {
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .split(' ')
+            .filter(|w| Uuid::parse_str(w).is_err())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(
+        words(&foreign.1),
+        words(&missing.1),
+        "a foreign person reads like a missing one"
+    );
+
+    viewers_seen();
+    let (status, body) = people_call(
+        "GET",
+        &format!("/people/{}/mentions", Uuid::from_u128(AZ_PERSON)),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        serde_json::json!([{
+            "node_id": Uuid::from_u128(AZ_OWNED_NODE),
+            "node_title": "A node",
+            "node_type": "article",
+            "in_body": true,
+            "notes": 2,
+        }])
+    );
+    // Listed among what this account can open, not among everything.
+    assert_all_seen_as(Some("test-sub"));
+}
+
+/// S9: the names of the people a text mentions travel with the text, are
+/// read only after the route's own access check, and are read for the
+/// caller in person. What another reader gets of a person is the id, the
+/// name and "mine": never a contact detail.
+#[tokio::test]
+async fn mention_names_come_with_the_text_and_only_to_its_reader() {
+    let call = |uri: String| async move {
+        let resp = Router::new()
+            .nest("/nodes", crate::routes::nodes::router())
+            .nest(
+                "/nodes/{node_id}/notes",
+                crate::routes::notes::node_note_router(),
+            )
+            .layer(axum::Extension(fake_claims()))
+            .with_state(test_state())
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_default(),
+        )
+    };
+    mention_reads();
+    // A node the caller can't view: refused, and no name was read.
+    for path in ["", "/notes"] {
+        let (status, _) = call(format!("/nodes/{}{path}", Uuid::from_u128(AZ_FOREIGN_NODE))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+    }
+    assert_eq!(mention_reads(), [], "names were read before the check");
+
+    let keys = |name: &serde_json::Value| {
+        let mut keys: Vec<String> = name
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let (status, node) = call(format!("/nodes/{}", Uuid::from_u128(AZ_VIEW_NODE))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(node["mentions"][0]["display_name"], "Ada");
+    assert_eq!(
+        keys(&node["mentions"][0]),
+        ["display_name", "mine", "person_id"]
+    );
+    let (status, notes) = call(format!("/nodes/{}/notes", Uuid::from_u128(AZ_VIEW_NODE))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(notes[0]["mentions"][0]["display_name"], "Ada");
+    assert_eq!(
+        keys(&notes[0]["mentions"][0]),
+        ["display_name", "mine", "person_id"]
+    );
+    assert_eq!(
+        mention_reads(),
+        [
+            ("for_node", "test-sub".to_string()),
+            ("for_notes", "test-sub".to_string())
+        ]
+    );
+}
+
+/// S9: a note write answers with the people the note mentions **as the
+/// caller may know them**, not as its author does. A note can be restored
+/// by its node's owner or an admin, who is not its author: read for the
+/// author, they would be told "mine" and names the author alone may know.
+#[tokio::test]
+async fn a_written_notes_mentions_are_named_for_the_caller() {
+    mention_reads();
+    let resp = Router::new()
+        .nest("/notes", crate::routes::notes::note_router())
+        .layer(axum::Extension(fake_claims()))
+        .with_state(test_state())
+        .oneshot(
+            Request::post(format!("/notes/{}/restore", Uuid::from_u128(1)))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let note: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    // The stub's note is someone else's; the names are the caller's view.
+    assert_ne!(note["owner_id"], "test-sub");
+    assert_eq!(note["mentions"][0]["display_name"], "Ada");
+    assert_eq!(mention_reads(), [("for_notes", "test-sub".to_string())]);
 }
 
 #[tokio::test]

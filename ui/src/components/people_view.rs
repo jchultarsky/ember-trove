@@ -1505,6 +1505,11 @@ fn PersonView(id: PersonId) -> impl IntoView {
         version.track();
         crate::api::fetch_person_usages(id)
     });
+    // S9: where text mentions them.
+    let mentioned = LocalResource::new(move || {
+        version.track();
+        crate::api::fetch_person_mentions(id)
+    });
     let editor_open = RwSignal::new(false);
     let current = Signal::derive(move || {
         person
@@ -1520,8 +1525,13 @@ fn PersonView(id: PersonId) -> impl IntoView {
     let delete = move || {
         let ok = web_sys::window()
             .and_then(|w| {
-                w.confirm_with_message("Delete this person? They'll be removed from every node.")
-                    .ok()
+                // S9: a mention is text. The name as it was typed stays in
+                // it (and in old versions and exports); only the link goes.
+                w.confirm_with_message(
+                    "Delete this person? They'll be removed from every node. \
+                     Where text mentions them, the name as typed stays and is no longer a link.",
+                )
+                .ok()
             })
             .unwrap_or(false);
         if !ok {
@@ -1585,8 +1595,79 @@ fn PersonView(id: PersonId) -> impl IntoView {
                         })}
                     </Suspense>
                 </section>
+                <MentionedIn mentioned=mentioned
+                    on_retry=Callback::new(move |()| version.update(|n| *n += 1)) />
             </div>
         </div>
+    }
+}
+
+/// "Mentioned in" (S9, ONTOLOGY §7.3): the nodes whose body or notes
+/// mention this person. Only nodes the reader can open are listed, and
+/// nothing is said of any other (§14).
+#[component]
+fn MentionedIn(
+    mentioned: LocalResource<Result<Vec<common::mention::PersonMention>, crate::error::UiError>>,
+    #[prop(into)] on_retry: Callback<()>,
+) -> impl IntoView {
+    view! {
+        <section aria-labelledby="mentioned-in-heading" data-testid="mentioned-in">
+            <h2 id="mentioned-in-heading" class="text-sm font-semibold text-stone-700 dark:text-stone-300 mb-2">"Mentioned in"</h2>
+            <Suspense fallback=|| ()>
+                {move || mentioned.get().map(|r| match r {
+                    Ok(list) if list.is_empty() => view! {
+                        <p class="text-sm text-stone-400">
+                            "Not mentioned in any text yet. Type @ in a node\u{2019}s body or in a note to mention them."
+                        </p>
+                    }.into_any(),
+                    Ok(list) => view! {
+                        <ul class="space-y-1">
+                            {list.into_iter().map(|m| view! { <MentionRow mention=m /> }).collect_view()}
+                        </ul>
+                    }.into_any(),
+                    // Not "not mentioned", and not nothing (#281, 1.7).
+                    Err(_) => view! {
+                        <crate::components::load_error::LoadError
+                            what="where this person is mentioned"
+                            on_retry=on_retry
+                        />
+                    }.into_any(),
+                })}
+            </Suspense>
+        </section>
+    }
+}
+
+/// Where in the node the person is mentioned: "body", "2 notes", or both.
+fn mention_places(in_body: bool, notes: u32) -> String {
+    let notes = match notes {
+        0 => None,
+        1 => Some("1 note".to_string()),
+        n => Some(format!("{n} notes")),
+    };
+    match (in_body, notes) {
+        (true, Some(notes)) => format!("body, {notes}"),
+        (true, None) => "body".to_string(),
+        (false, Some(notes)) => notes,
+        (false, None) => String::new(),
+    }
+}
+
+#[component]
+fn MentionRow(mention: common::mention::PersonMention) -> impl IntoView {
+    let navigate = use_navigate();
+    let node = mention.node_id;
+    let icon = crate::components::node_meta::type_icon(mention.node_type.as_str());
+    let places = mention_places(mention.in_body, mention.notes);
+    view! {
+        <li data-testid="mentioned-in-row">
+            <button type="button" class="flex items-center gap-2 text-sm text-stone-700 dark:text-stone-200 hover:text-amber-700 cursor-pointer"
+                on:click=move |_| navigate(&format!("/nodes/{node}"), Default::default())>
+                <span class="material-symbols-outlined text-stone-400" style="font-size:16px;" aria-hidden="true">{icon}</span>
+                {mention.node_title}
+                <span class="text-xs text-stone-500">{format!("\u{b7} {places}")}</span>
+            </button>
+        </li>
     }
 }
 
@@ -1661,6 +1742,13 @@ fn UsageRow(usage: PersonUsage) -> impl IntoView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mentioned_in_says_where() {
+        assert_eq!(mention_places(true, 0), "body");
+        assert_eq!(mention_places(true, 1), "body, 1 note");
+        assert_eq!(mention_places(false, 3), "3 notes");
+    }
 
     fn email(value: &str) -> ContactPoint {
         ContactPoint {

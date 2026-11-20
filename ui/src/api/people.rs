@@ -96,6 +96,14 @@ pub async fn fetch_person_usages(id: PersonId) -> Result<Vec<PersonUsage>, UiErr
     get_json(&format!("/people/{id}/usages")).await
 }
 
+/// "Mentioned in" (S9): the nodes whose text mentions this person,
+/// among those the caller can open.
+pub async fn fetch_person_mentions(
+    id: PersonId,
+) -> Result<Vec<common::mention::PersonMention>, UiError> {
+    get_json(&format!("/people/{id}/mentions")).await
+}
+
 pub async fn fetch_role_suggestions() -> Result<Vec<RoleCount>, UiError> {
     get_json("/people/roles").await
 }

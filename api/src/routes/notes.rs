@@ -10,7 +10,7 @@ use common::{
     id::{NodeId, NoteId},
     note::{
         CreateFeedNoteRequest, CreateNoteRequest, FeedNote, Note, NoteFeedParams, NoteSort,
-        ReaderNote, UpdateNoteRequest,
+        ReaderNote, SavedNote, UpdateNoteRequest,
     },
 };
 use garde::Validate;
@@ -57,11 +57,41 @@ async fn list_notes(
     Path(node_id): Path<Uuid>,
 ) -> Result<Json<Vec<ReaderNote>>, ApiError> {
     require_viewer(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
-    let notes = state
+    let mut notes = state
         .notes
         .list_for_node(NodeId(node_id), actor(&claims))
         .await?;
+    name_mentions(&state, &claims, notes.iter_mut()).await?;
     Ok(Json(notes))
+}
+
+/// Fill in the people each note mentions, as the caller may know them
+/// (S9). SECURITY: called after the route's own check that the caller
+/// may read these notes, and always for the caller in person.
+async fn name_mentions<'a>(
+    state: &AppState,
+    claims: &AuthClaims,
+    notes: impl Iterator<Item = &'a mut ReaderNote>,
+) -> Result<(), ApiError> {
+    let notes: Vec<&mut ReaderNote> = notes.collect();
+    let ids: Vec<NoteId> = notes.iter().map(|n| n.note.id).collect();
+    let mut named = state.mentions.for_notes(&ids, &claims.sub).await?;
+    for note in notes {
+        note.mentions = named.remove(&note.note.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
+/// A note just written, with the people it mentions as its writer may
+/// know them.
+async fn saved(state: &AppState, claims: &AuthClaims, note: Note) -> Result<SavedNote, ApiError> {
+    let mentions = state
+        .mentions
+        .for_notes(&[note.id], &claims.sub)
+        .await?
+        .remove(&note.id)
+        .unwrap_or_default();
+    Ok(SavedNote { note, mentions })
 }
 
 /// POST /nodes/:id/notes — create a note.
@@ -70,7 +100,7 @@ async fn create_note(
     Extension(claims): Extension<AuthClaims>,
     Path(node_id): Path<Uuid>,
     Json(req): Json<CreateNoteRequest>,
-) -> Result<(StatusCode, Json<Note>), ApiError> {
+) -> Result<(StatusCode, Json<SavedNote>), ApiError> {
     require_editor(state.permissions.as_ref(), &claims, NodeId(node_id)).await?;
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
@@ -79,7 +109,10 @@ async fn create_note(
         .notes
         .create(NodeId(node_id), &claims.sub, req)
         .await?;
-    Ok((StatusCode::CREATED, Json(note)))
+    Ok((
+        StatusCode::CREATED,
+        Json(saved(&state, &claims, note).await?),
+    ))
 }
 
 /// POST /notes — the Notes page's compose box: a note on the node named in
@@ -90,7 +123,7 @@ async fn create_note_on_node(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Json(req): Json<CreateFeedNoteRequest>,
-) -> Result<(StatusCode, Json<Note>), ApiError> {
+) -> Result<(StatusCode, Json<SavedNote>), ApiError> {
     require_editor(state.permissions.as_ref(), &claims, req.node_id).await?;
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
@@ -98,7 +131,10 @@ async fn create_note_on_node(
         .notes
         .create(req.node_id, &claims.sub, req.note)
         .await?;
-    Ok((StatusCode::CREATED, Json(note)))
+    Ok((
+        StatusCode::CREATED,
+        Json(saved(&state, &claims, note).await?),
+    ))
 }
 
 /// PATCH /notes/:note_id — edit an existing note: its author only, while
@@ -108,7 +144,7 @@ async fn update_note(
     Extension(claims): Extension<AuthClaims>,
     Path(note_id): Path<Uuid>,
     Json(req): Json<UpdateNoteRequest>,
-) -> Result<Json<Note>, ApiError> {
+) -> Result<Json<SavedNote>, ApiError> {
     req.validate()
         .map_err(|e| ApiError::Validation(e.to_string()))?;
 
@@ -116,7 +152,7 @@ async fn update_note(
         .notes
         .update(NoteId(note_id), actor(&claims), req)
         .await?;
-    Ok(Json(note))
+    Ok(Json(saved(&state, &claims, note).await?))
 }
 
 /// DELETE /notes/:note_id — delete a note: its author while they can still
@@ -136,9 +172,9 @@ async fn restore_note(
     State(state): State<AppState>,
     Extension(claims): Extension<AuthClaims>,
     Path(note_id): Path<Uuid>,
-) -> Result<Json<Note>, ApiError> {
+) -> Result<Json<SavedNote>, ApiError> {
     let note = state.notes.restore(NoteId(note_id), actor(&claims)).await?;
-    Ok(Json(note))
+    Ok(Json(saved(&state, &claims, note).await?))
 }
 
 /// GET /notes/feed — notes with node titles, filtered + sorted per query params
@@ -169,7 +205,10 @@ async fn note_feed(
         offset: i64::from(params.page.unwrap_or(1).max(1) - 1) * per_page,
     };
 
-    let feed = state.notes.feed(owner_id, actor(&claims), &filter).await?;
+    let mut feed = state.notes.feed(owner_id, actor(&claims), &filter).await?;
+    // The feed is what the caller may read; the names are for the caller
+    // in person, an admin included (S9).
+    name_mentions(&state, &claims, feed.iter_mut().map(|f| &mut f.note)).await?;
     Ok(Json(feed))
 }
 

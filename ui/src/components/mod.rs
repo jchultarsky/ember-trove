@@ -22,6 +22,7 @@ pub mod layout;
 pub mod links_panel;
 pub mod load_error;
 pub mod local_graph;
+pub mod mention_picker;
 pub mod modals;
 pub mod my_day_view;
 pub mod new_task_form;
