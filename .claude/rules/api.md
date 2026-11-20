@@ -298,13 +298,17 @@ cargo check && cargo clippy -- -D warnings
     through `stands_for` / `still_mentioned` (`repo/mention.rs`). A new
     one that compares `person_id = ANY($ids)` directly drops the row of
     a person mentioned by an old id;
-  - **a read answers an alias id only for a text that holds it**
-    (`for_node(.., in_text)`, per note for `for_notes`). Told of every
-    alias of a person named on one node, a reader learns two ids are
-    one person and reads the name behind a token on another node, where
+  - **a read answers a person only under the ids the text holds**
+    (`for_node(.., in_text)`, per note for `for_notes`;
+    `HELD_IS_THEIRS`): their own, an alias, or both. With none, not at
+    all, so a caller that forgets the ids gets nobody. Told of every id
+    of a person named on one node, a reader learns two ids are one
+    person and reads the name behind a token on another node, where
     rule 2 withholds it;
-  - `MentionName.links_to` (the real id) is set for the person's owner
-    only, and is absent from anyone else's answer;
+  - a text that holds only the old id never tells anyone but the
+    person's owner what their id is now: `MentionName.links_to` (the
+    real id) is set for the owner only, and no row is answered under an
+    id the text does not hold;
   - only reads of a **text** resolve an alias. `/people/{old id}` is a
     404 on every route: a tab still open on the one who went must not
     write to the one kept;

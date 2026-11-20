@@ -14818,9 +14818,16 @@ mod mentions {
 
     #[allow(clippy::expect_used)]
     async fn body_names(pool: &PgPool, node: NodeId, reader: &str) -> Vec<(String, bool)> {
+        // As the route reads it: with the ids the saved text holds.
+        let body: Option<String> = sqlx::query_scalar("SELECT body FROM nodes WHERE id = $1")
+            .bind(node.0)
+            .fetch_one(pool)
+            .await
+            .expect("body");
+        let held = common::mention::mentioned_ids(body.as_deref().unwrap_or_default());
         told(
             PgMentionRepo::new(pool.clone())
-                .for_node(node, reader, &[])
+                .for_node(node, reader, &held)
                 .await
                 .expect("names"),
         )
@@ -14828,9 +14835,15 @@ mod mentions {
 
     #[allow(clippy::expect_used)]
     async fn note_names(pool: &PgPool, note: NoteId, reader: &str) -> Vec<(String, bool)> {
+        let body: String = sqlx::query_scalar("SELECT body FROM node_notes WHERE id = $1")
+            .bind(note.0)
+            .fetch_one(pool)
+            .await
+            .expect("note");
+        let held = common::mention::mentioned_ids(&body);
         told(
             PgMentionRepo::new(pool.clone())
-                .for_notes(&[(note, Vec::new())], reader)
+                .for_notes(&[(note, held)], reader)
                 .await
                 .expect("names")
                 .remove(&note)
@@ -15660,6 +15673,13 @@ mod mentions {
             .collect()
     }
 
+    type Told = (PersonId, String, bool, Option<PersonId>);
+
+    fn sorted_told(mut told: Vec<Told>) -> Vec<Told> {
+        told.sort();
+        told
+    }
+
     /// The merge in one piece: what hung on the one who goes hangs on the
     /// kept person, the one who goes is gone, and their id is an alias.
     #[sqlx::test(migrations = "../migrations")]
@@ -15785,14 +15805,15 @@ mod mentions {
         // link leads to them.
         assert_eq!(
             body_told(&pool, only_abe, "alice", &[abe.id]).await,
-            [
+            [(abe.id, "Ada".to_string(), true, Some(ada.id))]
+        );
+        // A text with both ids: each names her, under itself.
+        assert_eq!(
+            body_told(&pool, both, "alice", &[ada.id, abe.id]).await,
+            sorted_told(vec![
                 (ada.id, "Ada".to_string(), true, None),
                 (abe.id, "Ada".to_string(), true, Some(ada.id)),
-            ]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
+            ])
         );
         // "Mentioned in" for the kept person lists what mentioned either.
         let mentioned = PgMentionRepo::new(pool.clone())
@@ -15864,13 +15885,12 @@ mod mentions {
             .expect("save");
         merged(&pool, "alice", ada.id, abe.id).await.expect("merge");
 
-        // Bob: the name, under the id his text holds; no link, no real id.
+        // Bob: the name, under the id his text holds, and nothing else.
+        // SECURITY: not the person's id as it is now, in any field. He is
+        // not her owner, and the text he can read does not hold it.
         assert_eq!(
             body_told(&pool, node, "bob", &[abe.id]).await,
-            [
-                (abe.id.min(ada.id), "Ada".to_string(), false, None),
-                (abe.id.max(ada.id), "Ada".to_string(), false, None),
-            ]
+            [(abe.id, "Ada".to_string(), false, None)]
         );
         // A text that does not hold the old id is not told of it: the
         // answer for it must not say which other ids are this person.
@@ -15878,9 +15898,22 @@ mod mentions {
             body_told(&pool, plain, "bob", &[ada.id]).await,
             [(ada.id, "Ada".to_string(), false, None)]
         );
+        // Ids a reader sends that the person does not go by, or none at
+        // all: nobody. The same for the id of another node's text.
+        assert_eq!(body_told(&pool, node, "bob", &[]).await, []);
         assert_eq!(
-            body_told(&pool, node, "bob", &[]).await,
-            [(ada.id, "Ada".to_string(), false, None)]
+            body_told(&pool, node, "bob", &[PersonId(Uuid::new_v4())]).await,
+            []
+        );
+        // Asking with the kept person's own id, which this text does not
+        // hold, is answered: the row is hers and she may be named here.
+        // It tells him nothing he was not told on the other node.
+        assert_eq!(
+            body_told(&pool, node, "bob", &[ada.id, abe.id]).await,
+            sorted_told(vec![
+                (ada.id, "Ada".to_string(), false, None),
+                (abe.id, "Ada".to_string(), false, None),
+            ])
         );
         // The same for a note.
         let note = a_note(&pool, node, "alice", &format!("call {}", token(&abe))).await;
@@ -15895,13 +15928,14 @@ mod mentions {
                 .any(|n| n.person_id == abe.id && n.display_name == "Ada")
         );
         assert!(told.iter().all(|n| !n.mine && n.links_to.is_none()));
+        assert!(told.iter().all(|n| n.person_id == abe.id), "{told:?}");
         let told = PgMentionRepo::new(pool.clone())
             .for_notes(&[(note, Vec::new())], "bob")
             .await
             .expect("names")
             .remove(&note)
             .unwrap_or_default();
-        assert!(told.iter().all(|n| n.person_id == ada.id), "{told:?}");
+        assert_eq!(told, [], "no id of the text's, nobody");
         // Two notes read at once: the old id is answered for the note
         // whose own text holds it, and not for the one beside it.
         let beside = a_note(&pool, node, "alice", &format!("call {}", token(&ada))).await;
@@ -15910,10 +15944,7 @@ mod mentions {
             .await
             .expect("names");
         let ids = |names: Vec<MentionName>| sorted(names.iter().map(|n| n.person_id).collect());
-        assert_eq!(
-            ids(told.remove(&note).unwrap_or_default()),
-            sorted(vec![ada.id, abe.id])
-        );
+        assert_eq!(ids(told.remove(&note).unwrap_or_default()), [abe.id]);
         assert_eq!(ids(told.remove(&beside).unwrap_or_default()), [ada.id]);
 
         // Alice can no longer open the node: Bob is told nobody, in the

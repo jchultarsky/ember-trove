@@ -35,8 +35,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - A merge is its owner's alone, with no admin bypass: an id of another
   account, in either place, reads like a missing person, and is never
   locked or waited on.
-- The id of a person who was merged away is told to a reader only with
-  a text that holds it, under the same rule as any name.
+- A person is named to a reader only under the ids the text in front
+  of them holds, under the same rule as any name. A text that holds
+  only the id of someone merged away never tells anyone but the
+  person's owner what their id is now.
 
 ## [3.32.0] - 2026-11-19
 

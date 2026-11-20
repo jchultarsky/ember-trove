@@ -32,10 +32,12 @@
 //!   person, **if they are the saver's own** (rule 1 is unchanged: the
 //!   alias is read inside the same statement that checks the owner);
 //! - a row stays while the text holds the person's id or an alias of it;
-//! - a read gives a name for an alias id **only when that text holds
-//!   it**. Told of every alias of a person named on one node, a reader
-//!   would learn that two ids are one person, and could then read the
-//!   name behind a token on another node where rule 2 withholds it.
+//! - a read answers a person **only under the ids that text holds**:
+//!   their own, an alias, or both. Told of every id of a person named on
+//!   one node, a reader would learn that two ids are one person, and
+//!   could then read the name behind a token on another node where rule
+//!   2 withholds it. A text that holds only the old id never tells
+//!   anyone but the person's owner what their id is now.
 
 use std::collections::HashMap;
 
@@ -82,6 +84,11 @@ fn still_mentioned(ids: u8) -> String {
             WHERE a.person_id = m.person_id AND a.old_id = ANY(${ids})))"
     )
 }
+
+/// SQL: the id `held.id`, one a text holds, is one of the person `p`'s:
+/// their own, or the id of someone merged into them.
+const HELD_IS_THEIRS: &str = "(held.id = p.id OR held.id IN \
+       (SELECT a.old_id FROM person_aliases a WHERE a.person_id = p.id))";
 
 /// The one statement that makes rows for a node's body: for the people
 /// in `make` who belong to `saver`, and nobody else.
@@ -317,8 +324,8 @@ pub trait MentionRepo: Send + Sync {
     ///
     /// `in_text`: the ids the body's tokens hold
     /// (`common::mention::mentioned_ids`). A person is answered under
-    /// their own id, and under the id of someone merged into them only
-    /// if the body holds that id.
+    /// each of those that is theirs: their own id, or the id of someone
+    /// merged into them. With none of them in the text, not at all.
     async fn for_node(
         &self,
         node: NodeId,
@@ -387,13 +394,12 @@ impl MentionRepo for PgMentionRepo {
              JOIN nodes n ON n.id = m.node_id \
              JOIN people p ON p.id = m.person_id \
              JOIN LATERAL ( \
-                 SELECT p.id AS token_id \
-                 UNION ALL \
-                 SELECT a.old_id FROM person_aliases a \
-                 WHERE a.person_id = p.id AND a.old_id = ANY($3) \
+                 SELECT DISTINCT held.id AS token_id FROM unnest($3::uuid[]) AS held(id) \
+                 WHERE {theirs} \
              ) t ON true \
              WHERE m.node_id = $1 AND {named} \
              ORDER BY lower(p.display_name), p.id, t.token_id",
+            theirs = HELD_IS_THEIRS,
             named = named_to(2),
         ))
         .bind(node.0)
@@ -427,15 +433,13 @@ impl MentionRepo for PgMentionRepo {
              JOIN nodes n ON n.id = nn.node_id \
              JOIN people p ON p.id = m.person_id \
              JOIN LATERAL ( \
-                 SELECT p.id AS token_id \
-                 UNION ALL \
-                 SELECT a.old_id FROM person_aliases a \
-                 WHERE a.person_id = p.id AND EXISTS ( \
-                     SELECT 1 FROM unnest($3::uuid[], $4::uuid[]) AS x(note_id, token_id) \
-                     WHERE x.note_id = m.note_id AND x.token_id = a.old_id) \
+                 SELECT DISTINCT held.id AS token_id \
+                 FROM unnest($3::uuid[], $4::uuid[]) AS held(note_id, id) \
+                 WHERE held.note_id = m.note_id AND {theirs} \
              ) t ON true \
              WHERE m.note_id = ANY($1) AND {named} \
              ORDER BY m.note_id, lower(p.display_name), p.id, t.token_id",
+            theirs = HELD_IS_THEIRS,
             named = named_to(2),
         ))
         .bind(&ids)
