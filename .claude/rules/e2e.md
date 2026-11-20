@@ -268,8 +268,10 @@ CI job is too slow a feedback loop for selector work.
     HTML as text. To read attributes under the rendered text, walk
     them in `evaluate` (`attributesWith` in mentions.spec.ts); don't
     match on `innerHTML`, where the writer's HTML is now words.
-  - A named mention's class attribute is `mention m-<random>`: locate
-    with `.mention` / `a.mention`, never `[class="mention"]`.
+  - A mention's class attribute is `mention m-<random>`: locate one
+    with `.mention` / `a.mention`. `[class="mention"]` is exactly a
+    copy a writer typed, and `[class^="mention m-"]` exactly one the
+    page wrote: use those two only to tell them apart.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,

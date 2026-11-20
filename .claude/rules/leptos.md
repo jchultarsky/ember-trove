@@ -452,9 +452,11 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     element once per guessed name beside a mention made to fall into
     their link's address, and the right guess made the count come out.
     So rendered markup is `class="mention m-<32 hex>"`: match
-    `.mention` in CSS and tests, never the whole attribute. Never
-    allow a class in the sanitizer that a text could know and a check
-    relies on.
+    `.mention` to find a mention, never `[class="mention"]` (that is
+    exactly a copy a writer typed). Only the look of a link to a person,
+    and the test of it, match on the start of the attribute
+    (`[class^="mention m-"]`). Never allow a class in the sanitizer
+    that a text could know and a check relies on.
   - Test a claim like "never in an attribute" by walking the output's
     attributes (`attribute_values` in the tests) and with the
     fixed-sequence fuzz, not with `contains("href=\"https://evil")`.
