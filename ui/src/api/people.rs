@@ -6,6 +6,7 @@ use common::{
         DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView, Person, PersonInput,
         PersonUsage, RoleCount,
     },
+    person_merge::{MergePlan, MergeRequest},
 };
 use gloo_net::http::Request;
 
@@ -68,13 +69,38 @@ pub async fn create_person(input: &PersonInput) -> Result<SavePerson, UiError> {
     parse_json(resp).await.map(SavePerson::Saved)
 }
 
+/// The body of a person's save: the fields, and the version they were
+/// edited from (S8c). `None` sends no version, as before.
+fn save_body(
+    input: &PersonInput,
+    based_on: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<serde_json::Value, UiError> {
+    let mut body = serde_json::to_value(input).map_err(|e| UiError::Parse(e.to_string()))?;
+    if let (Some(at), Some(fields)) = (based_on, body.as_object_mut()) {
+        fields.insert(
+            "expected_updated_at".to_string(),
+            serde_json::Value::String(at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)),
+        );
+    }
+    Ok(body)
+}
+
 /// Save a person. Like create, an address **added** here that someone
 /// else in the registry has refuses the save.
-pub async fn update_person(id: PersonId, input: &PersonInput) -> Result<SavePerson, UiError> {
+///
+/// `based_on`: the person's `updated_at` as this page read them (S8c).
+/// The API answers 412 when they have been changed since, by another
+/// tab or by a merge, and nothing is written.
+pub async fn update_person(
+    id: PersonId,
+    input: &PersonInput,
+    based_on: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<SavePerson, UiError> {
     let url = api_url(&format!("/people/{id}"));
+    let body = save_body(input, based_on)?;
     let resp = send_authed(|| {
         Request::put(&url)
-            .json(input)
+            .json(&body)
             .map_err(|e| UiError::Parse(e.to_string()))
     })
     .await?;
@@ -86,6 +112,28 @@ pub async fn update_person(id: PersonId, input: &PersonInput) -> Result<SavePers
         return Ok(SavePerson::Collides(warning));
     }
     parse_json(resp).await.map(SavePerson::Saved)
+}
+
+/// What merging `gone` into `kept` would do (S8c). Nothing is written.
+pub async fn merge_preview(kept: PersonId, gone: PersonId) -> Result<MergePlan, UiError> {
+    get_json(&format!("/people/{kept}/merge?from={gone}")).await
+}
+
+/// Merge `gone` into `kept`, if `confirm` is still the plan's token. A
+/// 412 means the plan changed: ask for it again and show it.
+pub async fn merge_people(
+    kept: PersonId,
+    gone: PersonId,
+    confirm: &str,
+) -> Result<Person, UiError> {
+    post_json(
+        &format!("/people/{kept}/merge"),
+        &MergeRequest {
+            from: gone,
+            confirm: confirm.to_string(),
+        },
+    )
+    .await
 }
 
 pub async fn delete_person(id: PersonId) -> Result<(), UiError> {

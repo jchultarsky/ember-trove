@@ -81,7 +81,9 @@ fn shown<'a>(label: &str, named: Option<&MentionName>, mark: &str) -> [Event<'a>
         Some(named) if named.mine => (
             format!(
                 r#"<a class="mention {mark}" href="/people/{}">"#,
-                named.person_id.0.hyphenated()
+                // Where the token holds the id of someone merged into
+                // this person, the link is to the person (S8c).
+                named.link_target().0.hyphenated()
             ),
             format!("@{}", named.display_name),
             "</a>",
@@ -430,6 +432,30 @@ mod tests {
             render_markdown(text, &HashMap::new(), people),
             render_body(text, &HashMap::new(), people).html,
         ]
+    }
+
+    /// S8c: a token with the id of someone merged away links to the
+    /// person kept, in every rendering. The old id is no page.
+    #[test]
+    fn a_mention_with_an_old_id_links_to_the_person_kept() {
+        let kept = PersonId(Uuid::from_u128(0xbea));
+        let text = format!("Met {}.", mention_token("Abe", ada()));
+        let people = [MentionName {
+            person_id: ada(),
+            display_name: "Ada King".to_string(),
+            mine: true,
+            links_to: Some(kept),
+        }];
+        for html in renderings(&text, &people) {
+            assert!(
+                html.contains(&format!(
+                    r#"<a class="mention" href="/people/{}""#,
+                    kept.0.hyphenated()
+                )) && html.contains(">@Ada King</a>"),
+                "{html}"
+            );
+            assert!(!html.contains(&ada().0.hyphenated().to_string()), "{html}");
+        }
     }
 
     #[test]

@@ -187,6 +187,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
     // previous two both risked the disposed-signal leak; see leptos.md).
     let cascade_confirm =
         expect_context::<crate::components::modals::cascade_confirm::CascadeConfirm>();
+    let merge_people = expect_context::<crate::components::modals::merge_people::MergePeople>();
     let handle = {
         let navigate = navigate.clone();
         window_event_listener(ev::keydown, move |ev: web_sys::KeyboardEvent| {
@@ -200,6 +201,14 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
                 if key == "Escape" {
                     ev.prevent_default();
                     cascade_confirm.go_back();
+                }
+                return;
+            }
+            // The same for the merge dialog (S8c): it deletes a person.
+            if merge_people.is_open() {
+                if key == "Escape" {
+                    ev.prevent_default();
+                    merge_people.go_back();
                 }
                 return;
             }
@@ -489,6 +498,7 @@ pub fn Layout(auth_state: AuthState) -> impl IntoView {
 
             // The confirmation before a cascade (S6b): one for the app.
             <crate::components::modals::cascade_confirm::CascadeConfirmModal />
+            <crate::components::modals::merge_people::MergePeopleModal />
 
             // v2.10.0 — Help modal: Shortcuts / Concepts / Workflow tabs.
             // Triggered by `?` (kept the legacy `show_shortcuts` signal name
