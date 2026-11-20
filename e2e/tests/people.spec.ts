@@ -161,10 +161,11 @@ test('the registry: one editor for new and edit, and an address is one person’
       .getByRole('textbox', { name: 'email', exact: true })
       .fill(email);
     await editor(page).getByRole('button', { name: 'Save' }).click();
-    // Two saved people: the notice opens the other one, and says that
-    // merging them comes later (S8b; the merge tool is S8c).
+    // Two saved people: the notice opens the other one, and offers to
+    // merge the two (S8c; `people_merge.spec.ts` follows that through).
     const refused = editor(page).getByTestId('email-taken');
-    await expect(refused).toContainText('Merging two saved people isn’t available yet.');
+    await expect(refused).toContainText('or merge the two into one');
+    await expect(refused.getByTestId('merge-with')).toBeVisible();
     await expect(refused.getByTestId('carry-over')).toHaveCount(0);
     await refused.getByRole('button', { name: originalName, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/people/${original.id}$`));

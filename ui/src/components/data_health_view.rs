@@ -77,6 +77,9 @@ enum Fix {
     /// Close what is still open under a project that is already in this
     /// closed state (S6b): the cascade's catch-up, confirmed first.
     CloseStillOpen(ProjectState),
+    /// Merge the person with one they share an address with (S8c): the
+    /// merge dialog, which shows what it does first.
+    Merge,
 }
 
 /// The words on a state fix's button, and what its toast says.
@@ -187,6 +190,14 @@ fn fixes_for(rule: RuleId, v: &Violation) -> Vec<Fix> {
                 fixes.push(Fix::RemoveLink);
             }
             fixes
+        }
+        // Two of the reader's own people with one address (S8c). Both
+        // are theirs, or the report would not name them.
+        RuleId::SharedEmail
+            if v.subject.kind == RefKind::Person
+                && v.related.iter().any(|r| r.kind == RefKind::Person) =>
+        {
+            vec![Fix::Merge]
         }
         _ => Vec::new(),
     }
@@ -774,6 +785,51 @@ fn FixControl(
             }
             .into_any()
         }
+        Fix::Merge => {
+            use crate::components::modals::merge_people::{self, MergeAsk};
+            let kept = common::id::PersonId(item.subject.id);
+            let among: Vec<(common::id::PersonId, String)> = item
+                .related
+                .iter()
+                .filter(|r| r.kind == RefKind::Person)
+                .map(|r| (common::id::PersonId(r.id), r.label.clone()))
+                .collect();
+            let merge = move |_| {
+                if busy.get_untracked() {
+                    return;
+                }
+                // With one other, the dialog opens on the plan; with
+                // more, it asks which of them first.
+                let other = match among.as_slice() {
+                    [(only, _)] => Some(*only),
+                    _ => None,
+                };
+                let opened = merge_people::ask(MergeAsk {
+                    kept,
+                    other,
+                    among: among.clone(),
+                    asked_on: crate::components::modals::cascade_confirm::current_path(),
+                    // The dialog says "Merged."; the report reads again.
+                    on_merged: std::sync::Arc::new(move |_| {
+                        on_fixed.try_run(());
+                    }),
+                    on_back: std::sync::Arc::new(move || {
+                        busy.try_set(false);
+                    }),
+                });
+                if opened {
+                    busy.set(true);
+                }
+            };
+            view! {
+                <button type="button" class=FIX_BUTTON aria-disabled=aria_busy(busy) on:click=merge
+                    data-testid="fix-merge-people">
+                    <span class="material-symbols-outlined" style="font-size: 14px;" aria-hidden="true">"merge"</span>
+                    "Merge\u{2026}"
+                </button>
+            }
+            .into_any()
+        }
         Fix::ClearStatus => {
             let node = NodeId(item.subject.id);
             let clear = move |_| {
@@ -1348,6 +1404,17 @@ mod tests {
             ref_href(&Ref::person(id, "p")),
             Some(format!("/people/{id}"))
         );
+    }
+
+    /// S8c: two of the reader's people with one address can be merged
+    /// from the report. A person with nobody named beside them can't.
+    #[test]
+    fn people_who_share_an_address_offer_a_merge() {
+        let (ada, abe) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let pair = Violation::new(Ref::person(ada, "Ada"), vec![Ref::person(abe, "Abe")]);
+        assert_eq!(fixes_for(RuleId::SharedEmail, &pair), vec![Fix::Merge]);
+        let alone = Violation::new(Ref::person(ada, "Ada"), vec![]);
+        assert_eq!(fixes_for(RuleId::SharedEmail, &alone), vec![]);
     }
 
     #[test]
