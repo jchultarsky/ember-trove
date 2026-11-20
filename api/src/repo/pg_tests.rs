@@ -16831,6 +16831,14 @@ mod mentions {
             merged.as_ref().map(|p| p.id)
         );
         assert_eq!(rows, [hi.id]);
+        // And they did meet: the save went on only once the merge had
+        // given way (1.6 s on this pool). Had the save taken `lo` first,
+        // it would have queued behind the merge and gone on at once, and
+        // everything above would hold without anything being tested.
+        assert!(
+            took > std::time::Duration::from_millis(1000),
+            "the save and the merge did not meet head on: the save went on after {took:?}"
+        );
     }
 
     /// A body mentions both people. A save that takes the kept person's
@@ -18731,5 +18739,130 @@ mod mentions {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    // ── From the sixth review of #364 ──────────────────────────────────
+
+    /// The merge's patience is for a statement, not for each wait in it.
+    /// Two other transactions hold a key share on `hi`. The merge has
+    /// `lo` and waits for `hi`: for the first of them, then anew for the
+    /// second, then anew for the save, each wait shorter than its
+    /// patience. The save has waited for `lo` all along. With
+    /// `lock_timeout` alone the merge was still there when the save
+    /// looked for a deadlock, and the save was ended.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_merge_that_waits_three_times_in_one_statement_still_gives_way(pool: PgPool) {
+        use std::time::{Duration, Instant};
+        let harness = pool;
+        let pool = slow_to_look_for_deadlocks(&harness).await;
+        let people = PgPersonRepo::new(pool.clone());
+        let hi = someone(&pool, "alice", "A hi").await;
+        let mid = someone(&pool, "alice", "B mid").await;
+        let mut lo = someone(&pool, "alice", "C lo").await;
+        while lo.id > hi.id {
+            lo = someone(&pool, "alice", "C lo").await;
+        }
+        let node = a_node(&pool, "alice", "Minutes").await;
+        let plan = people
+            .merge_plan("alice", hi.id, lo.id)
+            .await
+            .expect("plan");
+
+        // Two others with a key share on `hi`, taken before the save's.
+        let share_hi = "SELECT 1 FROM people WHERE id = $1 FOR KEY SHARE";
+        let mut first = pool.begin().await.unwrap();
+        sqlx::query(share_hi)
+            .bind(hi.id.0)
+            .execute(&mut *first)
+            .await
+            .unwrap();
+        let mut second = pool.begin().await.unwrap();
+        sqlx::query(share_hi)
+            .bind(hi.id.0)
+            .execute(&mut *second)
+            .await
+            .unwrap();
+        // The save has `hi` and is stopped before `lo`.
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM people WHERE id = $1 FOR UPDATE")
+            .bind(mid.id.0)
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let saving = {
+            let text = format!("{} {} {}", token(&hi), token(&mid), token(&lo));
+            let pool = pool.clone();
+            tokio::spawn(async move { save_body(&pool, node, "alice", &text).await })
+        };
+        assert_eq!(lock_waiters(&pool, 1).await, 1, "the save is not waiting");
+        // The merge has `lo` and waits for `hi`.
+        let merging = {
+            let (people, token) = (PgPersonRepo::new(pool.clone()), plan.token.clone());
+            tokio::spawn(async move { people.merge("alice", hi.id, lo.id, &token).await })
+        };
+        assert_eq!(lock_waiters(&pool, 2).await, 2, "the merge is not waiting");
+        let merge_waits = Instant::now();
+        // The save goes on to `lo`, which the merge holds.
+        held.commit().await.unwrap();
+        let save_waits = Instant::now();
+        // Each of the two others ends before the merge's patience (1.6 s
+        // on this pool) for it would run out.
+        tokio::time::sleep(Duration::from_millis(1350).saturating_sub(merge_waits.elapsed())).await;
+        first.commit().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(2750).saturating_sub(merge_waits.elapsed())).await;
+        second.commit().await.unwrap();
+
+        let limit = Duration::from_secs(20);
+        let saved = tokio::time::timeout(limit, saving)
+            .await
+            .expect("the save hangs")
+            .expect("join");
+        let took = save_waits.elapsed();
+        let merged = tokio::time::timeout(limit, merging)
+            .await
+            .expect("the merge hangs")
+            .expect("join");
+        drop(people);
+        pool.close().await;
+        assert!(
+            saved.is_ok() && gave_way_or_went_through(&merged) && took < NO_DEADLOCK,
+            "save: {:?}\nmerge: {:?}\nthe save waited {took:?}",
+            saved.as_ref().map(|n| n.id),
+            merged.as_ref().map(|p| p.id)
+        );
+    }
+
+    /// A merge that was carried out leaves nothing of its timeouts or
+    /// its keys on the connection it used: the next request on it must
+    /// not run with a merge's short patience. (The same check after "try
+    /// again" cannot see this: a rollback undoes even a setting made for
+    /// the whole session.)
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_merge_carried_out_leaves_its_connection_clean(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let abe = someone(&pool, "alice", "Abe").await;
+        let plan = PgPersonRepo::new(pool.clone())
+            .merge_plan("alice", ada.id, abe.id)
+            .await
+            .expect("plan")
+            .token;
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .expect("pool");
+        crate::repo::person_merge::merge(&one, "alice", ada.id, abe.id, &plan)
+            .await
+            .expect("the merge");
+        let (lock, statement, keys): (String, String, i64) = sqlx::query_as(
+            "SELECT current_setting('lock_timeout'), current_setting('statement_timeout'), \
+                    (SELECT count(*) FROM pg_locks WHERE pid = pg_backend_pid() \
+                       AND locktype = 'advisory')",
+        )
+        .fetch_one(&one)
+        .await
+        .unwrap();
+        one.close().await;
+        assert_eq!((lock.as_str(), statement.as_str(), keys), ("0", "0", 0));
     }
 }

@@ -100,13 +100,15 @@ const HELD_IS_THEIRS: &str = "(held.id = p.id OR held.id IN \
 /// body's save down with it.
 ///
 /// No `ORDER BY`: the people are locked as on `main`, in the order the
-/// scan meets them. A merge takes its two in id order, so a save that
-/// mentions both can meet their merge head on, and then the merge gives
-/// way (`repo/person_merge.rs`). For one commit of #364 this statement
-/// took them in id order instead. That spared the merge a second go,
-/// and it changed the order in which one save's rows lie in the table,
-/// which is the order a later save deletes them in: where `main` was in
-/// step with an account purge, that was not.
+/// scan meets them (as the rows lie, in a table the database has
+/// counted; by name, through the index on owner and name, in a small
+/// one it has not, as in the tests). A merge takes its two in id order,
+/// so a save that mentions both can meet their merge head on, and then
+/// the merge gives way (`repo/person_merge.rs`). For one commit of #364
+/// this statement took them in id order instead. That spared the merge
+/// a second go, and it changed the order in which one save's rows lie
+/// in the table, which is the order a later save deletes them in: where
+/// `main` was in step with an account purge, that was not.
 async fn make_body_rows(
     conn: &mut PgConnection,
     node: NodeId,

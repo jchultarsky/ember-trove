@@ -353,8 +353,10 @@ cargo check && cargo clippy -- -D warnings
   rows through its cascades, in an order that depends on the names of
   the database's triggers (it differs after a dump and load); a save, a
   copy and a note take a node or a note first and people after.
-  - Once it holds a row, the merge waits for a lock for two fifths of
-    `deadlock_timeout` (`person_merge::YIELDS`), so it stops waiting
+  - Once it holds a row, the merge gives each statement two fifths of
+    `deadlock_timeout` (`person_merge::YIELDS`: `lock_timeout` **and**
+    `statement_timeout`, since the first is per wait and three short
+    waits in one statement outlasted a save), so it stops waiting
     before the database looks for a deadlock and ends someone. It is
     tried once more, and then answers 409 "try again". The save or the
     delete it met goes on untouched. (A wait for a restore or the
@@ -402,8 +404,9 @@ cargo check && cargo clippy -- -D warnings
     waited on a merge wrote the old card over it. Without the table
     lock first, a restore's lock on `people` fits between the two;
   - **a save's statements have no `ORDER BY`**: they take people and
-    rows in the order `main` takes them (the scan's: for people, by
-    name). Putting them in id order, to match the merge, changed the
+    rows in the order `main` takes them (the scan's: as the rows lie,
+    or by name in a small table never analyzed, as in the tests).
+    Putting them in id order, to match the merge, changed the
     order one save's rows lie in the table, and so the order a later
     save deletes them in, and that met the account purge where `main`
     does not. Only the merge sorts what it locks, and the merge is the

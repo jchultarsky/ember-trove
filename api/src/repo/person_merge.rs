@@ -54,6 +54,10 @@ use uuid::Uuid;
 
 use super::node::{DEADLOCK, LOCK_NOT_AVAILABLE, sqlstate};
 
+/// A statement stopped by `statement_timeout`: for a merge, the same as
+/// a lock it stopped waiting for ([`YIELDS`]).
+const STATEMENT_TIMED_OUT: &str = "57014";
+
 /// How long a merge waits for a row or a lock another transaction holds.
 const LOCK_TIMEOUT: &str = "SET LOCAL lock_timeout = '5s'";
 
@@ -62,12 +66,23 @@ const LOCK_TIMEOUT: &str = "SET LOCAL lock_timeout = '5s'";
 /// (`deadlock_timeout`, one second unless the server says otherwise).
 /// The one that has waited that long finds the deadlock and is ended.
 /// A merge that stops waiting sooner is never found in one, and whoever
-/// it met goes on. (Not a promise: a merge that had already made the
-/// other wait for most of a second, through several short waits of its
-/// own, can still be late. Then the database ends one of the two, as it
-/// would have, and a merge so ended is tried once more.)
-pub(crate) const YIELDS: &str = "SELECT set_config('lock_timeout', greatest(1, \
-     (extract(epoch FROM current_setting('deadlock_timeout')::interval) * 400)::int)::text, true)";
+/// it met goes on.
+///
+/// Both timeouts, the same length. `lock_timeout` is for each wait on
+/// its own: a merge that waited for one row three times, for three
+/// holders one after another, each wait short enough, was still there
+/// when the save it had kept waiting all along looked for a deadlock
+/// and was ended (sixth review of #364). `statement_timeout` is for the
+/// statement, however many waits it is made of.
+///
+/// (Still not a promise: waits in several statements one after another
+/// can add up the same way. And a merge whose own statement runs longer
+/// than this, with many thousands of rows to move, says "try again"
+/// every time: none is near that.)
+pub(crate) const YIELDS: &str = "WITH patience AS (SELECT greatest(1, \
+     (extract(epoch FROM current_setting('deadlock_timeout')::interval) * 400)::int)::text AS ms) \
+     SELECT set_config('lock_timeout', ms, true), set_config('statement_timeout', ms, true) \
+     FROM patience";
 
 /// For a test that holds a row to stop a merge half way and needs it to
 /// be there still when the row is let go.
@@ -110,7 +125,12 @@ impl MergeError {
     fn into_public(self) -> EmberTroveError {
         match self {
             Self::Public(e) => e,
-            Self::Db(e) if matches!(sqlstate(&e), Some(LOCK_NOT_AVAILABLE | DEADLOCK)) => {
+            Self::Db(e)
+                if matches!(
+                    sqlstate(&e),
+                    Some(LOCK_NOT_AVAILABLE | DEADLOCK | STATEMENT_TIMED_OUT)
+                ) =>
+            {
                 EmberTroveError::AlreadyExists(BUSY.to_string())
             }
             // The email rule refused the kept person's new list: someone
@@ -502,7 +522,12 @@ pub(crate) async fn merge_with(
         // written: once more, from the start. What it met has most
         // often finished by then, and if what it did changed the plan,
         // the second go says so.
-        Err(MergeError::Db(e)) if matches!(sqlstate(&e), Some(DEADLOCK | LOCK_NOT_AVAILABLE)) => {
+        Err(MergeError::Db(e))
+            if matches!(
+                sqlstate(&e),
+                Some(DEADLOCK | LOCK_NOT_AVAILABLE | STATEMENT_TIMED_OUT)
+            ) =>
+        {
             merge_once(pool, owner, kept, gone, confirm, patience)
                 .await
                 .map_err(MergeError::into_public)
