@@ -360,9 +360,12 @@ cargo check && cargo clippy -- -D warnings
     delete it met goes on untouched. (A wait for a restore or the
     account's purge is not such a meeting: it is answered at once.)
   - Tests that stop a merge on a row and then let it meet something
-    run on `slow_to_look_for_deadlocks` (pg_tests): at the usual one
-    second the merge has 0.4 s, twice, and a busy machine uses that up
-    before the meeting.
+    run on `slow_to_look_for_deadlocks` (pg_tests; four seconds): at
+    the usual one second the merge has 0.4 s, twice, and a busy machine
+    uses that up before the meeting. Not longer than the five seconds
+    the merge gives its keys: at ten, the tests passed with the giving
+    way taken out. **Run "the merge does not give way" as a deliberate
+    break after any change to them.**
   - **Do not fix a deadlock with the merge by adding a lock somewhere
     else.** Each of three tries did: a hold on the people a body
     already mentions made a co-editor's save meet the account purge; a
@@ -384,9 +387,10 @@ cargo check && cargo clippy -- -D warnings
     (`drop_body_rows`). Without both, a save that takes the kept
     person's token out and leaves the other's left a real mention with
     no row;
-  - **a save holds nothing it would not hold anyway, only sooner.** A
-    hold on every person the node mentioned, and then on every row of
-    the node, each met the account purge head on (a purge deletes its
+  - **a save holds nothing it would not hold anyway, only sooner, and
+    in the same order.** A hold on every person the node mentioned,
+    then on every row of the node, then on the right rows in id order,
+    each met the account purge head on (a purge deletes its
     people's rows one person at a time, in the order it meets them).
     A save never holds a person it does not add a mention of, never
     one of another account, and never a row it leaves alone;
@@ -397,10 +401,13 @@ cargo check && cargo clippy -- -D warnings
     before the `UPDATE`. Without the row, a save with no version that
     waited on a merge wrote the old card over it. Without the table
     lock first, a restore's lock on `people` fits between the two;
-  - a statement that locks several people locks them in id order
-    (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does. It spares
-    the everyday case a wait; it is not what keeps a save from being
-    ended (the merge giving way is);
+  - **a save's statements have no `ORDER BY`**: they take people and
+    rows in the order `main` takes them (the scan's: for people, by
+    name). Putting them in id order, to match the merge, changed the
+    order one save's rows lie in the table, and so the order a later
+    save deletes them in, and that met the account purge where `main`
+    does not. Only the merge sorts what it locks, and the merge is the
+    one that gives way;
   - a note's save makes all its rows again each time, and asks twice
     as a body's does (`sync_note_on`, `make_body_rows`): a statement
     that waited for a merge finds the person gone and sees the alias

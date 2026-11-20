@@ -99,11 +99,14 @@ const HELD_IS_THEIRS: &str = "(held.id = p.id OR held.id IN \
 /// the read and the insert would fail the foreign key and take the
 /// body's save down with it.
 ///
-/// `ORDER BY p.id`: the people are locked in id order, as a merge locks
-/// its two (`repo/person_merge.rs`), so the two do not meet head on
-/// over them in the everyday case. (Where they still do, the merge
-/// gives way: the second pass below can take the kept person after
-/// someone with a higher id.)
+/// No `ORDER BY`: the people are locked as on `main`, in the order the
+/// scan meets them. A merge takes its two in id order, so a save that
+/// mentions both can meet their merge head on, and then the merge gives
+/// way (`repo/person_merge.rs`). For one commit of #364 this statement
+/// took them in id order instead. That spared the merge a second go,
+/// and it changed the order in which one save's rows lie in the table,
+/// which is the order a later save deletes them in: where `main` was in
+/// step with an account purge, that was not.
 async fn make_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
@@ -118,7 +121,7 @@ async fn make_body_rows(
         "INSERT INTO node_mentions (node_id, person_id) \
          SELECT $1, p.id FROM people p \
          WHERE {theirs} AND p.owner_id = $3 \
-         ORDER BY p.id FOR KEY SHARE OF p \
+         FOR KEY SHARE OF p \
          ON CONFLICT DO NOTHING",
         theirs = stands_for(2),
     );
@@ -156,15 +159,15 @@ async fn make_body_rows(
 /// the merge dropped the other's row with the person: a mention its
 /// owner made was left with no row at all.
 ///
-/// **Only the rows the delete would take anyway**, so a save holds
-/// nothing it does not hold without this, only sooner. Twice a wider
+/// **Only the rows the delete would take anyway, in the order it would
+/// take them** (no `ORDER BY`), so a save holds nothing it does not hold
+/// without this, only sooner. Twice a wider
 /// hold was tried here and twice it met an account purge head on: over
 /// every person the node mentioned, and then over every row of the
 /// node. A purge deletes its people's rows one person at a time, in the
 /// order it meets the people; a save that holds rows of two of them it
 /// has no business with, in another order, is ended or ends the purge.
-/// (A save that takes two such mentions out at once can still meet a
-/// purge of their account: that is older than the merge.)
+/// (`a_save_beside_a_purge_*` in the pg tests hold the pair to that.)
 async fn drop_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
@@ -172,8 +175,7 @@ async fn drop_body_rows(
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
     sqlx::query(&format!(
-        "SELECT 1 FROM node_mentions m WHERE m.node_id = $1 AND NOT {kept} \
-         ORDER BY m.person_id FOR UPDATE",
+        "SELECT 1 FROM node_mentions m WHERE m.node_id = $1 AND NOT {kept} FOR UPDATE",
         kept = still_mentioned(2),
     ))
     .bind(node.0)
@@ -250,7 +252,7 @@ pub(crate) async fn copy_body_rows_on(
         "SELECT 1 FROM people p \
          WHERE p.id IN (SELECT m.person_id FROM node_mentions m WHERE m.node_id = $1) \
            AND p.owner_id = $2 \
-         ORDER BY p.id FOR KEY SHARE OF p",
+         FOR KEY SHARE OF p",
     )
     .bind(from.0)
     .bind(copier)
@@ -262,7 +264,7 @@ pub(crate) async fn copy_body_rows_on(
          SELECT $2, p.id FROM node_mentions m \
          JOIN people p ON p.id = m.person_id \
          WHERE m.node_id = $1 AND {held} AND p.owner_id = $4 \
-         ORDER BY p.id FOR KEY SHARE OF p \
+         FOR KEY SHARE OF p \
          ON CONFLICT DO NOTHING",
         held = still_mentioned(3),
     ))
@@ -297,7 +299,7 @@ pub(crate) async fn sync_note_on(
             "INSERT INTO note_mentions (note_id, person_id) \
              SELECT $1, p.id FROM people p \
              WHERE {theirs} AND p.owner_id = $3 \
-             ORDER BY p.id FOR KEY SHARE OF p \
+             FOR KEY SHARE OF p \
              ON CONFLICT DO NOTHING",
             theirs = stands_for(2),
         );
