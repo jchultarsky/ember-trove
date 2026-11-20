@@ -5,15 +5,21 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-18)
 
-- **S9: mentions of people in text** (#360; ONTOLOGY §7.3, §14; owner
-  decisions of 2026-11-18). `@` in a body or a note picks one of your
+- **v3.32.0 shipped: S9, mentions of people in text** (#360, PRs #361
+  and #362; ONTOLOGY §7.3, §14; owner decisions of 2026-11-18). `@` in a body or a note picks one of your
   People; the text holds `@[name](person:id)`. A mention is real only
   if it has a row (`node_mentions`, `note_mentions`, migration 057),
   made by the account saving the text for its own person. Another
   reader gets the current name and nothing else, while the person's
   owner can still open the node. No lookup by id. Backup format 14.
+  The page checks what it rendered: a mention that did not come out as
+  its own element shows the text with its raw HTML as words. Nothing
+  writes a person's current name into a text: an "Update" for stale
+  labels was built and taken out after three reviews (see leptos.md).
   **Next:** S8c (the merge tool: rewrite tokens and move rows; a
-  report of leftover tokens; a version on `PUT /people/{id}`). Rules:
+  report of leftover tokens; a version on `PUT /people/{id}`; and, if
+  wanted, bringing labels up to date on a parser input that is the
+  same for every reader). Rules:
   "Mentions of people in text" in `.claude/rules/api.md`, "Mentions of
   people" in `.claude/rules/leptos.md`.
 
