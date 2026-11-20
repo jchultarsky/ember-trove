@@ -15681,6 +15681,13 @@ mod mentions {
         .await
         .expect("save");
         let note = a_note(&pool, only_abe, "alice", &format!("call {}", token(&abe))).await;
+        let both_note = a_note(
+            &pool,
+            only_abe,
+            "alice",
+            &format!("{} with {}", token(&abe), token(&ada)),
+        )
+        .await;
         // Abe alone on one node; both on another.
         let moved = people
             .add_membership(only_abe, abe.id, Some("Lead"), None)
@@ -15765,6 +15772,7 @@ mod mentions {
         assert_eq!(body_rows(&pool, only_abe).await, [ada.id]);
         assert_eq!(body_rows(&pool, both).await, [ada.id]);
         assert_eq!(note_rows(&pool, note).await, [ada.id]);
+        assert_eq!(note_rows(&pool, both_note).await, [ada.id]);
         // No text was touched.
         let body: String = sqlx::query_scalar("SELECT body FROM nodes WHERE id = $1")
             .bind(only_abe.0)
@@ -15894,13 +15902,32 @@ mod mentions {
             .remove(&note)
             .unwrap_or_default();
         assert!(told.iter().all(|n| n.person_id == ada.id), "{told:?}");
+        // Two notes read at once: the old id is answered for the note
+        // whose own text holds it, and not for the one beside it.
+        let beside = a_note(&pool, node, "alice", &format!("call {}", token(&ada))).await;
+        let mut told = PgMentionRepo::new(pool.clone())
+            .for_notes(&[(note, vec![abe.id]), (beside, vec![ada.id])], "bob")
+            .await
+            .expect("names");
+        let ids = |names: Vec<MentionName>| sorted(names.iter().map(|n| n.person_id).collect());
+        assert_eq!(
+            ids(told.remove(&note).unwrap_or_default()),
+            sorted(vec![ada.id, abe.id])
+        );
+        assert_eq!(ids(told.remove(&beside).unwrap_or_default()), [ada.id]);
 
-        // Alice can no longer open the node: Bob is told nobody.
+        // Alice can no longer open the node: Bob is told nobody, in the
+        // body or in a note, under either id.
         PgPermissionRepo::new(pool.clone())
             .revoke(grant.id, node)
             .await
             .expect("revoke");
         assert_eq!(body_told(&pool, node, "bob", &[abe.id]).await, []);
+        let told = PgMentionRepo::new(pool.clone())
+            .for_notes(&[(note, vec![abe.id]), (beside, vec![ada.id])], "bob")
+            .await
+            .expect("names");
+        assert!(told.values().all(Vec::is_empty), "{told:?}");
     }
 
     /// SECURITY, rule 1 with an alias: a token with the old id is a
@@ -15966,6 +15993,65 @@ mod mentions {
         assert_eq!(note_rows(&pool, note).await, [ada.id]);
     }
 
+    /// A copy of a node whose text still holds the old id carries the
+    /// mention for the copier whose person it is, and for nobody else.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_copy_carries_a_mention_written_under_the_old_id(pool: PgPool) {
+        let ada = someone(&pool, "alice", "Ada").await;
+        let abe = someone(&pool, "alice", "Abe").await;
+        let nodes = PgNodeRepo::new(pool.clone());
+        let node = a_node(&pool, "alice", "Plan").await;
+        share(&pool, node, "alice", "bob").await;
+        let body = format!("met {}", token(&abe));
+        save_body(&pool, node, "alice", &body).await.expect("save");
+        merged(&pool, "alice", ada.id, abe.id).await.expect("merge");
+        let copy = |by: &'static str, title: &'static str| {
+            let (nodes, body) = (&nodes, body.clone());
+            async move {
+                nodes
+                    .duplicate(
+                        by,
+                        CreateNodeRequest {
+                            body: Some(body),
+                            ..node_req(title)
+                        },
+                        node,
+                    )
+                    .await
+                    .expect("duplicate")
+                    .id
+            }
+        };
+        let hers = copy("alice", "Alice's copy").await;
+        assert_eq!(body_rows(&pool, hers).await, [ada.id]);
+        assert!(body_told(&pool, hers, "alice", &[abe.id]).await.contains(&(
+            abe.id,
+            "Ada".to_string(),
+            true,
+            Some(ada.id)
+        )));
+        assert_eq!(body_rows(&pool, copy("bob", "Bob's copy").await).await, []);
+    }
+
+    /// An account's purge takes its aliases with its people, and leaves
+    /// another account's alone. (The table has no account column: the
+    /// purge reaches it through the cascade from `people`.)
+    #[sqlx::test(migrations = "../migrations")]
+    async fn an_account_purge_takes_its_aliases_and_no_one_elses(pool: PgPool) {
+        use crate::repo::account::{AccountRepo, PgAccountRepo};
+        let ada = someone(&pool, "alice", "Ada").await;
+        let abe = someone(&pool, "alice", "Abe").await;
+        let bo = someone(&pool, "bob", "Bo").await;
+        let ben = someone(&pool, "bob", "Ben").await;
+        merged(&pool, "alice", ada.id, abe.id).await.expect("merge");
+        merged(&pool, "bob", bo.id, ben.id).await.expect("merge");
+        PgAccountRepo::new(pool.clone())
+            .purge("alice", None)
+            .await
+            .expect("purge");
+        assert_eq!(aliases(&pool).await, [(ben.id, bo.id)]);
+    }
+
     /// The table never holds a chain: a later merge of the kept person
     /// re-points what stood for them. A deleted person takes their aliases.
     #[sqlx::test(migrations = "../migrations")]
@@ -15989,9 +16075,17 @@ mod mentions {
             true,
             Some(cy.id)
         )));
-        // Every route on an old id is a missing person.
+        // Every route on an old id is a missing person, whatever version
+        // a save of it sends.
         let people = PgPersonRepo::new(pool.clone());
+        let now = people.get("alice", cy.id).await.expect("cy").updated_at;
         for old in [abe.id, ada.id] {
+            assert!(matches!(
+                people
+                    .update("alice", old, &person("Back", None), Some(now))
+                    .await,
+                Err(EmberTroveError::NotFound(_))
+            ));
             assert!(people.get("alice", old).await.is_err());
             assert!(people.usages("alice", old).await.is_err());
             assert!(people.delete("alice", old).await.is_err());
@@ -16303,9 +16397,57 @@ mod mentions {
                 .await
                 .expect("tidy");
         }
+        // And a restore takes that key alone, before it deletes a row:
+        // held shared, as a merge under way holds it, it waits.
+        let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+        let archive = crate::backup::read_snapshot(&mut tx).await.expect("read");
+        drop(tx);
+        let bea = someone(&pool, "alice", "Bea").await;
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtext('ember.restore'))")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let restoring = {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let mut tx = pool.begin().await.expect("tx");
+                crate::backup::restore_into(&mut tx, &archive)
+                    .await
+                    .expect("restore");
+                tx.commit().await.expect("commit");
+            })
+        };
+        let mut waiting = 0;
+        for _ in 0..400 {
+            waiting = scalar(
+                &pool,
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE datname = current_database() AND wait_event_type = 'Lock' \
+                   AND wait_event = 'advisory'",
+            )
+            .await;
+            if waiting > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(waiting, 1, "the restore did not wait for the merge");
         assert!(
-            crate::repo::person_merge::RESTORE_LOCK.contains("'ember.restore'"),
-            "the restore's lock is the key a merge shares"
+            PgPersonRepo::new(pool.clone())
+                .get("alice", bea.id)
+                .await
+                .is_ok(),
+            "the restore deleted a row while it waited"
+        );
+        held.commit().await.unwrap();
+        restoring.await.expect("join");
+        assert!(
+            PgPersonRepo::new(pool.clone())
+                .get("alice", bea.id)
+                .await
+                .is_err(),
+            "the archive is from before Bea"
         );
     }
 
@@ -16331,6 +16473,19 @@ mod mentions {
         drop(tx);
         assert_eq!(after.person_aliases.len(), 1);
 
+        // An archive is not trusted to hold only sound aliases: one to
+        // nobody, and one that is a living person's id, are left out.
+        let mut after = after;
+        for (old_id, person_id) in [
+            (PersonId(Uuid::new_v4()), PersonId(Uuid::new_v4())),
+            (ada.id, ada.id),
+        ] {
+            after.person_aliases.push(common::mention::BackupAlias {
+                old_id,
+                person_id,
+                merged_at: Utc::now(),
+            });
+        }
         // Wipe what the merge left, then restore the archive made after it.
         sqlx::query("DELETE FROM person_aliases")
             .execute(&pool)

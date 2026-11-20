@@ -6043,6 +6043,9 @@ async fn a_merge_is_for_the_owner_of_both_people() {
     assert_eq!(plan["gone_name"], "Bea");
     assert_eq!(plan["token"], STUB_MERGE_TOKEN);
     assert_eq!(plan["notes_line"], "Merged in: name \u{201c}Bea\u{201d}.");
+    // SECURITY: the count is the caller's own view, never everyone's.
+    assert_eq!(plan["mentioned_in"], 1);
+    assert_all_seen_as(Some("test-sub"));
     let (status, kept) = people_call(
         "POST",
         &format!("/people/{ada}/merge"),
