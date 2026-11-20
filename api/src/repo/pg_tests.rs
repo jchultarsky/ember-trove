@@ -17746,8 +17746,10 @@ mod mentions {
             .await
             .expect("the merge hangs")
             .expect("join");
+        // The save changed nothing the plan was made from, so the merge's
+        // second go, after it gave way, is carried out.
         assert!(
-            saved.is_ok() && gave_way_or_went_through(&merged) && took < NO_DEADLOCK,
+            saved.is_ok() && merged.is_ok() && took < NO_DEADLOCK,
             "save: {:?}\nmerge: {:?}\nafter {took:?}",
             saved.as_ref().map(|n| n.id),
             merged.as_ref().map(|p| p.id)
