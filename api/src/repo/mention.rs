@@ -147,8 +147,8 @@ async fn make_body_rows(
 
 /// Delete a node's rows for people its body no longer mentions.
 ///
-/// The node's rows are held first, by a statement of its own. A merge
-/// under way holds the body rows of its two people
+/// The rows it is about to delete are held first, by a statement of its
+/// own. A merge under way holds the body rows of its two people
 /// (`repo/person_merge.rs`): this waits for it, and the delete that
 /// follows then sees the alias it left. In one statement, a save that
 /// takes the kept person's token out and leaves the other's deleted the
@@ -156,25 +156,28 @@ async fn make_body_rows(
 /// the merge dropped the other's row with the person: a mention its
 /// owner made was left with no row at all.
 ///
-/// Rows of this node only, and no person: a save holds nobody it does
-/// not itself add a mention of, and nobody of another account. (It did,
-/// for one commit: the account purge then had to take its people in the
-/// same order, and that put the purge out of step with a restore and
-/// with a note's save.)
-///
-/// A note needs none of this: every save of a note makes all its rows
-/// again, and that one statement holds every person the note's text
-/// names, in id order.
+/// **Only the rows the delete would take anyway**, so a save holds
+/// nothing it does not hold without this, only sooner. Twice a wider
+/// hold was tried here and twice it met an account purge head on: over
+/// every person the node mentioned, and then over every row of the
+/// node. A purge deletes its people's rows one person at a time, in the
+/// order it meets the people; a save that holds rows of two of them it
+/// has no business with, in another order, is ended or ends the purge.
+/// (A save that takes two such mentions out at once can still meet a
+/// purge of their account: that is older than the merge.)
 async fn drop_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
     mentioned: &[PersonId],
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
-    sqlx::query(
-        "SELECT 1 FROM node_mentions m WHERE m.node_id = $1 ORDER BY m.person_id FOR UPDATE",
-    )
+    sqlx::query(&format!(
+        "SELECT 1 FROM node_mentions m WHERE m.node_id = $1 AND NOT {kept} \
+         ORDER BY m.person_id FOR UPDATE",
+        kept = still_mentioned(2),
+    ))
     .bind(node.0)
+    .bind(&ids)
     .execute(&mut *conn)
     .await
     .map_err(db("sync mentions"))?;
@@ -285,22 +288,32 @@ pub(crate) async fn sync_note_on(
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
     if !ids.is_empty() {
-        // Once: every save of a note makes all its rows again, so one
-        // that lost a row to a merge under way gets it with the next.
-        sqlx::query(&format!(
+        // Twice at most, as for a body (`make_body_rows`): a statement
+        // that waited for a merge finds the person gone, and sees the
+        // alias only when asked again. Asked once, a note written
+        // during a merge kept no row for its mention until it was next
+        // edited, and a note is often never edited again.
+        let insert = format!(
             "INSERT INTO note_mentions (note_id, person_id) \
              SELECT $1, p.id FROM people p \
              WHERE {theirs} AND p.owner_id = $3 \
              ORDER BY p.id FOR KEY SHARE OF p \
              ON CONFLICT DO NOTHING",
             theirs = stands_for(2),
-        ))
-        .bind(note.0)
-        .bind(&ids)
-        .bind(author)
-        .execute(&mut *conn)
-        .await
-        .map_err(db("sync mentions"))?;
+        );
+        for _ in 0..2 {
+            let made = sqlx::query(&insert)
+                .bind(note.0)
+                .bind(&ids)
+                .bind(author)
+                .execute(&mut *conn)
+                .await
+                .map_err(db("sync mentions"))?
+                .rows_affected();
+            if made >= ids.len() as u64 {
+                break;
+            }
+        }
     }
     sqlx::query(&format!(
         "DELETE FROM note_mentions m WHERE m.note_id = $1 AND NOT {kept}",

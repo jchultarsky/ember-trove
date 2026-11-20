@@ -357,7 +357,12 @@ cargo check && cargo clippy -- -D warnings
     `deadlock_timeout` (`person_merge::YIELDS`), so it stops waiting
     before the database looks for a deadlock and ends someone. It is
     tried once more, and then answers 409 "try again". The save or the
-    delete it met goes on untouched.
+    delete it met goes on untouched. (A wait for a restore or the
+    account's purge is not such a meeting: it is answered at once.)
+  - Tests that stop a merge on a row and then let it meet something
+    run on `slow_to_look_for_deadlocks` (pg_tests): at the usual one
+    second the merge has 0.4 s, twice, and a busy machine uses that up
+    before the meeting.
   - **Do not fix a deadlock with the merge by adding a lock somewhere
     else.** Each of three tries did: a hold on the people a body
     already mentions made a co-editor's save meet the account purge; a
@@ -374,12 +379,17 @@ cargo check && cargo clippy -- -D warnings
   What must not happen is a wrong result; these are for that, not for
   lock order:
   - the merge holds the body rows (`node_mentions`) of its two people
-    before it moves any, and a body's save holds **the node's own
-    rows** in a statement of its own before it deletes one
+    before it moves any, and a body's save holds **the rows it is
+    about to delete** in a statement of its own before it deletes them
     (`drop_body_rows`). Without both, a save that takes the kept
     person's token out and leaves the other's left a real mention with
-    no row. Rows of that node only: a save never holds a person it
-    does not add a mention of, and never one of another account;
+    no row;
+  - **a save holds nothing it would not hold anyway, only sooner.** A
+    hold on every person the node mentioned, and then on every row of
+    the node, each met the account purge head on (a purge deletes its
+    people's rows one person at a time, in the order it meets them).
+    A save never holds a person it does not add a mention of, never
+    one of another account, and never a row it leaves alone;
   - a copy holds the copier's own people on the source, in a statement
     of its own, before it copies rows;
   - `PersonRepo::update` takes the table lock its write needs, then the
@@ -391,15 +401,18 @@ cargo check && cargo clippy -- -D warnings
     (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does. It spares
     the everyday case a wait; it is not what keeps a save from being
     ended (the merge giving way is);
-  - a note needs none of this: every save of a note makes all its rows
-    again, in one statement that holds every person its text names.
+  - a note's save makes all its rows again each time, and asks twice
+    as a body's does (`sync_note_on`, `make_body_rows`): a statement
+    that waited for a merge finds the person gone and sees the alias
+    only when asked again. Asked once, a note written during a merge
+    had no row for its mention until its next edit.
 - The one who goes is deleted **before** the kept person is written:
   the email rule must find their addresses free. An address a third
   person lists is left out (`report.someone_elses`), not taken.
 - Refusals (a list over 10, notes over 10,000, a joined membership note
   over 2,000) are 422 in words; a changed plan is 412; a restore or the
-  account's purge still running after 5 s, or a row still held at the
-  second try, is 409 "try again".
+  account's purge still running after 5 s (one wait, not tried again),
+  or a row still held at the second try, is 409 "try again".
 - The plan's `mentioned_in` is counted in the route with
   `subject_scope`, as the person's "Mentioned in" list is: a raw row
   count would tell of nodes the caller can no longer open. It is not

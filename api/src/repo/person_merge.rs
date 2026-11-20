@@ -341,13 +341,26 @@ async fn merge_once(
     // Before any row, and with nothing held, so with time to wait: a
     // purge and a restore delete what hangs on nodes before they reach
     // `people`, the other way round from a merge.
+    //
+    // A purge or a restore still running after that wait is answered
+    // "try again" at once. It is not a meeting to give way in and try
+    // again: a second go would only wait as long once more.
+    let busy = |e: sqlx::Error| {
+        if sqlstate(&e) == Some(LOCK_NOT_AVAILABLE) {
+            MergeError::Public(EmberTroveError::AlreadyExists(BUSY.to_string()))
+        } else {
+            MergeError::Db(e)
+        }
+    };
     sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtext('ember.purge.' || $1))")
         .bind(owner)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(busy)?;
     sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtext('ember.restore'))")
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(busy)?;
     // From here on the merge holds rows, and gives way: module doc.
     sqlx::query(patience).execute(&mut *tx).await?;
 
@@ -355,7 +368,8 @@ async fn merge_once(
     // The body rows of both, held before anything is decided about them.
     // A save that is taking one of them out of a body ends first, and
     // the moves below see what it left; a save that comes later waits
-    // here (`repo::mention::drop_body_rows`) and decides after the merge.
+    // for the row it means to delete (`repo::mention::drop_body_rows`)
+    // and decides after the merge.
     sqlx::query(
         "SELECT 1 FROM node_mentions WHERE person_id = ANY($1) \
          ORDER BY node_id, person_id FOR UPDATE",
