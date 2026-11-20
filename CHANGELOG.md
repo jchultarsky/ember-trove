@@ -36,6 +36,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - A merge that would pass a limit (10 entries in a list, 10,000
     characters of notes) is refused in words. An address a third person
     lists too is left out and said.
+  - A merge that meets a save, a delete, an account's removal or a
+    restore in progress gives way: it is tried once more, and if it is
+    still in the way it says to try again, with nothing written. The
+    other operation is never the one ended.
   - Backup format 15 carries the aliases; older archives still restore.
 
 ### Changed
