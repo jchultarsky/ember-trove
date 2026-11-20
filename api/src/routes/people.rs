@@ -29,6 +29,7 @@ use common::{
         DuplicateMatch, DuplicateWarning, MembershipInput, MembershipUpdate, MembershipView,
         Person, PersonBody, PersonUsage, RoleCount, normalize, normalize_membership,
     },
+    person_merge::{MergePlan, MergeRequest},
 };
 use uuid::Uuid;
 
@@ -50,6 +51,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/{id}/usages", get(person_usages))
         .route("/{id}/mentions", get(person_mentions))
+        .route("/{id}/merge", get(merge_preview).post(merge_people))
 }
 
 /// `/api/nodes/{node_id}/people`
@@ -191,9 +193,79 @@ async fn update_person(
     } else {
         Vec::new()
     };
+    // The version the sender read, if it says (S8c): a save from a tab
+    // that is out of date is a 412, not a silent overwrite.
+    let expected = body.expected_updated_at;
     let input = normalize(body.resolve(&stored)).map_err(invalid)?;
-    let write = state.people.update(&claims.sub, id, &input);
+    let write = state.people.update(&claims.sub, id, &input, expected);
     save_unless_it_collides(&state, &claims.sub, Some(id), &input, write, StatusCode::OK).await
+}
+
+/// `?from=` of the merge preview: the person who would go.
+#[derive(Debug, serde::Deserialize)]
+struct MergeFrom {
+    from: Uuid,
+}
+
+const SAME_PERSON: &str = "a person can't be merged with themself";
+
+/// What merging `from` into `{id}` would do (S8c, #363): the kept person
+/// as they would be, what moves, what is joined, what refuses it, and
+/// the token to confirm with. Nothing is written.
+///
+/// SECURITY: both people are the caller's own. `&claims.sub`, never
+/// `subject_scope`: there is no admin bypass on People. Either id being
+/// another account's, or nobody's, is one 404 that names neither.
+async fn merge_preview(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<MergeFrom>,
+) -> Result<Json<MergePlan>, ApiError> {
+    let (kept, gone) = (PersonId(id), PersonId(q.from));
+    if kept == gone {
+        return Err(ApiError::Validation(SAME_PERSON.into()));
+    }
+    let mut plan = state.people.merge_plan(&claims.sub, kept, gone).await?;
+    // Counted after the repo has said both are the caller's, and only
+    // among nodes this reader can open: the number is the one their
+    // "Mentioned in" list shows, and tells of no node they can't see.
+    let mentioned = state
+        .mentions
+        .mentioned_in(gone, subject_scope(&claims))
+        .await?;
+    plan.mentioned_in = u32::try_from(mentioned.len()).unwrap_or(u32::MAX);
+    Ok(Json(plan))
+}
+
+/// Merge `from` into `{id}`, in one transaction, if `confirm` is the
+/// token of the plan as it is now.
+///
+/// - 404: either person is not the caller's, or is not there.
+/// - 412: something changed since the plan was shown. Ask for it again.
+/// - 422: the plan has a refusal (a list or a note too long), or the two
+///   ids are one.
+/// - 409: the rows are held by another change. Try again.
+async fn merge_people(
+    State(state): State<AppState>,
+    Extension(claims): Extension<AuthClaims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<MergeRequest>,
+) -> Result<Json<Person>, ApiError> {
+    let kept = PersonId(id);
+    if kept == req.from {
+        return Err(ApiError::Validation(SAME_PERSON.into()));
+    }
+    // A token is a hash in hex. Anything longer is not one of ours.
+    if req.confirm.len() > 64 {
+        return Err(ApiError::Validation("that is not a merge token".into()));
+    }
+    Ok(Json(
+        state
+            .people
+            .merge(&claims.sub, kept, req.from, &req.confirm)
+            .await?,
+    ))
 }
 
 /// Deletes the person and, by cascade, their memberships.

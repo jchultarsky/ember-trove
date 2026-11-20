@@ -1740,6 +1740,14 @@ fn mention_reads() -> Vec<(&'static str, String)> {
     MENTION_READERS.with(|v| std::mem::take(&mut *v.borrow_mut()))
 }
 
+/// The token the stub's merge plan carries, and the merges it was asked
+/// to make (by whom, kept, gone).
+const STUB_MERGE_TOKEN: &str = "stub-merge-token";
+thread_local! {
+    static MERGES: std::cell::RefCell<Vec<(String, common::id::PersonId, common::id::PersonId)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Names one person, Ada, for whatever text it is asked about, and
 /// records for whom. `mentioned_in` panics for any person but the
 /// caller's own (`AZ_PERSON`): a route that asked where someone else's
@@ -1751,6 +1759,7 @@ impl StubMentionRepo {
             person_id: common::id::PersonId(Uuid::from_u128(AZ_PERSON)),
             display_name: "Ada".into(),
             mine: reader == "test-sub",
+            links_to: None,
         }
     }
 }
@@ -1760,13 +1769,14 @@ impl crate::repo::mention::MentionRepo for StubMentionRepo {
         &self,
         _: NodeId,
         reader: &str,
+        _: &[common::id::PersonId],
     ) -> Result<Vec<common::mention::MentionName>, EmberTroveError> {
         MENTION_READERS.with(|v| v.borrow_mut().push(("for_node", reader.to_string())));
         Ok(vec![Self::ada(reader)])
     }
     async fn for_notes(
         &self,
-        notes: &[common::id::NoteId],
+        notes: &[(common::id::NoteId, Vec<common::id::PersonId>)],
         reader: &str,
     ) -> Result<
         std::collections::HashMap<common::id::NoteId, Vec<common::mention::MentionName>>,
@@ -1775,7 +1785,7 @@ impl crate::repo::mention::MentionRepo for StubMentionRepo {
         MENTION_READERS.with(|v| v.borrow_mut().push(("for_notes", reader.to_string())));
         Ok(notes
             .iter()
-            .map(|n| (*n, vec![Self::ada(reader)]))
+            .map(|(n, _)| (*n, vec![Self::ada(reader)]))
             .collect())
     }
     async fn mentioned_in(
@@ -1783,9 +1793,8 @@ impl crate::repo::mention::MentionRepo for StubMentionRepo {
         person: common::id::PersonId,
         reader: Option<&str>,
     ) -> Result<Vec<common::mention::PersonMention>, EmberTroveError> {
-        assert_eq!(
-            person.0.as_u128(),
-            AZ_PERSON,
+        assert!(
+            matches!(person.0.as_u128(), AZ_PERSON | AZ_SECOND_PERSON),
             "asked where a person who is not the caller's is mentioned"
         );
         saw_viewer("mentions.mentioned_in", reader);
@@ -1833,7 +1842,8 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
                 addresses: vec![],
                 notes: None,
                 created_at: now,
-                updated_at: now,
+                // The version the stub's people are at.
+                updated_at: chrono::DateTime::UNIX_EPOCH,
             })
         } else {
             Err(EmberTroveError::NotFound(format!("person {id} not found")))
@@ -1851,10 +1861,63 @@ impl crate::repo::person::PersonRepo for StubPersonRepo {
         owner: &str,
         id: common::id::PersonId,
         input: &common::person::PersonInput,
+        expected: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<common::person::Person, EmberTroveError> {
         // Only the caller's own two people exist.
         self.get(owner, id).await?;
+        // A version that is not the stored one (the stub's people are at
+        // the epoch) is the real repo's 412.
+        if expected.is_some_and(|at| at != chrono::DateTime::UNIX_EPOCH) {
+            return Err(EmberTroveError::PreconditionFailed(
+                crate::repo::person::PERSON_CHANGED.into(),
+            ));
+        }
         stub_person_write(owner, id, input)
+    }
+    async fn merge_plan(
+        &self,
+        owner: &str,
+        kept: common::id::PersonId,
+        gone: common::id::PersonId,
+    ) -> Result<common::person_merge::MergePlan, EmberTroveError> {
+        // SECURITY: as the real read, both must be the caller's own, and
+        // either one missing is one answer that names neither.
+        let none = |_| EmberTroveError::NotFound("person not found".into());
+        let kept_person = self.get(owner, kept).await.map_err(none)?;
+        let gone_person = self.get(owner, gone).await.map_err(none)?;
+        let planned = common::person_merge::plan(&kept_person, &gone_person, &[], &[], &[]);
+        Ok(common::person_merge::MergePlan {
+            kept,
+            gone,
+            kept_name: kept_person.display_name,
+            gone_name: gone_person.display_name,
+            result: planned.result,
+            report: planned.report,
+            notes_line: planned.notes_line,
+            moved: 0,
+            joined: Vec::new(),
+            mentioned_in: 0,
+            refusals: planned.refusals,
+            token: STUB_MERGE_TOKEN.into(),
+        })
+    }
+    async fn merge(
+        &self,
+        owner: &str,
+        kept: common::id::PersonId,
+        gone: common::id::PersonId,
+        confirm: &str,
+    ) -> Result<common::person::Person, EmberTroveError> {
+        let none = |_| EmberTroveError::NotFound("person not found".into());
+        let kept_person = self.get(owner, kept).await.map_err(none)?;
+        self.get(owner, gone).await.map_err(none)?;
+        if confirm != STUB_MERGE_TOKEN {
+            return Err(EmberTroveError::PreconditionFailed(
+                crate::repo::person_merge::PLAN_CHANGED.into(),
+            ));
+        }
+        MERGES.with(|m| m.borrow_mut().push((owner.to_string(), kept, gone)));
+        Ok(kept_person)
     }
     async fn delete(&self, _: &str, _: common::id::PersonId) -> Result<(), EmberTroveError> {
         unimplemented!()
@@ -5884,6 +5947,156 @@ async fn someone_elses_person_is_a_404_like_a_missing_one() {
         (status, body["display_name"].as_str()),
         (StatusCode::OK, Some("Ada"))
     );
+}
+
+/// S8c (#363; ONTOLOGY §7.1): merging two people is their owner's alone.
+/// Either id being another account's, or nobody's, is the same 404, for
+/// the preview and for the merge, and nothing is merged.
+#[tokio::test]
+async fn a_merge_is_for_the_owner_of_both_people() {
+    let ada = Uuid::from_u128(AZ_PERSON);
+    let bea = Uuid::from_u128(AZ_SECOND_PERSON);
+    // Any id the stub registry doesn't hold for this account.
+    let foreign = Uuid::from_u128(0x5e_0f01);
+    let missing = Uuid::new_v4();
+    MERGES.with(|m| m.borrow_mut().clear());
+    let words = |body: &serde_json::Value| body["error"].as_str().unwrap_or_default().to_string();
+    let mut answers = Vec::new();
+    for (kept, gone) in [
+        (ada, foreign),
+        (foreign, ada),
+        (ada, missing),
+        (missing, ada),
+    ] {
+        let preview = people_call(
+            "GET",
+            &format!("/people/{kept}/merge?from={gone}"),
+            serde_json::json!({}),
+        )
+        .await;
+        let merge = people_call(
+            "POST",
+            &format!("/people/{kept}/merge"),
+            serde_json::json!({ "from": gone, "confirm": STUB_MERGE_TOKEN }),
+        )
+        .await;
+        assert_eq!(preview.0, StatusCode::NOT_FOUND, "{kept} <- {gone}");
+        assert_eq!(merge.0, StatusCode::NOT_FOUND, "{kept} <- {gone}");
+        // No id in the words: what is said can't tell the cases apart.
+        for said in [words(&preview.1), words(&merge.1)] {
+            assert!(
+                said.split(' ').all(|w| Uuid::parse_str(w).is_err()),
+                "names an id: {said}"
+            );
+            answers.push(said);
+        }
+    }
+    answers.dedup();
+    assert_eq!(answers.len(), 1, "one answer for all of them: {answers:?}");
+    assert!(MERGES.with(|m| m.borrow().is_empty()));
+
+    // A person and themself: refused before anything is read.
+    for (method, uri, body) in [
+        (
+            "GET",
+            format!("/people/{ada}/merge?from={ada}"),
+            serde_json::json!({}),
+        ),
+        (
+            "POST",
+            format!("/people/{ada}/merge"),
+            serde_json::json!({ "from": ada, "confirm": STUB_MERGE_TOKEN }),
+        ),
+    ] {
+        let (status, _) = people_call(method, &uri, body).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{method} {uri}");
+    }
+    // A token that is not the plan's: 412, and nothing is merged. One
+    // that is no token at all is not passed on.
+    let (status, _) = people_call(
+        "POST",
+        &format!("/people/{ada}/merge"),
+        serde_json::json!({ "from": bea, "confirm": "another-plan" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    let (status, _) = people_call(
+        "POST",
+        &format!("/people/{ada}/merge"),
+        serde_json::json!({ "from": bea, "confirm": "x".repeat(65) }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(MERGES.with(|m| m.borrow().is_empty()));
+
+    // The owner's own two: the plan, with how many nodes mention the one
+    // who goes (as their "Mentioned in" list counts them), and the merge.
+    viewers_seen();
+    let (status, plan) = people_call(
+        "GET",
+        &format!("/people/{ada}/merge?from={bea}"),
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plan}");
+    assert_eq!(plan["kept_name"], "Ada");
+    assert_eq!(plan["gone_name"], "Bea");
+    assert_eq!(plan["token"], STUB_MERGE_TOKEN);
+    assert_eq!(plan["notes_line"], "Merged in: name \u{201c}Bea\u{201d}.");
+    // SECURITY: the count is the caller's own view, never everyone's.
+    assert_eq!(plan["mentioned_in"], 1);
+    assert_all_seen_as(Some("test-sub"));
+    let (status, kept) = people_call(
+        "POST",
+        &format!("/people/{ada}/merge"),
+        serde_json::json!({ "from": bea, "confirm": STUB_MERGE_TOKEN }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["id"], ada.to_string());
+    // SECURITY: asked of the repo as the caller in person.
+    assert_eq!(
+        MERGES.with(|m| m.borrow().clone()),
+        [(
+            "test-sub".to_string(),
+            common::id::PersonId(ada),
+            common::id::PersonId(bea)
+        )]
+    );
+}
+
+/// S8c: a save of a person carries the version it was based on, so a tab
+/// that is out of date can't undo a merge (or any other change).
+#[tokio::test]
+async fn a_person_save_from_an_older_version_is_refused() {
+    let ada = Uuid::from_u128(AZ_PERSON);
+    let body = |version: Option<&str>| {
+        let mut body = serde_json::json!({ "display_name": "Ada", "addresses": [] });
+        if let Some(at) = version {
+            body["expected_updated_at"] = at.into();
+        }
+        body
+    };
+    let (status, _) = people_call(
+        "PUT",
+        &format!("/people/{ada}"),
+        body(Some("2026-11-19T10:00:00Z")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    // At the version the person is at, and from a page that sends none.
+    for version in [Some("1970-01-01T00:00:00Z"), None] {
+        let (status, saved) = people_call("PUT", &format!("/people/{ada}"), body(version)).await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+    }
+    // Another account's person is a 404 whatever version is sent.
+    let (status, _) = people_call(
+        "PUT",
+        &format!("/people/{}", Uuid::from_u128(0x5e_0f01)),
+        body(Some("2026-11-19T10:00:00Z")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 /// S9 (#360; ONTOLOGY §7.3, §14): "Mentioned in" is the person's owner's

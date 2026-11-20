@@ -168,6 +168,12 @@ pub struct PersonBody {
     pub address: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// The person's `updated_at` as the sender read it (S8c, #363). When
+    /// it is sent, the save is applied only if the person is still at
+    /// that version; else 412 and nothing is written. Without it, a tab
+    /// that is out of date could undo a merge by saving over it.
+    #[serde(default)]
+    pub expected_updated_at: Option<DateTime<Utc>>,
 }
 
 impl PersonBody {

@@ -6,6 +6,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Merging two saved people, in the API** (S8c, #363; ONTOLOGY §7.1).
+  - `GET /api/people/{id}/merge?from=` answers what the merge would do,
+    and `POST /api/people/{id}/merge` carries it out if that is still
+    the plan. One transaction; owner only.
+  - The kept person's values stand, blanks are filled, lists grow. What
+    the one who goes had otherwise (a name, a company, a position) is
+    kept as one line in the kept person's notes.
+  - Their memberships move. Where both are on one node, the kept
+    person's role stands, the notes are joined, and the other role is
+    said in the plan.
+  - **No text is changed.** The id of the one who goes becomes an alias
+    of the one kept (migration 058): every mention of either shows the
+    kept person, in old versions and on other people's nodes too.
+  - A merge that would pass a limit (10 entries in a list, 10,000
+    characters of notes) is refused in words. An address a third person
+    lists too is left out and said.
+  - Backup format 15 carries the aliases; older archives still restore.
+
+### Changed
+- `PUT /api/people/{id}` takes `expected_updated_at`: a save from a tab
+  that is out of date is refused (412) instead of writing over what
+  changed. A save that sends none still goes through, except over a
+  person someone was merged into.
+
+### Security
+- A merge is its owner's alone, with no admin bypass: an id of another
+  account, in either place, reads like a missing person, and is never
+  locked or waited on.
+- A person is named to a reader only under the ids the text in front
+  of them holds, under the same rule as any name. A text that holds
+  only the id of someone merged away never tells anyone but the
+  person's owner what their id is now.
+
 ## [3.32.0] - 2026-11-19
 
 ### Added
