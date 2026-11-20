@@ -10,6 +10,14 @@
 //! plain-text views all go through [`mentions`]. Who may make a mention,
 //! and to whom a person is named, are the API's rules
 //! (`api/src/repo/mention.rs`); nothing here decides that.
+//!
+//! The page shows a mention only where this scanner **and** the Markdown
+//! parser read one (`ui/src/mention.rs`). Where they differ (a token in
+//! an image's alt text, or inside raw HTML) a row may exist and the page
+//! names nobody there: it can understate, never the other way. (The
+//! page takes its mentions from this scanner's reading of the text as
+//! written, and finds each again by position once the wiki links are
+//! written as HTML. It never scans the rewritten text.)
 
 use std::ops::Range;
 
@@ -40,8 +48,8 @@ pub struct Mention<'a> {
 /// Every mention in `text`, in order. The one scanner.
 ///
 /// - `@[label](person:id)`, on one line.
-/// - The label is not empty and holds no `[`, `]` or backtick
-///   ([`mention_token`] never writes one).
+/// - The label is not empty and holds no `[`, `]`, backtick, backslash
+///   or `<` ([`mention_token`] never writes one).
 /// - The id has one spelling: 36 characters, lower case, hyphenated.
 ///   An upper-case or braced UUID is plain text. One spelling means two
 ///   tokens for one person can't look different to the sync and the
@@ -77,10 +85,15 @@ pub fn mentions(text: &str) -> Vec<Mention<'_>> {
 fn token_at(text: &str, open: usize) -> Option<Mention<'_>> {
     let label_start = open + OPEN.len();
     let rest = text.get(label_start..)?;
-    // The label ends at the first `]`. A `[`, a backtick or a line break
-    // before it means this is not a mention, and the look stops there:
-    // never to the end of a long line for each `@[` on it.
-    let label_len = rest.find([']', '[', '`', '\n'])?;
+    // The label ends at the first `]`. A `[`, a backtick, a backslash,
+    // a `<` or a line break (a lone CR too: a text box makes it a line
+    // feed) before it means this is not a mention, and
+    // the look stops there: never to the end of a long line for each
+    // `@[` on it. (A backslash: Markdown would read `\]` as part of the
+    // label. A `<`: Markdown would read a tag there, and a tag's own
+    // text can hold a `]`. The page shows a mention only where both
+    // readers agree.)
+    let label_len = rest.find([']', '[', '`', '\\', '<', '\n', '\r'])?;
     if !rest.get(label_len..)?.starts_with(']') {
         return None;
     }
@@ -178,8 +191,8 @@ pub fn mention_label(name: &str) -> String {
     let swapped: String = name
         .chars()
         .map(|c| match c {
-            '[' => '(',
-            ']' => ')',
+            '[' | '<' => '(',
+            ']' | '>' => ')',
             '`' => '\'',
             '\\' | '|' => '/',
             c if c.is_control() => ' ',
@@ -213,52 +226,20 @@ pub fn plain(text: &str) -> String {
     replace_mentions(text, |m| format!("@{}", m.label))
 }
 
-/// `text` with the labels of the author's own people brought up to
-/// their current names, and how many labels changed. `None` when every
-/// label of theirs is current.
-///
-/// Only people in `own_names` are touched: someone else's label is what
-/// that person wrote, and their names are not this author's to know.
-/// The result is offered to the author as an edit; nothing rewrites
-/// text on its own.
+/// Whether an `input` event of this `inputType` is the person typing:
+/// a character put in or taken out at the cursor. A paste, a drop, an
+/// undo or a redo changes the text too, and can leave the cursor at the
+/// end of an `@bob` nobody just typed: the picker then shows its list
+/// with nobody ready, as it does when the cursor is moved there. An
+/// event with no type (a script set the value) is not typing.
 #[must_use]
-pub fn refresh_labels(text: &str, own_names: &[(PersonId, String)]) -> Option<(String, usize)> {
-    let mut changed = 0;
-    let refreshed = replace_mentions(text, |m| {
-        let current = own_names
-            .iter()
-            .find(|(id, _)| *id == m.person_id)
-            .map(|(_, name)| mention_label(name));
-        match current {
-            Some(label) if label != m.label => {
-                changed += 1;
-                mention_token(&label, m.person_id)
-            }
-            _ => text.get(m.range.clone()).unwrap_or_default().to_string(),
-        }
-    });
-    (changed > 0).then_some((refreshed, changed))
+pub fn typed_by(input_type: &str) -> bool {
+    matches!(
+        input_type,
+        "insertText" | "insertCompositionText" | "insertFromComposition"
+    ) || input_type.starts_with("deleteContent")
+        || input_type.starts_with("deleteWord")
 }
-
-/// `text` as HTML in which nothing is markup, for a name put into
-/// Markdown before it is rendered: every character that is not a letter
-/// or a digit is written as a numeric entity. A name such as
-/// `[x](https://e)` or `*a*` would otherwise be read as Markdown inside
-/// the mention.
-#[must_use]
-pub fn html_inert(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if c.is_alphanumeric() {
-            out.push(c);
-        } else {
-            out.push_str(&format!("&#{};", u32::from(c)));
-        }
-    }
-    out
-}
-
-// ── The picker ─────────────────────────────────────────────────────────
 
 /// JavaScript counts string positions in UTF-16 code units and Rust in
 /// UTF-8 bytes. Slicing by a UTF-16 offset can land inside a character
@@ -337,10 +318,43 @@ pub fn mention_query_at(text: &str, cursor: usize) -> Option<MentionQuery> {
     })
 }
 
-/// `text` with the mention being typed (`typed`, from
-/// [`mention_query_at`] at this `cursor`) replaced by the token for the
-/// person picked, and the UTF-16 cursor position after it. A space
-/// follows the token unless white space is there already.
+/// A pick, as an edit of the text box: replace the UTF-16 range
+/// `from..to` (the `@` and what was typed after it) with `insert`.
+/// Given to the browser as one edit, it can be undone with Ctrl+Z.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionEdit {
+    pub from: usize,
+    pub to: usize,
+    pub insert: String,
+}
+
+/// The edit that puts a mention of the person picked where the mention
+/// being typed is (`typed`, from [`mention_query_at`] at this `cursor`).
+/// A space follows the token unless white space is there already.
+#[must_use]
+pub fn mention_edit(
+    text: &str,
+    typed: &MentionQuery,
+    cursor: usize,
+    name: &str,
+    id: PersonId,
+) -> MentionEdit {
+    let cut = utf16_to_utf8_offset(text, cursor).max(typed.at);
+    let tail = text.get(cut..).unwrap_or_default();
+    let space = if tail.starts_with(char::is_whitespace) {
+        ""
+    } else {
+        " "
+    };
+    MentionEdit {
+        from: utf8_to_utf16_offset(text, typed.at),
+        to: utf8_to_utf16_offset(text, cut),
+        insert: format!("{}{space}", mention_token(name, id)),
+    }
+}
+
+/// `text` after [`mention_edit`], and the UTF-16 cursor position after
+/// what was put in.
 #[must_use]
 pub fn insert_mention(
     text: &str,
@@ -349,19 +363,57 @@ pub fn insert_mention(
     name: &str,
     id: PersonId,
 ) -> (String, usize) {
-    let cut = utf16_to_utf8_offset(text, cursor).max(typed.at);
-    let head = text.get(..typed.at).unwrap_or_default();
-    let tail = text.get(cut..).unwrap_or_default();
-    let space = if tail.starts_with(char::is_whitespace) {
-        ""
-    } else {
-        " "
-    };
-    let inserted = format!("{}{space}", mention_token(name, id));
-    let after = head.len() + inserted.len();
-    let out = format!("{head}{inserted}{tail}");
-    let cursor = utf8_to_utf16_offset(&out, after);
+    let edit = mention_edit(text, typed, cursor, name, id);
+    let head = text
+        .get(..utf16_to_utf8_offset(text, edit.from))
+        .unwrap_or_default();
+    let tail = text
+        .get(utf16_to_utf8_offset(text, edit.to)..)
+        .unwrap_or_default();
+    let out = format!("{head}{}{tail}", edit.insert);
+    let cursor = utf8_to_utf16_offset(&out, head.len() + edit.insert.len());
     (out, cursor)
+}
+
+/// How a person matches what is typed after `@`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PickerMatch {
+    /// A word of their name starts with it: they are who was meant, and
+    /// the first such person is ready for Enter.
+    Name,
+    /// One of their email addresses starts with it: listed, never ready.
+    Email,
+}
+
+/// Whether a person is offered for `query`, and how.
+///
+/// Only the name (from the start of any of its words) and the start of
+/// an email address count. Not a company, a phone number or the middle
+/// of anything: "lunch @12" must not offer whoever has 12 in a phone
+/// number, with Enter then putting them into a text others read. An
+/// empty query offers everyone, with nobody ready.
+#[must_use]
+pub fn picker_match(display_name: &str, emails: &[&str], query: &str) -> Option<PickerMatch> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Some(PickerMatch::Name);
+    }
+    let name = display_name.to_lowercase();
+    let at_a_word = name
+        .char_indices()
+        .filter(|(i, _)| {
+            name.get(..*i)
+                .and_then(|before| before.chars().next_back())
+                .is_none_or(|c| !c.is_alphanumeric())
+        })
+        .any(|(i, _)| name.get(i..).is_some_and(|rest| rest.starts_with(&query)));
+    if at_a_word {
+        return Some(PickerMatch::Name);
+    }
+    emails
+        .iter()
+        .any(|e| e.trim().to_lowercase().starts_with(&query))
+        .then_some(PickerMatch::Email)
 }
 
 /// `byte_offset`, moved to the end of the mention it is inside of, if
@@ -515,6 +567,13 @@ mod tests {
             format!("@[A[da](person:{ADA})"),
             format!("@[A`da](person:{ADA})"),
             format!("@[Ada\nLovelace](person:{ADA})"),
+            format!("@[Ada\rLovelace](person:{ADA})"),
+            // Markdown reads `\]` as part of a longer label.
+            format!("@[Ada\\](person:{ADA})"),
+            format!("@[A\\da](person:{ADA})"),
+            // Markdown reads a tag at `<`, and a tag can hold a `]`.
+            format!("@[A <b>da</b>](person:{ADA})"),
+            format!("@[A<da](person:{ADA})"),
         ] {
             assert!(mentions(&not_one).is_empty(), "{not_one}");
         }
@@ -566,6 +625,10 @@ mod tests {
         }
         assert_eq!(mention_label("  Ada   Lovelace "), "Ada Lovelace");
         assert_eq!(mention_label("A[d]a"), "A(d)a");
+        assert_eq!(
+            mention_label("Ada <ada@example.com>"),
+            "Ada (ada@example.com)"
+        );
         assert_eq!(mention_label(""), "person");
     }
 
@@ -581,35 +644,30 @@ mod tests {
     }
 
     #[test]
-    fn only_own_labels_are_refreshed() {
-        let text = format!("@[Ada Lovelace](person:{ADA}) met @[Bea](person:{BEA}).");
-        let own = [(id(ADA), "Ada King".to_string())];
-        let (fresh, changed) = refresh_labels(&text, &own).expect("stale");
-        assert_eq!(
-            fresh,
-            format!("@[Ada King](person:{ADA}) met @[Bea](person:{BEA}).")
-        );
-        assert_eq!(changed, 1);
-        // Current already, or nobody of theirs: nothing to offer.
-        assert_eq!(refresh_labels(&fresh, &own), None);
-        assert_eq!(refresh_labels(&text, &[]), None);
-        // A name that needs tidying counts as current once tidied.
-        let odd = [(id(ADA), " Ada  [King] ".to_string())];
-        let (fresh, _) = refresh_labels(&text, &odd).expect("stale");
-        assert!(fresh.starts_with("@[Ada (King)](person:"), "{fresh}");
-        assert_eq!(refresh_labels(&fresh, &odd), None);
-    }
-
-    #[test]
-    fn a_name_is_never_markup() {
-        assert_eq!(html_inert("Ada"), "Ada");
-        assert_eq!(html_inert("Ada L."), "Ada&#32;L&#46;");
-        let hostile = html_inert("[x](https://e) *a* <b> &amp; `c`");
-        for c in ['[', ']', '(', ')', '*', '<', '>', '`', ' ', '_'] {
-            assert!(!hostile.contains(c), "{c:?} in {hostile}");
+    fn typing_is_told_from_a_paste_or_an_undo() {
+        for typed in [
+            "insertText",
+            "insertCompositionText",
+            // What Safari sends when an input method commits.
+            "insertFromComposition",
+            "deleteContentBackward",
+            "deleteContentForward",
+            "deleteWordBackward",
+        ] {
+            assert!(typed_by(typed), "{typed}");
         }
-        // Letters of any script stay readable.
-        assert_eq!(html_inert("José李"), "José李");
+        for not in [
+            "insertFromPaste",
+            "insertFromDrop",
+            "insertFromYank",
+            "insertReplacementText",
+            "historyUndo",
+            "historyRedo",
+            "insertLineBreak",
+            "",
+        ] {
+            assert!(!typed_by(not), "{not}");
+        }
     }
 
     #[test]
@@ -685,6 +743,56 @@ mod tests {
         assert_eq!(out, format!("Met @[Ada](person:{ADA}) yesterday"));
         assert_eq!(after, format!("Met @[Ada](person:{ADA})").len());
         assert_eq!(mentions(&out).len(), 1);
+    }
+
+    #[test]
+    fn a_pick_is_one_edit_of_the_text_box() {
+        let text = "👉 Met @ad yesterday";
+        let cursor = "👉 Met @ad".encode_utf16().count();
+        let typed = mention_query_at(text, cursor).expect("typing");
+        let edit = mention_edit(text, &typed, cursor, "Ada", id(ADA));
+        assert_eq!(
+            edit,
+            MentionEdit {
+                from: "👉 Met ".encode_utf16().count(),
+                to: cursor,
+                insert: format!("@[Ada](person:{ADA})"),
+            }
+        );
+        // At the end of the text a space follows.
+        let text = "@ad";
+        let typed = mention_query_at(text, 3).expect("typing");
+        assert!(
+            mention_edit(text, &typed, 3, "Ada", id(ADA))
+                .insert
+                .ends_with(") ")
+        );
+    }
+
+    #[test]
+    fn the_picker_offers_people_by_name_or_the_start_of_an_address() {
+        let ada = |q: &str| {
+            picker_match(
+                "Ada Lovelace-King",
+                &["ada.l@example.com", "countess@work.example"],
+                q,
+            )
+        };
+        assert_eq!(ada(""), Some(PickerMatch::Name));
+        assert_eq!(ada("ad"), Some(PickerMatch::Name));
+        assert_eq!(ada("ADA LOVE"), Some(PickerMatch::Name));
+        assert_eq!(ada("love"), Some(PickerMatch::Name));
+        assert_eq!(ada("king"), Some(PickerMatch::Name));
+        assert_eq!(ada("countess"), Some(PickerMatch::Email));
+        // Not the middle of a word, the domain, or anything else of them.
+        assert_eq!(ada("da"), None);
+        assert_eq!(ada("example"), None);
+        assert_eq!(ada("ovelace"), None);
+        // A phone number or a company is no way to be offered.
+        assert_eq!(picker_match("Bo", &[], "12"), None);
+        assert_eq!(picker_match("Bo", &[], "acme"), None);
+        // Name matches sort before address matches.
+        assert!(PickerMatch::Name < PickerMatch::Email);
     }
 
     #[test]

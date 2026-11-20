@@ -279,7 +279,11 @@ const CONCEPTS: &[Concept] = &[
                nothing is saved until you save there. On a Project it can put \
                that person on the Project instead, with the role and note you \
                typed. People who shared an address before this rule stay as \
-               they are; Data health lists them.",
+               they are; Data health lists them. To mention someone in text, \
+               type @ in a node\u{2019}s body or in a note and pick them: the page \
+               shows their name as a link to their card, and their card lists \
+               where they are mentioned. Someone you share the node with sees \
+               the name and nothing else of them.",
     },
     Concept {
         title: "Captures",

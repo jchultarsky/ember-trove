@@ -22,8 +22,10 @@
 //! tracking-pixel — relevant now that one owner's content may be rendered in
 //! another user's (or an admin's) session.
 
-use crate::wikilink::preprocess_wikilinks;
+use crate::mention::{Resolved, Token, with_mentions};
+use crate::wikilink::{Moved, preprocess_wikilinks_moved};
 use common::id::NodeId;
+use common::mention::MentionName;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd, html as cmark_html};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -112,19 +114,48 @@ fn sanitize_style(value: &str) -> Option<String> {
 /// - Adds `<span>`, `<div>`, `<input>` (for task-list checkboxes)
 /// - Permits `style` on block/inline elements, with its VALUE filtered to a
 ///   safe CSS-property allowlist (see [`sanitize_style`])
-/// - Permits `data-node-id` on `<a>` and one class each on `<a>` and
-///   `<span>`: the two the WikiLink renderer writes
+/// - Permits `data-node-id` on `<a>`, and by name the classes the
+///   renderers themselves write: the WikiLink renderer's two and the
+///   mention renderer's two (`crate::mention`).
 ///
 /// SECURITY: `class` is never allowed as a free attribute. The app's own
 /// stylesheet has classes that cover the screen (the loader's `etl-root`,
 /// Tailwind's `fixed inset-0`), so any class a writer could choose is the
 /// overlay `sanitize_style` exists to stop (2026-11-10).
 fn sanitizer() -> ammonia::Builder<'static> {
+    sanitizer_naming(None)
+}
+
+/// [`sanitizer`], for a render that names people: it also allows that
+/// render's own class (`mention::Resolved::mark`) on a mention's `<a>`
+/// and `<span>`.
+///
+/// SECURITY: the class is random and made for one render, so no writer
+/// can have typed it. The render's check of its result looks for it
+/// (`Resolved::intact`). Never allow a class here that a text could
+/// know.
+fn sanitizer_naming(mark: Option<&str>) -> ammonia::Builder<'_> {
     let mut b = ammonia::Builder::new();
+    if let Some(mark) = mark {
+        b.add_allowed_classes("a", std::iter::once(mark));
+        b.add_allowed_classes("span", std::iter::once(mark));
+    }
     b.add_tags(&["span", "div", "input"]);
     b.add_tag_attributes("a", &["data-node-id"]);
-    b.add_allowed_classes("a", &["wikilink"]);
-    b.add_allowed_classes("span", &["wikilink-unresolved"]);
+    // By name, and no others: the classes the WikiLink renderer and the
+    // mention renderer write. None of them places or sizes anything
+    // (`input.css`). A writer can type them too, and so give words of
+    // their own the plain look of a name; the look of a link to a person
+    // is styled only for an element with a render's own class
+    // (`sanitizer_naming`) that leads to `/people/…`.
+    //
+    // SECURITY: this sanitizer is the LAST thing that touches the HTML.
+    // Never change its output afterwards (see `crate::mention`).
+    b.add_allowed_classes("a", &["wikilink", "mention"]);
+    b.add_allowed_classes(
+        "span",
+        &["wikilink-unresolved", "mention", "mention-unresolved"],
+    );
     b.add_tag_attributes("input", &["type", "checked", "disabled"]);
     b.add_tag_attributes("img", &["src", "alt", "width", "height", "style"]);
     for &tag in STYLED_ELEMENTS {
@@ -147,14 +178,162 @@ fn sanitizer() -> ammonia::Builder<'static> {
 /// Render Markdown with WikiLink resolution.
 ///
 /// `[[title]]` and `[[title|display]]` are first expanded by
-/// [`preprocess_wikilinks`], then rendered with pulldown-cmark, and finally
-/// sanitised by ammonia.
-pub fn render_markdown(source: &str, title_map: &HashMap<String, NodeId>) -> String {
-    let preprocessed = preprocess_wikilinks(source, title_map);
-    let parser = Parser::new_ext(&preprocessed, MD_OPTIONS);
+/// [`preprocess_wikilinks_moved`], then rendered with pulldown-cmark, and
+/// finally sanitised by ammonia.
+///
+/// Mentions of people (S9) are shown for the people in `people`: those
+/// the reader may be told the name of ([`crate::mention`]).
+pub fn render_markdown(
+    source: &str,
+    title_map: &HashMap<String, NodeId>,
+    people: &[MentionName],
+) -> String {
+    render_with_mentions(source, Some(title_map), people)
+}
+
+/// `html` as the sanitizer leaves it, for tests. (Cleaning a renderer's
+/// output again changes nothing a writer could use: the mention tests
+/// hold their texts to that. It is not true of every text: the HTML
+/// parser can shape a tree differently the second time.)
+#[cfg(test)]
+pub(crate) fn sanitized(html: &str) -> String {
+    sanitizer().clean(html).to_string()
+}
+
+/// [`sanitized`] by a sanitizer that allows `mark`, for tests.
+#[cfg(test)]
+pub(crate) fn sanitized_naming(html: &str, mark: &str) -> String {
+    sanitizer_naming(Some(mark)).clean(html).to_string()
+}
+
+/// How a text's own raw HTML is written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RawHtml {
+    /// As HTML, for the sanitizer to judge. The usual way.
+    AsWritten,
+    /// As the characters it is made of. For a text whose HTML does not
+    /// leave a mention whole: with nothing of the writer's parsed as
+    /// HTML, there is no attribute for one to fall into.
+    ///
+    /// SECURITY: the text given to the Markdown parser is the same in
+    /// both ways, wiki links written and all; only what is done with the
+    /// parser's HTML events differs. So Markdown reads the same links in
+    /// both, and a mention in the one is a mention in the other. (Were
+    /// the wiki links left as typed here, `[[T]]` in a link's address
+    /// would make an address of what was none, with a token in it.)
+    AsText,
+}
+
+/// A text ready for the Markdown parser: its wiki links written as HTML
+/// (where it has any), and where each mention of a person in the text
+/// **as written** is in it.
+struct Prepared {
+    text: String,
+    tokens: Vec<Token>,
+    moved: Moved,
+}
+
+fn prepare(source: &str, title_map: Option<&HashMap<String, NodeId>>) -> Prepared {
+    let (text, moved) = match title_map {
+        Some(titles) => preprocess_wikilinks_moved(source, titles),
+        None => (source.to_string(), Moved::nowhere()),
+    };
+    Prepared {
+        tokens: Token::all(source, &moved),
+        text,
+        moved,
+    }
+}
+
+/// The parsed events of a prepared text, with each mention of a person
+/// replaced by what `people` lets the reader see ([`with_mentions`]),
+/// and what was written for them.
+fn events_with_mentions<'a>(
+    prepared: &'a Prepared,
+    people: &[MentionName],
+    raw: RawHtml,
+) -> (Vec<Event<'a>>, Resolved) {
+    let events = Parser::new_ext(&prepared.text, MD_OPTIONS)
+        .into_offset_iter()
+        .map(|(event, range)| {
+            let event = match event {
+                // The tags of a wiki link are the app's own, and stay.
+                Event::InlineHtml(html)
+                    if raw == RawHtml::AsText && !prepared.moved.wrote(&range) =>
+                {
+                    Event::Text(html)
+                }
+                Event::Html(html) if raw == RawHtml::AsText => Event::Text(html),
+                Event::Start(Tag::HtmlBlock) if raw == RawHtml::AsText => {
+                    Event::Start(Tag::Paragraph)
+                }
+                Event::End(TagEnd::HtmlBlock) if raw == RawHtml::AsText => {
+                    Event::End(TagEnd::Paragraph)
+                }
+                event => event,
+            };
+            (event, range)
+        })
+        .collect();
+    with_mentions(events, &prepared.tokens, &prepared.moved, people)
+}
+
+/// A rendering whose mentions are whole.
+///
+/// `render` writes and sanitizes one attempt. The text is tried as
+/// written; if that leaves a mention not whole (`Resolved::intact`), with
+/// its raw HTML as text. SECURITY: never return an attempt that failed
+/// the check. Should every attempt fail (none has), nothing of the text
+/// is rendered.
+fn checked<T>(
+    source: &str,
+    title_map: Option<&HashMap<String, NodeId>>,
+    people: &[MentionName],
+    render: impl Fn(&Prepared, &[MentionName], RawHtml) -> (T, Resolved),
+    html_of: impl Fn(&T) -> &str,
+) -> T {
+    let prepared = prepare(source, title_map);
+    for (raw, people) in [
+        (RawHtml::AsWritten, people),
+        (RawHtml::AsText, people),
+        // Not reached by any text found: with no raw HTML, Markdown
+        // writes each mention where the HTML parser reads an element.
+        (RawHtml::AsText, &[]),
+    ] {
+        let (out, resolved) = render(&prepared, people, raw);
+        let sanitizer = sanitizer_naming(Some(resolved.mark()));
+        if resolved.intact(html_of(&out), |h| sanitizer.clean(h).to_string()) {
+            return out;
+        }
+    }
+    // Nothing held. Show no text of it at all rather than one unchecked.
+    let nothing = Prepared {
+        text: String::new(),
+        tokens: Vec::new(),
+        moved: Moved::nowhere(),
+    };
+    render(&nothing, &[], RawHtml::AsText).0
+}
+
+/// One attempt at [`render_markdown`] / [`render_note`]: parse, replace
+/// the mentions among the events, write the HTML, and sanitize it last.
+fn html_of(prepared: &Prepared, people: &[MentionName], raw: RawHtml) -> (String, Resolved) {
+    let (events, resolved) = events_with_mentions(prepared, people, raw);
     let mut html_out = String::new();
-    cmark_html::push_html(&mut html_out, parser);
-    sanitizer().clean(&html_out).to_string()
+    cmark_html::push_html(&mut html_out, events.into_iter());
+    let html = sanitizer_naming(Some(resolved.mark()))
+        .clean(&html_out)
+        .to_string();
+    (html, resolved)
+}
+
+/// The shared path of [`render_markdown`] and [`render_note`].
+fn render_with_mentions(
+    source: &str,
+    title_map: Option<&HashMap<String, NodeId>>,
+    people: &[MentionName],
+) -> String {
+    checked(source, title_map, people, html_of, String::as_str)
 }
 
 // ── Body outline (#185) ─────────────────────────────────────────────────────
@@ -201,13 +380,28 @@ impl RenderedBody {
 /// [`render_markdown`] for the node page (#185): the same HTML, except that
 /// every h2/h3 carries an `ember-h-N` id, plus the outline of those headings.
 /// Headings with no text get an id but no outline entry.
-pub fn render_body(source: &str, title_map: &HashMap<String, NodeId>) -> RenderedBody {
-    let preprocessed = preprocess_wikilinks(source, title_map);
+pub fn render_body(
+    source: &str,
+    title_map: &HashMap<String, NodeId>,
+    people: &[MentionName],
+) -> RenderedBody {
+    // As `render_with_mentions`: every mention must have come out whole.
+    // The outline is made with each attempt: it reads the names.
+    checked(source, Some(title_map), people, body_of, |body| {
+        body.html.as_str()
+    })
+}
+
+/// One attempt at [`render_body`].
+fn body_of(prepared: &Prepared, people: &[MentionName], raw: RawHtml) -> (RenderedBody, Resolved) {
+    // A mention in a heading is a `Text` event by now, so the outline
+    // reads it as its name.
+    let (parsed, resolved) = events_with_mentions(prepared, people, raw);
     let mut outline = Vec::new();
     let mut next_id = 0usize;
     // The open h2/h3: (level, id, text so far).
     let mut current: Option<(u8, String, String)> = None;
-    let events = Parser::new_ext(&preprocessed, MD_OPTIONS).map(|ev| match ev {
+    let events = parsed.into_iter().map(|ev| match ev {
         Event::Start(Tag::Heading {
             level: level @ (HeadingLevel::H2 | HeadingLevel::H3),
             classes,
@@ -250,13 +444,20 @@ pub fn render_body(source: &str, title_map: &HashMap<String, NodeId>) -> Rendere
     });
     let mut html_out = String::new();
     cmark_html::push_html(&mut html_out, events);
-    RenderedBody {
-        html: sanitizer().clean(&html_out).to_string(),
-        outline,
-    }
+    let html = sanitizer_naming(Some(resolved.mark()))
+        .clean(&html_out)
+        .to_string();
+    (RenderedBody { html, outline }, resolved)
 }
 
-/// Render Markdown without WikiLink resolution (notes, public share view).
+/// Render a note: Markdown with its mentions of people (S9), for the
+/// people in `people`. Notes have no wiki links (`[[x]]` is text there).
+pub fn render_note(source: &str, people: &[MentionName]) -> String {
+    render_with_mentions(source, None, people)
+}
+
+/// Render Markdown with nothing resolved (a Brief, a template preview).
+/// A mention of a person reads "@name" there, linked to nothing.
 pub fn render_markdown_plain(source: &str) -> String {
     let parser = Parser::new_ext(source, MD_OPTIONS);
     let mut html_out = String::new();
@@ -565,11 +766,40 @@ mod tests {
         assert!(!render_markdown_plain("a\nb").contains("<br"));
     }
 
+    /// SECURITY: a render whose mentions are not whole is never shown.
+    /// No text is known to fail every attempt; if one did, nothing of it
+    /// is rendered, rather than something unchecked.
+    #[test]
+    fn a_text_that_no_attempt_holds_is_rendered_as_nothing() {
+        let attempts = std::cell::Cell::new(0);
+        let out = checked(
+            "words of the text",
+            None,
+            &[],
+            |prepared, _, _| {
+                attempts.set(attempts.get() + 1);
+                // What a render that ignored the check would have shown.
+                (
+                    format!("<p>{}</p>", prepared.text),
+                    if prepared.text.is_empty() {
+                        crate::mention::with_mentions(Vec::new(), &[], &Moved::nowhere(), &[]).1
+                    } else {
+                        Resolved::never_intact()
+                    },
+                )
+            },
+            String::as_str,
+        );
+        // As written, as text, as text with nobody named; then nothing.
+        assert_eq!(attempts.get(), 4);
+        assert_eq!(out, "<p></p>");
+    }
+
     /// SECURITY: `class` is as good as `style` for an overlay. The app's own
     /// stylesheet has classes that cover the whole screen (the loader's
     /// `etl-root`, Tailwind's `fixed inset-0`), so a shared note carrying
     /// `<a class="etl-root" href="https://evil.example">` would put a
-    /// clickable page over the reader's app. Only the two classes the
+    /// clickable page over the reader's app. Only the classes the
     /// renderer itself writes survive.
     #[test]
     fn user_written_classes_are_stripped_from_every_renderer() {
@@ -580,7 +810,7 @@ mod tests {
             r#"<span class="wikilink-unresolved fixed">u</span>"#,
         );
         let outputs = [
-            render_markdown(hostile, &HashMap::new()),
+            render_markdown(hostile, &HashMap::new(), &[]),
             render_markdown_plain(hostile),
             render_capture(hostile),
             render_markdown_inline(hostile),
@@ -592,7 +822,8 @@ mod tests {
             // The text and the link itself stay.
             assert!(html.contains("sign in"), "{html}");
             assert!(html.contains(r#"href="https://example.com""#), "{html}");
-            // The renderer's own two classes are the ones allowed.
+            // The WikiLink renderer's own two classes are among the few
+            // allowed.
             assert!(html.contains(r#"class="wikilink""#), "{html}");
             assert!(html.contains(r#"class="wikilink-unresolved""#), "{html}");
         }
@@ -603,7 +834,7 @@ mod tests {
         let id = NodeId(uuid::Uuid::new_v4());
         // Keys are lower case: links match without regard to case.
         let map = HashMap::from([("rust".to_string(), id)]);
-        let html = render_markdown("[[Rust]] and [[Nowhere]]", &map);
+        let html = render_markdown("[[Rust]] and [[Nowhere]]", &map, &[]);
         assert!(html.contains(r#"class="wikilink""#), "{html}");
         assert!(
             html.contains(&format!(r#"data-node-id="{}""#, id.0)),
@@ -759,7 +990,7 @@ mod tests {
     // ── Body outline (#185) ──
 
     fn body(src: &str) -> RenderedBody {
-        render_body(src, &HashMap::new())
+        render_body(src, &HashMap::new(), &[])
     }
 
     #[test]
@@ -806,6 +1037,7 @@ mod tests {
         let r = render_body(
             "## Ask **[[Alice|her]]** about `code` & [docs](https://x)\n",
             &map,
+            &[],
         );
         assert_eq!(r.outline[0].text, "Ask her about code & docs");
     }
@@ -841,8 +1073,8 @@ mod tests {
     fn body_html_matches_render_markdown_apart_from_heading_ids() {
         let src = "## A\n\nSome *text* with [[x]].\n\n- [ ] t\n";
         let map = HashMap::new();
-        let plain = render_markdown(src, &map);
-        let with_ids = render_body(src, &map)
+        let plain = render_markdown(src, &map, &[]);
+        let with_ids = render_body(src, &map, &[])
             .html
             .replace(r#" id="ember-h-0""#, "");
         assert_eq!(plain, with_ids);
@@ -859,7 +1091,7 @@ mod tests {
         assert!(!r.html.contains("node-tasks-heading"), "{}", r.html);
         assert!(!r.html.contains("id="), "{}", r.html);
         // The plain renderers keep no ids at all.
-        assert!(!render_markdown("## A\n", &HashMap::new()).contains("id="));
+        assert!(!render_markdown("## A\n", &HashMap::new(), &[]).contains("id="));
         assert!(!render_markdown_plain("## A\n").contains("id="));
     }
 }

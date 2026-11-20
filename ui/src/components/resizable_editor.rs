@@ -15,6 +15,8 @@
 use leptos::prelude::*;
 use leptos::wasm_bindgen::JsCast;
 
+use crate::components::mention_picker::{Dock, MentionPicker};
+
 const DEFAULT_CLASS: &str = "w-full px-3 py-2 rounded-lg border border-stone-200 dark:border-stone-700 \
     bg-stone-50 dark:bg-stone-800 text-sm text-stone-800 dark:text-stone-200 \
     placeholder-stone-400 dark:placeholder-stone-600 resize-y min-h-[64px] \
@@ -57,6 +59,11 @@ pub fn ResizableEditor(
     /// the window), never shorter than the class makes it.
     #[prop(optional)]
     fit_to_text: bool,
+    /// The `@` picker (S9): given for a note's editor, where text may
+    /// mention people. It must be made for this `value` and `node_ref`.
+    /// Task and capture editors pass none.
+    #[prop(optional)]
+    mentions: Option<MentionPicker>,
 ) -> impl IntoView {
     // Track the last reported height so a plain click (mouseup without a resize)
     // doesn't fire a redundant save.
@@ -104,15 +111,41 @@ pub fn ResizableEditor(
     };
 
     view! {
-        <div class="w-full">
+        // Relative: the `@` list docks under the box.
+        <div class="w-full relative">
+            {mentions.map(|picker| picker.view(Dock::Below))}
             <textarea
                 node_ref=textarea_ref
                 class=cls
                 style=style
                 placeholder=placeholder
                 aria-label=aria_label
+                aria-autocomplete=mentions.map(|_| "list")
+                aria-controls=move || mentions.and_then(|picker| picker.controls())
+                aria-activedescendant=move || mentions.and_then(|picker| picker.active_descendant())
                 prop:value=move || value.get()
-                on:input=move |ev| value.set(event_target_value(&ev))
+                on:input=move |ev| {
+                    value.set(event_target_value(&ev));
+                    if let Some(picker) = mentions {
+                        picker.after_input(&ev);
+                    }
+                }
+                on:click=move |_| {
+                    if let Some(picker) = mentions {
+                        picker.after_click();
+                    }
+                }
+                // An arrow, Home or End moves the cursor without an `input`.
+                on:keyup=move |ev: leptos::ev::KeyboardEvent| {
+                    if let Some(picker) = mentions {
+                        picker.on_keyup(&ev);
+                    }
+                }
+                on:blur=move |_| {
+                    if let Some(picker) = mentions {
+                        picker.close();
+                    }
+                }
                 // Native corner-grip path: report the height after a drag.
                 on:mouseup=move |ev| {
                     if let Some(target) = ev.target()
@@ -122,6 +155,13 @@ pub fn ResizableEditor(
                     }
                 }
                 on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                    // The `@` list takes its keys first: its Escape must
+                    // not reach `on_escape`, which discards the edit.
+                    if let Some(picker) = mentions
+                        && picker.on_keydown(&ev)
+                    {
+                        return;
+                    }
                     if let Some(cb) = on_submit
                         && ev.key() == "Enter"
                         && (ev.ctrl_key() || ev.meta_key())

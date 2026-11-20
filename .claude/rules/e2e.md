@@ -234,6 +234,44 @@ CI job is too slow a feedback loop for selector work.
   be given one address through the API any more; a spec that needs a
   pair has no way to make one (the Postgres tests use the restore's
   setting).
+- **Mentions** (S9, mentions.spec.ts):
+  - The list is `mention-picker`, its rows `getByRole('option')`. Type
+    with `pressSequentially` (a `fill` puts the cursor nowhere useful
+    and fires one input). The person's name holds the stamp, so type
+    `@Ada <stamp>` minus a few characters to get exactly one option.
+  - On the page: `a.mention` (the reader's own person),
+    `span.mention` (someone else's, name only), `.mention-unresolved`.
+    Other test ids: `mentioned-in`, `mentioned-in-row`.
+  - What a reader is told is `GET /api/nodes/{id}` → `mentions`; assert
+    it with `toEqual` on the whole list, so an extra field fails.
+  - A row is made only by a save that **adds** the token, made by the
+    person's owner: to set up a real mention through the API, create
+    the node with the token in its body, or save the body as that
+    identity with the token new in that save. Saving a body that had
+    the token already makes nothing.
+  - Where the cursor is after a key (2026-11-19): an undo of a pick
+    leaves what it put back **selected**, so the cursor is at the `@`,
+    not after the name, and the list does not reopen. `Home` in a
+    textarea goes to the start of the line as laid out; on a long
+    wrapped line that is not the start of the line. Test cursor keys
+    on a short line of its own.
+  - To fake the registry: `page.route((url) => url.pathname ===
+    '/api/people', …)`. Hold the answer to make it arrive late, fulfil
+    with 500 for the alert. `unroute` before the next step.
+  - A list that opened because the cursor moved (a click, End) has
+    nobody ready, and neither has one that follows a paste (its `input`
+    event is not typing). Playwright's `fill` and `pressSequentially`
+    both arrive as `insertText`, which is typing. To fake a paste,
+    `setRangeText` and dispatch `new InputEvent('input', { inputType:
+    'insertFromPaste', bubbles: true })`.
+  - A text whose raw HTML would swallow a mention is shown with that
+    HTML as text. To read attributes under the rendered text, walk
+    them in `evaluate` (`attributesWith` in mentions.spec.ts); don't
+    match on `innerHTML`, where the writer's HTML is now words.
+  - A mention's class attribute is `mention m-<random>`: locate one
+    with `.mention` / `a.mention`. `[class="mention"]` is exactly a
+    copy a writer typed, and `[class^="mention m-"]` exactly one the
+    page wrote: use those two only to tell them apart.
 - **People at a collision** (S8b, people_collision.spec.ts):
   - Test ids: `carry-over`, `carry-review`, `carried-mark`,
     `carry-kept-edit`; on a node `add-here`, `already-here`,

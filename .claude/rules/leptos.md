@@ -389,6 +389,171 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     while it runs (a disabled button drops the keyboard), with a guard
     in the handler. When an answer removes the focused control, the
     keyboard goes to the form's alert (`focus_alert_if_lost`).
+- **Mentions of people** (S9, #360). `common::mention` reads
+  `@[label](person:id)` for the API; never scan for `@[` anywhere else.
+  - **A mention is shown only where both readers agree it is one**
+    (`ui/src/mention.rs`, `with_mentions`): `common::mention::mentions`
+    reads a token at that place in the text **as written**, **and** the
+    Markdown parser read the same bytes as an inline link, outside an
+    image. That is true of one reader's page. Don't build on "every
+    reader's Markdown reads the same links": it does not (see "Nothing
+    writes a person's current name" below).
+  - **The text is scanned for mentions once, as written** (`Token::all`),
+    and each one is found again by position after the wiki links are
+    written as HTML (`wikilink::Moved`). Never scan the rewritten text:
+    it holds other tokens (a wiki link's HTML changes which backticks
+    pair), and the API, which decides who is mentioned, reads the text
+    as written (fifth review of #362).
+    It is replaced among the parsed events: a fixed opening tag, the
+    name as a `Text` event (the HTML writer escapes it), a closing tag.
+  - **The sanitizer is the last thing that touches rendered HTML.**
+    Two designs were tried and must not come back (both reviews of
+    #362):
+    - HTML for the name put into the Markdown **source**: a token
+      inside a writer's own `<a href='https://elsewhere/?q=…'>` carried
+      the person's name to that address on a click.
+    - HTML put in **after** the sanitizer, at markers in the text: a
+      writer forged the markers, and the fill cut through sanitized
+      markup, leaving attributes of the writer's choosing on an
+      allowed element.
+    Anything new that a renderer adds goes in as events, before the
+    HTML is written.
+  - **The result is checked, not trusted** (`Resolved::intact`; third
+    review of #362). Markdown and the HTML parser read a text
+    differently: raw HTML can end inside an open attribute
+    (`<div><a href='https://elsewhere/?q=`, a blank line), and what
+    Markdown writes next is then that attribute's value to the
+    sanitizer. No rule about where a token sits lists every such case.
+    So every mention written must be in the sanitizer's output as the
+    element written for it, as often as written. One that names nobody
+    is checked too: its label is a name someone picked, and a page is
+    not the same for every reader (a wiki link is an `<a>` for one and
+    a `<span>` for another, and inside `<svg>` the HTML parser treats
+    them differently). The check reads the output and never changes
+    it. Anything else that puts a reader-only secret into rendered
+    Markdown needs the same check.
+  - **A text that fails the check is shown with its raw HTML as text**
+    (`markdown::checked`, `RawHtml::AsText`): nothing of the writer's
+    is then HTML, so there is no attribute to fall into; the mentions
+    are mentions and the writer's link is no link. Both attempts parse
+    **the same text** (wiki links written as HTML; their own tags
+    stay, `Moved::wrote`), so Markdown reads the same links in each.
+    `checked` never returns an attempt that failed the check; were all
+    to fail (none has), it renders nothing.
+  - **The check is one pass over the page** (`Resolved::intact`): the
+    writer chooses how many different labels a text has, and a search
+    of the page for each took a third of a minute on a body of the
+    size the API allows. Anything checked per mention must not search
+    the whole page per mention.
+  - **The element it looks for can't be typed** (`Resolved::mark`;
+    fourth review). Each render makes a random class, writes it on
+    every mention, and allows it in that render's sanitizer alone
+    (`sanitizer_naming`). Without it a writer typed the
+    element once per guessed name beside a mention made to fall into
+    their link's address, and the right guess made the count come out.
+    So rendered markup is `class="mention m-<32 hex>"`: match
+    `.mention` to find a mention, never `[class="mention"]` (that is
+    exactly a copy a writer typed). Only the look of a link to a person,
+    and the test of it, match on the start of the attribute
+    (`[class^="mention m-"]`). Never allow a class in the sanitizer
+    that a text could know and a check relies on.
+  - Test a claim like "never in an attribute" by walking the output's
+    attributes (`attribute_values` in the tests) and with the
+    fixed-sequence fuzz, not with `contains("href=\"https://evil")`.
+  - The sanitizer allows the mention's classes by name (`mention` on
+    `a` and `span`, `mention-unresolved` on `span`), so a writer can
+    type them and give their own words the plain look of a name, as
+    they can make them bold. That is accepted: no name is told by it.
+    The look of a link to a person is styled only for an element that
+    carries a render's own class and leads to `/people/…`
+    (`a[class^="mention m-"][href^="/people/"]` in `input.css`): the
+    sanitizer strips every `m-…` but its own render's, so a writer's
+    `<a class="mention" href="/people/…">` does not get it.
+  - A token inside a link the writer wrote in HTML names nobody
+    (`anchors_opened`): it is written with its label, and checked like
+    the rest. That is tidiness, not a boundary: it reads tags by eye
+    and can be fooled. Don't leave such a token to Markdown as a plain
+    link: unchecked, its label fell into the writer's address.
+  - `mine` → `<a class="mention" href="/people/{id}">`; otherwise
+    `<span class="mention">` with no id in the markup; nobody to name →
+    `<span class="mention-unresolved">` with the label. Told apart
+    without colour (`input.css`).
+  - `render_markdown` and `render_body` take the people to name;
+    `render_note` is for notes (no wiki links there). Anything else
+    (`render_markdown_plain`: a Brief, a template) shows "@name" with
+    no link, because the sanitizer drops the `person:` scheme.
+  - **The names come from the API with the text** (`ViewedNode.mentions`,
+    `ReaderNote.mentions`, `SavedNote`). Don't add a "resolve these ids"
+    call: there is deliberately no such endpoint.
+  - **The editor names only who the text came with and who was picked
+    in it** (`MentionPicker::set_known`, `names`), never "everyone in
+    my registry". A token someone else typed with the id of the
+    author's person is not a mention; the preview must not show it as
+    one.
+  - **Nothing writes a person's current name into a text.** A label is
+    the name as it was when the mention was picked; the page shows the
+    current one. An "Update" for labels that show an older name was
+    built and taken out (2026-11-19). It wrote the name into every
+    token the editor's page showed as a mention, and three reviews in
+    a row found a text for which one of those was, to another reader
+    or after the edit itself, the address of a link: the Markdown
+    parser reads a text differently by its length and by which wiki
+    links lead somewhere (a link label's limit of 1,000 counted
+    characters, a budget for reference links that the text's size
+    sets). Before building it again, give the parser one text for
+    every reader (a placeholder of fixed shape for each wiki link,
+    swapped after the parse), and check the text again after the
+    edit. It belongs with the merge tool (S8c).
+  - **The picker is `MentionPicker`** (`mention_picker.rs`), one hook
+    for the body textarea and `ResizableEditor` (`mentions=` is opt-in:
+    notes only). The textarea calls `on_keydown` first and returns if
+    it was used.
+    - People are offered by `common::mention::picker_match`: a word of
+      the name, or the start of an email address. Never by company or
+      phone (`"lunch @12"` offered whoever had 12 in a number).
+    - Enter and Tab pick only a highlighted option; one is highlighted
+      only when a **name** matches what was **typed**. A bare `@`, an
+      address-only match, or a list that opened because the cursor
+      moved into an `@…` already in the text (`after_click`,
+      `on_keyup`; `by_typing` false) needs an arrow key first: Enter at
+      the end of a line that ends in `@bob` is a new line. A paste, a
+      drop and an undo are not typing either: `after_input` takes the
+      event and reads its `inputType` (`common::mention::typed_by`).
+      Nor is an edit the picker itself makes (`editing`). Before a
+      pick, Enter and Tab check the list is still about where the
+      cursor is.
+    - Escape closes the list only (it must not reach the editor's
+      Escape), and the "couldn't load your People" alert the same way.
+      Ctrl/⌘+Enter stays the editor's and closes the list; any other
+      key with a modifier is left alone (AltGr types letters, and `@`
+      itself, on many keyboards). Shift+Tab leaves the field.
+    - A pick is one `insertText` edit by the browser (`edit`), so
+      Ctrl+Z undoes it and the box's own `input` handler sets the
+      signal. Don't `set_value` a textarea for an edit the user may
+      want to undo, and don't replace the whole text for a small
+      change: the box's `input` handler then sees the cursor at the
+      very end.
+    - Offsets from the box (`selectionStart`) count in the box's own
+      text (`el.value()`), not in the editor's signal: a text saved
+      with CRLF line ends differs until the first keystroke.
+    - The registry is read when an `@` starts a mention: at the first
+      one, and again at each later one (a person added since, a read
+      that failed). Never per keystroke: `reads` is bumped only when
+      the `@` is a new one (a signal set to the value it has still
+      notifies).
+    - The highlight is derived from the list as it is
+      (`active_in`): whoever an arrow key moved to, **by person**, else
+      the first when a name matches. So it is right when the registry
+      arrives after the name was typed, and Enter never picks someone
+      who slid into a highlighted row.
+    - `on_keyup` follows the cursor on an arrow, Home or End.
+    - Option ids are keyed by person, and an `aria-live` line says how
+      many people there are and who is highlighted.
+    - The list docks under a note's box (`Dock::Below`): above it, the
+      Notes page cut it off.
+  - **A stale label is never rewritten**, in a body or a note. The
+    editor's baseline, Revert, the 412 fingerprints and draft recovery
+    all hold "the text as loaded".
 - **A bulk action is paced by request** (`task_actions::paced`; S7a):
   a job that is more than one request uses `paced_by` with its cost
   (`FilingJob::requests`). A bulk button checks the card's `busy` before
@@ -458,14 +623,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   (`api::fetch_node_list`) and shows the rows as they come. Filtering or
   sorting a page in the browser orders only what happened to be loaded.
 - **Wiki links are read by `common::wikilink` only** (#281, 3.1). The
-  renderer (`wikilink.rs::preprocess_wikilinks`) and the excerpts use
+  renderer (`wikilink.rs::preprocess_wikilinks_moved`) and the excerpts use
   `replace_wikilinks`; don't scan for `[[` in the UI. The editor's `[[`
   autocomplete is the exception: it looks backwards from the cursor.
-- **Rendered Markdown never keeps a class the writer chose** (2026-11-10).
-  `markdown::sanitizer` allows `wikilink` on `<a>` and
-  `wikilink-unresolved` on `<span>` through `add_allowed_classes`, and
-  nothing else: the app's own stylesheet has classes that cover the
-  screen. A renderer that needs a new class adds it there, by name.
+- **Rendered Markdown keeps only classes the renderers write, by name**
+  (2026-11-10): `markdown::sanitizer` allows `wikilink` and `mention`
+  on `<a>`, `wikilink-unresolved`, `mention` and `mention-unresolved`
+  on `<span>` (and each render's own random class, `sanitizer_naming`)
+  through `add_allowed_classes`, and nothing else: the app's own
+  stylesheet has classes that cover the screen. A writer can type the
+  named ones, so none of them may place or size anything. A renderer
+  that needs a new class adds it there, by name.
 - **The service worker never writes** (2026-11-10). Any site can make a
   browser post to an address the worker answers, and the worker's own
   requests carry the session. A share goes to the app as

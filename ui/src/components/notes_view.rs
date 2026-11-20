@@ -9,11 +9,12 @@ use leptos_router::hooks::use_navigate;
 
 use crate::components::empty_state::EmptyState;
 use crate::components::icon_button::{IconButton, IconButtonVariant};
+use crate::components::mention_picker::MentionPicker;
 use crate::components::node_picker::NodePicker;
 use crate::components::page_header::PageHeader;
 use crate::components::resizable_editor::ResizableEditor;
 use crate::components::toast::{ToastAction, ToastLevel, ToastState};
-use crate::markdown::render_markdown_plain;
+use crate::markdown::render_note;
 
 /// Mirror of history_panel::PALETTE — full class strings so Tailwind's scanner picks them up.
 const PALETTE: &[(&str, &str)] = &[
@@ -65,6 +66,9 @@ pub fn NotesView() -> impl IntoView {
 
     // ── Compose box state ──────────────────────────────────────────────────
     let body = RwSignal::new(String::new());
+    // S9: the `@` picker of the compose box.
+    let compose_ref: NodeRef<leptos::html::Textarea> = NodeRef::new();
+    let compose_mentions = MentionPicker::new(body, compose_ref);
     let selected_node = RwSignal::<Option<(NodeId, String)>>::new(None);
     let posting = RwSignal::new(false);
     let error = RwSignal::<Option<String>>::new(None);
@@ -311,6 +315,8 @@ pub fn NotesView() -> impl IntoView {
             <div class="px-6 py-4 border-b border-stone-200 dark:border-stone-800 space-y-2">
                 <ResizableEditor
                     value=body
+                    node_ref=compose_ref
+                    mentions=compose_mentions
                     placeholder="Write a note…  (Ctrl+Enter to post)"
                     on_submit=Callback::new(move |()| do_post())
                 />
@@ -470,7 +476,8 @@ pub fn NotesView() -> impl IntoView {
                                     let node_id = feed_note.note.node_id;
                                     let note_id = feed_note.note.id;
                                     let node_title = feed_note.node_title.clone();
-                                    let body_html = render_markdown_plain(&feed_note.note.body);
+                                    // Its mentions as this reader may know them (S9).
+                                    let body_html = render_note(&feed_note.note.body, &feed_note.note.mentions);
                                     let card_class = palette_card_class(&feed_note.note.color).to_string();
                                     // Local time, not the UTC value printed as-is. The
                                     // date is when it was written; an edit adds a mark.
