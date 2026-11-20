@@ -346,6 +346,23 @@ cargo check && cargo clippy -- -D warnings
   `UPDATE … SET person_id`; only the changed foreign key is checked. An
   insert and a delete instead would lock node rows after people, and
   meet a body's save (node first, then people) head on.
+- **A save that meets a merge waits for it, and decides afterwards**
+  (review of #364, 2026-11-20). A statement's own tables are read
+  before it waits on a row, so one statement that both waits and
+  decides sees the world from before the merge:
+  - a statement that locks several people locks them **in id order**
+    (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does. In scan
+    order, a save that mentions both and their merge each held the one
+    the other waited for, and the save was the one ended (a 500);
+  - a body's save holds the people the node already mentions
+    (`HOLD_MENTIONED`) in a statement of its own before it deletes a
+    row. Without it, a save that takes the kept person's token out and
+    leaves the other's left a real mention with no row;
+  - `PersonRepo::update` holds the person's row (by id **and owner**)
+    in a statement of its own before the `UPDATE`. Without it a save
+    with no version that waited on a merge wrote the old card over it;
+  - the merge moves a note's mention rows before a body's, the order a
+    node's delete reaches them (not proven to matter; it costs nothing).
 - The one who goes is deleted **before** the kept person is written:
   the email rule must find their addresses free. An address a third
   person lists is left out (`report.someone_elses`), not taken.

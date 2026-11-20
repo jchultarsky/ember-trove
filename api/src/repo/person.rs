@@ -321,6 +321,22 @@ impl PersonRepo for PgPersonRepo {
         p: &PersonInput,
         expected: Option<DateTime<Utc>>,
     ) -> Result<Person, EmberTroveError> {
+        // The row is held first, by a statement of its own. A save that
+        // meets a merge under way waits here, and the write below then
+        // reads the alias table as the merge left it. In one statement
+        // the wait comes after that table was read: a save with no
+        // version would pass, and write the card from before the merge
+        // over its result.
+        //
+        // SECURITY: by id **and owner**, so another account's person is
+        // never locked or waited on.
+        let mut tx = self.pool.begin().await.map_err(internal("update person"))?;
+        sqlx::query("SELECT 1 FROM people WHERE id = $1 AND owner_id = $2 FOR NO KEY UPDATE")
+            .bind(id.0)
+            .bind(owner)
+            .execute(&mut *tx)
+            .await
+            .map_err(internal("update person"))?;
         // The version is checked in the statement that writes, so a save
         // can't slip in between a check and the write. A save that sends
         // none passes, except over a person someone was merged into.
@@ -346,9 +362,10 @@ impl PersonRepo for PgPersonRepo {
         .bind(Json(&p.addresses))
         .bind(&p.notes)
         .bind(expected)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(save_failed("update person"))?;
+        tx.commit().await.map_err(internal("update person"))?;
         match saved {
             Some(row) => Ok(row.into()),
             // No row: not the owner's (or not there), or not at that

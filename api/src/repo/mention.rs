@@ -98,6 +98,11 @@ const HELD_IS_THEIRS: &str = "(held.id = p.id OR held.id IN \
 /// read until this transaction ends; without it a person deleted between
 /// the read and the insert would fail the foreign key and take the
 /// body's save down with it.
+///
+/// `ORDER BY p.id`: the people are locked in id order, as a merge locks
+/// its two (`repo/person_merge.rs`). In the order a scan meets them, a
+/// save that mentions both and their merge could each hold the one the
+/// other waits for, and the save was usually the one ended.
 async fn make_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
@@ -112,7 +117,7 @@ async fn make_body_rows(
         "INSERT INTO node_mentions (node_id, person_id) \
          SELECT $1, p.id FROM people p \
          WHERE {theirs} AND p.owner_id = $3 \
-         FOR KEY SHARE OF p \
+         ORDER BY p.id FOR KEY SHARE OF p \
          ON CONFLICT DO NOTHING",
         theirs = stands_for(2),
     );
@@ -139,6 +144,24 @@ async fn make_body_rows(
     Ok(())
 }
 
+/// SQL: hold, until the transaction ends, the people who have a row on
+/// the node bound at `$1`, in id order.
+///
+/// A statement of its own, before the one that deletes rows. A merge
+/// under way holds its two people: this waits for it, and the delete
+/// that follows then sees the alias it left. Without it, a save that
+/// takes the kept person's token out and leaves the other's deletes the
+/// kept person's row (the other's id does not stand for them yet), the
+/// merge drops the other's row with the person, and a mention its owner
+/// made is left with no row at all.
+///
+/// A note needs none of this: every save of a note makes all its rows
+/// again, and that statement already holds every person the note's
+/// text names.
+const HOLD_MENTIONED: &str = "SELECT 1 FROM people p \
+     WHERE p.id IN (SELECT m.person_id FROM node_mentions m WHERE m.node_id = $1) \
+     ORDER BY p.id FOR KEY SHARE OF p";
+
 /// Delete a node's rows for people its body no longer mentions.
 async fn drop_body_rows(
     conn: &mut PgConnection,
@@ -146,6 +169,11 @@ async fn drop_body_rows(
     mentioned: &[PersonId],
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
+    sqlx::query(HOLD_MENTIONED)
+        .bind(node.0)
+        .execute(&mut *conn)
+        .await
+        .map_err(db("sync mentions"))?;
     sqlx::query(&format!(
         "DELETE FROM node_mentions m WHERE m.node_id = $1 AND NOT {kept}",
         kept = still_mentioned(2),
@@ -211,7 +239,7 @@ pub(crate) async fn copy_body_rows_on(
          SELECT $2, p.id FROM node_mentions m \
          JOIN people p ON p.id = m.person_id \
          WHERE m.node_id = $1 AND {held} AND p.owner_id = $4 \
-         FOR KEY SHARE OF p \
+         ORDER BY p.id FOR KEY SHARE OF p \
          ON CONFLICT DO NOTHING",
         held = still_mentioned(3),
     ))
@@ -243,7 +271,7 @@ pub(crate) async fn sync_note_on(
             "INSERT INTO note_mentions (note_id, person_id) \
              SELECT $1, p.id FROM people p \
              WHERE {theirs} AND p.owner_id = $3 \
-             FOR KEY SHARE OF p \
+             ORDER BY p.id FOR KEY SHARE OF p \
              ON CONFLICT DO NOTHING",
             theirs = stands_for(2),
         ))
