@@ -278,15 +278,6 @@ impl AccountRepo for PgAccountRepo {
             .execute(&mut *tx)
             .await
             .map_err(purge_err)?;
-        // And their people, in id order (S8c). A save of a body that
-        // mentions several of them, by anyone who can edit that node,
-        // holds them in id order (`repo::mention::hold_body_people`); the
-        // delete below takes them as a scan meets them.
-        sqlx::query("SELECT 1 FROM people WHERE owner_id = $1 ORDER BY id FOR UPDATE")
-            .bind(subject_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(purge_err)?;
 
         let shared_nodes = count(&mut tx, SHARED_NODES, subject_id).await?;
 

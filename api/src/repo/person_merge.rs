@@ -9,21 +9,33 @@
 //! id of another account is never read, never locked and never waited
 //! on: it is a missing person, in the same time.
 //!
-//! **Lock order.** First two advisory locks, shared: the account's purge
-//! key and the restore key. Both of those delete rows that hang on nodes
-//! (memberships, mention rows) before they reach `people`; a merge goes
-//! the other way round, and without these they could each hold what the
-//! other waits for. Then both `people` rows, in id order
-//! (`.claude/rules/api.md`: rows first, then the email rule's advisory
-//! lock, which the trigger takes when the kept person is written). Then
-//! the two people's `node_people` rows. Nothing here locks a node: the
-//! rows that hang on nodes are moved by changing `person_id` alone, so a
-//! body's save (node first, then people) cannot be met head on over a
-//! node. Over the people it could: so a save locks the people it
-//! mentions in id order too, and holds the people a text already
-//! mentions before it deletes a row (`repo/mention.rs`:
-//! `hold_body_people`), which makes it wait for a merge
-//! under way instead of deciding on what was true before it.
+//! **Locks, and who gives way.** First two advisory locks, shared: the
+//! account's purge key and the restore key. Then both `people` rows, in
+//! id order (`.claude/rules/api.md`: rows first, then the email rule's
+//! advisory lock, which the trigger takes when the kept person is
+//! written); their `node_people` rows; and their `node_mentions` rows.
+//! Nothing here locks a node: the rows that hang on nodes are moved by
+//! changing `person_id` alone.
+//!
+//! No order of these fits every other transaction. A node's delete
+//! reaches the same rows through its cascades, in an order that depends
+//! on the names of the database's triggers; a save, a copy and a note
+//! each take a node or a note first and people after. Three reviews of
+//! #364 each found a pair that could hold what the other waited for,
+//! and each lock added to fit one of them broke the order of another.
+//! So the rule is not an order but **who gives way: the merge does.**
+//! Once it holds a row, it waits for any other lock for well under the
+//! time the database takes to look for a deadlock ([`YIELDS`]). Met
+//! head on, it is the merge that gives up, with nothing written, before
+//! the database ends either; the other goes on as if nothing happened.
+//! The merge is then tried once more and, if it is still in the way,
+//! answers "try again". A merge is rare, short and somebody's own
+//! deliberate act; a save or a delete ended with a 500 is not.
+//!
+//! What is left to the others is only what makes them **decide after a
+//! merge and not during it** (`repo/mention.rs`, `repo/person.rs`): a
+//! statement of their own that waits for the merge's rows before the
+//! statement that decides.
 //!
 //! **No text is touched** (owner decision, 2026-11-19). The id of the
 //! person who goes is recorded in `person_aliases` and stands for the
@@ -44,6 +56,23 @@ use super::node::{DEADLOCK, LOCK_NOT_AVAILABLE, sqlstate};
 
 /// How long a merge waits for a row or a lock another transaction holds.
 const LOCK_TIMEOUT: &str = "SET LOCAL lock_timeout = '5s'";
+
+/// How long a merge waits for a row, once it holds one: two fifths of
+/// the time after which the database looks for a deadlock
+/// (`deadlock_timeout`, one second unless the server says otherwise).
+/// The one that has waited that long finds the deadlock and is ended.
+/// A merge that stops waiting sooner is never found in one, and whoever
+/// it met goes on. (Not a promise: a merge that had already made the
+/// other wait for most of a second, through several short waits of its
+/// own, can still be late. Then the database ends one of the two, as it
+/// would have, and a merge so ended is tried once more.)
+pub(crate) const YIELDS: &str = "SELECT set_config('lock_timeout', greatest(1, \
+     (extract(epoch FROM current_setting('deadlock_timeout')::interval) * 400)::int)::text, true)";
+
+/// For a test that holds a row to stop a merge half way and needs it to
+/// be there still when the row is let go.
+#[cfg(all(test, feature = "pg-tests"))]
+pub(crate) const WAITS: &str = "SET LOCAL lock_timeout = '20s'";
 
 /// The restore's key: a restore takes it alone, a merge shares it.
 pub(crate) const RESTORE_LOCK: &str = "SELECT pg_advisory_xact_lock(hashtext('ember.restore'))";
@@ -303,12 +332,15 @@ async fn merge_once(
     kept: PersonId,
     gone: PersonId,
     confirm: &str,
+    patience: &'static str,
 ) -> Result<Person, MergeError> {
     // READ COMMITTED (the pool's default): the email rule refuses to run
     // under anything else.
     let mut tx = pool.begin().await?;
     sqlx::query(LOCK_TIMEOUT).execute(&mut *tx).await?;
-    // Before any row: see the module doc.
+    // Before any row, and with nothing held, so with time to wait: a
+    // purge and a restore delete what hangs on nodes before they reach
+    // `people`, the other way round from a merge.
     sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtext('ember.purge.' || $1))")
         .bind(owner)
         .execute(&mut *tx)
@@ -316,8 +348,21 @@ async fn merge_once(
     sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtext('ember.restore'))")
         .execute(&mut *tx)
         .await?;
+    // From here on the merge holds rows, and gives way: module doc.
+    sqlx::query(patience).execute(&mut *tx).await?;
 
     let read = read(&mut tx, owner, kept, gone, true).await?;
+    // The body rows of both, held before anything is decided about them.
+    // A save that is taking one of them out of a body ends first, and
+    // the moves below see what it left; a save that comes later waits
+    // here (`repo::mention::drop_body_rows`) and decides after the merge.
+    sqlx::query(
+        "SELECT 1 FROM node_mentions WHERE person_id = ANY($1) \
+         ORDER BY node_id, person_id FOR UPDATE",
+    )
+    .bind([kept.0, gone.0])
+    .execute(&mut *tx)
+    .await?;
     let planned = read.planned();
     // What was confirmed must be what is true now, under the locks.
     if read.token() != confirm {
@@ -350,11 +395,7 @@ async fn merge_once(
         .await?;
     // Mention rows the same way. Where the kept person is mentioned in
     // the same text already, the other's row is left for the cascade.
-    // A body's rows first, then a note's: the order in which the delete
-    // of a node reaches them (the node's own rows, and only then the rows
-    // of its notes, which are a cascade of a cascade). The other way
-    // round, the two each held what the other waited for
-    // (`a_node_delete_and_a_merge_do_not_end_each_other`).
+    // A body's rows first (they are held already), then a note's.
     sqlx::query(
         "UPDATE node_mentions m SET person_id = $1 WHERE m.person_id = $2 \
          AND NOT EXISTS (SELECT 1 FROM node_mentions k \
@@ -429,11 +470,26 @@ pub(crate) async fn merge(
     gone: PersonId,
     confirm: &str,
 ) -> Result<Person, EmberTroveError> {
-    match merge_once(pool, owner, kept, gone, confirm).await {
-        // One of two transactions waiting on each other was ended, and
-        // nothing was written: once more, from the start.
-        Err(MergeError::Db(e)) if sqlstate(&e) == Some(DEADLOCK) => {
-            merge_once(pool, owner, kept, gone, confirm)
+    merge_with(pool, owner, kept, gone, confirm, YIELDS).await
+}
+
+/// [`merge`], waiting for a held row as `patience` says.
+pub(crate) async fn merge_with(
+    pool: &PgPool,
+    owner: &str,
+    kept: PersonId,
+    gone: PersonId,
+    confirm: &str,
+    patience: &'static str,
+) -> Result<Person, EmberTroveError> {
+    match merge_once(pool, owner, kept, gone, confirm, patience).await {
+        // The merge gave way to something that held a row it needed, or
+        // was ended as one of two waiting on each other. Nothing was
+        // written: once more, from the start. What it met has most
+        // often finished by then, and if what it did changed the plan,
+        // the second go says so.
+        Err(MergeError::Db(e)) if matches!(sqlstate(&e), Some(DEADLOCK | LOCK_NOT_AVAILABLE)) => {
+            merge_once(pool, owner, kept, gone, confirm, patience)
                 .await
                 .map_err(MergeError::into_public)
         }

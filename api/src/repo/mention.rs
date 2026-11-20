@@ -100,9 +100,10 @@ const HELD_IS_THEIRS: &str = "(held.id = p.id OR held.id IN \
 /// body's save down with it.
 ///
 /// `ORDER BY p.id`: the people are locked in id order, as a merge locks
-/// its two (`repo/person_merge.rs`). In the order a scan meets them, a
-/// save that mentions both and their merge could each hold the one the
-/// other waits for, and the save was usually the one ended.
+/// its two (`repo/person_merge.rs`), so the two do not meet head on
+/// over them in the everyday case. (Where they still do, the merge
+/// gives way: the second pass below can take the kept person after
+/// someone with a higher id.)
 async fn make_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
@@ -144,61 +145,39 @@ async fn make_body_rows(
     Ok(())
 }
 
-/// Hold, until the transaction ends, every person a body's save has to
-/// do with: those the node already has a row for, and those of `saver`'s
-/// own the save adds a mention of (`make`).
+/// Delete a node's rows for people its body no longer mentions.
 ///
-/// **One statement, in id order, before anything else is read or
-/// written for the save.** A merge under way holds its two people (in
-/// id order too): the save waits here, and what follows then sees the
-/// alias the merge left.
-/// - Without the first half, a save that takes the kept person's token
-///   out and leaves the other's deletes the kept person's row (the
-///   other's id does not stand for them yet) while the merge drops the
-///   other's row with the person: a mention its owner made is left with
-///   no row at all.
-/// - In two statements (the added people, then the ones already there),
-///   each in id order, the two together are not: a body that mentions
-///   the lower id, saved with a new mention of the higher, held the
-///   higher and waited for the lower, the reverse of their merge.
+/// The node's rows are held first, by a statement of its own. A merge
+/// under way holds the body rows of its two people
+/// (`repo/person_merge.rs`): this waits for it, and the delete that
+/// follows then sees the alias it left. In one statement, a save that
+/// takes the kept person's token out and leaves the other's deleted the
+/// kept person's row (the other's id did not stand for them yet) while
+/// the merge dropped the other's row with the person: a mention its
+/// owner made was left with no row at all.
 ///
-/// It holds people of other accounts too, when the node mentions them.
-/// So anything that locks many people of one account takes them in id
-/// order as well (the account purge does).
+/// Rows of this node only, and no person: a save holds nobody it does
+/// not itself add a mention of, and nobody of another account. (It did,
+/// for one commit: the account purge then had to take its people in the
+/// same order, and that put the purge out of step with a restore and
+/// with a note's save.)
 ///
 /// A note needs none of this: every save of a note makes all its rows
 /// again, and that one statement holds every person the note's text
 /// names, in id order.
-async fn hold_body_people(
-    conn: &mut PgConnection,
-    node: NodeId,
-    make: &[PersonId],
-    saver: &str,
-) -> Result<(), EmberTroveError> {
-    let ids: Vec<Uuid> = make.iter().map(|p| p.0).collect();
-    sqlx::query(&format!(
-        "SELECT 1 FROM people p \
-         WHERE p.id IN (SELECT m.person_id FROM node_mentions m WHERE m.node_id = $1) \
-            OR ({theirs} AND p.owner_id = $3) \
-         ORDER BY p.id FOR KEY SHARE OF p",
-        theirs = stands_for(2),
-    ))
-    .bind(node.0)
-    .bind(&ids)
-    .bind(saver)
-    .execute(&mut *conn)
-    .await
-    .map_err(db("sync mentions"))?;
-    Ok(())
-}
-
-/// Delete a node's rows for people its body no longer mentions.
 async fn drop_body_rows(
     conn: &mut PgConnection,
     node: NodeId,
     mentioned: &[PersonId],
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
+    sqlx::query(
+        "SELECT 1 FROM node_mentions m WHERE m.node_id = $1 ORDER BY m.person_id FOR UPDATE",
+    )
+    .bind(node.0)
+    .execute(&mut *conn)
+    .await
+    .map_err(db("sync mentions"))?;
     sqlx::query(&format!(
         "DELETE FROM node_mentions m WHERE m.node_id = $1 AND NOT {kept}",
         kept = still_mentioned(2),
@@ -229,9 +208,10 @@ async fn drop_body_rows(
 /// earlier save, perhaps a co-editor's with the id of this saver's
 /// person: saving around it must not make it real.
 ///
-/// People first ([`hold_body_people`]), then rows of this table: the
-/// insert, then the delete. The other order could deadlock with an
-/// account purge, which deletes people and then, by cascade, rows here.
+/// The insert comes first: it locks the people it reads, and the delete
+/// then locks rows of this table. The other order could deadlock with
+/// an account purge, which deletes people and then, by cascade, rows
+/// here.
 pub(crate) async fn sync_body_on(
     conn: &mut PgConnection,
     node: NodeId,
@@ -239,7 +219,6 @@ pub(crate) async fn sync_body_on(
     make: &[PersonId],
     saver: &str,
 ) -> Result<(), EmberTroveError> {
-    hold_body_people(conn, node, make, saver).await?;
     make_body_rows(conn, node, make, saver).await?;
     drop_body_rows(conn, node, mentioned).await
 }

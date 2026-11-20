@@ -16710,9 +16710,15 @@ mod mentions {
         let merging = {
             let (pool, token) = (pool.clone(), plan.token.clone());
             tokio::spawn(async move {
-                PgPersonRepo::new(pool)
-                    .merge("alice", ada.id, abe.id, &token)
-                    .await
+                crate::repo::person_merge::merge_with(
+                    &pool,
+                    "alice",
+                    ada.id,
+                    abe.id,
+                    &token,
+                    crate::repo::person_merge::WAITS,
+                )
+                .await
             })
         };
         assert_eq!(waiters(1).await, 1, "the merge is not under way");
@@ -16789,9 +16795,15 @@ mod mentions {
         let merging = {
             let (pool, token) = (pool.clone(), plan.token.clone());
             tokio::spawn(async move {
-                PgPersonRepo::new(pool)
-                    .merge("alice", hi.id, lo.id, &token)
-                    .await
+                crate::repo::person_merge::merge_with(
+                    &pool,
+                    "alice",
+                    hi.id,
+                    lo.id,
+                    &token,
+                    crate::repo::person_merge::WAITS,
+                )
+                .await
             })
         };
         assert_eq!(lock_waiters(&pool, 1).await, 1, "the merge is not waiting");
@@ -16863,9 +16875,15 @@ mod mentions {
         let merging = {
             let (pool, token) = (pool.clone(), plan.token.clone());
             tokio::spawn(async move {
-                PgPersonRepo::new(pool)
-                    .merge("alice", ada.id, abe.id, &token)
-                    .await
+                crate::repo::person_merge::merge_with(
+                    &pool,
+                    "alice",
+                    ada.id,
+                    abe.id,
+                    &token,
+                    crate::repo::person_merge::WAITS,
+                )
+                .await
             })
         };
         assert_eq!(
@@ -16936,13 +16954,12 @@ mod mentions {
 
     // ── From the second review of #364: what the fixes above must not do ──
 
-    /// `sync_body_on` locks people twice: the ones this save adds
-    /// (`make_body_rows`, in id order), then the ones the node already
-    /// has a row for (`HOLD_MENTIONED`, in id order). Each list is
-    /// sorted; the two together are not. A body that already mentions
-    /// the lower id, saved with a new mention of the higher one, takes
-    /// the higher first and then waits for the lower: the reverse of
-    /// their merge.
+    /// A body's save holds nobody it does not itself add a mention of.
+    /// For one commit it also held the people the node already had a row
+    /// for, in a second statement: each list sorted, the two together
+    /// not. A body that mentioned the lower id, saved with a new mention
+    /// of the higher, then held the higher and waited for the lower: the
+    /// reverse of their merge.
     #[sqlx::test(migrations = "../migrations")]
     async fn a_save_that_adds_one_of_two_people_beside_the_other_is_not_ended_by_their_merge(
         pool: PgPool,
@@ -16976,9 +16993,15 @@ mod mentions {
         let merging = {
             let (pool, token) = (pool.clone(), plan.token.clone());
             tokio::spawn(async move {
-                PgPersonRepo::new(pool)
-                    .merge("alice", hi.id, lo.id, &token)
-                    .await
+                crate::repo::person_merge::merge_with(
+                    &pool,
+                    "alice",
+                    hi.id,
+                    lo.id,
+                    &token,
+                    crate::repo::person_merge::WAITS,
+                )
+                .await
             })
         };
         assert_eq!(lock_waiters(&pool, 1).await, 1, "the merge is not waiting");
@@ -16987,11 +17010,12 @@ mod mentions {
             let (pool, text) = (pool.clone(), format!("{} and {}", token(&lo), token(&hi)));
             tokio::spawn(async move { save_body(&pool, node, "alice", &text).await })
         };
-        assert_eq!(lock_waiters(&pool, 2).await, 2, "the save is not waiting");
+        // It holds nobody it does not add: `lo` is not waited for.
+        let saved = tokio::time::timeout(std::time::Duration::from_secs(5), saving)
+            .await
+            .expect("the save waited for a person it does not add")
+            .expect("join");
         held.commit().await.unwrap();
-        let released = std::time::Instant::now();
-
-        let saved = saving.await.expect("join");
         let merged = merging.await.expect("join");
         assert!(
             saved.is_ok() && merged.is_ok(),
@@ -16999,11 +17023,7 @@ mod mentions {
             saved.as_ref().map(|n| n.id),
             merged.as_ref().map(|p| p.id)
         );
-        assert!(
-            released.elapsed() < std::time::Duration::from_millis(900),
-            "the two waited on each other until a deadlock was found: {:?}",
-            released.elapsed()
-        );
+        assert_eq!(body_rows(&pool, node).await, [hi.id]);
     }
 
     /// `PersonRepo::update` now takes the row with a `SELECT … FOR
@@ -17072,12 +17092,10 @@ mod mentions {
         );
     }
 
-    /// `HOLD_MENTIONED` locks the people a node already mentions,
-    /// whoever they belong to. Before it, a save by someone else never
-    /// touched another account's people. Now a co-editor's save of a
-    /// body that mentions two people of an account takes them in id
-    /// order, while that account's purge deletes them in the order a
-    /// scan meets them.
+    /// A save by someone else never touches another account's people
+    /// it adds no mention of. (For one commit it held every person the
+    /// node already mentioned, in id order, while that account's purge
+    /// deleted them in the order a scan meets them.)
     #[sqlx::test(migrations = "../migrations")]
     async fn another_accounts_save_and_a_purge_do_not_end_each_other(pool: PgPool) {
         use crate::repo::account::{AccountRepo, PgAccountRepo};
@@ -17187,9 +17205,15 @@ mod mentions {
         let merging = {
             let (pool, token) = (pool.clone(), plan.token.clone());
             tokio::spawn(async move {
-                PgPersonRepo::new(pool)
-                    .merge("alice", ada.id, abe.id, &token)
-                    .await
+                crate::repo::person_merge::merge_with(
+                    &pool,
+                    "alice",
+                    ada.id,
+                    abe.id,
+                    &token,
+                    crate::repo::person_merge::WAITS,
+                )
+                .await
             })
         };
         assert_eq!(lock_waiters(&pool, 1).await, 1, "the merge is not waiting");
@@ -17254,9 +17278,15 @@ mod mentions {
         let merging = {
             let (pool, token) = (pool.clone(), plan.token.clone());
             tokio::spawn(async move {
-                PgPersonRepo::new(pool)
-                    .merge("alice", ada.id, abe.id, &token)
-                    .await
+                crate::repo::person_merge::merge_with(
+                    &pool,
+                    "alice",
+                    ada.id,
+                    abe.id,
+                    &token,
+                    crate::repo::person_merge::WAITS,
+                )
+                .await
             })
         };
         assert_eq!(lock_waiters(&pool, 1).await, 1, "the merge is not waiting");
@@ -17285,6 +17315,518 @@ mod mentions {
             body_rows(&pool, copy).await,
             [ada.id],
             "the copy holds {body:?}, a mention its owner made, and has no row for it"
+        );
+    }
+
+    // ── From the third review of #364: where no order fits, the merge gives way ──
+
+    /// The purge now takes its people `FOR UPDATE` (table lock:
+    /// ROW SHARE) long before its `DELETE FROM people` (ROW EXCLUSIVE).
+    /// A restore's `LOCK TABLE people IN SHARE ROW EXCLUSIVE MODE` fits
+    /// between the two, exactly as it did for `PersonRepo::update`: the
+    /// purge holds the rows the restore's delete needs and waits for the
+    /// table the restore holds. An account with no node of its own (a
+    /// co-editor with contacts) is enough; with a node, the two meet on
+    /// `nodes` first and queue.
+    ///
+    /// The pause is a lock on `captures`, which both reach after the
+    /// locks in question and which holds no row of anyone here.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_purge_and_a_restore_do_not_end_each_other_over_the_people_table(pool: PgPool) {
+        use crate::repo::account::{AccountRepo, PgAccountRepo};
+        someone(&pool, "alice", "Ada").await;
+        let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+        let archive = crate::backup::read_snapshot(&mut tx).await.expect("read");
+        drop(tx);
+
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE captures IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        // The purge: its people are locked, and it stops at its captures.
+        let purging = {
+            let pool = pool.clone();
+            tokio::spawn(async move { PgAccountRepo::new(pool).purge("alice", None).await })
+        };
+        assert_eq!(lock_waiters(&pool, 1).await, 1, "the purge is not waiting");
+        // The restore: it has the table lock on people, and stops at the
+        // captures too.
+        let restoring = {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let mut tx = pool.begin().await.expect("tx");
+                let done = crate::backup::restore_into(&mut tx, &archive)
+                    .await
+                    .map_err(|e| format!("{e:?}"));
+                tx.rollback().await.expect("rollback");
+                done
+            })
+        };
+        assert_eq!(
+            lock_waiters(&pool, 2).await,
+            2,
+            "the restore is not waiting"
+        );
+        held.commit().await.unwrap();
+        let released = std::time::Instant::now();
+
+        let limit = std::time::Duration::from_secs(20);
+        let purged = tokio::time::timeout(limit, purging)
+            .await
+            .expect("the purge hangs")
+            .expect("join");
+        let restored = tokio::time::timeout(limit, restoring)
+            .await
+            .expect("the restore hangs")
+            .expect("join");
+        assert!(
+            purged.is_ok() && restored.is_ok(),
+            "purge: {:?}\nrestore: {restored:?}",
+            purged.as_ref().map(|c| c.people)
+        );
+        assert!(
+            released.elapsed() < std::time::Duration::from_millis(900),
+            "the two waited on each other until a deadlock was found: {:?}",
+            released.elapsed()
+        );
+    }
+
+    /// The same early lock puts people BEFORE notes, tasks and
+    /// captures in the purge. A restore deletes the nodes (and so every
+    /// note and task) first and the people last. Before c922a8f the
+    /// purge went notes, captures, people as well. Now: the restore has
+    /// deleted Alice's note on Bob's node and waits for her person; the
+    /// purge holds her person and waits for her note.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_purge_and_a_restore_do_not_end_each_other_over_a_note(pool: PgPool) {
+        use crate::repo::account::{AccountRepo, PgAccountRepo};
+        // Alice owns no node. She has a contact, and a note on Bob's node.
+        someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "bob", "Bob's").await;
+        share(&pool, node, "bob", "alice").await;
+        a_note(&pool, node, "alice", "a word").await;
+        let mut tx = crate::backup::begin_snapshot(&pool).await.expect("begin");
+        let archive = crate::backup::read_snapshot(&mut tx).await.expect("read");
+        drop(tx);
+
+        // The restore has deleted the nodes (and Alice's note with them)
+        // and stops just before it deletes the people.
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE captures IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let restoring = {
+            let pool = pool.clone();
+            tokio::spawn(async move {
+                let mut tx = pool.begin().await.expect("tx");
+                let done = crate::backup::restore_into(&mut tx, &archive)
+                    .await
+                    .map_err(|e| format!("{e:?}"));
+                tx.rollback().await.expect("rollback");
+                done
+            })
+        };
+        assert_eq!(
+            lock_waiters(&pool, 1).await,
+            1,
+            "the restore is not waiting"
+        );
+        // The purge locks Alice's person, then waits for her note.
+        let purging = {
+            let pool = pool.clone();
+            tokio::spawn(async move { PgAccountRepo::new(pool).purge("alice", None).await })
+        };
+        assert_eq!(lock_waiters(&pool, 2).await, 2, "the purge is not waiting");
+        held.commit().await.unwrap();
+        let released = std::time::Instant::now();
+
+        let limit = std::time::Duration::from_secs(20);
+        let restored = tokio::time::timeout(limit, restoring)
+            .await
+            .expect("the restore hangs")
+            .expect("join");
+        let purged = tokio::time::timeout(limit, purging)
+            .await
+            .expect("the purge hangs")
+            .expect("join");
+        assert!(
+            purged.is_ok() && restored.is_ok(),
+            "purge: {:?}\nrestore: {restored:?}",
+            purged.as_ref().map(|c| c.people)
+        );
+        assert!(
+            released.elapsed() < std::time::Duration::from_millis(900),
+            "the two waited on each other until a deadlock was found: {:?}",
+            released.elapsed()
+        );
+    }
+
+    /// The same inversion against the purged account's own last
+    /// request: a note's save holds the note and then its author's
+    /// people; the purge now holds the people and then deletes the
+    /// notes. (A capture made into a note or a node goes capture, then
+    /// people, the same way.)
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_purge_and_the_accounts_own_note_save_do_not_end_each_other(pool: PgPool) {
+        use crate::repo::account::{AccountRepo, PgAccountRepo};
+        let ada = someone(&pool, "alice", "Ada").await;
+        let node = a_node(&pool, "bob", "Bob's").await;
+        share(&pool, node, "bob", "alice").await;
+        let note = a_note(&pool, node, "alice", "a word").await;
+
+        // The purge has Alice's people and stops at its count of files.
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("LOCK TABLE attachments IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let purging = {
+            let pool = pool.clone();
+            tokio::spawn(async move { PgAccountRepo::new(pool).purge("alice", None).await })
+        };
+        assert_eq!(lock_waiters(&pool, 1).await, 1, "the purge is not waiting");
+        // Alice's save of her note, sent before she was suspended: it
+        // has the note and waits for Ada.
+        let saving = {
+            let (pool, body) = (pool.clone(), format!("call {}", token(&ada)));
+            tokio::spawn(async move {
+                PgNoteRepo::new(pool)
+                    .update(
+                        note,
+                        note_actor("alice"),
+                        UpdateNoteRequest {
+                            body,
+                            color: "default".to_string(),
+                        },
+                    )
+                    .await
+            })
+        };
+        // (With the people locked where they are deleted, the save does
+        // not wait here.)
+        for _ in 0..200 {
+            if saving.is_finished() || lock_waiters(&pool, 2).await == 2 {
+                break;
+            }
+        }
+        held.commit().await.unwrap();
+        let released = std::time::Instant::now();
+
+        let limit = std::time::Duration::from_secs(20);
+        let purged = tokio::time::timeout(limit, purging)
+            .await
+            .expect("the purge hangs")
+            .expect("join");
+        let saved = tokio::time::timeout(limit, saving)
+            .await
+            .expect("the save hangs")
+            .expect("join");
+        assert!(
+            purged.is_ok() && saved.is_ok(),
+            "purge: {:?}\nsave: {:?}",
+            purged.as_ref().map(|c| c.people),
+            saved.as_ref().map(|n| n.id)
+        );
+        assert!(
+            released.elapsed() < std::time::Duration::from_millis(900),
+            "the two waited on each other until a deadlock was found: {:?}",
+            released.elapsed()
+        );
+    }
+
+    /// The order in which a node's delete reaches `node_mentions` and
+    /// `node_people`, as this database has it: the names of the two
+    /// cascade triggers on `nodes`, compared as text.
+    async fn mentions_cascade_before_memberships(pool: &PgPool) -> bool {
+        scalar(
+            pool,
+            "SELECT count(*) FROM pg_trigger m, pg_trigger p \
+             WHERE m.tgrelid = 'nodes'::regclass AND p.tgrelid = 'nodes'::regclass \
+               AND m.tgtype & 8 = 8 AND p.tgtype & 8 = 8 \
+               AND m.tgconstraint = (SELECT oid FROM pg_constraint \
+                                     WHERE conname = 'node_mentions_node_id_fkey') \
+               AND p.tgconstraint = (SELECT oid FROM pg_constraint \
+                                     WHERE conname = 'node_people_node_id_fkey') \
+               AND m.tgname < p.tgname",
+        )
+        .await
+            == 1
+    }
+
+    /// A node that mentions Abe and has him as a member is deleted while
+    /// Abe is merged into Ada. `flipped`: the cascade from `nodes` to
+    /// `node_people` is made again, so its trigger has the later name and
+    /// the delete reaches `node_mentions` first. That is the order a
+    /// database has after `pg_dump | psql` (foreign keys are made again
+    /// in name order: `node_mentions_…` before `node_people_…`), and the
+    /// order one has when the OID counter gained a digit between
+    /// migrations 037 and 057 (the names are compared as text).
+    #[allow(clippy::expect_used, clippy::unwrap_used)]
+    async fn a_delete_meets_a_merge(
+        pool: &PgPool,
+        flipped: bool,
+    ) -> (
+        Result<(), EmberTroveError>,
+        Result<Person, EmberTroveError>,
+        std::time::Duration,
+    ) {
+        let people = PgPersonRepo::new(pool.clone());
+        let ada = someone(pool, "alice", "Ada").await;
+        let abe = someone(pool, "alice", "Abe").await;
+        // The pause is the one of
+        // `a_node_delete_and_a_merge_do_not_end_each_other`: other nodes
+        // whose bodies mention Abe, made first, so the merge's update of
+        // `node_mentions` meets their rows before the doomed node's.
+        let mut others = Vec::new();
+        for n in 0..12 {
+            let other = a_node(pool, "alice", &format!("Other {n}")).await;
+            save_body(pool, other, "alice", &token(&abe))
+                .await
+                .expect("save");
+            others.push(other.0);
+        }
+        let doomed = a_node(pool, "alice", "Doomed").await;
+        save_body(pool, doomed, "alice", &token(&abe))
+            .await
+            .expect("save");
+        people
+            .add_membership(doomed, abe.id, Some("Lead"), None)
+            .await
+            .expect("member");
+        if flipped {
+            sqlx::query(
+                "ALTER TABLE node_people \
+                 DROP CONSTRAINT node_people_node_id_fkey, \
+                 ADD CONSTRAINT node_people_node_id_fkey \
+                     FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE",
+            )
+            .execute(pool)
+            .await
+            .expect("alter");
+        }
+        assert_eq!(mentions_cascade_before_memberships(pool).await, flipped);
+        let plan = people
+            .merge_plan("alice", ada.id, abe.id)
+            .await
+            .expect("plan");
+
+        // The merge holds Abe's membership and stops in its update of
+        // `node_mentions`, at the other nodes' rows.
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM node_mentions WHERE node_id = ANY($1) FOR UPDATE")
+            .bind(&others)
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let merging = {
+            let (pool, token) = (pool.clone(), plan.token.clone());
+            tokio::spawn(async move {
+                PgPersonRepo::new(pool)
+                    .merge("alice", ada.id, abe.id, &token)
+                    .await
+            })
+        };
+        assert_eq!(lock_waiters(pool, 1).await, 1, "the merge is not waiting");
+        // The delete waits for the membership the merge holds. Flipped,
+        // it has deleted the doomed node's body row by then.
+        let deleting = {
+            let pool = pool.clone();
+            tokio::spawn(async move { PgNodeRepo::new(pool).delete(doomed).await })
+        };
+        assert_eq!(lock_waiters(pool, 2).await, 2, "the delete is not waiting");
+        held.commit().await.unwrap();
+        let released = std::time::Instant::now();
+        let limit = std::time::Duration::from_secs(20);
+        let deleted = tokio::time::timeout(limit, deleting)
+            .await
+            .expect("the delete hangs")
+            .expect("join");
+        // Timed to the end of the delete: the merge's own second go
+        // comes after.
+        let took = released.elapsed();
+        let merged = tokio::time::timeout(limit, merging)
+            .await
+            .expect("the merge hangs")
+            .expect("join");
+        (deleted, merged, took)
+    }
+
+    /// What a merge may answer when it met something head on: carried
+    /// out, or (having given way) "the plan changed" or "try again".
+    /// Never a failure of the database's.
+    fn gave_way_or_went_through(merged: &Result<Person, EmberTroveError>) -> bool {
+        matches!(
+            merged,
+            Ok(_) | Err(EmberTroveError::PreconditionFailed(_) | EmberTroveError::AlreadyExists(_))
+        )
+    }
+
+    /// Less than the time the database takes to look for a deadlock:
+    /// nobody was ended by one.
+    const NO_DEADLOCK: std::time::Duration = std::time::Duration::from_millis(900);
+
+    /// The control for the next test: as the migrations make it.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_delete_of_a_node_with_a_member_and_a_merge_as_migrated(pool: PgPool) {
+        let (deleted, merged, took) = a_delete_meets_a_merge(&pool, false).await;
+        assert!(
+            deleted.is_ok() && gave_way_or_went_through(&merged) && took < NO_DEADLOCK,
+            "delete: {deleted:?}\nmerge: {:?}\nafter {took:?}",
+            merged.as_ref().map(|p| p.id)
+        );
+    }
+
+    /// "A body's rows first, then a note's: the order a node's
+    /// delete reaches them" holds for memberships and body rows only
+    /// while `RI_ConstraintTrigger_a_<oid of node_people's>` sorts
+    /// before `…_<oid of node_mentions'>` as text.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_delete_of_a_node_with_a_member_and_a_merge_after_a_dump_and_load(pool: PgPool) {
+        let (deleted, merged, took) = a_delete_meets_a_merge(&pool, true).await;
+        assert!(
+            deleted.is_ok() && gave_way_or_went_through(&merged) && took < NO_DEADLOCK,
+            "delete: {deleted:?}\nmerge: {:?}\nafter {took:?}",
+            merged.as_ref().map(|p| p.id)
+        );
+    }
+
+    /// A save reads the alias table before it waits for a person. One
+    /// that waited for a merge takes the kept person only afterwards, in
+    /// `make_body_rows`' second pass: after people with higher ids, so
+    /// not "in id order" for the transaction. A second merge, of the
+    /// kept person with one the save already holds, then has the kept
+    /// person and waits for the other, and the save is the one ended.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_save_takes_the_kept_person_out_of_id_order(pool: PgPool) {
+        let mut four = Vec::new();
+        for name in ["A", "B", "C", "D"] {
+            four.push(someone(&pool, "alice", name).await);
+        }
+        four.sort_by_key(|p| p.id);
+        let [kept, other, slow, gone] = [&four[0], &four[1], &four[2], &four[3]];
+        let node = a_node(&pool, "alice", "Minutes").await;
+
+        // Something holds `slow` for a moment: the save's hold has
+        // `other` and waits there, its statement begun before any merge.
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM people WHERE id = $1 FOR UPDATE")
+            .bind(slow.id.0)
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let saving = {
+            let text = format!("{} {} {}", token(gone), token(other), token(slow));
+            let pool = pool.clone();
+            tokio::spawn(async move { save_body(&pool, node, "alice", &text).await })
+        };
+        assert_eq!(lock_waiters(&pool, 1).await, 1, "the save is not waiting");
+        // The first merge, start to end: `gone` into `kept`.
+        merged(&pool, "alice", kept.id, gone.id)
+            .await
+            .expect("the first merge");
+        // The second: `kept` with `other`. It has `kept` (the lower id)
+        // and waits for `other`, which the save holds.
+        let merging = {
+            let (pool, kept, other) = (pool.clone(), kept.id, other.id);
+            tokio::spawn(async move { merged(&pool, "alice", other, kept).await })
+        };
+        assert_eq!(lock_waiters(&pool, 2).await, 2, "the merge is not waiting");
+        held.commit().await.unwrap();
+        let released = std::time::Instant::now();
+
+        let limit = std::time::Duration::from_secs(20);
+        let saved = tokio::time::timeout(limit, saving)
+            .await
+            .expect("the save hangs")
+            .expect("join");
+        let took = released.elapsed();
+        let merged = tokio::time::timeout(limit, merging)
+            .await
+            .expect("the merge hangs")
+            .expect("join");
+        assert!(
+            saved.is_ok() && gave_way_or_went_through(&merged) && took < NO_DEADLOCK,
+            "save: {:?}\nmerge: {:?}\nafter {took:?}",
+            saved.as_ref().map(|n| n.id),
+            merged.as_ref().map(|p| p.id)
+        );
+    }
+
+    /// Both people are members of one
+    /// node, the case a merge joins. The merge locks their memberships
+    /// in the order of the memberships' ids; the node's delete takes
+    /// them as its scan meets them.
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_delete_of_a_node_both_are_members_of_and_their_merge(pool: PgPool) {
+        let people = PgPersonRepo::new(pool.clone());
+        let nodes = PgNodeRepo::new(pool.clone());
+        let mut two = [
+            someone(&pool, "alice", "Ada").await,
+            someone(&pool, "alice", "Abe").await,
+        ];
+        two.sort_by_key(|p| p.id);
+        // The membership the delete meets first (made first, of the
+        // lower person id) must be the one the merge locks second.
+        let (doomed, second_locked) = loop {
+            let node = a_node(&pool, "alice", &format!("Doomed {}", Uuid::new_v4())).await;
+            let met_first = people
+                .add_membership(node, two[0].id, Some("Lead"), None)
+                .await
+                .expect("member");
+            let met_second = people
+                .add_membership(node, two[1].id, Some("Chair"), None)
+                .await
+                .expect("member");
+            if met_first.0 > met_second.0 {
+                break (node, met_second);
+            }
+            nodes.delete(node).await.expect("tidy");
+        };
+        let plan = people
+            .merge_plan("alice", two[0].id, two[1].id)
+            .await
+            .expect("plan");
+
+        let mut held = pool.begin().await.unwrap();
+        sqlx::query("SELECT 1 FROM node_people WHERE id = $1 FOR UPDATE")
+            .bind(second_locked.0)
+            .execute(&mut *held)
+            .await
+            .unwrap();
+        let merging = {
+            let (pool, token, kept, gone) =
+                (pool.clone(), plan.token.clone(), two[0].id, two[1].id);
+            tokio::spawn(async move {
+                PgPersonRepo::new(pool)
+                    .merge("alice", kept, gone, &token)
+                    .await
+            })
+        };
+        assert_eq!(lock_waiters(&pool, 1).await, 1, "the merge is not waiting");
+        let deleting = {
+            let pool = pool.clone();
+            tokio::spawn(async move { PgNodeRepo::new(pool).delete(doomed).await })
+        };
+        assert_eq!(lock_waiters(&pool, 2).await, 2, "the delete is not waiting");
+        held.commit().await.unwrap();
+        let released = std::time::Instant::now();
+
+        let limit = std::time::Duration::from_secs(20);
+        let deleted = tokio::time::timeout(limit, deleting)
+            .await
+            .expect("the delete hangs")
+            .expect("join");
+        let took = released.elapsed();
+        let merged = tokio::time::timeout(limit, merging)
+            .await
+            .expect("the merge hangs")
+            .expect("join");
+        assert!(
+            deleted.is_ok() && gave_way_or_went_through(&merged) && took < NO_DEADLOCK,
+            "delete: {deleted:?}\nmerge: {:?}\nafter {took:?}",
+            merged.as_ref().map(|p| p.id)
         );
     }
 }

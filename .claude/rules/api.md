@@ -336,7 +336,8 @@ cargo check && cargo clippy -- -D warnings
   account's id is never locked or waited on.
 - **Lock order** (`repo/person_merge.rs`): the purge's advisory key and
   the restore's (`ember.restore`), both **shared**, before any row;
-  then both `people` rows in id order; then their `node_people` rows.
+  then both `people` rows in id order, their `node_people` rows and
+  their `node_mentions` rows.
   A purge and a restore delete what hangs on nodes before they reach
   `people`, the other way round from a merge: without the keys each
   can hold what the other waits for, and the one ended may be the
@@ -346,42 +347,59 @@ cargo check && cargo clippy -- -D warnings
   `UPDATE … SET person_id`; only the changed foreign key is checked. An
   insert and a delete instead would lock node rows after people, and
   meet a body's save (node first, then people) head on.
-- **A save that meets a merge waits for it, and decides afterwards**
-  (review of #364, 2026-11-20). A statement's own tables are read
-  before it waits on a row, so one statement that both waits and
-  decides sees the world from before the merge:
-  - whatever locks several people locks them **in id order**
-    (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does: a save,
-    a copy, and the account purge (`FOR UPDATE` before its delete). In
-    scan order, two of them each held the one the other waited for,
-    and the save was the one ended (a 500). "In id order" is about a
-    transaction, not a statement: two sorted statements are not sorted
-    together;
-  - so a body's save holds **all** its people in one statement first
-    (`hold_body_people`): those the node already has a row for and
-    those it adds. Without the first, a save that takes the kept
+- **Where a merge meets another transaction head on, the merge gives
+  way** (three reviews of #364, 2026-11-20). No order of the merge's
+  rows fits everyone: a node's delete reaches memberships and mention
+  rows through its cascades, in an order that depends on the names of
+  the database's triggers (it differs after a dump and load); a save, a
+  copy and a note take a node or a note first and people after.
+  - Once it holds a row, the merge waits for a lock for two fifths of
+    `deadlock_timeout` (`person_merge::YIELDS`), so it stops waiting
+    before the database looks for a deadlock and ends someone. It is
+    tried once more, and then answers 409 "try again". The save or the
+    delete it met goes on untouched.
+  - **Do not fix a deadlock with the merge by adding a lock somewhere
+    else.** Each of three tries did: a hold on the people a body
+    already mentions made a co-editor's save meet the account purge; a
+    lock on the purge's people to answer that put the purge out of step
+    with a restore and with a note's save; a guessed reordering of the
+    merge's own statements was the reverse of a node delete's. A lock
+    added to fix one race is a new edge in everyone else's order.
+  - Not a promise: a merge that has already made the other wait for
+    most of a second, through several short waits of its own, can be
+    late. The database then ends one of the two, as it would have.
+- **A save that meets a merge decides after it, not during it.** A
+  statement reads its tables before it waits on a row, so one statement
+  that both waits and decides sees the world from before the merge.
+  What must not happen is a wrong result; these are for that, not for
+  lock order:
+  - the merge holds the body rows (`node_mentions`) of its two people
+    before it moves any, and a body's save holds **the node's own
+    rows** in a statement of its own before it deletes one
+    (`drop_body_rows`). Without both, a save that takes the kept
     person's token out and leaves the other's left a real mention with
-    no row. A copy holds the copier's people on the source the same way;
+    no row. Rows of that node only: a save never holds a person it
+    does not add a mention of, and never one of another account;
+  - a copy holds the copier's own people on the source, in a statement
+    of its own, before it copies rows;
   - `PersonRepo::update` takes the table lock its write needs, then the
     person's row (by id **and owner**), each in a statement of its own,
     before the `UPDATE`. Without the row, a save with no version that
     waited on a merge wrote the old card over it. Without the table
     lock first, a restore's lock on `people` fits between the two;
-  - the merge moves a body's mention rows before a note's: the order a
-    node's delete reaches them (its own rows, then its notes' rows,
-    which are a cascade of a cascade). The reverse deadlocks, and the
-    delete can be the one ended;
-  - a lock added to fix one race is a new edge in everyone else's lock
-    order. Each of the three above came from the fix for another, and
-    was found only by a second review of the fix: test a new lock
-    against every transaction that touches the same rows (a merge, a
-    purge, a restore, a node's delete, another save).
+  - a statement that locks several people locks them in id order
+    (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does. It spares
+    the everyday case a wait; it is not what keeps a save from being
+    ended (the merge giving way is);
+  - a note needs none of this: every save of a note makes all its rows
+    again, in one statement that holds every person its text names.
 - The one who goes is deleted **before** the kept person is written:
   the email rule must find their addresses free. An address a third
   person lists is left out (`report.someone_elses`), not taken.
 - Refusals (a list over 10, notes over 10,000, a joined membership note
-  over 2,000) are 422 in words; a changed plan is 412; a lock not got
-  in 5 s, or a second deadlock, is 409 "try again".
+  over 2,000) are 422 in words; a changed plan is 412; a restore or the
+  account's purge still running after 5 s, or a row still held at the
+  second try, is 409 "try again".
 - The plan's `mentioned_in` is counted in the route with
   `subject_scope`, as the person's "Mentioned in" list is: a raw row
   count would tell of nodes the caller can no longer open. It is not
