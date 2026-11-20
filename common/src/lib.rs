@@ -63,6 +63,7 @@ pub mod ontology;
 pub mod permission;
 pub mod person;
 pub mod person_carry;
+pub mod person_merge;
 pub mod picker;
 pub mod project_focus;
 pub mod project_state;
