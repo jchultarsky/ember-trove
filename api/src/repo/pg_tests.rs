@@ -18400,12 +18400,23 @@ mod mentions {
     /// saves so that the table holds `first`'s row before `last`'s.
     /// Alice's purge has deleted `first`'s row and is stopped at
     /// `middle`'s on another node. Bob then saves `after`.
+    /// How the two rows on Bob's node came to lie in the table.
+    #[derive(Clone, Copy)]
+    enum RowsMade {
+        /// By one save.
+        Together,
+        /// By two: the row of the person the purge meets first lies first.
+        FirstThenLast,
+        /// By two, the other way round.
+        LastThenFirst,
+    }
+
     #[allow(clippy::expect_used, clippy::unwrap_used)]
     async fn bob_saves_while_alice_is_purged(
         pool: &PgPool,
         keep_first: bool,
         keep_last: bool,
-        one_save: bool,
+        made: RowsMade,
     ) -> (
         Result<Node, EmberTroveError>,
         Result<(), EmberTroveError>,
@@ -18421,28 +18432,24 @@ mod mentions {
         }
         let node = a_node(pool, "bob", "Bob's").await;
         share(pool, node, "bob", "alice").await;
-        if one_save {
-            save_body(
-                pool,
-                node,
-                "alice",
-                &format!("{} and {}", token(&first), token(&last)),
-            )
-            .await
-            .expect("save");
-        } else {
-            save_body(pool, node, "alice", &token(&first))
+        let alone = match made {
+            RowsMade::Together => None,
+            RowsMade::FirstThenLast => Some(&first),
+            RowsMade::LastThenFirst => Some(&last),
+        };
+        if let Some(alone) = alone {
+            save_body(pool, node, "alice", &token(alone))
                 .await
                 .expect("save");
-            save_body(
-                pool,
-                node,
-                "alice",
-                &format!("{} and {}", token(&first), token(&last)),
-            )
-            .await
-            .expect("save");
         }
+        save_body(
+            pool,
+            node,
+            "alice",
+            &format!("{} and {}", token(&first), token(&last)),
+        )
+        .await
+        .expect("save");
         assert_eq!(body_rows(pool, node).await.len(), 2);
         let aside = a_node(pool, "bob", "Bob's other").await;
         share(pool, aside, "bob", "alice").await;
@@ -18517,7 +18524,7 @@ mod mentions {
     async fn a_save_beside_a_purge_that_takes_out_the_row_the_purge_has(pool: PgPool) {
         neither_was_ended(
             "takes out first",
-            bob_saves_while_alice_is_purged(&pool, false, true, false).await,
+            bob_saves_while_alice_is_purged(&pool, false, true, RowsMade::FirstThenLast).await,
         );
     }
 
@@ -18525,7 +18532,7 @@ mod mentions {
     async fn a_save_beside_a_purge_that_takes_out_the_row_the_purge_has_not(pool: PgPool) {
         neither_was_ended(
             "takes out last",
-            bob_saves_while_alice_is_purged(&pool, true, false, false).await,
+            bob_saves_while_alice_is_purged(&pool, true, false, RowsMade::FirstThenLast).await,
         );
     }
 
@@ -18533,7 +18540,7 @@ mod mentions {
     async fn a_save_beside_a_purge_that_takes_out_both_rows_made_by_two_saves(pool: PgPool) {
         neither_was_ended(
             "takes out both (two saves)",
-            bob_saves_while_alice_is_purged(&pool, false, false, false).await,
+            bob_saves_while_alice_is_purged(&pool, false, false, RowsMade::FirstThenLast).await,
         );
     }
 
@@ -18541,8 +18548,22 @@ mod mentions {
     async fn a_save_beside_a_purge_that_takes_out_both_rows_made_by_one_save(pool: PgPool) {
         neither_was_ended(
             "takes out both (one save)",
-            bob_saves_while_alice_is_purged(&pool, false, false, true).await,
+            bob_saves_while_alice_is_purged(&pool, false, false, RowsMade::Together).await,
         );
+    }
+
+    /// A save that takes nothing out holds no row at all, however the
+    /// rows lie. Holding every row of the node (as one commit of #364
+    /// did), it took the row the purge had not reached yet and waited
+    /// for the one the purge had: with the rows this way round, that is
+    /// a deadlock. (The other purge tests lay the rows the other way,
+    /// where a wide hold only waits.)
+    #[sqlx::test(migrations = "../migrations")]
+    async fn a_save_beside_a_purge_that_takes_out_nothing_holds_no_row(pool: PgPool) {
+        let (saved, purged, took, waited) =
+            bob_saves_while_alice_is_purged(&pool, true, true, RowsMade::LastThenFirst).await;
+        assert!(!waited, "a save that deletes no row waited for one");
+        neither_was_ended("takes out nothing", (saved, purged, took, waited));
     }
 
     /// After "try again" from the wait for a restore, the connection
