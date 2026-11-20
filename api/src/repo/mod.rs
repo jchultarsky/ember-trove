@@ -19,6 +19,7 @@ pub mod note;
 pub mod object_deletion;
 pub mod permission;
 pub mod person;
+pub mod person_merge;
 #[cfg(all(test, feature = "pg-tests"))]
 mod pg_tests;
 pub mod pkce;

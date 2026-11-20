@@ -39,11 +39,36 @@ pub trait PersonRepo: Send + Sync {
     /// [`Self::email_collisions`] first, so this is the answer to a race.
     async fn create(&self, owner: &str, input: &PersonInput) -> Result<Person, EmberTroveError>;
     /// As [`Self::create`]; NotFound unless `owner` owns `id`.
+    ///
+    /// `expected`: the person's `updated_at` as the sender read it (S8c).
+    /// When given, the save is applied only if the person is still at
+    /// that version; else `PreconditionFailed` and nothing is written.
+    /// Without it the save goes through, **unless the person has been
+    /// merged into** (they have an alias): a tab from before the merge,
+    /// or from before versions were sent, would undo it.
     async fn update(
         &self,
         owner: &str,
         id: PersonId,
         input: &PersonInput,
+        expected: Option<DateTime<Utc>>,
+    ) -> Result<Person, EmberTroveError>;
+    /// What merging `gone` into `kept` would do (S8c): nothing is
+    /// written. NotFound unless `owner` owns both.
+    async fn merge_plan(
+        &self,
+        owner: &str,
+        kept: PersonId,
+        gone: PersonId,
+    ) -> Result<common::person_merge::MergePlan, EmberTroveError>;
+    /// Merge `gone` into `kept` in one transaction, if `confirm` is the
+    /// token of the plan as it is now (`person_merge::merge`).
+    async fn merge(
+        &self,
+        owner: &str,
+        kept: PersonId,
+        gone: PersonId,
+        confirm: &str,
     ) -> Result<Person, EmberTroveError>;
     async fn delete(&self, owner: &str, id: PersonId) -> Result<(), EmberTroveError>;
     /// The owner's **other** people whom a save of `id` (`None`: a person
@@ -167,6 +192,11 @@ fn save_failed(what: &'static str) -> impl Fn(sqlx::Error) -> EmberTroveError {
     }
 }
 
+/// What a save is told when the person is no longer at the version the
+/// sender read.
+pub(crate) const PERSON_CHANGED: &str =
+    "this person changed since you opened them: reload to see how they are now";
+
 fn person_not_found(id: PersonId) -> EmberTroveError {
     EmberTroveError::NotFound(format!("person {id} not found"))
 }
@@ -289,13 +319,20 @@ impl PersonRepo for PgPersonRepo {
         owner: &str,
         id: PersonId,
         p: &PersonInput,
+        expected: Option<DateTime<Utc>>,
     ) -> Result<Person, EmberTroveError> {
-        sqlx::query_as::<_, PersonRow>(&format!(
+        // The version is checked in the statement that writes, so a save
+        // can't slip in between a check and the write. A save that sends
+        // none passes, except over a person someone was merged into.
+        let saved = sqlx::query_as::<_, PersonRow>(&format!(
             r#"
             UPDATE people SET
                 display_name = $3, company = $4, position = $5, emails = $6, phones = $7,
                 addresses = $8, notes = $9
             WHERE id = $1 AND owner_id = $2
+              AND CASE WHEN $10::timestamptz IS NULL
+                       THEN NOT EXISTS (SELECT 1 FROM person_aliases a WHERE a.person_id = $1)
+                       ELSE updated_at = $10 END
             RETURNING {PERSON_COLS}
             "#
         ))
@@ -308,11 +345,40 @@ impl PersonRepo for PgPersonRepo {
         .bind(Json(&p.phones))
         .bind(Json(&p.addresses))
         .bind(&p.notes)
+        .bind(expected)
         .fetch_optional(&self.pool)
         .await
-        .map_err(save_failed("update person"))?
-        .map(Person::from)
-        .ok_or_else(|| person_not_found(id))
+        .map_err(save_failed("update person"))?;
+        match saved {
+            Some(row) => Ok(row.into()),
+            // No row: not the owner's (or not there), or not at that
+            // version. Told apart only for the owner.
+            None => {
+                self.get(owner, id).await?;
+                Err(EmberTroveError::PreconditionFailed(
+                    PERSON_CHANGED.to_string(),
+                ))
+            }
+        }
+    }
+
+    async fn merge_plan(
+        &self,
+        owner: &str,
+        kept: PersonId,
+        gone: PersonId,
+    ) -> Result<common::person_merge::MergePlan, EmberTroveError> {
+        super::person_merge::merge_plan(&self.pool, owner, kept, gone).await
+    }
+
+    async fn merge(
+        &self,
+        owner: &str,
+        kept: PersonId,
+        gone: PersonId,
+        confirm: &str,
+    ) -> Result<Person, EmberTroveError> {
+        super::person_merge::merge(&self.pool, owner, kept, gone, confirm).await
     }
 
     async fn delete(&self, owner: &str, id: PersonId) -> Result<(), EmberTroveError> {
