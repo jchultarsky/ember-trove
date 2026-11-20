@@ -566,7 +566,14 @@ async fn get_node(
     // above, and for the caller in person, an admin included: a name is
     // given only with text its reader may read, and only while the
     // person's owner can still open this node.
-    let mentions = state.mentions.for_node(node.id, &claims.sub).await?;
+    // The ids its tokens hold go with it: an id that is an alias (of a
+    // person merged into another, S8c) is answered only for a text that
+    // holds it.
+    let in_text = common::mention::mentioned_ids(node.body.as_deref().unwrap_or_default());
+    let mentions = state
+        .mentions
+        .for_node(node.id, &claims.sub, &in_text)
+        .await?;
     Ok(Json(ViewedNode {
         node,
         blocked_by,

@@ -419,6 +419,7 @@ mod tests {
             person_id: ada(),
             display_name: name.to_string(),
             mine,
+            links_to: None,
         }]
     }
 

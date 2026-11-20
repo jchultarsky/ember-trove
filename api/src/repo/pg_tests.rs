@@ -14811,7 +14811,7 @@ mod mentions {
     async fn body_names(pool: &PgPool, node: NodeId, reader: &str) -> Vec<(String, bool)> {
         told(
             PgMentionRepo::new(pool.clone())
-                .for_node(node, reader)
+                .for_node(node, reader, &[])
                 .await
                 .expect("names"),
         )
@@ -14821,7 +14821,7 @@ mod mentions {
     async fn note_names(pool: &PgPool, note: NoteId, reader: &str) -> Vec<(String, bool)> {
         told(
             PgMentionRepo::new(pool.clone())
-                .for_notes(&[note], reader)
+                .for_notes(&[(note, Vec::new())], reader)
                 .await
                 .expect("names")
                 .remove(&note)

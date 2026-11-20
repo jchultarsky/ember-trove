@@ -436,6 +436,7 @@ impl MentionPicker {
                     person_id: person.id,
                     display_name: person.display_name.clone(),
                     mine: true,
+                    links_to: None,
                 });
             }
         });
@@ -747,6 +748,7 @@ mod tests {
             person_id: PersonId(Uuid::from_u128(n)),
             display_name: name.to_string(),
             mine,
+            links_to: None,
         };
         let names = MentionPicker::names_of(
             vec![name(1, "Ada King", true), name(7, "Theirs", false)],

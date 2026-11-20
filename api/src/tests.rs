@@ -1751,6 +1751,7 @@ impl StubMentionRepo {
             person_id: common::id::PersonId(Uuid::from_u128(AZ_PERSON)),
             display_name: "Ada".into(),
             mine: reader == "test-sub",
+            links_to: None,
         }
     }
 }
@@ -1760,13 +1761,14 @@ impl crate::repo::mention::MentionRepo for StubMentionRepo {
         &self,
         _: NodeId,
         reader: &str,
+        _: &[common::id::PersonId],
     ) -> Result<Vec<common::mention::MentionName>, EmberTroveError> {
         MENTION_READERS.with(|v| v.borrow_mut().push(("for_node", reader.to_string())));
         Ok(vec![Self::ada(reader)])
     }
     async fn for_notes(
         &self,
-        notes: &[common::id::NoteId],
+        notes: &[(common::id::NoteId, Vec<common::id::PersonId>)],
         reader: &str,
     ) -> Result<
         std::collections::HashMap<common::id::NoteId, Vec<common::mention::MentionName>>,
@@ -1775,7 +1777,7 @@ impl crate::repo::mention::MentionRepo for StubMentionRepo {
         MENTION_READERS.with(|v| v.borrow_mut().push(("for_notes", reader.to_string())));
         Ok(notes
             .iter()
-            .map(|n| (*n, vec![Self::ada(reader)]))
+            .map(|(n, _)| (*n, vec![Self::ada(reader)]))
             .collect())
     }
     async fn mentioned_in(

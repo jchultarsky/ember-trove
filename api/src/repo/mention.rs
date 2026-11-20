@@ -22,6 +22,20 @@
 //! text that holds the mention, by a route that has already checked its
 //! reader may read that text, and always for that reader in person:
 //! never for "everyone", as an admin's lists are.
+//!
+//! **Aliases (S8c, #363).** A merge of two people deletes one and leaves
+//! their id in `person_aliases`, standing for the one kept. No text is
+//! changed, so a token can hold either id. The rows are always of the
+//! living person; every statement here that compares a row with the ids
+//! a text holds reads those ids through the alias table:
+//! - a save that adds a token with the old id makes a row for the kept
+//!   person, **if they are the saver's own** (rule 1 is unchanged: the
+//!   alias is read inside the same statement that checks the owner);
+//! - a row stays while the text holds the person's id or an alias of it;
+//! - a read gives a name for an alias id **only when that text holds
+//!   it**. Told of every alias of a person named on one node, a reader
+//!   would learn that two ids are one person, and could then read the
+//!   name behind a token on another node where rule 2 withholds it.
 
 use std::collections::HashMap;
 
@@ -51,6 +65,24 @@ fn named_to(reader: u8) -> String {
     )
 }
 
+/// SQL: the person `p` is one the ids bound at `$ids` stand for: by
+/// their own id, or by the id of someone merged into them (S8c).
+fn stands_for(ids: u8) -> String {
+    format!(
+        "(p.id = ANY(${ids}) OR p.id IN \
+           (SELECT a.person_id FROM person_aliases a WHERE a.old_id = ANY(${ids})))"
+    )
+}
+
+/// SQL: the row `m` is of a person the ids bound at `$ids` stand for.
+fn still_mentioned(ids: u8) -> String {
+    format!(
+        "(m.person_id = ANY(${ids}) OR EXISTS \
+           (SELECT 1 FROM person_aliases a \
+            WHERE a.person_id = m.person_id AND a.old_id = ANY(${ids})))"
+    )
+}
+
 /// The one statement that makes rows for a node's body: for the people
 /// in `make` who belong to `saver`, and nobody else.
 ///
@@ -69,19 +101,34 @@ async fn make_body_rows(
         return Ok(());
     }
     let ids: Vec<Uuid> = make.iter().map(|p| p.0).collect();
-    sqlx::query(
+    let insert = format!(
         "INSERT INTO node_mentions (node_id, person_id) \
          SELECT $1, p.id FROM people p \
-         WHERE p.id = ANY($2) AND p.owner_id = $3 \
+         WHERE {theirs} AND p.owner_id = $3 \
          FOR KEY SHARE OF p \
          ON CONFLICT DO NOTHING",
-    )
-    .bind(node.0)
-    .bind(&ids)
-    .bind(saver)
-    .execute(&mut *conn)
-    .await
-    .map_err(db("sync mentions"))?;
+        theirs = stands_for(2),
+    );
+    // Twice at most. A merge that was under way holds the person's row:
+    // this statement waits for it, then finds the person gone, and its
+    // own view of the alias table is from before the merge. Asked again,
+    // it sees the alias and makes the row for the person kept. (Fewer
+    // rows than ids is also the everyday case of an id that is not the
+    // saver's, or a row that was there: the second pass then finds the
+    // same nothing.)
+    for _ in 0..2 {
+        let made = sqlx::query(&insert)
+            .bind(node.0)
+            .bind(&ids)
+            .bind(saver)
+            .execute(&mut *conn)
+            .await
+            .map_err(db("sync mentions"))?
+            .rows_affected();
+        if made >= ids.len() as u64 {
+            break;
+        }
+    }
     Ok(())
 }
 
@@ -92,12 +139,15 @@ async fn drop_body_rows(
     mentioned: &[PersonId],
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
-    sqlx::query("DELETE FROM node_mentions WHERE node_id = $1 AND NOT (person_id = ANY($2))")
-        .bind(node.0)
-        .bind(&ids)
-        .execute(&mut *conn)
-        .await
-        .map_err(db("sync mentions"))?;
+    sqlx::query(&format!(
+        "DELETE FROM node_mentions m WHERE m.node_id = $1 AND NOT {kept}",
+        kept = still_mentioned(2),
+    ))
+    .bind(node.0)
+    .bind(&ids)
+    .execute(&mut *conn)
+    .await
+    .map_err(db("sync mentions"))?;
     Ok(())
 }
 
@@ -149,14 +199,15 @@ pub(crate) async fn copy_body_rows_on(
         return Ok(());
     }
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
-    sqlx::query(
+    sqlx::query(&format!(
         "INSERT INTO node_mentions (node_id, person_id) \
          SELECT $2, p.id FROM node_mentions m \
          JOIN people p ON p.id = m.person_id \
-         WHERE m.node_id = $1 AND m.person_id = ANY($3) AND p.owner_id = $4 \
+         WHERE m.node_id = $1 AND {held} AND p.owner_id = $4 \
          FOR KEY SHARE OF p \
          ON CONFLICT DO NOTHING",
-    )
+        held = still_mentioned(3),
+    ))
     .bind(from.0)
     .bind(to.0)
     .bind(&ids)
@@ -179,13 +230,16 @@ pub(crate) async fn sync_note_on(
 ) -> Result<(), EmberTroveError> {
     let ids: Vec<Uuid> = mentioned.iter().map(|p| p.0).collect();
     if !ids.is_empty() {
-        sqlx::query(
+        // Once: every save of a note makes all its rows again, so one
+        // that lost a row to a merge under way gets it with the next.
+        sqlx::query(&format!(
             "INSERT INTO note_mentions (note_id, person_id) \
              SELECT $1, p.id FROM people p \
-             WHERE p.id = ANY($2) AND p.owner_id = $3 \
+             WHERE {theirs} AND p.owner_id = $3 \
              FOR KEY SHARE OF p \
              ON CONFLICT DO NOTHING",
-        )
+            theirs = stands_for(2),
+        ))
         .bind(note.0)
         .bind(&ids)
         .bind(author)
@@ -193,13 +247,36 @@ pub(crate) async fn sync_note_on(
         .await
         .map_err(db("sync mentions"))?;
     }
-    sqlx::query("DELETE FROM note_mentions WHERE note_id = $1 AND NOT (person_id = ANY($2))")
-        .bind(note.0)
-        .bind(&ids)
-        .execute(&mut *conn)
-        .await
-        .map_err(db("sync mentions"))?;
+    sqlx::query(&format!(
+        "DELETE FROM note_mentions m WHERE m.note_id = $1 AND NOT {kept}",
+        kept = still_mentioned(2),
+    ))
+    .bind(note.0)
+    .bind(&ids)
+    .execute(&mut *conn)
+    .await
+    .map_err(db("sync mentions"))?;
     Ok(())
+}
+
+/// Every alias, all accounts: the backup's read, on its one snapshot.
+pub(crate) async fn aliases_all_on(
+    conn: &mut PgConnection,
+) -> Result<Vec<common::mention::BackupAlias>, EmberTroveError> {
+    let rows = sqlx::query_as::<_, (Uuid, Uuid, chrono::DateTime<chrono::Utc>)>(
+        "SELECT old_id, person_id, merged_at FROM person_aliases ORDER BY merged_at, old_id",
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db("list_all aliases"))?;
+    Ok(rows
+        .into_iter()
+        .map(|(old, person, merged_at)| common::mention::BackupAlias {
+            old_id: PersonId(old),
+            person_id: PersonId(person),
+            merged_at,
+        })
+        .collect())
 }
 
 /// Every stored mention, all accounts: the backup's read, on its one
@@ -237,16 +314,23 @@ pub trait MentionRepo: Send + Sync {
     /// them. Someone not named is simply absent: a forged token, a
     /// deleted person and a person whose owner can no longer open the
     /// node are one answer.
+    ///
+    /// `in_text`: the ids the body's tokens hold
+    /// (`common::mention::mentioned_ids`). A person is answered under
+    /// their own id, and under the id of someone merged into them only
+    /// if the body holds that id.
     async fn for_node(
         &self,
         node: NodeId,
         reader: &str,
+        in_text: &[PersonId],
     ) -> Result<Vec<MentionName>, EmberTroveError>;
 
-    /// The same for each of `notes`. A note in the trash names nobody.
+    /// The same for each of `notes`, each with the ids its own text
+    /// holds. A note in the trash names nobody.
     async fn for_notes(
         &self,
-        notes: &[NoteId],
+        notes: &[(NoteId, Vec<PersonId>)],
         reader: &str,
     ) -> Result<HashMap<NoteId, Vec<MentionName>>, EmberTroveError>;
 
@@ -260,6 +344,22 @@ pub trait MentionRepo: Send + Sync {
         person: PersonId,
         reader: Option<&str>,
     ) -> Result<Vec<PersonMention>, EmberTroveError>;
+}
+
+/// One answered name: under the id the text's token holds, and for the
+/// person's owner alone, where that token's link leads when the id is
+/// an alias.
+///
+/// SECURITY: `links_to` is the person's real id. A reader who is not
+/// their owner never gets it: there is no way into another account's
+/// People (ONTOLOGY §14).
+fn named_as((token, person, display_name, mine): (Uuid, Uuid, String, bool)) -> MentionName {
+    MentionName {
+        person_id: PersonId(token),
+        display_name,
+        mine,
+        links_to: (mine && token != person).then_some(PersonId(person)),
+    }
 }
 
 pub struct PgMentionRepo {
@@ -278,62 +378,78 @@ impl MentionRepo for PgMentionRepo {
         &self,
         node: NodeId,
         reader: &str,
+        in_text: &[PersonId],
     ) -> Result<Vec<MentionName>, EmberTroveError> {
-        let rows = sqlx::query_as::<_, (Uuid, String, bool)>(&format!(
-            "SELECT p.id, p.display_name, p.owner_id = $2::text \
+        let held: Vec<Uuid> = in_text.iter().map(|p| p.0).collect();
+        let rows = sqlx::query_as::<_, (Uuid, Uuid, String, bool)>(&format!(
+            "SELECT t.token_id, p.id, p.display_name, p.owner_id = $2::text \
              FROM node_mentions m \
              JOIN nodes n ON n.id = m.node_id \
              JOIN people p ON p.id = m.person_id \
+             JOIN LATERAL ( \
+                 SELECT p.id AS token_id \
+                 UNION ALL \
+                 SELECT a.old_id FROM person_aliases a \
+                 WHERE a.person_id = p.id AND a.old_id = ANY($3) \
+             ) t ON true \
              WHERE m.node_id = $1 AND {named} \
-             ORDER BY lower(p.display_name), p.id",
+             ORDER BY lower(p.display_name), p.id, t.token_id",
             named = named_to(2),
         ))
         .bind(node.0)
         .bind(reader)
+        .bind(&held)
         .fetch_all(&self.pool)
         .await
         .map_err(db("read mentions"))?;
-        Ok(rows
-            .into_iter()
-            .map(|(id, display_name, mine)| MentionName {
-                person_id: PersonId(id),
-                display_name,
-                mine,
-            })
-            .collect())
+        Ok(rows.into_iter().map(named_as).collect())
     }
 
     async fn for_notes(
         &self,
-        notes: &[NoteId],
+        notes: &[(NoteId, Vec<PersonId>)],
         reader: &str,
     ) -> Result<HashMap<NoteId, Vec<MentionName>>, EmberTroveError> {
         let mut named: HashMap<NoteId, Vec<MentionName>> = HashMap::new();
         if notes.is_empty() {
             return Ok(named);
         }
-        let ids: Vec<Uuid> = notes.iter().map(|n| n.0).collect();
-        let rows = sqlx::query_as::<_, (Uuid, Uuid, String, bool)>(&format!(
-            "SELECT m.note_id, p.id, p.display_name, p.owner_id = $2::text \
+        let ids: Vec<Uuid> = notes.iter().map(|(n, _)| n.0).collect();
+        // Which id each note's own text holds, as two arrays side by side.
+        let (of_note, held): (Vec<Uuid>, Vec<Uuid>) = notes
+            .iter()
+            .flat_map(|(note, ids)| ids.iter().map(move |id| (note.0, id.0)))
+            .unzip();
+        let rows = sqlx::query_as::<_, (Uuid, Uuid, Uuid, String, bool)>(&format!(
+            "SELECT m.note_id, t.token_id, p.id, p.display_name, p.owner_id = $2::text \
              FROM note_mentions m \
              JOIN node_notes nn ON nn.id = m.note_id AND nn.deleted_at IS NULL \
              JOIN nodes n ON n.id = nn.node_id \
              JOIN people p ON p.id = m.person_id \
+             JOIN LATERAL ( \
+                 SELECT p.id AS token_id \
+                 UNION ALL \
+                 SELECT a.old_id FROM person_aliases a \
+                 WHERE a.person_id = p.id AND EXISTS ( \
+                     SELECT 1 FROM unnest($3::uuid[], $4::uuid[]) AS x(note_id, token_id) \
+                     WHERE x.note_id = m.note_id AND x.token_id = a.old_id) \
+             ) t ON true \
              WHERE m.note_id = ANY($1) AND {named} \
-             ORDER BY m.note_id, lower(p.display_name), p.id",
+             ORDER BY m.note_id, lower(p.display_name), p.id, t.token_id",
             named = named_to(2),
         ))
         .bind(&ids)
         .bind(reader)
+        .bind(&of_note)
+        .bind(&held)
         .fetch_all(&self.pool)
         .await
         .map_err(db("read mentions"))?;
-        for (note, id, display_name, mine) in rows {
-            named.entry(NoteId(note)).or_default().push(MentionName {
-                person_id: PersonId(id),
-                display_name,
-                mine,
-            });
+        for (note, token, id, display_name, mine) in rows {
+            named
+                .entry(NoteId(note))
+                .or_default()
+                .push(named_as((token, id, display_name, mine)));
         }
         Ok(named)
     }

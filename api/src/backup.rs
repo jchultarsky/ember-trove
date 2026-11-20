@@ -317,6 +317,9 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
     // Which task waits for which (S5d), between the live tasks above.
     let task_dependencies = repo::task_dependency::list_all_on(&mut *conn).await?;
     let mentions = repo::mention::list_all_on(&mut *conn).await?;
+    // Ids of people merged into another (S8c), in the same snapshot as
+    // the people and the mention rows they explain.
+    let person_aliases = repo::mention::aliases_all_on(&mut *conn).await?;
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
     let focus = repo::project_focus::list_all_on(&mut *conn).await?;
@@ -362,6 +365,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         focus: Some(focus),
         task_dependencies,
         mentions,
+        person_aliases,
     })
 }
 
