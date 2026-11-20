@@ -461,7 +461,36 @@ reach (a person with no email, or an email that changed).
   - On a node, the Person who has the address is put on the node
     instead, with the Role and Note typed. The other details typed are
     not added to them.
-  - Merging two **saved** People comes with the merge tool.
+  - Two **saved** People are merged with the merge tool (below). The
+    notice over an edit that collides offers it.
+- **The merge tool** joins two of an account's own People into one. It
+  is the fallback for what the rule cannot reach: a Person with no
+  email, an email that changed, a pair from before the rule.
+  - One Person is **kept**; the other is merged in and then deleted.
+    Which is which is chosen in the dialog, and can be swapped there.
+  - The plan is shown first, and nothing is written until it is
+    confirmed. If either Person changed meanwhile, the merge is not
+    carried out and the plan is shown again.
+  - **Fields:** the kept Person's stand. A blank company, position or
+    notes is filled; emails, phones and addresses the kept Person does
+    not have are added. A name, company or position of the other that
+    differs is kept as one line in the kept Person's notes ("Merged in:
+    name “…”; company “…”.").
+  - **An address a third Person also lists** (an old pair) is left out
+    and said: taking it would make a new pair.
+  - **Memberships** move to the kept Person. Where both are on one
+    Project, the kept Person's role stands (the other's fills a blank),
+    the two notes are joined, and the other's role, if it differs, is
+    said in the plan and not kept.
+  - **Mentions** of the other become mentions of the kept Person, and no
+    text is changed (§7.3).
+  - **Refused, in words,** when together they would pass a limit: ten
+    entries in a list, the length of a Person's notes or of a
+    membership's note. Tidy one of them first.
+  - **There is no undo.** A backup made before the merge has both.
+  - It opens from a Person's page, from the notice over an edit that
+    collides, and from the data-health report's list of People who
+    share an address.
 - **The same address** means the same text once the spaces around it are
   off and ASCII letters are compared without case. Nothing more: no mail
   provider's own rules (dots, `+tags`), and letters outside ASCII are
@@ -521,6 +550,14 @@ ID, not their name**.
   the mention cannot be resolved. It is never used to find anyone, and it
   can be older than the Person's current name: nothing rewrites it, and
   the page shows the current name without it.
+- **After a merge (§7.1) no text is rewritten.** The ID of the Person
+  who was merged away stands for the one kept, wherever a mention is
+  read or written: a mention with the old ID shows the kept Person's
+  current name, in a body, a note, an old version and on other people's
+  nodes, under the same rules as any mention. Typed or pasted again by
+  the Person's owner it is a real mention of the kept Person; typed by
+  anyone else it is plain text, as before. The old ID opens nothing:
+  only a text's mention reads through it.
 - **A mention is real only when its author made it.** A save makes a
   mention only for a mention it **adds** to the text, and only of the
   saver's own People. A token typed or pasted with another account's
@@ -1019,6 +1056,8 @@ model's semantics never widen what anyone can see or change.
 | 2026-11-18 | How §7.1 is built (S8a). The rule is in the database for every writer, as a trigger under a lock per account, **not a unique index and not a `person_emails` table** as the programme had it: a unique key can't say "old pairs may stay, new ones may not". A `person_emails` table with a unique key can replace it once no address is shared and no Person lists one twice. "The same address": spaces off, ASCII case folded, nothing else, the same on every installation. The same address twice on one Person is refused by the API (the database's rule is about two People; a restore brings back a Person who has one twice), and so is an address with a wrapper or one of the usual invisible characters. `?confirm=true` no longer saves anyway. A restore brings back its archive's pairs and its preview counts them. No backup format change. Shared mailboxes are refused from now on; Companies, where §7.1 puts them, come in S10a | Developer, building S8a; in the plan the owner approved |
 | 2026-11-18 | **How a mention is written and shown** (§7.3, §14; S9). The raw text holds the name and the ID, `@[name](person:ID)`: the ID is the identity, the page shows the current name, and the name in the text may go stale after a rename. Another reader (a sharee, the admin) sees the current name as plain text, with no link. No report of leftover mentions yet: it comes with the merge tool (S8c) | Owner, in the developer session (planning S9, #360) |
 | 2026-11-18 | How S9 is built. A mention is real only if it has a row, made in the transaction that saves the text, for a mention that save adds, of the saver's own People; a token with no row names nobody, and a token someone else put in the text is never made real by a later save, a restored version or a copy (from the security review of #361: a co-editor could otherwise plant a token with the ID of the owner's Person and have the owner's next save name them). A Person is named to another reader only while the Person's owner can still open the node. Names travel only with the text that holds the mention; there is no lookup by ID. The picker is docked at the editor and driven by the keyboard, and `@` followed by Enter is a new line, never a pick. A mention is shown only where Markdown reads a link and the app's own scanner reads a token, as words on the page, with the sanitizer run last on everything and its result checked: a text in which a mention, one that names nobody included, did not come out as its own element (raw HTML can swallow what follows it into an attribute) is shown with its raw HTML as plain text, and that element carries a class made at random for each render, so a writer cannot type it to stand in for a mention (six reviews of #362 shaped this); the picker offers People by name or the start of an email address, and Enter picks only when a name matches. A stale name in the text is never rewritten: nothing writes a Person's current name into a text, and the page shows it without. (An "Update" for stale names was built and taken out on 2026-11-19: three reviews in a row found a text in which it wrote the name into the address of a link. It can come back with the merge tool, S8c.) Search finds a mention by the name as typed. Backup format 14 carries the rows. Not in S9: wiki links in notes; mentions in task titles, Briefs, captures and templates; People in the graph; creating a Person from the picker | Developer, building S9; in the plan the owner approved |
+| 2026-11-19 | **The merge tool** (§7.1, §7.3; S8c). Mentions of the Person who goes: **an alias, and no text is touched** (the ID stands for the one kept; rewriting every text, version and other people's nodes was the alternative). Their name, company and position, where they differ, are kept as **one line in the kept Person's notes**, shown in the plan first. Both on one Project: the kept Person's role stands, the notes are **joined**, the other's role is said in the plan. No report of leftover mentions (an alias leaves none), and no "Update" of stale labels. |
+| 2026-11-19 | How S8c is built. One transaction, owner only with no admin bypass; the plan carries a token and the merge is refused (412) if anything it was made from changed. `person_aliases` (migration 058) holds the old ID; a later merge re-points it, so there is never a chain. A read names a Person only under the IDs the text in front of the reader holds, and tells only the owner what the Person's ID is now. A Person's save carries the version it was made from; one with no version is refused over a Person someone was merged into. **Decided by the builder, for the owner to see:** no undo (a backup from before has both); a third Person's address is left out and said, not a refusal; a sharee can infer that two records were merged, because an old mention takes the kept Person's name; a merge from the notice over an edit does not save what else was typed there. Backup format 15. |
 | 2026-11-18 | **What a collision offers** (§7.1, S8b). A new Person who collides: one button adds what was typed to the Person who has the address, for review in that Person's editor; nothing is saved until Save. On a node: one button puts that Person on the node with the Role and Note typed; the other details typed are not added to them, and the notice says so. Editing a saved Person and adding another saved Person's address: opening them is all that is offered, and merging two saved People is the merge tool's (S8c) | Owner, in the developer session (planning S8b, #357) |
 | 2026-11-18 | How S8b is built. In the browser, as an ordinary edit of the existing Person: no new route, and the database's rule still decides on Save. The merge is made when their editor opens, against the Person as just read (or an unsaved edit of them the device had kept, which the review then says), never at the click. A typed name, company or position that differs is said and not used. Over a limit the entry is added and the save is refused in words until something is removed. A phone is the same number by its digits; notes are compared by whole lines and theirs stay to the letter; an address that belongs to a third Person is left out and said. Nothing is carried over that the device cannot keep, so backing out always has the typed input to go back to. **For S8c:** a Person save should carry the version it was based on, as a node save does | Developer, building S8b; in the plan the owner approved |
 | 2026-11-16 | An Area is never a `derived_from` origin (§6.5): new such links are refused, and Data health lists the old ones. Their fixes: the Area becomes the node's home where the kinds allow and it has none; a Reference, never contained, is linked as a source of the Area (the link converted and turned round); otherwise the link is removed. "Active", in the delete and archive warning of §6.3, means not archived and not a complete or cancelled Project. The delete warning is a count of links from such nodes that the reader can see, apart from what the delete destroys. A node's links are shown in named groups, and a remove control only where the remove would pass | Developer, building S7a (#342); in the plan the owner approved |

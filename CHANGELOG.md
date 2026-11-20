@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Merge two records of one person** (S8c, #363; ONTOLOGY §7.1).
+  - From a person's page (the merge button), from the notice when an
+    edit of a saved person uses an address another has ("Merge with
+    them…", in place of "isn't available yet"), and from Data health's
+    list of people who share an address.
+  - You choose the other person, can swap which one is kept, and read
+    what the merge would do before anything is written: what is added,
+    the line kept in the notes, memberships moved and joined, where the
+    other is mentioned. If either was changed meanwhile, the plan is
+    shown again. There is no undo; a backup from before has both.
+  - A merge started from the edit notice does not save the other
+    changes typed there, and the notice says so. Going back from the
+    merge returns to the edit with what was typed.
 - **Merging two saved people, in the API** (S8c, #363; ONTOLOGY §7.1).
   - `GET /api/people/{id}/merge?from=` answers what the merge would do,
     and `POST /api/people/{id}/merge` carries it out if that is still
@@ -26,6 +39,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - Backup format 15 carries the aliases; older archives still restore.
 
 ### Changed
+- Editing a person now sends the version the page read. An edit left
+  open in a tab while the person was changed elsewhere, or merged, is
+  not saved: the form says so and what to do, and what was typed is
+  kept on the device for after the reload.
+- A mention written with the ID of someone since merged away links to
+  the person kept.
+- Data health's advice for people who share an address now starts with
+  merging them.
 - `PUT /api/people/{id}` takes `expected_updated_at`: a save from a tab
   that is out of date is refused (412) instead of writing over what
   changed. A save that sends none still goes through, except over a
