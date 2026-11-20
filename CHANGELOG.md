@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.32.0] - 2026-11-19
+
 ### Added
 - **Mention a person by typing `@`** (S9, #360; ONTOLOGY §7.3), in a
   node's body or in a note.
