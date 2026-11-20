@@ -22,7 +22,7 @@
 //! node. Over the people it could: so a save locks the people it
 //! mentions in id order too, and holds the people a text already
 //! mentions before it deletes a row (`repo/mention.rs`:
-//! `make_body_rows`, `HOLD_MENTIONED`), which makes it wait for a merge
+//! `hold_body_people`), which makes it wait for a merge
 //! under way instead of deciding on what was true before it.
 //!
 //! **No text is touched** (owner decision, 2026-11-19). The id of the
@@ -350,22 +350,24 @@ async fn merge_once(
         .await?;
     // Mention rows the same way. Where the kept person is mentioned in
     // the same text already, the other's row is left for the cascade.
-    // A note's rows first, then a body's: the order in which the delete
-    // of a node reaches them (its notes cascade before its own rows), so
-    // the two don't each hold what the other waits for.
+    // A body's rows first, then a note's: the order in which the delete
+    // of a node reaches them (the node's own rows, and only then the rows
+    // of its notes, which are a cascade of a cascade). The other way
+    // round, the two each held what the other waited for
+    // (`a_node_delete_and_a_merge_do_not_end_each_other`).
     sqlx::query(
-        "UPDATE note_mentions m SET person_id = $1 WHERE m.person_id = $2 \
-         AND NOT EXISTS (SELECT 1 FROM note_mentions k \
-                         WHERE k.note_id = m.note_id AND k.person_id = $1)",
+        "UPDATE node_mentions m SET person_id = $1 WHERE m.person_id = $2 \
+         AND NOT EXISTS (SELECT 1 FROM node_mentions k \
+                         WHERE k.node_id = m.node_id AND k.person_id = $1)",
     )
     .bind(kept.0)
     .bind(gone.0)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE node_mentions m SET person_id = $1 WHERE m.person_id = $2 \
-         AND NOT EXISTS (SELECT 1 FROM node_mentions k \
-                         WHERE k.node_id = m.node_id AND k.person_id = $1)",
+        "UPDATE note_mentions m SET person_id = $1 WHERE m.person_id = $2 \
+         AND NOT EXISTS (SELECT 1 FROM note_mentions k \
+                         WHERE k.note_id = m.note_id AND k.person_id = $1)",
     )
     .bind(kept.0)
     .bind(gone.0)

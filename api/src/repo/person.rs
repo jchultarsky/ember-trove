@@ -331,6 +331,15 @@ impl PersonRepo for PgPersonRepo {
         // SECURITY: by id **and owner**, so another account's person is
         // never locked or waited on.
         let mut tx = self.pool.begin().await.map_err(internal("update person"))?;
+        // The table lock the write needs, taken before the row: the row
+        // lock alone takes a weaker one, and a restore's lock on the
+        // table (`backup::restore_into`) fits between the two. The save
+        // then held the row the restore deletes and waited for the table
+        // the restore holds.
+        sqlx::query("LOCK TABLE people IN ROW EXCLUSIVE MODE")
+            .execute(&mut *tx)
+            .await
+            .map_err(internal("update person"))?;
         sqlx::query("SELECT 1 FROM people WHERE id = $1 AND owner_id = $2 FOR NO KEY UPDATE")
             .bind(id.0)
             .bind(owner)

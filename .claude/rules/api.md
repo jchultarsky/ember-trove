@@ -350,19 +350,32 @@ cargo check && cargo clippy -- -D warnings
   (review of #364, 2026-11-20). A statement's own tables are read
   before it waits on a row, so one statement that both waits and
   decides sees the world from before the merge:
-  - a statement that locks several people locks them **in id order**
-    (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does. In scan
-    order, a save that mentions both and their merge each held the one
-    the other waited for, and the save was the one ended (a 500);
-  - a body's save holds the people the node already mentions
-    (`HOLD_MENTIONED`) in a statement of its own before it deletes a
-    row. Without it, a save that takes the kept person's token out and
-    leaves the other's left a real mention with no row;
-  - `PersonRepo::update` holds the person's row (by id **and owner**)
-    in a statement of its own before the `UPDATE`. Without it a save
-    with no version that waited on a merge wrote the old card over it;
-  - the merge moves a note's mention rows before a body's, the order a
-    node's delete reaches them (not proven to matter; it costs nothing).
+  - whatever locks several people locks them **in id order**
+    (`ORDER BY p.id FOR KEY SHARE OF p`), as the merge does: a save,
+    a copy, and the account purge (`FOR UPDATE` before its delete). In
+    scan order, two of them each held the one the other waited for,
+    and the save was the one ended (a 500). "In id order" is about a
+    transaction, not a statement: two sorted statements are not sorted
+    together;
+  - so a body's save holds **all** its people in one statement first
+    (`hold_body_people`): those the node already has a row for and
+    those it adds. Without the first, a save that takes the kept
+    person's token out and leaves the other's left a real mention with
+    no row. A copy holds the copier's people on the source the same way;
+  - `PersonRepo::update` takes the table lock its write needs, then the
+    person's row (by id **and owner**), each in a statement of its own,
+    before the `UPDATE`. Without the row, a save with no version that
+    waited on a merge wrote the old card over it. Without the table
+    lock first, a restore's lock on `people` fits between the two;
+  - the merge moves a body's mention rows before a note's: the order a
+    node's delete reaches them (its own rows, then its notes' rows,
+    which are a cascade of a cascade). The reverse deadlocks, and the
+    delete can be the one ended;
+  - a lock added to fix one race is a new edge in everyone else's lock
+    order. Each of the three above came from the fix for another, and
+    was found only by a second review of the fix: test a new lock
+    against every transaction that touches the same rows (a merge, a
+    purge, a restore, a node's delete, another save).
 - The one who goes is deleted **before** the kept person is written:
   the email rule must find their addresses free. An address a third
   person lists is left out (`report.someone_elses`), not taken.
