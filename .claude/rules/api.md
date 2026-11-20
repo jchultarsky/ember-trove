@@ -151,12 +151,13 @@ cargo check && cargo clippy -- -D warnings
   (`PersonError::DuplicateEmail`), not the trigger's. A restore brings
   back a person who has one twice, and anything that joins two people's
   lists (the merge tool) removes repeats by key itself.
-- **For S8c (the merge tool), not built:** `PUT /people/{id}` replaces
-  the whole person and carries no version, so a tab that is out of date
-  can undo a merge. Give it `expected_updated_at`, as node saves have
-  (412). The merge locks both person rows first, in id order, with a
-  `lock_timeout`. S8b's carry-over is an ordinary edit made in the
-  browser (`common::person_carry`); it added no route.
+- **A person save carries its version** (S8c): `PUT /people/{id}`
+  takes `expected_updated_at`, checked in the statement that writes
+  (412, `PERSON_CHANGED`). A save that sends none still goes through,
+  **except** over a person someone was merged into (they have an
+  alias): that is a tab from before the merge. S8b's carry-over is an
+  ordinary edit made in the browser (`common::person_carry`); it added
+  no route.
 - **Routes**: `save_unless_it_collides` reads who has the address
   (`PersonRepo::email_collisions`), writes nothing if anyone does, and
   answers the database's own refusal (`AlreadyExists`, a raced save) by
@@ -288,9 +289,70 @@ cargo check && cargo clippy -- -D warnings
   `BackupData::restorable_mentions` lets through (the text has the
   token, the person is in the archive, a note's row is its author's
   person).
-- **For S8c:** a merge of two people rewrites the tokens of the one
-  that goes and moves its rows; a report of tokens with no row
-  ("leftovers") scans text, since a deleted person's rows are gone.
+- **Aliases (S8c, #363; migration 058).** A merge deletes one person
+  and leaves their id in `person_aliases`, standing for the one kept.
+  **No text is rewritten** (owner decision, 2026-11-19), so a token can
+  hold either id, in bodies, notes and old versions, on nodes of any
+  account. Rows are always of the living person. So:
+  - every statement that compares a row with the ids a text holds goes
+    through `stands_for` / `still_mentioned` (`repo/mention.rs`). A new
+    one that compares `person_id = ANY($ids)` directly drops the row of
+    a person mentioned by an old id;
+  - **a read answers an alias id only for a text that holds it**
+    (`for_node(.., in_text)`, per note for `for_notes`). Told of every
+    alias of a person named on one node, a reader learns two ids are
+    one person and reads the name behind a token on another node, where
+    rule 2 withholds it;
+  - `MentionName.links_to` (the real id) is set for the person's owner
+    only, and is absent from anyone else's answer;
+  - only reads of a **text** resolve an alias. `/people/{old id}` is a
+    404 on every route: a tab still open on the one who went must not
+    write to the one kept;
+  - the table is one step deep, always: a merge re-points the aliases
+    of the one who goes, and a trigger refuses an alias that is a
+    living person's id;
+  - `make_body_rows` runs twice at most: a save that waited on a merge
+    finds the person gone, and sees the alias only when asked again.
+- No report of tokens with no row ("leftovers") is built: an alias
+  leaves none, and a deleted person's show as unresolved on the page
+  (owner decision, 2026-11-19).
+
+## Merging two people (S8c, #363)
+
+- `GET /people/{kept}/merge?from={gone}` answers the plan
+  (`common::person_merge::MergePlan`, with a token); `POST` carries it
+  out if `confirm` is the token of the plan **as it is under the
+  locks**. The rule for the result is pure, in `common::person_merge`
+  (fields by `person_carry::carry_into`; what differs kept as one line
+  in the notes; memberships joined). The route never works it out.
+- **SECURITY: owner only, no admin bypass.** `&claims.sub`, never
+  `subject_scope`. The people are read and locked by id **and owner**
+  in one statement; fewer than two rows is "person not found", naming
+  neither, whichever is missing and whoever it belongs to. Another
+  account's id is never locked or waited on.
+- **Lock order** (`repo/person_merge.rs`): the purge's advisory key and
+  the restore's (`ember.restore`), both **shared**, before any row;
+  then both `people` rows in id order; then their `node_people` rows.
+  A purge and a restore delete what hangs on nodes before they reach
+  `people`, the other way round from a merge: without the keys each
+  can hold what the other waits for, and the one ended may be the
+  restore. Anything new that deletes nodes and people in one
+  transaction takes one of those keys alone, first.
+- **No node is locked.** Memberships and mention rows move with
+  `UPDATE … SET person_id`; only the changed foreign key is checked. An
+  insert and a delete instead would lock node rows after people, and
+  meet a body's save (node first, then people) head on.
+- The one who goes is deleted **before** the kept person is written:
+  the email rule must find their addresses free. An address a third
+  person lists is left out (`report.someone_elses`), not taken.
+- Refusals (a list over 10, notes over 10,000, a joined membership note
+  over 2,000) are 422 in words; a changed plan is 412; a lock not got
+  in 5 s, or a second deadlock, is 409 "try again".
+- The plan's `mentioned_in` is counted in the route with
+  `subject_scope`, as the person's "Mentioned in" list is: a raw row
+  count would tell of nodes the caller can no longer open. It is not
+  in the token.
+- Nothing about a merge goes to History or a webhook.
 
 ## Captures (#234)
 
@@ -363,7 +425,7 @@ cargo check && cargo clippy -- -D warnings
   refresh → revoke + 401). Any new public route that mints a session must
   do the same.
 
-## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12, task dependencies 13, mentions 14)
+## What a backup holds (#281, format 5; Briefs made it 6, Focus 8, task states 9, project states 10, a note's edited date 11, no repeat rule 12, task dependencies 13, mentions 14, aliases of merged people 15)
 
 - **One snapshot.** `create_backup` reads everything through
   `backup::read_snapshot` on `begin_snapshot`'s transaction
