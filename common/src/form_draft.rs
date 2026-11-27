@@ -82,6 +82,13 @@ pub struct PersonFormDraft {
     /// before 3.31.0 has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carried: Option<Carried>,
+    /// The form was put onto a person changed elsewhere since
+    /// ([`Self::rebased_on`], S8c). `base` is then the person as they
+    /// were at that moment, so a later restore would no longer see the
+    /// change: this keeps the notice, which says to check the lists and
+    /// the notes, across a reload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rebased: bool,
 }
 
 /// What the dialog does with a stored draft when it mounts.
@@ -90,8 +97,9 @@ pub enum FormRecovery {
     /// Nothing in it that the dialog wouldn't start with: drop it silently.
     Discard,
     /// Reopen the dialog with the draft and say so. `changed` is true when
-    /// the person was saved with other values after the draft was taken:
-    /// saving the draft then replaces that change.
+    /// the person was saved with other values after the draft was taken.
+    /// The dialog then opens with [`PersonFormDraft::rebased_on`], never
+    /// with the draft as it is: saving that would replace the change.
     Offer { changed: bool },
 }
 
@@ -340,11 +348,17 @@ mod tests {
             base: PersonInput::default(),
             saved_at: Some(1_800_000_000_000),
             carried: None,
+            rebased: false,
         };
         let json = serde_json::to_string(&d).expect("serialize");
         // An ordinary draft is stored as it always was.
         assert!(!json.contains("carried"), "{json}");
-        assert_eq!(PersonFormDraft::parse(&json), Some(d));
+        assert!(!json.contains("rebased"), "{json}");
+        assert_eq!(PersonFormDraft::parse(&json), Some(d.clone()));
+        // One put onto a person changed since says so after a reload too.
+        let rebased = PersonFormDraft { rebased: true, ..d };
+        let json = serde_json::to_string(&rebased).expect("serialize");
+        assert_eq!(PersonFormDraft::parse(&json), Some(rebased));
         assert_eq!(PersonFormDraft::parse("{not json"), None);
     }
 

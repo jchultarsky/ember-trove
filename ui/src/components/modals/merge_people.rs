@@ -146,6 +146,10 @@ fn said(e: &UiError) -> String {
     }
 }
 
+/// How long Merge ignores a press after a changed plan replaced the one
+/// on screen (ms).
+const SETTLE_MS: u32 = 1500;
+
 /// How many people the search lists.
 const LISTED: usize = 20;
 
@@ -175,6 +179,9 @@ pub fn MergePeopleModal() -> impl IntoView {
     // The plan was replaced by a newer one after the server refused.
     let changed = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
+    // A plan that replaced the one on screen has only just appeared: a
+    // second press meant for the old one must not confirm it unread.
+    let settling = RwSignal::new(false);
     // Only the latest read is shown.
     let read_v = StoredValue::new(0u32);
     let back_ref: NodeRef<html::Button> = NodeRef::new();
@@ -211,9 +218,13 @@ pub fn MergePeopleModal() -> impl IntoView {
         if open && was_open != Some(true) {
             busy.set(false);
             changed.set(false);
+            settling.set(false);
             error.set(None);
             cards.set(Vec::new());
             plan.set(None);
+            // An answer still on its way to an earlier question is not
+            // this one's.
+            read_v.update_value(|v| *v = v.wrapping_add(1));
             let asked = request.get_untracked();
             pair.set(asked.map(|a| (a.kept, a.other)));
             load();
@@ -266,6 +277,7 @@ pub fn MergePeopleModal() -> impl IntoView {
         });
         plan.set(None);
         error.set(None);
+        read_v.update_value(|v| *v = v.wrapping_add(1));
     };
     let swap = move || {
         if busy.get_untracked() {
@@ -282,7 +294,7 @@ pub fn MergePeopleModal() -> impl IntoView {
     };
 
     let confirm = move || {
-        if busy.get_untracked() {
+        if busy.get_untracked() || settling.get_untracked() {
             return;
         }
         let (Some(asked), Some((kept, Some(other))), Some(Ok(shown))) = (
@@ -315,13 +327,37 @@ pub fn MergePeopleModal() -> impl IntoView {
                 // One of them is no longer what was shown: show the plan
                 // as it is now, and ask again.
                 Err(UiError::Api { status: 412, .. }) => {
+                    // No read begun earlier may land over this one.
+                    let v = read_v.try_get_value().unwrap_or(0).wrapping_add(1);
+                    read_v.try_set_value(v);
                     match crate::api::merge_preview(kept, other).await {
                         Ok(now) => {
-                            plan.try_set(Some(Ok(now)));
-                            changed.try_set(true);
+                            // The two as they are now, too: what tells
+                            // them apart may be what changed.
+                            let mut people = Vec::new();
+                            for id in [kept, other] {
+                                if let Ok(p) = crate::api::fetch_person(id).await {
+                                    people.push(p);
+                                }
+                            }
+                            if read_v.try_get_value() == Some(v) {
+                                cards.try_set(people);
+                                plan.try_set(Some(Ok(now)));
+                                changed.try_set(true);
+                                // Long enough to see that it changed.
+                                settling.try_set(true);
+                                Timeout::new(SETTLE_MS, move || {
+                                    settling.try_set(false);
+                                })
+                                .forget();
+                            }
                         }
+                        // The plan on screen is not the plan any more: it
+                        // goes, and its Merge button with it.
                         Err(e) => {
-                            error.try_set(Some(said(&e)));
+                            if read_v.try_get_value() == Some(v) {
+                                plan.try_set(Some(Err(said(&e))));
+                            }
                         }
                     }
                     busy.try_set(false);
@@ -398,7 +434,7 @@ pub fn MergePeopleModal() -> impl IntoView {
                                         {move || changed.get().then(|| view! {
                                             <p class="text-stone-700 dark:text-stone-200 rounded-lg
                                                       bg-stone-100 dark:bg-stone-800 px-3 py-2"
-                                               role="status" data-testid="merge-changed">
+                                               role="alert" data-testid="merge-changed">
                                                 "One of them was changed while this was open. \
                                                  This is what the merge would do now."
                                             </p>
@@ -493,7 +529,9 @@ pub fn MergePeopleModal() -> impl IntoView {
                                    font-medium rounded-lg bg-ember hover:bg-ember-strong text-white
                                    transition-colors
                                    aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                            aria-disabled=move || if busy.get() { "true" } else { "false" }
+                            aria-disabled=move || {
+                                if busy.get() || settling.get() { "true" } else { "false" }
+                            }
                             data-testid="merge-confirm"
                             on:click=move |_| confirm()
                         >

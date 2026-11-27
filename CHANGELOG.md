@@ -53,6 +53,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   read, so saving it wrote the older values back over the change (and
   would have undone a merge). A field that was changed is still kept
   whole, as typed: the notice says to check the lists and the notes.
+  The same holds for an edit brought back by Undo, or by going back
+  from the merge dialog, after the person was changed meanwhile.
+- What was typed in an edit stays on the device while the merge dialog
+  stands in for the editor: a reload there no longer loses it.
+- When a merge's plan changed and is shown again, Merge ignores a press
+  for a moment, so a second press meant for the old plan confirms
+  nothing unread; the two people's details are read again with the plan.
+- Undo of a discarded edit closes an open merge dialog first.
 - A merge's plan no longer speaks of notes on a shared node when
   neither has any, of a line added to the notes when it is there
   already, or of the kept person "having" a company that differs.

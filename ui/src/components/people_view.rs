@@ -444,6 +444,11 @@ pub fn PersonEditor(
     let baseline = StoredValue::new(PersonInput::default());
     // Set by Undo, so reopening keeps the restored values.
     let restoring = StoredValue::new(false);
+    // The merge dialog is standing in for this editor (S8c): that one
+    // closing keeps the draft, so a reload with the merge dialog up still
+    // has what was typed.
+    let standing_by = StoredValue::new(false);
+    let merge_dialog = use_context::<merge_people::MergePeople>();
     let saving = RwSignal::new(false);
     // Some(changed) while the dialog shows input restored from a draft.
     let recovered = RwSignal::new(None::<bool>);
@@ -592,6 +597,9 @@ pub fn PersonEditor(
             // Kept with the draft: a reload during the review brings the
             // notice and the marks back, and never merges again.
             carried: carried.try_get_untracked().flatten(),
+            // Kept with the draft too: a reload still says the person was
+            // changed since, and to check what was typed.
+            rebased: recovered.try_get_untracked().flatten() == Some(true),
         };
         if d.is_dirty() {
             crate::draft::write_person_draft(&key, &d)
@@ -643,6 +651,7 @@ pub fn PersonEditor(
                 let d = PersonFormDraft {
                     person: d.rebased_on(&current),
                     base: current.clone(),
+                    rebased: true,
                     ..d
                 };
                 if d.is_dirty() {
@@ -651,6 +660,10 @@ pub fn PersonEditor(
                     // All that was typed is what they hold now.
                     (Some(d), Some(FormRecovery::Discard))
                 }
+            }
+            // Put onto them before an earlier reload: still said.
+            (Some(d), Some(FormRecovery::Offer { changed: false })) if d.rebased => {
+                (Some(d), Some(FormRecovery::Offer { changed: true }))
             }
             other => other,
         };
@@ -759,7 +772,9 @@ pub fn PersonEditor(
         if !is_open && was_open == Some(true) {
             recovered.set(None);
             carried.set(None);
-            if let Some(key) = draft_key.get_value() {
+            if standing_by.get_value() {
+                standing_by.set_value(false);
+            } else if let Some(key) = draft_key.get_value() {
                 crate::draft::clear_form_draft(&key);
             }
         }
@@ -1021,6 +1036,11 @@ pub fn PersonEditor(
             }),
         });
         if opened {
+            // On this device first, and kept through the closing: until
+            // the merge is made or left, what was typed is only here.
+            if try_keep() {
+                standing_by.set_value(true);
+            }
             open.set(false);
         }
     });
@@ -1039,6 +1059,18 @@ pub fn PersonEditor(
             push_undo_toast(
                 "Changes discarded",
                 std::sync::Arc::new(move || {
+                    // Never two dialogs: a merge dialog that is open goes
+                    // first, and one that is saving is not interrupted.
+                    if let Some(merge) = merge_dialog {
+                        merge.go_back();
+                        if merge.is_open() {
+                            push_toast(
+                                ToastLevel::Info,
+                                "Not brought back: a merge is being saved.",
+                            );
+                            return;
+                        }
+                    }
                     let changed = put_back(typed.clone(), read.clone());
                     restoring.set_value(true);
                     // Closing dropped the review's notice and marks, and

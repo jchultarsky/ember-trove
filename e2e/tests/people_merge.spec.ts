@@ -244,6 +244,15 @@ test('the notice over an edit offers the merge; going back keeps what was typed'
   // The asker said who: there is no one else to choose.
   await expect(dialog(page).getByTestId('merge-choose-again')).toHaveCount(0);
 
+  // A reload with the merge dialog up: what was typed is still on this
+  // device, and the edit is offered again.
+  await page.reload();
+  await expect(editor(page).getByTestId('form-draft-recovery')).toBeVisible();
+  await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('Typed here');
+  await editor(page).getByRole('button', { name: 'Save' }).click();
+  await editor(page).getByTestId('email-taken').getByTestId('merge-with').click();
+  await expect(dialog(page).getByTestId('merge-kept')).toContainText(ada.display_name);
+
   // Going back returns to the edit, with what was typed.
   await dialog(page).getByTestId('merge-back').click();
   await expect(dialog(page)).toHaveCount(0);
@@ -335,7 +344,14 @@ test('a plan that changed is shown again, and a refusal leaves nothing to press'
   expect(edited.status()).toBe(200);
   await dialog(page).getByTestId('merge-confirm').click();
   await expect(dialog(page).getByTestId('merge-changed')).toBeVisible();
+  // A second press, meant for the plan that was there, confirms nothing:
+  // the new plan has not been read yet.
+  await dialog(page).getByTestId('merge-confirm').click({ force: true });
   await expect(dialog(page).getByTestId('merge-lines')).toContainText('Added to the kept person: company.');
+  // What tells the two apart is read again too.
+  await expect(dialog(page).getByTestId('merge-gone')).toContainText(`Late ${stamp}`);
+  await expect(dialog(page).getByTestId('merge-confirm')).toHaveAttribute('aria-disabled', 'false');
+  await expect(dialog(page).getByTestId('merge-changed')).toBeVisible();
   expect((await request.get(`/api/people/${abe.id}`)).status()).toBe(200);
 
   // Notes that are too long together: said, and there is no Merge button.
@@ -419,6 +435,49 @@ test('an edit from before a merge is refused, and says to reload', async ({ page
     data: { display_name: 'Back again', emails: [], expected_updated_at: abe.updated_at },
   });
   expect(gone.status()).toBe(404);
+});
+
+test('an Undo pressed after a merge brings back only what was typed', async ({ page, request }) => {
+  const stamp = newStamp();
+  const ada = await person(request, { display_name: `e2e Ada ${stamp}` });
+  const abe = await person(request, {
+    display_name: `e2e Abe ${stamp}`,
+    company: `Initech ${stamp}`,
+    emails: [{ value: `abe.${stamp}@example.com` }],
+  });
+
+  // An edit is dismissed: "Changes discarded", with Undo for a few seconds.
+  await page.goto(`/people/${ada.id}`);
+  await card(page).getByRole('button', { name: 'Edit person' }).click();
+  await editor(page).getByRole('textbox', { name: 'Position' }).fill('Typed before');
+  await page.keyboard.press('Escape');
+  await expect(editor(page)).toHaveCount(0);
+  const undo = page.getByRole('button', { name: 'Undo' });
+  await expect(undo).toBeVisible();
+
+  // Inside those seconds someone is merged into her from the card, and
+  // the page reads her again: Save would now send the version after the
+  // merge, and pass.
+  await card(page).getByRole('button', { name: 'Merge with another person' }).click();
+  await dialog(page).getByRole('searchbox').fill(abe.display_name);
+  await dialog(page).getByTestId('merge-candidate').click();
+  await dialog(page).getByTestId('merge-confirm').click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(card(page)).toContainText(`Initech ${stamp}`);
+  await undo.click();
+
+  // The form that comes back was read before the merge. Whatever the page
+  // holds by now, saving must not take away what the merge gave her.
+  await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('Typed before');
+  await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue(`Initech ${stamp}`);
+  await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('has been changed since');
+  await editor(page).getByRole('button', { name: 'Save' }).click();
+  await expect(editor(page)).toHaveCount(0);
+  const after: Person & { company?: string } = await (await request.get(`/api/people/${ada.id}`)).json();
+  expect(after.company).toBe(`Initech ${stamp}`);
+  expect(after.emails.map((e) => e.value)).toContain(`abe.${stamp}@example.com`);
+  expect(after.notes ?? '').toContain(`e2e Abe ${stamp}`);
+  expect(after.position).toBe('Typed before');
 });
 
 test('someone the node is shared with sees the kept person’s name on an old mention, as plain text', async ({
