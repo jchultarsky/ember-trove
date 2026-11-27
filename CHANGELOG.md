@@ -47,6 +47,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   open in a tab while the person was changed elsewhere, or merged, is
   not saved: the form says so and what to do, and what was typed is
   kept on the device for after the reload.
+- An unsaved edit of a person that the device kept, offered again after
+  the person was changed elsewhere, now holds only what was typed, on
+  the person as they are now. It used to hold the whole form as it was
+  read, so saving it wrote the older values back over the change (and
+  would have undone a merge). A field that was changed is still kept
+  whole, as typed: the notice says to check the lists and the notes.
+- A merge's plan no longer speaks of notes on a shared node when
+  neither has any, of a line added to the notes when it is there
+  already, or of the kept person "having" a company that differs.
 - A mention written with the ID of someone since merged away links to
   the person kept.
 - Data health's advice for people who share an address now starts with

@@ -258,9 +258,12 @@ test('a reload keeps the open dialog\'s input, and only a dirty one (#170)', asy
     await page.reload();
     await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('changed since');
     await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('Rear Admiral');
+    // What was not typed is as the card is now, and is saved so.
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Harvard');
     // Saving drops the draft: a reload opens nothing.
     await editor(page).getByRole('button', { name: 'Save' }).click();
     await expect(editor(page)).toHaveCount(0);
+    expect((await (await request.get(`/api/people/${p.id}`)).json()).company).toBe('Harvard');
     await page.reload();
     await expect(card).toBeVisible();
     await expect(editor(page)).toHaveCount(0);

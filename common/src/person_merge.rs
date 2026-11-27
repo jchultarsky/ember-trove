@@ -170,7 +170,9 @@ pub fn plan_lines(plan: &MergePlan) -> Vec<String> {
     .collect();
     let mut lines = Vec::new();
     lines.push(if added.is_empty() {
-        "Nothing to add: the kept person already has the other\u{2019}s details.".to_string()
+        // Not "they already have the other's details": a company or a
+        // position that differs is not theirs, and is said next.
+        "Nothing to add to the kept person\u{2019}s details.".to_string()
     } else {
         format!("Added to the kept person: {}.", added.join(", "))
     });
@@ -197,8 +199,13 @@ pub fn plan_lines(plan: &MergePlan) -> Vec<String> {
     }
     for join in &plan.joined {
         let mut line = format!(
-            "Both are on \u{201c}{}\u{201d}: one entry is kept, with the notes of both.",
-            join.node_title
+            "Both are on \u{201c}{}\u{201d}: one entry is kept{}.",
+            join.node_title,
+            if join.note.is_some() {
+                ", with the notes they have there"
+            } else {
+                ""
+            }
         );
         if let Some(role) = &join.role_not_kept {
             line.push_str(&format!(
@@ -326,9 +333,15 @@ pub fn plan(
         })
         .collect();
 
-    let notes_line = notes_line(&report);
-    if let Some(line) = &notes_line {
-        let notes = with_line(person.notes.take(), line);
+    let mut notes_line = notes_line(&report);
+    if let Some(line) = notes_line.clone() {
+        let had = person.notes.clone();
+        let notes = with_line(person.notes.take(), &line);
+        // The line is there already (an earlier merge of someone of the
+        // same name): nothing is added, so nothing is said to be.
+        if had.as_deref() == Some(notes.as_str()) {
+            notes_line = None;
+        }
         if notes.chars().count() > MAX_NOTES && !refusals.contains(&MergeRefusal::NotesTooLong) {
             refusals.push(MergeRefusal::NotesTooLong);
         }
@@ -748,7 +761,7 @@ mod tests {
                 "A line is added to the kept person\u{2019}s notes: Merged in: name \u{201c}Ada K.\u{201d}.",
                 "Left out, because it belongs to someone else: shared@example.com.",
                 "The other\u{2019}s place on 2 nodes moves to the kept person.",
-                "Both are on \u{201c}Project 100\u{201d}: one entry is kept, with the notes of both. The other\u{2019}s role there, \u{201c}Guest\u{201d}, is not kept.",
+                "Both are on \u{201c}Project 100\u{201d}: one entry is kept, with the notes they have there. The other\u{2019}s role there, \u{201c}Guest\u{201d}, is not kept.",
                 "The other is mentioned in 1 node you can open. Those mentions will show the kept person\u{2019}s name; the text itself is not changed.",
             ]
         );
@@ -764,11 +777,53 @@ mod tests {
         ));
         assert_eq!(
             twin,
-            ["Nothing to add: the kept person already has the other\u{2019}s details."]
+            ["Nothing to add to the kept person\u{2019}s details."]
         );
         for line in lines.iter().chain(&twin) {
             assert!(!line.contains("  "), "{line}");
         }
+    }
+
+    /// From the review of #365: three things the plan said that could be
+    /// untrue.
+    #[test]
+    fn the_plan_says_nothing_that_is_not_so() {
+        // No notes on either entry: none are spoken of.
+        let (kept_on, gone_on) = ([on(10, 100, Some("Lead"), None)], [on(20, 100, None, None)]);
+        let plan = answered(
+            &person(1, "Ada"),
+            &person(2, "Ada"),
+            &[],
+            &kept_on,
+            &gone_on,
+            0,
+        );
+        assert_eq!(plan.joined[0].note, None);
+        assert!(!plan_lines(&plan).iter().any(|l| l.contains("notes")));
+
+        // The line is in the kept person's notes already: not "added".
+        let line = "Merged in: name \u{201c}Ada Byron\u{201d}.";
+        let mut kept = person(1, "Ada King");
+        kept.notes = Some(line.to_string());
+        let plan = answered(&kept, &person(2, "Ada Byron"), &[], &[], &[], 0);
+        assert_eq!(plan.result.notes.as_deref(), Some(line));
+        assert_eq!(plan.notes_line, None);
+        assert!(
+            !plan_lines(&plan)
+                .iter()
+                .any(|l| l.starts_with("A line is added"))
+        );
+
+        // A company that differs is not something the kept person "has".
+        let (mut kept, mut gone) = (person(1, "Ada"), person(2, "Ada"));
+        kept.company = Some("Lovelace Ltd".to_string());
+        gone.company = Some("Analytical Engines".to_string());
+        let lines = plan_lines(&answered(&kept, &gone, &[], &[], &[], 0));
+        assert_eq!(
+            lines[0],
+            "Nothing to add to the kept person\u{2019}s details."
+        );
+        assert!(lines[1].contains("company \u{201c}Analytical Engines\u{201d}"));
     }
 
     #[test]

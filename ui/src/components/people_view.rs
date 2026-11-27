@@ -366,14 +366,23 @@ enum EditorTarget {
 }
 
 /// The notice over a person dialog the app reopened from its draft (#170).
-fn recovery_message(changed: bool) -> &'static str {
+fn recovery_message(changed: bool) -> String {
+    const KEPT: &str = "This device kept what you'd typed here.";
     if changed {
-        "This device kept what you'd typed here. The person has been changed \
-         since; saving replaces that change."
+        format!("{KEPT} {CHANGED_SINCE}")
     } else {
-        "This device kept what you'd typed here."
+        KEPT.to_string()
     }
 }
+
+/// Said over a kept edit of a person who was changed elsewhere since
+/// (S8c). The form then holds `PersonFormDraft::rebased_on`: only what was
+/// typed, on the person as they are now. A field that was changed is kept
+/// whole, so a list or the notes may lack what was added elsewhere (a
+/// merge's addresses, its line in the notes): the notice says to look.
+const CHANGED_SINCE: &str = "The person has been changed since. What you had not changed is \
+     shown as it is now; what you changed is as you typed it, so check the lists and the \
+     notes before you save.";
 
 /// The one person editor (create and edit look the same): a centred dialog
 /// on desktop and a full-screen sheet on phones (`ModalPlacement::Sheet`),
@@ -623,6 +632,28 @@ pub fn PersonEditor(
         let stored = key.as_deref().and_then(crate::draft::read_person_draft);
         let current = initial.get_untracked();
         let offered = stored.as_ref().map(|d| d.recovery(&current));
+        // S8c: the person was changed since this edit was kept (saved
+        // elsewhere, or someone was merged into them). The draft holds the
+        // whole form as it was read, and Save sends the version this page
+        // just read, so offered as it is it would write every field back
+        // and undo that change: a merge has no undo. Only what was typed
+        // is put onto the person as they are now.
+        let (stored, offered) = match (stored, offered) {
+            (Some(d), Some(FormRecovery::Offer { changed: true })) => {
+                let d = PersonFormDraft {
+                    person: d.rebased_on(&current),
+                    base: current.clone(),
+                    ..d
+                };
+                if d.is_dirty() {
+                    (Some(d), offered)
+                } else {
+                    // All that was typed is what they hold now.
+                    (Some(d), Some(FormRecovery::Discard))
+                }
+            }
+            other => other,
+        };
         // S8b: a hand-over is merged here, once, against the person as
         // just loaded, or against their own unsaved edit if this device
         // kept one. Never at the click: that copy could be stale by the
@@ -922,6 +953,32 @@ pub fn PersonEditor(
     // never open at once. Going back from it reopens this one with what
     // was typed; a merge does not save what was typed here, and the
     // notice says so.
+    // Put a form that was set aside (Undo, or back from the merge dialog)
+    // on screen again. True when the person was changed meanwhile: then
+    // only what was typed goes onto them as they are now (S8c). Save
+    // sends the version the page holds at that moment, so the whole form
+    // as it was read would pass the version check and write the older
+    // values over the change. A merge made from the card inside an Undo
+    // toast's few seconds was undone that way.
+    let put_back = move |typed: PersonInput, read: PersonInput| -> bool {
+        let now = match (target, initial.try_get_untracked()) {
+            (EditorTarget::Existing(_), Some(now)) if now != read => now,
+            _ => {
+                draft.load(typed);
+                return false;
+            }
+        };
+        let rebased = PersonFormDraft {
+            person: typed,
+            base: read,
+            ..Default::default()
+        }
+        .rebased_on(&now);
+        draft.load(rebased);
+        baseline.try_set_value(now);
+        true
+    };
+
     let merge_with = Callback::new(move |person: TakenPerson| {
         let EditorTarget::Existing(kept) = target else {
             return;
@@ -931,6 +988,7 @@ pub fn PersonEditor(
             return;
         }
         let typed = draft.read();
+        let read = baseline.get_value();
         let was_carried = carried.get_untracked();
         let was_recovered = recovered.get_untracked();
         let opened = merge_people::ask(MergeAsk {
@@ -948,13 +1006,18 @@ pub fn PersonEditor(
                 if open.try_get_untracked().is_none() {
                     return;
                 }
-                draft.load(typed.clone());
+                let changed = put_back(typed.clone(), read.clone());
                 restoring.set_value(true);
-                if was_carried.is_some() {
+                if changed {
+                    recovered.try_set(Some(true));
+                } else if was_carried.is_some() {
                     recovered.try_set(was_recovered);
                 }
                 carried.try_set(was_carried.clone());
                 open.try_set(true);
+                // Closing the editor for the merge dropped its draft: what
+                // was typed is on this device again from here on.
+                keep();
             }),
         });
         if opened {
@@ -965,6 +1028,7 @@ pub fn PersonEditor(
     // Escape and the backdrop: discard, with Undo when something changed.
     let dismiss = Callback::new(move |()| {
         let typed = draft.read();
+        let read = baseline.get_value();
         let was_carried = carried.get_untracked();
         let was_recovered = recovered.get_untracked();
         open.set(false);
@@ -975,11 +1039,13 @@ pub fn PersonEditor(
             push_undo_toast(
                 "Changes discarded",
                 std::sync::Arc::new(move || {
-                    draft.load(typed.clone());
+                    let changed = put_back(typed.clone(), read.clone());
                     restoring.set_value(true);
                     // Closing dropped the review's notice and marks, and
-                    // whether they were changed since, which Save replaces.
-                    if was_carried.is_some() {
+                    // whether they were changed since.
+                    if changed {
+                        recovered.try_set(Some(true));
+                    } else if was_carried.is_some() {
                         recovered.try_set(was_recovered);
                     }
                     carried.try_set(was_carried.clone());
@@ -1270,7 +1336,7 @@ fn CarryReview(
                 </p>
             })}
             {changed.then(|| view! {
-                <p>"The person has been changed since; saving replaces that change."</p>
+                <p>{CHANGED_SINCE}</p>
             })}
             <button type="button" class="text-xs underline cursor-pointer"
                 on:click=move |_| on_discard.run(())>

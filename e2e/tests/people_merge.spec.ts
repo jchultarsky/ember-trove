@@ -128,7 +128,7 @@ test('a person’s page: choose the other, read the plan, swap, and merge', asyn
   );
   await expect(lines).toContainText('The other’s place on 1 node moves to the kept person.');
   // She has no role there, so his fills the blank: nothing is "not kept".
-  await expect(lines).toContainText(`Both are on “${both.title}”: one entry is kept, with the notes of both.`);
+  await expect(lines).toContainText(`Both are on “${both.title}”: one entry is kept, with the notes they have there.`);
   await expect(lines).not.toContainText('is not kept');
   await expect(lines).toContainText('The other is mentioned in 1 node you can open.');
   await expect(dialog(page)).toContainText('This can’t be undone');
@@ -196,7 +196,7 @@ test('merging the page’s own person into another lands on the one kept', async
   await expect(dialog(page).getByTestId('merge-kept')).toContainText(abe.display_name);
   // Two bare records: nothing to add, and the line names neither.
   await expect(dialog(page).getByTestId('merge-lines')).toContainText(
-    'Nothing to add: the kept person already has the other’s details.',
+    'Nothing to add to the kept person’s details.',
   );
   await dialog(page).getByTestId('merge-swap').click();
   await expect(dialog(page).getByTestId('merge-kept')).toContainText(ada.display_name);
@@ -370,12 +370,16 @@ test('an edit from before a merge is refused, and says to reload', async ({ page
   await expect(editor(page).getByRole('alert')).toContainText('What you typed is kept on this device');
   expect((await (await request.get(`/api/people/${ada.id}`)).json()).notes).toBe(`Elsewhere ${stamp}`);
   // After the reload the form is offered again, and says she was changed
-  // since. Saving from there is a choice made knowing it.
+  // since. It holds only what was typed, on her as she is now: saving
+  // from there writes the position and leaves the notes from elsewhere.
   await page.reload();
-  await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('has been changed');
+  await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('has been changed since');
+  await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('check the lists and the notes');
+  await expect(editor(page).getByRole('textbox', { name: 'Notes' })).toHaveValue(`Elsewhere ${stamp}`);
   await editor(page).getByRole('button', { name: 'Save' }).click();
   await expect(editor(page)).toHaveCount(0);
   await expect(card(page)).toContainText('From an old tab');
+  expect((await (await request.get(`/api/people/${ada.id}`)).json()).notes).toBe(`Elsewhere ${stamp}`);
 
   // The same with a merge in between.
   await card(page).getByRole('button', { name: 'Edit person' }).click();
@@ -391,11 +395,24 @@ test('an edit from before a merge is refused, and says to reload', async ({ page
   expect(now.company).toBe(`Initech ${stamp}`);
   expect(now.position).toBe('From an old tab');
 
-  // After a reload what was typed is offered on the person as they are.
+  // After a reload what was typed is offered on the person as they are:
+  // the form shows what the merge gave her, and saving it keeps all of
+  // that. A merge has no undo, so a kept edit must never write it away.
   await page.reload();
-  await expect(editor(page).getByTestId('form-draft-recovery')).toBeVisible();
+  await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('has been changed since');
   await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('From an old tab, again');
-  await editor(page).getByRole('button', { name: 'Discard' }).click();
+  await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue(`Initech ${stamp}`);
+  await editor(page).getByRole('button', { name: 'Save' }).click();
+  await expect(editor(page)).toHaveCount(0);
+  const saved: Person & { company?: string } = await (await request.get(`/api/people/${ada.id}`)).json();
+  expect(saved.position).toBe('From an old tab, again');
+  expect(saved.company).toBe(`Initech ${stamp}`);
+  expect(saved.notes).toBe(now.notes);
+  expect(saved.notes).toContain(`e2e Abe ${stamp}`);
+  // Nothing is left to offer.
+  await page.reload();
+  await expect(card(page)).toBeVisible();
+  await expect(editor(page)).toHaveCount(0);
 
   // A tab still open on the one who went: their save finds nobody.
   const gone = await request.put(`/api/people/${abe.id}`, {
