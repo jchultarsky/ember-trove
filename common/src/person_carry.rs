@@ -20,6 +20,7 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use crate::id::PersonId;
 use crate::person::{
@@ -95,7 +96,7 @@ pub fn people_named(matches: &[DuplicateMatch]) -> Vec<TakenPerson> {
 }
 
 /// A field of a person, for saying what a carry-over did to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CarriedField {
     Name,
@@ -136,7 +137,7 @@ impl CarriedField {
 /// A typed value that was not used because the existing person has
 /// another: said in the review, never written anywhere. It is also how a
 /// wrong match shows ("you typed Acme; theirs is Initech").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct NotUsed {
     pub field: CarriedField,
     pub typed: String,
@@ -144,14 +145,14 @@ pub struct NotUsed {
 
 /// A field a carry-over filled, with what it put there: the field is
 /// marked "added" only while it still holds that.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct Filled {
     pub field: CarriedField,
     pub value: String,
 }
 
 /// What a carry-over did, for the review: what to mark, and what to say.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct CarryReport {
     /// The name typed for the new person.
     #[serde(default)]

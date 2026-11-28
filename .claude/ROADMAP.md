@@ -3,7 +3,29 @@
 Living document: current state, backlog, and the decisions behind the architecture.
 Keep it current as part of each change (see `POLICY.md` §10).
 
-## Current state (2026-11-18)
+## Current state (2026-11-27)
+
+- **v3.33.0 shipped: S8c, merge two saved people** (#363, PRs #364
+  and #365; ONTOLOGY §7.1, §7.3; owner
+  decisions of 2026-11-19). One person is kept, the other's details,
+  memberships and mentions move to them, and the other is deleted, in
+  one transaction, after the plan is shown (`common::person_merge`,
+  `repo/person_merge.rs`, `modals/merge_people.rs`). **No text is
+  rewritten:** the old id is an alias (`person_aliases`, migration 058)
+  that mention reads and writes go through, and that opens nothing
+  else. A person's save now carries the version it was made from.
+  Backup format 15. Not built, by decision: an undo, a report of
+  leftover mentions, and "Update" for stale labels. A form set aside
+  (a kept draft, an Undo, back from the merge dialog) goes back onto
+  the person as they are now (`PersonFormDraft::rebased_on`). Left from
+  the reviews, all low: a merge POST that never settles leaves the
+  dialog unclosable (as the cascade's); "Couldn't merge" is said for a
+  failed plan read; the stale-save notice can promise a kept draft when
+  nothing was typed; the cascade and merge dialogs can both be open on
+  Data health. **Next:** S10a
+  (the Company entity). Rules: "Merging two people" and "Aliases" in
+  `.claude/rules/api.md`, "Merging two people is one dialog" in
+  `.claude/rules/leptos.md`.
 
 - **v3.32.0 shipped: S9, mentions of people in text** (#360, PRs #361
   and #362; ONTOLOGY §7.3, §14; owner decisions of 2026-11-18). `@` in a body or a note picks one of your

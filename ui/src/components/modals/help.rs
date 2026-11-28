@@ -279,7 +279,13 @@ const CONCEPTS: &[Concept] = &[
                nothing is saved until you save there. On a Project it can put \
                that person on the Project instead, with the role and note you \
                typed. People who shared an address before this rule stay as \
-               they are; Data health lists them. To mention someone in text, \
+               they are; Data health lists them. Two records of one person can \
+               be merged, from either one\u{2019}s page (the merge button), from that \
+               notice when you are editing a saved person, or from Data health. \
+               You choose which is kept and see what the merge does first: the \
+               kept one\u{2019}s details stand, the other\u{2019}s are added where there \
+               were none, their places on Projects and their mentions move over, \
+               and the other record is deleted. It can\u{2019}t be undone. To mention someone in text, \
                type @ in a node\u{2019}s body or in a note and pick them: the page \
                shows their name as a link to their card, and their card lists \
                where they are mentioned. Someone you share the node with sees \

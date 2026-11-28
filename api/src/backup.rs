@@ -317,6 +317,9 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
     // Which task waits for which (S5d), between the live tasks above.
     let task_dependencies = repo::task_dependency::list_all_on(&mut *conn).await?;
     let mentions = repo::mention::list_all_on(&mut *conn).await?;
+    // Ids of people merged into another (S8c), in the same snapshot as
+    // the people and the mention rows they explain.
+    let person_aliases = repo::mention::aliases_all_on(&mut *conn).await?;
     let briefs = repo::brief::list_all_on(&mut *conn).await?;
     // Focus (#282), every account's, in the same snapshot as its nodes.
     let focus = repo::project_focus::list_all_on(&mut *conn).await?;
@@ -362,6 +365,7 @@ pub(crate) async fn read_snapshot(conn: &mut sqlx::PgConnection) -> Result<Backu
         focus: Some(focus),
         task_dependencies,
         mentions,
+        person_aliases,
     })
 }
 
@@ -737,6 +741,16 @@ pub(crate) async fn restore_into(
     // older one (`None`) never held any, so the live entries are read here
     // and those whose project the archive brings back are put back below:
     // the rule for a list an older archive lacks (`BackupData`).
+    // Before any row (S8c): a restore deletes the nodes, and so the rows
+    // that hang on them, before it reaches the people. A merge of two
+    // people goes the other way round. Each holding what the other waits
+    // for would end one of them, perhaps this one; so a merge shares this
+    // key and a restore takes it alone (`repo::person_merge`).
+    sqlx::query(repo::person_merge::RESTORE_LOCK)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("restore lock failed: {e}")))?;
+
     let focus: Cow<'_, [BackupFocus]> = match &data.focus {
         Some(list) => Cow::Borrowed(list),
         None => Cow::Owned(repo::project_focus::list_all_on(&mut *conn).await?),
@@ -1236,6 +1250,21 @@ pub(crate) async fn restore_into(
         .execute(&mut *conn)
         .await
         .map_err(|e| ApiError::Internal(format!("insert membership failed: {e}")))?;
+    }
+    // Ids of people merged into another (S8c), after the people. Only
+    // the sound ones (`BackupData::restorable_aliases`); an older archive
+    // has none, and the live ones went with the people deleted above.
+    for alias in data.restorable_aliases() {
+        sqlx::query(
+            "INSERT INTO person_aliases (old_id, person_id, merged_at) VALUES ($1, $2, $3) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(alias.old_id.0)
+        .bind(alias.person_id.0)
+        .bind(alias.merged_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| ApiError::Internal(format!("insert alias failed: {e}")))?;
     }
     // Mentions of people in text (S9), after the people, the nodes and
     // the notes they hang on. Only rows the archive's own text and people

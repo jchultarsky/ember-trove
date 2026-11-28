@@ -151,6 +151,7 @@ pub fn App() -> impl IntoView {
     // The one confirmation before a cascade (S6b): anything that closes a
     // project asks through it; Layout mounts the dialog.
     provide_context(crate::components::modals::cascade_confirm::CascadeConfirm::new());
+    provide_context(crate::components::modals::merge_people::MergePeople::new());
 
     // Toast actions that open a page set this; Layout acts on it.
     provide_context(NavRequest(RwSignal::new(None)));

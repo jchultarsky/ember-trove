@@ -74,8 +74,12 @@ async fn name_mentions<'a>(
     notes: impl Iterator<Item = &'a mut ReaderNote>,
 ) -> Result<(), ApiError> {
     let notes: Vec<&mut ReaderNote> = notes.collect();
-    let ids: Vec<NoteId> = notes.iter().map(|n| n.note.id).collect();
-    let mut named = state.mentions.for_notes(&ids, &claims.sub).await?;
+    // Each with the ids its own text holds (see `MentionRepo::for_node`).
+    let asked: Vec<(NoteId, Vec<common::id::PersonId>)> = notes
+        .iter()
+        .map(|n| (n.note.id, common::mention::mentioned_ids(&n.note.body)))
+        .collect();
+    let mut named = state.mentions.for_notes(&asked, &claims.sub).await?;
     for note in notes {
         note.mentions = named.remove(&note.note.id).unwrap_or_default();
     }
@@ -87,7 +91,10 @@ async fn name_mentions<'a>(
 async fn saved(state: &AppState, claims: &AuthClaims, note: Note) -> Result<SavedNote, ApiError> {
     let mentions = state
         .mentions
-        .for_notes(&[note.id], &claims.sub)
+        .for_notes(
+            &[(note.id, common::mention::mentioned_ids(&note.body))],
+            &claims.sub,
+        )
         .await?
         .remove(&note.id)
         .unwrap_or_default();

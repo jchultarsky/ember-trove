@@ -159,7 +159,7 @@ impl RuleId {
                 "Remove one edge of the loop."
             }
             Self::SharedEmail => {
-                "Open them and take the address off all but one. If they are one person, keep one record."
+                "If they are one person, merge them. If not, open them and take the address off all but one."
             }
         }
     }

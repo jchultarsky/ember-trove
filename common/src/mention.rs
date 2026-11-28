@@ -435,9 +435,26 @@ pub fn outside_a_token(text: &str, byte_offset: usize) -> usize {
 /// is not their owner gets the name and no more (ONTOLOGY §14).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct MentionName {
+    /// The id the text's token holds. After a merge that can be the id
+    /// of the person who went (an alias of the one kept, S8c).
     pub person_id: PersonId,
     pub display_name: String,
     pub mine: bool,
+    /// The reader's own person this token now stands for, when
+    /// `person_id` is an alias: where the mention's link leads. Never
+    /// set for anyone but the person's owner, and absent from the answer
+    /// when unset: another reader gets the three fields above and no
+    /// more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links_to: Option<PersonId>,
+}
+
+impl MentionName {
+    /// The person's own page, for their owner: where a mention links.
+    #[must_use]
+    pub fn link_target(&self) -> PersonId {
+        self.links_to.unwrap_or(self.person_id)
+    }
 }
 
 /// "Mentioned in": one node that mentions a person, in its body, in its
@@ -461,6 +478,16 @@ pub struct BackupMention {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_id: Option<NoteId>,
     pub person_id: PersonId,
+}
+
+/// One alias, as a backup holds it (S8c): the id of a person who was
+/// merged into another, and the person kept. A mention token with the
+/// old id stands for the kept person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct BackupAlias {
+    pub old_id: PersonId,
+    pub person_id: PersonId,
+    pub merged_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[cfg(test)]
@@ -811,7 +838,16 @@ mod tests {
             person_id: id(ADA),
             display_name: "Ada".into(),
             mine: false,
+            links_to: None,
         };
+        // Their owner's link leads to the person the token stands for.
+        let own = MentionName {
+            mine: true,
+            links_to: Some(id(BEA)),
+            ..name.clone()
+        };
+        assert_eq!(own.link_target(), id(BEA));
+        assert_eq!(name.link_target(), id(ADA));
         let json = serde_json::to_value(&name).expect("json");
         let mut keys: Vec<&str> = json
             .as_object()

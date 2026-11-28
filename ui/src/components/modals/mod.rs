@@ -7,6 +7,7 @@ pub mod delete_account;
 pub mod delete_confirm;
 pub mod fast_capture;
 pub mod help;
+pub mod merge_people;
 
 use leptos::html;
 use leptos::portal::Portal;

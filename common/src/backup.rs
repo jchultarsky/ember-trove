@@ -104,7 +104,14 @@ pub struct EntityCounts {
 /// release would restore the text without them, and every mention would
 /// show as unresolved with nothing said, so the number moves. Archives
 /// of 3 to 13 still restore: no text in them holds a mention.
-pub const SCHEMA_VERSION: u32 = 14;
+/// 15 (S8c, #363): the archive carries the aliases a merge of two people
+/// leaves (`person_aliases`): a mention token with the id of the person
+/// who went stands for the one kept. An older release would restore the
+/// people and the text without them, and those mentions would show as
+/// unresolved with nothing said, so the number moves. Archives of 3 to
+/// 14 still restore: none holds an alias, and since every restore
+/// replaces the people, none is left behind.
+pub const SCHEMA_VERSION: u32 = 15;
 
 /// The oldest format this release restores. Format 3 differs from 4 only
 /// in holding captures as notes without a node, which restore converts
@@ -531,14 +538,46 @@ pub struct BackupData {
     /// [`BackupData::restorable_mentions`] lets through.
     #[serde(default)]
     pub mentions: Vec<crate::mention::BackupMention>,
+    // ── Format 15: aliases of merged people (S8c, #363) ───────────────────
+    /// Ids of people who were merged into another (`person_aliases`). A
+    /// plain list like `mentions`: an alias hangs on the person kept,
+    /// and every restore replaces the people. Restore puts back only
+    /// what [`BackupData::restorable_aliases`] lets through.
+    #[serde(default)]
+    pub person_aliases: Vec<crate::mention::BackupAlias>,
 }
 
 impl BackupData {
+    /// The archive's aliases as a restore lands them (S8c): each old id
+    /// once, pointing at a person the archive holds, and never an id
+    /// that is itself a person in the archive (an alias is the id of
+    /// someone who is gone).
+    ///
+    /// SECURITY: an alias makes a token name a person. One that points
+    /// at nobody, or that would turn a living person's id into another's,
+    /// must not come back from an archive.
+    #[must_use]
+    pub fn restorable_aliases(&self) -> Vec<crate::mention::BackupAlias> {
+        use std::collections::HashSet;
+        let people: HashSet<_> = self.people.iter().map(|p| p.id).collect();
+        let mut seen = HashSet::new();
+        self.person_aliases
+            .iter()
+            .filter(|a| {
+                people.contains(&a.person_id)
+                    && !people.contains(&a.old_id)
+                    && seen.insert(a.old_id)
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The archive's mentions as a restore lands them (S9): each once,
     /// and only a row that
     /// - names a person the archive holds,
     /// - sits on a node body or a note the archive holds (exactly one of
-    ///   the two), whose text has a mention token for that person, and
+    ///   the two), whose text has a mention token for that person, or
+    ///   for an id that is an alias of theirs (S8c), and
     /// - for a note, is of the note's author's own person: a note has one
     ///   writer, so that rule can be checked again here.
     ///
@@ -565,6 +604,16 @@ impl BackupData {
             .filter(|n| n.node_id.is_some())
             .map(|n| (n.id, (n.owner_id.as_str(), mentioned_ids(&n.body))))
             .collect();
+        // The ids a text may hold for each person: their own, and the
+        // ids of people merged into them.
+        let mut stands_for: HashMap<crate::id::PersonId, crate::id::PersonId> = HashMap::new();
+        for alias in self.restorable_aliases() {
+            stands_for.insert(alias.old_id, alias.person_id);
+        }
+        let holds = |ids: &[crate::id::PersonId], person: crate::id::PersonId| {
+            ids.iter()
+                .any(|id| *id == person || stands_for.get(id) == Some(&person))
+        };
         let mut kept: Vec<crate::mention::BackupMention> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for m in &self.mentions {
@@ -572,12 +621,10 @@ impl BackupData {
                 continue;
             };
             let backed = match (m.node_id, m.note_id) {
-                (Some(node), None) => bodies
-                    .get(&node)
-                    .is_some_and(|ids| ids.contains(&m.person_id)),
+                (Some(node), None) => bodies.get(&node).is_some_and(|ids| holds(ids, m.person_id)),
                 (None, Some(note)) => notes
                     .get(&note)
-                    .is_some_and(|(author, ids)| author == owner && ids.contains(&m.person_id)),
+                    .is_some_and(|(author, ids)| author == owner && holds(ids, m.person_id)),
                 _ => false,
             };
             if backed && seen.insert((m.node_id, m.note_id, m.person_id)) {
@@ -724,7 +771,6 @@ mod tests {
     fn an_archive_carries_mentions_and_a_restore_takes_only_backed_ones() {
         use crate::id::{NodeId, NoteId, PersonId};
         use crate::mention::{BackupMention, mention_token};
-        assert_eq!(SCHEMA_VERSION, 14);
         let older: BackupData = serde_json::from_str(
             r#"{"nodes":[],"edges":[],"tags":[],"notes":[],"tasks":[],"attachments":[]}"#,
         )
@@ -809,6 +855,101 @@ mod tests {
             written["mentions"][0],
             serde_json::json!({ "node_id": node, "person_id": ada })
         );
+    }
+
+    /// Format 15 (S8c): the archive carries the aliases a merge leaves,
+    /// and a mention whose text holds the old id is still backed.
+    #[test]
+    fn an_archive_carries_aliases_and_a_restore_takes_only_sound_ones() {
+        use crate::id::{NodeId, NoteId, PersonId};
+        use crate::mention::{BackupAlias, BackupMention, mention_token};
+        assert_eq!(SCHEMA_VERSION, 15);
+        let older: BackupData = serde_json::from_str(
+            r#"{"nodes":[],"edges":[],"tags":[],"notes":[],"tasks":[],"attachments":[],"mentions":[]}"#,
+        )
+        .expect("a format-14 archive");
+        assert!(older.person_aliases.is_empty());
+        assert!(older.restorable_aliases().is_empty());
+
+        let id = |n: u128| uuid::Uuid::from_u128(n);
+        // Ada was kept; `was` went into her. Bo is another account's.
+        let (ada, bo, was, nobody) = (
+            PersonId(id(1)),
+            PersonId(id(2)),
+            PersonId(id(3)),
+            PersonId(id(4)),
+        );
+        let (node, plain) = (NodeId(id(10)), NodeId(id(11)));
+        let note = NoteId(id(20));
+        let old_token = mention_token("Ada B.", was);
+        let when = "2026-11-19T00:00:00Z";
+        let data: BackupData = serde_json::from_value(serde_json::json!({
+            "nodes": [
+                { "id": node, "owner_id": "alice", "node_type": "article", "title": "A",
+                  "slug": "a", "body": old_token, "metadata": {}, "status": "draft", "tags": [],
+                  "pinned": false, "edge_count": 0, "created_at": when, "updated_at": when },
+                { "id": plain, "owner_id": "alice", "node_type": "article", "title": "B",
+                  "slug": "b", "body": "no mention", "metadata": {}, "status": "draft", "tags": [],
+                  "pinned": false, "edge_count": 0, "created_at": when, "updated_at": when }
+            ],
+            "edges": [], "tags": [], "tasks": [], "attachments": [],
+            "notes": [
+                { "id": note, "node_id": node, "owner_id": "alice", "body": old_token,
+                  "created_at": when, "updated_at": when }
+            ],
+            "people": [
+                { "id": ada, "owner_id": "alice", "display_name": "Ada", "emails": [], "phones": [],
+                  "created_at": when, "updated_at": when },
+                { "id": bo, "owner_id": "bob", "display_name": "Bo", "emails": [], "phones": [],
+                  "created_at": when, "updated_at": when }
+            ],
+            "mentions": [
+                { "node_id": node, "person_id": ada },
+                { "note_id": note, "person_id": ada },
+                { "node_id": plain, "person_id": ada },
+                { "node_id": node, "person_id": bo }
+            ],
+            "person_aliases": [
+                { "old_id": was, "person_id": ada, "merged_at": when },
+                // The same old id again, for someone else.
+                { "old_id": was, "person_id": bo, "merged_at": when },
+                // To a person the archive lacks.
+                { "old_id": id(5), "person_id": nobody, "merged_at": when },
+                // The id of someone who is in the archive.
+                { "old_id": bo, "person_id": ada, "merged_at": when }
+            ]
+        }))
+        .expect("an archive");
+        let when: DateTime<Utc> = when.parse().expect("a time");
+        assert_eq!(
+            data.restorable_aliases(),
+            [BackupAlias {
+                old_id: was,
+                person_id: ada,
+                merged_at: when
+            }]
+        );
+        // The rows for Ada are backed by the old id in the text. Bo's is
+        // not: the alias is Ada's, and the text holds no token of his.
+        assert_eq!(
+            data.restorable_mentions(),
+            [
+                BackupMention {
+                    node_id: Some(node),
+                    note_id: None,
+                    person_id: ada
+                },
+                BackupMention {
+                    node_id: None,
+                    note_id: Some(note),
+                    person_id: ada
+                },
+            ]
+        );
+        // Without the aliases, as an older release reads it: no row.
+        let mut without = data.clone();
+        without.person_aliases.clear();
+        assert!(without.restorable_mentions().is_empty());
     }
 
     /// Format 13 (S5d): the archive carries which task waits for which.
