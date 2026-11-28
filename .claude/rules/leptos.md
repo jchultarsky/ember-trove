@@ -358,8 +358,7 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
 - **What the notice offers is a `TakenOffer`** (S8b, #357), chosen by
   the dialog's `PersonForm`: `CarryOver` for a new person, `AddHere` on
   a node (`OnNode`, which offers opening only, when the reader may not
-  add people there), `OpenOnly` for an edit (merging two saved people
-  is S8c).
+  add people there), `Merge` for an edit of a saved person (S8c).
   - **Carry-over** is `common::person_carry::carry_into`, pure. The
     typed input travels in memory (`draft::PersonHandOff`, taken once
     when the other person's dialog mounts) and is merged in the restore
@@ -389,6 +388,37 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     while it runs (a disabled button drops the keyboard), with a guard
     in the handler. When an answer removes the focused control, the
     keyboard goes to the form's alert (`focus_alert_if_lost`).
+- **Merging two people is one dialog** (S8c, #363):
+  `modals/merge_people.rs`, mounted in `Layout`, opened with
+  `merge_people::ask(MergeAsk { kept, other, among, .. })`, like the
+  cascade's. A new place that merges people asks it; never call
+  `api::merge_people` from anywhere else.
+  - The words are `common::person_merge::plan_lines` (the kept person,
+    the other: two records of one person often have one name, so a
+    sentence never relies on the names) and `MergeRefusal::says`. With a
+    refusal there is no Merge button.
+  - The server's plan is the only thing shown, and its token the only
+    thing confirmed. A 412 reads the plan again and says it changed.
+  - **Never two dialogs at once.** From the person editor's notice the
+    merge dialog takes the editor's place (`merge_with`): going back
+    reopens the editor with what was typed, held in memory; a merge
+    does not save it, and the notice says so. Reopening the editor
+    after a merge with what was typed would write the old lists over
+    what the merge added.
+  - After a merge the dialog drops both people's edit drafts. The
+    person page then shows the one kept, with `replace` when that is
+    another page: Back must not land on a person who is gone.
+  - Its Escape is the window dispatcher's too (`layout.rs`), as for the
+    cascade: it deletes something.
+- **A person's save carries the version it was made from** (S8c):
+  `PersonEditor`'s `based_on`, the `updated_at` the page read, sent by
+  `api::update_person`. A 412 or a 404 on an edit is
+  `stale_save_message`: it says to reload, and promises a kept draft
+  only when `try_keep()` stored one. Any other write of a person from
+  the browser sends its version the same way.
+- **A mention's link is `MentionName::link_target()`**, never
+  `person_id`: after a merge the token's id can be an alias, which is
+  no page.
 - **Mentions of people** (S9, #360). `common::mention` reads
   `@[label](person:id)` for the API; never scan for `@[` anywhere else.
   - **A mention is shown only where both readers agree it is one**

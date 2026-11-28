@@ -293,6 +293,13 @@ CI job is too slow a feedback loop for selector work.
   Truncate first (`db_grain` in pg_tests), and take "the same instant"
   from one clock read, not two.
 
+- **The merge dialog is an `alertdialog`** named "Merge two people"
+  (2026-11-20, S8c), not a `dialog`: `getByRole('dialog')` finds the
+  person editor and not it. Two people who share an address can't be
+  made through the API (it refuses the second), so the Data health card
+  for them is served with `page.route` over real people
+  (`people_merge.spec.ts`), and its fix runs against the real API.
+
 ## Writing new specs
 
 - One spec file per surface; keep the suite **sequential** (`workers: 1`) —

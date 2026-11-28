@@ -7,6 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Merge two records of one person** (S8c, #363; ONTOLOGY §7.1).
+  - From a person's page (the merge button), from the notice when an
+    edit of a saved person uses an address another has ("Merge with
+    them…", in place of "isn't available yet"), and from Data health's
+    list of people who share an address.
+  - You choose the other person, can swap which one is kept, and read
+    what the merge would do before anything is written: what is added,
+    the line kept in the notes, memberships moved and joined, where the
+    other is mentioned. If either was changed meanwhile, the plan is
+    shown again. There is no undo; a backup from before has both.
+  - A merge started from the edit notice does not save the other
+    changes typed there, and the notice says so. Going back from the
+    merge returns to the edit with what was typed.
 - **Merging two saved people, in the API** (S8c, #363; ONTOLOGY §7.1).
   - `GET /api/people/{id}/merge?from=` answers what the merge would do,
     and `POST /api/people/{id}/merge` carries it out if that is still
@@ -23,15 +36,48 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   - A merge that would pass a limit (10 entries in a list, 10,000
     characters of notes) is refused in words. An address a third person
     lists too is left out and said.
+  - A merge that meets a save, a delete, an account's removal or a
+    restore in progress gives way: it is tried once more, and if it is
+    still in the way it says to try again, with nothing written. The
+    other operation is never the one ended.
   - Backup format 15 carries the aliases; older archives still restore.
 
 ### Changed
+- Editing a person now sends the version the page read. An edit left
+  open in a tab while the person was changed elsewhere, or merged, is
+  not saved: the form says so and what to do, and what was typed is
+  kept on the device for after the reload.
+- An unsaved edit of a person that the device kept, offered again after
+  the person was changed elsewhere, now holds only what was typed, on
+  the person as they are now. It used to hold the whole form as it was
+  read, so saving it wrote the older values back over the change (and
+  would have undone a merge). A field that was changed is still kept
+  whole, as typed: the notice says to check the lists and the notes.
+  The same holds for an edit brought back by Undo, or by going back
+  from the merge dialog, after the person was changed meanwhile.
+- What was typed in an edit stays on the device while the merge dialog
+  stands in for the editor: a reload there no longer loses it.
+- When a merge's plan changed and is shown again, Merge ignores a press
+  for a moment, so a second press meant for the old plan confirms
+  nothing unread; the two people's details are read again with the plan.
+- Undo of a discarded edit closes an open merge dialog first.
+- A merge's plan no longer speaks of notes on a shared node when
+  neither has any, of a line added to the notes when it is there
+  already, or of the kept person "having" a company that differs.
+- A mention written with the ID of someone since merged away links to
+  the person kept.
+- Data health's advice for people who share an address now starts with
+  merging them.
 - `PUT /api/people/{id}` takes `expected_updated_at`: a save from a tab
   that is out of date is refused (412) instead of writing over what
   changed. A save that sends none still goes through, except over a
   person someone was merged into.
 
 ### Security
+- `cookie` 0.18.3 and `url` 2.5.9, for RUSTSEC-2026-0594 (private cookie
+  nonces could repeat in a process that forks; the API does not fork)
+  and RUSTSEC-2026-0592 (a stack overflow in `Url::origin()` on nested
+  `blob:` addresses).
 - A merge is its owner's alone, with no admin bypass: an id of another
   account, in either place, reads like a missing person, and is never
   locked or waited on.

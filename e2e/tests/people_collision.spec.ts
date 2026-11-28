@@ -432,13 +432,14 @@ test('an unsaved edit of them that this device kept is said in the review', asyn
     await addPhone(page, '+1 555 010 9999');
     const review = await carryOver(page, await saveRefused(page), theirs);
     // The additions are on top of the kept edit, and the review says so:
-    // Save would write that edit too.
+    // Save would write that edit too. The kept edit is only what was
+    // typed: the company saved elsewhere since is shown as it is now.
     await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('Kept title');
-    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Analytical Engines');
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Elsewhere Ltd');
     await expect(phoneRows(page)).toHaveCount(1);
     await expect(review).toContainText('Added: 1 phone.');
     await expect(review.getByTestId('carry-kept-edit')).toBeVisible();
-    await expect(review).toContainText('The person has been changed since; saving replaces that change.');
+    await expect(review).toContainText('The person has been changed since. What you had not changed is shown as it is now');
 
     // Both are still said after a reload, and after Escape and Undo.
     await page.reload();
