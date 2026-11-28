@@ -82,6 +82,13 @@ pub struct PersonFormDraft {
     /// before 3.31.0 has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carried: Option<Carried>,
+    /// The form was put onto a person changed elsewhere since
+    /// ([`Self::rebased_on`], S8c). `base` is then the person as they
+    /// were at that moment, so a later restore would no longer see the
+    /// change: this keeps the notice, which says to check the lists and
+    /// the notes, across a reload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rebased: bool,
 }
 
 /// What the dialog does with a stored draft when it mounts.
@@ -90,8 +97,9 @@ pub enum FormRecovery {
     /// Nothing in it that the dialog wouldn't start with: drop it silently.
     Discard,
     /// Reopen the dialog with the draft and say so. `changed` is true when
-    /// the person was saved with other values after the draft was taken:
-    /// saving the draft then replaces that change.
+    /// the person was saved with other values after the draft was taken.
+    /// The dialog then opens with [`PersonFormDraft::rebased_on`], never
+    /// with the draft as it is: saving that would replace the change.
     Offer { changed: bool },
 }
 
@@ -120,6 +128,44 @@ impl PersonFormDraft {
             changed: self.base != *current,
         }
     }
+
+    /// What this draft holds, put onto the person as they are now
+    /// (`current`): each field the draft left as it found it takes the
+    /// current value, and each field it changed keeps what was typed.
+    ///
+    /// For a draft offered again after the person was changed elsewhere
+    /// (`FormRecovery::Offer { changed: true }`). The draft holds the
+    /// whole form as it was read. Offered as it is and saved, it writes
+    /// every field back: after a merge that takes away the addresses,
+    /// the company and the notes line the merge added, when all that was
+    /// typed may have been a position (S8c; a merge has no undo).
+    ///
+    /// A list counts as one field: a list the draft changed is kept as
+    /// typed, whole. The form says so.
+    #[must_use]
+    pub fn rebased_on(&self, current: &PersonInput) -> PersonInput {
+        fn pick<T: PartialEq + Clone>(typed: &T, read: &T, now: &T) -> T {
+            if typed == read {
+                now.clone()
+            } else {
+                typed.clone()
+            }
+        }
+        let (typed, read) = (&self.person, &self.base);
+        PersonInput {
+            display_name: pick(
+                &typed.display_name,
+                &read.display_name,
+                &current.display_name,
+            ),
+            company: pick(&typed.company, &read.company, &current.company),
+            position: pick(&typed.position, &read.position, &current.position),
+            emails: pick(&typed.emails, &read.emails, &current.emails),
+            phones: pick(&typed.phones, &read.phones, &current.phones),
+            addresses: pick(&typed.addresses, &read.addresses, &current.addresses),
+            notes: pick(&typed.notes, &read.notes, &current.notes),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -132,6 +178,64 @@ mod tests {
             display_name: n.to_string(),
             ..Default::default()
         }
+    }
+
+    /// S8c: a draft offered again over a person changed since carries
+    /// only what was typed. What it did not touch is as the person is now.
+    #[test]
+    fn a_draft_is_put_onto_the_person_as_they_are_now() {
+        use crate::person::ContactPoint;
+        let email = |v: &str| ContactPoint {
+            label: String::new(),
+            value: v.to_string(),
+            preferred: false,
+        };
+        let read = PersonInput {
+            display_name: "Ada".into(),
+            emails: vec![email("ada@example.com")],
+            ..Default::default()
+        };
+        // Only a position was typed.
+        let draft = PersonFormDraft {
+            person: PersonInput {
+                position: Some("Analyst".into()),
+                ..read.clone()
+            },
+            base: read.clone(),
+            ..Default::default()
+        };
+        // Meanwhile someone was merged into her.
+        let now = PersonInput {
+            display_name: "Ada".into(),
+            company: Some("Initech".into()),
+            emails: vec![email("ada@example.com"), email("abe@example.com")],
+            notes: Some("Merged in: name \u{201c}Abe\u{201d}.".into()),
+            ..Default::default()
+        };
+        assert_eq!(draft.recovery(&now), FormRecovery::Offer { changed: true });
+        assert_eq!(
+            draft.rebased_on(&now),
+            PersonInput {
+                position: Some("Analyst".into()),
+                ..now.clone()
+            }
+        );
+        // A list that was changed is kept as typed, whole.
+        let draft = PersonFormDraft {
+            person: PersonInput {
+                emails: vec![email("ada@example.com"), email("typed@example.com")],
+                ..read.clone()
+            },
+            base: read.clone(),
+            ..Default::default()
+        };
+        let rebased = draft.rebased_on(&now);
+        assert_eq!(rebased.emails.len(), 2);
+        assert_eq!(rebased.emails[1].value, "typed@example.com");
+        assert_eq!(rebased.company, now.company);
+        assert_eq!(rebased.notes, now.notes);
+        // Nothing changed elsewhere: the draft as it is.
+        assert_eq!(draft.rebased_on(&read), draft.person);
     }
 
     #[test]
@@ -244,11 +348,17 @@ mod tests {
             base: PersonInput::default(),
             saved_at: Some(1_800_000_000_000),
             carried: None,
+            rebased: false,
         };
         let json = serde_json::to_string(&d).expect("serialize");
         // An ordinary draft is stored as it always was.
         assert!(!json.contains("carried"), "{json}");
-        assert_eq!(PersonFormDraft::parse(&json), Some(d));
+        assert!(!json.contains("rebased"), "{json}");
+        assert_eq!(PersonFormDraft::parse(&json), Some(d.clone()));
+        // One put onto a person changed since says so after a reload too.
+        let rebased = PersonFormDraft { rebased: true, ..d };
+        let json = serde_json::to_string(&rebased).expect("serialize");
+        assert_eq!(PersonFormDraft::parse(&json), Some(rebased));
         assert_eq!(PersonFormDraft::parse("{not json"), None);
     }
 

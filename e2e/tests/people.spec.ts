@@ -161,10 +161,11 @@ test('the registry: one editor for new and edit, and an address is one person’
       .getByRole('textbox', { name: 'email', exact: true })
       .fill(email);
     await editor(page).getByRole('button', { name: 'Save' }).click();
-    // Two saved people: the notice opens the other one, and says that
-    // merging them comes later (S8b; the merge tool is S8c).
+    // Two saved people: the notice opens the other one, and offers to
+    // merge the two (S8c; `people_merge.spec.ts` follows that through).
     const refused = editor(page).getByTestId('email-taken');
-    await expect(refused).toContainText('Merging two saved people isn’t available yet.');
+    await expect(refused).toContainText('or merge the two into one');
+    await expect(refused.getByTestId('merge-with')).toBeVisible();
     await expect(refused.getByTestId('carry-over')).toHaveCount(0);
     await refused.getByRole('button', { name: originalName, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/people/${original.id}$`));
@@ -257,9 +258,12 @@ test('a reload keeps the open dialog\'s input, and only a dirty one (#170)', asy
     await page.reload();
     await expect(editor(page).getByTestId('form-draft-recovery')).toContainText('changed since');
     await expect(editor(page).getByRole('textbox', { name: 'Position' })).toHaveValue('Rear Admiral');
+    // What was not typed is as the card is now, and is saved so.
+    await expect(editor(page).getByRole('textbox', { name: 'Company' })).toHaveValue('Harvard');
     // Saving drops the draft: a reload opens nothing.
     await editor(page).getByRole('button', { name: 'Save' }).click();
     await expect(editor(page)).toHaveCount(0);
+    expect((await (await request.get(`/api/people/${p.id}`)).json()).company).toBe('Harvard');
     await page.reload();
     await expect(card).toBeVisible();
     await expect(editor(page)).toHaveCount(0);

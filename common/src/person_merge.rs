@@ -143,6 +143,86 @@ pub struct MergePlan {
     pub token: String,
 }
 
+/// What the dialog says a merge will do, a sentence a line.
+///
+/// The two are called "the kept person" and "the other" throughout: two
+/// records of one person often have the same name, and a sentence that
+/// names both would then say nothing.
+#[must_use]
+pub fn plan_lines(plan: &MergePlan) -> Vec<String> {
+    let report = &plan.report;
+    let counted = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let filled = |f: CarriedField| report.has_filled(f);
+    let added: Vec<String> = [
+        filled(CarriedField::Company).then(|| "company".to_string()),
+        filled(CarriedField::Position).then(|| "position".to_string()),
+        counted(report.emails.len(), "email", "emails"),
+        counted(report.phones.len(), "phone", "phones"),
+        counted(report.addresses.len(), "address", "addresses"),
+        filled(CarriedField::Notes).then(|| "notes".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut lines = Vec::new();
+    lines.push(if added.is_empty() {
+        // Not "they already have the other's details": a company or a
+        // position that differs is not theirs, and is said next.
+        "Nothing to add to the kept person\u{2019}s details.".to_string()
+    } else {
+        format!("Added to the kept person: {}.", added.join(", "))
+    });
+    if let Some(line) = &plan.notes_line {
+        lines.push(format!(
+            "A line is added to the kept person\u{2019}s notes: {line}"
+        ));
+    }
+    if !report.someone_elses.is_empty() {
+        lines.push(format!(
+            "Left out, because {} to someone else: {}.",
+            if report.someone_elses.len() == 1 {
+                "it belongs"
+            } else {
+                "they belong"
+            },
+            report.someone_elses.join(", ")
+        ));
+    }
+    if let Some(nodes) = counted(plan.moved as usize, "node", "nodes") {
+        lines.push(format!(
+            "The other\u{2019}s place on {nodes} moves to the kept person."
+        ));
+    }
+    for join in &plan.joined {
+        let mut line = format!(
+            "Both are on \u{201c}{}\u{201d}: one entry is kept{}.",
+            join.node_title,
+            if join.note.is_some() {
+                ", with the notes they have there"
+            } else {
+                ""
+            }
+        );
+        if let Some(role) = &join.role_not_kept {
+            line.push_str(&format!(
+                " The other\u{2019}s role there, \u{201c}{role}\u{201d}, is not kept."
+            ));
+        }
+        lines.push(line);
+    }
+    if let Some(nodes) = counted(plan.mentioned_in as usize, "node", "nodes") {
+        lines.push(format!(
+            "The other is mentioned in {nodes} you can open. Those mentions will show the \
+             kept person\u{2019}s name; the text itself is not changed."
+        ));
+    }
+    lines
+}
+
 /// `POST /people/{kept}/merge`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 pub struct MergeRequest {
@@ -253,9 +333,15 @@ pub fn plan(
         })
         .collect();
 
-    let notes_line = notes_line(&report);
-    if let Some(line) = &notes_line {
-        let notes = with_line(person.notes.take(), line);
+    let mut notes_line = notes_line(&report);
+    if let Some(line) = notes_line.clone() {
+        let had = person.notes.clone();
+        let notes = with_line(person.notes.take(), &line);
+        // The line is there already (an earlier merge of someone of the
+        // same name): nothing is added, so nothing is said to be.
+        if had.as_deref() == Some(notes.as_str()) {
+            notes_line = None;
+        }
         if notes.chars().count() > MAX_NOTES && !refusals.contains(&MergeRefusal::NotesTooLong) {
             refusals.push(MergeRefusal::NotesTooLong);
         }
@@ -614,6 +700,130 @@ mod tests {
             fingerprint(&kept, &gone, &[], &kept_on, &two),
             fingerprint(&kept, &gone, &[], &kept_on, &owt)
         );
+    }
+
+    /// The plan the API would answer for these two, as the dialog gets it.
+    fn answered(
+        kept: &Person,
+        gone: &Person,
+        third_party: &[String],
+        kept_on: &[MembershipIn],
+        gone_on: &[MembershipIn],
+        mentioned_in: u32,
+    ) -> MergePlan {
+        let planned = plan(kept, gone, third_party, kept_on, gone_on);
+        MergePlan {
+            kept: kept.id,
+            gone: gone.id,
+            kept_name: kept.display_name.clone(),
+            gone_name: gone.display_name.clone(),
+            result: planned.result,
+            report: planned.report,
+            notes_line: planned.notes_line,
+            moved: planned.moved.len() as u32,
+            joined: planned.joined,
+            mentioned_in,
+            refusals: planned.refusals,
+            token: String::new(),
+        }
+    }
+
+    #[test]
+    fn the_plan_is_said_a_sentence_a_line() {
+        let mut kept = person(1, "Ada");
+        kept.emails = vec![point("ada@example.com", "work", true)];
+        let mut gone = person(2, "Ada K.");
+        gone.company = Some("Initech".to_string());
+        gone.emails = vec![
+            point("ada@example.com", "", false),
+            point("ada.k@example.com", "", false),
+            point("shared@example.com", "", false),
+        ];
+        gone.phones = vec![point("+1 555 0100", "", false)];
+        let kept_on = [on(10, 100, Some("Lead"), Some("Since March."))];
+        let gone_on = [
+            on(20, 100, Some("Guest"), Some("Pays.")),
+            on(21, 101, None, None),
+            on(22, 102, None, None),
+        ];
+        let lines = plan_lines(&answered(
+            &kept,
+            &gone,
+            &["shared@example.com".to_string()],
+            &kept_on,
+            &gone_on,
+            1,
+        ));
+        assert_eq!(
+            lines,
+            [
+                "Added to the kept person: company, 1 email, 1 phone.",
+                "A line is added to the kept person\u{2019}s notes: Merged in: name \u{201c}Ada K.\u{201d}.",
+                "Left out, because it belongs to someone else: shared@example.com.",
+                "The other\u{2019}s place on 2 nodes moves to the kept person.",
+                "Both are on \u{201c}Project 100\u{201d}: one entry is kept, with the notes they have there. The other\u{2019}s role there, \u{201c}Guest\u{201d}, is not kept.",
+                "The other is mentioned in 1 node you can open. Those mentions will show the kept person\u{2019}s name; the text itself is not changed.",
+            ]
+        );
+        // Two records with nothing to tell them apart: one line, and it
+        // names neither.
+        let twin = plan_lines(&answered(
+            &person(1, "Ada"),
+            &person(2, "Ada"),
+            &[],
+            &[],
+            &[],
+            0,
+        ));
+        assert_eq!(
+            twin,
+            ["Nothing to add to the kept person\u{2019}s details."]
+        );
+        for line in lines.iter().chain(&twin) {
+            assert!(!line.contains("  "), "{line}");
+        }
+    }
+
+    /// From the review of #365: three things the plan said that could be
+    /// untrue.
+    #[test]
+    fn the_plan_says_nothing_that_is_not_so() {
+        // No notes on either entry: none are spoken of.
+        let (kept_on, gone_on) = ([on(10, 100, Some("Lead"), None)], [on(20, 100, None, None)]);
+        let plan = answered(
+            &person(1, "Ada"),
+            &person(2, "Ada"),
+            &[],
+            &kept_on,
+            &gone_on,
+            0,
+        );
+        assert_eq!(plan.joined[0].note, None);
+        assert!(!plan_lines(&plan).iter().any(|l| l.contains("notes")));
+
+        // The line is in the kept person's notes already: not "added".
+        let line = "Merged in: name \u{201c}Ada Byron\u{201d}.";
+        let mut kept = person(1, "Ada King");
+        kept.notes = Some(line.to_string());
+        let plan = answered(&kept, &person(2, "Ada Byron"), &[], &[], &[], 0);
+        assert_eq!(plan.result.notes.as_deref(), Some(line));
+        assert_eq!(plan.notes_line, None);
+        assert!(
+            !plan_lines(&plan)
+                .iter()
+                .any(|l| l.starts_with("A line is added"))
+        );
+
+        // A company that differs is not something the kept person "has".
+        let (mut kept, mut gone) = (person(1, "Ada"), person(2, "Ada"));
+        kept.company = Some("Lovelace Ltd".to_string());
+        gone.company = Some("Analytical Engines".to_string());
+        let lines = plan_lines(&answered(&kept, &gone, &[], &[], &[], 0));
+        assert_eq!(
+            lines[0],
+            "Nothing to add to the kept person\u{2019}s details."
+        );
+        assert!(lines[1].contains("company \u{201c}Analytical Engines\u{201d}"));
     }
 
     #[test]

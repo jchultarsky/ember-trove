@@ -26,7 +26,7 @@
 use chrono::{DateTime, Utc};
 use common::brief::{
     BriefInput, MAX_HEADLINE, ProjectBrief, STALE_AFTER_DAYS, StatusMove, move_status_section,
-    normalize, points_from_text, points_to_text,
+    normalize, points_from_text, points_hint, points_to_text,
 };
 use common::id::NodeId;
 use common::node::UpdateNodeRequest;
@@ -43,6 +43,8 @@ use crate::markdown::{render_markdown_inline, render_markdown_plain};
 /// How many points a dashboard card shows before "+N more".
 const CARD_POINTS: usize = 5;
 
+/// The help line under a field (#317): always visible, unlike a placeholder.
+const HINT_CLASS: &str = "mt-1 text-xs text-stone-500 dark:text-stone-400";
 const LABEL_CLASS: &str = "block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1";
 const INPUT_CLASS: &str = "w-full text-sm bg-stone-100 dark:bg-stone-800 text-stone-800 \
      dark:text-stone-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 \
@@ -404,10 +406,14 @@ fn BriefEditor(
                     id="brief-pitch"
                     rows="5"
                     class=INPUT_CLASS
+                    aria-describedby="brief-pitch-hint"
                     placeholder="What this project is, why it matters, where it stands now"
                     prop:value=move || form.pitch.get()
                     on:input=move |ev| form.pitch.set(event_target_value(&ev))
                 />
+                <p id="brief-pitch-hint" class=HINT_CLASS>
+                    "Markdown: **bold**, *italic*, `code`, [links](https://…), lists."
+                </p>
             </div>
             <div>
                 <label for="brief-points" class=LABEL_CLASS>"Points"</label>
@@ -415,10 +421,18 @@ fn BriefEditor(
                     id="brief-points"
                     rows="4"
                     class=INPUT_CLASS
+                    aria-describedby="brief-points-hint"
                     placeholder="One per line: blockers, next moves, things to watch"
                     prop:value=move || form.points.get()
                     on:input=move |ev| form.points.set(event_target_value(&ev))
                 />
+                // #317: the rule stays visible once the field has text, and
+                // the count shows how the text will be split.
+                <p id="brief-points-hint" class=HINT_CLASS aria-live="polite"
+                    data-testid="brief-points-hint">
+                    {move || form.points.with(|t| points_hint(t))}
+                    " Inline Markdown works in each point."
+                </p>
             </div>
             {move || form.error.get().map(|message| view! {
                 <p class="text-xs text-heat-max" role="alert" data-testid="brief-error">
