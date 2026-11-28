@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.33.0] - 2026-11-27
+
 ### Added
 - **Merge two records of one person** (S8c, #363; ONTOLOGY §7.1).
   - From a person's page (the merge button), from the notice when an
