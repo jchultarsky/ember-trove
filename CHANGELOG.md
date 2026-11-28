@@ -6,6 +6,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.34.0] - 2026-11-27
+
+### Changed
+
+- Brief editor (#317): Pitch and Points now carry a help line that stays
+  visible once the field has text. Pitch says it takes Markdown; Points says
+  one point per line and counts, as you type, how many points the text will
+  save as (and warns past the limit of 20). Points also accept a numbered
+  list (`1.`, `1)`) and open task boxes (`- [ ]`) as list markers, like the
+  Status-section move already did; `-`, `*` and `+` were already accepted.
+
 ## [3.33.0] - 2026-11-27
 
 ### Added
