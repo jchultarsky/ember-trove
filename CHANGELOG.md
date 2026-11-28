@@ -6,6 +6,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.34.0] - 2026-11-27
+
 ### Changed
 
 - Brief editor (#317): Pitch and Points now carry a help line that stays

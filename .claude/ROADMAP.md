@@ -5,6 +5,11 @@ Keep it current as part of each change (see `POLICY.md` §10).
 
 ## Current state (2026-11-27)
 
+- **v3.34.0 shipped: help lines in the Brief editor** (#317, PR #318).
+  Pitch says it takes Markdown; Points says one point per line and
+  counts what the text will save as. Points also read numbered lists
+  and task boxes as markers (`common::brief`). No migration.
+
 - **v3.33.0 shipped: S8c, merge two saved people** (#363, PRs #364
   and #365; ONTOLOGY §7.1, §7.3; owner
   decisions of 2026-11-19). One person is kept, the other's details,
