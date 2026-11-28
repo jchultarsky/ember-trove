@@ -441,23 +441,34 @@ pub fn points_to_text(points: &[String]) -> String {
     points.join("\n")
 }
 
-/// The editor's text as points: one per line. A leading `- `, `* ` or `+ `
-/// is dropped, since people type a list as a list. Blank lines go.
-/// [`normalize`] still judges the result.
+/// The editor's text as points: one per line. A Markdown list marker
+/// (`- `, `* `, `+ `, `1. `, `1) `) and an open task box (`[ ] `) are
+/// dropped, since people type a list as a list (#317): the same rule as
+/// [`move_status_section`]'s list items. Blank lines go. [`normalize`]
+/// still judges the result.
 #[must_use]
 pub fn points_from_text(text: &str) -> Vec<String> {
     text.lines()
         .map(|line| {
             let t = line.trim();
-            ["- ", "* ", "+ "]
-                .iter()
-                .find_map(|m| t.strip_prefix(m))
-                .unwrap_or(t)
-                .trim()
+            list_item(t).unwrap_or(t)
         })
         .filter(|p| !p.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// The editor's live line under Points (#317): how the text will be
+/// saved, so the one-point-per-line rule shows while typing, not only in
+/// an empty field's placeholder.
+#[must_use]
+pub fn points_hint(text: &str) -> String {
+    match points_from_text(text).len() {
+        0 => "One point per line. Markdown list markers are fine.".to_string(),
+        1 => "Saves as 1 point (one per line).".to_string(),
+        n if n > MAX_POINTS => format!("{n} points: a brief holds at most {MAX_POINTS}."),
+        n => format!("Saves as {n} points (one per line)."),
+    }
 }
 
 /// The text of a markdown list item (`- x`, `* x`, `+ x`, `1. x`, `1) x`),
@@ -837,16 +848,50 @@ mod tests {
 
     #[test]
     fn the_editors_points_are_one_per_line() {
-        let points =
-            points_from_text("- first\n\n  * second  \n+ third\nfourth\n   \n2. kept as typed");
-        assert_eq!(
-            points,
-            ["first", "second", "third", "fourth", "2. kept as typed"]
-        );
+        let points = points_from_text("- first\n\n  * second  \n+ third\nfourth\n   \n2. numbered");
+        assert_eq!(points, ["first", "second", "third", "fourth", "numbered"]);
         assert_eq!(
             points_to_text(&points),
-            "first\nsecond\nthird\nfourth\n2. kept as typed"
+            "first\nsecond\nthird\nfourth\nnumbered"
         );
         assert_eq!(points_from_text(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_editor_reads_any_markdown_list_as_points() {
+        // #317: a numbered list or a task list is a list too.
+        assert_eq!(
+            points_from_text("1. one\n2) two\n- [ ] open\n- [x] done\n-not a marker"),
+            ["one", "two", "open", "[x] done", "-not a marker"]
+        );
+        // Inline markdown inside a point is kept for the renderer.
+        assert_eq!(
+            points_from_text("- **Blocked** on `api`"),
+            ["**Blocked** on `api`"]
+        );
+        // A paragraph on one line stays one point: the hint says so.
+        assert_eq!(points_from_text("one long line. still one").len(), 1);
+    }
+
+    #[test]
+    fn the_points_hint_counts_what_will_be_saved() {
+        assert!(points_hint("").starts_with("One point per line"));
+        assert!(points_hint("  \n ").starts_with("One point per line"));
+        assert_eq!(points_hint("- a"), "Saves as 1 point (one per line).");
+        assert_eq!(
+            points_hint("a\n\n- b\n"),
+            "Saves as 2 points (one per line)."
+        );
+        let many = (0..=MAX_POINTS)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            points_hint(&many),
+            format!(
+                "{} points: a brief holds at most {MAX_POINTS}.",
+                MAX_POINTS + 1
+            )
+        );
     }
 }
