@@ -401,8 +401,9 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
     thing confirmed. A 412 reads the plan again and says it changed.
   - **Never two dialogs at once.** From the person editor's notice the
     merge dialog takes the editor's place (`merge_with`): going back
-    reopens the editor with what was typed, held in memory; a merge
-    does not save it, and the notice says so. Reopening the editor
+    reopens the editor with what was typed; a merge does not save it,
+    and the notice says so. The draft stays stored while the merge
+    dialog stands in (`standing_by`), so a reload there keeps it. Reopening the editor
     after a merge with what was typed would write the old lists over
     what the merge added.
   - After a merge the dialog drops both people's edit drafts. The
@@ -416,6 +417,17 @@ cargo clippy -p ui --target wasm32-unknown-unknown -- -D warnings
   `stale_save_message`: it says to reload, and promises a kept draft
   only when `try_keep()` stored one. Any other write of a person from
   the browser sends its version the same way.
+  - **The version is read when Save is pressed, so it proves nothing
+    about the form.** A form that was set aside and comes back (a kept
+    draft, Undo, back from the merge dialog) may have been read before
+    the person changed, and would pass the check and write the old
+    values back. Every such path goes through
+    `PersonFormDraft::rebased_on` (`put_back`, and the restore effect):
+    only what was typed, on the person as they are now, with the
+    `CHANGED_SINCE` notice (`rebased` keeps it across a reload). A new
+    way to bring a form back does the same.
+  - After a 412 the merge dialog ignores Merge for `SETTLE_MS`: a
+    second press meant for the old plan must not confirm the new one.
 - **A mention's link is `MentionName::link_target()`**, never
   `person_id`: after a merge the token's id can be an alias, which is
   no page.
