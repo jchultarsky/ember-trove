@@ -74,6 +74,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   person someone was merged into.
 
 ### Security
+- `cookie` 0.18.3 and `url` 2.5.9, for RUSTSEC-2026-0594 (private cookie
+  nonces could repeat in a process that forks; the API does not fork)
+  and RUSTSEC-2026-0592 (a stack overflow in `Url::origin()` on nested
+  `blob:` addresses).
 - A merge is its owner's alone, with no admin bypass: an id of another
   account, in either place, reads like a missing person, and is never
   locked or waited on.
